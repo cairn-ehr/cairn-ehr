@@ -533,21 +533,49 @@ fn establish_local_state_escrow(
 /// is OPTIONAL and the event medium is already written (the load-bearing copy), so a missing
 /// passphrase (unattended run), a wrong passphrase, or an I/O error must never abort backup.
 ///
-/// ⚠️ **#495 — THIS CEREMONY SUCCEEDS OVER AN EMPTY BUNDLE, AND THAT IS THE DEFECT.**
-/// `read_local_state` returns `LocalState::empty()` unconditionally (its `_db` is unused),
-/// so on a node holding real `event_dek` custody this seals nothing, writes a valid
-/// `CAIRNL1` container, and reports success. The failure paths above are all handled
-/// honestly; it is the SUCCESS path that lies. Nothing here needs to change when #495 is
-/// fixed — the fix is inside `read_local_state` — but a reader arriving at "why did my
-/// restore have no keys" lands here first.
+/// **What this ceremony now carries (#495 / ADR-0066 decision 3).** The bundle holds this
+/// node's surviving `event_dek` custody and the INDEPENDENT X25519 unwrap secret that opens
+/// it, so a restored solo clinic inherits both halves of the pair. It used to seal an empty
+/// bundle and report success on a node holding real custody — the SUCCESS path was the lie,
+/// while every failure path was honest. That is closed.
+///
+/// The one degradation left is the unwrap key: if it cannot be loaded, the export still goes
+/// out with the custody rows and a warning, because the export is OPTIONAL and the event
+/// medium (the load-bearing copy) is already written. An operator who is not told here would
+/// find out during a restore instead.
+///
+/// ⚠️ Still NOT true end-to-end: the backup medium carries no clinical event (#500), and the
+/// restore side (`localstate::apply_local_state`) still refuses a non-empty bundle rather
+/// than installing it. A reader arriving at "why did my restore have no keys" should read
+/// both of those before concluding this function is at fault.
 async fn seal_and_write_local_state_export(
     db: &tokio_postgres::Client,
     wraps: &cairn_node::localstate::LskWraps,
     passphrase: Option<String>,
     medium: &std::path::Path,
+    key_path: &std::path::Path,
 ) -> anyhow::Result<PathBuf> {
     let op = resolve_passphrase(passphrase)?; // op-pass unwraps the LSK
-    let bundle = cairn_node::localstate::read_local_state(db).await?;
+
+    // The unwrap secret comes from the KEYSTORE FILE, never the database: a DB backup that
+    // could reconstruct a DEK would defeat the custody plane entirely. The same operator
+    // passphrase that unwraps the LSK unseals it (ADR-0066 decision 1 — one ceremony, one
+    // passphrase, one recovery code).
+    let unwrap_path = cairn_node::keystore::unwrap_key_path_for(key_path);
+    let unwrap = match cairn_node::keystore::load_unwrap_secret(&unwrap_path, Some(&op)) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!(
+                "WARNING: could not load the unwrap key at {} ({e}) — the export will carry \
+                 custody rows but no key to open them; a restore from it cannot read sealed \
+                 bodies. Run `cairn-node establish-unwrap-key`.",
+                unwrap_path.display()
+            );
+            None
+        }
+    };
+
+    let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_deref()).await?;
     let container = cairn_node::localstate::build_export_container(wraps, &op, &bundle)?;
     let export_path = cairn_node::localstate::localstate_path_for(medium);
     cairn_node::fsio::atomic_write(&export_path, &container, Some(0o600))?;
@@ -1688,7 +1716,11 @@ async fn main() -> anyhow::Result<()> {
                     // degrades honestly: warn + skip, exactly like the absent-escrow branch
                     // below. It must NEVER abort an already-complete event backup with a
                     // non-zero exit — that would page an operator over a backup that succeeded.
-                    match seal_and_write_local_state_export(&db, &wraps, passphrase, &to).await {
+                    // `&cli.key` too: the unwrap secret the export must carry lives in that
+                    // key's `<key>.unwrap` sibling, not in the database (ADR-0066).
+                    match seal_and_write_local_state_export(&db, &wraps, passphrase, &to, &cli.key)
+                        .await
+                    {
                         Ok(export_path) => {
                             println!("local-state exported to {}", export_path.display())
                         }
@@ -1838,10 +1870,16 @@ async fn main() -> anyhow::Result<()> {
             // OWN local-state escrow. Absent export => skip (the node restores from events
             // alone — honest degradation).
             //
-            // ⚠️ #495: "apply it" is a noop today, because the export it is applying is
-            // always empty (localstate::read_local_state never reads the database). This is
-            // the moment a restored solo node would have regained its custody, and it is
-            // where the absence finally bites. Do not read the noop as "nothing to do".
+            // ⚠️ #495, RESTORE HALF — still open, and its shape has CHANGED. The export is
+            // no longer empty: since ADR-0066 it carries the dead node's surviving custody
+            // rows and the unwrap secret that opens them. But `apply_local_state` does not
+            // install them yet — it REFUSES a non-empty bundle (loudly, which is the right
+            // direction: better a failed restore than one that silently discarded recovered
+            // key material). So this is still the moment a restored solo node regains its
+            // custody, and it still does not. What is owed here, per ADR-0066 decision 4:
+            // install the recovered secret and register its public half BEFORE touching any
+            // custody row, because `node_unwrap_key` is a singleton whose registrar refuses
+            // a differing key and wrapping needs the public half present.
             //
             // ⚠️ The `Err` arm of the read below is SILENT — a permissions or I/O failure on
             // a present export is indistinguishable here from no export at all, at the worst

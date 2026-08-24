@@ -14,21 +14,41 @@
 //! day-one piece is `establish_lsk`: state accrued before the channel exists has no
 //! durability path, so the channel must exist from `init`.
 //!
-//! ⚠️ **THE SCOPE SENTENCE THAT USED TO STAND HERE HAS EXPIRED — see #495.** It read
-//! *"the federation-node tier has no clinical surface yet, so the bundle is EMPTY today"*,
-//! and it was true when slice D was written. ADR-0052 then made **every clinical body
-//! born-sealed**, so this node now holds real `event_dek` custody — and the slots are
-//! still empty. The consequence is not cosmetic: restore mints a fresh signing seed
-//! (ADR-0026 decision 4) and the X25519 unwrap secret is HKDF-derived from it (ADR-0052
-//! decision 4), so **every born-sealed body on a restored SOLO node is unopenable**,
-//! against ADR-0026 decision 1's promise that node-default and sealed-episode DEKs survive.
-//! *Solo* is the scope ADR-0026 itself uses, and it is not a hedge: a FEDERATED node that
-//! re-peers does recover custody, because the serve arm re-wraps each DEK against the
-//! puller's current unwrap cert (`cairn-sync`'s `rewrap_custody_for_peer`). The solo clinic
-//! — the one for which *"replication provides zero durability"* — has no such rescue.
-//! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` pins the gap; #495 carries the
-//! three fix options. Its sibling is #500 (the medium carries no clinical event either).
-//! **Do not re-describe these slots as legitimately empty without closing #495 first.**
+//! # History of this header, because it is the lesson (#495)
+//!
+//! The scope paragraph above once ended *"the federation-node tier has no clinical surface
+//! yet, so the bundle is EMPTY today"*. That was true when slice D was written and
+//! **expired silently** when ADR-0052 made every clinical body born-sealed: the node began
+//! holding real `event_dek` custody while these slots stayed empty, and because restore
+//! mints a fresh signing seed (ADR-0026 decision 4) from which the X25519 unwrap secret was
+//! then HKDF-derived (ADR-0052 decision 4), **every born-sealed body on a restored SOLO
+//! node was unopenable**. A document whose stated precondition had expired, believed for
+//! months. Read the paragraph above with that in mind before adding to it.
+//!
+//! # What is closed, and what is still open — state of play
+//!
+//! **CLOSED (#495 / ADR-0066 — see `docs/spec/decisions/`, ADR number 0066, "Identity dies
+//! with the disk; custody must not").** The node's unwrap key is now an INDEPENDENT X25519
+//! keypair (decision 1) living in its own `<key>.unwrap` keystore file, and it rides this
+//! export beside the custody rows (decision 3): [`LocalState::unwrap_secret`] carries the
+//! secret, [`LocalState::episode_deks`] carries the wrapped `event_dek` rows minus every
+//! target in `erasure_shred_log` (decision 7). Identity may die with the disk; custody no
+//! longer does. The producer is [`crate::localstate_read::read_local_state`].
+//!
+//! **STILL OPEN, do not read this module as closing them:**
+//!
+//! - **The backup medium carries no clinical event (#500).** It exports the federation
+//!   plane only. Until that lands, a restored node gets a working key and nothing to open
+//!   with it — neither half is useful alone. This is the next slice.
+//! - **The restore side does not land custody yet.** [`apply_local_state`] still refuses a
+//!   non-empty bundle rather than installing it — loudly, which is correct, but it means the
+//!   export currently writes what the restorer cannot yet apply. #495's restore half.
+//! - **Promise 2 has no subject.** [`LocalState::node_default_deks`] stays empty because no
+//!   node-default data-at-rest keystore exists anywhere in the built system. That slot's
+//!   emptiness is neither honoured nor violated; it names a tier that must exist first.
+//!
+//! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` holds the guards for all of the
+//! above, and says of each whether it asserts a guarantee or pins a surviving defect.
 
 use crate::seal::{
     self, aead_decrypt, aead_encrypt, normalize_recovery_code, rand_bytes, ArgonParams, Wrap,
@@ -67,13 +87,21 @@ pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 /// we reserve the SLOT SHAPE without committing to the clinical tier's internal schema (no
 /// speculative generality).
 ///
-/// ⚠️ **Every slot is EMPTY today, and no longer legitimately so — this is #495.** The
-/// clinical tier exists and this node holds real `event_dek` custody; nothing here carries
-/// it across a restore. See the module header for the full finding, and
-/// `tests/dr_clinical_guarantee_gap.rs` for the guards that pin it.
+/// **Which slots carry something, as of #495 / ADR-0066** — read this before writing a
+/// comment that calls the bundle empty, because two earlier comments here said exactly that
+/// and both went stale (the module header has the history):
+///
+/// - [`Self::episode_deks`] and [`Self::unwrap_secret`] are **FILLED** on a provisioned node
+///   by [`crate::localstate_read::read_local_state`]. Together they are the custody that
+///   survives a dead disk.
+/// - [`Self::node_default_deks`], [`Self::config`] and [`Self::drafts`] are still empty,
+///   legitimately: none of the three has a store anywhere in the built system to be filled
+///   from. Their emptiness is "nothing exists yet", not "we forgot".
 ///
 /// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
-/// must grant read access, never a signing identity. Do not add it here.
+/// must grant read access, never a signing identity. Do not add it here. An unwrap secret is
+/// read access and so belongs; a signing seed is an identity and does not (ADR-0066
+/// decision 2 restates this and keeps the boundary exactly where ADR-0026 drew it).
 ///
 /// `serde(default)` on every content field makes this ADDITIVELY evolvable (principle 11):
 /// a bundle written before a field existed still deserializes, with that field defaulted.
@@ -97,8 +125,10 @@ pub struct LocalState {
     /// (#495: promise 2 has no subject; see `dr_clinical_guarantee_gap.rs`).
     #[serde(default)]
     pub node_default_deks: Vec<Vec<u8>>,
-    /// Sealed-episode DEKs (minus any erased — ADR-0026 point 6). Empty, though
-    /// `event_dek` holds custody for every born-sealed body — the #495 hole itself.
+    /// Sealed-episode DEKs — one [`EpisodeDek`] per surviving `event_dek` row, CBOR-encoded
+    /// into this slot's opaque leaf type, minus every event named in `erasure_shred_log`
+    /// (ADR-0026 point 6 / ADR-0066 decision 7). Each DEK travels **wrapped**, exactly as it
+    /// sits in the database; [`Self::unwrap_secret`] is what opens them.
     #[serde(default)]
     pub episode_deks: Vec<Vec<u8>>,
     /// Node config blob. None today (no node config table exists yet).
@@ -107,12 +137,23 @@ pub struct LocalState {
     /// Draft / scratchpad store. Empty today (no draft store exists yet).
     #[serde(default)]
     pub drafts: Vec<Vec<u8>>,
+    /// ADR-0066: this node's INDEPENDENT X25519 unwrap secret, so a restored node inherits
+    /// custody of every body it also inherits. The signing key is still deliberately absent
+    /// (ADR-0026 point 4): a stolen, unsealed export must yield READ access, never a
+    /// signing identity — and an unwrap secret is exactly read access.
+    #[serde(default)]
+    pub unwrap_secret: Option<Vec<u8>>,
 }
 
 impl LocalState {
-    /// The empty bundle. THE ONLY PRODUCER this node has — `read_local_state` returns
-    /// it unconditionally, which is #495. A fix must add a producer that reads custody
-    /// out of the database; `dr_clinical_guarantee_gap.rs` pins the count at one.
+    /// The bundle's ZERO VALUE — the honest answer for a node that holds nothing to carry
+    /// (a freshly-`init`ed node, or one whose custody tables are empty).
+    ///
+    /// It is one of exactly TWO producers of a `LocalState`; the other is
+    /// [`crate::localstate_read::read_local_state`], which reads real custody out of the
+    /// database and is the one that must filter erased events. That pairing is pinned by
+    /// `dr_clinical_guarantee_gap.rs`, because a THIRD producer skipping the filter is how
+    /// an erased body's key would travel.
     pub fn empty() -> Self {
         LocalState {
             version: 1,
@@ -120,18 +161,57 @@ impl LocalState {
             episode_deks: Vec::new(),
             config: None,
             drafts: Vec::new(),
+            unwrap_secret: None,
         }
     }
 
-    /// True iff the bundle carries no content. It was once documented here as "the only
-    /// valid state at this tier" — a sentence written before the clinical tier existed. It
-    /// is now the state a node in #495 is stuck in, not a valid one.
+    /// True iff the bundle carries no content at all.
+    ///
+    /// ⚠️ **Not a validity check, and never a success condition.** Two earlier comments here
+    /// framed emptiness first as "the only valid state at this tier" and then as "the state
+    /// a node in #495 is stuck in"; both aged badly. What it means now is narrow and stable:
+    /// this node had nothing to export. On a provisioned node holding born-sealed bodies
+    /// that answer is FALSE, and must be — see [`Self::episode_deks`].
+    ///
+    /// Every content slot participates, [`Self::unwrap_secret`] included: a bundle carrying
+    /// only the secret still carries key material, and treating it as empty would let
+    /// [`apply_local_state`] wave it through as a no-op.
     pub fn is_empty(&self) -> bool {
         self.node_default_deks.is_empty()
             && self.episode_deks.is_empty()
             && self.config.is_none()
             && self.drafts.is_empty()
+            && self.unwrap_secret.is_none()
     }
+}
+
+/// One event's wrapped custody row, as it travels in [`LocalState::episode_deks`].
+///
+/// The slot's leaf type is opaque `Vec<u8>` by design (the container reserved the SLOT SHAPE
+/// without committing to the clinical tier's schema), so each element is a small CBOR struct
+/// rather than a format change: the container format is untouched by this type existing.
+///
+/// The DEK travels **wrapped**, exactly as it sits in `event_dek` — the export never holds
+/// raw key material, and the separately-carried [`LocalState::unwrap_secret`] is what opens
+/// it. `event_id` is the hyphenated UUID TEXT, matching how this crate carries every event
+/// id (tokio-postgres's `uuid` feature is not enabled here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EpisodeDek {
+    pub event_id: String,
+    pub dek_wrapped: Vec<u8>,
+}
+
+/// Serialize one custody row for the export slot. Pure.
+pub fn episode_dek_to_cbor(d: &EpisodeDek) -> Vec<u8> {
+    let mut out = Vec::new();
+    ciborium::into_writer(d, &mut out).expect("CBOR serialization of EpisodeDek cannot fail");
+    out
+}
+
+/// Parse one custody row from the export slot. Errors, never panics — a restore reading a
+/// bit-rotted or foreign element must degrade honestly rather than abort a node mid-recovery.
+pub fn episode_dek_from_cbor(bytes: &[u8]) -> Result<EpisodeDek, LocalStateError> {
+    ciborium::from_reader(bytes).map_err(|e| LocalStateError::Decode(e.to_string()))
 }
 
 /// Serialize a bundle to CBOR. Pure. (No magic header — the bundle is always carried
@@ -322,33 +402,29 @@ pub fn lsk_sidecar_path_for(key: &Path) -> PathBuf {
     key.with_file_name(name)
 }
 
-/// Read the node's exportable local state from the DB — **or rather, do not**: this returns
-/// the EMPTY bundle unconditionally, and `_db` is unused, so the export cannot see custody
-/// even in principle. THIS IS THE SEAM the clinical tier extends: it must read the
-/// node-default + sealed-episode DEKs (minus erased — ADR-0026 point 6), node config, and
-/// the draft/scratchpad store into the typed slots. The signing key is never read here
-/// (point 4). Async + DB-handle so filling the seam needs no signature change.
+/// The DB-reading producer, re-exported so every existing `localstate::read_local_state`
+/// call site keeps resolving after the move.
 ///
-/// ⚠️ **#495 — this is a live disaster-recovery hole, not a pending nicety.** `event_dek`
-/// now holds real custody for every born-sealed body (ADR-0052), and `main.rs`'s backup
-/// path calls this function, seals the empty result and **reports success**. Pinned by
-/// `tests/dr_clinical_guarantee_gap.rs::local_state_export_carries_no_dek_though_the_database_holds_one`.
-pub async fn read_local_state(_db: &tokio_postgres::Client) -> anyhow::Result<LocalState> {
-    Ok(LocalState::empty())
-}
+/// It lives in [`crate::localstate_read`] rather than here because this module owns the
+/// FORMAT (container, seal, slots) and was already past the project's 500-line file budget;
+/// reading custody out of a database is a different job with a different dependency.
+pub use crate::localstate_read::read_local_state;
 
-/// Apply a restored local-state bundle into a fresh node. The bundle is always empty today,
-/// so this is a validated noop — it asserts the bundle carries no content it cannot yet
-/// honour, rather than silently dropping it. THIS IS THE SEAM the clinical tier extends: it
-/// must load DEKs into the keystore, restore config, and rehydrate drafts. A non-empty
-/// bundle here means a newer node wrote content an older restorer cannot apply — fail loud.
+/// Apply a restored local-state bundle into a fresh node. Today this is a validated noop: it
+/// asserts the bundle carries no content it cannot yet honour, rather than silently dropping
+/// it. THIS IS THE SEAM the clinical tier extends: it must install the unwrap secret, load
+/// DEKs into the keystore, restore config, and rehydrate drafts.
 ///
-/// ⚠️ **#495, RESTORE HALF.** [`read_local_state`] is the export side of the same open seam;
-/// this is the side that would have to *land* the custody. Both must be built for ADR-0026
-/// decision 1 to become true, and a fix that builds only one leaves the other silently
-/// green — which is why `dr_clinical_guarantee_gap.rs` pins the producer and the reader
-/// separately. The `bail!` below is correct and must stay: refusing a bundle we cannot
-/// apply is the one part of this path that already fails loudly.
+/// ⚠️ **#495, RESTORE HALF — and the export half has LANDED, so this refusal now fires in
+/// practice.** [`read_local_state`] fills `episode_deks` and `unwrap_secret` on any
+/// provisioned node, so the bundle reaching a restore is no longer empty and the `bail!`
+/// below rejects it. That is loud rather than lossy, which is the correct failure direction
+/// (silently discarding recovered key material is the outcome this whole area exists to
+/// prevent) — but it means ADR-0026 decision 1 is NOT yet true end-to-end. What is still
+/// owed here, per ADR-0066 decision 4: install the recovered secret and register its public
+/// half FIRST (`node_unwrap_key` is a singleton whose registrar refuses a differing key, and
+/// wrapping needs the public half present), then land the custody rows. The `bail!` must
+/// stay until that exists.
 pub async fn apply_local_state(
     _db: &tokio_postgres::Client,
     ls: &LocalState,

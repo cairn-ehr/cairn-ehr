@@ -14,13 +14,25 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
-/// The export comes back empty. **The assertion is still true; its old justification was
-/// not** — this test used to say "no clinical surface yet => the bundle is empty", a
-/// sentence ADR-0052 falsified when it made every clinical body born-sealed. The emptiness
-/// is now a **defect** (#495), pinned properly — against a database that genuinely holds
-/// custody — by `dr_clinical_guarantee_gap.rs`. Kept here as the round-trip's read half.
-/// (Renamed off `..._is_empty_at_the_federation_tier` for the same reason: a test name is a
-/// claim, and that one re-taught the expired framing every time it was read.)
+/// The round-trip's READ half, over a node that genuinely holds nothing to export.
+///
+/// The emptiness asserted here is **correct, not a defect**. `reset_node_federation_tables`
+/// runs first, so there is no `event_dek` custody to carry; and `None` is passed for the
+/// unwrap secret, which is what a caller that could not load `<key>.unwrap` supplies. An
+/// empty bundle is the right answer to both, and applying one must be a clean noop.
+///
+/// **What this test is NOT.** It is not evidence that the export is empty in general —
+/// since #495/ADR-0066 a provisioned node's export carries its surviving `event_dek`
+/// custody and its unwrap secret. That property is pinned where it can actually be
+/// observed, against a database holding real custody, in
+/// `dr_clinical_guarantee_gap.rs::the_export_carries_the_unwrap_secret_and_the_surviving_dek`.
+/// If this test ever stops resetting the federation tables, it stops being true.
+///
+/// (Two earlier framings of this test were wrong in turn — first "no clinical surface yet,
+/// so the tier's bundle is empty", falsified by ADR-0052's born-sealed bodies; then "the
+/// emptiness is a defect", falsified by ADR-0066. The name was already changed once off
+/// `..._is_empty_at_the_federation_tier` for the first of those, because a test name is a
+/// claim. The stable claim is the one above: this node has nothing, so it exports nothing.)
 #[tokio::test]
 async fn read_local_state_returns_the_empty_bundle() {
     let Some(base) = cs() else {
@@ -30,11 +42,25 @@ async fn read_local_state_returns_the_empty_bundle() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let conn = db::connect_and_load_schema(&base).await.unwrap();
     db::reset_node_federation_tables(&conn).await.ok();
+    // The CLINICAL custody plane too, and this line is load-bearing since #495. Before it,
+    // `read_local_state` ignored the database entirely, so "no custody" needed no setup.
+    // Now the answer depends on `event_dek` — and `reset_node_federation_tables` truncates
+    // only the FEDERATION tables (`node_event`, `local_node`, `sync_cursor`, `hlc_state`,
+    // `node_event_quarantine`), never this one. These integration binaries share one
+    // serialized database, so a sibling suite's leftover custody row would otherwise make
+    // this test fail depending on binary order.
+    conn.batch_execute("TRUNCATE event_dek, erasure_shred_log CASCADE")
+        .await
+        .expect("clearing the custody plane so this node genuinely holds nothing");
 
-    let ls = read_local_state(&conn).await.expect("read must succeed");
+    // `None`: the caller could not load an unwrap secret. The export is still built — see
+    // `read_local_state`'s doc for why that is a warn, not an abort.
+    let ls = read_local_state(&conn, None)
+        .await
+        .expect("read must succeed");
     assert!(
         ls.is_empty(),
-        "the export is empty — a DEFECT since ADR-0052, not the tier's shape (#495)"
+        "a node with no custody and no secret to carry exports an empty bundle"
     );
     // Applying an empty bundle is a clean noop (the seam the clinical tier extends).
     apply_local_state(&conn, &ls)

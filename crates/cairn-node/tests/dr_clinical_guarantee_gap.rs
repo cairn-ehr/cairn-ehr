@@ -1,6 +1,12 @@
 //! #495 and #500 — ADR-0026 decision 1 promises three things about a restored node's
-//! CLINICAL tier. All three are FALSE in the built system. This file pins each one
-//! against reality, so the gap is loud instead of invisible.
+//! CLINICAL tier. This file holds each promise against what is actually built, so a gap is
+//! loud instead of invisible.
+//!
+//! **When this file was written all three were FALSE.** ADR-0066 has since closed the
+//! CUSTODY one (#495) — the node's unwrap key is an independent keypair that now rides the
+//! sealed export — so this is no longer "four pins plus a mechanism". It is a MIX: some
+//! tests assert the promise and stay green, others still pin today's defect. Every test
+//! below says in its own doc which of the two it is; read that before changing one.
 //!
 //! # The three promises
 //!
@@ -22,24 +28,31 @@
 //! does for exactly that reason — the deployment with no such rescue is the solo clinic it
 //! opens by naming, the one for which *"replication provides zero durability"*.
 //!
-//! # What was actually built
+//! # What is actually built
 //!
-//! - `backup::read_event_set` reads `SELECT signed_bytes FROM node_event` — the
-//!   **federation plane only** — and `backup::backup_to` writes exactly that set to the
-//!   medium. No `event_log`, no `event_clear`, no `event_dek`. Because `event_log` also
-//!   carries the demographic, identity, registration and erasure streams, a restored solo
-//!   node has **no patients and no charts at all**, not merely no clinical content (#500).
-//! - Restore mints a **fresh signing key** (ADR-0026 decision 4, "the private signing key
-//!   is never backed up"): `restore.rs` orchestrates the apply and the supersede, `main.rs`
-//!   owns the minting. The X25519 unwrap secret is HKDF-derived from that seed
-//!   (`cairn_event::seal::derive_unwrap_secret`, ADR-0052 decision 4), so a fresh seed is a
-//!   fresh unwrap secret and every `event_dek` row wrapped to the dead node's public half
-//!   is unopenable on that node (#495).
-//! - `localstate::LocalState` reserves `node_default_deks` and `episode_deks` — the two
-//!   slots that would carry the keys across — and `read_local_state` fills neither. It
-//!   does not even take a live look: its `_db` parameter is unused.
+//! - **STILL BROKEN (#500).** `backup::read_event_set` reads `SELECT signed_bytes FROM
+//!   node_event` — the **federation plane only** — and `backup::backup_to` writes exactly
+//!   that set to the medium. No `event_log`, no `event_clear`, no `event_dek`. Because
+//!   `event_log` also carries the demographic, identity, registration and erasure streams,
+//!   a restored solo node has **no patients and no charts at all**, not merely no clinical
+//!   content.
+//! - Restore still mints a **fresh signing key** (ADR-0026 decision 4, "the private signing
+//!   key is never backed up"): `restore.rs` orchestrates the apply and the supersede,
+//!   `main.rs` owns the minting. What ADR-0066 CHANGED is the consequence. The X25519
+//!   unwrap secret used to be HKDF-derived from that seed (ADR-0052 decision 4), so a fresh
+//!   seed meant a fresh unwrap secret and every inherited `event_dek` row was noise. It is
+//!   now an **independent** keypair in its own `<key>.unwrap` keystore file (decision 1)
+//!   that rides the sealed export (decision 3), so identity may die with the disk while
+//!   custody survives it. `cairn_event::seal::derive_unwrap_secret` survives only as
+//!   ADR-0066 decision 5's one-time MIGRATION for nodes provisioned before it.
+//! - `localstate::LocalState` reserves `node_default_deks` and `episode_deks`.
+//!   `localstate_read::read_local_state` now fills `episode_deks` from `event_dek` (minus
+//!   every target named in `erasure_shred_log` — ADR-0066 decision 7) and carries the
+//!   unwrap secret itself in a third slot. `node_default_deks` stays empty, and
+//!   LEGITIMATELY so: promise 2 has **no subject** — no node-default data-at-rest keystore
+//!   exists anywhere in the built system for it to export.
 //!
-//! # Why the gap is honest history rather than an oversight
+//! # Why the (former) custody gap was honest history rather than an oversight
 //!
 //! `localstate.rs`'s own header declared the deferral: *"the federation-node tier has no
 //! clinical surface yet, so the bundle is empty … the clinical tier fills later via
@@ -48,22 +61,38 @@
 //! ROADMAP went on recording slices A–D as ✓ done. The precondition is the thing that
 //! rotted, not the code.
 //!
-//! # Why these tests assert the DEFECT rather than the guarantee
+//! # Why a PIN, where one is still used
 //!
-//! The obvious TDD move is a red test stating the promise. This crate has no `#[ignore]`
-//! anywhere and a permanently-red test would block the gate for every unrelated change,
-//! so the pin follows the repo's existing "pinned count" idiom instead: **assert what is
-//! true today, and the guard failing IS the guard working.**
+//! For an unfixed defect the obvious TDD move is a red test stating the promise. This
+//! crate has no `#[ignore]` anywhere and a permanently-red test would block the gate for
+//! every unrelated change, so an unfixed promise follows the repo's existing "pinned count"
+//! idiom instead: **assert what is true today, name the inversion the fix owes, and the
+//! guard failing IS the guard working.**
 //!
-//! **Four of the five tests here are PINS that go red on the commit that fixes the gap**
-//! — [`medium_carries_the_federation_plane_and_no_clinical_event`] (#500),
-//! [`local_state_export_carries_no_dek_though_the_database_holds_one`] (#495),
-//! [`the_only_local_state_producer_is_the_empty_constructor`] (#495, the producer half),
-//! and [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`] (#495's
-//! erasure dimension). Each names what it must be INVERTED to.
-//! [`a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body`] is the odd one
-//! out and says so in its own doc: it describes the **mechanism**, so it stays true after
-//! the fix. Read that as four pins plus one mechanism test, not as five pins.
+//! # What each test is now
+//!
+//! - [`the_export_carries_the_unwrap_secret_and_the_surviving_dek`] — **GUARANTEE** (#495,
+//!   ADR-0066 decisions 3 and 7). It replaced the pin that asserted the export carried no
+//!   DEK at all. It stays green; if it reddens, a restored solo clinic has lost custody of
+//!   its own sealed bodies again.
+//! - [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`] — **HALF
+//!   GUARANTEE, HALF PROHIBITION**, and that asymmetry is the whole point: the survivor's
+//!   custody must travel, the shredded event's must never. The prohibition was written
+//!   while it was still vacuous and became load-bearing on the exact commit that inverted
+//!   its sibling.
+//! - [`the_export_filter_drops_a_custody_row_the_shred_log_forbids`] — **DEFENCE IN DEPTH**,
+//!   and the only test that can fire the producer's `erasure_shred_log` filter at all. It
+//!   stages a state the production doors cannot produce, and its own doc explains why that
+//!   deliberate exception to this suite's rules is the point rather than a shortcut.
+//! - [`medium_carries_the_federation_plane_and_no_clinical_event`] — **still a PIN** (#500,
+//!   the sibling issue). It names its own inversion and goes red on the commit that fixes
+//!   the medium. Do not read the rest of this file as evidence that it is fixed.
+//! - [`local_state_producers_are_the_empty_constructor_and_the_db_reader`] — a producer
+//!   COUNT guard over source text; it moved from 1 to 2 when the DB-reading producer
+//!   landed.
+//! - [`a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body`] — **MECHANISM**,
+//!   not a pin, and it says so in its own doc: it describes what a fresh seed does to a
+//!   derived secret, which is unchanged and is now migration-only territory.
 //!
 //! DB-gated on `$CAIRN_TEST_PG`; the two pure tests always run. The skip is itself
 //! guarded — `tests/db_gate_actually_ran.rs` derives its required-variable set from these
@@ -75,7 +104,7 @@ use cairn_event::seal::{
     derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_dek, unwrap_public,
 };
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
-use cairn_node::localstate::{read_local_state, LocalState};
+use cairn_node::localstate::{episode_dek_from_cbor, read_local_state, EpisodeDek, LocalState};
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -286,21 +315,26 @@ async fn medium_carries_the_federation_plane_and_no_clinical_event() {
     );
 }
 
-/// **Promises 2 and 3 — "node-default data-at-rest keys survive" and "sealed-episode DEKs
-/// survive minus any erased ones" — are FALSE (#495).**
+/// **Promise 3 — "sealed-episode DEKs survive" — is now TRUE (#495, ADR-0066).** This is
+/// the guarantee test that replaced the pin asserting the export carried nothing.
 ///
-/// The sealed local-state export (ADR-0026 slice D) is the only artifact that could carry
-/// key material off the dying node. Its two DEK slots exist and stay empty, and
-/// `read_local_state` never looks at the database at all — so a node holding real custody
-/// exports an empty bundle without noticing.
+/// The sealed local-state export (ADR-0026 slice D) is the only artifact that can carry key
+/// material off a dying node. ADR-0066 decision 3 rides the node's INDEPENDENT unwrap
+/// secret in it beside the `event_dek` custody rows, so a restored solo clinic inherits both
+/// halves of the pair it needs: the wrapped DEKs, and the one secret that opens them.
 ///
-/// Anti-vacuity: the custody read back below is opened with the node's own unwrap secret,
-/// so the row is proven to be REAL, OPENABLE and THIS event's — a length check alone would
-/// pass over a well-shaped but meaningless blob.
+/// ANTI-VACUITY, inherited from the pin this replaced and then strengthened:
 ///
-/// **When #495 is fixed:** `episode_deks` must be non-empty here, and `is_empty()` false.
+/// 1. The node is provisioned and the sealed event is authored through the **production
+///    door** (`submit_event` with its DEK), so `event_dek` genuinely holds an openable
+///    wrapped DEK before the export is built — the test never writes one itself.
+/// 2. The happy path is asserted **first** (the secret is carried, and it is this node's
+///    byte for byte), so a later failure cannot pass for the wrong reason.
+/// 3. The carried secret is checked to actually **open** the carried DEK. Anything less —
+///    a presence check, a length check — would prove transport, not recovery, and a
+///    well-shaped meaningless blob would sail through it.
 #[tokio::test]
-async fn local_state_export_carries_no_dek_though_the_database_holds_one() {
+async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -310,35 +344,43 @@ async fn local_state_export_carries_no_dek_though_the_database_holds_one() {
     let (sk, kid) = provisioned_clinic(&c).await;
     let (event_id, _bytes) = author_sealed_clinical_event(&c, &sk, &kid).await;
 
-    // Anti-vacuity: custody genuinely exists on this node — a wrapped DEK written by the
-    // production door, which the node's own unwrap secret opens.
-    let wrapped: Vec<u8> = c
-        .query_one(
-            "SELECT dek_wrapped FROM event_dek WHERE event_id = $1::text::uuid",
-            &[&event_id],
-        )
+    // `provisioned_clinic` registers this node's unwrap key by DERIVING it from the signing
+    // seed — the ADR-0066 decision 5 migration shape, which is what the shared medication
+    // fixture models. So the secret a real operator would load from `<key>.unwrap` is, for
+    // this node, exactly the derived one; deriving it here is how the test gets hold of the
+    // same secret the production door wrapped every DEK to.
+    let node_secret = derive_unwrap_secret(&sk.to_bytes());
+    // `&*` is load-bearing: `Some(&node_secret)` would be `Option<&Zeroizing<[u8; 32]>>`
+    // — deref coercion does not reach inside `Some`, so deref explicitly.
+    let exported = read_local_state(&c, Some(&*node_secret))
         .await
-        .unwrap()
-        .get(0);
-    let secret = derive_unwrap_secret(&sk.to_bytes());
-    unwrap_dek(&wrapped, &secret)
-        .expect("the door wrapped a real, openable DEK into this node's custody");
+        .expect("export must succeed");
 
-    let exported = read_local_state(&c).await.expect("export must succeed");
+    let carried = exported
+        .unwrap_secret
+        .as_ref()
+        .expect("ADR-0066: the export must carry the node's unwrap secret");
+    assert_eq!(
+        carried.as_slice(),
+        node_secret.as_slice(),
+        "the carried secret must be this node's, byte for byte"
+    );
 
-    assert!(
-        exported.episode_deks.is_empty(),
-        "PINS #495: the sealed local-state export carries no sealed-episode DEK, though \
-         event_dek holds an openable one for this very event. ADR-0026 decision 1 promises \
-         they survive. When #495 is fixed this assertion must be INVERTED."
-    );
-    assert!(
-        exported.is_empty(),
-        "PINS #495: the WHOLE bundle is empty on a node with a live clinical tier. \
-         `read_local_state`'s `_db` parameter is unused, so the export cannot see custody \
-         even in principle — the seam localstate.rs declared for the clinical tier is \
-         still open, and the clinical tier now exists."
-    );
+    let deks: Vec<EpisodeDek> = exported
+        .episode_deks
+        .iter()
+        .map(|b| episode_dek_from_cbor(b).unwrap())
+        .collect();
+    let mine = deks
+        .iter()
+        .find(|d| d.event_id == event_id)
+        .expect("the sealed event's custody must be in the export");
+
+    // The whole point: the carried secret opens the carried DEK. Anything less proves
+    // transport, not recovery.
+    let recovered: [u8; 32] = carried.as_slice().try_into().unwrap();
+    unwrap_dek(&mine.dek_wrapped, &recovered)
+        .expect("the exported secret must open the exported custody row");
 
     // Promise 2 is UNPINNABLE from the export side, and the reason IS the finding: there
     // is no node-default data-at-rest keystore anywhere in the built system (the only
@@ -364,27 +406,26 @@ async fn local_state_export_carries_no_dek_though_the_database_holds_one() {
     );
 }
 
-/// **The erasure half of promise 3 — "minus any erased ones" — has no guard at all today,
-/// and it is the half whose failure is worst.**
+/// **The erasure half of promise 3 — "minus any erased ones" — and it is the half whose
+/// failure is worst.** ADR-0066 decision 7 states the asymmetry this test exists for: the
+/// survivor's DEK **must** be present, the shredded event's **must never** be.
 ///
 /// ADR-0026 point 6 requires a restore to replay the shred log so an erased body is not
-/// resurrected. A fix for #495 that routes `event_dek` rows into the export WITHOUT
-/// consulting `erasure_shred_log` would carry a crypto-shredded body's key across the
-/// restore boundary and undo an erasure the node already executed — the worst outcome in
-/// this whole area, and the rest of this suite would stay green through it. This test is
-/// the tripwire.
+/// resurrected. A #495 fix that routed `event_dek` rows into the export WITHOUT consulting
+/// `erasure_shred_log` would carry a crypto-shredded body's key across the restore boundary
+/// and undo an erasure the node already executed — the worst outcome in this whole area,
+/// and the rest of this suite would stay green through it. This test is the tripwire.
 ///
 /// Anti-vacuity: two sealed events are authored and only one is shredded, and BOTH custody
 /// rows are checked afterwards — the shredded one gone, the survivor's still openable. So
-/// the shred is proven to have really executed, and a fix cannot satisfy this test by
-/// simply exporting nothing for either.
+/// the shred is proven to have really executed, and the export cannot satisfy this test by
+/// simply carrying nothing for either.
 ///
-/// **When #495 is fixed:** invert the `episode_deks.is_empty()` assertion — the export must
-/// carry the SURVIVOR's DEK — and keep the second exactly as it is: the shredded event's key must
-/// still never appear. That asymmetry is the whole point of this test, and it is why the
-/// second assertion is written now even though it is VACUOUS today (an empty export has
-/// nothing to scan — the code says so at the assertion). It becomes load-bearing on the
-/// exact commit that makes the first one false.
+/// **The asymmetry, as it now stands:** the first assertion was INVERTED on the commit that
+/// closed #495 — the survivor's DEK must travel. The prohibition below survived that commit
+/// unchanged, exactly as it was written to. It was authored while it was still vacuous (an
+/// empty export had nothing to scan) precisely so that it would already be sitting here,
+/// under a reviewer's eyes, on the commit that made it load-bearing.
 #[tokio::test]
 async fn export_carries_no_dek_for_the_survivor_and_none_for_the_shredded() {
     let Some(base) = cs() else {
@@ -427,19 +468,49 @@ async fn export_carries_no_dek_for_the_survivor_and_none_for_the_shredded() {
         "the shred was provenance-precise: the unshredded event keeps its custody"
     );
 
-    let exported = read_local_state(&c).await.expect("export must succeed");
+    let node_secret = derive_unwrap_secret(&sk.to_bytes());
+    let exported = read_local_state(&c, Some(&*node_secret))
+        .await
+        .expect("export must succeed");
+
+    // INVERTED on the #495 fix, as this test's doc said it must be: the survivor's custody
+    // travels. Decoded and matched by event id rather than merely counted, so "non-empty"
+    // cannot stand in for "carries THIS event".
+    let decoded: Vec<EpisodeDek> = exported
+        .episode_deks
+        .iter()
+        .map(|b| episode_dek_from_cbor(b).expect("every export element is a valid EpisodeDek"))
+        .collect();
     assert!(
-        exported.episode_deks.is_empty(),
-        "PINS #495: the export carries no DEK for the SURVIVING sealed body, though the \
-         node holds its custody. When #495 is fixed this assertion must be INVERTED — the \
-         survivor's DEK must travel."
+        decoded.iter().any(|d| d.event_id == survivor_id),
+        "ADR-0066 decision 7, first half: the export MUST carry the surviving sealed body's \
+         DEK — the node holds its custody and a restore needs it. Carried: {decoded:?}"
     );
-    // VACUOUS TODAY, AND SAID SO PLAINLY: the assertion above pins `episode_deks` empty, so
-    // this scan has nothing to scan. It is not evidence about the present — it is a FORWARD
-    // tripwire, placed here because the commit that inverts the assertion above is exactly
-    // the commit that could get this one wrong, and a reviewer of that commit will be
-    // reading this file. Stating the vacuity is the point: an unlabelled vacuous guard
-    // reads as coverage, which is the failure this whole suite exists to name.
+
+    // The prohibition, in the strongest form the slot's shape allows. The leaf type is now
+    // KNOWN (`EpisodeDek`), so decoding and comparing ids observes the property directly
+    // instead of hoping an identifier's bytes happen to appear.
+    assert!(
+        !decoded.iter().any(|d| d.event_id == shredded_id),
+        "ADR-0066 decision 7 / ADR-0026 point 6: no trace of the SHREDDED event's custody \
+         may ever reach the export. An export that names a crypto-shredded event \
+         resurrects an executed erasure on restore. Carried: {decoded:?}"
+    );
+    // KEPT EXACTLY AS FIRST WRITTEN, and now joined by the decoded check above. This scans
+    // the opaque slot bytes for the event UUID's raw 16-byte form — the shape-independent
+    // question "is this event referenced in there at all?". The element shape that landed
+    // with #495 stores the id as TEXT, so this scan alone would NOT observe the property;
+    // that is why the decoded assertion above exists and is the live guard. This one is kept
+    // because it costs nothing, needs no knowledge of the leaf type, and would still fire on
+    // a future shape that stored ids as bytes. Over a key that must never travel, two
+    // independent looks are worth the lines.
+    //
+    // Its original note declared itself VACUOUS — "the assertion above pins `episode_deks`
+    // empty, so this scan has nothing to scan" — and that self-labelling is why the gap was
+    // caught here rather than shipped: on the commit that filled the slot, the label forced
+    // the question "is it load-bearing NOW?", and the honest answer was no, because the
+    // chosen leaf shape stores text. An unlabelled vacuous guard reads as coverage, which is
+    // the failure this whole suite exists to name.
     let shredded_marker = shredded_uuid_bytes(&shredded_id);
     assert!(
         !exported
@@ -451,12 +522,141 @@ async fn export_carries_no_dek_for_the_survivor_and_none_for_the_shredded() {
          exports event_dek without consulting erasure_shred_log resurrects an executed \
          erasure on restore."
     );
+
+    // And the same prohibition over the OTHER slot #495 filled. An unwrap secret is read
+    // access to every body it was wrapped for, so a shredded event leaking through the
+    // secret slot would be the same defect wearing a different hat. It carries a bare
+    // 32-byte X25519 secret, so this is a cheap standing check that it stays that.
+    assert!(
+        !exported
+            .unwrap_secret
+            .as_ref()
+            .is_some_and(|s| s.windows(16).any(|w| w == shredded_marker.as_slice())),
+        "the secret slot carries a 32-byte X25519 secret and nothing else — certainly no \
+         reference to an erased event"
+    );
 }
 
-/// The raw 16 bytes of an event UUID, for scanning an opaque export slot. The slot's
-/// internal schema is deliberately uncommitted (`Vec<u8>` — no speculative generality), so
-/// the only shape-independent way to ask "is this event referenced in there?" is to look
-/// for its identifier's bytes.
+/// **The producer's `erasure_shred_log` filter, and the ONLY test that can fire it.**
+///
+/// Why it needs its own test, stated plainly because the answer is uncomfortable: on a
+/// healthy node that filter selects nothing extra. `cairn_execute_shred` (db/037) already
+/// DELETES the custody row when a shred executes, and `apply_remote_event` (db/020) already
+/// refuses to create one for a target already in `erasure_shred_log`. So its sibling test
+/// [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`] would stay green
+/// with the filter DELETED — it proves the outcome, not the mechanism. A filter no test can
+/// fire is a filter a refactor can remove with nothing going red, and the failure it guards
+/// against (an erased body's key resurrected on a restored node) is irreversible.
+///
+/// So this test STAGES A STATE THE PRODUCTION DOORS CANNOT PRODUCE: a live `event_dek` row
+/// sitting beside a live `erasure_shred_log` entry for the same event. That is a deliberate
+/// exception to this suite's "never write through the test" rule, and the exception is the
+/// point — the filter exists precisely for a world where an upstream defence has failed
+/// (a future apply path, a hand-repaired database, a peer re-supply), and only a test
+/// willing to simulate that failure can observe it. It is defence in depth, tested in depth.
+///
+/// Anti-vacuity, in this order: the shred is proven to have really executed (its custody is
+/// gone) BEFORE the row is staged back; the staging is proven to have taken; the SURVIVOR is
+/// proven to still travel, so the filter is precise rather than a blanket refusal; and only
+/// then is the forbidden row's absence asserted.
+///
+/// Key material is never fabricated here (house rule 6) — the re-inserted DEK is the exact
+/// wrapped blob the production door minted, read out before the shred destroyed it.
+#[tokio::test]
+async fn the_export_filter_drops_a_custody_row_the_shred_log_forbids() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+
+    let (survivor_id, _) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    let (shredded_id, _) = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    // Capture the real wrapped DEK before the shred destroys it — the bytes that must not
+    // travel are then genuinely the bytes the door wrapped, not a fabricated stand-in.
+    let doomed_dek: Vec<u8> = c
+        .query_one(
+            "SELECT dek_wrapped FROM event_dek WHERE event_id = $1::text::uuid",
+            &[&shredded_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    shred(&c, &sk, &kid, &shredded_id).await;
+    let after_shred: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_dek WHERE event_id = $1::text::uuid",
+            &[&shredded_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after_shred, 0,
+        "the shred executed: cairn_execute_shred destroyed the target's custody. The row \
+         staged below therefore genuinely could not arise through a production door."
+    );
+
+    // THE STAGING. Superuser INSERT, bypassing every door — see this test's doc.
+    c.execute(
+        "INSERT INTO event_dek (event_id, dek_wrapped) VALUES ($1::text::uuid, $2)",
+        &[&shredded_id, &doomed_dek],
+    )
+    .await
+    .expect("staging the impossible state: custody beside a live shred-log entry");
+
+    let staged: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_dek d JOIN erasure_shred_log s \
+             ON s.target_event_id = d.event_id WHERE d.event_id = $1::text::uuid",
+            &[&shredded_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        staged, 1,
+        "anti-vacuity: the forbidden state really exists now — one custody row for an event \
+         the shred log names. Without this the assertions below prove nothing."
+    );
+
+    let node_secret = derive_unwrap_secret(&sk.to_bytes());
+    let exported = read_local_state(&c, Some(&*node_secret))
+        .await
+        .expect("export must succeed");
+    let decoded: Vec<EpisodeDek> = exported
+        .episode_deks
+        .iter()
+        .map(|b| episode_dek_from_cbor(b).expect("every export element is a valid EpisodeDek"))
+        .collect();
+
+    // Precision first: the filter must drop the forbidden row WITHOUT dropping everything.
+    // Asserted before the refusal so the refusal cannot pass by exporting nothing at all.
+    assert!(
+        decoded.iter().any(|d| d.event_id == survivor_id),
+        "the filter is provenance-precise: an unshredded event's custody still travels. \
+         Carried: {decoded:?}"
+    );
+    assert!(
+        !decoded.iter().any(|d| d.event_id == shredded_id),
+        "ADR-0066 decision 7: `read_local_state` must consult erasure_shred_log and refuse \
+         to export custody for a shredded event, EVEN when a custody row exists. Deleting \
+         that WHERE NOT EXISTS clause must redden this test — it is the only test that can \
+         see it. Carried: {decoded:?}"
+    );
+}
+
+/// The raw 16 bytes of an event UUID, for scanning an export slot without decoding it.
+///
+/// The slot's leaf type is `Vec<u8>` at the container level, so this is the shape-independent
+/// way to ask "is this event referenced in there at all?" — no knowledge of the element's
+/// internal schema required. Since #495 that schema IS known (`localstate::EpisodeDek`) and
+/// stores the id as TEXT, so a caller must not rely on this scan alone; see the two-check
+/// arrangement in [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`].
 fn shredded_uuid_bytes(event_id: &str) -> [u8; 16] {
     *Uuid::parse_str(event_id).unwrap().as_bytes()
 }
@@ -505,29 +705,41 @@ async fn shred(c: &Client, sk: &SigningKey, kid: &str, target: &str) {
     .expect("a plaintext erasure tombstone is admitted");
 }
 
-/// **The mechanism** — why the promises above cannot be rescued by a database-level
-/// restore either. Pure: no database, always runs.
+/// **The mechanism, and it is now MIGRATION-ONLY territory — do not read it as a
+/// description of the live path.** Pure: no database, always runs.
 ///
-/// Restore mints a fresh signing key by design (ADR-0026 decision 4), and ADR-0052
-/// decision 4 derives the X25519 unwrap secret from that seed. So the restored node's
-/// unwrap secret is a *different* secret, and every `event_dek` row it inherits — from a
-/// disk image, a `pg_dump`, or a peer that re-supplied the rows verbatim — is noise to it.
+/// ⚠️ **Scope first, because this test's shape is unchanged while its meaning is not.**
+/// ADR-0066 decision 1 made the node's unwrap key an INDEPENDENT X25519 keypair, so the
+/// live path no longer derives an unwrap secret from a signing seed at all, and a restored
+/// node adopts the exported secret instead of deriving one (decision 4). What is tested
+/// below is the DERIVATION's mechanics — which are unchanged, and which still matter for
+/// exactly one population: nodes provisioned before ADR-0066, whose custody is wrapped to a
+/// derived key and which adopt that derived secret once as their first independent key
+/// (decision 5). This test says what would happen to such a node if that adoption were
+/// skipped and a fresh seed minted instead. It is the reason the adoption exists.
 ///
-/// SCOPE, stated precisely because the obvious over-claim is wrong: this does NOT mean a
-/// database-level restore yields unreadable bodies. `event_clear` is an ordinary logged
-/// table holding the CLEAR payload and clear twin for every sealed body this node has
-/// custody of, so a `pg_dump` or disk image carries readable content without needing any
-/// DEK at all. The true and still-damning statement is narrower — the inherited DEKs are
-/// noise, and NEITHER the backup medium NOR the sealed export carries the DEKs or
-/// `event_clear`, so the ADR-0026 restore path (medium + recovery secret) is the one that
-/// arrives with nothing.
+/// Restore mints a fresh signing key by design (ADR-0026 decision 4), and the pre-ADR-0066
+/// derivation (ADR-0052 decision 4) took the X25519 unwrap secret from that seed. So such a
+/// node's restored unwrap secret is a *different* secret, and every `event_dek` row it
+/// inherits — from a disk image, a `pg_dump`, or a peer that re-supplied the rows verbatim
+/// — is noise to it.
+///
+/// A SECOND SCOPE NOTE, stated precisely because the obvious over-claim is wrong: this does
+/// NOT mean a database-level restore yields unreadable bodies. `event_clear` is an ordinary
+/// logged table holding the CLEAR payload and clear twin for every sealed body this node has
+/// custody of, so a `pg_dump` or disk image carries readable content without needing any DEK
+/// at all. The narrower true statement is that the inherited DEKs are noise; and the backup
+/// MEDIUM still carries neither the DEKs nor `event_clear` (#500). The sealed EXPORT no
+/// longer belongs in that list — since #495 it carries the custody rows and the secret that
+/// opens them, which is precisely what stopped the ADR-0026 restore path from arriving with
+/// nothing.
 ///
 /// The happy-path leg is asserted FIRST and deliberately: without it a broken `wrap`/
 /// `unwrap` pair would make the refusal below pass for entirely the wrong reason.
 ///
-/// **When #495 is fixed:** this test stays true — it describes the mechanism, not the
-/// gap. What must change is that the fix routes the *secret* (or the seed) across the
-/// restore boundary, which is the decision #495 asks for.
+/// **#495 is fixed, and this test stayed true** — it describes the mechanism, not the gap.
+/// The fix routed the *secret* across the restore boundary (never the seed: a seed would be
+/// a signing identity, which ADR-0026 point 4 forbids the export to carry).
 #[test]
 fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
     // House rule 6: key material is DERIVED at runtime, never a literal — a byte-array
@@ -565,49 +777,87 @@ fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
     );
 }
 
-/// The empty bundle is not a runtime accident that a populated node would avoid — there is
-/// **no code anywhere that builds a non-empty one**. Pure: no database.
+/// Exactly TWO pieces of code build a `LocalState`, and the guard knows both by name.
+/// Pure: no database.
 ///
-/// Kept separate from the DB-gated export test on purpose: that one shows the *reader*
-/// ignores custody, this one shows there is no *producer* either. Both would have to change
-/// for ADR-0026 decision 1 to become true, and a fix that touched only one would leave the
-/// other green.
+/// **RENAMED on the #495 fix** (it was `the_only_local_state_producer_is_the_empty_
+/// constructor`). A test name is a claim, and that one asserted a state of affairs ADR-0066
+/// deliberately ended — leaving it would have re-taught the expired framing to every reader,
+/// which is the exact failure mode this suite was written about. Its sibling in
+/// `tests/localstate.rs` was renamed once already for the same reason.
+///
+/// **Why this guard still earns its place after the fix.** Before, it showed there was no
+/// producer that could read custody; now it fixes the producer surface at a known, small
+/// number so a THIRD one cannot appear unnoticed. That matters because the two are not
+/// interchangeable: `empty()` is the legitimate zero value (a bundle with nothing to carry),
+/// while `localstate_read::read_local_state` is the one that must consult
+/// `erasure_shred_log`. A third producer that skipped that filter would resurrect an erased
+/// body's key on restore, and every other test here would stay green.
+///
+/// **The two-file scan is the load-bearing part.** The producer moved OUT of
+/// `localstate.rs` (already past the 500-line house budget; the format and the DB read are
+/// different jobs), so a single-file scan would now count 1, pass, and prove nothing about
+/// the file that does the dangerous work. Both files are read.
 ///
 /// This is a SOURCE-DERIVED guard, the repo's idiom for a claim about code shape
 /// (`event_log_row_by_name.rs`, `no_drugref_dependency.rs`). Asserting instead that
 /// `LocalState::empty()` returns something empty would be a tautology over a constructor's
 /// own name — it could not observe the property this test is named for, which is exactly
 /// the failure mode this file exists to avoid.
-///
-/// **When #495 is fixed:** a second producer must exist (the one that reads custody out of
-/// the database), so the count below goes to 2 and this assertion reddens. Raise it to the
-/// new number and name the new producer in the message.
 #[test]
-fn the_only_local_state_producer_is_the_empty_constructor() {
-    let src =
-        sources::read_source(&sources::repo_root().join("crates/cairn-node/src/localstate.rs"));
+fn local_state_producers_are_the_empty_constructor_and_the_db_reader() {
+    let root = sources::repo_root();
+    // Both files, named individually rather than walked: the claim is about these two
+    // specific producers, and a walk would silently absorb a third file's producer into the
+    // count instead of reddening on it.
+    let files = [
+        root.join("crates/cairn-node/src/localstate.rs"),
+        root.join("crates/cairn-node/src/localstate_read.rs"),
+    ];
 
-    let producers: Vec<(usize, String)> = src
-        .lines()
-        .enumerate()
-        .map(|(i, l)| (i + 1, l.trim().to_string()))
-        .filter(|(_, l)| constructs_local_state(l))
+    let producers: Vec<(String, usize, String)> = files
+        .iter()
+        .flat_map(|f| {
+            let name = f
+                .file_name()
+                .expect("both paths name a file")
+                .to_string_lossy()
+                .into_owned();
+            sources::read_source(f)
+                .lines()
+                .enumerate()
+                .map(|(i, l)| (name.clone(), i + 1, l.trim().to_string()))
+                .filter(|(_, _, l)| constructs_local_state(l))
+                .collect::<Vec<_>>()
+        })
         .collect();
 
     assert_eq!(
         producers.len(),
-        1,
-        "PINS #495: `LocalState` is constructed in exactly ONE place — `empty()` — so the \
-         empty bundle is the only bundle this node can build, no matter what the database \
-         holds. Found: {producers:?}"
+        2,
+        "`LocalState` is constructed in exactly TWO places — `localstate::LocalState::empty()` \
+         (the legitimate zero value) and `localstate_read::read_local_state` (the DB reader, \
+         which MUST filter on erasure_shred_log). A third producer is a place an erased \
+         body's key could travel from. Found: {producers:?}"
     );
 
-    // Also confirm the one producer really is `empty()`, not some other site that happens
-    // to be alone — the count alone would not notice a swap.
+    // And one is in each file: the count alone would pass if the DB reader vanished and a
+    // second `empty()`-shaped constructor appeared beside the first.
+    for f in &files {
+        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            producers.iter().filter(|(n, _, _)| *n == name).count(),
+            1,
+            "one producer per file — {name} must hold exactly one. Found: {producers:?}"
+        );
+    }
+
+    // Also confirm `empty()` really is the zero-value producer, not some other site that
+    // happens to sit alone in that file — a count cannot notice a swap.
     let ls = LocalState::empty();
     assert!(
         ls.is_empty(),
-        "the sole producer is `empty()`, and it produces an empty bundle"
+        "`empty()` is the zero-value producer, and it produces an empty bundle"
     );
 }
 
