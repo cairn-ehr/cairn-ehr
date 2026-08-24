@@ -19,7 +19,8 @@
   **E2**, appended 2026-08-24 (under decision 4) — decision 4's **derivation** clause (the node unwrap key
   HKDF-derived from the Ed25519 signing seed) is **superseded by
   [ADR-0066](0066-identity-dies-with-the-disk-custody-must-not.md)**, which makes it an independent X25519
-  keypair; unlike E1 this one does change a clause, and the rest of decision 4 — including the
+  keypair. Where E1 corrected the record of what was built, **E2 makes no change of its own — it records one
+  made by a superseding ADR**, which is what the errata rule requires. The rest of decision 4 — including the
   no-second-ceremony rationale — stands unchanged.
 - **Resolves:** [#189](https://github.com/cairn-ehr/cairn-ehr/issues/189) (2026-07-15 review finding C1,
   Critical/window-closing — the seal-by-default posture), [#92](https://github.com/cairn-ehr/cairn-ehr/issues/92)
@@ -190,9 +191,11 @@ slice's perf bench (§8).
 > stopping at the serving node's log.
 
 > **Erratum E2 (2026-08-24) — the derivation clause is superseded; the rest of decision 4 stands.**
-> This erratum is a different animal from E1 and says so plainly: E1 corrected *the record of what was
-> built* and changed no decision, whereas this one **does change one clause**. It is therefore a forward
-> pointer to a superseding decision, not a factual correction. The clause — *"**The node unwrap key is
+> This erratum differs from E1 in what it points at, and the distinction is the one the errata rule in
+> [README](README.md#rules) draws: an erratum never changes a decision. **E1 corrected the record of what was
+> built. E2 changes nothing of its own — it records a change made by a superseding ADR**, which is the route
+> the rule requires for anything that alters a decision. Without the pointer, the clause below would go on
+> describing a system that no longer exists. The clause — *"**The node unwrap key is
 > X25519**, derived from the node's Ed25519 signing seed by HKDF with
 > `info = "cairn-node-unwrap-x25519-v1"`"* — is **superseded by
 > [ADR-0066](0066-identity-dies-with-the-disk-custody-must-not.md)**: the node unwrap key is an

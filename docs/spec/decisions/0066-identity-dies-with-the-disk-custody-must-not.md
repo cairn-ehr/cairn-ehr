@@ -122,8 +122,10 @@ named for `event_dek` custody; its dual-recipient seal (op-passphrase **or** rec
 escrow an unwrap secret needs; and it is written as a **sibling of the medium** on every backup, so it
 shares the medium's fate.
 
-The export therefore satisfies point 4's test unchanged: it confers **read access, never a signing
-identity**. Someone holding the export plus a secret can read the dead node's records; they still cannot
+The export therefore satisfies **point 3's** stated test unchanged — *"a stolen, unsealed artifact yields
+**read access but not a signing identity**"* — the same sentence decision 2 cites, and the locus to quote when
+citing this test anywhere (point 4 makes the related but differently-worded claim that *"a stolen backup cannot
+resurrect a node identity"*). Someone holding the export plus a secret can read the dead node's records; they still cannot
 sign as it. That is the boundary ADR-0026 drew on purpose, and this ADR keeps it exactly where it was.
 
 The slot is **typed and additive** ([ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md)):
@@ -182,9 +184,11 @@ which is why the message names the command.
 The export carries `event_dek` rows **wrapped, verbatim** — no raw key material ever lands in it — and it
 carries **nothing for an event already crypto-shredded**.
 
-[ADR-0026](0026-node-durability-and-disaster-recovery.md) point 6 requires that *"a backup can no more silently
-defeat erasure than a sibling node can"*, and [ADR-0052](0052-born-sealed-clinical-bodies.md) decision 6 makes a
-shred destroy the custody row. **A key that never crosses the restore boundary cannot be
+[ADR-0026](0026-node-durability-and-disaster-recovery.md) states the requirement in its **Context** — *"A backup
+can no more silently defeat erasure than a sibling node can"* — and implements it in **point 6**
+(shred-as-replayed-event, shred completion ⊇ backup propagation); the sentence is not itself in point 6, so
+look for it one section up. [ADR-0052](0052-born-sealed-clinical-bodies.md) decision 6 makes a shred destroy
+the custody row. **A key that never crosses the restore boundary cannot be
 resurrected by one**, which is stronger than replaying the shred log after the fact and does not depend on
 replay ordering. The two mechanisms compose: the export omits the key, and the shred log still replays.
 This asymmetry — the survivor's DEK **must** be present, the shredded event's **must never** be — is the
@@ -203,8 +207,9 @@ load-bearing property of the export's tests.
 >   tier in the built system — only per-event DEKs. The export slot exists and nothing produces it. The
 >   clause is neither honoured nor violated; it names a tier that would have to exist first, and it must
 >   not be read as satisfied by anything here.
-> - **`cairn-sync` still derives its own unwrap secret.** It does not depend on `cairn-node` and cannot
->   read the new keystore file, so after this change a freshly-provisioned node registers an independent
+> - **`cairn-sync` still derives its own unwrap secret.** It has no **production** dependency on `cairn-node`
+>   (only a dev-dependency, for tests) — a layering choice, not a structural impossibility — and so cannot
+>   read the new keystore file. After this change a freshly-provisioned node registers an independent
 >   key while the sync daemon derives a different one. The accompanying slice makes that divergence
 >   **fail fast at startup** rather than degrade quietly — a serve arm that cannot open its own custody
 >   looks exactly like a peer with no custody to offer, which is the silent failure this whole ADR is
