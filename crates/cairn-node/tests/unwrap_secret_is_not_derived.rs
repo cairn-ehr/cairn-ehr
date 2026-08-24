@@ -37,6 +37,17 @@
 //! derive_unwrap_secret(` declaration line itself (same declaration-vs-call idiom
 //! `identity_scaffolding_shared.rs`'s `locally_declared` already uses one directory
 //! over — a definition can never be written in the shape of a call).
+//!
+//! ## Known limitation: production code after a MID-FILE `#[cfg(test)]` module
+//!
+//! Despite its name, `cfg_test_tail_start` finds the FIRST `#[cfg(test)] mod` in the
+//! file, not a trailing one — production code placed AFTER it would go unscanned. Rust
+//! convention (which this repo follows throughout `crates/*/src`) puts the test module
+//! last, so nothing in this tree is shaped that way today, which is exactly why nothing
+//! would have noticed if it were. This is a gap in a REGRESSION NET for an accidental
+//! re-coupling, not a defence against deliberate concealment —
+//! `no_drugref_dependency.rs`'s own `strip_rust_cfg_test_tail` states the identical gap,
+//! in the identical terms, for the identical reason.
 
 #[path = "common/sources.rs"]
 mod sources;
@@ -57,13 +68,15 @@ fn is_the_declaration_line(line: &str) -> bool {
     line.starts_with("fn derive_unwrap_secret(")
 }
 
-/// The line index where a trailing `#[cfg(test)] mod` block begins, if the file has
-/// one. Same idiom as `no_drugref_dependency.rs`'s `strip_rust_cfg_test_tail` (that
-/// file's doc explains the convention: a `src/` file's unit tests conventionally live
-/// in a same-file tail, so production code and test fixtures share one file and must be
-/// told apart by more than "which file"). Scoped locally rather than shared, because
-/// this guard's need — find the boundary once — is narrower than that file's, which
-/// also blanks comments and string literals for an unrelated check.
+/// The line index where the FIRST `#[cfg(test)] mod` block begins, if the file has one
+/// — not necessarily a trailing one; see the module header's "Known limitation" for
+/// what that means for production code placed after it. Same idiom as
+/// `no_drugref_dependency.rs`'s `strip_rust_cfg_test_tail` (that file's doc explains the
+/// convention: a `src/` file's unit tests conventionally live in a same-file tail, so
+/// production code and test fixtures share one file and must be told apart by more than
+/// "which file"). Scoped locally rather than shared, because this guard's need — find
+/// the boundary once — is narrower than that file's, which also blanks comments and
+/// string literals for an unrelated check.
 fn cfg_test_tail_start(lines: &[&str]) -> Option<usize> {
     let item_line = |from: usize| -> Option<usize> {
         (from..lines.len()).find(|&i| {
@@ -82,35 +95,53 @@ fn cfg_test_tail_start(lines: &[&str]) -> Option<usize> {
     })
 }
 
-/// Does this file's PRODUCTION text — excluding any trailing `#[cfg(test)]` module, and
-/// excluding `derive_unwrap_secret`'s own declaration line — contain a real call to it?
-/// This is the file-level predicate the guard actually means by "calls
-/// `derive_unwrap_secret`": naming it in your own signature, or in your own test
-/// fixtures, is not that.
+/// Strips a same-line `//` comment tail (covers `//`, `///`, and `//!` alike — all three
+/// share the two-slash prefix, so a whole doc-comment line strips to empty). Naming the
+/// function in prose — a doc comment writing `` `derive_unwrap_secret` `` in backticks,
+/// exactly the shape this file's own module doc uses — is not a call, the same clause
+/// (a) `no_drugref_dependency.rs` carries for its own scan. Line-oriented and quote-
+/// unaware like the rest of this guard: a `//` inside a string literal would still cut
+/// the line early, an accepted, narrow miss in the safe direction (under- rather than
+/// over-scanning a line is the wrong way round for THIS omission, but no production line
+/// in this tree embeds a `//` inside a string next to this identifier today).
+fn strip_comment_tail(line: &str) -> &str {
+    match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    }
+}
+
+/// Does this file's PRODUCTION text — excluding any trailing `#[cfg(test)]` module,
+/// excluding same-line comments, and excluding `derive_unwrap_secret`'s own declaration
+/// line — contain a real call to it? This is the file-level predicate the guard actually
+/// means by "calls `derive_unwrap_secret`": naming it in your own signature, in a doc
+/// comment, or in your own test fixtures, is not that.
 fn calls_derive_unwrap_secret(text: &str) -> bool {
     let lines: Vec<&str> = text.lines().collect();
     let tail_start = cfg_test_tail_start(&lines).unwrap_or(lines.len());
-    lines[..tail_start]
-        .iter()
-        .any(|line| line.contains("derive_unwrap_secret") && !is_the_declaration_line(line))
+    lines[..tail_start].iter().any(|line| {
+        let code = strip_comment_tail(line);
+        code.contains("derive_unwrap_secret") && !is_the_declaration_line(code)
+    })
 }
 
 /// Production files permitted to call `derive_unwrap_secret`, with the reason each is
 /// allowed. A file NOT on this list calling it is the failure this guard exists for.
+///
+/// `crates/cairn-node/src/medication/sealed_submit.rs` is deliberately NOT here: its
+/// `ensure_unwrap_key` calls `keystore::unwrap_secret(sk)`, and the derivation happens
+/// INSIDE `keystore.rs` — so `sealed_submit.rs` never contains the literal
+/// `derive_unwrap_secret` and was never an offender. An allow-list entry for a file that
+/// calls nothing on this list is misleading documentation, and would have made a later
+/// task's "remove this entry" step a silent no-op.
 const ALLOWED: &[(&str, &str)] = &[
     (
         "crates/cairn-node/src/keystore.rs",
         "the ADR-0066 adoption migration (`adopt_derived_unwrap_secret`) — the one place a \
          pre-ADR-0066 node re-derives its old secret to keep its existing event_dek rows openable",
     ),
-    // The two sites ADR-0066 has not yet reached. Both entries are REMOVED/REWRITTEN by a
-    // later task in this same slice; they are listed now so that every commit leaves the
-    // suite green (house rule 6), never so that the coupling is tolerated.
-    (
-        "crates/cairn-node/src/medication/sealed_submit.rs",
-        "PRE-ADR-0066 — `ensure_unwrap_key` still derives. REMOVE THIS ENTRY in Task 4, \
-         which turns that function into a verification and deletes the derivation",
-    ),
+    // The one site ADR-0066 has not yet reached. Listed now so every commit leaves the
+    // suite green (house rule 6), never so the coupling is tolerated.
     (
         "crates/cairn-sync/src/main.rs",
         "PRE-ADR-0066 — cairn-sync cannot read cairn-node's keystore. REWRITE THIS REASON \
@@ -121,18 +152,38 @@ const ALLOWED: &[(&str, &str)] = &[
 #[test]
 fn only_the_adoption_migration_derives_the_unwrap_secret() {
     let root = sources::repo_root();
-    let mut offenders: Vec<String> = Vec::new();
+    // Collected once (not re-swept per assertion below) so every check below sees
+    // EXACTLY the set the offender scan itself ran against.
+    let files: Vec<std::path::PathBuf> = sources::production_rust_files(&root).collect();
 
-    for path in sources::production_rust_files(&root) {
-        let text = sources::read_source(&path);
-        if !calls_derive_unwrap_secret(&text) {
-            continue;
-        }
+    let mut offenders: Vec<String> = Vec::new();
+    let mut swept_rel_paths: Vec<String> = Vec::new();
+    // Positive control (part of the anti-vacuity check below): does the RAW substring
+    // still show up anywhere, independent of the matcher's declaration/comment/test-tail
+    // smarts? If `derive_unwrap_secret` were renamed (e.g. to
+    // `derive_legacy_unwrap_secret` in a later cleanup) or moved out of `crates/*/src`
+    // entirely, `calls_derive_unwrap_secret` would return `false` EVERYWHERE,
+    // `offenders` would be empty forever, and `files.len() > 50` would still hold — this
+    // guard would report green while protecting nothing. This counter is independent of
+    // the matcher precisely so it cannot go blind for the SAME reason the matcher would.
+    let mut raw_needle_sightings = 0usize;
+
+    for path in &files {
+        let text = sources::read_source(path);
         let rel = path
             .strip_prefix(&root)
             .unwrap_or(Path::new(""))
             .to_string_lossy()
             .replace('\\', "/");
+        swept_rel_paths.push(rel.clone());
+
+        if text.contains("derive_unwrap_secret") {
+            raw_needle_sightings += 1;
+        }
+
+        if !calls_derive_unwrap_secret(&text) {
+            continue;
+        }
         if !ALLOWED.iter().any(|(allowed, _)| *allowed == rel) {
             offenders.push(rel);
         }
@@ -147,13 +198,38 @@ fn only_the_adoption_migration_derives_the_unwrap_secret() {
          record (#495)."
     );
 
-    // Anti-vacuity: the guard must be scanning real files, not an empty set. If the
-    // helper's globbing breaks, an empty sweep would pass silently and forever.
+    // Anti-vacuity, part 1: the guard must be scanning real files, not an empty set. If
+    // the helper's globbing breaks, an empty sweep would pass silently and forever.
     assert!(
-        sources::production_rust_files(&root).count() > 50,
+        files.len() > 50,
         "the production-source sweep found almost nothing — the scan itself is broken, and \
          a guard that inspects nothing always passes"
     );
+
+    // Anti-vacuity, part 2 (positive control): the thing this guard hunts must still be
+    // findable, in its raw literal form, somewhere in the swept text. See the counter's
+    // doc comment above for exactly which silent-pass this catches.
+    assert!(
+        raw_needle_sightings > 0,
+        "no swept file contains the literal `derive_unwrap_secret` any more — has the \
+         function been renamed, or moved out of crates/*/src? If so this guard is now \
+         VACUOUS (every ALLOWED entry has gone inert with no signal) and must be updated \
+         to track the new name/location, never simply deleted."
+    );
+
+    // Anti-vacuity, part 3: every live ALLOWED path must actually be inside the swept
+    // set. Catches the same rename/move as part 2 from the allow-list's side, AND a
+    // walker silently narrowed to a subset of crates (an ALLOWED file living in a crate
+    // the walker stopped covering would never be read, so its entry would go inert with
+    // no signal even though `raw_needle_sightings` stayed positive elsewhere).
+    for (allowed, _) in ALLOWED {
+        assert!(
+            swept_rel_paths.iter().any(|p| p == allowed),
+            "ALLOWED names {allowed:?}, but the production-source sweep never saw that \
+             file — the walker's scope has narrowed, or the file moved, and this \
+             allow-list entry is now unverifiable"
+        );
+    }
 }
 
 /// Pins the matcher itself against synthetic sources, not just its verdict on today's
@@ -204,11 +280,11 @@ fn the_matcher_exempts_the_declaration_and_test_fixtures_but_not_a_real_call() {
          must still be caught"
     );
 
-    // A call site that sits AFTER a cfg(test) tail is unrealistic in this tree (Rust
-    // convention puts the test module last, and `no_drugref_dependency.rs`'s own
-    // module doc states the same accepted limitation) but is worth pinning so the
-    // boundary's direction — production-then-tests, not the reverse — is explicit
-    // rather than assumed.
+    // A real call site that sits BEFORE the cfg(test) tail must still be caught, even
+    // though the tail ITSELF also mentions the function as a fixture — the matcher must
+    // not treat "the tail names it too" as license to ignore the production call that
+    // precedes it. (The reverse case — production code placed AFTER a `#[cfg(test)]
+    // mod` — is a known, separately-documented gap; see the module header.)
     let production_before_tail = concat!(
         "pub fn sneaky(seed: &[u8; 32]) -> Zeroizing<[u8; 32]> {\n",
         "    derive_unwrap_secret(seed)\n",
@@ -222,5 +298,40 @@ fn the_matcher_exempts_the_declaration_and_test_fixtures_but_not_a_real_call() {
         calls_derive_unwrap_secret(production_before_tail),
         "a real call site BEFORE the cfg(test) tail must still be caught even though the \
          tail itself also mentions the function"
+    );
+}
+
+/// Regression pin for the second review-round finding: without comment stripping, ANY
+/// doc comment writing `` `derive_unwrap_secret` `` in backticks — the exact shape this
+/// file's own module doc uses, and the shape a future doc edit to `seal.rs`'s
+/// `load_unwrap_secret`/`generate_unwrap_secret` docs could easily take — would trip the
+/// guard. The natural but wrong fix for that would be adding `seal.rs` to `ALLOWED`,
+/// which blanket-exempts the whole defining file and destroys the declaration/test-tail
+/// line-scoping this guard exists to have. So comments must be stripped before matching,
+/// and this pins that a comment-only mention stays clean while a real call right next
+/// to an unrelated comment is still caught.
+#[test]
+fn the_matcher_exempts_comment_mentions_but_not_a_real_call_beside_one() {
+    let doc_comment_only = concat!(
+        "/// See `derive_unwrap_secret` for the pre-ADR-0066 adoption path.\n",
+        "//! module-level mention of derive_unwrap_secret in prose\n",
+        "// a line comment naming derive_unwrap_secret too\n",
+        "pub fn unrelated() {}\n",
+    );
+    assert!(
+        !calls_derive_unwrap_secret(doc_comment_only),
+        "a doc/line comment naming the function in prose must not read as a call"
+    );
+
+    let real_call_beside_a_comment = concat!(
+        "pub fn sneaky(seed: &[u8; 32]) -> Zeroizing<[u8; 32]> {\n",
+        "    // derive_unwrap_secret is mentioned here too, but the call below is real\n",
+        "    cairn_event::seal::derive_unwrap_secret(seed)\n",
+        "}\n",
+    );
+    assert!(
+        calls_derive_unwrap_secret(real_call_beside_a_comment),
+        "a real call must still be caught even on a line adjacent to a comment naming \
+         the same function"
     );
 }
