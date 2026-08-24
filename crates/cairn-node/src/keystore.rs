@@ -1,6 +1,6 @@
 use crate::seal;
 use cairn_event::{generate_key, SigningKey};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(thiserror::Error, Debug)]
 pub enum KeystoreError {
@@ -136,14 +136,106 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
     }
 }
 
-/// ADR-0052: the node's X25519 DEK-unwrap secret, HKDF-derived from the SAME
-/// Ed25519 seed the keystore already seals and escrows (ADR-0026) — one master
-/// secret, two independent keys, no second recovery ceremony. Domain-separated
-/// by the HKDF info tag in cairn-event::seal, so the unwrap secret leaks nothing
-/// about the signing key (and vice versa). The daemon holds this secret and NEVER
-/// stores it in the database — only its public half (the unwrap-key cert) does,
-/// so a DB backup can never reconstruct a DEK.
+/// SUPERSEDED by ADR-0066 — this is no longer the standing design, it is a one-time
+/// pre-ADR-0066 adoption path. ADR-0052's HKDF-derivation from the Ed25519 signing seed
+/// is exactly the coupling that emptied a restored solo node's clinical record: DR
+/// mints a fresh signing seed and never backs up the old one, so the derived unwrap
+/// secret changed on restore and every inherited wrapped-DEK row went permanently dark
+/// (#495/#500). The node's unwrap key now lives independently in its own sealed
+/// sidecar file — see [`generate_unwrap_sealed`] / [`load_unwrap_secret`] below.
+///
+/// Kept (not deleted) only because its sole caller, `medication/sealed_submit.rs`, is
+/// rewritten by a later task in this slice; that task deletes this function and the
+/// caller together so the tree never sits with a caller of a function that no longer
+/// exists. Do not add new callers.
 pub fn unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
+    let seed = zeroize::Zeroizing::new(sk.to_bytes());
+    cairn_event::seal::derive_unwrap_secret(&seed)
+}
+
+/// The unwrap-key file for a signing-key path: `<key>.unwrap`, a sibling — discoverable
+/// from what every command already has, exactly like the `.lsk` sidecar. Pure.
+pub fn unwrap_key_path_for(key: &Path) -> PathBuf {
+    let mut name = key
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".unwrap");
+    key.with_file_name(name)
+}
+
+/// Mint this node's INDEPENDENT X25519 unwrap secret and write it sealed (mode 0600)
+/// under both operator secrets. Returns the PUBLIC half, which the caller registers in
+/// the database (`cairn_register_unwrap_key`) — the secret half never enters the DB, so a
+/// database backup alone can never unwrap a DEK.
+///
+/// The sealed format is the SAME dual-recipient bundle the signing key uses: both are
+/// 32-byte secrets, so `seal::seal` covers this with no new ceremony and no new format
+/// (ADR-0066 decision 1 — the operator still holds one passphrase and one recovery code).
+pub fn generate_unwrap_sealed(
+    path: &Path,
+    op_pass: &str,
+    recovery_code: &str,
+) -> Result<[u8; 32], KeystoreError> {
+    let secret = cairn_event::seal::generate_unwrap_secret()
+        .map_err(|e| KeystoreError::Key(e.to_string()))?;
+    write_unwrap_sealed(path, &secret, op_pass, recovery_code)?;
+    Ok(cairn_event::seal::unwrap_public(&secret))
+}
+
+/// Write a KNOWN unwrap secret sealed under both operator secrets. Two callers, both
+/// carrying a secret that must not change: the ADR-0066 adoption migration (which keeps a
+/// pre-ADR-0066 node's existing `event_dek` rows openable) and `restore`, which installs
+/// the dead node's unwrap secret so the restored node inherits its custody.
+pub fn write_unwrap_sealed(
+    path: &Path,
+    secret: &[u8; 32],
+    op_pass: &str,
+    recovery_code: &str,
+) -> Result<(), KeystoreError> {
+    let material = zeroize::Zeroizing::new(*secret);
+    let sealed = seal::seal(&material, op_pass, recovery_code)
+        .map_err(|e| KeystoreError::Key(e.to_string()))?;
+    crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
+    Ok(())
+}
+
+/// Load the node's unwrap secret, auto-detecting sealed vs plaintext exactly as [`load`]
+/// does for the signing key — including the distinct [`KeystoreError::Sealed`] variant, so
+/// the CLI can prompt for the passphrase from ONE load attempt with no TOCTOU-prone
+/// pre-classification read.
+pub fn load_unwrap_secret(
+    path: &Path,
+    secret: Option<&str>,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, KeystoreError> {
+    let bytes = zeroize::Zeroizing::new(std::fs::read(path)?);
+    if let Ok(sealed) = seal::from_cbor(&bytes) {
+        let secret = secret.ok_or(KeystoreError::Sealed)?;
+        seal::unseal(&sealed, secret).ok_or_else(|| {
+            KeystoreError::Key(
+                "cannot unseal the unwrap key: wrong passphrase/recovery code or corrupt file"
+                    .into(),
+            )
+        })
+    } else {
+        Ok(zeroize::Zeroizing::new(
+            bytes.as_slice().try_into().map_err(|_| {
+                KeystoreError::Key("not a sealed bundle and not a 32-byte unwrap secret".into())
+            })?,
+        ))
+    }
+}
+
+/// ADR-0066 decision 5 — THE MIGRATION, and the only production caller of
+/// `derive_unwrap_secret`.
+///
+/// A node provisioned before ADR-0066 wrapped every `event_dek` row to the public half of
+/// the secret HKDF-derived from its signing seed. Re-deriving it once and adopting it as
+/// that node's first INDEPENDENT key keeps all of them openable — no rewrap, no migration
+/// of custody rows, nothing to get wrong at 3am. It works only while the signing seed
+/// still reconstructs the old secret, which is why this migration is cheap now and never
+/// cheaper.
+pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
     let seed = zeroize::Zeroizing::new(sk.to_bytes());
     cairn_event::seal::derive_unwrap_secret(&seed)
 }
@@ -311,5 +403,69 @@ mod tests {
         let bad = dir.path().join("bad.key");
         std::fs::write(&bad, b"only 5").unwrap(); // not 32 bytes, not a bundle
         assert!(matches!(key_at_rest_state(&bad), KeyAtRest::Corrupt));
+    }
+
+    #[test]
+    fn unwrap_key_roundtrips_under_both_secrets_and_is_owner_only() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("node.unwrap");
+        let public = generate_unwrap_sealed(&p, "op", "REC-CODE").unwrap();
+
+        let via_op = load_unwrap_secret(&p, Some("op")).unwrap();
+        let via_rec = load_unwrap_secret(&p, Some("REC-CODE")).unwrap();
+        assert_eq!(*via_op, *via_rec, "both secrets recover the same key");
+        assert_eq!(
+            cairn_event::seal::unwrap_public(&via_op),
+            public,
+            "the returned public half must match the sealed secret's"
+        );
+        assert!(
+            matches!(load_unwrap_secret(&p, None), Err(KeystoreError::Sealed)),
+            "a sealed unwrap key with no secret returns the distinct Sealed variant"
+        );
+    }
+
+    #[test]
+    fn an_adopted_secret_still_opens_a_dek_wrapped_before_adoption() {
+        // The migration promise (ADR-0066 decision 5): a node provisioned before ADR-0066 has
+        // event_dek rows wrapped to its DERIVED public half. Adoption must keep every one of
+        // them openable — that is what makes the migration lossless and rewrap-free.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("node.unwrap");
+        let (sk, _kid) = cairn_event::generate_key().unwrap();
+
+        // A DEK wrapped the OLD way, before adoption. House rule 6: derived at runtime.
+        let old_secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+        let dek: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3));
+        let wrapped =
+            cairn_event::seal::wrap_dek_for(&dek, &cairn_event::seal::unwrap_public(&old_secret))
+                .unwrap();
+
+        let adopted = adopt_derived_unwrap_secret(&sk);
+        write_unwrap_sealed(&p, &adopted, "op", "REC-CODE").unwrap();
+
+        let loaded = load_unwrap_secret(&p, Some("op")).unwrap();
+        assert_eq!(
+            cairn_event::seal::unwrap_dek(&wrapped, &loaded)
+                .expect("an adopted key must open a pre-adoption wrap")
+                .as_slice(),
+            &dek,
+            "adoption is lossless: no event_dek row needs rewrapping"
+        );
+    }
+
+    #[test]
+    fn unwrap_key_at_rest_reports_missing_sealed_and_corrupt() {
+        let dir = tempdir().unwrap();
+        assert!(matches!(
+            key_at_rest_state(&dir.path().join("nope.unwrap")),
+            KeyAtRest::Missing
+        ));
+        let p = dir.path().join("node.unwrap");
+        generate_unwrap_sealed(&p, "op", "REC-CODE").unwrap();
+        assert!(matches!(
+            key_at_rest_state(&p),
+            KeyAtRest::Sealed { dual_recipient: true }
+        ));
     }
 }
