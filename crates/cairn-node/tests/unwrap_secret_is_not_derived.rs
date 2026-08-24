@@ -155,8 +155,10 @@ const ALLOWED: &[(&str, &str)] = &[
     // suite green (house rule 6), never so the coupling is tolerated.
     (
         "crates/cairn-sync/src/main.rs",
-        "PRE-ADR-0066 — cairn-sync cannot read cairn-node's keystore. REWRITE THIS REASON \
-         in Task 5 once the startup divergence check exists",
+        "PRE-ADR-0066 — cairn-sync cannot read cairn-node's keystore (no production \
+         dependency on cairn-node, and argon2/the sealed-bundle format live there). Fails \
+         fast on divergence instead (assert_unwrap_key_registered / unwrap_key_matches) — \
+         tracked by #503, which is the real fix (extract a shared cairn-keystore crate)",
     ),
 ];
 
