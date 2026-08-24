@@ -200,8 +200,7 @@ const WRAP_AAD_CONTEXT: &[u8] = b"cairn-dek-wrap-v1";
 /// exactly as it did for the HKDF output this replaces.
 pub fn generate_unwrap_secret() -> Result<Zeroizing<[u8; 32]>, EventError> {
     let mut out = Zeroizing::new([0u8; 32]);
-    getrandom::fill(out.as_mut())
-        .map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
+    getrandom::fill(out.as_mut()).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
     Ok(out)
 }
 

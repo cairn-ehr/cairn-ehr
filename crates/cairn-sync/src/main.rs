@@ -7326,7 +7326,9 @@ mod tests {
 
         // Bytes shaped like cairn-node's sealed bundle: binary, invalid UTF-8. Derived at
         // runtime (house rule 6) — this is a key file, so no literal key material.
-        let sealed_like: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(3).wrapping_add(0x80)).collect();
+        let sealed_like: Vec<u8> = (0u8..64)
+            .map(|i| i.wrapping_mul(3).wrapping_add(0x80))
+            .collect();
         std::fs::write(&p, &sealed_like).unwrap();
 
         let err = load_or_create_key(p.to_str().unwrap())
@@ -7352,7 +7354,10 @@ mod tests {
         assert!(p.exists(), "an absent key file is still created");
         // And a second call LOADS it rather than minting a new identity.
         let (_sk2, kid2) = load_or_create_key(p.to_str().unwrap()).unwrap();
-        assert_eq!(kid, kid2, "a second start must reuse the key, not replace it");
+        assert_eq!(
+            kid, kid2,
+            "a second start must reuse the key, not replace it"
+        );
     }
 }
 
