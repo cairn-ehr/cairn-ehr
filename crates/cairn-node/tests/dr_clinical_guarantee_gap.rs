@@ -320,14 +320,14 @@ async fn medium_carries_the_federation_plane_and_no_clinical_event() {
 /// ADR-0066 decision 3).** This is the guarantee test that replaced the pin asserting the
 /// export carried nothing.
 ///
-/// ⚠️ **Scoped deliberately, because the unscoped sentence would be false.** The DEKs do NOT
-/// yet survive a restore: `localstate::apply_local_state` refuses a non-empty bundle and
-/// `main.rs`'s restore arm propagates that refusal, so custody leaves the dying node and is
-/// then turned away on arrival. What this test proves is that the custody and the key to open
-/// it now REACH the export — the half ADR-0066 decision 3 owns. The other half is decision 4
-/// (a restored node adopts the exported unwrap key), and it is not built. Writing "promise 3
-/// is now TRUE" here would be a freshly-minted version of the expired-precondition claim this
-/// whole suite exists to catch.
+/// ⚠️ **Scoped deliberately, because the unscoped sentence would still be false.** What this
+/// test proves is that the custody and the key to open it REACH the export — the half
+/// ADR-0066 decision 3 owns. Decision 4 (a restored node ADOPTS the exported unwrap key) has
+/// since landed too, and is pinned in `restore_inherits_custody.rs` — so the KEY now survives
+/// a restore end-to-end. The wrapped `event_dek` ROWS still do not: they are carried across
+/// and counted, but not inserted, because the medium carries no clinical event for them to be
+/// custody of (**#500**, the next slice). Writing "promise 3 is now TRUE" here would be a
+/// freshly-minted version of the expired-precondition claim this whole suite exists to catch.
 ///
 /// The sealed local-state export (ADR-0026 slice D) is the only artifact that can carry key
 /// material off a dying node. ADR-0066 decision 3 rides the node's INDEPENDENT unwrap

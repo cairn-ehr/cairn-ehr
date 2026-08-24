@@ -6,7 +6,7 @@ use cairn_node::db;
 use cairn_node::localstate::{
     apply_local_state, establish_lsk, from_cbor, localstate_path_for, lsk_sidecar_path_for,
     parse_container, read_local_state, seal_local_state, serialize_container, serialize_sidecar,
-    to_cbor, unseal_local_state_rec, LocalState,
+    to_cbor, unseal_local_state_rec, CustodyKeyDestination, LocalState,
 };
 use tempfile::tempdir;
 
@@ -62,10 +62,32 @@ async fn read_local_state_returns_the_empty_bundle() {
         ls.is_empty(),
         "a node with no custody and no secret to carry exports an empty bundle"
     );
-    // Applying an empty bundle is a clean noop (the seam the clinical tier extends).
-    apply_local_state(&conn, &ls)
-        .await
-        .expect("applying an empty bundle is a noop");
+    // Applying an empty bundle is a clean noop. Since ADR-0066 decision 4 the applier
+    // INSTALLS a carried unwrap key, so it needs a destination to install it at — but this
+    // bundle carries none, so nothing is written and the tempdir path below is never touched.
+    // Asserting that is the point: "no secret to install" must stay distinguishable from
+    // "installed something", and the report is where a caller reads the difference.
+    let dir = tempdir().unwrap();
+    let report = apply_local_state(
+        &conn,
+        &ls,
+        &CustodyKeyDestination::Sealed {
+            path: &dir.path().join("node.key.unwrap"),
+            op_pass: "op-pass-for-a-bundle-that-carries-nothing",
+            recovery_code: "recovery-code-for-a-bundle-that-carries-nothing",
+        },
+    )
+    .await
+    .expect("applying an empty bundle is a noop");
+    assert_eq!(
+        report.unwrap_key_installed, None,
+        "an empty bundle installs no custody key — and must say so rather than claim one"
+    );
+    assert_eq!(report.episode_deks_carried, 0);
+    assert!(
+        !dir.path().join("node.key.unwrap").exists(),
+        "nothing may be written when there is nothing to install"
+    );
 }
 
 #[test]
