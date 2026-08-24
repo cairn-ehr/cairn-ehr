@@ -136,23 +136,6 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
     }
 }
 
-/// SUPERSEDED by ADR-0066 — this is no longer the standing design, it is a one-time
-/// pre-ADR-0066 adoption path. ADR-0052's HKDF-derivation from the Ed25519 signing seed
-/// is exactly the coupling that emptied a restored solo node's clinical record: DR
-/// mints a fresh signing seed and never backs up the old one, so the derived unwrap
-/// secret changed on restore and every inherited wrapped-DEK row went permanently dark
-/// (#495/#500). The node's unwrap key now lives independently in its own sealed
-/// sidecar file — see [`generate_unwrap_sealed`] / [`load_unwrap_secret`] below.
-///
-/// Kept (not deleted) only because its sole caller, `medication/sealed_submit.rs`, is
-/// rewritten by a later task in this slice; that task deletes this function and the
-/// caller together so the tree never sits with a caller of a function that no longer
-/// exists. Do not add new callers.
-pub fn unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
-    let seed = zeroize::Zeroizing::new(sk.to_bytes());
-    cairn_event::seal::derive_unwrap_secret(&seed)
-}
-
 /// The unwrap-key file for a signing-key path: `<key>.unwrap`, a sibling — discoverable
 /// from what every command already has, exactly like the `.lsk` sidecar. Pure.
 ///
@@ -239,6 +222,51 @@ pub fn write_unwrap_sealed(
     Ok(())
 }
 
+/// Write a KNOWN unwrap secret UNSEALED (mode 0600) — the custody-plane counterpart of
+/// [`generate_plaintext`] for the signing key, and used on exactly the same path: a node
+/// provisioned with `--insecure-plaintext`, where no operator passphrase and no recovery
+/// code exist to seal anything under.
+///
+/// WHY THIS EXISTS AT ALL (a junior reader will reasonably ask why we would write a key
+/// in the clear). ADR-0066 decision 6 moved unwrap-key registration out of the write path
+/// and into provisioning. A throwaway test node has an unsealed signing key by explicit
+/// operator choice; without an unwrap key beside it, that node could no longer write a
+/// single clinical event, because every sealed body's DEK is wrapped to the node's unwrap
+/// key. So the custody key follows the signing key's at-rest posture: sealed beside a
+/// sealed key, plaintext beside a plaintext one. Never use this for a real node — the
+/// escrow does not exist for a plaintext key (key loss = record loss).
+pub fn write_unwrap_plaintext(path: &Path, secret: &[u8; 32]) -> Result<(), KeystoreError> {
+    crate::fsio::atomic_write(path, secret, Some(0o600))?;
+    Ok(())
+}
+
+/// Mint this node's INDEPENDENT X25519 unwrap secret and write it UNSEALED (mode 0600),
+/// returning the PUBLIC half for the caller to register. The `--insecure-plaintext`
+/// counterpart of [`generate_unwrap_sealed`]; see [`write_unwrap_plaintext`] for why the
+/// unsealed variant exists and when it is legitimate.
+///
+/// Carries the same read-after-write check its sealed sibling does, and for the same
+/// reason: the returned public half is what every subsequent `event_dek` row gets wrapped
+/// to, so registering one this function has not proven readable back from disk would leave
+/// the node unable to open its own custody — the ADR-0066 failure shape one layer up.
+pub fn generate_unwrap_plaintext(path: &Path) -> Result<[u8; 32], KeystoreError> {
+    let secret = cairn_event::seal::generate_unwrap_secret()
+        .map_err(|e| KeystoreError::Key(e.to_string()))?;
+    write_unwrap_plaintext(path, &secret)?;
+
+    let readback = load_unwrap_secret(path, None)?;
+    if *readback != *secret {
+        return Err(KeystoreError::Key(
+            "unwrap key verification failed after write: the bytes read back do not match \
+             the secret generated"
+                .into(),
+        ));
+    }
+    // Derive the public half from the READBACK, never the in-memory secret, so a caller
+    // only ever registers a key this function has actually proven recoverable from disk.
+    Ok(cairn_event::seal::unwrap_public(&readback))
+}
+
 /// Load the node's unwrap secret, auto-detecting sealed vs plaintext exactly as [`load`]
 /// does for the signing key — including the distinct [`KeystoreError::Sealed`] variant, so
 /// the CLI can prompt for the passphrase from ONE load attempt with no TOCTOU-prone
@@ -307,10 +335,12 @@ pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 3
 /// [`generate_unwrap_sealed`] or [`adopt_derived_unwrap_secret`] at all — it IS the
 /// signing key's content, misplaced.
 ///
-/// Deliberately NOT wired into `load_unwrap_secret` or any provisioning path here — this
-/// task only owns the keystore file shape. The task that owns provisioning/loading
-/// decides where in that flow to call this and how to react (refuse to boot, most
-/// likely).
+/// Deliberately NOT wired into [`load_unwrap_secret`] itself: that loader is also the
+/// path a future `restore` uses to install a DEAD node's unwrap secret, where the live
+/// signing key is a different key entirely and this comparison would be meaningless. The
+/// check belongs where both keys are genuinely this node's — `main.rs`'s
+/// `establish-unwrap-key`, via `load_unwrap_secret_or_refuse_swapped_file`, which refuses
+/// the command rather than registering a public half derived from the signing seed.
 pub fn unwrap_secret_is_the_signing_seed(unwrap: &[u8; 32], sk: &SigningKey) -> bool {
     *unwrap == sk.to_bytes()
 }

@@ -11,8 +11,13 @@ BEGIN;
 
 -- ---------------------------------------------------------------------------
 -- 1. The node's X25519 public unwrap key (single row). The SECRET half lives in
---    the daemon keystore (derived from the Ed25519 seed, ADR-0026 escrow) and
---    NEVER enters the database — a DB backup can never reconstruct a DEK.
+--    the daemon keystore, in its own `<key>.unwrap` file sealed under the ADR-0026
+--    escrow secrets, and NEVER enters the database — a DB backup can never
+--    reconstruct a DEK. It is an INDEPENDENT keypair: ADR-0066 superseded ADR-0052's
+--    derivation-from-the-Ed25519-seed, because disaster recovery deliberately mints a
+--    fresh signing seed and the derived secret then changed, permanently orphaning
+--    every inherited wrapped-DEK row (#495). The row is written by provisioning
+--    (`cairn-node init` / `establish-unwrap-key`), never by the write path.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS node_unwrap_key (
     singleton     BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (singleton),

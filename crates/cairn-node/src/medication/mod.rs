@@ -12,7 +12,13 @@ mod coding;
 mod dose;
 pub mod read;
 mod reconciliation;
-mod sealed_submit;
+// Public since ADR-0066 decision 6: `ensure_unwrap_key` stopped being a side effect and
+// became a REFUSAL — an unprovisioned node cannot write a sealed body. That refusal is a
+// safety guarantee, so `unwrap_key_provisioning.rs` has to be able to name the function
+// and prove it fires; a guard that can only reach the behaviour through six layers of
+// orchestrator is a guard that will eventually be testing something else. (`read` and
+// `signoff` are already public, for the CLI's benefit.)
+pub mod sealed_submit;
 pub mod signoff;
 
 pub use assert::{
