@@ -693,27 +693,55 @@ fn request(peer: &str, req: &Request) -> R<Vec<u8>> {
 // ---------------------------------------------------------------------------
 // Key handling (skeleton: a per-node key file; the registry is ADR-0011).
 // ---------------------------------------------------------------------------
+/// Load this node's signing key, creating one only when the path does not exist.
+///
+/// ⚠️ **A file that exists but does not parse is a REFUSAL, never an overwrite.** This function
+/// used to `read_to_string` and fall through to create-and-write on any error — including invalid
+/// UTF-8, which is exactly what cairn-node's sealed (binary CBOR) key file produces. Pointing this
+/// daemon at a real node's key therefore replaced that node's sealed signing key with a fresh
+/// plaintext one. The signing key is never backed up (ADR-0026 decision 4), so the identity was
+/// gone for good — caused by nothing more than starting a daemon.
 fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
-    if let Ok(text) = std::fs::read_to_string(path) {
-        let seed: [u8; 32] = hex::decode(text.trim())?
-            .try_into()
-            .map_err(|_| "key file is not a 32-byte hex seed")?;
-        let sk = SigningKey::from_bytes(&seed);
-        let kid = hex::encode(sk.verifying_key().to_bytes());
-        return Ok((sk, kid));
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let text = std::str::from_utf8(&bytes).map_err(|_| {
+                format!(
+                    "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
+                     key?); refusing to overwrite it. Point --key at this daemon's own key file."
+                )
+            })?;
+            let seed: [u8; 32] = hex::decode(text.trim())
+                .map_err(|e| {
+                    format!("{path} exists but is not valid hex ({e}); refusing to overwrite it")
+                })?
+                .try_into()
+                .map_err(|_| {
+                    format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
+                })?;
+            let sk = SigningKey::from_bytes(&seed);
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            Ok((sk, kid))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // The only path that creates. Absence is the one state where writing cannot
+            // destroy anything.
+            let (sk, kid) = cairn_event::generate_key()?;
+            std::fs::write(path, hex::encode(sk.to_bytes()))?;
+            // Restrict the private-key file to the owner (0600). std::fs::write creates it 0644 by
+            // default, leaving the signing seed world-readable on a shared machine (review finding
+            // L12). Set the mode AFTER writing so the bytes are never briefly world-readable.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            eprintln!("generated new signing key at {path} (kid {})", &kid[..16]);
+            Ok((sk, kid))
+        }
+        // Present but unreadable (permissions, I/O): refuse. "Cannot read" is not "absent",
+        // and treating it as absent is how the overwrite happened.
+        Err(e) => Err(format!("cannot read {path} ({e}); refusing to overwrite it").into()),
     }
-    let (sk, kid) = cairn_event::generate_key()?;
-    std::fs::write(path, hex::encode(sk.to_bytes()))?;
-    // Restrict the private-key file to the owner (0600). std::fs::write creates it 0644 by
-    // default, leaving the signing seed world-readable on a shared machine (review finding
-    // L12). Set the mode AFTER writing so the bytes are never briefly world-readable.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    eprintln!("generated new signing key at {path} (kid {})", &kid[..16]);
-    Ok((sk, kid))
 }
 
 fn now_ms() -> i64 {
@@ -7283,6 +7311,48 @@ mod tests {
             vec![None, None],
             "no requester key means all-None custody"
         );
+    }
+
+    /// A key file that exists but cannot be parsed must STOP the daemon, never be overwritten.
+    ///
+    /// `read_to_string` fails on invalid UTF-8, and cairn-node's sealed key file is binary CBOR —
+    /// so before this guard, pointing cairn-sync at a real node's key file generated a fresh key
+    /// and wrote it over the sealed one. The signing key is never backed up (ADR-0026 decision 4),
+    /// so that is unrecoverable identity loss caused by a daemon start.
+    #[test]
+    fn an_unparseable_key_file_is_refused_and_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("node.key");
+
+        // Bytes shaped like cairn-node's sealed bundle: binary, invalid UTF-8. Derived at
+        // runtime (house rule 6) — this is a key file, so no literal key material.
+        let sealed_like: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(3).wrapping_add(0x80)).collect();
+        std::fs::write(&p, &sealed_like).unwrap();
+
+        let err = load_or_create_key(p.to_str().unwrap())
+            .expect_err("an unparseable key file must be refused, never overwritten");
+        assert!(
+            format!("{err}").contains("refusing to overwrite"),
+            "the refusal must say what it is protecting; got: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            sealed_like,
+            "THE POINT: the existing key file must be byte-identical after the refusal"
+        );
+    }
+
+    /// The create-on-absent path is the intended behaviour and must survive the fix.
+    #[test]
+    fn an_absent_key_file_is_still_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("fresh.key");
+        let (_sk, kid) = load_or_create_key(p.to_str().unwrap()).unwrap();
+        assert!(!kid.is_empty());
+        assert!(p.exists(), "an absent key file is still created");
+        // And a second call LOADS it rather than minting a new identity.
+        let (_sk2, kid2) = load_or_create_key(p.to_str().unwrap()).unwrap();
+        assert_eq!(kid, kid2, "a second start must reuse the key, not replace it");
     }
 }
 
