@@ -33,7 +33,9 @@
 
 use cairn_node::db;
 use cairn_node::localstate::{
-    apply_local_state, read_local_state, recovered_unwrap_secret, CustodyKeyDestination, LocalState,
+    apply_local_state, build_export_container, establish_lsk, from_cbor, parse_container,
+    read_local_state, recovered_unwrap_secret, unseal_local_state_rec, CustodyKeyDestination,
+    LocalState,
 };
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -76,9 +78,20 @@ fn a_restored_node_opens_a_pre_restore_sealed_body() {
 
     // The restored node: a DIFFERENT signing identity (ADR-0026 decision 4 mints one), and
     // the dead node's unwrap secret installed from the export under the NEW secrets.
+    //
+    // This goes through `CustodyKeyDestination::install` — the production install path — and
+    // NOT through `keystore::write_unwrap_sealed` beneath it. That distinction is the whole
+    // value of the test: calling the lower function would leave this green even if the
+    // restore path were reverted to a no-op, and the header's claim that it catches "an
+    // install re-sealed under the wrong secret" would be a claim about code it never runs.
     let restored_key = dir.path().join("restored.unwrap");
-    cairn_node::keystore::write_unwrap_sealed(&restored_key, &dead_secret, NEW_OP, NEW_REC)
-        .unwrap();
+    CustodyKeyDestination::Sealed {
+        path: &restored_key,
+        op_pass: NEW_OP,
+        recovery_code: NEW_REC,
+    }
+    .install(&dead_secret)
+    .unwrap();
     let restored_secret =
         cairn_node::keystore::load_unwrap_secret(&restored_key, Some(NEW_OP)).unwrap();
 
@@ -287,6 +300,35 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
         bundle.episode_deks.len(),
         1,
         "exactly the one custody row staged above"
+    );
+
+    // ---- The bundle must TRAVEL, not just exist in memory (review finding I3). ----
+    //
+    // Everything below is applied to a bundle that has been through the real off-node
+    // journey: sealed into a `CAIRNL1` container, written as bytes, parsed back, unsealed
+    // with the dead node's recovery code, and CBOR-decoded. Without this hop, nothing in
+    // this slice ever serializes a populated `unwrap_secret`, so a serde attribute change
+    // that dropped the field would leave every test here green and every real restore
+    // silently keyless — this slice's own failure shape, one layer down.
+    let dead_lsk = establish_lsk(DEAD_OP, DEAD_REC).expect("the dying node's escrow");
+    let container = build_export_container(&dead_lsk, DEAD_OP, &bundle)
+        .expect("the export ceremony must seal the populated bundle");
+    let parsed = parse_container(&container).expect("the sibling file must parse back");
+    let plaintext = zeroize::Zeroizing::new(
+        unseal_local_state_rec(&parsed, DEAD_REC)
+            .expect("the OLD node's recovery code is what a restore has to hand"),
+    );
+    let bundle = from_cbor(&plaintext).expect("the travelled bundle must decode");
+    assert_eq!(
+        bundle.unwrap_secret.as_deref(),
+        Some(dead_secret.as_slice()),
+        "the secret must survive seal -> bytes -> parse -> unseal -> decode intact; if this \
+         reddens, the export carries no key and no restore anywhere can inherit custody"
+    );
+    assert_eq!(
+        bundle.episode_deks.len(),
+        1,
+        "and so must the custody row it opens"
     );
 
     // The restore target: a fresh database (no unwrap key registered) and a key path that

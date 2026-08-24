@@ -498,6 +498,12 @@ pub use crate::localstate_read::read_local_state;
 ///
 /// The lifetime is borrowed throughout: the caller owns the operator secrets (in `Zeroizing`,
 /// so they are wiped when the restore ceremony ends) and this type never copies them.
+///
+/// **`Debug` is deliberately NOT derived**, the same rule [`LskWraps`] states for itself.
+/// This type holds the restored node's operator passphrase AND its recovery code as plain
+/// `&str`. A derived `Debug` would print both, in full, into any log line, panic message or
+/// failing `assert_eq!` that happened to include a destination. If a future change needs one,
+/// hand-write it and redact both fields, exactly as [`LocalState`] does for its secret.
 pub enum CustodyKeyDestination<'a> {
     /// Sealed under the RESTORED node's own freshly-minted secrets — never the dead node's.
     /// The operator carries ONE passphrase and ONE recovery code forward from the restore

@@ -371,6 +371,44 @@ fn refuse_to_replace_existing_unwrap_key(path: &std::path::Path) -> anyhow::Resu
     Ok(())
 }
 
+/// Refuse a `restore` that would clobber a LIVE node's unwrap key — the restore-arm twin of
+/// [`refuse_to_replace_existing_unwrap_key`], and it must be its own function because the
+/// remedy it prints is different.
+///
+/// THE SCENARIO THIS CATCHES, because it is not exotic. A machine already runs a live node.
+/// An operator restores a DIFFERENT node on it with the default `--key` but a fresh
+/// `--conn`. Step 3's "target database already has an enrolled node" fence does not fire —
+/// the database really is fresh. Step 4 then overwrites the live signing key, which is
+/// survivable (an identity is re-provisioned, and restore re-mints one anyway). Step 6 would
+/// overwrite the live `<key>.unwrap`, which is NOT survivable: every `event_dek` row wrapped
+/// to it is orphaned permanently. That asymmetry is stated at
+/// [`refuse_to_replace_existing_unwrap_key`] and it applies here word for word.
+///
+/// WHY NOT COMPARE CONTENTS INSTEAD. A legitimate retry — the first attempt failed, the
+/// operator points a second one at a fresh database — genuinely re-encounters this file,
+/// sealed under the FIRST attempt's recovery code, which this run does not have. So there is
+/// no content check that separates "my own half-finished attempt" from "another node's live
+/// custody", and a check that guessed would be worse than none. Existence is the honest
+/// question; the operator, who knows which case they are in, answers it with one `mv`.
+///
+/// Called at the TOP of the restore arm, before the medium is even read, so the refusal
+/// costs nothing and lands before a single byte is written.
+///
+/// Pure and path-only so the refusal can be tested without a database.
+fn refuse_restore_beside_a_live_unwrap_key(path: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !path.exists(),
+        "an unwrap key already exists at {} — refusing to restore over it. If this machine \
+         already runs a node, that file is THAT node's custody key, and replacing it would \
+         permanently orphan every sealed clinical body it holds (ADR-0066): restore with a \
+         different `--key` path instead. If it is the leftover of an earlier attempt at THIS \
+         restore, move it aside and re-run — it is sealed under the recovery code that \
+         attempt printed, which this run cannot reproduce, so it cannot be reused.",
+        path.display()
+    );
+    Ok(())
+}
+
 /// Resolve this node's unwrap secret for `establish-unwrap-key`: load the existing file if
 /// there is one, otherwise ADOPT the pre-ADR-0066 derived secret and write it.
 ///
@@ -542,7 +580,6 @@ fn establish_local_state_escrow(
 ///
 /// `NotFound` is the ONLY kind treated as absence — the same rule
 /// `keystore::key_at_rest_state` follows for exactly the same reason.
-#[derive(Debug)]
 enum ExportRead {
     /// No file at the path. Legitimate; restore continues from events alone.
     Absent,
@@ -550,6 +587,21 @@ enum ExportRead {
     Present(Vec<u8>),
     /// A file is (or may be) there, but reading it failed. Must be reported, never skipped.
     Unreadable(std::io::Error),
+}
+
+/// Hand-written rather than derived so `{:?}` prints the export's SIZE, not its bytes. A
+/// derived `Debug` would dump the whole sealed container into a panic message or a log line.
+/// Those bytes are ciphertext, so this is legibility rather than a leak — an unreadable wall
+/// of numbers tells a reader nothing the length does not — but the convention in this
+/// codebase is that key-adjacent types say what they print, and this one now does.
+impl std::fmt::Debug for ExportRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Absent => write!(f, "Absent"),
+            Self::Present(bytes) => write!(f, "Present({} bytes)", bytes.len()),
+            Self::Unreadable(e) => write!(f, "Unreadable({e})"),
+        }
+    }
 }
 
 /// Classify the local-state export sibling at `path`. See [`ExportRead`] for why the
@@ -560,6 +612,78 @@ fn read_optional_local_state_export(path: &std::path::Path) -> ExportRead {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => ExportRead::Absent,
         Err(e) => ExportRead::Unreadable(e),
     }
+}
+
+/// Unseal a present local-state export and apply it — the whole ADR-0026 slice D / ADR-0066
+/// decision 4 ceremony, extracted out of the `restore` arm.
+///
+/// **WHY IT IS A FUNCTION.** Inline, this ceremony contained three separate `?`s, and every
+/// one of them exited the restore arm *past* the summary block — so the operator lost their
+/// `new node` / `supersedes` / `re-peer with pair-offer` lines and got a non-zero exit on a
+/// node that was in fact fully restored, with the restore door already fenced closed behind
+/// them (`finalize_identity` has written `local_node`, and a second restore into an enrolled
+/// database is refused). None of the three was exotic: `prompt_password` fails on any
+/// non-tty, i.e. every scripted restore; `from_cbor` refuses a bundle written by a NEWER
+/// node; `apply_local_state` refuses a slot this build cannot apply. Returning a `Result` the
+/// caller captures ONCE fixes all three together, and makes the ceremony testable.
+///
+/// The two return shapes are different answers, not degrees of the same one:
+/// - `Ok(None)` — an honest degradation already reported to the operator. A corrupt or
+///   bit-rotted export, or a wrong recovery code. Local-state is OPTIONAL and the events are
+///   the load-bearing copy, so the restore stands and the process still succeeds.
+/// - `Err` — recovered key material we could not install. Reported, and the process exits
+///   non-zero *after* the summary has printed.
+async fn apply_local_state_export(
+    db: &tokio_postgres::Client,
+    bytes: &[u8],
+    export_path: &std::path::Path,
+    unwrap_path: &std::path::Path,
+    new_secrets: Option<&(Zeroizing<String>, Zeroizing<String>)>,
+) -> anyhow::Result<Option<cairn_node::localstate::AppliedLocalState>> {
+    // A corrupt/bit-rotted export sibling must NOT fail the restore: by this point the node
+    // is already fully restored, and off-site media bit-rot is a likely failure.
+    let Ok(sealed) = cairn_node::localstate::parse_container(bytes) else {
+        eprintln!(
+            "WARNING: local-state export present at {} but unreadable (corrupt/bit-rotted?) — \
+             skipping local-state; node restores from events alone.",
+            export_path.display()
+        );
+        return Ok(None);
+    };
+
+    eprintln!("Local-state export found. Enter the OLD node's recovery code to unseal it:");
+    let old_code = Zeroizing::new(rpassword::prompt_password("old recovery code: ")?);
+    // A wrong recovery-code guess degrades the same way (warn + skip) — a bad guess at the
+    // OPTIONAL local-state must not kill an otherwise-complete restore.
+    let Some(plaintext) = cairn_node::localstate::unseal_local_state_rec(&sealed, &old_code) else {
+        eprintln!(
+            "WARNING: could not unseal the local-state export — wrong recovery code? \
+             Skipping local-state; node restores from events alone."
+        );
+        return Ok(None);
+    };
+
+    // The unsealed bundle contains the dead node's RAW unwrap secret (ADR-0066 decision 3),
+    // so this plaintext is key material and must not be dropped unwiped — the restore-side
+    // twin of the wrap in `build_export_container`. `LocalState`'s own `Drop` wipes the
+    // decoded copy; this wipes the buffer it was decoded from.
+    let plaintext = Zeroizing::new(plaintext);
+    let bundle = cairn_node::localstate::from_cbor(&plaintext)?;
+
+    // The inherited key follows the RESTORED node's at-rest posture, exactly as `init` makes
+    // the custody key follow the signing key's: sealed beside a sealed key, plaintext beside
+    // an `--insecure-plaintext` one.
+    let destination = match new_secrets {
+        Some((op, code)) => cairn_node::localstate::CustodyKeyDestination::Sealed {
+            path: unwrap_path,
+            op_pass: op,
+            recovery_code: code,
+        },
+        None => cairn_node::localstate::CustodyKeyDestination::Plaintext { path: unwrap_path },
+    };
+    Ok(Some(
+        cairn_node::localstate::apply_local_state(db, &bundle, &destination).await?,
+    ))
 }
 
 /// Seal the node's local-state bundle and write the `CAIRNL1` export sibling beside `medium`
@@ -1805,6 +1929,34 @@ async fn main() -> anyhow::Result<()> {
             passphrase,
             insecure_plaintext,
         } => {
+            // 0. PRE-FLIGHT, before a single byte is minted or written. Both checks below
+            //    have to live here rather than beside the code they protect, because by the
+            //    time that code runs `finalize_identity` has fenced the restore door closed
+            //    (it writes `local_node`, and restore refuses to run into an enrolled
+            //    database) — there is no free second attempt to notice a problem on.
+            let unwrap_path = cairn_node::keystore::unwrap_key_path_for(&cli.key);
+            refuse_restore_beside_a_live_unwrap_key(&unwrap_path)?;
+            //    #502 item 1. An export that is ABSENT is a legitimate, supported outcome
+            //    (restore from events alone). One that is PRESENT BUT UNREADABLE may be this
+            //    node's entire custody key behind a permissions error, an I/O error or a
+            //    vanished mount — so it stops the restore HERE, while stopping still costs
+            //    nothing, instead of warning about it after the door has shut.
+            let export_path = cairn_node::localstate::localstate_path_for(&from);
+            let export_bytes = match read_optional_local_state_export(&export_path) {
+                ExportRead::Absent => None,
+                ExportRead::Present(bytes) => Some(bytes),
+                ExportRead::Unreadable(e) => anyhow::bail!(
+                    "a local-state export exists at {} but could not be read ({e}) — refusing \
+                     to restore. This is NOT the same as 'no export was written': that file \
+                     may hold this node's only custody key, and a restore that skipped it \
+                     would finish, fence the door closed, and leave every sealed clinical \
+                     body permanently unopenable. Fix the read error (permissions? a mount \
+                     that went away?) and run restore again. If you are certain no export \
+                     was ever written there, move the file aside.",
+                    export_path.display()
+                ),
+            };
+
             // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
@@ -1908,146 +2060,90 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
 
-            // 6. ADR-0026 slice D + ADR-0066 decision 4: if a sealed local-state export sits
-            // beside the medium, unseal it with the OLD recovery code and apply it. Applying
-            // it INSTALLS the dead node's independent unwrap secret into this node's keystore
-            // — re-sealed under the NEW secrets minted in step 4 — and registers its public
-            // half, so the restored node's custody IS the dead node's custody. It must adopt
-            // rather than mint: `node_unwrap_key` is a singleton whose registrar refuses a
-            // differing key, so a minted key here could never be corrected.
+            // 6. ADR-0026 slice D + ADR-0066 decision 4: apply the local-state export, if
+            // one sits beside the medium. Applying it INSTALLS the dead node's independent
+            // unwrap secret into this node's keystore — re-sealed under the NEW secrets
+            // minted in step 4 — and registers its public half, so the restored node's
+            // custody IS the dead node's custody. It must ADOPT rather than mint:
+            // `node_unwrap_key` is a singleton whose registrar refuses a differing key, so a
+            // minted key here could never be corrected.
             //
-            // Absent export => skip (the node restores from events alone — honest
-            // degradation). A present-but-unreadable one is NOT skipped in silence: see
-            // `read_optional_local_state_export` for why the distinction is load-bearing
-            // (#502 item 1).
+            // The ceremony itself lives in `apply_local_state_export`; read its doc for why
+            // its `Result` is captured here rather than propagated with `?`.
             //
-            // ORDERING NOTE, and it is temporary: this block runs AFTER `finalize_identity`,
-            // which is correct only while no CLINICAL event is applied here. Custody must be
+            // ORDERING NOTE, and it is temporary: this runs AFTER `finalize_identity`, which
+            // is correct only while no CLINICAL event is applied here. Custody must be
             // registered before clinical events land, because the door wraps each event's DEK
             // to the registered public half. When the medium starts carrying clinical events
             // (#500) this block moves up ahead of step 5. Do not read the current position as
             // settled.
-            let export_path = cairn_node::localstate::localstate_path_for(&from);
-            // Held across the summary block below rather than propagated with `?`. The node
-            // is ALREADY fully restored by this point, so a local-state failure must not cost
-            // the operator the `new node` / `supersedes` / `re-peer with …` lines — those are
-            // their next step, and the restore door has fenced closed behind them
-            // (`finalize_identity` wrote `local_node`, and a second restore into an enrolled
-            // database is refused). So: report it, finish telling them what happened, and
-            // THEN exit non-zero.
+            //
+            // The failure is held across the summary block rather than propagated, because
+            // the node is ALREADY fully restored by this point and a local-state failure must
+            // not cost the operator the `new node` / `supersedes` / `re-peer with …` lines —
+            // those are their next step, and the door has fenced closed behind them. So:
+            // report it, finish telling them what happened, and THEN exit non-zero.
             let mut local_state_failure: Option<anyhow::Error> = None;
-            match read_optional_local_state_export(&export_path) {
-                ExportRead::Absent => {}
-                ExportRead::Unreadable(e) => eprintln!(
-                    "WARNING: a local-state export exists at {} but could not be read ({e}) — \
-                     skipping it; node restores from events alone. This is NOT the same as \
-                     'no export was written': if that file holds this node's custody key, fix \
-                     the read error and restore again from a fresh database, because this \
-                     node cannot open any sealed body without it.",
-                    export_path.display()
-                ),
-                ExportRead::Present(bytes) => {
-                    // A corrupt/bit-rotted export sibling must NOT bail — by this point the node
-                    // is ALREADY fully restored (key minted, events applied, identity finalized),
-                    // and off-site media bit-rot is a likely failure. Local-state is OPTIONAL and
-                    // the events are the load-bearing copy, so degrade honestly: warn and skip.
-                    match cairn_node::localstate::parse_container(&bytes) {
-                        Ok(sealed) => {
-                            eprintln!("Local-state export found. Enter the OLD node's recovery code to unseal it:");
-                            let old_code = Zeroizing::new(
-                                rpassword::prompt_password("old recovery code: ")?);
-                            // Wrong recovery-code guess degrades the same way (warn + skip) — a bad
-                            // guess at the OPTIONAL local-state must not kill an otherwise-complete
-                            // restore. Only a bundle this version genuinely cannot apply stays loud.
-                            match cairn_node::localstate::unseal_local_state_rec(&sealed, &old_code) {
-                                Some(plaintext) => {
-                                    // The unsealed bundle now contains the dead node's RAW unwrap
-                                    // secret (ADR-0066 decision 3), so this plaintext is key
-                                    // material and must not be dropped unwiped — the restore-side
-                                    // twin of the wrap in `build_export_container`. `LocalState`'s
-                                    // own `Drop` wipes the decoded copy; this wipes the buffer it
-                                    // was decoded from.
-                                    let plaintext = Zeroizing::new(plaintext);
-                                    let bundle = cairn_node::localstate::from_cbor(&plaintext)?;
-                                    // The inherited key follows the RESTORED node's at-rest
-                                    // posture, exactly as `init` makes the custody key follow
-                                    // the signing key's: sealed beside a sealed key, plaintext
-                                    // beside an `--insecure-plaintext` one.
-                                    let unwrap_path =
-                                        cairn_node::keystore::unwrap_key_path_for(&cli.key);
-                                    let destination = match &new_secrets {
-                                        Some((op, code)) => {
-                                            cairn_node::localstate::CustodyKeyDestination::Sealed {
-                                                path: &unwrap_path,
-                                                op_pass: op,
-                                                recovery_code: code,
-                                            }
-                                        }
-                                        None => {
-                                            cairn_node::localstate::CustodyKeyDestination::Plaintext {
-                                                path: &unwrap_path,
-                                            }
-                                        }
-                                    };
-                                    match cairn_node::localstate::apply_local_state(
-                                        &db, &bundle, &destination,
-                                    )
-                                    .await
-                                    {
-                                        Ok(report) => {
-                                            println!(
-                                                "local-state restored from {}",
-                                                export_path.display()
-                                            );
-                                            match &report.unwrap_key_installed {
-                                                Some(path) => println!(
-                                                    "custody inherited: unwrap key installed at {} \
-                                                     and registered ({} episode DEK(s) carried)",
-                                                    path.display(),
-                                                    report.episode_deks_carried
-                                                ),
-                                                None => eprintln!(
-                                                    "WARNING: the local-state export carries no \
-                                                     unwrap key — sealed bodies restored later \
-                                                     will not be openable on this node (export \
-                                                     predates ADR-0066?)"
-                                                ),
-                                            }
-                                            // Declared at the operator surface rather than buried
-                                            // in a comment: the carried custody rows land with the
-                                            // clinical events, which the medium does not yet carry
-                                            // (#500, slice 2). A carried-but-not-applied count
-                                            // nobody sees is the exact failure this slice corrects.
-                                            if report.episode_deks_carried > 0 {
-                                                println!(
-                                                    "note: those {} custody row(s) are carried but \
-                                                     not yet applied — they land with the clinical \
-                                                     events, which this backup medium does not yet \
-                                                     carry (#500)",
-                                                    report.episode_deks_carried
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "ERROR: the local-state export could not be applied: {e:#}"
-                                            );
-                                            eprintln!(
-                                                "       The node itself IS restored (details below), \
-                                                 but it did NOT inherit the dead node's custody key."
-                                            );
-                                            local_state_failure = Some(e);
-                                        }
-                                    }
-                                }
-                                None => eprintln!(
-                                    "WARNING: could not unseal the local-state export — wrong recovery code? \
-                                     Skipping local-state; node restores from events alone."),
-                            }
+            if let Some(bytes) = export_bytes {
+                match apply_local_state_export(
+                    &db,
+                    &bytes,
+                    &export_path,
+                    &unwrap_path,
+                    new_secrets.as_ref(),
+                )
+                .await
+                {
+                    Ok(Some(report)) => {
+                        println!("local-state restored from {}", export_path.display());
+                        match &report.unwrap_key_installed {
+                            Some(path) => println!(
+                                "custody inherited: unwrap key installed at {} and registered \
+                                 ({} episode DEK(s) carried)",
+                                path.display(),
+                                report.episode_deks_carried
+                            ),
+                            // Not a footnote: with no `node_unwrap_key` row this node cannot
+                            // even AUTHOR a sealed body — `submit_event` raises, and its error
+                            // text sends the operator to `establish-unwrap-key`. On a restored
+                            // node that command adopts a secret derived from the NEW signing
+                            // seed and registers it, after which the singleton registrar
+                            // refuses the real exported key FOREVER. So the warning has to
+                            // name that trap, or the operator's obvious next step forecloses
+                            // the fix permanently.
+                            None => eprintln!(
+                                "WARNING: the local-state export carries no unwrap key (does it \
+                                 predate ADR-0066?). This node has NO custody key: it cannot \
+                                 open any sealed body it inherits, and it cannot author a new \
+                                 sealed clinical event either.\n\
+                                 \x20        Do NOT run `cairn-node establish-unwrap-key` if \
+                                 there is any chance of recovering an export that carries the \
+                                 old key — it would register a DIFFERENT key, and the registrar \
+                                 then refuses the real one permanently."
+                            ),
                         }
-                        Err(_) => eprintln!(
-                            "WARNING: local-state export present at {} but unreadable (corrupt/bit-rotted?) — \
-                             skipping local-state; node restores from events alone.", export_path.display()),
+                        // Declared at the operator surface rather than buried in a comment:
+                        // the carried custody rows land with the clinical events, which the
+                        // medium does not yet carry (#500, slice 2). A carried-but-not-applied
+                        // count nobody sees is the exact failure this slice corrects.
+                        if report.episode_deks_carried > 0 {
+                            println!(
+                                "note: those {} custody row(s) are carried but not yet applied \
+                                 — they land with the clinical events, which this backup \
+                                 medium does not yet carry (#500)",
+                                report.episode_deks_carried
+                            );
+                        }
+                    }
+                    // An honest degradation the helper already reported to the operator.
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("ERROR: the local-state export could not be applied: {e:#}");
+                        eprintln!(
+                            "       The node itself IS restored (details below), but it did \
+                             NOT inherit the dead node's custody key."
+                        );
+                        local_state_failure = Some(e);
                     }
                 }
             }
@@ -4144,6 +4240,47 @@ mod tests {
             "the loader must hand back the adopted secret unchanged — a rewrap here would \
              orphan every existing event_dek row"
         );
+    }
+
+    // --- restore must not clobber a LIVE node's custody key (review finding I2) ---
+    //
+    // The scenario is a machine already running a node, and an operator restoring a
+    // DIFFERENT node on it with the default `--key` but a fresh `--conn`. The enrolled-DB
+    // fence does not fire (the database really is fresh), so only this check stands between
+    // that operator and permanently orphaning a live clinic's entire sealed record.
+
+    #[test]
+    fn restore_refuses_to_overwrite_a_live_nodes_unwrap_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("node.key");
+        let unwrap = cairn_node::keystore::unwrap_key_path_for(&key);
+        // A REAL live custody key, written by the production provisioning path.
+        cairn_node::keystore::generate_unwrap_sealed(&unwrap, OP_PASS, REC_CODE).unwrap();
+
+        let msg = refuse_restore_beside_a_live_unwrap_key(&unwrap)
+            .expect_err("restoring over a live custody key is unrecoverable data loss")
+            .to_string();
+        assert!(
+            msg.contains(&unwrap.display().to_string()),
+            "the refusal must name the file, or the operator cannot act on it: {msg}"
+        );
+        assert!(
+            msg.contains("--key"),
+            "and must name the remedy — a different --key path: {msg}"
+        );
+        assert!(
+            unwrap.exists(),
+            "the check must not have touched the file it is protecting"
+        );
+    }
+
+    #[test]
+    fn restore_proceeds_on_a_machine_with_no_unwrap_key() {
+        // Positive control: the ordinary disaster-recovery case is a bare machine. Without
+        // this, a check that refused unconditionally would look identical to a working one.
+        let dir = tempfile::tempdir().unwrap();
+        refuse_restore_beside_a_live_unwrap_key(&dir.path().join("node.key.unwrap"))
+            .expect("a bare machine is exactly what restore is for");
     }
 
     // --- #502 item 1: a present-but-unreadable export must not render as "no export" ---
