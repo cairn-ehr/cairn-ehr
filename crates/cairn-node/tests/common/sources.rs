@@ -129,6 +129,54 @@ pub fn read_source(path: &Path) -> String {
         .unwrap_or_else(|e| panic!("unreadable source file {}: {e}", path.display()))
 }
 
+/// Every crate's shipped `.rs` surface: `crates/<crate>/src/**/*.rs` for every crate in
+/// the workspace. This is what "production code" means to a guard like
+/// `unwrap_secret_is_not_derived.rs` (#495/ADR-0066) — the code that ships, as opposed
+/// to a `tests/` directory (this one included) or a `benches/` harness, neither of which
+/// is ever linked into anything a node runs.
+///
+/// Crate directories are discovered by listing `root/crates/*` rather than hardcoded by
+/// name, so a new crate added to the workspace is swept in automatically instead of
+/// silently sitting outside every source-derived guard until someone remembers to add
+/// it. `tests`/`benches` join `target` in the skip list defensively: no crate's `src/`
+/// tree nests either today (both sit as SIBLINGS of `src/`, never inside it — see the
+/// `crates/*/` layout), but a guard whose stated scope is "production" should not start
+/// including one silently if that ever changes.
+///
+/// Uses `DirEntry::file_type()` rather than `Path::is_dir()` for the same reason
+/// [`source_files`] does — it does not follow symlinks — even though the one-level scan
+/// here (over `crates/` only) cannot itself loop unbounded; the deeper recursive walk is
+/// `source_files`'s, which already carries that guarantee.
+///
+/// Returns an iterator rather than a borrowed slice or a `Vec` a caller must remember to
+/// call `.iter()` on: a guard's anti-vacuity check (`…count() > 50`) reads naturally
+/// against an iterator, and every path is already owned (built fresh from `root` on each
+/// call), so there is no borrow for a `Vec` to usefully preserve here.
+pub fn production_rust_files(root: &Path) -> impl Iterator<Item = PathBuf> {
+    let crates_dir = root.join("crates");
+    let entries = std::fs::read_dir(&crates_dir)
+        .unwrap_or_else(|e| panic!("unreadable crates directory {}: {e}", crates_dir.display()));
+
+    let mut crate_src_dirs: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .unwrap_or_else(|e| panic!("unreadable entry under {}: {e}", crates_dir.display()));
+        let file_type = entry
+            .file_type()
+            .unwrap_or_else(|e| panic!("no file type for {}: {e}", entry.path().display()));
+        if !file_type.is_dir() {
+            continue;
+        }
+        let src = entry.path().join("src");
+        if src.is_dir() {
+            crate_src_dirs.push(src);
+        }
+    }
+    crate_src_dirs.sort();
+
+    source_files(&crate_src_dirs, &["target", "tests", "benches"], &["rs"]).into_iter()
+}
+
 /// The repository root, derived from this crate's manifest directory.
 ///
 /// `CARGO_MANIFEST_DIR` is `crates/cairn-node`, so the root is two levels up. Canonicalized,

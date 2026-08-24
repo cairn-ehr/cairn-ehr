@@ -186,11 +186,42 @@ const UNWRAP_KEY_HKDF_INFO: &[u8] = b"cairn-node-unwrap-x25519-v1";
 /// KEK-derivation + AEAD domain tag for the DEK wrap itself.
 const WRAP_AAD_CONTEXT: &[u8] = b"cairn-dek-wrap-v1";
 
-/// Derive a node's X25519 unwrap secret from its Ed25519 signing seed via
-/// domain-separated HKDF-SHA256. Deterministic (same seed -> same secret) but
-/// cryptographically independent of the seed's use as a signing key: the
-/// distinct info tag means an attacker who somehow recovered the unwrap secret
-/// still learns nothing about the Ed25519 signing key, and vice versa.
+/// Mint a fresh, INDEPENDENT X25519 unwrap secret (ADR-0066 decision 1).
+///
+/// WHY THIS EXISTS: the unwrap key used to be HKDF-derived from the node's Ed25519
+/// signing seed, which tied DATA CUSTODY to NODE IDENTITY. ADR-0026 deliberately kills
+/// the identity on disaster recovery (the signing key is never backed up), so the
+/// derivation silently killed the custody too — every inherited `event_dek` row became
+/// unopenable on a restored solo node (#495). An independent key has its own lifecycle:
+/// it is sealed at rest under the same operator secrets and carried across a restore in
+/// the local-state export, so identity can die without taking the record with it.
+///
+/// The raw 32 bytes need no clamping here — `x25519_dalek::StaticSecret` clamps on use,
+/// exactly as it did for the HKDF output this replaces.
+pub fn generate_unwrap_secret() -> Result<Zeroizing<[u8; 32]>, EventError> {
+    let mut out = Zeroizing::new([0u8; 32]);
+    getrandom::fill(out.as_mut())
+        .map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
+    Ok(out)
+}
+
+/// ⚠️ **MIGRATION PATH ONLY — DO NOT CALL THIS TO OBTAIN A NODE'S UNWRAP SECRET.**
+/// Use `cairn_node::keystore::load_unwrap_secret`, which reads the independent key
+/// ADR-0066 decision 1 established.
+///
+/// This function survives for exactly one purpose: a node provisioned BEFORE ADR-0066
+/// has `event_dek` rows wrapped to the public half of the secret this derives, so
+/// `cairn-node establish-unwrap-key` re-derives it once and adopts it as that node's
+/// first independent key. That adoption is lossless — no row is rewrapped — and it
+/// works only while the signing seed still reconstructs the old secret.
+///
+/// **Calling it anywhere else re-creates the coupling that cost the whole clinical
+/// record on a restored solo node (#495).** `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`
+/// pins the production call sites; the count failing is the guard working.
+///
+/// Deterministic in the seed, and cryptographically independent of the seed's use as a
+/// signing key: the distinct HKDF info tag means recovering one teaches nothing about
+/// the other.
 pub fn derive_unwrap_secret(seed: &[u8; 32]) -> Zeroizing<[u8; 32]> {
     let hk = Hkdf::<Sha256>::new(None, seed);
     let mut out = Zeroizing::new([0u8; 32]);
@@ -529,6 +560,31 @@ mod tests {
         let b = derive_unwrap_secret(&seed);
         assert_eq!(a.as_slice(), b.as_slice());
         assert_ne!(a.as_slice(), &seed); // never the raw signing seed
+    }
+
+    /// A generated unwrap secret is a first-class wrap recipient, and is tied to no seed.
+    /// This is the property ADR-0066 decision 1 rests on: two calls must differ (so the key
+    /// is not a function of anything), and the resulting keypair must behave exactly as a
+    /// derived one did at the wrap/unwrap boundary (so nothing downstream can tell them
+    /// apart). House rule 6: every byte here comes from the generator or an existing runtime
+    /// fixture — no literals.
+    #[test]
+    fn a_generated_unwrap_secret_is_independent_and_wraps_like_a_derived_one() {
+        let a = generate_unwrap_secret().unwrap();
+        let b = generate_unwrap_secret().unwrap();
+        assert_ne!(*a, *b, "two generated unwrap secrets must differ");
+
+        let dek = dek_fixture();
+        let wrapped = wrap_dek_for(&dek, &unwrap_public(&a)).unwrap();
+        assert_eq!(
+            unwrap_dek(&wrapped, &a).unwrap().as_slice(),
+            &dek,
+            "the generated keypair must open its own wrap"
+        );
+        assert!(
+            unwrap_dek(&wrapped, &b).is_err(),
+            "a different secret must not open it"
+        );
     }
 
     // Review fix (round 2, IMPORTANT 1): the all-zero encoding is Curve25519's
