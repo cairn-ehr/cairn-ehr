@@ -29,7 +29,7 @@
 |---|---|---|
 | `crates/cairn-event/src/seal.rs` | The seal/wrap crypto core | Add `generate_unwrap_secret`; re-document `derive_unwrap_secret` as migration-only |
 | `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs` | Source guard: no production site may re-couple identity to custody | **Create** |
-| `crates/cairn-node/src/keystore.rs` | Key material at rest | Add the `node.unwrap` file lifecycle; delete `unwrap_secret(sk)` |
+| `crates/cairn-node/src/keystore.rs` | Key material at rest | Add the `node.unwrap` file lifecycle (Task 3); `unwrap_secret(sk)` is deleted in Task 4 with its only caller |
 | `crates/cairn-node/src/medication/sealed_submit.rs` | Seal-then-sign write path | `ensure_unwrap_key` becomes a verification, not a registration |
 | `crates/cairn-node/src/medication/{reconciliation,attestation,signoff}.rs` | Other write paths | Drop the now-unused argument at 3 call sites |
 | `crates/cairn-node/src/localstate.rs` | The `CAIRNL1` export | Add the `unwrap_secret` slot + the `episode_deks` producer |
@@ -208,11 +208,26 @@ use common::sources;
 
 /// Production files permitted to call `derive_unwrap_secret`, with the reason each is
 /// allowed. A file NOT on this list calling it is the failure this guard exists for.
-const ALLOWED: &[(&str, &str)] = &[(
-    "crates/cairn-node/src/keystore.rs",
-    "the ADR-0066 adoption migration (`adopt_derived_unwrap_secret`) — the one place a \
-     pre-ADR-0066 node re-derives its old secret to keep its existing event_dek rows openable",
-)];
+const ALLOWED: &[(&str, &str)] = &[
+    (
+        "crates/cairn-node/src/keystore.rs",
+        "the ADR-0066 adoption migration (`adopt_derived_unwrap_secret`) — the one place a \
+         pre-ADR-0066 node re-derives its old secret to keep its existing event_dek rows openable",
+    ),
+    // The two sites ADR-0066 has not yet reached. Both entries are REMOVED/REWRITTEN by a
+    // later task in this same slice; they are listed now so that every commit leaves the
+    // suite green (house rule 6), never so that the coupling is tolerated.
+    (
+        "crates/cairn-node/src/medication/sealed_submit.rs",
+        "PRE-ADR-0066 — `ensure_unwrap_key` still derives. REMOVE THIS ENTRY in Task 4, \
+         which turns that function into a verification and deletes the derivation",
+    ),
+    (
+        "crates/cairn-sync/src/main.rs",
+        "PRE-ADR-0066 — cairn-sync cannot read cairn-node's keystore. REWRITE THIS REASON \
+         in Task 5 once the startup divergence check exists",
+    ),
+];
 
 #[test]
 fn only_the_adoption_migration_derives_the_unwrap_secret() {
@@ -258,7 +273,7 @@ fn only_the_adoption_migration_derives_the_unwrap_secret() {
 - [ ] **Step 7: Run the guard — it must pass only after Task 4**
 
 Run: `cargo test -p cairn-node --test unwrap_secret_is_not_derived`
-Expected at this point: **FAIL**, naming `crates/cairn-node/src/medication/sealed_submit.rs` and `crates/cairn-sync/src/main.rs`. That is correct — those are the live couplings Tasks 4 and 5 remove. Leave it red and proceed; it goes green at the end of Task 5.
+Expected: **PASS**. The two still-coupled sites are on the allow-list with `REMOVE THIS ENTRY in Task 4` / `REWRITE THIS REASON in Task 5` reasons, so the suite is green at this commit and every later one (house rule 6: all tests pass before committing). The guard still does its job — a *new* site not on the list fails it immediately.
 
 - [ ] **Step 8: Commit**
 
@@ -282,7 +297,7 @@ git commit -m "feat(#495): an independent unwrap secret, and the guard that keep
   - `keystore::write_unwrap_sealed(path: &Path, secret: &[u8; 32], op_pass: &str, recovery_code: &str) -> Result<(), KeystoreError>`
   - `keystore::load_unwrap_secret(path: &Path, secret: Option<&str>) -> Result<Zeroizing<[u8; 32]>, KeystoreError>`
   - `keystore::adopt_derived_unwrap_secret(sk: &SigningKey) -> Zeroizing<[u8; 32]>`
-- Removes: `keystore::unwrap_secret(sk)` — every caller moves to `load_unwrap_secret`
+- **Does NOT remove `keystore::unwrap_secret(sk)`.** Its only caller is `sealed_submit.rs:70`, which Task 4 rewrites; deleting it here would leave a commit that does not compile, and house rule 6 requires every commit to be green. Task 4 deletes the function and its caller together.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -361,7 +376,7 @@ Expected: FAIL — `cannot find function 'generate_unwrap_sealed'`.
 
 - [ ] **Step 3: Implement**
 
-Add to `keystore.rs`, replacing the existing `unwrap_secret` function:
+Add to `keystore.rs`, **beside** the existing `unwrap_secret` function (Task 4 deletes that one together with its only caller):
 
 ```rust
 /// The unwrap-key file for a signing-key path: `<key>.unwrap`, a sibling — discoverable
@@ -457,7 +472,7 @@ Add `use std::path::PathBuf;` to the imports.
 - [ ] **Step 4: Run the tests**
 
 Run: `cargo test -p cairn-node --lib keystore::tests`
-Expected: PASS, all of them. The crate will not yet build its binary — `sealed_submit.rs` still calls the deleted `unwrap_secret`; Task 4 fixes that.
+Expected: PASS, all of them. Run `cargo test -p cairn-node --all-targets` too — this commit must be green on its own.
 
 - [ ] **Step 5: Commit**
 
@@ -552,9 +567,17 @@ pub async fn ensure_unwrap_key(client: &tokio_postgres::Client) -> anyhow::Resul
 }
 ```
 
+- [ ] **Step 3b: Make the module reachable, and delete the old derivation**
+
+`crates/cairn-node/src/medication/mod.rs:15` declares `mod sealed_submit;` — **private**, so the Step 1 test cannot name it. Change it to `pub mod sealed_submit;` (its siblings `read` and `signoff` are already public).
+
+In the same commit, delete `keystore::unwrap_secret(sk)` — this task removes its only caller, so the function and the caller die together and every commit stays green.
+
 - [ ] **Step 4: Update the four call sites**
 
 `sealed_submit.rs:311`, `reconciliation.rs:254`, `attestation.rs:206`, `signoff.rs:156` — drop the second argument: `ensure_unwrap_key(client).await?;`. If `node_sk` becomes unused in any of those functions, do **not** delete the parameter — it is still the signing key those paths use elsewhere; let the compiler tell you, and only remove a binding it flags.
+
+Then **remove the `crates/cairn-node/src/medication/sealed_submit.rs` entry from `unwrap_secret_is_not_derived.rs`'s `ALLOWED` list** — its reason line says `REMOVE THIS ENTRY in Task 4`, and the guard is only honest if the list shrinks as the couplings go. Re-run `cargo test -p cairn-node --test unwrap_secret_is_not_derived`; it must still pass.
 
 - [ ] **Step 5: Wire `init` and add `establish-unwrap-key`**
 
@@ -913,6 +936,8 @@ pub async fn read_local_state(
 }
 ```
 
+**A third caller the File Structure table missed:** `crates/cairn-node/tests/localstate.rs:34` calls `read_local_state(&conn)` inside `read_local_state_returns_the_empty_bundle`. Update it to pass `None` and keep it TRUE rather than deleting it — that test resets the federation tables, so the node genuinely holds no custody and an empty bundle is the correct answer there. Rewrite its doc comment: it is no longer pinning a defect, it is the round-trip's read half over a node with nothing to export.
+
 Delete the old `read_local_state` from `localstate.rs`, re-export the new one (`pub use crate::localstate_read::read_local_state;`) so existing call sites keep resolving, register the module in `lib.rs`, and **rewrite `localstate.rs`'s module header and the `LocalState` / `empty` / `is_empty` doc comments**: the expired-precondition warnings describe a hole that is now closed on the custody axis. Say what is still open (slice 2 lands the events and the registry) rather than deleting the warning wholesale — an over-correction here is how the original stale comment happened.
 
 - [ ] **Step 5: Update the caller**
@@ -1100,6 +1125,156 @@ gh pr create --title "ADR-0066: identity dies with the disk; custody must not (#
 ```
 
 The body must: link `Closes #495`, state that #500 stays open and why the two were split, name the three inverted pins, and list the issues filed in Task 5.
+
+---
+
+### Task 9: cairn-sync must never overwrite a key file it cannot parse
+
+**Independent of #495 and dispatched FIRST**, because the defect destroys signing keys. Found while
+reading `load_or_create_key` for Task 5.
+
+`crates/cairn-sync/src/main.rs`'s `load_or_create_key` does `std::fs::read_to_string(path)`, and on
+**any** error — including invalid UTF-8 — falls through to generating a fresh key and
+`std::fs::write`-ing it **over the same path**. cairn-node writes its key as a sealed CBOR bundle
+(binary), so `read_to_string` fails on invalid UTF-8 and a daemon that was only trying to start
+**destroys the node's sealed signing key**. That key is never backed up (ADR-0026 decision 4), so the
+loss is total and unrecoverable: the node's identity is gone and every future event it signs is a
+stranger's.
+
+Create-on-absent is the intended behaviour and stays. What must change is that **only absence** may
+lead to creation.
+
+**Files:**
+- Modify: `crates/cairn-sync/src/main.rs` (`load_or_create_key`)
+
+- [ ] **Step 1: Write the failing test**
+
+In `crates/cairn-sync/src/main.rs`'s test module:
+
+```rust
+/// A key file that exists but cannot be parsed must STOP the daemon, never be overwritten.
+///
+/// `read_to_string` fails on invalid UTF-8, and cairn-node's sealed key file is binary CBOR —
+/// so before this guard, pointing cairn-sync at a real node's key file generated a fresh key
+/// and wrote it over the sealed one. The signing key is never backed up (ADR-0026 decision 4),
+/// so that is unrecoverable identity loss caused by a daemon start.
+#[test]
+fn an_unparseable_key_file_is_refused_and_left_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("node.key");
+
+    // Bytes shaped like cairn-node's sealed bundle: binary, invalid UTF-8. Derived at
+    // runtime (house rule 6) — this is a key file, so no literal key material.
+    let sealed_like: Vec<u8> = (0u8..64).map(|i| i.wrapping_mul(3).wrapping_add(0x80)).collect();
+    std::fs::write(&p, &sealed_like).unwrap();
+
+    let err = load_or_create_key(p.to_str().unwrap())
+        .expect_err("an unparseable key file must be refused, never overwritten");
+    assert!(
+        format!("{err}").contains("refusing to overwrite"),
+        "the refusal must say what it is protecting; got: {err}"
+    );
+    assert_eq!(
+        std::fs::read(&p).unwrap(),
+        sealed_like,
+        "THE POINT: the existing key file must be byte-identical after the refusal"
+    );
+}
+
+/// The create-on-absent path is the intended behaviour and must survive the fix.
+#[test]
+fn an_absent_key_file_is_still_created() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("fresh.key");
+    let (_sk, kid) = load_or_create_key(p.to_str().unwrap()).unwrap();
+    assert!(!kid.is_empty());
+    assert!(p.exists(), "an absent key file is still created");
+    // And a second call LOADS it rather than minting a new identity.
+    let (_sk2, kid2) = load_or_create_key(p.to_str().unwrap()).unwrap();
+    assert_eq!(kid, kid2, "a second start must reuse the key, not replace it");
+}
+```
+
+`tempfile` is already a dev-dependency of cairn-sync — no new dependency.
+
+- [ ] **Step 2: Run them and watch the first fail**
+
+Run: `cargo test -p cairn-sync an_unparseable_key_file an_absent_key_file`
+Expected: `an_unparseable_key_file_is_refused_and_left_untouched` FAILS (the file is overwritten and no error is returned); `an_absent_key_file_is_still_created` passes.
+
+- [ ] **Step 3: Fix the loader**
+
+Rewrite the head of `load_or_create_key` so creation is reached ONLY when the path does not exist,
+and every other outcome is a refusal that leaves the file alone:
+
+```rust
+/// Load this node's signing key, creating one only when the path does not exist.
+///
+/// ⚠️ **A file that exists but does not parse is a REFUSAL, never an overwrite.** This function
+/// used to `read_to_string` and fall through to create-and-write on any error — including invalid
+/// UTF-8, which is exactly what cairn-node's sealed (binary CBOR) key file produces. Pointing this
+/// daemon at a real node's key therefore replaced that node's sealed signing key with a fresh
+/// plaintext one. The signing key is never backed up (ADR-0026 decision 4), so the identity was
+/// gone for good — caused by nothing more than starting a daemon.
+fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let text = std::str::from_utf8(&bytes).map_err(|_| {
+                format!(
+                    "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
+                     key?); refusing to overwrite it. Point --key at this daemon's own key file."
+                )
+            })?;
+            let seed: [u8; 32] = hex::decode(text.trim())
+                .map_err(|e| {
+                    format!("{path} exists but is not valid hex ({e}); refusing to overwrite it")
+                })?
+                .try_into()
+                .map_err(|_| {
+                    format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
+                })?;
+            let sk = SigningKey::from_bytes(&seed);
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            Ok((sk, kid))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // The only path that creates. Absence is the one state where writing cannot
+            // destroy anything.
+            let (sk, kid) = cairn_event::generate_key()?;
+            std::fs::write(path, hex::encode(sk.to_bytes()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            eprintln!("generated new signing key at {path} (kid {})", &kid[..16]);
+            Ok((sk, kid))
+        }
+        // Present but unreadable (permissions, I/O): refuse. "Cannot read" is not "absent",
+        // and treating it as absent is how the overwrite happened.
+        Err(e) => Err(format!("cannot read {path} ({e}); refusing to overwrite it").into()),
+    }
+}
+```
+
+Keep the 0600 permission-setting exactly as it is — it is a prior review finding (L12) and unrelated
+to this fix. Match the crate's actual error type: `R<T>` here is the crate's boxed-error alias, so
+`format!(...).into()` is the idiom; check a neighbouring function and follow it.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p cairn-sync an_unparseable_key_file an_absent_key_file`
+Expected: both PASS.
+Run: `cargo test -p cairn-sync --all-targets`
+Expected: PASS — several suites drive this loader, and a refusal where they expected creation would
+show up here.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/cairn-sync/src/main.rs
+git commit -m "fix: cairn-sync must never overwrite a key file it cannot parse"
+```
 
 ## Paper-parity benchmark (§1.2)
 
