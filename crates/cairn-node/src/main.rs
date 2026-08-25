@@ -4418,6 +4418,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_unverified_custody_file_does_not_read_as_confirmed() {
+        // The one rendering arm none of the tests above cover: file present, registered,
+        // but not opened (sealed, no passphrase supplied). `status` never prompts for a
+        // secret, so this arm's entire job is to say "I did not check" rather than imply a
+        // match. A regression that collapsed this arm into `ConfirmedMatch`'s wording would
+        // pass the rest of this suite untouched while silently restoring the exact defect
+        // this branch fixed — a node that cannot open anything it holds, reporting healthy.
+        // Both directions matter: asserting only the first substring below would still pass
+        // if the two arms were merged onto the "NOT opened" wording alone.
+        let path = std::path::Path::new("/nodes/a/node.key.unwrap");
+        let line = unwrap_key_status_line(
+            &cairn_node::keystore::KeyAtRest::Sealed {
+                dual_recipient: true,
+            },
+            &CustodyRegistration::Unverified,
+            path,
+        );
+        assert!(
+            line.contains("NOT opened"),
+            "an unverified custody file must say plainly that `status` did not look inside \
+             it: {line}"
+        );
+        assert!(
+            !line.contains("confirmed to hold"),
+            "and must never borrow the confirmed-match wording, which would imply a check \
+             that never happened: {line}"
+        );
+    }
+
     // --- ADR-0066: `init` must never silently replace an existing custody key ---
 
     #[test]
