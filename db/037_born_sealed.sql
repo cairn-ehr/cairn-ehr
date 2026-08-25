@@ -11,8 +11,13 @@ BEGIN;
 
 -- ---------------------------------------------------------------------------
 -- 1. The node's X25519 public unwrap key (single row). The SECRET half lives in
---    the daemon keystore (derived from the Ed25519 seed, ADR-0026 escrow) and
---    NEVER enters the database — a DB backup can never reconstruct a DEK.
+--    the daemon keystore, in its own `<key>.unwrap` file sealed under the ADR-0026
+--    escrow secrets, and NEVER enters the database — a DB backup can never
+--    reconstruct a DEK. It is an INDEPENDENT keypair: ADR-0066 superseded ADR-0052's
+--    derivation-from-the-Ed25519-seed, because disaster recovery deliberately mints a
+--    fresh signing seed and the derived secret then changed, permanently orphaning
+--    every inherited wrapped-DEK row (#495). The row is written by provisioning
+--    (`cairn-node init` / `establish-unwrap-key`), never by the write path.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS node_unwrap_key (
     singleton     BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (singleton),
@@ -20,6 +25,17 @@ CREATE TABLE IF NOT EXISTS node_unwrap_key (
     registered_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
+-- The registrar. Its ONE guarantee, which ADR-0066 now leans on in several places
+-- (restore adopts rather than mints BECAUSE this refuses a differing key), is:
+-- **after this returns successfully, the registered key IS p_pub.**
+--
+-- The ON CONFLICT DO NOTHING below is what makes the insert safe against a concurrent
+-- provisioning run — but DO NOTHING is also silence, and silence here would break the
+-- guarantee: the loser of that race would return successfully while a DIFFERENT key sat
+-- in the table. Two operators provisioning at once is rare; a caller that believes its
+-- key is registered when another one is, is unrecoverable (the singleton then refuses
+-- the real key forever). So the outcome is RE-READ and compared, and the same refusal
+-- fires whether the conflict was found before the insert or created during it.
 CREATE OR REPLACE FUNCTION cairn_register_unwrap_key(p_pub BYTEA) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE v_existing BYTEA;
@@ -28,7 +44,12 @@ BEGIN
     IF v_existing IS NULL THEN
         INSERT INTO node_unwrap_key (unwrap_pub) VALUES (p_pub)
         ON CONFLICT (singleton) DO NOTHING;
-    ELSIF v_existing <> p_pub THEN
+        -- Re-read: DO NOTHING means a concurrent transaction won the singleton, and
+        -- whatever IT registered is what this node now has. Reporting success without
+        -- checking would hand this caller a false belief about its own custody.
+        SELECT unwrap_pub INTO v_existing FROM node_unwrap_key;
+    END IF;
+    IF v_existing IS NOT NULL AND v_existing <> p_pub THEN
         -- Unwrap-key rotation re-wraps every custody row — a deliberate,
         -- separate ceremony (ADR-0052 deferred list). Refuse a silent swap.
         RAISE EXCEPTION 'cairn_register_unwrap_key: a different unwrap key is registered — rotation is a separate ceremony (ADR-0052)';

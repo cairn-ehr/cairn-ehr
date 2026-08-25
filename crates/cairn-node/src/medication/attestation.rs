@@ -182,28 +182,36 @@ pub async fn attest_thread_in_tx(
 
 /// Post-hoc standalone sign-off: mint an HLC, open a one-statement txn, attest, commit.
 ///
-/// `node_sk` is the NODE's own signing key — used ONLY to register the node's DEK-unwrap
-/// key defensively before the sealed attestation submits (ADR-0052). The author-time verb
-/// paths always register it via the content submit, but a post-hoc vouch on a thread this
-/// node acquired by SYNC (Tasks 8/9, when synced threads gain custody) may reach the door
-/// with no unwrap key registered yet, and the attestation's custody wrap would then fail
-/// with "node unwrap key not registered". Registration MUST be the node key, never the
-/// human attester (`params.human_sk`): the node holds custody, and the node_unwrap_key
-/// singleton refuses a second, different key (`cairn_register_unwrap_key`). Idempotent, so
-/// calling it when the content path already registered the same key is a safe no-op.
+/// The node's DEK-unwrap key is VERIFIED present before the sealed attestation submits
+/// (ADR-0052 custody; ADR-0066 decision 6 moved REGISTERING it to provisioning). A
+/// post-hoc vouch on a thread this node acquired by SYNC (Tasks 8/9, when synced threads
+/// gain custody) can reach the door on a node that was never provisioned, and the
+/// attestation's custody wrap would then fail deep in the floor with "node unwrap key not
+/// registered"; checking here fails earlier and names the command that fixes it. Custody
+/// is always the NODE's, never the human attester's (`params.human_sk`) — the
+/// `node_unwrap_key` singleton holds exactly one key regardless of who signs.
+///
+/// `_node_sk` — DELIBERATELY UNUSED, deliberately KEPT. It used to be the key this
+/// function derived-and-registered the node's unwrap key from; ADR-0066 decision 6 deleted
+/// that use, and nothing in this path signs with the node key (the attestation event is
+/// signed by `params.human_sk`). It stays in the signature because dropping it would also
+/// drop the `load_signing_key` call in the `medication-attest` CLI arm, i.e. stop that
+/// command requiring the node's own passphrase — an OPERATOR-FACING ceremony change that
+/// belongs to a decision about the attest ceremony, not to a custody-key refactor. Remove
+/// it only as part of that decision.
 ///
 /// SAFETY FOLLOW-UP (Tasks 8/9): this only makes the CUSTODY key present; it does NOT fix
 /// the ADR-0049 false-fresh hazard a partial-custody node can still hit at the staleness
 /// view (see cairn_medication_thread_commitment in db/034). That gate is Tasks 8/9's job.
 pub async fn attest_medication_thread(
     client: &mut tokio_postgres::Client,
-    node_sk: &SigningKey,
+    _node_sk: &SigningKey,
     node_origin: &str,
     params: &AttestParams<'_>,
     patient: Uuid,
     medication_id: Uuid,
 ) -> anyhow::Result<Uuid> {
-    crate::medication::sealed_submit::ensure_unwrap_key(client, node_sk).await?;
+    crate::medication::sealed_submit::ensure_unwrap_key(client).await?;
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let tx = client.transaction().await?;
     let id = attest_thread_in_tx(&tx, params, patient, medication_id, hlc).await?;

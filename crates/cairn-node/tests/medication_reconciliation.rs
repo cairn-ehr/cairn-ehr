@@ -25,10 +25,13 @@ fn db_msg(e: &tokio_postgres::Error) -> String {
         .unwrap_or_else(|| e.to_string())
 }
 
-/// ADR-0052: seal a CLEAR clinical EventBody like the node write path, register the
-/// node's unwrap key, sign, and submit through the 4-arg strict door. Returns the raw
-/// driver Result so refusal-pinning tests keep using db_msg. House rule 6: the DEK is
-/// generated inside seal_event_payload, never a literal.
+/// ADR-0052: seal a CLEAR clinical EventBody like the node write path, sign, and submit
+/// through the 4-arg strict door. Returns the raw driver Result so refusal-pinning tests
+/// keep using db_msg. House rule 6: the DEK is generated inside seal_event_payload, never a
+/// literal.
+///
+/// Does NOT register the node's unwrap key — `setup_node` provisions it (ADR-0066
+/// decision 6).
 async fn seal_and_submit(
     c: &Client,
     sk: &SigningKey,
@@ -44,12 +47,6 @@ async fn seal_and_submit(
     body.payload = container;
     body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
     let signed = sign(&body, sk).expect("sign the sealed body");
-    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
-    c.execute(
-        "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
-    )
-    .await?;
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
         &[&signed.signed_bytes, &dek.as_slice()],
@@ -84,6 +81,24 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
     c.execute(
         "SELECT enroll_actor('device', '{\"role\":\"registration-desk\"}', $1)",
         &[&kid],
+    )
+    .await
+    .unwrap();
+    // PROVISION this node's custody key (ADR-0066 decision 6). Registering it used to be a
+    // side effect of the first sealed write — `ensure_unwrap_key` did it silently — so the
+    // fixture never had to. That is exactly the implicit behaviour decision 6 removed: the
+    // write path now VERIFIES and refuses an unprovisioned node, so the fixture must do
+    // what `cairn-node init` does. It belongs HERE, not in a submit helper, because the
+    // TRUNCATE above wipes the singleton on every test and the orchestrator-driven tests
+    // never go through a submit helper at all.
+    //
+    // FRESHLY GENERATED, never derived from the signing seed: that derivation is the
+    // coupling ADR-0066 removed, and nothing in this suite ever unwraps a DEK. House rule
+    // 6 — computed at runtime, never a literal.
+    let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
     )
     .await
     .unwrap();

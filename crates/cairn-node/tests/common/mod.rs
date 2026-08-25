@@ -606,11 +606,31 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
     )
     .await
     .unwrap();
-    // ADR-0052: register THIS node's unwrap key (derived from the device key) so the strict
-    // door can wrap every sealed event's DEK into custody — attestation events are
-    // clinical.* and born-sealed too. A node has exactly ONE unwrap key regardless of who
-    // signs individual events; deriving it from the human key would collide on the
-    // node_unwrap_key singleton.
+    // ADR-0052: register THIS node's unwrap key so the strict door can wrap every sealed
+    // event's DEK into custody — attestation events are clinical.* and born-sealed too. A
+    // node has exactly ONE unwrap key regardless of who signs individual events; deriving it
+    // from the human key would collide on the node_unwrap_key singleton.
+    //
+    // WHY THIS FIXTURE STILL DERIVES, SINCE ADR-0066 — read before "fixing" it. ADR-0066
+    // made a real node's unwrap key an INDEPENDENT X25519 keypair, PROVISIONED by
+    // `cairn-node init` / `establish-unwrap-key` rather than derived from the signing seed.
+    // This fixture keeps deriving from the device key on purpose, for two reasons:
+    //
+    //   1. It stands in for PROVISIONING. A DB-only test has no keystore file, so the
+    //      fixture needs some deterministic secret to register, and the derivation is the
+    //      cheapest one reproducible from a key the test already holds. The door cannot tell
+    //      a derived key from a generated one (that is ADR-0066 decision 1's whole point),
+    //      so nothing under test is weakened by the choice.
+    //   2. Other code DEPENDS on it being the derived one. `submit_medication_with_raw_safety`
+    //      and `build_raw_safety_medication` below re-register the same derived key so they
+    //      work whether or not this fixture ran first — and `node_unwrap_key`'s registrar is
+    //      a singleton that REFUSES a differing key, so a generated key here would break
+    //      them. `dr_clinical_guarantee_gap.rs` goes further and re-derives this exact secret
+    //      to get hold of the node's custody; it documents the dependency from its side, and
+    //      this is the same fact stated from ours.
+    //
+    // So: derived HERE is a test-fixture convention, never a claim about production. If it
+    // ever changes, all four sites change together.
     let secret = cairn_event::seal::derive_unwrap_secret(&sk_d.to_bytes());
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
@@ -635,10 +655,12 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
 ///
 /// Signs with the HUMAN key and takes ADR-0053 authorship (`with_human_author`) — the
 /// shape every real medication assert in this slice carries — while `sk`/`kid` (the
-/// device/node key) re-registers the node's unwrap key, exactly as `ensure_unwrap_key`
-/// does on every real submit. Re-registering is a no-op when `medication_setup` already
-/// registered the same key (idempotent — see `cairn_register_unwrap_key`'s own doc), so
-/// this helper does not depend on being called only after that fixture.
+/// device/node key) re-registers the node's unwrap key. Since ADR-0066 decision 6 the real
+/// pipeline no longer registers on write (`ensure_unwrap_key` only VERIFIES), so this
+/// re-registration stands in for PROVISIONING, keeping the helper independent of whether
+/// `medication_setup` ran first: registering the same key twice is a no-op (idempotent —
+/// see `cairn_register_unwrap_key`'s own doc), and it must be the same DERIVED key that
+/// fixture registers, because the singleton refuses a differing one.
 ///
 /// Returns the submitted event's content address (`event_log.content_address`), or the
 /// door's rejection — NOT unwrapped, so a caller asserting ADMISSION can still say why a
@@ -655,10 +677,11 @@ pub async fn submit_medication_with_raw_safety(
     wall: i64,
     safety: serde_json::Value,
 ) -> Result<Vec<u8>, tokio_postgres::Error> {
-    // Re-register the node's unwrap key from the DEVICE key, exactly as
-    // `ensure_unwrap_key(client, node_sk)` does in the real pipeline — custody is always
-    // the NODE's regardless of who signs (born-sealed erasability, ADR-0052). Idempotent:
-    // a second registration of the same key is a no-op.
+    // Provision the node's unwrap key from the DEVICE key — custody is always the NODE's
+    // regardless of who signs (born-sealed erasability, ADR-0052). Since ADR-0066 decision
+    // 6 the write path only VERIFIES a key is registered, so this is the PROVISIONING step
+    // rather than a mirror of what `ensure_unwrap_key` does. Idempotent: a second
+    // registration of the same key is a no-op.
     //
     // `.expect()`, deliberately NOT `?` (2026-08-15 review, Important #3): this function's
     // `Result` is the caller's proxy for "did the DOOR admit or refuse this write" —

@@ -12,6 +12,7 @@ pub mod identity_evidence;
 pub mod john_doe;
 pub mod keystore;
 pub mod localstate;
+pub mod localstate_read;
 pub mod matcher_actor;
 pub mod medication;
 pub mod medium;

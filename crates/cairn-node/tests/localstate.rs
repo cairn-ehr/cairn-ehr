@@ -6,7 +6,7 @@ use cairn_node::db;
 use cairn_node::localstate::{
     apply_local_state, establish_lsk, from_cbor, localstate_path_for, lsk_sidecar_path_for,
     parse_container, read_local_state, seal_local_state, serialize_container, serialize_sidecar,
-    to_cbor, unseal_local_state_rec, LocalState,
+    to_cbor, unseal_local_state_rec, CustodyKeyDestination, LocalState,
 };
 use tempfile::tempdir;
 
@@ -14,13 +14,25 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
-/// The export comes back empty. **The assertion is still true; its old justification was
-/// not** — this test used to say "no clinical surface yet => the bundle is empty", a
-/// sentence ADR-0052 falsified when it made every clinical body born-sealed. The emptiness
-/// is now a **defect** (#495), pinned properly — against a database that genuinely holds
-/// custody — by `dr_clinical_guarantee_gap.rs`. Kept here as the round-trip's read half.
-/// (Renamed off `..._is_empty_at_the_federation_tier` for the same reason: a test name is a
-/// claim, and that one re-taught the expired framing every time it was read.)
+/// The round-trip's READ half, over a node that genuinely holds nothing to export.
+///
+/// The emptiness asserted here is **correct, not a defect**. `reset_node_federation_tables`
+/// runs first, so there is no `event_dek` custody to carry; and `None` is passed for the
+/// unwrap secret, which is what a caller that could not load `<key>.unwrap` supplies. An
+/// empty bundle is the right answer to both, and applying one must be a clean noop.
+///
+/// **What this test is NOT.** It is not evidence that the export is empty in general —
+/// since #495/ADR-0066 a provisioned node's export carries its surviving `event_dek`
+/// custody and its unwrap secret. That property is pinned where it can actually be
+/// observed, against a database holding real custody, in
+/// `dr_clinical_guarantee_gap.rs::the_export_carries_the_unwrap_secret_and_the_surviving_dek`.
+/// If this test ever stops resetting the federation tables, it stops being true.
+///
+/// (Two earlier framings of this test were wrong in turn — first "no clinical surface yet,
+/// so the tier's bundle is empty", falsified by ADR-0052's born-sealed bodies; then "the
+/// emptiness is a defect", falsified by ADR-0066. The name was already changed once off
+/// `..._is_empty_at_the_federation_tier` for the first of those, because a test name is a
+/// claim. The stable claim is the one above: this node has nothing, so it exports nothing.)
 #[tokio::test]
 async fn read_local_state_returns_the_empty_bundle() {
     let Some(base) = cs() else {
@@ -30,16 +42,53 @@ async fn read_local_state_returns_the_empty_bundle() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let conn = db::connect_and_load_schema(&base).await.unwrap();
     db::reset_node_federation_tables(&conn).await.ok();
+    // The CLINICAL custody plane too, and this line is load-bearing since #495. Before it,
+    // `read_local_state` ignored the database entirely, so "no custody" needed no setup.
+    // Now the answer depends on `event_dek` — and `reset_node_federation_tables` truncates
+    // only the FEDERATION tables (`node_event`, `local_node`, `sync_cursor`, `hlc_state`,
+    // `node_event_quarantine`), never this one. These integration binaries share one
+    // serialized database, so a sibling suite's leftover custody row would otherwise make
+    // this test fail depending on binary order.
+    conn.batch_execute("TRUNCATE event_dek, erasure_shred_log CASCADE")
+        .await
+        .expect("clearing the custody plane so this node genuinely holds nothing");
 
-    let ls = read_local_state(&conn).await.expect("read must succeed");
+    // `None`: the caller could not load an unwrap secret. The export is still built — see
+    // `read_local_state`'s doc for why that is a warn, not an abort.
+    let ls = read_local_state(&conn, None)
+        .await
+        .expect("read must succeed");
     assert!(
         ls.is_empty(),
-        "the export is empty — a DEFECT since ADR-0052, not the tier's shape (#495)"
+        "a node with no custody and no secret to carry exports an empty bundle"
     );
-    // Applying an empty bundle is a clean noop (the seam the clinical tier extends).
-    apply_local_state(&conn, &ls)
-        .await
-        .expect("applying an empty bundle is a noop");
+    // Applying an empty bundle is a clean noop. Since ADR-0066 decision 4 the applier
+    // INSTALLS a carried unwrap key, so it needs a destination to install it at — but this
+    // bundle carries none, so nothing is written and the tempdir path below is never touched.
+    // Asserting that is the point: "no secret to install" must stay distinguishable from
+    // "installed something", and the report is where a caller reads the difference.
+    let dir = tempdir().unwrap();
+    let report = apply_local_state(
+        &conn,
+        &ls,
+        &CustodyKeyDestination::Sealed {
+            path: &dir.path().join("node.key.unwrap"),
+            op_pass: "op-pass-for-a-bundle-that-carries-nothing",
+            recovery_code: "recovery-code-for-a-bundle-that-carries-nothing",
+        },
+    )
+    .await
+    .expect("applying an empty bundle is a noop");
+    assert_eq!(
+        report.unwrap_key_installed(),
+        None,
+        "an empty bundle installs no custody key — and must say so rather than claim one"
+    );
+    assert_eq!(report.episode_deks_carried(), 0);
+    assert!(
+        !dir.path().join("node.key.unwrap").exists(),
+        "nothing may be written when there is nothing to install"
+    );
 }
 
 #[test]
@@ -88,4 +137,52 @@ fn corrupt_container_parses_as_error_not_panic() {
     let garbage = b"CAIRNL1\nnot valid cbor at all";
     assert!(cairn_node::localstate::parse_container(garbage).is_err());
     assert!(cairn_node::localstate::parse_container(b"no magic here").is_err());
+}
+
+/// **The evidence behind `restore`'s reworded failure line (review finding C1).**
+///
+/// `parse_container` validates the `CAIRNL1` magic and the CBOR framing — and nothing
+/// else. `payload_ct` is an opaque byte string inside that frame, so corruption *within*
+/// the sealed body sails through the parse and surfaces only when the AEAD tag fails to
+/// verify: `unseal_local_state_rec` returns `None`, which is **bit-for-bit the same answer
+/// a wrong recovery code produces**.
+///
+/// That is why the restore arm may not tell an operator *"the export itself is intact;
+/// the code is what failed"* after a failed unseal. It cannot know that, and saying so
+/// sends someone hunting a code they already typed correctly and then spending a second
+/// superseding identity for nothing — a precise untruth in the reassuring direction, at
+/// the one moment the operator has no second attempt (principle 4).
+///
+/// This test uses the CORRECT code throughout, so a `None` here can only mean damage.
+#[test]
+fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
+    let op = "op-passphrase";
+    let code = "REC-CODE-FIXTURE";
+    let wraps = establish_lsk(op, code).unwrap();
+    let bundle = LocalState::empty();
+    let sealed = seal_local_state(&wraps, op, &to_cbor(&bundle)).unwrap();
+    let container = serialize_container(&sealed);
+
+    // Positive control: undamaged, the correct code recovers the bundle. Without this the
+    // assertions below would pass just as well against a container that never sealed
+    // anything.
+    let intact = parse_container(&container).expect("an undamaged container must parse");
+    assert!(
+        unseal_local_state_rec(&intact, code).is_some(),
+        "precondition: the correct recovery code must open an undamaged export"
+    );
+
+    // Damage one byte of the SEALED BODY, not the frame. The ciphertext is the largest
+    // run in the container, so the last byte is inside `payload_ct`'s tag — past the
+    // magic, past every CBOR key, and therefore invisible to the parser.
+    let mut damaged = container.clone();
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xFF;
+
+    let parsed = parse_container(&damaged)
+        .expect("THE POINT: ciphertext damage still parses — the frame is intact");
+    assert!(
+        unseal_local_state_rec(&parsed, code).is_none(),
+        "damaged ciphertext must fail to unseal even under the CORRECT code"
+    );
 }

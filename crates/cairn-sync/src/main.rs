@@ -311,6 +311,94 @@ fn assert_pgx_floor(client: &mut postgres::Client) -> R<()> {
     Ok(())
 }
 
+/// True iff this daemon's unwrap public half agrees with what the database has registered.
+/// `None` (nothing registered) is NOT a divergence: the node has claimed no custody key yet, and
+/// refusing there would break a legitimate first-run flow (a brand-new node that has never run
+/// `cairn-node init`). Pure, so the decision is testable without a database — see
+/// `a_divergent_unwrap_key_is_detected_rather_than_degraded` in `mod tests`.
+///
+/// # Why this check exists at all (ADR-0066 / issue #495)
+///
+/// `cairn-node` provisions an INDEPENDENT X25519 unwrap keypair per ADR-0066 and registers its
+/// public half in `node_unwrap_key` (the singleton table). `cairn-sync` has not been converted
+/// (issue #503 tracks the real fix — a shared keystore crate) and still HKDF-DERIVES its unwrap
+/// secret from the node's Ed25519 signing seed at two call sites (`do_pull`, `serve_conn`). On a
+/// node provisioned by today's `cairn-node init` those two keys disagree, and a disagreement here
+/// is NOT cosmetic: `rewrap_custody_for_peer` silently degrades a failed re-wrap to "no custody
+/// for this slot", which is bit-for-bit indistinguishable from a peer that legitimately has no
+/// custody to offer. Catching the mismatch at startup turns that silent, misleading degradation
+/// into a loud, actionable refusal instead.
+fn unwrap_key_matches(mine: &[u8; 32], registered: Option<&[u8; 32]>) -> bool {
+    match registered {
+        None => true,
+        Some(theirs) => mine == theirs,
+    }
+}
+
+/// The actionable message for a divergent unwrap key (see `unwrap_key_matches`). Pure so the
+/// message contract is unit-testable independent of a live database connection — mirrors
+/// `pgx_floor_message`'s split from `assert_pgx_floor` just above.
+fn unwrap_key_divergence_message(mine: &[u8; 32], registered: &[u8; 32], issue: u32) -> String {
+    format!(
+        "this daemon derives unwrap key {} from its signing key, but the database has {} \
+         registered (ADR-0066: cairn-node now provisions an INDEPENDENT unwrap key). This \
+         daemon cannot open this node's custody. See issue #{issue} — point --key at the same \
+         key this node was provisioned with, or run cairn-sync against a node provisioned \
+         before ADR-0066.",
+        hex::encode(&mine[..8]),
+        hex::encode(&registered[..8]),
+    )
+}
+
+/// The tracking issue named in `unwrap_key_divergence_message` — cairn-sync deriving instead of
+/// loading the node's provisioned unwrap key (the real fix: a shared keystore crate).
+const UNWRAP_KEY_DIVERGENCE_ISSUE: u32 = 503;
+
+/// Fail fast if this daemon's DERIVED unwrap key (ADR-0052/ADR-0026: HKDF from the signing seed)
+/// disagrees with the unwrap key the database has REGISTERED (ADR-0066: cairn-node's
+/// independently-provisioned key). Beside `assert_pgx_floor` deliberately: same shape, a startup
+/// gate rather than a runtime degrade, because a silent mismatch here is indistinguishable from
+/// "this peer has no custody to offer" (issue #495 / #503).
+///
+/// Called only from call sites that ALREADY hold both a connected client and this node's signing
+/// key for custody purposes (`cmd_pull`, `cmd_run`, the `serve` CLI arm) — a command with no
+/// custody-bearing key (e.g. `init`, `requeue`) never derives an unwrap secret and so has nothing
+/// to check here.
+fn assert_unwrap_key_registered(client: &mut postgres::Client, mine: &[u8; 32]) -> R<()> {
+    // `query_opt`, not `query_one`: an absent row (no unwrap key registered yet) is a legitimate
+    // "nothing claimed", not an error — see `unwrap_key_matches`'s `None` case.
+    let row = client.query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])?;
+    let Some(registered) = row.map(|r| r.get::<_, Vec<u8>>(0)) else {
+        // No row: nothing has been claimed yet — see `unwrap_key_matches`'s `None` case.
+        return Ok(());
+    };
+    // A ROW THAT IS NOT 32 BYTES IS A REFUSAL, NEVER "nothing registered".
+    //
+    // db/037 CHECKs this column to exactly 32 bytes, so today the branch is unreachable, and
+    // the first draft leaned on that: `try_into().ok()` folded a malformed row into `None`,
+    // which this function reads as "no key claimed" and passes. That is fail-OPEN inside a
+    // fail-fast gate — and it is the same shape as the defect this very file fixes 400 lines
+    // below, where "cannot parse" was read as "does not exist" and destroyed a sealed signing
+    // key. The whole lesson of ADR-0066 is that two individually-sound layers contradict each
+    // other exactly where they meet, so a daemon that does not own this schema should not
+    // stake a safety gate on a constraint in it. Refusing costs nothing while the CHECK holds
+    // and is correct the day it does not.
+    let registered: [u8; 32] = registered.as_slice().try_into().map_err(|_| {
+        format!(
+            "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody plane is \
+             malformed and this daemon cannot tell whether its own unwrap key agrees with it. \
+             Refusing to start rather than proceeding as though no key were registered.",
+            registered.len()
+        )
+    })?;
+    if !unwrap_key_matches(mine, Some(&registered)) {
+        return Err(
+            unwrap_key_divergence_message(mine, &registered, UNWRAP_KEY_DIVERGENCE_ISSUE).into(),
+        );
+    }
+    Ok(())
+}
+
 /// A pull that FAILED LOUDLY for data-integrity reasons (unverifiable events
 /// quarantined, quarantine pen full, or declared signing-context skew) rather
 /// than transport reasons. Distinguished from a plain transport error so:
@@ -693,27 +781,55 @@ fn request(peer: &str, req: &Request) -> R<Vec<u8>> {
 // ---------------------------------------------------------------------------
 // Key handling (skeleton: a per-node key file; the registry is ADR-0011).
 // ---------------------------------------------------------------------------
+/// Load this node's signing key, creating one only when the path does not exist.
+///
+/// ⚠️ **A file that exists but does not parse is a REFUSAL, never an overwrite.** This function
+/// used to `read_to_string` and fall through to create-and-write on any error — including invalid
+/// UTF-8, which is exactly what cairn-node's sealed (binary CBOR) key file produces. Pointing this
+/// daemon at a real node's key therefore replaced that node's sealed signing key with a fresh
+/// plaintext one. The signing key is never backed up (ADR-0026 decision 4), so the identity was
+/// gone for good — caused by nothing more than starting a daemon.
 fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
-    if let Ok(text) = std::fs::read_to_string(path) {
-        let seed: [u8; 32] = hex::decode(text.trim())?
-            .try_into()
-            .map_err(|_| "key file is not a 32-byte hex seed")?;
-        let sk = SigningKey::from_bytes(&seed);
-        let kid = hex::encode(sk.verifying_key().to_bytes());
-        return Ok((sk, kid));
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let text = std::str::from_utf8(&bytes).map_err(|_| {
+                format!(
+                    "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
+                     key?); refusing to overwrite it. Point --key at this daemon's own key file."
+                )
+            })?;
+            let seed: [u8; 32] = hex::decode(text.trim())
+                .map_err(|e| {
+                    format!("{path} exists but is not valid hex ({e}); refusing to overwrite it")
+                })?
+                .try_into()
+                .map_err(|_| {
+                    format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
+                })?;
+            let sk = SigningKey::from_bytes(&seed);
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            Ok((sk, kid))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // The only path that creates. Absence is the one state where writing cannot
+            // destroy anything.
+            let (sk, kid) = cairn_event::generate_key()?;
+            std::fs::write(path, hex::encode(sk.to_bytes()))?;
+            // Restrict the private-key file to the owner (0600). std::fs::write creates it 0644 by
+            // default, leaving the signing seed world-readable on a shared machine (review finding
+            // L12). Set the mode AFTER writing so the bytes are never briefly world-readable.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            }
+            eprintln!("generated new signing key at {path} (kid {})", &kid[..16]);
+            Ok((sk, kid))
+        }
+        // Present but unreadable (permissions, I/O): refuse. "Cannot read" is not "absent",
+        // and treating it as absent is how the overwrite happened.
+        Err(e) => Err(format!("cannot read {path} ({e}); refusing to overwrite it").into()),
     }
-    let (sk, kid) = cairn_event::generate_key()?;
-    std::fs::write(path, hex::encode(sk.to_bytes()))?;
-    // Restrict the private-key file to the owner (0600). std::fs::write creates it 0644 by
-    // default, leaving the signing seed world-readable on a shared machine (review finding
-    // L12). Set the mode AFTER writing so the bytes are never briefly world-readable.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    eprintln!("generated new signing key at {path} (kid {})", &kid[..16]);
-    Ok((sk, kid))
 }
 
 fn now_ms() -> i64 {
@@ -4192,6 +4308,13 @@ fn cmd_pull(
     // Load this node's signing key so the pull presents an unwrap cert and gains
     // custody of any sealed events it replicates (ADR-0052 custody sidecar).
     let (sk, _kid) = load_or_create_key(key_path)?;
+    // ADR-0066 fail-fast: this daemon still DERIVES its unwrap key from `sk` (issue #503
+    // tracks loading the node's own provisioned key instead). If that derived key
+    // disagrees with what the database has registered, any custody DEK the peer re-wraps
+    // back for us would silently fail to open — see assert_unwrap_key_registered's doc.
+    let mine =
+        cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(&sk.to_bytes()));
+    assert_unwrap_key_registered(&mut client, &mine)?;
     // A manual one-shot pull defaults to incremental; `--full` requests a sweep
     // from seq 0 (an explicit "reconcile everything now", the same path cmd_run
     // takes on cadence — issue #196).
@@ -4513,6 +4636,16 @@ fn cmd_run(
     // pull loop must share the SAME key — deriving it twice would race to create the
     // file and could leave serve and pull on different identities. One Arc feeds both.
     let node_key = Arc::new(load_or_create_key(key_path)?.0);
+    // Connect and fail fast BEFORE spawning the serve thread (ADR-0066): this run's
+    // derived unwrap key (shared by both the pull loop below and the serve thread, via
+    // the one `node_key` Arc) must agree with what the database registered, or the serve
+    // thread's re-wraps would silently degrade into "no custody to offer" the moment a
+    // peer pulls from it — see assert_unwrap_key_registered's doc (issue #503).
+    let mut client = connect_checked_apply(conn)?;
+    let mine = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+        &node_key.to_bytes(),
+    ));
+    assert_unwrap_key_registered(&mut client, &mine)?;
     {
         let (c, l) = (conn.to_string(), listen.to_string());
         let own_key = Arc::clone(&node_key);
@@ -4526,7 +4659,6 @@ fn cmd_run(
         .create(true)
         .append(true)
         .open(log_path)?;
-    let mut client = connect_checked_apply(conn)?;
     eprintln!("run: serving on {listen}, pulling {peer_name} ({peer}) every {interval_ms}ms -> {log_path}");
 
     // The lazy byte tier runs on its OWN thread, never inline in the clinical pull
@@ -5424,6 +5556,16 @@ fn main() -> R<()> {
             let own_key = Arc::new(
                 load_or_create_key(&flag(&args, "--key").unwrap_or_else(|| "node.key".into()))?.0,
             );
+            // ADR-0066 fail-fast, BEFORE this daemon starts accepting connections: a
+            // one-off connection just to check the registered unwrap key, since (unlike
+            // `pull`/`run`) `serve` otherwise never touches the database until its first
+            // accepted connection — see assert_unwrap_key_registered's doc (issue #503).
+            let mut startup_client = connect_checked_apply(&need(conn.clone()))?;
+            let mine = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+                &own_key.to_bytes(),
+            ));
+            assert_unwrap_key_registered(&mut startup_client, &mine)?;
+            drop(startup_client);
             cmd_serve(
                 need(conn),
                 &need(flag(&args, "--listen")),
@@ -6239,6 +6381,59 @@ mod tests {
         // Guards against a typo in the const turning every floor check into a
         // fail-closed refusal of a perfectly good library.
         assert!(parse_pgx_version(REQUIRED_PGX_FLOOR).is_some());
+    }
+
+    /// ADR-0066: cairn-sync still DERIVES its unwrap secret while cairn-node now loads an
+    /// independent one. When they disagree the serve arm cannot open this node's own custody,
+    /// so it must stop and say so — degrading silently would look exactly like a peer that
+    /// simply has no custody to offer.
+    #[test]
+    fn a_divergent_unwrap_key_is_detected_rather_than_degraded() {
+        // Runtime-computed, never literal byte arrays (house rule 6): these are not real
+        // keys, just two distinct 32-byte fixtures derived from a simple formula.
+        let mine: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(1));
+        let other: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(9));
+        assert!(unwrap_key_matches(&mine, Some(&mine)), "agreement passes");
+        assert!(
+            !unwrap_key_matches(&mine, Some(&other)),
+            "divergence is caught"
+        );
+        assert!(
+            unwrap_key_matches(&mine, None),
+            "an unregistered key is not a divergence — nothing has been claimed yet"
+        );
+    }
+
+    /// Pins the divergence message's CONTENT, not just that a divergence is detected: it must
+    /// name both keys (short hex prefixes), point at ADR-0066, say plainly that this daemon
+    /// cannot open the node's custody, and carry the tracking issue number — an operator
+    /// reading this line off a crashed daemon's stderr has no other context to go on.
+    #[test]
+    fn the_divergence_message_names_both_keys_the_adr_and_the_issue() {
+        let mine: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(3));
+        let registered: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(7));
+        let msg = unwrap_key_divergence_message(&mine, &registered, 503);
+
+        let mine_prefix = hex::encode(&mine[..8]);
+        let registered_prefix = hex::encode(&registered[..8]);
+        assert!(
+            msg.contains(&mine_prefix),
+            "must name this daemon's own derived key: {msg}"
+        );
+        assert!(
+            msg.contains(&registered_prefix),
+            "must name the database's registered key: {msg}"
+        );
+        assert_ne!(
+            mine_prefix, registered_prefix,
+            "the two fixture keys must actually differ, or this test proves nothing"
+        );
+        assert!(msg.contains("ADR-0066"), "must cite the ADR: {msg}");
+        assert!(
+            msg.contains("cannot open this node's custody"),
+            "must say plainly what the daemon cannot do: {msg}"
+        );
+        assert!(msg.contains("#503"), "must name the tracking issue: {msg}");
     }
 
     #[test]
@@ -7282,6 +7477,53 @@ mod tests {
             out,
             vec![None, None],
             "no requester key means all-None custody"
+        );
+    }
+
+    /// A key file that exists but cannot be parsed must STOP the daemon, never be overwritten.
+    ///
+    /// `read_to_string` fails on invalid UTF-8, and cairn-node's sealed key file is binary CBOR —
+    /// so before this guard, pointing cairn-sync at a real node's key file generated a fresh key
+    /// and wrote it over the sealed one. The signing key is never backed up (ADR-0026 decision 4),
+    /// so that is unrecoverable identity loss caused by a daemon start.
+    #[test]
+    fn an_unparseable_key_file_is_refused_and_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("node.key");
+
+        // Bytes shaped like cairn-node's sealed bundle: binary, invalid UTF-8. Derived at
+        // runtime (house rule 6) — this is a key file, so no literal key material.
+        let sealed_like: Vec<u8> = (0u8..64)
+            .map(|i| i.wrapping_mul(3).wrapping_add(0x80))
+            .collect();
+        std::fs::write(&p, &sealed_like).unwrap();
+
+        let err = load_or_create_key(p.to_str().unwrap())
+            .expect_err("an unparseable key file must be refused, never overwritten");
+        assert!(
+            format!("{err}").contains("refusing to overwrite"),
+            "the refusal must say what it is protecting; got: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            sealed_like,
+            "THE POINT: the existing key file must be byte-identical after the refusal"
+        );
+    }
+
+    /// The create-on-absent path is the intended behaviour and must survive the fix.
+    #[test]
+    fn an_absent_key_file_is_still_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("fresh.key");
+        let (_sk, kid) = load_or_create_key(p.to_str().unwrap()).unwrap();
+        assert!(!kid.is_empty());
+        assert!(p.exists(), "an absent key file is still created");
+        // And a second call LOADS it rather than minting a new identity.
+        let (_sk2, kid2) = load_or_create_key(p.to_str().unwrap()).unwrap();
+        assert_eq!(
+            kid, kid2,
+            "a second start must reuse the key, not replace it"
         );
     }
 }

@@ -391,14 +391,30 @@ async fn revoke_peer(
     .expect("author peer.revoked");
 }
 
-/// Register a node's OWN DEK-unwrap public key so its apply door can take custody of
-/// (and later crypto-shred) the sealed events it pulls. Derived from the node's signing
-/// seed exactly as the daemon derives it (`derive_unwrap_secret` → `unwrap_public`) and
-/// registered through the same in-DB singleton the author-side `ensure_unwrap_key` uses.
-/// Without this, the door ADMITS a sealed event but WARNS and withholds custody (no
-/// `event_clear` row is written), so the node never projects the sealed body — exactly
-/// the born-sealed floor (#92). A real second site performs this owner ceremony once,
-/// just like actor enrollment; the custody plane does not replicate.
+/// Register a node's OWN DEK-unwrap public key. Two callers, two reasons:
+///
+/// - The PULLER (`b`): so its apply door can take custody of (and later crypto-shred) the
+///   sealed events it pulls. Without this the door ADMITS a sealed event but WARNS and
+///   withholds custody (no `event_clear` row), so the node never projects the sealed body
+///   — exactly the born-sealed floor (#92).
+/// - The AUTHOR (`a`): because ADR-0066 decision 6 made registration a PROVISIONING act.
+///   `ensure_unwrap_key` used to register a key as a side effect of the first sealed
+///   write; it now VERIFIES one is registered and refuses when none is. Every test that
+///   authors on A through the production orchestrators must therefore provision A first,
+///   the way `cairn-node init` does.
+///
+/// A real second site performs this owner ceremony once, just like actor enrollment; the
+/// custody plane does not replicate.
+///
+/// **DERIVED from the node's signing seed, deliberately — do NOT switch this to
+/// `generate_unwrap_secret` the way cairn-node's own fixtures now do.** cairn-sync's serve
+/// arm re-derives node A's unwrap secret FROM A's key file (`derive_unwrap_secret` →
+/// `unwrap_public`) in order to unwrap A's per-event DEKs and re-wrap them for the puller.
+/// A freshly generated key here would satisfy the write path and then silently break the
+/// custody-handoff assertions instead — turning a loud failure into a quiet wrong answer,
+/// which is strictly worse. That cairn-sync still derives while cairn-node now provisions
+/// independently is a real divergence, and Task 5 of this slice exists to make it loud;
+/// papering over it here would hide the very thing that task must find.
 async fn register_unwrap_key(c: &Client, sk: &SigningKey) {
     let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
     let public = cairn_event::seal::unwrap_public(&secret);
@@ -639,6 +655,12 @@ async fn a_to_b_pull_converges_projections_and_ships_the_attestation() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
     // #231: custody follows admission — A re-wraps a DEK only for an ADMITTED peer, so
@@ -1007,6 +1029,12 @@ async fn refused_apply_pens_the_bytes_and_recovers_without_loss() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
     // #231: custody follows admission — A re-wraps a DEK only for an ADMITTED peer, so
@@ -1505,6 +1533,12 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
     // #231: A must ADMIT B before it re-wraps any DEK for B. Serve runs under sk_d, so
@@ -1861,6 +1895,12 @@ async fn an_unadmitted_puller_replicates_events_but_gains_no_custody() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, _kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     // B is FULLY custody-capable — its unwrap key is registered, exactly as in the
     // admitted test. So the only thing that can deny it custody below is A's pin, not
@@ -2009,6 +2049,12 @@ async fn a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
 
@@ -2122,6 +2168,12 @@ async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
     // A is provisioned and has peers — just not B (the arm a live deployment hits).
@@ -2246,6 +2298,12 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
     let (sk_d, kid_d) = generate_key().unwrap();
     let (_sk_h, kid_h) = generate_key().unwrap();
     enroll_actors(&a, &kid_d, &kid_h).await;
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
 
     let mut a = a;
     let patient = Uuid::now_v7();
@@ -2362,6 +2420,12 @@ async fn serve_case_excludes_dek_for_a_shred_logged_event_with_live_custody() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
     // #231: custody follows admission — A re-wraps a DEK only for an ADMITTED peer, so
@@ -2552,6 +2616,12 @@ async fn sealed_non_clinical_pull_does_not_freeze_the_watermark() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     register_unwrap_key(&b, &sk_b).await;
     // #231: custody follows admission, so B must be an admitted peer of A before any
@@ -2775,6 +2845,12 @@ async fn forward_dated_event_does_not_wedge_the_pull() {
     let keydir = TempDir::new().unwrap();
     let (sk_b, kid_b) = generate_key().unwrap();
     let key_a = write_key_file(keydir.path(), "node-a.key", &sk_d);
+    // A AUTHORS below, so A needs its OWN custody key registered: since ADR-0066
+    // decision 6 the write path VERIFIES a key is registered and refuses when none is,
+    // instead of registering one as a side effect of the first sealed write. Derived
+    // from `sk_d`, deliberately — see `register_unwrap_key`'s doc for why a freshly
+    // generated key would break the custody handoff silently.
+    register_unwrap_key(&a, &sk_d).await;
     let key_b = write_key_file(keydir.path(), "node-b.key", &sk_b);
     // The medication events are BORN-SEALED (ADR-0052): without B's own unwrap key
     // registered, its apply door admits them but withholds custody, so NEITHER

@@ -1389,7 +1389,7 @@ BEGIN
     IF v_sealed AND NOT EXISTS (SELECT 1 FROM erasure_shred_log WHERE target_event_id = v_event_id) THEN
         SELECT unwrap_pub INTO v_pub FROM node_unwrap_key;
         IF v_pub IS NULL THEN
-            RAISE EXCEPTION 'submit_event: node unwrap key not registered — the authoring daemon must call cairn_register_unwrap_key first (ADR-0052)';
+            RAISE EXCEPTION 'submit_event: node unwrap key not registered — this node has no custody key, so a sealed body could not be given recoverable custody; run `cairn-node establish-unwrap-key` (ADR-0052 custody, ADR-0066 decision 6: registering it is a PROVISIONING act, not a write-path side effect)';
         END IF;
         INSERT INTO event_dek (event_id, dek_wrapped)
         VALUES (v_event_id, cairn_wrap_dek(p_dek, v_pub))

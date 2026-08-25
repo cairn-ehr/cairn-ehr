@@ -9,26 +9,61 @@
 //!
 //! SCOPE (slice D): this module builds the can't-retrofit SHAPE — the format, the
 //! dual-recipient secret lifecycle (a long-lived local-state DEK dual-wrapped once at
-//! provisioning), the container, and the restore path — with typed empty slots the
-//! clinical tier fills later via additive evolution (principle 11). The genuine
+//! provisioning), the container, and the restore path — with typed slots the clinical tier
+//! fills later via additive evolution (principle 11). **Two of those slots are no longer
+//! empty** — see the state of play below; this paragraph is left otherwise as written
+//! because its own expiry is the lesson recorded under it. The genuine
 //! day-one piece is `establish_lsk`: state accrued before the channel exists has no
 //! durability path, so the channel must exist from `init`.
 //!
-//! ⚠️ **THE SCOPE SENTENCE THAT USED TO STAND HERE HAS EXPIRED — see #495.** It read
-//! *"the federation-node tier has no clinical surface yet, so the bundle is EMPTY today"*,
-//! and it was true when slice D was written. ADR-0052 then made **every clinical body
-//! born-sealed**, so this node now holds real `event_dek` custody — and the slots are
-//! still empty. The consequence is not cosmetic: restore mints a fresh signing seed
-//! (ADR-0026 decision 4) and the X25519 unwrap secret is HKDF-derived from it (ADR-0052
-//! decision 4), so **every born-sealed body on a restored SOLO node is unopenable**,
-//! against ADR-0026 decision 1's promise that node-default and sealed-episode DEKs survive.
-//! *Solo* is the scope ADR-0026 itself uses, and it is not a hedge: a FEDERATED node that
-//! re-peers does recover custody, because the serve arm re-wraps each DEK against the
-//! puller's current unwrap cert (`cairn-sync`'s `rewrap_custody_for_peer`). The solo clinic
-//! — the one for which *"replication provides zero durability"* — has no such rescue.
-//! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` pins the gap; #495 carries the
-//! three fix options. Its sibling is #500 (the medium carries no clinical event either).
-//! **Do not re-describe these slots as legitimately empty without closing #495 first.**
+//! # History of this header, because it is the lesson (#495)
+//!
+//! The scope paragraph above once ended *"the federation-node tier has no clinical surface
+//! yet, so the bundle is EMPTY today"*. That was true when slice D was written and
+//! **expired silently** when ADR-0052 made every clinical body born-sealed: the node began
+//! holding real `event_dek` custody while these slots stayed empty, and because restore
+//! mints a fresh signing seed (ADR-0026 decision 4) from which the X25519 unwrap secret was
+//! then HKDF-derived (ADR-0052 decision 4), **every born-sealed body on a restored SOLO
+//! node was unopenable**. A document whose stated precondition had expired, believed for
+//! months. Read the paragraph above with that in mind before adding to it.
+//!
+//! # What is closed, and what is still open — state of play
+//!
+//! **CLOSED (#495 / ADR-0066 — see `docs/spec/decisions/`, ADR number 0066, "Identity dies
+//! with the disk; custody must not").** The node's unwrap key is now an INDEPENDENT X25519
+//! keypair (decision 1) living in its own `<key>.unwrap` keystore file, and it rides this
+//! export beside the custody rows (decision 3): [`LocalState::unwrap_secret`] carries the
+//! secret, [`LocalState::episode_deks`] carries the wrapped `event_dek` rows minus every
+//! target in `erasure_shred_log` (decision 7). The producer is
+//! [`crate::localstate_read::read_local_state`].
+//!
+//! Both halves of the KEY's journey are now closed: the export carries the secret (decision
+//! 3) and [`apply_local_state`] installs it on arrival, re-sealed under the restored node's
+//! own secrets, and registers its public half (decision 4).
+//!
+//! Read that narrowly, because the ADR's title — "identity dies with the disk; custody must
+//! not" — is still not fully this system's behaviour. What survives a restore today is the
+//! KEY. The custody ROWS ride along and are counted, but nothing inserts them, because the
+//! backup medium carries no clinical event for them to be custody of (#500, below). Neither
+//! half is useful without the other; do not read this section as more than it says.
+//!
+//! **STILL OPEN, do not read this module as closing them:**
+//!
+//! - **The backup medium carries no clinical event (#500).** It exports the federation
+//!   plane only. Until that lands, a restored node gets a working key and nothing to open
+//!   with it — neither half is useful alone. This is the next slice.
+//! - **The restore side lands the KEY, not yet the rows.** [`apply_local_state`] now installs
+//!   the recovered unwrap secret and registers its public half (ADR-0066 decision 4), so a
+//!   restored node's custody IS the dead node's custody — that is #495's restore half, and it
+//!   is closed. What it still does not do is INSERT the carried `episode_deks`: they belong to
+//!   clinical events, and the medium carries none of those yet (#500). The count is reported
+//!   to the operator rather than buried, so the gap is visible at the surface.
+//! - **Promise 2 has no subject.** [`LocalState::node_default_deks`] stays empty because no
+//!   node-default data-at-rest keystore exists anywhere in the built system. That slot's
+//!   emptiness is neither honoured nor violated; it names a tier that must exist first.
+//!
+//! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` holds the guards for all of the
+//! above, and says of each whether it asserts a guarantee or pins a surviving defect.
 
 use crate::seal::{
     self, aead_decrypt, aead_encrypt, normalize_recovery_code, rand_bytes, ArgonParams, Wrap,
@@ -54,9 +89,13 @@ pub enum LocalStateError {
     /// Reachable from `establish_lsk`, `seal_local_state`, and their callers.
     #[error("seal: {0}")]
     Seal(String),
-    // NOTE: no `Io` variant — no `localstate` function does file I/O (reads happen in
-    // `main.rs` via `anyhow`). Adding it here would be YAGNI; add it when a function
-    // here actually touches the filesystem.
+    // NOTE: no `Io` variant. The FORMAT functions in this module do no file I/O (reads
+    // happen in `main.rs` via `anyhow`). The one function here that does touch the
+    // filesystem — `CustodyKeyDestination::install`, which writes the inherited unwrap key —
+    // returns `anyhow::Result` rather than this enum, because its failures are already typed
+    // by `keystore::KeystoreError` and its caller only ever reports them to an operator.
+    // Adding a variant here would be YAGNI; add one when a `LocalStateError`-returning
+    // function needs to distinguish an I/O failure.
 }
 
 /// The highest bundle `version` this build understands. A bundle declaring a higher
@@ -67,13 +106,21 @@ pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 /// we reserve the SLOT SHAPE without committing to the clinical tier's internal schema (no
 /// speculative generality).
 ///
-/// ⚠️ **Every slot is EMPTY today, and no longer legitimately so — this is #495.** The
-/// clinical tier exists and this node holds real `event_dek` custody; nothing here carries
-/// it across a restore. See the module header for the full finding, and
-/// `tests/dr_clinical_guarantee_gap.rs` for the guards that pin it.
+/// **Which slots carry something, as of #495 / ADR-0066** — read this before writing a
+/// comment that calls the bundle empty, because two earlier comments here said exactly that
+/// and both went stale (the module header has the history):
+///
+/// - [`Self::episode_deks`] and [`Self::unwrap_secret`] are **FILLED** on a provisioned node
+///   by [`crate::localstate_read::read_local_state`]. Together they are the custody that
+///   survives a dead disk.
+/// - [`Self::node_default_deks`], [`Self::config`] and [`Self::drafts`] are still empty,
+///   legitimately: none of the three has a store anywhere in the built system to be filled
+///   from. Their emptiness is "nothing exists yet", not "we forgot".
 ///
 /// The signing key is DELIBERATELY ABSENT (ADR-0026 point 4): a stolen, unsealed export
-/// must grant read access, never a signing identity. Do not add it here.
+/// must grant read access, never a signing identity. Do not add it here. An unwrap secret is
+/// read access and so belongs; a signing seed is an identity and does not (ADR-0066
+/// decision 2 restates this and keeps the boundary exactly where ADR-0026 drew it).
 ///
 /// `serde(default)` on every content field makes this ADDITIVELY evolvable (principle 11):
 /// a bundle written before a field existed still deserializes, with that field defaulted.
@@ -86,7 +133,7 @@ pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 /// to guard against. With this, an unknown field is a LOUD refusal instead. `default` (for
 /// missing fields) and `deny_unknown_fields` (for extra fields) are orthogonal and compose:
 /// an OLDER bundle still deserializes, a NEWER one is refused rather than silently lossy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalState {
     /// Bundle format version (bump only on a NON-additive change, which we avoid).
@@ -97,8 +144,10 @@ pub struct LocalState {
     /// (#495: promise 2 has no subject; see `dr_clinical_guarantee_gap.rs`).
     #[serde(default)]
     pub node_default_deks: Vec<Vec<u8>>,
-    /// Sealed-episode DEKs (minus any erased — ADR-0026 point 6). Empty, though
-    /// `event_dek` holds custody for every born-sealed body — the #495 hole itself.
+    /// Sealed-episode DEKs — one [`EpisodeDek`] per surviving `event_dek` row, CBOR-encoded
+    /// into this slot's opaque leaf type, minus every event named in `erasure_shred_log`
+    /// (ADR-0026 point 6 / ADR-0066 decision 7). Each DEK travels **wrapped**, exactly as it
+    /// sits in the database; [`Self::unwrap_secret`] is what opens them.
     #[serde(default)]
     pub episode_deks: Vec<Vec<u8>>,
     /// Node config blob. None today (no node config table exists yet).
@@ -107,12 +156,23 @@ pub struct LocalState {
     /// Draft / scratchpad store. Empty today (no draft store exists yet).
     #[serde(default)]
     pub drafts: Vec<Vec<u8>>,
+    /// ADR-0066: this node's INDEPENDENT X25519 unwrap secret, so a restored node inherits
+    /// custody of every body it also inherits. The signing key is still deliberately absent
+    /// (ADR-0026 point 4): a stolen, unsealed export must yield READ access, never a
+    /// signing identity — and an unwrap secret is exactly read access.
+    #[serde(default)]
+    pub unwrap_secret: Option<Vec<u8>>,
 }
 
 impl LocalState {
-    /// The empty bundle. THE ONLY PRODUCER this node has — `read_local_state` returns
-    /// it unconditionally, which is #495. A fix must add a producer that reads custody
-    /// out of the database; `dr_clinical_guarantee_gap.rs` pins the count at one.
+    /// The bundle's ZERO VALUE — the honest answer for a node that holds nothing to carry
+    /// (a freshly-`init`ed node, or one whose custody tables are empty).
+    ///
+    /// It is one of exactly TWO producers of a `LocalState`; the other is
+    /// [`crate::localstate_read::read_local_state`], which reads real custody out of the
+    /// database and is the one that must filter erased events. That pairing is pinned by
+    /// `dr_clinical_guarantee_gap.rs`, because a THIRD producer skipping the filter is how
+    /// an erased body's key would travel.
     pub fn empty() -> Self {
         LocalState {
             version: 1,
@@ -120,18 +180,121 @@ impl LocalState {
             episode_deks: Vec::new(),
             config: None,
             drafts: Vec::new(),
+            unwrap_secret: None,
         }
     }
 
-    /// True iff the bundle carries no content. It was once documented here as "the only
-    /// valid state at this tier" — a sentence written before the clinical tier existed. It
-    /// is now the state a node in #495 is stuck in, not a valid one.
+    /// True iff the bundle carries no content at all.
+    ///
+    /// ⚠️ **Not a validity check, and never a success condition.** Two earlier comments here
+    /// framed emptiness first as "the only valid state at this tier" and then as "the state
+    /// a node in #495 is stuck in"; both aged badly. What it means now is narrow and stable:
+    /// this node had nothing to export. On a provisioned node holding born-sealed bodies
+    /// that answer is FALSE, and must be — see [`Self::episode_deks`].
+    ///
+    /// Every content slot participates, [`Self::unwrap_secret`] included: a bundle carrying
+    /// only the secret still carries key material, and treating it as empty would let
+    /// [`apply_local_state`] wave it through as a no-op.
     pub fn is_empty(&self) -> bool {
         self.node_default_deks.is_empty()
             && self.episode_deks.is_empty()
             && self.config.is_none()
             && self.drafts.is_empty()
+            && self.unwrap_secret.is_none()
     }
+}
+
+/// Hand-written so the raw unwrap secret can never reach a log line, a panic message, or an
+/// `assert_eq!` failure. `Debug` was DERIVED until #495, which was harmless while every slot
+/// was empty and is not now: `{:?}` on a populated bundle would print this node's custody key
+/// in full. Everything else is shown as usual — only the secret is redacted, and its presence
+/// is still visible so a reader can tell "absent" from "hidden".
+impl std::fmt::Debug for LocalState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalState")
+            .field("version", &self.version)
+            .field("node_default_deks", &self.node_default_deks)
+            .field("episode_deks", &self.episode_deks)
+            .field("config", &self.config)
+            .field("drafts", &self.drafts)
+            .field(
+                "unwrap_secret",
+                &self.unwrap_secret.as_ref().map(|_| "<redacted 32 bytes>"),
+            )
+            .finish()
+    }
+}
+
+/// Wipe the raw unwrap secret when a bundle is dropped (issues #46/#54 — the convention this
+/// module already follows for the LSK).
+///
+/// A `Vec<u8>` field rather than `Zeroizing<Vec<u8>>` because the field must round-trip
+/// through `serde`/`ciborium` unchanged; wiping on drop gets the same protection without
+/// asking the serializer to understand a wrapper type. Every bundle that ever held the secret
+/// — the one the producer built, the one the restore path decoded — passes through here.
+///
+/// LIMITS, so nobody reads this as more than it is: a `Vec` that was reallocated while being
+/// built leaves its earlier buffer behind, and `serde` makes its own copies during encode and
+/// decode. Wiping is a real reduction in exposure, not an erasure guarantee (#508).
+impl Drop for LocalState {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        if let Some(secret) = self.unwrap_secret.as_mut() {
+            secret.zeroize();
+        }
+    }
+}
+
+/// One event's wrapped custody row, as it travels in [`LocalState::episode_deks`].
+///
+/// The slot's leaf type is opaque `Vec<u8>` by design (the container reserved the SLOT SHAPE
+/// without committing to the clinical tier's schema), so each element is a small CBOR struct
+/// rather than a format change: the container format is untouched by this type existing.
+///
+/// The DEK travels **wrapped**, exactly as it sits in `event_dek` — the export never holds
+/// raw key material, and the separately-carried [`LocalState::unwrap_secret`] is what opens
+/// it. `event_id` is the hyphenated UUID TEXT, matching how this crate carries every event
+/// id (tokio-postgres's `uuid` feature is not enabled here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EpisodeDek {
+    pub event_id: String,
+    pub dek_wrapped: Vec<u8>,
+}
+
+/// Serialize one custody row for the export slot. Pure.
+pub fn episode_dek_to_cbor(d: &EpisodeDek) -> Vec<u8> {
+    let mut out = Vec::new();
+    ciborium::into_writer(d, &mut out).expect("CBOR serialization of EpisodeDek cannot fail");
+    out
+}
+
+/// Parse one custody row from the export slot. Errors, never panics — a restore reading a
+/// bit-rotted or foreign element must degrade honestly rather than abort a node mid-recovery.
+///
+/// **The length check is not decoration, and it is cheap only while it is early.** A
+/// `dek_wrapped` that is not exactly [`cairn_event::seal::WRAPPED_DEK_LEN`] bytes can never
+/// be opened — `unwrap_dek` refuses it — so a truncated or padded row is a custody row that
+/// looks present and is permanently dead. Today that is inert: `apply_local_state` COUNTS
+/// these rows without inserting them, because the medium carries no clinical event yet
+/// (#500). **#500 is the slice that inserts them**, and after that a bad row is a chart entry
+/// nobody can read or crypto-shred, discovered only when someone tries. Catching it at the
+/// decode boundary costs one comparison and is the same reasoning
+/// [`recovered_unwrap_secret`] applies one struct over — which is exactly where this check
+/// was missing.
+pub fn episode_dek_from_cbor(bytes: &[u8]) -> Result<EpisodeDek, LocalStateError> {
+    let row: EpisodeDek =
+        ciborium::from_reader(bytes).map_err(|e| LocalStateError::Decode(e.to_string()))?;
+    if row.dek_wrapped.len() != cairn_event::seal::WRAPPED_DEK_LEN {
+        return Err(LocalStateError::Decode(format!(
+            "custody row for event {} carries a {}-byte wrapped DEK, not {} — it could never \
+             be unwrapped, so admitting it would restore a chart entry nobody can read or \
+             crypto-shred",
+            row.event_id,
+            row.dek_wrapped.len(),
+            cairn_event::seal::WRAPPED_DEK_LEN
+        )));
+    }
+    Ok(row)
 }
 
 /// Serialize a bundle to CBOR. Pure. (No magic header — the bundle is always carried
@@ -240,21 +403,34 @@ pub fn seal_local_state(
 }
 
 /// Recover the bundle via the operational passphrase (re-export / self-verify path).
-pub fn unseal_local_state_op(s: &SealedLocalState, op_pass: &str) -> Option<Vec<u8>> {
+pub fn unseal_local_state_op(s: &SealedLocalState, op_pass: &str) -> Option<Zeroizing<Vec<u8>>> {
     let lsk = seal::try_unwrap(&s.wraps.wrap_op, op_pass, &s.wraps.salt_op, &s.wraps.argon)?;
-    aead_decrypt(&lsk, &s.payload_nonce, &s.payload_ct)
+    // Zeroizing at the SOURCE, not at each call site. This buffer is the decrypted
+    // bundle CBOR, which since ADR-0066 decision 3 holds the node's raw X25519 custody
+    // secret in the clear. Returning a bare `Vec<u8>` made wiping a discipline every
+    // caller had to remember; the module header already records that `seal::try_unwrap`
+    // was changed to return `Zeroizing` for exactly this reason.
+    aead_decrypt(&lsk, &s.payload_nonce, &s.payload_ct).map(Zeroizing::new)
 }
 
 /// Recover the bundle via the recovery code (the disaster-recovery path — the only
 /// guaranteed-available secret after total disk loss). The code is normalized first.
-pub fn unseal_local_state_rec(s: &SealedLocalState, recovery_code: &str) -> Option<Vec<u8>> {
+pub fn unseal_local_state_rec(
+    s: &SealedLocalState,
+    recovery_code: &str,
+) -> Option<Zeroizing<Vec<u8>>> {
     let lsk = seal::try_unwrap(
         &s.wraps.wrap_rec,
         &normalize_recovery_code(recovery_code),
         &s.wraps.salt_rec,
         &s.wraps.argon,
     )?;
-    aead_decrypt(&lsk, &s.payload_nonce, &s.payload_ct)
+    // Zeroizing at the SOURCE, not at each call site. This buffer is the decrypted
+    // bundle CBOR, which since ADR-0066 decision 3 holds the node's raw X25519 custody
+    // secret in the clear. Returning a bare `Vec<u8>` made wiping a discipline every
+    // caller had to remember; the module header already records that `seal::try_unwrap`
+    // was changed to return `Zeroizing` for exactly this reason.
+    aead_decrypt(&lsk, &s.payload_nonce, &s.payload_ct).map(Zeroizing::new)
 }
 
 /// Serialize a sealed export to magic-prefixed CBOR for the `CAIRNL1` sibling file. Pure.
@@ -282,7 +458,21 @@ pub fn build_export_container(
     op_pass: &str,
     bundle: &LocalState,
 ) -> Result<Vec<u8>, LocalStateError> {
-    let sealed = seal_local_state(wraps, op_pass, &to_cbor(bundle))?;
+    // `Zeroizing` is load-bearing here since #495, and it was not before. The bundle now
+    // carries a RAW X25519 unwrap secret (`LocalState::unwrap_secret`), so this CBOR
+    // plaintext is a full copy of it in the clear; without the wrapper it would be dropped
+    // unwiped the moment `seal_local_state` returned, leaving the node's custody key
+    // readable in freed heap for anything that later reads that memory (a core dump, a swap
+    // file, a heap-spray). Same reasoning, and the same issues (#46/#54), that made
+    // `seal::try_unwrap` return `Zeroizing` for the LSK.
+    //
+    // RESIDUAL, stated rather than implied: `to_cbor` builds its `Vec` by GROWING it, so any
+    // reallocation during serialization frees an intermediate buffer that still holds part of
+    // the secret and that nothing can reach to wipe. Wiping the final buffer is a real
+    // reduction, not a guarantee — the guarantee needs a serializer writing into a
+    // pre-sized zeroizing buffer. Tracked in #508.
+    let plaintext = Zeroizing::new(to_cbor(bundle));
+    let sealed = seal_local_state(wraps, op_pass, &plaintext)?;
     Ok(serialize_container(&sealed))
 }
 
@@ -322,44 +512,383 @@ pub fn lsk_sidecar_path_for(key: &Path) -> PathBuf {
     key.with_file_name(name)
 }
 
-/// Read the node's exportable local state from the DB — **or rather, do not**: this returns
-/// the EMPTY bundle unconditionally, and `_db` is unused, so the export cannot see custody
-/// even in principle. THIS IS THE SEAM the clinical tier extends: it must read the
-/// node-default + sealed-episode DEKs (minus erased — ADR-0026 point 6), node config, and
-/// the draft/scratchpad store into the typed slots. The signing key is never read here
-/// (point 4). Async + DB-handle so filling the seam needs no signature change.
+/// The DB-reading producer, re-exported so every existing `localstate::read_local_state`
+/// call site keeps resolving after the move.
 ///
-/// ⚠️ **#495 — this is a live disaster-recovery hole, not a pending nicety.** `event_dek`
-/// now holds real custody for every born-sealed body (ADR-0052), and `main.rs`'s backup
-/// path calls this function, seals the empty result and **reports success**. Pinned by
-/// `tests/dr_clinical_guarantee_gap.rs::local_state_export_carries_no_dek_though_the_database_holds_one`.
-pub async fn read_local_state(_db: &tokio_postgres::Client) -> anyhow::Result<LocalState> {
-    Ok(LocalState::empty())
+/// It lives in [`crate::localstate_read`] rather than here because this module owns the
+/// FORMAT (container, seal, slots) and was already past the project's 500-line file-size
+/// GUIDELINE (a guideline, not a cap — `tests/patient_register_demographics.rs` records the
+/// correction to the "house limit" phrasing); reading custody out of a database is a
+/// different job with a different dependency.
+pub use crate::localstate_read::read_local_state;
+
+/// Where a restored node's INHERITED unwrap key is written, and at what at-rest posture.
+///
+/// WHY THIS IS AN ENUM RATHER THAN A PASSPHRASE PAIR. The custody key follows the SIGNING
+/// key's posture, exactly as it does at `init` (see `keystore::write_unwrap_plaintext`'s doc
+/// for the full argument): a node restored with `--insecure-plaintext` has no operator
+/// passphrase and no recovery code in existence to seal anything under, and skipping the
+/// custody key there would leave that node unable to open a single body it just inherited.
+/// Modelling "which secrets exist" as a type rather than two `Option`s makes the impossible
+/// combination — a recovery code but no passphrase — unrepresentable.
+///
+/// The lifetime is borrowed throughout: the caller owns the operator secrets (in `Zeroizing`,
+/// so they are wiped when the restore ceremony ends) and this type never copies them.
+///
+/// **`Debug` is deliberately NOT derived**, the same rule [`LskWraps`] states for itself.
+/// This type holds the restored node's operator passphrase AND its recovery code as plain
+/// `&str`. A derived `Debug` would print both, in full, into any log line, panic message or
+/// failing `assert_eq!` that happened to include a destination. If a future change needs one,
+/// hand-write it and redact both fields, exactly as [`LocalState`] does for its secret.
+pub enum CustodyKeyDestination<'a> {
+    /// Sealed under the RESTORED node's own freshly-minted secrets — never the dead node's.
+    /// The operator carries ONE passphrase and ONE recovery code forward from the restore
+    /// ceremony (ADR-0066 decision 1); the dead disk's secrets are not part of the new node.
+    Sealed {
+        path: &'a Path,
+        op_pass: &'a str,
+        recovery_code: &'a str,
+    },
+    /// Written unsealed (mode 0600) — only on `restore --insecure-plaintext`, where no
+    /// operator secret exists. Never for a real node: the escrow does not exist for a
+    /// plaintext key, so key loss is record loss.
+    Plaintext { path: &'a Path },
 }
 
-/// Apply a restored local-state bundle into a fresh node. The bundle is always empty today,
-/// so this is a validated noop — it asserts the bundle carries no content it cannot yet
-/// honour, rather than silently dropping it. THIS IS THE SEAM the clinical tier extends: it
-/// must load DEKs into the keystore, restore config, and rehydrate drafts. A non-empty
-/// bundle here means a newer node wrote content an older restorer cannot apply — fail loud.
-///
-/// ⚠️ **#495, RESTORE HALF.** [`read_local_state`] is the export side of the same open seam;
-/// this is the side that would have to *land* the custody. Both must be built for ADR-0026
-/// decision 1 to become true, and a fix that builds only one leaves the other silently
-/// green — which is why `dr_clinical_guarantee_gap.rs` pins the producer and the reader
-/// separately. The `bail!` below is correct and must stay: refusing a bundle we cannot
-/// apply is the one part of this path that already fails loudly.
-pub async fn apply_local_state(
-    _db: &tokio_postgres::Client,
-    ls: &LocalState,
+impl<'a> CustodyKeyDestination<'a> {
+    /// The keystore file this destination writes.
+    pub fn path(&self) -> &'a Path {
+        match self {
+            Self::Sealed { path, .. } | Self::Plaintext { path } => path,
+        }
+    }
+
+    /// Write `secret` here and PROVE it reads back before returning.
+    ///
+    /// The read-after-write check is not ceremony, and it is the same one
+    /// `keystore::generate_unwrap_sealed` performs for the same reason: the caller's very
+    /// next act is to register this key's PUBLIC half in `node_unwrap_key`, which is a
+    /// singleton whose registrar then refuses any different key forever. Registering a half
+    /// whose secret is not actually recoverable from disk — a truncated write, a lying
+    /// fsync, a serialization edge — would leave the restored node unable to open the custody
+    /// it just inherited, with every surface reporting success. That is the ADR-0066 failure
+    /// shape reintroduced one layer up, at the one moment there is no second copy to go back
+    /// to.
+    ///
+    /// BOTH recipients are verified on the sealed path. A bundle that opens under the
+    /// passphrase but not the recovery code is half an escrow, and a node cannot tell from
+    /// the outside — the operator would discover it only on the *next* disaster. The cost is
+    /// three Argon2 derivations (the agnostic loader tries the passphrase recipient first),
+    /// paid once per restore ceremony, which is negligible beside the restore itself.
+    pub fn install(&self, secret: &[u8; 32]) -> anyhow::Result<()> {
+        match self {
+            Self::Sealed {
+                path,
+                op_pass,
+                recovery_code,
+            } => {
+                crate::keystore::write_unwrap_sealed(path, secret, op_pass, recovery_code)?;
+                verify_installed(path, Some(op_pass), secret, "operator passphrase")?;
+                verify_installed(path, Some(recovery_code), secret, "recovery code")?;
+            }
+            Self::Plaintext { path } => {
+                crate::keystore::write_unwrap_plaintext(path, secret)?;
+                verify_installed(path, None, secret, "unsealed read")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One arm of [`CustodyKeyDestination::install`]'s read-after-write check: re-read the file
+/// under `reader` and confirm the recovered bytes are the ones we meant to install.
+fn verify_installed(
+    path: &Path,
+    reader: Option<&str>,
+    expected: &[u8; 32],
+    recipient: &str,
 ) -> anyhow::Result<()> {
-    if !ls.is_empty() {
+    let readback = crate::keystore::load_unwrap_secret(path, reader).map_err(|e| {
+        anyhow::anyhow!(
+            "inherited unwrap key written to {} but unreadable via its {recipient}: {e} \
+             — refusing to register a custody key this node cannot open",
+            path.display()
+        )
+    })?;
+    if *readback != *expected {
         anyhow::bail!(
-            "restored local-state bundle carries content this node version cannot apply \
-             (the clinical-tier apply seam is not built yet); refusing to silently drop it"
+            "inherited unwrap key written to {} reads back DIFFERENT bytes via its \
+             {recipient} — refusing to register a custody key this node cannot open",
+            path.display()
         );
     }
     Ok(())
+}
+
+/// What [`apply_local_state`] actually did, so the caller can TELL THE OPERATOR.
+///
+/// This is a return value rather than a set of `println!`s inside the applier for one
+/// reason: a count that nobody sees is the exact failure shape this whole slice exists to
+/// correct (a document whose stated precondition had expired, believed for months). The
+/// restore command prints every field; a test can assert on every field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedLocalState {
+    /// The keystore file the inherited unwrap key was written to, if the bundle carried one.
+    /// `None` means the export carried no key — a real degradation the caller must warn
+    /// about, not a quiet success.
+    ///
+    /// PRIVATE, with two named constructors below, because `restore` branches on nothing but
+    /// `is_some()` to choose between "custody inherited" and the loudest warning on the whole
+    /// DR path. A public field made "claims an install that did not happen" a representable
+    /// state in the one type whose falsehood silences that warning.
+    unwrap_key_installed: Option<PathBuf>,
+    /// How many wrapped custody rows the bundle carried. **Carried, not applied** — see
+    /// [`apply_local_state`].
+    episode_deks_carried: usize,
+}
+
+impl AppliedLocalState {
+    /// The good outcome: a key was installed at `path` AND registered. Only
+    /// [`apply_local_state`] can honestly say this, which is why it is the only caller.
+    fn custody_inherited(path: PathBuf, episode_deks_carried: usize) -> Self {
+        Self {
+            unwrap_key_installed: Some(path),
+            episode_deks_carried,
+        }
+    }
+
+    /// The degraded outcome: the bundle carried no unwrap key, so none was installed and none
+    /// registered. Named rather than expressed as `None`, so the caller's warning branch is
+    /// reached by a stated fact instead of an inferred one.
+    fn no_custody_key(episode_deks_carried: usize) -> Self {
+        Self {
+            unwrap_key_installed: None,
+            episode_deks_carried,
+        }
+    }
+
+    /// The keystore file the inherited key was written to, or `None` if the bundle carried
+    /// none.
+    ///
+    /// **Callers MUST warn on `None`.** It is not a quiet success: with no key installed and
+    /// none registered, the restored node can neither open an inherited sealed body nor
+    /// author a new one, and the operator's obvious next move (`establish-unwrap-key`) would
+    /// foreclose the real key permanently on the singleton registrar.
+    pub fn unwrap_key_installed(&self) -> Option<&Path> {
+        self.unwrap_key_installed.as_deref()
+    }
+
+    /// How many custody rows travelled. Carried, not applied (#500).
+    pub fn episode_deks_carried(&self) -> usize {
+        self.episode_deks_carried
+    }
+}
+
+/// Extract the recovered X25519 unwrap secret from a restored bundle, REFUSING a slot that
+/// cannot be a key.
+///
+/// Pure, and separate from [`apply_local_state`], so the refusal happens before anything is
+/// written or registered. Order is the whole point: `apply_local_state` writes the keystore
+/// file BEFORE `cairn_register_unwrap_key` is consulted, so the registrar cannot catch a
+/// malformed secret — by the time it would refuse, the file is already on disk. A length
+/// check is the only thing standing between "the operator is told to try again" and "a
+/// restored node holds a keystore file that opens nothing".
+///
+/// `Ok(None)` and `Err` are deliberately different answers: an ABSENT secret is a legitimate
+/// older export (written before ADR-0066), which the caller warns about; a MALFORMED one is
+/// corruption or a version mismatch, which must stop the install.
+pub fn recovered_unwrap_secret(ls: &LocalState) -> anyhow::Result<Option<Zeroizing<[u8; 32]>>> {
+    let Some(bytes) = ls.unwrap_secret.as_deref() else {
+        return Ok(None);
+    };
+    if bytes.len() != 32 {
+        anyhow::bail!(
+            "the export's unwrap secret is {} bytes, not 32 — refusing to install a key that \
+             cannot open this node's inherited custody",
+            bytes.len()
+        );
+    }
+    // Copied straight into `Zeroizing` rather than through a bare `[u8; 32]` temporary, so
+    // this function leaves no unwiped copy of the secret on the stack. (The bundle's own copy
+    // is wiped by `LocalState`'s `Drop`; the residual serde/CBOR copies are #508.)
+    let mut secret = Zeroizing::new([0u8; 32]);
+    secret.as_mut_slice().copy_from_slice(bytes);
+    Ok(Some(secret))
+}
+
+/// Prove the recovered secret is the key this bundle's custody is actually wrapped to —
+/// the one check that distinguishes a *well-formed* 32 bytes from a *correct* 32 bytes
+/// (review finding I4).
+///
+/// **Why a length check is not enough.** Every key in this plane is a bare `[u8; 32]`: the
+/// X25519 secret half, its public half, the node's Ed25519 signing seed, and a DEK are all
+/// the same type, so the compiler cannot tell them apart and neither can
+/// [`recovered_unwrap_secret`], which can only ask how many bytes there are. The
+/// read-after-write checks in [`CustodyKeyDestination::install`] do not close this either:
+/// they prove the file holds *the bytes we wrote*, never *a key that opens anything*. So a
+/// bundle carrying the PUBLIC half where the secret belongs — a plausible mistake, since the
+/// two are indistinguishable at every type in the path — would install cleanly, register
+/// cleanly, and be discovered only when someone tried to read a chart. By then
+/// `node_unwrap_key` is a singleton holding the wrong key, and the right one is refused
+/// forever.
+///
+/// The proof is cheap and total: unwrap one carried DEK. If the secret is the right one it
+/// succeeds; if it is the public half, another node's key, or corrupted-but-32-bytes, the
+/// AEAD tag fails. One X25519 plus one AEAD open, once per restore.
+///
+/// **When it cannot prove anything, it says so by doing nothing.** An export carrying no
+/// custody rows — a node that never wrote a sealed body — offers nothing to test against.
+/// That is a legitimate bundle and must restore, so this returns `Ok(())`. Manufacturing a
+/// verdict from an absence of evidence is the failure principle 4 exists to forbid; the
+/// caller reports the carried count either way, so the operator can see which case they are
+/// in.
+///
+/// Pure, and called BEFORE the install, so a wrong key costs nothing — the same ordering
+/// rule, and for the same reason, as [`recovered_unwrap_secret`].
+pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &[u8; 32]) -> anyhow::Result<()> {
+    let Some(first) = ls.episode_deks.first() else {
+        return Ok(());
+    };
+    let row = episode_dek_from_cbor(first).map_err(|e| {
+        anyhow::anyhow!(
+            "the export's first custody row could not be decoded ({e}) — refusing \
+                         to install a key against a bundle this node cannot read"
+        )
+    })?;
+    cairn_event::seal::unwrap_dek(&row.dek_wrapped, secret).map_err(|_| {
+        anyhow::anyhow!(
+            "the unwrap secret in this export does NOT open the custody it travels with \
+             (tested against the row for event {}). The bundle is internally inconsistent: \
+             its key and its custody rows come from different nodes, or the secret slot holds \
+             something that is not this node's X25519 secret half — every key here is 32 raw \
+             bytes, so a public half or a signing seed in that slot is well-formed and still \
+             useless. Refusing before anything is written: installing it would register a \
+             singleton custody key that opens none of this node's record, and the registrar \
+             would then refuse the real key permanently (ADR-0066).",
+            row.event_id
+        )
+    })?;
+    Ok(())
+}
+
+/// Apply a restored local-state bundle into a fresh node — **ADR-0066 decision 4, the moment
+/// a restored solo clinic regains custody of its own record.**
+///
+/// A restored node deliberately mints a FRESH signing identity (ADR-0026 decision 4), because
+/// the dead node's signing seed was never backed up. So it must ADOPT the dead node's unwrap
+/// secret rather than mint one: every `event_dek` row it is about to inherit is wrapped to
+/// that key, and `node_unwrap_key` is a singleton whose registrar refuses a differing key —
+/// mint here and the node can never open its own record, irreversibly.
+///
+/// What this does, in the order it must happen:
+///
+/// 1. **Refuse what it cannot apply**, before touching anything. `node_default_deks`,
+///    `config` and `drafts` have no store anywhere in the built system; a bundle from a newer
+///    node that carries them must fail loudly rather than have them silently dropped.
+/// 2. **Validate the recovered secret** ([`recovered_unwrap_secret`]) — a malformed one is
+///    refused before a byte is written, because the file write is not reversible here.
+/// 3. **Install it** at `custody`, proving it reads back (see
+///    [`CustodyKeyDestination::install`]).
+/// 4. **Register its public half**, so the restored node's custody IS the dead node's
+///    custody. Registration comes last of the three because it is the step that can never be
+///    taken back.
+///
+/// # What is CARRIED but not APPLIED, and why that is honest rather than lossy
+///
+/// [`LocalState::episode_deks`] is counted and reported, not inserted. The rows belong to
+/// clinical events, and the backup medium does not yet carry a single clinical event
+/// (**#500**, the next slice) — so there is nothing for them to be custody OF, and building a
+/// second custody door here that #500 would immediately supersede would be waste. The count
+/// travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the restore
+/// command PRINTS it: an operator is told what came across and what is still owed, rather
+/// than finding out on the next disaster.
+///
+/// The ordering note for whoever lands #500: custody must be registered BEFORE clinical
+/// events apply, because the door wraps each event's DEK to the registered public half. This
+/// function already does its half in that order; the *caller* currently runs it after
+/// `finalize_identity`, which is fine only while no clinical event is applied. That call site
+/// has to move up when the medium starts carrying them.
+pub async fn apply_local_state(
+    db: &tokio_postgres::Client,
+    ls: &LocalState,
+    custody: &CustodyKeyDestination<'_>,
+) -> anyhow::Result<AppliedLocalState> {
+    // Step 1 — the refusal that must never soften into a silent accept. Named per slot, so
+    // the operator learns WHAT was withheld rather than that "something" was.
+    let mut unappliable: Vec<&str> = Vec::new();
+    if !ls.node_default_deks.is_empty() {
+        unappliable.push("node_default_deks");
+    }
+    if ls.config.is_some() {
+        unappliable.push("config");
+    }
+    if !ls.drafts.is_empty() {
+        unappliable.push("drafts");
+    }
+    if !unappliable.is_empty() {
+        anyhow::bail!(
+            "restored local-state bundle carries content this node version cannot apply \
+             ({}); refusing to silently drop it. No store exists here for those slots — the \
+             bundle was probably written by a newer cairn-node.",
+            unappliable.join(", ")
+        );
+    }
+
+    // Step 2 — validate before writing. See `recovered_unwrap_secret` for why the order is
+    // load-bearing rather than stylistic. Two checks, in increasing strength: the secret is
+    // 32 bytes, and (when the bundle carries custody to test against) it actually OPENS that
+    // custody. The second is what separates well-formed from correct — see
+    // `secret_opens_the_carried_custody`.
+    let secret = recovered_unwrap_secret(ls)?;
+    if let Some(secret) = secret.as_deref() {
+        secret_opens_the_carried_custody(ls, secret)?;
+    }
+
+    // Steps 3 and 4 — install, then register. Never the other way round: a registered public
+    // half whose secret is not on disk is unrecoverable (the singleton registrar refuses the
+    // real key afterwards), whereas a written file with no registration is fixed by re-running.
+    let unwrap_key_installed = match secret {
+        Some(secret) => {
+            custody.install(&secret)?;
+            let public = cairn_event::seal::unwrap_public(&secret);
+            db.execute(
+                "SELECT cairn_register_unwrap_key($1)",
+                &[&public.as_slice()],
+            )
+            .await
+            // The registrar refuses a DIFFERING key (db/037), and that refusal arrives AFTER
+            // the file is on disk — the ordering above is deliberate and right for the
+            // ordinary case, but it means this particular failure leaves the node in a state
+            // no raw Postgres string explains: a custody FILE holding the dead node's key
+            // beside a REGISTRATION holding some other one. The reachable cause is specific
+            // and worth naming, because the remedy follows from it: somebody ran
+            // `establish-unwrap-key` against this database before restoring into it, which
+            // registered a key derived from the NEW signing seed.
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "the inherited custody key was written to {} but this database ALREADY \
+                     REGISTERED a different one, and `node_unwrap_key` is a singleton whose \
+                     registrar refuses a differing key ({e}). The likely cause is \
+                     `cairn-node establish-unwrap-key` having been run against this database \
+                     before the restore, which registers a key derived from the NEW signing \
+                     seed — the registration is the wrong one, the file just written is the \
+                     right one. Restore again from the SAME medium into a DIFFERENT, freshly \
+                     created database and do NOT run `establish-unwrap-key` on it first; a \
+                     second superseding identity is auditable and expected. The file at {} \
+                     holds the dead node's real key: keep it.",
+                    custody.path().display(),
+                    custody.path().display()
+                )
+            })?;
+            Some(custody.path().to_path_buf())
+        }
+        None => None,
+    };
+
+    Ok(match unwrap_key_installed {
+        Some(path) => AppliedLocalState::custody_inherited(path, ls.episode_deks.len()),
+        None => AppliedLocalState::no_custody_key(ls.episode_deks.len()),
+    })
 }
 
 /// The `status` local-state line. Pure (presence flags injected). Honest about BOTH the
@@ -481,11 +1010,15 @@ mod tests {
         let sealed = seal_local_state(&wraps, OP, &bundle).unwrap();
         // Either secret recovers the same plaintext bundle.
         assert_eq!(
-            unseal_local_state_op(&sealed, OP).as_deref(),
+            unseal_local_state_op(&sealed, OP)
+                .as_deref()
+                .map(Vec::as_slice),
             Some(bundle.as_slice())
         );
         assert_eq!(
-            unseal_local_state_rec(&sealed, REC).as_deref(),
+            unseal_local_state_rec(&sealed, REC)
+                .as_deref()
+                .map(Vec::as_slice),
             Some(bundle.as_slice()),
             "the recovery code (off-node escrow) must unseal — the disaster-recovery path"
         );
@@ -555,7 +1088,9 @@ mod tests {
         );
         let back = parse_container(&bytes).unwrap();
         assert_eq!(
-            unseal_local_state_rec(&back, REC).as_deref(),
+            unseal_local_state_rec(&back, REC)
+                .as_deref()
+                .map(Vec::as_slice),
             Some(b"x".as_slice())
         );
     }
@@ -595,7 +1130,9 @@ mod tests {
         // The recovered wraps still unseal an export sealed under the originals.
         let sealed = seal_local_state(&back, OP, b"y").unwrap();
         assert_eq!(
-            unseal_local_state_op(&sealed, OP).as_deref(),
+            unseal_local_state_op(&sealed, OP)
+                .as_deref()
+                .map(Vec::as_slice),
             Some(b"y".as_slice())
         );
     }
@@ -662,11 +1199,15 @@ mod tests {
             "each export re-encrypts the payload (fresh nonce)"
         );
         assert_eq!(
-            unseal_local_state_rec(&a, REC).as_deref(),
+            unseal_local_state_rec(&a, REC)
+                .as_deref()
+                .map(Vec::as_slice),
             Some(b"bundle-A".as_slice())
         );
         assert_eq!(
-            unseal_local_state_rec(&b, REC).as_deref(),
+            unseal_local_state_rec(&b, REC)
+                .as_deref()
+                .map(Vec::as_slice),
             Some(b"bundle-B".as_slice())
         );
     }

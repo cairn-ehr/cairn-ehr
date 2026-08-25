@@ -170,6 +170,7 @@ nav:
       - ADR-0063 · The safety projection and the seal as coarsening boundary: spec/decisions/0063-the-safety-projection-and-the-seal-as-coarsening-boundary.md
       - ADR-0064 · Admit the claim, withhold the power: spec/decisions/0064-admit-the-claim-withhold-the-power.md
       - ADR-0065 · Narrow the custody, never the reach: spec/decisions/0065-narrow-the-custody-never-the-reach.md
+      - ADR-0066 · Identity dies with the disk; custody must not: spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md

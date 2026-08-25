@@ -296,84 +296,18 @@ stream's first two parts; full detail in git, the PRs and the linked ADRs).**
 [#405](https://github.com/cairn-ehr/cairn-ehr/issues/405),
 [#426](https://github.com/cairn-ehr/cairn-ehr/issues/426); ADR-0063 gains erratum E1; no new migration).**
 
-- **Claim authority at the apply door.** A protection-removing claim takes effect only when a human this
-  node can hold responsible stands behind it. **One predicate, one site:** `cairn_claim_authority(claim,
-  target) → 'attested' | 'self' | 'unverified'` (db/005), consulted at exactly one clause in
-  `cairn_sensitivity_standing` (db/048), so display coarsening, safety-rung emission and part C's dial all
-  inherit it — the anti-drift answer to #404. It **gates effect, never admission**, and only in the
-  withholding direction, so no door refusal and no fork (the #342 trap). *Flag what cannot self-heal; view
-  what can* became a stated rule: the withdrawal worklist is a VIEW, `safety_overclaim_flag` a LEDGER.
-  Gives [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its first SQL counterpart — NOT its
-  mirror. The PR #410 review found **7 of 11 production-code mutations survived a green suite**: an
-  unpinned R2 self-identity equality, `EXCEPTION WHEN OTHERS` not catching a statement timeout (57014 is
-  one of the two codes it excludes), a fail-OPEN protection-stripping comparison, and comments asserting
-  guarantees the fixtures never delivered. Open: #408, #409, #413, #414, #415, #416, #417, #418, #419,
-  #420, #422.
-- **One §5.9 leak closed, one narrowed.** Both were **a guarantee stated in a comment the code did not
-  provide**, one per plane — and the review found the first fix had reproduced that shape in its own
-  prose. *In SQL:* a column-level `REVOKE` cannot narrow a table-level `GRANT`, so db/049 §8 drops
-  `cairn_agent` to an explicit 23-column grant omitting `safety` and both read functions became `SECURITY
-  DEFINER` — a pair where either half alone is broken. **Cost-raising, not a floor:** `event_log.safety`
-  copies a *clear* field of the signed body and `signed_bytes` stays granted (#424 closed; the open design
-  question is **#432**), and the runtime role is a `cairn_node` member db/049 never narrows (**#425**).
-  ADR-0063 decision 2 — emission-time coarsening — is what binds. Replay-window residual **#427**. *In
-  Rust:* a parameter name is not a security property; `classify_authorship_confidence` graded a forgery
-  `Attested`. Both key arguments are now a `VerifiedKid` newtype; mint-site allowlist unpinned **#428**.
-- **The `search_path` that pinned nothing** (21 headers gained `, pg_temp`). Live data loss at both
-  owner-rights write doors, not hygiene: `SET search_path = public` does not exclude the session temp
-  schema, so with a decoy `event_log` in place `submit_event` and `apply_remote_event` each **returned
-  SUCCESS while the owner-privileged INSERT landed in the caller's temp table** — demonstrated as
-  `cairn_agent`, a role with no write privilege on `event_log` at all. A pinned path must deny the temp
-  schema the *first look*, and the guard is over `pg_proc`, not a name list. Open: **#430** (~100 unpinned
-  invoker-rights functions; `cairn_patient_has_events` is safe only by inheriting `submit_event`'s path),
-  **#431**, **#420**.
+- **Claim authority at the apply door.** A protection-removing claim takes effect only when a human this node can hold responsible stands behind it. **One predicate, one site:** `cairn_claim_authority(claim, target) → 'attested' | 'self' | 'unverified'` (db/005), consulted at exactly one clause in `cairn_sensitivity_standing` (db/048), so display coarsening, safety-rung emission and part C's dial all inherit it — the anti-drift answer to #404. It **gates effect, never admission**, and only in the withholding direction, so no door refusal and no fork (the #342 trap). *Flag what cannot self-heal; view what can* became a stated rule: the withdrawal worklist is a VIEW, `safety_overclaim_flag` a LEDGER. Gives [#245](https://github.com/cairn-ehr/cairn-ehr/issues/245) its first SQL counterpart — NOT its mirror. The PR #410 review found **7 of 11 production-code mutations survived a green suite**: an unpinned R2 self-identity equality, `EXCEPTION WHEN OTHERS` not catching a statement timeout (57014 is one of the two codes it excludes), a fail-OPEN protection-stripping comparison, and comments asserting guarantees the fixtures never delivered. Open: #408, #409, #413, #414, #415, #416, #417, #418, #419, #420, #422.
+- **One §5.9 leak closed, one narrowed.** Both were **a guarantee stated in a comment the code did not provide**, one per plane — and the review found the first fix had reproduced that shape in its own prose. *In SQL:* a column-level `REVOKE` cannot narrow a table-level `GRANT`, so db/049 §8 drops `cairn_agent` to an explicit 23-column grant omitting `safety` and both read functions became `SECURITY DEFINER` — a pair where either half alone is broken. **Cost-raising, not a floor:** `event_log.safety` copies a *clear* field of the signed body and `signed_bytes` stays granted (#424 closed; the open design question is **#432**), and the runtime role is a `cairn_node` member db/049 never narrows (**#425**). ADR-0063 decision 2 — emission-time coarsening — is what binds. Replay-window residual **#427**. *In Rust:* a parameter name is not a security property; `classify_authorship_confidence` graded a forgery `Attested`. Both key arguments are now a `VerifiedKid` newtype; mint-site allowlist unpinned **#428**.
+- **The `search_path` that pinned nothing** (21 headers gained `, pg_temp`). Live data loss at both owner-rights write doors, not hygiene: `SET search_path = public` does not exclude the session temp schema, so with a decoy `event_log` in place `submit_event` and `apply_remote_event` each **returned SUCCESS while the owner-privileged INSERT landed in the caller's temp table** — demonstrated as `cairn_agent`, a role with no write privilege on `event_log` at all. A pinned path must deny the temp schema the *first look*, and the guard is over `pg_proc`, not a name list. Open: **#430** (~100 unpinned invoker-rights functions; `cairn_patient_has_events` is safe only by inheriting `submit_event`'s path), **#431**, **#420**.
 
 
 **Slice 69 + its two follow-on passes — condensed (2026-08-18 → 08-20; closes #388, #383, #421, #435,
 #387, #439, #382, #385, #381; opens **#436**, **#441**, **#444**; ADR-0064 gains errata E1/E2; no new
 ADR, no new migration, SCHEMA stays 49).**
 
-- **The §5.9 operator surface.** Three slices had shipped a §5.9 mechanism and no way to look at it, so
-  ADR-0064's §1.2 budget stood *owed*. `patient-sensitivity <chart>` reports the withdrawal worklist
-  (reason + rationale + accountable actor), deferred `sensitivity.%` events, the standing assertions a
-  custody-thin node cannot anchor, safety overclaims, and the **measured** count of sealed medication
-  events held without custody; `sensitivity-assert`/`-withdraw` read back what took effect. **NAME, NEVER
-  COUNT** — #388 part 3 and #383 both asked for a *count*, and a count cannot separate *custody-blind*
-  from *genuinely empty*, the one question the line exists to answer. Mechanics: a chart-scoped definer
-  (`cairn_patient_deferred_sensitivity(uuid)`, db/043) because `event_deferred` is granted to `cairn_node`,
-  not `cairn_agent`; db/048 projects `responsible_actor_id`, which its `judged` CTE always computed and the
-  outer SELECT dropped (#421); custody-blindness is **measured** in db/048 §11b, not inferred from
-  `standing.is_empty()`; peer-copied fields are Debug-escaped (a newline forged a report line); **one
-  header per worklist arm**, because the `stranger-attested` arm DID take effect and a shared *"did NOT
-  take effect"* sentence told the operator a completed, unaccountable removal of protection had not
-  happened; and the report declares what it cannot contain, asserted over *empty* lists.
-- **The read-back and its known gap.** `readback.rs` reports two independently observed facts **never
-  merged** — which worklist arm (accountability) and what this node can say about the target (effect) —
-  because db/048's `inert` arm merges *"nobody accountable"* with *"not replicated here yet"*. It gives
-  ADR-0064's KNOWN GAP its first test: `TargetState::OnAnotherChart` must never collapse into
-  `Held { still_standing: false }`, since `cairn_sensitivity_standing` is patient-scoped on both sides
-  (load-bearing — else chart B strips chart A) and a naive membership test reports a mis-chart withdrawal
-  **effective**, a precise untruth in the reassuring direction on a confidentiality surface. Residual
-  **#436**: the same shape arriving by REPLICATION is invisible, and the fix is visibility, not a door.
-  Type design: `source` → a `Provenance` enum; `GRADE_*` stay **consts** (ADR-0062 decision 2: `grade` is
-  OPEN and db/048 mints a third `source` itself); **`WinningSubject`** fuses `chart_source` +
-  `chart_content_address` on the ADDRESS, making erratum E6 structurally unrepeatable.
-- **The trap-clearing pass (2026-08-20).** **#439:** `cargo doc` was red on `main` and completed only
-  under two `-A` flags, hiding every later rustdoc error; the BLOCKING copy now runs as the last steps of
-  the required `test` job (root workspace + `fixtures` + `cairn_pgx`) under an explicit `RUSTDOCFLAGS=-D
-  warnings` — **#444** owns promoting the still-unrequired jobs. **#382:** the `REVOKE EXECUTE … FROM
-  PUBLIC` convention was followed by 5 of 22 `cairn_check_*` validators; the deliverable is
-  CHECKABILITY — `floor_execute_grants.rs` asserts it over `pg_proc.proacl` (**a NULL ACL is the
-  PERMISSIVE case**), its applier half reading the `cairn_projection_apply` REGISTRY, not the `_apply`
-  suffix (1 of 21 carries none). **#385:** the five thread projections index `content_address` and
-  `cairn_event_thread` returns early for §10b's thread-free types — **which made that list safety-critical
-  in the DISCLOSURE direction**, since §11's conservative bound is gated on the negation of the same
-  predicate, so widening it wrongly silences all three thread arms at once and a standing `sequestered`
-  grade reads back `('routine','none')`. The first draft's comment claimed the opposite; correcting it was
-  the most consequential finding. **#381:** three pins on the db/048 SQL mirror. All guards
-  mutation-tested. Residual: #385's index win is unmeasured on volume data; two hand-maintained mirror
-  lists (**#441**). Still open on this surface: **#414**, **#415** (expect it to fire on routine care now
-  that it is visible), **#416**.
+- **The §5.9 operator surface.** Three slices had shipped a §5.9 mechanism and no way to look at it, so ADR-0064's §1.2 budget stood *owed*. `patient-sensitivity <chart>` reports the withdrawal worklist (reason + rationale + accountable actor), deferred `sensitivity.%` events, the standing assertions a custody-thin node cannot anchor, safety overclaims, and the **measured** count of sealed medication events held without custody; `sensitivity-assert`/`-withdraw` read back what took effect. **NAME, NEVER COUNT** — #388 part 3 and #383 both asked for a *count*, and a count cannot separate *custody-blind* from *genuinely empty*, the one question the line exists to answer. Mechanics: a chart-scoped definer (`cairn_patient_deferred_sensitivity(uuid)`, db/043) because `event_deferred` is granted to `cairn_node`, not `cairn_agent`; db/048 projects `responsible_actor_id`, which its `judged` CTE always computed and the outer SELECT dropped (#421); custody-blindness is **measured** in db/048 §11b, not inferred from `standing.is_empty()`; peer-copied fields are Debug-escaped (a newline forged a report line); **one header per worklist arm**, because the `stranger-attested` arm DID take effect and a shared *"did NOT take effect"* sentence told the operator a completed, unaccountable removal of protection had not happened; and the report declares what it cannot contain, asserted over *empty* lists.
+- **The read-back and its known gap.** `readback.rs` reports two independently observed facts **never merged** — which worklist arm (accountability) and what this node can say about the target (effect) — because db/048's `inert` arm merges *"nobody accountable"* with *"not replicated here yet"*. It gives ADR-0064's KNOWN GAP its first test: `TargetState::OnAnotherChart` must never collapse into `Held { still_standing: false }`, since `cairn_sensitivity_standing` is patient-scoped on both sides (load-bearing — else chart B strips chart A) and a naive membership test reports a mis-chart withdrawal **effective**, a precise untruth in the reassuring direction on a confidentiality surface. Residual **#436**: the same shape arriving by REPLICATION is invisible, and the fix is visibility, not a door. Type design: `source` → a `Provenance` enum; `GRADE_*` stay **consts** (ADR-0062 decision 2: `grade` is OPEN and db/048 mints a third `source` itself); **`WinningSubject`** fuses `chart_source` + `chart_content_address` on the ADDRESS, making erratum E6 structurally unrepeatable.
+- **The trap-clearing pass (2026-08-20).** **#439:** `cargo doc` was red on `main` and completed only under two `-A` flags, hiding every later rustdoc error; the BLOCKING copy now runs as the last steps of the required `test` job (root workspace + `fixtures` + `cairn_pgx`) under an explicit `RUSTDOCFLAGS=-D warnings` — **#444** owns promoting the still-unrequired jobs. **#382:** the `REVOKE EXECUTE … FROM PUBLIC` convention was followed by 5 of 22 `cairn_check_*` validators; the deliverable is CHECKABILITY — `floor_execute_grants.rs` asserts it over `pg_proc.proacl` (**a NULL ACL is the PERMISSIVE case**), its applier half reading the `cairn_projection_apply` REGISTRY, not the `_apply` suffix (1 of 21 carries none). **#385:** the five thread projections index `content_address` and `cairn_event_thread` returns early for §10b's thread-free types — **which made that list safety-critical in the DISCLOSURE direction**, since §11's conservative bound is gated on the negation of the same predicate, so widening it wrongly silences all three thread arms at once and a standing `sequestered` grade reads back `('routine','none')`. The first draft's comment claimed the opposite; correcting it was the most consequential finding. **#381:** three pins on the db/048 SQL mirror. All guards mutation-tested. Residual: #385's index win is unmeasured on volume data; two hand-maintained mirror lists (**#441**). Still open on this surface: **#414**, **#415** (expect it to fire on routine care now that it is visible), **#416**.
 
 **Two tech-debt passes — the silent gates and the trap-clearing they left behind (2026-08-20 → 08-21; closes [#446](https://github.com/cairn-ehr/cairn-ehr/issues/446), **#442**, **#443**, [#449](https://github.com/cairn-ehr/cairn-ehr/issues/449)–[#453](https://github.com/cairn-ehr/cairn-ehr/issues/453), [#386](https://github.com/cairn-ehr/cairn-ehr/issues/386); opens **#447**; no ADR, no migration, SCHEMA stays 49).** Nine gates that could pass **without running** — built nothing, so the lessons live in HANDOVER and only the mechanics are logged here.
 
@@ -441,15 +375,48 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
 - **C1 (buildable now):** rung 1 (`custody.nodes`, both doors, serve-door withholding), the audited break-glass path, and the **in-chart location signal** — of the three notification directions (location / custodian / patient) it is the only one that actually restrains, and it needs no channel. Patient and custodian are §5.12 discharging obligations in part D, where the ADR records the DV hazard: *"sealed content on your record was opened at Clinic A"* delivered to a household phone reaches the person the record was sequestered against, with a pointer.
 
 
-**The DR-guarantee audit — three promises, none of them true (2026-08-23, fourth pass; confirms [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495), opens [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500); adds `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` — 5 tests, every assertion mutation-checked: four PINS that go red on the fix, plus one MECHANISM test that stays true and says so — and corrects the expired comments at their source (`localstate.rs` header, `LocalState`, `empty`/`is_empty`, `read_local_state` and `apply_local_state`; `backup.rs::read_event_set`; `main.rs`'s export ceremony and restore arm; and the stale justification on `tests/localstate.rs`'s emptiness assertion). Opened [#502](https://github.com/cairn-ehr/cairn-ehr/issues/502) for the DR path's four silent-success spots. No logic change, no migration, no ADR, SCHEMA stays 50; the one operator-visible edit is removing a **false reassurance** from a backup warning — *"backed up events only (they are the load-bearing copy and are safe)"* cannot be said while #500 is open).** #495 was filed from the ADR-0065 design pass with an honest caveat — *"I have not read the sealed local-state export design, so this may already be resolved there."* Reading it turned the suspicion into two confirmed defects.
+**The DR-guarantee audit — three promises, none of them true (2026-08-23, fourth pass; confirms [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495), opens [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) and [#502](https://github.com/cairn-ehr/cairn-ehr/issues/502); adds `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` — 5 tests, every assertion mutation-checked: four PINS that go red on the fix, plus one MECHANISM test that stays true and says so — and corrects the expired comments at their source (`localstate.rs` header, `LocalState`, `empty`/`is_empty`, `read_local_state`, `apply_local_state`; `backup.rs::read_event_set`; `main.rs`'s export ceremony and restore arm; `tests/localstate.rs`'s emptiness assertion). No logic change, no migration, no ADR, SCHEMA stays 50; the one operator-visible edit is removing a **false reassurance** from a backup warning.)** #495 was filed from the ADR-0065 design pass with an honest caveat — *"I have not read the sealed local-state export design, so this may already be resolved there."* Reading it turned the suspicion into two confirmed defects. **Slice 1 below closes #495; #500 is still open.**
 
-- **ADR-0026 decision 1's three clinical promises are all false.** It guarantees, for total hardware loss of a solo node restored from the sealed medium: *"the **clinical event log survives**"*, *"**node-default data-at-rest keys survive**"*, *"**sealed-episode DEKs survive minus any erased ones**"*. Built: `backup.rs::read_event_set` exports `SELECT signed_bytes FROM node_event` (the federation plane — so NO `event_log` row travels at all, clinical or demographic or identity), and `LocalState`'s two DEK slots are `Vec::new()` with `read_local_state`'s `_db` parameter **unused**. Promise 2 turns out to have no subject at all: there is no node-default keystore anywhere in the built system.
-- **#500 — the bytes.** The medium carries no clinical event at all. A solo clinic — the deployment ADR-0026 opens by naming as first-class, *"replication provides **zero** durability"* — backs up nightly, `verify-backup` passes, health is reported honestly, and restore recovers its peering history and **zero clinical records**.
-- **#495 — the key.** Restore mints a fresh seed by design (decision 4; `restore.rs` orchestrates, `main.rs` mints); the X25519 unwrap secret is HKDF-derived from it (ADR-0052 decision 4), so every inherited `event_dek` row is unopenable **on a solo node** — a federated node that re-peers recovers custody via `cairn-sync`'s `rewrap_custody_for_peer`, which is why ADR-0026 scopes the promise to solo in the first place. **Fixing either alone is useless**: one leaves a working key with nothing to open, the other sealed bodies with no key. #495 carries three fix options — escrow the secret / break the derivation / declare the loss — none symmetric, each superseding an ADR.
+- **ADR-0026 decision 1's three clinical promises were all false.** Built: `backup.rs::read_event_set` exports `SELECT signed_bytes FROM node_event` (the federation plane — so NO `event_log` row travels), and `LocalState`'s two DEK slots were `Vec::new()` with `read_local_state`'s `_db` parameter **unused**. Promise 2 turns out to have **no subject at all**: there is no node-default keystore anywhere in the built system, so it is neither honoured nor violated.
+- **#500 — the bytes (STILL OPEN).** A solo clinic — the deployment ADR-0026 opens by naming as first-class, *"replication provides **zero** durability"* — backs up nightly, `verify-backup` passes, health is reported honestly, and restore recovers its peering history and **zero clinical records**.
+- **#495 — the key (CLOSED by slice 1 below).** Restore mints a fresh seed by design (decision 4); the X25519 unwrap secret was HKDF-derived from it (ADR-0052 decision 4), so every inherited `event_dek` row was unopenable **on a solo node**. **Fixing either alone is useless**: one leaves a working key with nothing to open, the other sealed bodies with no key — which is why they were filed apart.
 - **⇒ A DEFERRAL IS ONLY HONEST WHILE ITS STATED PRECONDITION HOLDS, AND NOTHING WATCHES FOR ONE EXPIRING.** The `localstate.rs` module header declared its empty seam truthfully — *"the federation-node tier has no clinical surface yet"*. ADR-0052 made that sentence false and nothing reopened the seam, while this file went on recording slices A–D as ✓ done. The first defect here whose cause is a **true comment going stale**, and it is whole-record loss. **Every ✓ in this file rests on a sentence; the sentence is what to re-check.**
-- **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** `main.rs`'s backup arm runs the local-state export, seals an empty bundle into a valid `CAIRNL1` container and reports success; `backup-status.json` records a true count of what the medium actually holds; `verify-backup` reports the medium's integrity truly. **Every surface is honest and the composite is a precise untruth** — principle 4, and ADR-0026 decision 7's *"a node that cannot currently back up … must say so"*, violated by a system in which no single component lies. (The backup path does NOT write the `.lsk` sidecar — that is `init` / `establish-local-state-key` / `restore`; an earlier draft of this entry claimed it did, which is the same class of error this entry is about.)
-- **⇒ WHERE A GUARANTEE IS ALREADY FALSE, PIN THE DEFECT, NOT THE PROMISE.** No `#[ignore]` exists in this crate and a permanently-red test would block the gate for every unrelated change, so the suite asserts what is true **today**, each assertion naming what it must be INVERTED to — the pinned-count idiom, where the guard failing IS the guard working. Anti-vacuity is explicit: the node is provisioned so the medium is genuinely non-empty, the `event_dek` row is written by the **production door** rather than the test, and the pure test asserts the happy-path unwrap *first* so the refusal cannot pass for the wrong reason. All four mutations verified red.
+- **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** The backup arm ran the local-state export, sealed an empty bundle into a valid `CAIRNL1` container and reported success; `backup-status.json` recorded a true count of what the medium actually held; `verify-backup` reported the medium's integrity truly. **Every surface is honest and the composite is a precise untruth** — principle 4, and ADR-0026 decision 7's *"a node that cannot currently back up … must say so"*, violated by a system in which no single component lies.
+- **⇒ WHERE A GUARANTEE IS ALREADY FALSE, PIN THE DEFECT, NOT THE PROMISE.** No `#[ignore]` exists in this crate and a permanently-red test would block the gate for every unrelated change, so the suite asserts what is true **today**, each assertion naming what it must be INVERTED to — the pinned-count idiom, where the guard failing IS the guard working. Anti-vacuity is explicit: the node is provisioned so the medium is genuinely non-empty, the `event_dek` row is written by the **production door**, and the pure test asserts the happy-path unwrap *first*. All four mutations verified red.
 - **A design-level coupling worth remembering:** deriving the unwrap secret from the signing seed bought *"no new key-management mechanism"* (ADR-0052 decision 4) and paid for it with a contradiction against ADR-0026 decision 4 that **neither ADR could see from inside itself**. Cross-ADR claims about *the same key material* need checking where they meet, which is code.
+
+**DR slice 1 — identity dies with the disk; custody must not (2026-08-24; [ADR-0066](spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md), spec v0.67 → v0.68; ADR-0052 gains erratum E2; closes [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495); opens [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503)–[#509](https://github.com/cairn-ehr/cairn-ehr/issues/509) and [#511](https://github.com/cairn-ehr/cairn-ehr/issues/511)–[#513](https://github.com/cairn-ehr/cairn-ehr/issues/513); `crates/cairn-event`, `crates/cairn-node`, `crates/cairn-sync`, a message-only edit in `db/005` and a hardened registrar in `db/037` — no migration, SCHEMA stays 50).** Full workspace sweep EXIT 0 over 139 binaries. **[#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) IS NOT CLOSED and is slice 2** — the medium still carries the federation plane only, so this slice hands a restored node a working key and nothing yet to open with it. Do not read "the DR hole is fixed" anywhere in this file.
+
+- **The coupling is broken.** One 32-byte seed used to be both the node's **identity** (Ed25519) and its **data custody** (the X25519 secret HKDF-derived from it), so ADR-0026 decision 4's deliberate fresh seed on recovery — exactly right, a stolen medium must never resurrect a signing identity — silently changed the custody key too. The unwrap key is now an **independent X25519 keypair**, sealed in its own `<key>.unwrap` file under the same dual-recipient envelope as the signing key (ADR-0026 slice A). **ADR-0026 decision 4 stands unchanged and gets stronger**; ADR-0052 is superseded **in exactly one clause** (its derivation clause) and carries erratum **E2** pointing here — a pure append, zero deleted lines.
+- **Adoption is lossless, and it is the only place the derivation survives.** A node provisioned before this ADR re-derives its old secret **exactly once** (`keystore::adopt_derived_unwrap_secret`), so its existing `event_dek` rows stay openable. Everything else is forbidden by `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`, which sweeps `crates/*/src/**` and whose allow-list **asserts each entry is still live** — a dead entry fails the guard, so the list cannot silently widen. Two rounds of review hardened it: a rename-proof positive control keyed on the *declaration* `fn derive_unwrap_secret(`, and a comment-blind matcher, after the first draft would have passed green on the defining file by luck.
+- **Custody travels, and a shredded event's key never does.** The secret and the surviving `event_dek` rows ride the `CAIRNL1` local-state export; the export filter drops any custody row the `erasure_shred_log` forbids. **A key that never crosses the restore boundary cannot be resurrected**, which is stronger than replaying the shred log afterwards and does not depend on replay ordering. That asymmetry — the survivor's DEK **must** be present, the shredded event's **must never** be — is proved by a test staging a custody row beside a live shred-log entry, the only test that reddens on deleting the filter's `WHERE NOT EXISTS`.
+- **`restore` adopts the exported key; it does not mint one** (decision 4), installing it before the ceremony reports, and the whole restore arm was re-nested from six levels to two so all three exits land after the operator summary. A restore beside a **live** `<key>.unwrap` is refused at the top of the arm with both remedies named — a lost signing identity is re-provisioned every restore, a lost unwrap key is not survivable, so the two files are **not** symmetric. #502 item 1 is fixed here too: a present-but-unreadable export now refuses the restore instead of being skipped in silence.
+- **Registering the public half is a PROVISIONING act, not a write-path side effect** (decision 6). `ensure_unwrap_key` and `db/005` now refuse and name `cairn-node establish-unwrap-key`; **six test suites, one of them in another crate, were resting on the old implicit registration** — every one fixed in its fixture, none by weakening the control.
+- **Opened.** **#503** (`cairn-sync` still derives and cannot read the keystore — it now **fails fast at startup** on divergence; the real fix is a shared `cairn-keystore` crate) · **#504** (dead `_node_sk` on two orchestrators — removing it drops an operator passphrase ceremony, so it is a decision) · **#505** (the migration mints a SECOND recovery code — the *documentation* half is closed, see below; the open half is whether to offer an opt-in single-code migration) · **#506** (`establish-unwrap-key`'s CLI arm has no integration test) · **#507** (provisioning duplicated across 8 fixtures) · **#508** (CBOR serialization leaves unwiped copies of the unwrap secret in freed heap — a container-format decision, not a patch; reading "we zeroize it" as complete would be wrong) · **#509** (a fourth fail-open of the class this slice fixed three of) · **#511** (every key in the custody plane is a bare `[u8; 32]`, so public-for-secret compiles — `Secret32`/`PublicKey32` newtypes) · **#512** (the `M > N` paper-parity defect house rule 7 demanded be filed) · **#513** (no end-to-end test of the backup→export keystore seam).
+- **⇒ THE REVIEW WAVE FOUND THE SLICE'S OWN FAILURE SHAPE IN THE SLICE.** Two findings were the exact
+  defect ADR-0066 exists to correct, one layer over: *"the export itself is intact; the code is what
+  failed"* was **a precise untruth told at a disaster** — `parse_container` validates the `CAIRNL1`
+  magic and the CBOR frame and nothing else, so ciphertext damage and a mistyped recovery code produce
+  the identical `None`, and the line sent an operator hunting a code they had typed correctly and then
+  on to spend a second superseding identity for nothing. And **ADR-0066 decision 1 stated a claim this
+  branch's own code contradicted** (the migration's second recovery code), which — ADRs being immutable
+  once merged — would have been a brand-new ADR born owing an erratum. Both fixed *before* merge;
+  decision 1 now scopes the one-code property to `init` and names the migration exception, so **#505
+  needs no erratum**.
+- **Also closed in the wave.** `init` gained the pre-write registered-key check `establish-unwrap-key`
+  already had (it could otherwise overwrite the signing key and mint a doomed custody key before the
+  registrar refused) · `apply_local_state` now **trial-unwraps a carried DEK before installing**, so a
+  well-formed-but-wrong 32 bytes — the public half in the secret slot — is refused instead of registered
+  onto a singleton · `verify-backup` no longer prints an all-clear it did not establish: it reports the
+  export sibling and declares that its sealed contents were **not** checked · the registrar's
+  `ON CONFLICT DO NOTHING` now re-reads and compares, so a concurrent loser is refused rather than told
+  it succeeded · `episode_dek_from_cbor` validates the wrapped-DEK length, free now and irreversible
+  once #500 inserts those rows · the production-source sweep widened past the Cargo workspace to every
+  shipping tree (`extensions/cairn_pgx`, `cairn-gui`), with the pgrx `#[cfg(any(test, …))]` gate taught
+  to the matcher **in the same change**, because widening either alone breaks the guard.
+- **⇒ BREAKAGE HID FROM A GATE IN THREE DISTINCT WAYS IN ONE SLICE**, and only `scripts/run-db-gated-tests.sh` catches all three: **fail-fast** masked 13 failures in `medication_coding.rs`; **`cargo test … | tail`** masked cargo's exit status entirely, reporting "exit 0" over a real failure; and a **cross-crate** suite (`cairn-sync/tests/clinical_pull.rs`) was invisible because `-p cairn-node` never builds it while `cargo check --workspace` compiles it **without running it**.
+- **⇒ FOUR DEFECTS WERE IN THE TASK BRIEFS, NOT THE IMPLEMENTATIONS:** brief code that was not rustfmt-clean; a gate invocation naming one of the three required DB variables; a leaf shape (`event_id` as TEXT) that would have left a shredded-event safety assertion **permanently vacuous**; and a key install placed where control flow could never reach it. **Root cause common to all four: the instructions were checked against what the code should do, never against the gates and control flow the project actually runs.** ⇒ **A plan that supplies verbatim code and commands must be run against the project's own gates before it is handed to anyone.**
+- **⇒ WHERE NO TEST CARRIES THE VALUE ACROSS THE DISK, THE ONE LINK THAT MATTERS IS PROVEN BY NOTHING.** `unwrap_secret` carries `#[serde(default)]`, so a `skip_serializing` mutant deserializes to `None` **silently** — before a populated round-trip test existed it left every DR test green and every restore keyless, this slice's own failure shape one layer down.
 
 ## Phase 5 — Security & compliance core
 
@@ -474,27 +441,31 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
   **Live residual:** the commitment binds set *content*, so a peer's genuine marker spliced between
   **byte-identical converged** media is not rejectable — impossible on a sole-enroll medium, so multi-enroll
   restores report `Provenance::SignedFederated` → confirm-on-restore.
-- **Sealed local-state export** — ⚠️ **container done, contents empty** (ADR-0026 **slice D**): a long-lived
+- **Sealed local-state export** — ✓ **CUSTODY now travels** (ADR-0026 **slice D**, completed by DR slice 1 /
+  [ADR-0066](spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md), 2026-08-24): a long-lived
   local-state DEK dual-wrapped once at provisioning; `CAIRNL1` export + a `CAIRNX1` `.lsk` sidecar;
-  additive-CBOR `LocalState` with typed-empty slots + DB read/apply **seams** the clinical tier extends;
-  signing key never in the bundle. **The seam's stated precondition — *"the federation-node tier has no
-  clinical surface yet"* (the `localstate.rs` module header) — EXPIRED when ADR-0052 made every clinical body born-sealed,
-  and nothing reopened it.** `read_local_state`'s `_db` parameter is unused, so the export cannot see custody
-  even in principle, while `main.rs`'s backup arm runs the ceremony and reports success over
-  an empty bundle. With restore minting a fresh seed (decision 4) and the X25519 unwrap secret derived from
-  it (ADR-0052 decision 4), **every born-sealed body on a restored SOLO node is unopenable**
-  (**[#495](https://github.com/cairn-ehr/cairn-ehr/issues/495)**, confirmed in code 2026-08-23 — it carries
-  the three fix options, none symmetric; each supersedes an ADR).
-  **ADR-0026 slices A and C complete; B and D are partial — see #495/#500.** **Uniform key-material zeroization** ✓ ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)):
-  every transient KEK/DEK/seed/LSK in `Zeroizing`. Optional follow-on: escrow rungs (Shamir M-of-N, QR, TPM).
+  additive-CBOR `LocalState`; signing key never in the bundle. The seam's stated precondition — *"the
+  federation-node tier has no clinical surface yet"* — had **EXPIRED** when ADR-0052 made every clinical
+  body born-sealed, leaving the bundle empty and the derived unwrap key dead on a restored solo node
+  (**#495**). The bundle now carries the **independent** unwrap secret and the surviving `event_dek` rows
+  (a shredded event's excluded by construction), and `restore` installs the secret (the carried rows wait for
+  the events they belong to — #500). **Still owed: the clinical
+  event log itself does not travel — [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500), slice 2 —
+  so ADR-0026 decision 1 must NOT be cited as met, and its promise 2 ("node-default data-at-rest keys
+  survive") has no subject in the built system at all.** **ADR-0026 slices A, C and D complete; B is
+  partial — see #500.** **Uniform key-material zeroization** ✓ ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)):
+  every transient KEK/DEK/seed/LSK in `Zeroizing`, with residual **#508** (CBOR leaves unwiped copies of
+  the unwrap secret in freed heap). Optional follow-on: escrow rungs (Shamir M-of-N, QR, TPM).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
 - **Audit-log integrity, offline auth, mTLS** ([§7](spec/security.md)).
 
 ## Phase 6 — Federation hardening
 
 - **Revocation cascade; anchor-as-power** ([ADR-0018](spec/decisions/0018-federation-revocation-cascade-and-the-anchor-as-power.md)).
-- **DR / recovery escrow** — ✓ done at node level (ADR-0026 slices A–D, see Phase 5). Federation-tier
-  follow-ons: peer-quorum (social) recovery + escrow rungs (Shamir M-of-N, QR, TPM/keyring).
+- **DR / recovery escrow** — ADR-0026 slices A, C, D done at node level; **slice B still carries no clinical
+  event (#500)**, see Phase 5. Federation-tier follow-ons: peer-quorum (social) recovery + escrow rungs
+  (Shamir M-of-N, QR, TPM/keyring). Node-tier residual **#505** (the ADR-0066 migration path mints a second
+  recovery code).
 - **Node-identity `supersede`** — ✓ done (ADR-0026 slice C). **Signing-key rotation** (`rotate-key` actor event) — still reserved, not built.
 
 ## Phase 7 — Attachments / byte tier

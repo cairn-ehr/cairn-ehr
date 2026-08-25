@@ -53,6 +53,21 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
     )
     .await
     .unwrap();
+
+    // ADR-0066 decision 6: registering this node's unwrap key is a PROVISIONING act
+    // (`cairn-node init` / `establish-unwrap-key`); the sealed-write path only VERIFIES
+    // one is registered and refuses an unprovisioned node. So the fixture must now do what
+    // provisioning does — it used to be done implicitly by the first write. FRESHLY
+    // GENERATED, never derived from the signing seed: that derivation is exactly the
+    // coupling ADR-0066 removed, and nothing in this suite ever unwraps a DEK. House rule
+    // 6: computed at runtime, never a literal.
+    let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
+    )
+    .await
+    .unwrap();
     (sk, kid)
 }
 
@@ -89,6 +104,15 @@ async fn setup_node_and_human(c: &Client) -> (SigningKey, String, SigningKey, St
     c.execute(
         "SELECT enroll_actor('human', '{\"role\":\"clinician\"}', $1)",
         &[&kid_h],
+    )
+    .await
+    .unwrap();
+    // Same ADR-0066 provisioning step as `setup_node` above, for the same reason — see
+    // that helper's comment.
+    let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
     )
     .await
     .unwrap();

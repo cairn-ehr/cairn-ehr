@@ -6,8 +6,11 @@
 //! CLEAR `EventBody` (payload + `Some(clear twin)`) so they stay testable in
 //! cairn-event; this module seals that body under a fresh per-event DEK, signs
 //! the SEALED form (seal-then-sign: the signature covers ciphertext and survives
-//! a shred), registers the node's unwrap key, and hands the DEK to the strict
-//! door for its floor checks, custody wrap, and the operational clear view.
+//! a shred), verifies this node's unwrap key is registered (ADR-0066 decision 6 —
+//! REGISTERING it is a provisioning act, `cairn-node init` /
+//! `cairn-node establish-unwrap-key`; the write path only checks), and hands the
+//! DEK to the strict door for its floor checks, custody wrap, and the operational
+//! clear view.
 //!
 //! For a junior reader: think of it as "encrypt the clinical content, sign the
 //! envelope, then knock on the one write door with the key the door needs to
@@ -17,8 +20,6 @@
 use anyhow::Context;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
 use cairn_event::{sign, EventBody, SigningKey};
-
-use crate::keystore;
 
 /// The human who AUTHORS a clinical event (#204 / ADR-0053) — the FIRST half of
 /// principle 10, the mirror of `AttestParams` (attestation.rs, the second half). The
@@ -35,8 +36,9 @@ pub struct AuthorParams<'a> {
 ///
 /// `Some` ⇒ the body is rewritten to `{human, authored} + {node, recorded}` and the
 /// HUMAN's key signs; `None` ⇒ the body is untouched and the NODE signs (device-additive,
-/// unchanged). Custody is NOT decided here and never follows the signature: every caller
-/// still registers the node's unwrap key (born-sealed erasability, ADR-0052).
+/// unchanged). Custody is NOT decided here and never follows the signature: the node's
+/// own provisioned unwrap key holds custody whoever signed, and every caller verifies it
+/// is registered (born-sealed erasability, ADR-0052; provisioning, ADR-0066 decision 6).
 ///
 /// WHY A HELPER: the single-thread door (`seal_sign_submit`) and the two-thread
 /// reconcile/separate path both need this pair, and `with_human_author` is NOT idempotent
@@ -57,24 +59,35 @@ pub fn apply_author<'a>(
     }
 }
 
-/// Register this node's X25519 public unwrap key so the strict door can wrap every
-/// sealed event's DEK into recoverable custody. Idempotent: `cairn_register_unwrap_key`
-/// is a no-op once the same key is present (and refuses a *different* key — rotation is
-/// a separate ceremony, ADR-0052). Derives the public half from the node's Ed25519 seed
-/// via the domain-separated HKDF in cairn-event::seal; the secret half never leaves the
-/// daemon, so a DB backup (public half only) can never unwrap a DEK.
-pub async fn ensure_unwrap_key(
-    client: &tokio_postgres::Client,
-    sk: &SigningKey,
-) -> anyhow::Result<()> {
-    let secret = keystore::unwrap_secret(sk);
-    let public = cairn_event::seal::unwrap_public(&secret);
-    client
-        .execute(
-            "SELECT cairn_register_unwrap_key($1)",
-            &[&public.as_slice()],
-        )
-        .await?;
+/// Verify this node's X25519 public unwrap key is registered before a sealed write.
+///
+/// ADR-0066 decision 6: registering it is a PROVISIONING act (`cairn-node init` /
+/// `cairn-node establish-unwrap-key`), not a side effect of the first write. Before
+/// ADR-0066 this function derived the secret from the signing key and registered it on
+/// every write, which quietly meant "whatever key this signer implies is this node's
+/// custody key" — and tied custody to identity, the coupling that emptied a restored
+/// node's clinical record (#495).
+///
+/// The door needs the key committed and visible so it can wrap this event's DEK into
+/// recoverable custody. A node without one would write sealed bodies it can never
+/// crypto-shred — foreclosing the ADR-0005 erasure ladder ADR-0052 exists to keep
+/// reachable — so this refuses rather than degrades, and names the remedy, because a
+/// refusal an operator cannot act on is not a safety control.
+///
+/// This reads only the PUBLIC half's presence; the secret never enters the database, so a
+/// DB backup alone still cannot unwrap a DEK. `db/005`'s `submit_event` enforces the same
+/// requirement at the floor — this check is the legible, remedy-naming failure one layer
+/// up, never a substitute for it.
+pub async fn ensure_unwrap_key(client: &tokio_postgres::Client) -> anyhow::Result<()> {
+    let registered: bool = client
+        .query_one("SELECT EXISTS (SELECT 1 FROM node_unwrap_key)", &[])
+        .await?
+        .get(0);
+    anyhow::ensure!(
+        registered,
+        "this node has no registered unwrap key, so a sealed body could not be given \
+         recoverable custody — run `cairn-node establish-unwrap-key` (ADR-0066)"
+    );
     Ok(())
 }
 
@@ -306,9 +319,11 @@ pub async fn seal_sign_submit(
 
     let (signed_bytes, dek) = seal_and_sign(body, signing_sk)?;
     // Custody is the NODE's regardless of who signed (born-sealed erasability, ADR-0052).
-    // Register the node's unwrap key first (idempotent, node-scoped): the door needs it
-    // committed and visible so it can wrap this event's DEK into recoverable custody.
-    ensure_unwrap_key(client, node_sk).await?;
+    // VERIFY the node's provisioned unwrap key is registered (ADR-0066 decision 6): the
+    // door needs it committed and visible so it can wrap this event's DEK into recoverable
+    // custody, and a node without one must be refused rather than write a body it could
+    // never crypto-shred.
+    ensure_unwrap_key(client).await?;
 
     match attest {
         None => {

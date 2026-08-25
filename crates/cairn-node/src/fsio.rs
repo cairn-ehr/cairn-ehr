@@ -17,17 +17,31 @@
 
 use std::path::{Path, PathBuf};
 
+/// A same-directory sibling of `path`, formed by appending `suffix` to its filename.
+/// Pure (no I/O) so it is trivially testable. Same-directory matters wherever a sibling
+/// stands in for an atomic `rename` target: rename is only atomic within one filesystem,
+/// so a sibling in `/tmp` (possibly a different mount) would defeat the whole point.
+///
+/// Shared by `tmp_sibling` (the `.tmp` sibling this file's atomic-write mechanics use)
+/// and `keystore::unwrap_key_path_for` (the `.unwrap` sidecar naming the node's
+/// independent unwrap-key file, ADR-0066) — the two are the same "suffix-sibling" idea
+/// applied to two different suffixes, so this is extracted rather than duplicated: one
+/// naming rule, one test of it, instead of two copies that could silently drift apart.
+pub fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
 /// The sibling temp path used for an atomic write: the target's full filename plus a
 /// `.tmp` suffix, in the SAME directory. Pure (no I/O) so it is trivially testable.
 /// Same-directory matters: `rename` is only atomic within one filesystem, so a temp in
 /// `/tmp` (possibly a different mount) would defeat the whole point.
 pub fn tmp_sibling(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    name.push(".tmp");
-    path.with_file_name(name)
+    sibling_with_suffix(path, ".tmp")
 }
 
 /// fsync the directory that contains `path`, so a freshly-`rename`d entry survives a

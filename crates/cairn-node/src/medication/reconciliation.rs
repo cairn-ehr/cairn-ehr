@@ -217,8 +217,9 @@ pub async fn separate_medications(
 /// `author` (ADR-0053) is applied in BOTH arms: `None` ⇒ device-additive (the node
 /// signs, `recorded`-only); `Some` ⇒ the human authors the content event too — the
 /// body is rewritten to an `authored`+`recorded` contributor pair and SIGNED by the
-/// human key — while custody stays the NODE's regardless (`ensure_unwrap_key` always
-/// registers the node's key, never the author's; born-sealed erasability, ADR-0052).
+/// human key — while custody stays the NODE's regardless (custody is the node's own
+/// PROVISIONED unwrap key, never the author's, and `ensure_unwrap_key` verifies it is
+/// registered; born-sealed erasability, ADR-0052 / ADR-0066 decision 6).
 #[allow(clippy::too_many_arguments)] // signer + node context + body + patient/2 subjects/author/attest
 async fn submit_reconcile_like(
     client: &mut tokio_postgres::Client,
@@ -248,10 +249,11 @@ async fn submit_reconcile_like(
                 crate::medication::sealed_submit::apply_author(body, author, node_sk);
             let (signed_bytes, dek) =
                 crate::medication::sealed_submit::seal_and_sign(body, signing_sk)?;
-            // The door needs the NODE's unwrap key registered before it can wrap this
-            // event's DEK into custody (idempotent; committed ahead of the txn) — the
-            // node keeps custody regardless of who signed.
-            crate::medication::sealed_submit::ensure_unwrap_key(client, node_sk).await?;
+            // The door needs the NODE's provisioned unwrap key registered before it can
+            // wrap this event's DEK into custody — the node keeps custody regardless of
+            // who signed. Checked ahead of the txn so an unprovisioned node is refused
+            // before anything is written (ADR-0066 decision 6).
+            crate::medication::sealed_submit::ensure_unwrap_key(client).await?;
             let tx = client.transaction().await?;
             tx.execute(
                 "SELECT submit_event($1, NULL, NULL, $2)",
