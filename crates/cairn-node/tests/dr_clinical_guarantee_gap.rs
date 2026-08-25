@@ -76,7 +76,7 @@
 //!   carried no DEK at all. It stays green; if it reddens, custody stops reaching the export.
 //!   It says nothing about the RESTORE half, which is decision 4 and is not built — see its
 //!   own doc before quoting it as "the DR guarantee holds".
-//! - [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`] — **HALF
+//! - [`export_carries_the_survivors_dek_and_never_the_shredded_ones`] — **HALF
 //!   GUARANTEE, HALF PROHIBITION**, and that asymmetry is the whole point: the survivor's
 //!   custody must travel, the shredded event's must never. The prohibition was written
 //!   while it was still vacuous and became load-bearing on the exact commit that inverted
@@ -441,7 +441,12 @@ async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
 /// empty export had nothing to scan) precisely so that it would already be sitting here,
 /// under a reviewer's eyes, on the commit that made it load-bearing.
 #[tokio::test]
-async fn export_carries_no_dek_for_the_survivor_and_none_for_the_shredded() {
+/// (RENAMED in the #495 review: it was `export_carries_no_dek_for_the_survivor_and_none_for
+/// _the_shredded`, which after the inversion asserted the exact opposite of its own first
+/// clause. This file's stated rule is that a test name is a claim, and it renamed two other
+/// tests on the same commit for that reason; leaving this one behind would have re-taught the
+/// expired framing to everyone who greps the test list without opening the doc.)
+async fn export_carries_the_survivors_dek_and_never_the_shredded_ones() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -557,7 +562,7 @@ async fn export_carries_no_dek_for_the_survivor_and_none_for_the_shredded() {
 /// healthy node that filter selects nothing extra. `cairn_execute_shred` (db/037) already
 /// DELETES the custody row when a shred executes, and `apply_remote_event` (db/020) already
 /// refuses to create one for a target already in `erasure_shred_log`. So its sibling test
-/// [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`] would stay green
+/// [`export_carries_the_survivors_dek_and_never_the_shredded_ones`] would stay green
 /// with the filter DELETED — it proves the outcome, not the mechanism. A filter no test can
 /// fire is a filter a refactor can remove with nothing going red, and the failure it guards
 /// against (an erased body's key resurrected on a restored node) is irreversible.
@@ -670,7 +675,7 @@ async fn the_export_filter_drops_a_custody_row_the_shred_log_forbids() {
 /// way to ask "is this event referenced in there at all?" — no knowledge of the element's
 /// internal schema required. Since #495 that schema IS known (`localstate::EpisodeDek`) and
 /// stores the id as TEXT, so a caller must not rely on this scan alone; see the two-check
-/// arrangement in [`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`].
+/// arrangement in [`export_carries_the_survivors_dek_and_never_the_shredded_ones`].
 fn shredded_uuid_bytes(event_id: &str) -> [u8; 16] {
     *Uuid::parse_str(event_id).unwrap().as_bytes()
 }

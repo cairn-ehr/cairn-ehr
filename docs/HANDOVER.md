@@ -37,8 +37,15 @@
 > sending the operator to a command that then refuses. That one mattered more since ADR-0066: the sealed
 > export is the only vehicle carrying a node's custody KEY off the machine, so a node with a bit-rotted
 > sidecar backed up nightly, passed `verify-backup`, and never let its custody key leave.
-> **Items 2 and 4 stay open** — `verify-backup` printing `backup OK: 0/0` over a medium that restores
-> nothing, and a discarded keystore-load reason.
+> **Item 2 is now fixed too**, in the review wave: `verify-backup` refuses a zero-event medium instead
+> of reporting `backup OK: 0/0` over an artifact that restores nothing. Checked in the CLI arm and NOT in
+> `all_intact()`, because `backup_to`'s verify-before-write calls the same predicate and a node with no
+> events yet must still be able to write its first medium — *is this medium internally consistent* and
+> *is this medium worth anything* are different questions. The same command also stopped printing an
+> all-clear it had not established: it now reports the sealed export sibling beside the medium and
+> **declares that the export's contents were not checked**, because `verify-backup` holds no recovery
+> code and cannot know whether the export carries a custody key. **Item 4 stays open** — a discarded
+> keystore-load reason.
 >
 > **⚠️ OPERATIONAL, AND NOTHING ELSE SAYS IT: federated sync is inoperable until
 > [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503) lands.** `cairn-sync` gained a startup fence
@@ -57,14 +64,20 @@
 > **Before trusting any ✓, check whether the sentence that justified it is still true.**
 
 > [!IMPORTANT]
-> **Four traps slice 1 minted. Each is a step a next session takes in good faith.**
+> **Five traps slice 1 minted. Each is a step a next session takes in good faith.**
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY.** It survives so a pre-ADR-0066 node can
 >    re-derive its old secret **exactly once**, inside `keystore::adopt_derived_unwrap_secret`, keeping its
 >    existing `event_dek` rows openable. **Calling it anywhere else re-creates the #495 coupling.** Pinned
->    by `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`, which sweeps `crates/*/src/**` and whose
->    allow-list also asserts **every entry is still live** — a dead entry fails the guard, so the list
->    cannot quietly widen. **When it fails, do not add a line to `ALLOWED`.**
+>    by `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`, which since the review wave sweeps
+>    **every shipping tree, not just the Cargo workspace** (`sources::PRODUCTION_TREES` —
+>    `crates/`, `extensions/`, `cairn-gui/`; the two `Cargo.toml` `exclude`s ship too, and
+>    `extensions/cairn_pgx` runs *inside Postgres*). Its allow-list also asserts **every entry is still
+>    live** — a dead entry fails the guard, so the list cannot quietly widen. **When it fails, do not add
+>    a line to `ALLOWED`.** Note the paired requirement: the sweep and the test-gate matcher
+>    (`is_a_test_gate_attribute`, which must recognise pgrx's `#[cfg(any(test, feature = "pg_test"))]`)
+>    have to move **together** — widening either alone reddens the guard on correct code, and the obvious
+>    fix for that red is the `ALLOWED` line that would gut it.
 > 2. **Registering the unwrap key is PROVISIONING, not a write-path side effect** (ADR-0066 decision 6).
 >    `ensure_unwrap_key` and `submit_event` now **refuse**. **A node whose database is recreated under an
 >    existing key file needs `cairn-node establish-unwrap-key` before its first sealed write** — six test
@@ -78,7 +91,17 @@
 >    secret derived from the **new** signing seed and registers it, and `node_unwrap_key`'s singleton
 >    registrar then refuses the real exported key **permanently**. It is the operator's obvious next step
 >    — `submit_event`'s own refusal text names that command — so `restore` warns about it explicitly.
->    Recover the export first.
+>    Recover the export first. Since the review wave, if it *has* happened, `apply_local_state`'s refusal
+>    now explains the resulting state rather than surfacing a raw Postgres error: the file just written
+>    holds the dead node's real key and must be kept, the registration is the wrong one, and the way out
+>    is another restore into a fresh database.
+>
+> 5. **`init` now refuses a database that already has custody registered.** Added in the review wave and
+>    worth knowing before it surprises someone: the file check (`refuse_to_replace_existing_unwrap_key`)
+>    only fires when `<key>.unwrap` EXISTS, so a node that lost its keystore could still run `init`,
+>    overwrite its signing key, mint a doomed custody key and only then fail at the registrar. `init`
+>    reads `node_unwrap_key` first now. The remedy it names is `establish-unwrap-key`, which is
+>    idempotent — see trap 4 before running it on a restored node.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A
 and B, the authority floor and the operator surface are BUILT (and enforce nothing beyond display and
@@ -168,7 +191,7 @@ clinical surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#508) · **Spec/ADRs:** v0.68 (through **ADR-0066** — *identity dies with the disk; custody must not*) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 1 adds no migration) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (through **ADR-0066** — *identity dies with the disk; custody must not*) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 1 adds no migration) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -195,8 +218,7 @@ that generalise past the slice that found them.
 
 **Closes [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495)
 ([ADR-0066](spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md), spec v0.68); opens
-#503–#508. 20 commits, 40 files, +6054/−461; full workspace sweep EXIT 0 over 139 binaries. No migration —
-SCHEMA stays 50.** Shipped: an independent X25519 unwrap keypair sealed in its own `<key>.unwrap` file
+#503–#509 and #511–#513, and closes #502 item 2. No migration — SCHEMA stays 50.** Shipped: an independent X25519 unwrap keypair sealed in its own `<key>.unwrap` file
 (same dual-recipient envelope as the signing key); a **lossless adoption path** for pre-ADR nodes
 (`keystore::adopt_derived_unwrap_secret` re-derives the old secret **once**, so existing `event_dek` rows
 stay openable); the secret and the surviving custody rows riding the `CAIRNL1` export with a **shredded
@@ -204,10 +226,27 @@ event's DEK excluded by construction**; and `restore` INSTALLING the inherited k
 **#495's status, #500's, and the four traps are in ⇒ NEXT — read that split before citing this anywhere.**
 Opened: **#503** (cairn-sync derives — extract a shared `cairn-keystore`), **#504** (dead `_node_sk` on two
 orchestrators — removing it would silently drop a passphrase ceremony, so it is a decision, not a
-refactor), **#505** (the migration path mints a SECOND recovery code, contradicting ADR-0066 decision 1 —
-needs an erratum), **#506** (`establish-unwrap-key`'s CLI arm has no integration test), **#507**
+refactor), **#505** (the migration path mints a SECOND recovery code — the *documentation* half is
+closed, decision 1 was scoped before merge so no erratum is owed; the open half is whether to offer an
+opt-in single-code migration), **#506** (`establish-unwrap-key`'s CLI arm has no integration test), **#507**
 (provisioning duplicated across 8 fixtures), **#508** (CBOR serialization leaves unwiped copies of the
-unwrap secret in freed heap — the real fix is a container-format decision, not a patch). What generalises:
+unwrap secret in freed heap — the real fix is a container-format decision, not a patch), **#509** (a
+fourth fail-open of the class this slice fixed three of), **#511** (`Secret32`/`PublicKey32` newtypes —
+every key in the custody plane is a bare `[u8; 32]`, so public-for-secret compiles), **#512** (the
+`M > N` paper-parity defect house rule 7 required be filed), **#513** (no end-to-end test of the
+backup→export keystore seam). What generalises:
+
+0. **⇒ THE REVIEW WAVE FOUND THE SLICE'S OWN FAILURE SHAPE INSIDE THE SLICE — TWICE.** (a) `restore` told
+   an operator *"The export itself is intact; the code is what failed"* after a spent recovery-code
+   budget. It cannot know that: `parse_container` validates the `CAIRNL1` magic and the CBOR frame and
+   **nothing else**, so damage inside the sealed body and a mistyped code produce the identical `None`.
+   A **precise untruth in the reassuring direction, at the one moment the operator has no second
+   attempt** — principle 4 inverted, in the slice written to correct exactly that. It now names both
+   causes and claims neither. (b) **ADR-0066 decision 1 asserted a property this branch's own code
+   contradicted** — *"exactly one escrow ceremony, one printed code, one safe"*, while the migration
+   path mints a second code and says so in its own comment. ADRs are **immutable once merged**, so this
+   was a brand-new ADR being born owing an erratum; it was scoped pre-merge instead. ⇒ **The window in
+   which an ADR is ordinary editable prose closes at merge — spend it.**
 
 1. **⇒ BREAKAGE HID FROM A GATE IN THREE DISTINCT WAYS IN ONE SLICE.** (a) **fail-fast** masked 13
    failures in `medication_coding.rs` — one red binary and cargo stops looking; (b) **`cargo test … | tail`

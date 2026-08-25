@@ -68,7 +68,33 @@ fn is_the_declaration_line(line: &str) -> bool {
     line.starts_with("fn derive_unwrap_secret(")
 }
 
-/// The line index where the FIRST `#[cfg(test)] mod` block begins, if the file has one
+/// True iff `line` is an attribute that gates the item below it on `test` — the boundary
+/// between a file's production text and its same-file unit-test tail.
+///
+/// **Two spellings, and BOTH are needed.** The plain `#[cfg(test)]` covers every crate under
+/// `crates/`. The pgrx extension gates its tests as
+/// `#[cfg(any(test, feature = "pg_test"))]` instead, because pgrx runs them inside a live
+/// Postgres behind a feature flag. That spelling only became relevant when the sweep widened
+/// past the Cargo workspace to every shipping tree (`sources::PRODUCTION_TREES`) — and the
+/// two changes have to land together. Widening the sweep alone would read
+/// `extensions/cairn_pgx/src/lib.rs`'s TEST call to `derive_unwrap_secret` as production and
+/// redden this guard on correct code; and the tempting fix for that red — adding the file to
+/// [`ALLOWED`] — would blanket-exempt the entire in-DB extension, destroying exactly the
+/// line-level scoping this guard exists to have.
+///
+/// Deliberately narrow: it matches `cfg(test)` and `cfg(any(test, …))`, the two shapes this
+/// repository actually uses. An exotic gate (`cfg(all(...))`, a nested `any` in another
+/// position) is NOT recognised, which fails in the LOUD direction — such a file's test tail
+/// would be scanned as production and the guard would redden, prompting a human to widen this
+/// function rather than reach for the allow-list.
+fn is_a_test_gate_attribute(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("#[cfg(test)]")
+        || t.starts_with("#[cfg(any(test,")
+        || t.starts_with("#[cfg(any(test ,")
+}
+
+/// The line index where the FIRST test-gated `mod` block begins, if the file has one
 /// — not necessarily a trailing one; see the module header's "Known limitation" for
 /// what that means for production code placed after it. Same idiom as
 /// `no_drugref_dependency.rs`'s `strip_rust_cfg_test_tail` (that file's doc explains the
@@ -85,7 +111,7 @@ fn cfg_test_tail_start(lines: &[&str]) -> Option<usize> {
         })
     };
     lines.iter().enumerate().find_map(|(i, line)| {
-        if !line.trim_start().starts_with("#[cfg(test)]") {
+        if !is_a_test_gate_attribute(line) {
             return None;
         }
         let item = item_line(i + 1)?;
@@ -162,12 +188,65 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
 ];
 
+/// The pgrx test gate must be recognised, or the widened sweep turns correct test code into
+/// a false offender.
+///
+/// `extensions/cairn_pgx/src/lib.rs` gates its tests as `#[cfg(any(test, feature =
+/// "pg_test"))]` and legitimately calls `derive_unwrap_secret` inside one. Before the sweep
+/// widened past the Cargo workspace that file was simply invisible; now it is scanned, and
+/// only `is_a_test_gate_attribute` keeps its test tail out of the production text. This pins
+/// that, so nobody "simplifies" the matcher back to a bare `#[cfg(test)]` and then reaches for
+/// ALLOWED to silence the red — which would exempt the whole in-DB extension.
+#[test]
+fn the_pgrx_test_gate_is_recognised_as_a_test_tail() {
+    let pgrx_shaped = concat!(
+        "pub fn ships() {}\n",
+        "#[cfg(any(test, feature = \"pg_test\"))]\n",
+        "#[pg_schema]\n",
+        "mod tests {\n",
+        "    fn t() { let _ = derive_unwrap_secret(&seed_fixture(1)); }\n",
+        "}\n",
+    );
+    assert!(
+        !calls_derive_unwrap_secret(pgrx_shaped),
+        "a call inside a pgrx-gated test module is NOT production code"
+    );
+
+    // Positive control: the same call ABOVE the gate is production and must still be caught,
+    // or this test would pass against a matcher that exempts everything.
+    let with_a_real_call = concat!(
+        "pub fn ships() { let _ = derive_unwrap_secret(&seed_fixture(1)); }\n",
+        "#[cfg(any(test, feature = \"pg_test\"))]\n",
+        "mod tests {}\n",
+    );
+    assert!(
+        calls_derive_unwrap_secret(with_a_real_call),
+        "a production call must still be caught in a file that also has a pgrx test gate"
+    );
+}
+
 #[test]
 fn only_the_adoption_migration_derives_the_unwrap_secret() {
     let root = sources::repo_root();
     // Collected once (not re-swept per assertion below) so every check below sees
     // EXACTLY the set the offender scan itself ran against.
     let files: Vec<std::path::PathBuf> = sources::production_rust_files(&root).collect();
+
+    // Anti-vacuity for the WIDENED sweep (review follow-up). The `> 50` floor below cannot
+    // notice one missing tree, and a tree that is absent is skipped silently by design (a
+    // partial checkout must not panic every guard). So assert the two trees this widening
+    // was FOR are genuinely in the set — otherwise the widening could be reverted by a typo
+    // in `PRODUCTION_TREES` and every guard would go on passing.
+    let swept = |needle: &str| files.iter().any(|f| f.to_string_lossy().contains(needle));
+    assert!(
+        swept("extensions/cairn_pgx/src"),
+        "the sweep must reach the in-DB extension — it ships inside Postgres and depends on \
+         cairn-event, so it is exactly where a re-coupling would matter most"
+    );
+    assert!(
+        swept("cairn-gui/"),
+        "the sweep must reach the reference UI — it ships too, workspace-excluded or not"
+    );
 
     let mut offenders: Vec<String> = Vec::new();
     // (relative path, whether that file's production text actually calls

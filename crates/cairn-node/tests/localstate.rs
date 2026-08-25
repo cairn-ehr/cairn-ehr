@@ -80,10 +80,11 @@ async fn read_local_state_returns_the_empty_bundle() {
     .await
     .expect("applying an empty bundle is a noop");
     assert_eq!(
-        report.unwrap_key_installed, None,
+        report.unwrap_key_installed(),
+        None,
         "an empty bundle installs no custody key — and must say so rather than claim one"
     );
-    assert_eq!(report.episode_deks_carried, 0);
+    assert_eq!(report.episode_deks_carried(), 0);
     assert!(
         !dir.path().join("node.key.unwrap").exists(),
         "nothing may be written when there is nothing to install"
@@ -136,4 +137,52 @@ fn corrupt_container_parses_as_error_not_panic() {
     let garbage = b"CAIRNL1\nnot valid cbor at all";
     assert!(cairn_node::localstate::parse_container(garbage).is_err());
     assert!(cairn_node::localstate::parse_container(b"no magic here").is_err());
+}
+
+/// **The evidence behind `restore`'s reworded failure line (review finding C1).**
+///
+/// `parse_container` validates the `CAIRNL1` magic and the CBOR framing — and nothing
+/// else. `payload_ct` is an opaque byte string inside that frame, so corruption *within*
+/// the sealed body sails through the parse and surfaces only when the AEAD tag fails to
+/// verify: `unseal_local_state_rec` returns `None`, which is **bit-for-bit the same answer
+/// a wrong recovery code produces**.
+///
+/// That is why the restore arm may not tell an operator *"the export itself is intact;
+/// the code is what failed"* after a failed unseal. It cannot know that, and saying so
+/// sends someone hunting a code they already typed correctly and then spending a second
+/// superseding identity for nothing — a precise untruth in the reassuring direction, at
+/// the one moment the operator has no second attempt (principle 4).
+///
+/// This test uses the CORRECT code throughout, so a `None` here can only mean damage.
+#[test]
+fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
+    let op = "op-passphrase";
+    let code = "REC-CODE-FIXTURE";
+    let wraps = establish_lsk(op, code).unwrap();
+    let bundle = LocalState::empty();
+    let sealed = seal_local_state(&wraps, op, &to_cbor(&bundle)).unwrap();
+    let container = serialize_container(&sealed);
+
+    // Positive control: undamaged, the correct code recovers the bundle. Without this the
+    // assertions below would pass just as well against a container that never sealed
+    // anything.
+    let intact = parse_container(&container).expect("an undamaged container must parse");
+    assert!(
+        unseal_local_state_rec(&intact, code).is_some(),
+        "precondition: the correct recovery code must open an undamaged export"
+    );
+
+    // Damage one byte of the SEALED BODY, not the frame. The ciphertext is the largest
+    // run in the container, so the last byte is inside `payload_ct`'s tag — past the
+    // magic, past every CBOR key, and therefore invisible to the parser.
+    let mut damaged = container.clone();
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xFF;
+
+    let parsed = parse_container(&damaged)
+        .expect("THE POINT: ciphertext damage still parses — the frame is intact");
+    assert!(
+        unseal_local_state_rec(&parsed, code).is_none(),
+        "damaged ciphertext must fail to unseal even under the CORRECT code"
+    );
 }

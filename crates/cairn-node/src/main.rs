@@ -488,6 +488,51 @@ fn refuse_to_replace_existing_unwrap_key(path: &std::path::Path) -> anyhow::Resu
     Ok(())
 }
 
+/// Refuse an `init` that would mint a custody key over a database which ALREADY registered
+/// one — the third member of this family, and the gap review finding I2 named.
+///
+/// `refuse_to_replace_existing_unwrap_key` above guards the FILE; this guards the
+/// REGISTRATION, and the two are not the same question. The uncovered state is a node whose
+/// `<key>.unwrap` has been lost while its database still holds the key every one of its
+/// `event_dek` rows is wrapped to. There the file check passes (the file really is gone), so
+/// `init` went on to overwrite the signing key, mint a FRESH unwrap key, write it, and only
+/// then fail at `cairn_register_unwrap_key`'s singleton refusal — with both files already
+/// replaced and nothing un-writable.
+///
+/// That is the same hazard [`resolve_or_adopt_unwrap_secret`] carries its `registered_public`
+/// comparison for (review finding I1), and it belongs on both commands or on neither. The
+/// asymmetry was the defect: an operator reaching for `init` after losing a keystore is in
+/// exactly the state where the guard matters most.
+///
+/// Note the difference in what each command can check. `establish-unwrap-key` ADOPTS a
+/// derived secret, so it can compare the key it is about to write against the registered one
+/// and permit a match. `init` GENERATES from the CSPRNG, so a match is a 2^-256 event: any
+/// registration at all is a contradiction, and the honest check is existence, not equality.
+///
+/// Pure, so the refusal is testable without a database.
+fn refuse_init_over_a_registered_custody_key(
+    registered: Option<&[u8]>,
+    unwrap_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let Some(registered) = registered else {
+        return Ok(());
+    };
+    anyhow::bail!(
+        "this database already has a custody key registered ({}), but there is no unwrap key \
+         at {} — refusing to `init` over it. `init` MINTS a fresh key, which cannot be the \
+         registered one, so every sealed clinical body already written under that \
+         registration would be orphaned permanently and `cairn_register_unwrap_key` would \
+         refuse the new key a moment later anyway — with this node's signing key already \
+         overwritten by then (ADR-0066). What you almost certainly want instead: restore the \
+         real custody file (it rides the sealed local-state export written beside every \
+         backup medium, ADR-0066 decision 3) and run `cairn-node establish-unwrap-key`, which \
+         is idempotent. If this really is a brand-new node, point `--conn` at a brand-new \
+         database.",
+        hex::encode(registered),
+        unwrap_path.display()
+    );
+}
+
 /// Refuse a `restore` that would clobber a LIVE node's unwrap key — the restore-arm twin of
 /// [`refuse_to_replace_existing_unwrap_key`], and it must be its own function because the
 /// remedy it prints is different.
@@ -811,6 +856,95 @@ fn read_escrow_sidecar(path: &std::path::Path) -> EscrowRead {
     }
 }
 
+/// What `verify-backup` was able to establish about the sealed local-state export sitting
+/// beside a medium (review finding I5).
+///
+/// **Why `verify-backup` has to say anything about it at all.** The `backup` arm degrades
+/// honestly on three separate paths — no `.lsk` escrow, an unusable `.lsk`, or an unwrap key
+/// it could not load — and every one of them warns to stderr and then exits **0**, on purpose:
+/// the event medium is the load-bearing copy and a nightly backup must not be failed over an
+/// optional export. That reasoning is right and is not changed here.
+///
+/// What was wrong is what happened NEXT. `verify-backup` — the command whose whole job is to
+/// be the cron health check — read the events, printed *"backup OK"*, and never looked at the
+/// export. So a node whose custody key had stopped leaving the machine reported a clean
+/// backup every night, which is the failure the `backup` arm's own comment names ("backs up
+/// nightly, passes `verify-backup`, and never lets its custody key leave") and which the
+/// warning rewording alone did not fix: nobody reads stderr from a cron job.
+///
+/// **And the honest limit.** This command holds no key and no database — that is what lets it
+/// run anywhere, on any copy of a medium, which is worth keeping. The export is SEALED, so
+/// whether it carries an unwrap secret cannot be known here without the recovery code. So the
+/// verdict names what it checked and declares what it did not, rather than implying the
+/// export is good because it is present (principle 4).
+#[derive(Debug, PartialEq, Eq)]
+enum ExportPresence {
+    /// A parseable `CAIRNL1` container. Its CONTENTS are unverified — sealed.
+    Framed,
+    /// No export beside the medium. Legitimate for a node with no local-state escrow, and a
+    /// silent total loss of custody for one that should have had it.
+    Absent,
+    /// Present and not usable: unreadable, or not a `CAIRNL1` container.
+    Damaged(String),
+}
+
+/// Classify the export sibling of `medium`, without a key or a database.
+fn classify_export_beside_medium(medium: &std::path::Path) -> ExportPresence {
+    let path = cairn_node::localstate::localstate_path_for(medium);
+    match read_optional_sibling(&path) {
+        SiblingRead::Absent => ExportPresence::Absent,
+        SiblingRead::Unreadable(e) => ExportPresence::Damaged(format!("could not be read: {e}")),
+        SiblingRead::Present(bytes) => match cairn_node::localstate::parse_container(&bytes) {
+            Ok(_) => ExportPresence::Framed,
+            Err(e) => ExportPresence::Damaged(format!("is not a readable CAIRNL1 container: {e}")),
+        },
+    }
+}
+
+/// Render `verify-backup`'s local-state line. Pure, so every verdict is unit-testable
+/// without writing a medium.
+///
+/// Returns the line plus whether it is FATAL. Damage is fatal — a present-but-broken export
+/// is unambiguous, and a health check must see it. Absence is not: a node that never ran
+/// `establish-local-state-key` legitimately has no export, and this command cannot tell that
+/// node from one that lost its custody channel. So absence shouts and still exits 0, which is
+/// the same trichotomy [`SiblingRead`] draws everywhere else on this path.
+fn export_verdict_line(presence: &ExportPresence, medium: &std::path::Path) -> (String, bool) {
+    let path = cairn_node::localstate::localstate_path_for(medium);
+    match presence {
+        ExportPresence::Framed => (
+            format!(
+                "local-state: sealed export present at {} (framing verified; its CONTENTS are \
+                 sealed and NOT checked here — this command holds no recovery code, so it \
+                 cannot confirm the export carries this node's custody key)",
+                path.display()
+            ),
+            false,
+        ),
+        ExportPresence::Absent => (
+            format!(
+                "local-state: NO export beside this medium ({} absent). A restore from it \
+                 would recover events only — NO custody key, so no sealed clinical body it \
+                 inherits could ever be opened or crypto-shredded (ADR-0066). Expected only \
+                 for a node that has never run `cairn-node establish-local-state-key`; on any \
+                 other node this means the nightly `backup` has been degrading and saying so \
+                 only on stderr.",
+                path.display()
+            ),
+            false,
+        ),
+        ExportPresence::Damaged(why) => (
+            format!(
+                "local-state: the export at {} {why}. This is NOT 'no export was written': \
+                 that file may hold this node's only custody key, and `restore` will refuse \
+                 to run against it.",
+                path.display()
+            ),
+            true,
+        ),
+    }
+}
+
 /// How many times `restore` will ask for the dead node's recovery code before giving up.
 ///
 /// Bounded, not infinite: an unattended restore must not hang forever on a prompt. Three is
@@ -868,7 +1002,7 @@ fn unseal_local_state_with_retries(
     sealed: &cairn_node::localstate::SealedLocalState,
     attempts: usize,
     mut ask: impl FnMut(usize) -> anyhow::Result<Zeroizing<String>>,
-) -> anyhow::Result<Option<Vec<u8>>> {
+) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
     for attempt in 1..=attempts {
         let code = ask(attempt)?;
         if let Some(plaintext) = cairn_node::localstate::unseal_local_state_rec(sealed, &code) {
@@ -882,6 +1016,39 @@ fn unseal_local_state_with_retries(
         }
     }
     Ok(None)
+}
+
+/// Why a local-state export did not open after every recovery-code attempt was spent —
+/// and, deliberately, WHICH OF TWO CAUSES IT WAS IS NOT STATED, because this code cannot
+/// know (review finding C1).
+///
+/// The line that stood here used to end *"The export itself is intact; the code is what
+/// failed."* That is a claim `restore` is not entitled to make.
+/// [`cairn_node::localstate::parse_container`] validates the `CAIRNL1` magic and the CBOR
+/// framing and **nothing else** — `payload_ct` is an opaque byte string inside that frame.
+/// So corruption *within* the sealed body sails through the parse and surfaces only when
+/// the AEAD tag fails, as `unseal_local_state_rec` returning `None`: **bit-for-bit the same
+/// answer a mistyped recovery code produces.** A bit-rotted off-site medium — precisely the
+/// failure the parse branch above says it exists to handle — therefore produced an
+/// authoritative *"the export is fine"*, sent the operator hunting a code they had already
+/// typed correctly, and then on to spend a second superseding identity for nothing.
+///
+/// Naming both causes is principle 4 applied where it costs the most: an acknowledged
+/// *"we cannot tell which"* beats a precise untruth in the reassuring direction, at the one
+/// moment the operator has no second attempt. `tests/localstate.rs`'s
+/// `ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code` is the evidence.
+///
+/// Pure, so the honesty of the wording is unit-testable without a database or a tty.
+fn unsealing_failed_cause(export_path: &std::path::Path, attempts: usize) -> String {
+    format!(
+        "the local-state export at {} did not open after {attempts} attempts. TWO CAUSES \
+         LOOK IDENTICAL HERE and this node cannot tell them apart: either every recovery \
+         code entered was wrong, or the export's sealed body is DAMAGED (off-site media \
+         bit-rot). The container's frame parsed, but that check covers only the CAIRNL1 \
+         magic and the CBOR envelope — never the sealed bytes inside it, whose only \
+         integrity check is the one that just failed.",
+        export_path.display()
+    )
 }
 
 /// Unseal a present local-state export and apply it — the whole ADR-0026 slice D / ADR-0066
@@ -947,18 +1114,14 @@ async fn apply_local_state_export(
     })?;
     let Some(plaintext) = plaintext else {
         warn_no_custody_key_installed(
-            &format!(
-                "the local-state export at {} was not unsealed after {RECOVERY_CODE_ATTEMPTS} \
-                 attempts — every code entered was wrong. The export itself is intact; the \
-                 code is what failed.",
-                export_path.display()
-            ),
+            &unsealing_failed_cause(export_path, RECOVERY_CODE_ATTEMPTS),
             "Find the OLD node's recovery code (it is the one printed at that node's `init` \
              or `seal-key`, stored off-site) and run `restore` again from the SAME medium \
              into a DIFFERENT, freshly-created database — this database is now enrolled and \
              will refuse a second restore. Doing so supersedes this node's identity a second \
              time, which is auditable and expected; there is no way to re-open the prompt on \
-             this node.",
+             this node. If a second copy of the medium exists, prefer THAT one: it rules out \
+             the damage case without costing another identity.",
         );
         return Ok(None);
     };
@@ -966,8 +1129,9 @@ async fn apply_local_state_export(
     // The unsealed bundle contains the dead node's RAW unwrap secret (ADR-0066 decision 3),
     // so this plaintext is key material and must not be dropped unwiped — the restore-side
     // twin of the wrap in `build_export_container`. `LocalState`'s own `Drop` wipes the
-    // decoded copy; this wipes the buffer it was decoded from.
-    let plaintext = Zeroizing::new(plaintext);
+    // decoded copy; the buffer it was decoded from is wiped by the `Zeroizing` that
+    // `unseal_local_state_rec` now returns, rather than by a re-wrap here that every future
+    // caller would have had to remember to write.
     let bundle = cairn_node::localstate::from_cbor(&plaintext)?;
 
     // The inherited key follows the RESTORED node's at-rest posture, exactly as `init` makes
@@ -1831,6 +1995,16 @@ async fn main() -> anyhow::Result<()> {
             // posture as the signing key it sits next to, and hands back the public half.
             let unwrap_path = cairn_node::keystore::unwrap_key_path_for(&cli.key);
             refuse_to_replace_existing_unwrap_key(&unwrap_path)?;
+            // ...and the registration half of the same question (review finding I2). Read
+            // BEFORE anything is minted, printed or written: everything below this line is
+            // irreversible, and the registrar downstream cannot be the backstop because by
+            // the time it refuses, the signing key and the new unwrap file are already on
+            // disk. `query_opt`: no row is the ordinary pre-`init` state, not an error.
+            let registered_custody: Option<Vec<u8>> = db
+                .query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])
+                .await?
+                .map(|row| row.get::<_, Vec<u8>>(0));
+            refuse_init_over_a_registered_custody_key(registered_custody.as_deref(), &unwrap_path)?;
             let ((sk, kid), unwrap_pub) = if insecure_plaintext {
                 eprintln!(
                     "WARNING: --insecure-plaintext: signing key written UNSEALED (test use only)"
@@ -2261,18 +2435,46 @@ async fn main() -> anyhow::Result<()> {
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let report = cairn_node::backup::verify_medium_bytes(&bytes)?;
-            if report.all_intact() {
-                println!(
-                    "backup OK: {}/{} event(s) verified",
-                    report.intact, report.total
-                );
-            } else {
+            if !report.all_intact() {
                 // Non-zero exit (bail) so a cron/health check detects a bad backup.
                 anyhow::bail!(
                     "backup FAILED self-verification: {}/{} event(s) intact, first bad at index {:?}",
                     report.intact,
                     report.total,
                     report.first_bad
+                );
+            }
+            // #502 item 2, the same false all-clear one case over: `all_intact()` is
+            // VACUOUSLY true at 0/0, so `backup` against a fresh un-`init`ed database wrote a
+            // medium and this command reported `backup OK: 0/0` over an artifact that restores
+            // nothing — a green cron check on an empty file, whose only other refusal is in
+            // `restore`, i.e. at the disaster, after the disk is gone.
+            //
+            // Checked HERE and not in `all_intact()` deliberately: `backup_to`'s
+            // verify-before-write calls the same predicate, and a node that genuinely holds no
+            // events yet must still be able to write its first medium. "Is this medium
+            // internally consistent" and "is this medium worth anything" are different
+            // questions, and only the second belongs to the health check.
+            if report.total == 0 {
+                anyhow::bail!(
+                    "backup EMPTY: {} carries zero events. It is internally consistent — which \
+                     is why the integrity check passes — and it would restore nothing at all. \
+                     A medium written from a database with no events is not a backup (#502 \
+                     item 2); if this node really is new, there is nothing to back up yet.",
+                    from.display()
+                );
+            }
+            // "events verified" is now stated as exactly that, not as "backup OK" — because
+            // the events are only half of what a restore needs since ADR-0066, and the older
+            // wording was an affirmative all-clear over a medium whose custody key may never
+            // have left the machine (review finding I5).
+            println!("events OK: {}/{} verified", report.intact, report.total);
+            let (line, fatal) = export_verdict_line(&classify_export_beside_medium(&from), &from);
+            println!("{line}");
+            if fatal {
+                anyhow::bail!(
+                    "backup INCOMPLETE: the events verified, but the local-state export beside \
+                     this medium is unusable — see the line above"
                 );
             }
         }
@@ -2449,12 +2651,12 @@ async fn main() -> anyhow::Result<()> {
                 {
                     Ok(Some(report)) => {
                         println!("local-state restored from {}", export_path.display());
-                        match &report.unwrap_key_installed {
+                        match report.unwrap_key_installed() {
                             Some(path) => println!(
                                 "custody inherited: unwrap key installed at {} and registered \
                                  ({} episode DEK(s) carried)",
                                 path.display(),
-                                report.episode_deks_carried
+                                report.episode_deks_carried()
                             ),
                             // Not a footnote: with no `node_unwrap_key` row this node cannot
                             // even AUTHOR a sealed body — `submit_event` raises, and its error
@@ -2486,12 +2688,12 @@ async fn main() -> anyhow::Result<()> {
                         // the carried custody rows land with the clinical events, which the
                         // medium does not yet carry (#500, slice 2). A carried-but-not-applied
                         // count nobody sees is the exact failure this slice corrects.
-                        if report.episode_deks_carried > 0 {
+                        if report.episode_deks_carried() > 0 {
                             println!(
                                 "note: those {} custody row(s) are carried but not yet applied \
                                  — they land with the clinical events, which this backup \
                                  medium does not yet carry (#500)",
-                                report.episode_deks_carried
+                                report.episode_deks_carried()
                             );
                         }
                     }
@@ -5060,6 +5262,177 @@ mod tests {
             line.contains("Do NOT run"),
             "and must warn off `establish-unwrap-key`, which would foreclose the real key \
              permanently on a singleton registrar: {line}"
+        );
+    }
+
+    /// Review finding C1 — the spent-attempts line must NOT claim the export is intact.
+    ///
+    /// `parse_container` checks the `CAIRNL1` magic and the CBOR frame and stops there, so a
+    /// damaged sealed body and a mistyped recovery code produce the identical `None` (proved
+    /// in `tests/localstate.rs::ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code`).
+    /// A line that picks one of the two sends an operator hunting a code they typed correctly
+    /// and then spending a second superseding identity for nothing.
+    #[test]
+    fn the_spent_attempts_line_names_both_causes_and_claims_neither() {
+        let path = std::path::Path::new("/var/lib/cairn/medium.cairnl1");
+        let msg = unsealing_failed_cause(path, RECOVERY_CODE_ATTEMPTS);
+
+        assert!(
+            msg.contains(&path.display().to_string()),
+            "must name the export: {msg}"
+        );
+        assert!(
+            msg.contains(&RECOVERY_CODE_ATTEMPTS.to_string()),
+            "must say how many attempts were spent: {msg}"
+        );
+        // THE POINT. The old wording asserted one cause as fact; both must now be offered.
+        assert!(
+            msg.contains("wrong"),
+            "must offer the wrong-code cause: {msg}"
+        );
+        assert!(
+            msg.contains("DAMAGED"),
+            "must offer the damaged-export cause: {msg}"
+        );
+        assert!(
+            !msg.contains("export itself is intact"),
+            "must NOT claim the export is intact — this code cannot know that: {msg}"
+        );
+    }
+
+    /// Review finding I2 — `init` must refuse a database that already registered custody,
+    /// BEFORE it mints anything.
+    ///
+    /// The uncovered state: the `<key>.unwrap` file is gone but the database still holds the
+    /// key every `event_dek` row is wrapped to. `refuse_to_replace_existing_unwrap_key` passes
+    /// (the file really is absent), so without this second guard `init` overwrote the signing
+    /// key, minted a fresh custody key, wrote it, and only then failed at the singleton
+    /// registrar — with both files already replaced.
+    #[test]
+    fn init_refuses_when_a_custody_key_is_already_registered() {
+        let unwrap_path = std::path::Path::new("/var/lib/cairn/node.key.unwrap");
+        // House rule 6: derived at runtime, never a literal. Stands in for a registered
+        // public half; its VALUE is irrelevant here — only its presence is.
+        let registered: [u8; 32] =
+            std::array::from_fn(|i| (i as u8).wrapping_mul(5).wrapping_add(2));
+
+        let err = refuse_init_over_a_registered_custody_key(Some(&registered), unwrap_path)
+            .expect_err("a registered custody key must stop `init` before it mints anything");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&hex::encode(registered)),
+            "the refusal must name the key that is registered: {msg}"
+        );
+        assert!(
+            msg.contains("establish-unwrap-key"),
+            "and must name the command that is idempotent and correct here: {msg}"
+        );
+
+        // The ordinary pre-`init` state must pass, or `init` could never run at all — the
+        // positive control without which the refusal above would be indistinguishable from
+        // a function that refuses everything.
+        refuse_init_over_a_registered_custody_key(None, unwrap_path)
+            .expect("nothing registered is the ordinary pre-`init` state and must be allowed");
+    }
+
+    // --- I5: `verify-backup` may not report an all-clear it did not establish ---
+
+    /// A present, well-framed export is reported WITHOUT implying its contents are good.
+    ///
+    /// This is the assertion that keeps the fix honest in the other direction: `verify-backup`
+    /// holds no recovery code, so it cannot know whether the sealed body carries a custody
+    /// key. Saying "export present ✓" would trade one false all-clear for a narrower one.
+    #[test]
+    fn a_framed_export_is_reported_without_claiming_its_contents() {
+        let medium = std::path::Path::new("/mnt/backup/medium.cairnm1");
+        let (line, fatal) = export_verdict_line(&ExportPresence::Framed, medium);
+        assert!(!fatal, "a well-framed export is not a health-check failure");
+        assert!(
+            line.contains("NOT checked"),
+            "must declare what it did not verify: {line}"
+        );
+        assert!(
+            line.contains("no recovery code"),
+            "and WHY it could not: {line}"
+        );
+    }
+
+    /// An ABSENT export shouts but does not fail the check — a node that never ran
+    /// `establish-local-state-key` legitimately has none, and this command cannot tell the two
+    /// apart. What it must not do is stay silent, which is how a nightly backup degraded for
+    /// months while `verify-backup` printed an all-clear.
+    #[test]
+    fn an_absent_export_is_loud_but_not_fatal() {
+        let medium = std::path::Path::new("/mnt/backup/medium.cairnm1");
+        let (line, fatal) = export_verdict_line(&ExportPresence::Absent, medium);
+        assert!(
+            !fatal,
+            "absence is legitimate for a node with no escrow — it must not fail the check"
+        );
+        assert!(
+            line.contains("NO export"),
+            "but it must be unmissable: {line}"
+        );
+        assert!(
+            line.contains("crypto-shredded") || line.contains("custody key"),
+            "and must say what is actually lost, not merely that a file is missing: {line}"
+        );
+    }
+
+    /// A present-but-broken export IS fatal: unambiguous damage, and `restore` will refuse to
+    /// run against it, so a health check has to see it now rather than at the disaster.
+    #[test]
+    fn a_damaged_export_fails_the_check() {
+        let medium = std::path::Path::new("/mnt/backup/medium.cairnm1");
+        let (line, fatal) = export_verdict_line(
+            &ExportPresence::Damaged("could not be read: permission denied".into()),
+            medium,
+        );
+        assert!(fatal, "damage must fail the health check");
+        assert!(
+            line.contains("NOT 'no export was written'"),
+            "and must not be mistakable for the absent case, whose remedy differs: {line}"
+        );
+    }
+
+    /// The classifier's three answers over real files, so the rendering tests above are not
+    /// pinning a shape nothing produces.
+    #[test]
+    fn classify_export_beside_medium_tells_the_three_states_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let medium = dir.path().join("medium.cairnm1");
+        std::fs::write(&medium, b"not read by this classifier").unwrap();
+
+        assert_eq!(
+            classify_export_beside_medium(&medium),
+            ExportPresence::Absent,
+            "no sibling written yet"
+        );
+
+        let export = cairn_node::localstate::localstate_path_for(&medium);
+        std::fs::write(&export, b"CAIRNL1 but not valid cbor").unwrap();
+        assert!(
+            matches!(
+                classify_export_beside_medium(&medium),
+                ExportPresence::Damaged(_)
+            ),
+            "a present, unparseable sibling is damage — never absence"
+        );
+
+        // A REAL container, built by the production sealer. House rule 6: the secrets are
+        // Argon2 inputs derived here, not key material.
+        let wraps = cairn_node::localstate::establish_lsk("op-pass", "REC-CODE").unwrap();
+        let bytes = cairn_node::localstate::build_export_container(
+            &wraps,
+            "op-pass",
+            &cairn_node::localstate::LocalState::empty(),
+        )
+        .unwrap();
+        std::fs::write(&export, &bytes).unwrap();
+        assert_eq!(
+            classify_export_beside_medium(&medium),
+            ExportPresence::Framed,
+            "a genuine CAIRNL1 container must be recognised"
         );
     }
 

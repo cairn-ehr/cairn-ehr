@@ -368,17 +368,35 @@ fn assert_unwrap_key_registered(client: &mut postgres::Client, mine: &[u8; 32]) 
     // `query_opt`, not `query_one`: an absent row (no unwrap key registered yet) is a legitimate
     // "nothing claimed", not an error — see `unwrap_key_matches`'s `None` case.
     let row = client.query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])?;
-    let registered: Option<Vec<u8>> = row.map(|r| r.get(0));
-    // node_unwrap_key.unwrap_pub is CHECKed to exactly 32 bytes at the schema level (db/037), so
-    // this conversion cannot fail for a row this query itself produced; treat a failure as "no
-    // usable registration" rather than panicking on a schema this daemon does not own.
-    let registered: Option<[u8; 32]> = registered.and_then(|b| b.try_into().ok());
-    match registered {
-        Some(theirs) if !unwrap_key_matches(mine, Some(&theirs)) => {
-            Err(unwrap_key_divergence_message(mine, &theirs, UNWRAP_KEY_DIVERGENCE_ISSUE).into())
-        }
-        _ => Ok(()),
+    let Some(registered) = row.map(|r| r.get::<_, Vec<u8>>(0)) else {
+        // No row: nothing has been claimed yet — see `unwrap_key_matches`'s `None` case.
+        return Ok(());
+    };
+    // A ROW THAT IS NOT 32 BYTES IS A REFUSAL, NEVER "nothing registered".
+    //
+    // db/037 CHECKs this column to exactly 32 bytes, so today the branch is unreachable, and
+    // the first draft leaned on that: `try_into().ok()` folded a malformed row into `None`,
+    // which this function reads as "no key claimed" and passes. That is fail-OPEN inside a
+    // fail-fast gate — and it is the same shape as the defect this very file fixes 400 lines
+    // below, where "cannot parse" was read as "does not exist" and destroyed a sealed signing
+    // key. The whole lesson of ADR-0066 is that two individually-sound layers contradict each
+    // other exactly where they meet, so a daemon that does not own this schema should not
+    // stake a safety gate on a constraint in it. Refusing costs nothing while the CHECK holds
+    // and is correct the day it does not.
+    let registered: [u8; 32] = registered.as_slice().try_into().map_err(|_| {
+        format!(
+            "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody plane is \
+             malformed and this daemon cannot tell whether its own unwrap key agrees with it. \
+             Refusing to start rather than proceeding as though no key were registered.",
+            registered.len()
+        )
+    })?;
+    if !unwrap_key_matches(mine, Some(&registered)) {
+        return Err(
+            unwrap_key_divergence_message(mine, &registered, UNWRAP_KEY_DIVERGENCE_ISSUE).into(),
+        );
     }
+    Ok(())
 }
 
 /// A pull that FAILED LOUDLY for data-integrity reasons (unverifiable events

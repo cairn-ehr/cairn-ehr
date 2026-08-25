@@ -298,13 +298,21 @@ pub fn wrap_dek_for(dek: &[u8; 32], recipient_pub: &[u8; 32]) -> Result<Vec<u8>,
 }
 
 /// Open a wrapped DEK with the recipient's secret unwrap key. Errors on
+/// The exact byte length of a wrapped DEK: `eph_pub ‖ nonce ‖ ciphertext+tag`
+/// (32 ‖ 24 ‖ 32+16). Named and exported rather than repeated as an inline sum, because two
+/// layers away from here need to reject a wrong-length wrap BEFORE it reaches
+/// [`unwrap_dek`] — `cairn_node::localstate::episode_dek_from_cbor` validates a custody row
+/// as it is decoded off a restore medium, where "well-formed" and "openable" must not be
+/// allowed to drift apart. An arithmetic expression cannot be shared; a const can.
+pub const WRAPPED_DEK_LEN: usize = 32 + 24 + 32 + 16;
+
 /// malformed length, wrong recipient, or tampering — every failure is a
 /// refusal, never a silent fallback (mirrors `unseal_event_payload`'s posture).
 pub fn unwrap_dek(
     wrapped: &[u8],
     unwrap_secret: &[u8; 32],
 ) -> Result<Zeroizing<[u8; 32]>, EventError> {
-    if wrapped.len() != 32 + 24 + 32 + 16 {
+    if wrapped.len() != WRAPPED_DEK_LEN {
         return Err(EventError::Seal("malformed wrapped DEK length".into()));
     }
     let eph_pub: [u8; 32] = wrapped[..32].try_into().expect("sliced 32 bytes");
@@ -539,7 +547,7 @@ mod tests {
         let public = unwrap_public(&secret);
         let dek = dek_fixture();
         let wrapped = wrap_dek_for(&dek, &public).unwrap();
-        assert_eq!(wrapped.len(), 32 + 24 + 32 + 16); // eph ‖ nonce ‖ ct+tag
+        assert_eq!(wrapped.len(), WRAPPED_DEK_LEN); // eph ‖ nonce ‖ ct+tag
         let opened = unwrap_dek(&wrapped, &secret).unwrap();
         assert_eq!(opened.as_slice(), &dek);
     }

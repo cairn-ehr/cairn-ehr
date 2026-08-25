@@ -353,12 +353,13 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
     .expect("ADR-0066 decision 4: a restore ADOPTS the exported unwrap key");
 
     assert_eq!(
-        report.unwrap_key_installed.as_deref(),
+        report.unwrap_key_installed(),
         Some(new_unwrap.as_path()),
         "the report must name the file it wrote, because that is what the operator is told"
     );
     assert_eq!(
-        report.episode_deks_carried, 1,
+        report.episode_deks_carried(),
+        1,
         "the carried-but-not-yet-applied count must be reported, not swallowed (#500)"
     );
 
@@ -486,4 +487,210 @@ async fn apply_local_state_still_refuses_a_slot_this_build_cannot_apply() {
         err.contains("drafts"),
         "the refusal must name the slot, or an operator cannot tell what was withheld: {err}"
     );
+}
+
+/// **The registrar refusal, and the state it leaves behind (review finding I3).**
+///
+/// `apply_local_state` installs the inherited key and THEN registers its public half. That
+/// order is right for the ordinary case and its reasoning is written at the call site: a
+/// registered public half whose secret is not on disk is unrecoverable, whereas a written
+/// file with no registration is fixed by re-running.
+///
+/// But `cairn_register_unwrap_key` REFUSES a differing key, and that path had no test — every
+/// other restore test truncates `node_unwrap_key` first. It is reachable, and by the route
+/// this slice's own warnings name as the top hazard: an operator runs `establish-unwrap-key`
+/// against the fresh restore target before restoring into it, registering a key derived from
+/// the NEW signing seed.
+///
+/// What this pins is not just "it errors" — a raw `db error` string would satisfy that and
+/// tell an operator nothing. It pins that the message explains WHICH of the two disagreeing
+/// halves is the real one, and that the file is left in place rather than half-removed,
+/// because that file holds the dead node's only custody key.
+#[tokio::test]
+async fn a_differing_registration_refuses_the_restore_legibly_and_keeps_the_file() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let dir = tempdir().unwrap();
+    let (_dead_key, dead_secret) = dead_node_with_one_custody_row(&c, dir.path()).await;
+    let bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
+
+    // The hazard state: a DIFFERENT key already registered in the restore target. Generated,
+    // so it is independent of the dead node's by construction (house rule 6 — the generator,
+    // never a literal).
+    c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
+    let interloper = cairn_event::seal::generate_unwrap_secret().unwrap();
+    let interloper_pub = cairn_event::seal::unwrap_public(&interloper);
+    c.execute(
+        "SELECT cairn_register_unwrap_key($1)",
+        &[&interloper_pub.as_slice()],
+    )
+    .await
+    .expect("stage the key an ill-timed `establish-unwrap-key` would have registered");
+
+    let new_unwrap =
+        cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
+    let err = apply_local_state(
+        &c,
+        &bundle,
+        &CustodyKeyDestination::Sealed {
+            path: &new_unwrap,
+            op_pass: NEW_OP,
+            recovery_code: NEW_REC,
+        },
+    )
+    .await
+    .expect_err("a differing registration must refuse the restore, not be papered over")
+    .to_string();
+
+    assert!(
+        err.contains("singleton"),
+        "the refusal must say WHY it cannot be retried against this database: {err}"
+    );
+    assert!(
+        err.contains("establish-unwrap-key"),
+        "and must name the likely cause, which is the only thing that makes it actionable: {err}"
+    );
+    assert!(
+        err.contains(&new_unwrap.display().to_string()),
+        "and must name the file that holds the real key: {err}"
+    );
+
+    // THE POINT of the second half: the written file is the dead node's REAL custody key and
+    // the registration is the wrong one. Deleting the file on this path would destroy the one
+    // artifact worth keeping, so it must still be there — and still openable.
+    assert!(
+        new_unwrap.exists(),
+        "the installed file must survive the refusal: it holds the dead node's real key"
+    );
+    let recovered = cairn_node::keystore::load_unwrap_secret(&new_unwrap, Some(NEW_OP))
+        .expect("and must still open under the restore ceremony's own passphrase");
+    assert_eq!(
+        *recovered, *dead_secret,
+        "and must be the DEAD node's secret — the half the operator has to keep"
+    );
+}
+
+/// **A well-formed key that opens nothing must be refused before it is installed
+/// (review finding I4).**
+///
+/// Every key in this plane is a bare 32-byte array — the X25519 secret half, its public
+/// half, the Ed25519 signing seed, a DEK. The compiler cannot tell them apart, and neither
+/// can a length check. So the most catastrophic single mistake available here — the PUBLIC
+/// half travelling in the secret slot — used to pass `recovered_unwrap_secret`, pass
+/// `install`'s read-after-write (which proves only that the file holds the bytes we wrote),
+/// and get REGISTERED. `node_unwrap_key` is a singleton, so the real key is then refused
+/// forever and the clinic's record is unreadable with every surface reporting success.
+///
+/// One trial unwrap of one carried DEK separates well-formed from correct. This test stages
+/// exactly that substitution.
+#[tokio::test]
+async fn a_secret_that_opens_no_carried_custody_is_refused_before_installing() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let dir = tempdir().unwrap();
+    let (_dead_key, dead_secret) = dead_node_with_one_custody_row(&c, dir.path()).await;
+
+    let mut bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
+    assert_eq!(
+        bundle.episode_deks.len(),
+        1,
+        "precondition: there must be custody to test the key against, or the check below \
+         legitimately does nothing and this test would prove nothing"
+    );
+
+    // THE SUBSTITUTION: the PUBLIC half where the secret belongs. Exactly 32 bytes, derived
+    // at runtime from real material (house rule 6), and completely useless as a key.
+    let public_half = cairn_event::seal::unwrap_public(&dead_secret);
+    bundle.unwrap_secret = Some(public_half.to_vec());
+
+    c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
+    let new_unwrap =
+        cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
+
+    let err = apply_local_state(
+        &c,
+        &bundle,
+        &CustodyKeyDestination::Sealed {
+            path: &new_unwrap,
+            op_pass: NEW_OP,
+            recovery_code: NEW_REC,
+        },
+    )
+    .await
+    .expect_err("a 32-byte value that opens no custody must never be installed")
+    .to_string();
+
+    assert!(
+        err.contains("does NOT open the custody"),
+        "the refusal must say what was actually wrong — not merely that something failed: {err}"
+    );
+    assert!(
+        !new_unwrap.exists(),
+        "and nothing may be written: this check exists to run BEFORE the irreversible step"
+    );
+    let registered: i64 = c
+        .query_one("SELECT count(*) FROM node_unwrap_key", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        registered, 0,
+        "and nothing registered — the singleton would otherwise foreclose the real key"
+    );
+}
+
+/// The positive control for the check above: a bundle with no custody rows carries nothing
+/// to test the key against, and must still restore.
+///
+/// Without this, `secret_opens_the_carried_custody` could be implemented as "always refuse"
+/// and the test above would still pass — while every node that had not yet written a sealed
+/// body became unrestorable.
+#[tokio::test]
+async fn a_bundle_with_no_custody_rows_still_restores() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let dir = tempdir().unwrap();
+
+    c.batch_execute("TRUNCATE node_unwrap_key, event_dek, erasure_shred_log CASCADE")
+        .await
+        .unwrap();
+    let dead_key = dir.path().join("dead-node.key.unwrap");
+    cairn_node::keystore::generate_unwrap_sealed(&dead_key, DEAD_OP, DEAD_REC).unwrap();
+    let dead_secret = cairn_node::keystore::load_unwrap_secret(&dead_key, Some(DEAD_OP)).unwrap();
+
+    // A node provisioned but never used clinically: a key, and no custody at all.
+    let bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
+    assert!(
+        bundle.episode_deks.is_empty(),
+        "precondition: this bundle must carry no custody"
+    );
+
+    let new_unwrap =
+        cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
+    let applied = apply_local_state(
+        &c,
+        &bundle,
+        &CustodyKeyDestination::Sealed {
+            path: &new_unwrap,
+            op_pass: NEW_OP,
+            recovery_code: NEW_REC,
+        },
+    )
+    .await
+    .expect("a provisioned-but-unused node must still restore its custody key");
+
+    assert_eq!(applied.unwrap_key_installed(), Some(&*new_unwrap));
+    assert_eq!(applied.episode_deks_carried(), 0);
 }

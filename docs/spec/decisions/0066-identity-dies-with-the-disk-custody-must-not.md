@@ -92,10 +92,27 @@ key.
 
 **This supersedes ADR-0052 decision 4's derivation clause only, and preserves its rationale.** That clause
 existed to avoid a *second operator ceremony* — *"the existing ADR-0026 op-passphrase + recovery-code
-escrow already covers it — no new key-management mechanism."* That property is kept in full: the
-independent key is sealed under **the same two secrets** (op-passphrase **or** recovery code), so the
-operator still has exactly one escrow ceremony, one printed code, one safe. What is dropped is the
-derivation, which bought nothing the sealing does not already buy and cost the record on every restore.
+escrow already covers it — no new key-management mechanism."* That property is kept: the independent key
+is sealed under **the same two secrets** (op-passphrase **or** recovery code), introducing no new key
+type, no new store and no new escrow mechanism. What is dropped is the derivation, which bought nothing
+the sealing does not already buy and cost the record on every restore.
+
+**One printed code, on a node provisioned by `init` — and NOT on the migration path.** Scoped rather than
+claimed flatly, because the code contradicts the flat claim and it is better to say so here than to owe an
+erratum later. `cairn-node init` mints both keys inside one ceremony, so that operator holds exactly one
+passphrase, one printed code, one safe. `cairn-node establish-unwrap-key` — the decision 5 migration for a
+node provisioned *before* this ADR — cannot reach that: the signing key's recovery code is **off-node by
+design** (ADR-0026), so this command has never seen it and cannot re-seal under it without prompting for a
+secret the operator may not have to hand at 3am. It therefore mints a **second, separate** recovery code
+for the unwrap file and says so at the surface. A migrated node holds **two** codes, and both must be
+kept: the signing key's opens `<key>`, the new one opens `<key>.unwrap`.
+
+That asymmetry is a declared cost of the migration, not of the design — it disappears for every node
+provisioned by `init` after this ADR, and it never affects a restored node (decision 4 re-seals the
+inherited secret under the restore ceremony's own single pair). Collapsing it would mean prompting for the
+signing key's recovery code during migration, which trades a second stored code for a ceremony that can
+fail when the operator is furthest from their safe. Tracked as
+[#505](https://github.com/cairn-ehr/cairn-ehr/issues/505) if that trade is ever revisited.
 
 Everything downstream is unchanged by construction: the wrap/unwrap boundary cannot tell a generated
 keypair from a derived one, the database still holds only the public half, and a DB backup still cannot

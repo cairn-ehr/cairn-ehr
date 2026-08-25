@@ -129,19 +129,37 @@ pub fn read_source(path: &Path) -> String {
         .unwrap_or_else(|e| panic!("unreadable source file {}: {e}", path.display()))
 }
 
-/// Every crate's shipped `.rs` surface: `crates/<crate>/src/**/*.rs` for every crate in
-/// the workspace. This is what "production code" means to a guard like
+/// The repository trees that hold shipping crates, each scanned one level deep for
+/// `<crate>/src/`. Not derived from `Cargo.toml`'s `members`, deliberately: that list is the
+/// build graph, and its `exclude` entries (`extensions/cairn_pgx`, `cairn-gui`) ship too.
+///
+/// Adding a tree here widens every source-derived guard at once, which is the point.
+const PRODUCTION_TREES: &[&str] = &["crates", "extensions", "cairn-gui"];
+
+/// Every shipped `.rs` surface in the repository: `<tree>/<crate>/src/**/*.rs` under each
+/// of [`PRODUCTION_TREES`]. This is what "production code" means to a guard like
 /// `unwrap_secret_is_not_derived.rs` (#495/ADR-0066) — the code that ships, as opposed
 /// to a `tests/` directory (this one included) or a `benches/` harness, neither of which
 /// is ever linked into anything a node runs.
 ///
-/// Crate directories are discovered by listing `root/crates/*` rather than hardcoded by
-/// name, so a new crate added to the workspace is swept in automatically instead of
-/// silently sitting outside every source-derived guard until someone remembers to add
-/// it. `tests`/`benches` join `target` in the skip list defensively: no crate's `src/`
-/// tree nests either today (both sit as SIBLINGS of `src/`, never inside it — see the
-/// `crates/*/` layout), but a guard whose stated scope is "production" should not start
-/// including one silently if that ever changes.
+/// **`crates/` alone was not "the code that ships", and the gap mattered.** The first
+/// version swept only `root/crates/*`, which is the CARGO WORKSPACE — and the two trees
+/// `Cargo.toml` deliberately `exclude`s ship anyway: `extensions/cairn_pgx` is the pgrx
+/// extension that runs INSIDE Postgres (the unbypassable floor, principle 12) and takes a
+/// path dependency on `cairn-event`, and `cairn-gui` is the reference UI. A re-coupling of
+/// custody to identity in either would have passed every source guard with the allow-list
+/// untouched. Workspace membership is a build-graph fact; "does it ship" is the question the
+/// guards actually ask, and they are not the same question.
+///
+/// Crate directories are discovered by LISTING each tree rather than hardcoded by name, so a
+/// new crate is swept in automatically instead of silently sitting outside every
+/// source-derived guard until someone remembers to add it. A tree that does not exist is
+/// skipped rather than panicking, so a partial checkout does not fail the guards — the
+/// anti-vacuity floor in each guard is what catches a sweep that has collapsed.
+///
+/// `tests`/`benches` join `target` in the skip list defensively: no crate's `src/` tree nests
+/// either today (both sit as SIBLINGS of `src/`, never inside it), but a guard whose stated
+/// scope is "production" should not start including one silently if that ever changes.
 ///
 /// Uses `DirEntry::file_type()` rather than `Path::is_dir()` for the same reason
 /// [`source_files`] does — it does not follow symlinks — even though the one-level scan
@@ -153,23 +171,28 @@ pub fn read_source(path: &Path) -> String {
 /// against an iterator, and every path is already owned (built fresh from `root` on each
 /// call), so there is no borrow for a `Vec` to usefully preserve here.
 pub fn production_rust_files(root: &Path) -> impl Iterator<Item = PathBuf> {
-    let crates_dir = root.join("crates");
-    let entries = std::fs::read_dir(&crates_dir)
-        .unwrap_or_else(|e| panic!("unreadable crates directory {}: {e}", crates_dir.display()));
-
     let mut crate_src_dirs: Vec<PathBuf> = Vec::new();
-    for entry in entries {
-        let entry = entry
-            .unwrap_or_else(|e| panic!("unreadable entry under {}: {e}", crates_dir.display()));
-        let file_type = entry
-            .file_type()
-            .unwrap_or_else(|e| panic!("no file type for {}: {e}", entry.path().display()));
-        if !file_type.is_dir() {
+    for tree in PRODUCTION_TREES {
+        let tree_dir = root.join(tree);
+        // A tree that is not present is not an error: a shallow or partial checkout should
+        // not panic every source-derived guard. Each guard's own anti-vacuity floor is what
+        // notices a sweep that has genuinely collapsed.
+        let Ok(entries) = std::fs::read_dir(&tree_dir) else {
             continue;
-        }
-        let src = entry.path().join("src");
-        if src.is_dir() {
-            crate_src_dirs.push(src);
+        };
+        for entry in entries {
+            let entry = entry
+                .unwrap_or_else(|e| panic!("unreadable entry under {}: {e}", tree_dir.display()));
+            let file_type = entry
+                .file_type()
+                .unwrap_or_else(|e| panic!("no file type for {}: {e}", entry.path().display()));
+            if !file_type.is_dir() {
+                continue;
+            }
+            let src = entry.path().join("src");
+            if src.is_dir() {
+                crate_src_dirs.push(src);
+            }
         }
     }
     crate_src_dirs.sort();
