@@ -292,24 +292,86 @@ fn print_recovery_code(code: &str) {
     eprintln!();
 }
 
+/// What `status` was able to establish about the custody key FILE on disk versus the public
+/// half REGISTERED in this node's database (ADR-0066).
+///
+/// WHY A FOURTH ANSWER EXISTS. `keystore::key_at_rest_state` only asks whether the file
+/// PARSES. A file that parses perfectly but holds the WRONG key therefore rendered exactly
+/// like a healthy node — which is how a bogus custody key could sit on disk unnoticed until
+/// the day somebody needed it. Comparing the file's public half against the registered one
+/// is the only thing that tells those apart.
+///
+/// And where the comparison cannot be made, [`Self::Unverified`] says so rather than
+/// implying a match: `status` never prompts for a secret (it must stay scriptable), so a
+/// SEALED custody file can only be opened when the operator supplies the passphrase. Under
+/// principle 4, an acknowledged "I did not check" beats a confident untruth.
+#[derive(Debug, PartialEq, Eq)]
+enum CustodyRegistration {
+    /// No `node_unwrap_key` row: this node has registered nothing.
+    NotRegistered,
+    /// Registered, and the file on disk demonstrably holds that exact key.
+    ConfirmedMatch,
+    /// Registered, and the file on disk holds a DIFFERENT key. A distinct disaster.
+    Mismatch,
+    /// Registered, but the file could not be opened to compare — it is sealed and no
+    /// passphrase was supplied, or there is no usable file at all.
+    Unverified,
+}
+
+/// Classify the custody file at `unwrap_path` against the `registered` public half.
+///
+/// `passphrase` is optional and never prompted for: with it, a sealed file can be opened and
+/// the comparison actually made; without it, the honest answer is
+/// [`CustodyRegistration::Unverified`]. Impure only in that it reads one file, so the
+/// rendering in [`unwrap_key_status_line`] stays pure and exhaustively unit-testable.
+fn classify_custody_registration(
+    unwrap_path: &std::path::Path,
+    registered: Option<&[u8]>,
+    passphrase: Option<&str>,
+) -> CustodyRegistration {
+    let Some(registered) = registered else {
+        return CustodyRegistration::NotRegistered;
+    };
+    // Any load failure — sealed with no secret, wrong secret, absent, corrupt — is the same
+    // answer here: we did not compare. The FILE's own posture is reported separately by
+    // `key_at_rest_state`, so nothing is lost by not restating it.
+    match cairn_node::keystore::load_unwrap_secret(unwrap_path, passphrase) {
+        Ok(secret) => {
+            if cairn_event::seal::unwrap_public(&secret).as_slice() == registered {
+                CustodyRegistration::ConfirmedMatch
+            } else {
+                CustodyRegistration::Mismatch
+            }
+        }
+        Err(_) => CustodyRegistration::Unverified,
+    }
+}
+
 /// Render the `status` line for this node's custody key (ADR-0066). Pure — takes the
 /// already-inspected file posture and the already-read registration flag — so every
 /// combination can be unit-tested without a database or a keystore on disk.
 ///
-/// WHY ALL FOUR COMBINATIONS EARN DIFFERENT WORDS. The file and the registration are two
-/// independent facts, and three of the four pairings are a distinct problem:
+/// WHY EVERY COMBINATION EARNS DIFFERENT WORDS. The file and the registration are two
+/// independent facts, and every pairing but one is a distinct problem:
 ///
-/// - file present + registered → healthy; the node can write sealed bodies and open them.
+/// - file present + registered + CONFIRMED the same key → healthy; the node can write
+///   sealed bodies and open them.
+/// - file present + registered + could not compare → healthy *as far as we looked*. Said
+///   that way on purpose (principle 4): `status` never prompts, so a sealed file it cannot
+///   open must not be reported as a confirmed match.
+/// - file present + registered + a DIFFERENT key → the node keeps writing sealed bodies
+///   (the door only checks that *a* key is registered) that THIS file will never open, and
+///   the obvious next command forecloses the fix permanently. Its own state, its own words.
 /// - file present + NOT registered → the node cannot write at all: `ensure_unwrap_key`
 ///   refuses every sealed write. Recoverable, and the remedy is one command.
 /// - file MISSING/CORRUPT + registered → the worst state there is. The node keeps writing
-///   happily (the door only checks the public half is registered) while nothing it writes
-///   can ever be opened or crypto-shredded again. This must SHOUT, not read as a footnote.
+///   happily while nothing it writes can ever be opened or crypto-shredded again. This must
+///   SHOUT, not read as a footnote.
 /// - file MISSING/CORRUPT + NOT registered → simply unprovisioned; ordinary and expected
 ///   before `init`/`establish-unwrap-key`.
 fn unwrap_key_status_line(
     state: &cairn_node::keystore::KeyAtRest,
-    registered: bool,
+    registration: &CustodyRegistration,
     path: &std::path::Path,
 ) -> String {
     use cairn_node::keystore::KeyAtRest;
@@ -329,23 +391,78 @@ fn unwrap_key_status_line(
         KeyAtRest::Missing => ("MISSING".to_string(), false),
         KeyAtRest::Corrupt => ("CORRUPT (unparseable unwrap-key file)".to_string(), false),
     };
-    let note = match (have_file, registered) {
-        (true, true) => "registered".to_string(),
-        (true, false) => "NOT REGISTERED — this node cannot write clinical events; run \
-                          `cairn-node establish-unwrap-key`"
-            .to_string(),
-        (false, true) => format!(
+    let note = match (have_file, registration) {
+        (true, CustodyRegistration::ConfirmedMatch) => {
+            "registered (this file confirmed to hold the registered key)".to_string()
+        }
+        // Not dressed up as health: we did not look inside the file. The line names the one
+        // thing that would let us look, so an operator who wants certainty can get it.
+        (true, CustodyRegistration::Unverified) => {
+            "registered (file present but NOT opened — set CAIRN_KEY_PASSPHRASE, or pass \
+             --passphrase, to have `status` confirm it holds the registered key)"
+                .to_string()
+        }
+        (true, CustodyRegistration::Mismatch) => format!(
+            "MISMATCH — the key in {} is NOT the key registered in this database. This node \
+             can still WRITE sealed bodies (the door only checks that a key is registered) \
+             that this file will never open or crypto-shred. Do NOT run `cairn-node \
+             establish-unwrap-key`: `node_unwrap_key` is a singleton whose registrar refuses \
+             a differing key, so registering anything else forecloses the real one \
+             permanently. Restore the custody file that matches the registration — it rides \
+             the sealed local-state export beside a backup medium (ADR-0066 decision 3).",
+            path.display()
+        ),
+        (true, CustodyRegistration::NotRegistered) => {
+            "NOT REGISTERED — this node cannot write clinical events; run \
+             `cairn-node establish-unwrap-key`"
+                .to_string()
+        }
+        // No usable file, so there was nothing to compare: any registered state collapses
+        // to the same disaster, and an unregistered one to the ordinary pre-`init` state.
+        (false, CustodyRegistration::NotRegistered) => {
+            "not provisioned — run `cairn-node init` or `cairn-node establish-unwrap-key`"
+                .to_string()
+        }
+        (false, _) => format!(
             "REGISTERED BUT NO USABLE KEY FILE at {} — this node can still WRITE sealed \
              bodies it will never be able to open or crypto-shred; restore the file before \
              authoring anything further",
             path.display()
         ),
-        (false, false) => {
-            "not provisioned — run `cairn-node init` or `cairn-node establish-unwrap-key`"
-                .to_string()
-        }
     };
     format!("{posture} ({note})")
+}
+
+/// Answer "is there a file at `path`?" in a way that FAILS CLOSED.
+///
+/// WHY NOT `Path::exists()` — read this before simplifying it back. `Path::exists()` is
+/// literally `fs::metadata(path).is_ok()`, so it collapses every reason a `stat()` can fail
+/// into a single `false`. ENOENT ("genuinely not there") is only one of them: EIO on a
+/// failing disk, ESTALE on a NAS-mounted key directory whose NFS handle went stale, ELOOP on
+/// a symlink cycle and ENOTDIR on a broken path all answer `false` too.
+///
+/// Every caller of this helper uses the answer to decide whether to **write a custody key**.
+/// There, `false` means "go ahead and write" — so an unreadable path turns into a licence to
+/// overwrite the very file the check exists to protect, and that loss is unrecoverable:
+/// every `event_dek` row wrapped to the replaced key is orphaned permanently (ADR-0066).
+///
+/// So `NotFound` is the ONLY genuinely-absent case, exactly the rule
+/// [`cairn_node::keystore::key_at_rest_state`] and [`read_optional_sibling`] already follow
+/// for the same reason. Anything else is an UNANSWERED question, and an unanswered question
+/// must stop the command rather than be read as permission.
+fn custody_file_exists(path: &std::path::Path) -> anyhow::Result<bool> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(anyhow::anyhow!(
+            "cannot tell whether a custody key exists at {} ({e}) — refusing to continue. \
+             This is NOT the same as 'there is no key there': an I/O error, a stale network \
+             mount, a symlink loop or a broken path all fail this way, and treating any of \
+             them as absence is how a live custody key gets overwritten and every sealed \
+             clinical body under it orphaned (ADR-0066). Fix the read error and re-run.",
+            path.display()
+        )),
+    }
 }
 
 /// Refuse to overwrite an unwrap key that already exists at `path`.
@@ -360,7 +477,7 @@ fn unwrap_key_status_line(
 /// Pure and path-only so the refusal can be tested without a database.
 fn refuse_to_replace_existing_unwrap_key(path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::ensure!(
-        !path.exists(),
+        !custody_file_exists(path)?,
         "an unwrap key already exists at {} — refusing to replace it. Overwriting it would \
          permanently orphan every sealed clinical body already written under it (ADR-0066). \
          If you are re-registering an existing key after recreating the database, run \
@@ -397,7 +514,7 @@ fn refuse_to_replace_existing_unwrap_key(path: &std::path::Path) -> anyhow::Resu
 /// Pure and path-only so the refusal can be tested without a database.
 fn refuse_restore_beside_a_live_unwrap_key(path: &std::path::Path) -> anyhow::Result<()> {
     anyhow::ensure!(
-        !path.exists(),
+        !custody_file_exists(path)?,
         "an unwrap key already exists at {} — refusing to restore over it. If this machine \
          already runs a node, that file is THAT node's custody key, and replacing it would \
          permanently orphan every sealed clinical body it holds (ADR-0066): restore with a \
@@ -412,7 +529,7 @@ fn refuse_restore_beside_a_live_unwrap_key(path: &std::path::Path) -> anyhow::Re
 /// Resolve this node's unwrap secret for `establish-unwrap-key`: load the existing file if
 /// there is one, otherwise ADOPT the pre-ADR-0066 derived secret and write it.
 ///
-/// **The `unwrap_path.exists()` branch is the whole safety property, which is why this is a
+/// **The `custody_file_exists(unwrap_path)?` branch is the whole safety property, which is why this is a
 /// function and not four inline lines.** The write happens BEFORE
 /// `cairn_register_unwrap_key` is ever called, so the registrar cannot be the backstop: a
 /// regression that inverted this condition would overwrite a live custody key first and
@@ -437,17 +554,56 @@ fn refuse_restore_beside_a_live_unwrap_key(path: &std::path::Path) -> anyhow::Re
 /// `op` is `None` only for a node whose SIGNING key is itself unsealed
 /// (`--insecure-plaintext`); the custody key then follows that posture rather than being
 /// unwritable.
+///
+/// `registered_public` is what the database already has in `node_unwrap_key`, read by the
+/// caller BEFORE anything is written, and it is the backstop the registrar cannot be for the
+/// ADOPT direction (review finding I1). The hazard is a node provisioned AFTER ADR-0066 —
+/// whose registered key is GENERATED, independent of the seed — that has LOST its
+/// `<key>.unwrap` file. `unwrap_path` does not exist, so the adopt branch fires, mints the
+/// DERIVED secret, prints a fresh recovery code and writes the file; only then does
+/// `cairn_register_unwrap_key` refuse the differing key. The refusal does not un-write the
+/// file, and the bogus file left behind is worse than the missing one it replaced: it makes
+/// `status` look healthy, and if that database is ever recreated a re-run loads it and
+/// registers the derived key, foreclosing the real one forever. So the comparison happens
+/// here, on this side of the write. `None` means nothing is registered — a recreated
+/// database, or a node that never got that far — which contradicts nothing and refuses
+/// nothing.
 fn resolve_or_adopt_unwrap_secret(
     unwrap_path: &std::path::Path,
     key_path: &std::path::Path,
     op: Option<&str>,
     sk: &cairn_event::SigningKey,
+    registered_public: Option<&[u8]>,
 ) -> anyhow::Result<Zeroizing<[u8; 32]>> {
-    if unwrap_path.exists() {
+    if custody_file_exists(unwrap_path)? {
         return load_unwrap_secret_or_refuse_swapped_file(unwrap_path, key_path, op, sk);
     }
 
     let adopted = cairn_node::keystore::adopt_derived_unwrap_secret(sk);
+
+    // THE PRE-WRITE COMPARISON. Everything below this point either prints a one-time
+    // recovery code or writes a file, and neither can be taken back — see this function's
+    // doc for why the registrar downstream is not a backstop for the adopt direction.
+    if let Some(registered) = registered_public {
+        let adopted_public = cairn_event::seal::unwrap_public(&adopted);
+        anyhow::ensure!(
+            registered == adopted_public.as_slice(),
+            "there is no unwrap key at {}, but this database ALREADY REGISTERED a different \
+             one ({}) from the key this node would adopt ({}). That means the custody file \
+             this node was provisioned with is MISSING — not absent-by-history — so adopting \
+             the derived secret here would write a key that opens none of this node's sealed \
+             clinical bodies, and `cairn_register_unwrap_key` would refuse it a moment later \
+             with the bogus file already on disk. Restore the real custody file: it rides the \
+             sealed local-state export written beside every backup medium (ADR-0066 decision \
+             3). If the registered key is genuinely unrecoverable, every sealed body already \
+             written under it is unopenable and no command here can change that — do not \
+             paper over it by registering a new key.",
+            unwrap_path.display(),
+            hex::encode(registered),
+            hex::encode(adopted_public)
+        );
+    }
+
     match op {
         Some(op) => {
             // A FRESH recovery code for the unwrap file. It cannot reuse the signing key's:
@@ -565,23 +721,32 @@ fn establish_local_state_escrow(
     Ok(())
 }
 
-/// The three genuinely different answers to "is there a local-state export beside this
-/// medium?" — #502 item 1.
+/// The three genuinely different answers to "is there a file at this custody sibling path?"
+/// — #502 items 1 and 3.
 ///
 /// WHY A TYPE RATHER THAN `if let Ok(bytes) = std::fs::read(…)`. That idiom collapses two
 /// answers an operator must be able to tell apart. **Absent** is a legitimate, supported
-/// outcome: a node that never ran `backup` with an escrow restores from events alone. **A
-/// present file we could not read** — wrong permissions, an I/O error, a mount that vanished
-/// mid-restore — is a potential loss of this node's entire custody key, and it rendered
-/// IDENTICALLY to absence. That matters here more than almost anywhere else in the codebase,
-/// because the restore door fences closed behind the operator: `finalize_identity` has
-/// already written `local_node`, and restore refuses to run into an enrolled database. There
-/// is no free second attempt to notice the mistake on.
+/// outcome. **A present file we could not read** — wrong permissions, an I/O error, a mount
+/// that vanished — is a potential loss of this node's entire custody key, and it rendered
+/// IDENTICALLY to absence.
+///
+/// TWO sites need exactly this split, which is why it is one shared type rather than two
+/// look-alikes, and both are custody-critical:
+///
+/// - `restore` reading the sealed local-state **export** beside the medium (#502 item 1).
+///   The restore door fences closed behind the operator: `finalize_identity` has already
+///   written `local_node`, and restore refuses to run into an enrolled database. There is no
+///   free second attempt to notice the mistake on.
+/// - `backup` reading the **`.lsk` escrow sidecar** beside the key (#502 item 3). A sidecar
+///   that is present but unreadable used to be diagnosed as "absent", with a remedy
+///   (`establish-local-state-key`) that then REFUSES precisely because the file exists — so a
+///   node with a bit-rotted sidecar backs up nightly, `verify-backup` passes, and its custody
+///   key never leaves the machine.
 ///
 /// `NotFound` is the ONLY kind treated as absence — the same rule
-/// `keystore::key_at_rest_state` follows for exactly the same reason.
-enum ExportRead {
-    /// No file at the path. Legitimate; restore continues from events alone.
+/// `keystore::key_at_rest_state` and [`custody_file_exists`] follow for the same reason.
+enum SiblingRead {
+    /// No file at the path. Legitimate; the caller continues without it.
     Absent,
     /// The file's bytes, ready to parse.
     Present(Vec<u8>),
@@ -589,12 +754,12 @@ enum ExportRead {
     Unreadable(std::io::Error),
 }
 
-/// Hand-written rather than derived so `{:?}` prints the export's SIZE, not its bytes. A
-/// derived `Debug` would dump the whole sealed container into a panic message or a log line.
+/// Hand-written rather than derived so `{:?}` prints the file's SIZE, not its bytes. A
+/// derived `Debug` would dump a whole sealed container into a panic message or a log line.
 /// Those bytes are ciphertext, so this is legibility rather than a leak — an unreadable wall
 /// of numbers tells a reader nothing the length does not — but the convention in this
 /// codebase is that key-adjacent types say what they print, and this one now does.
-impl std::fmt::Debug for ExportRead {
+impl std::fmt::Debug for SiblingRead {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Absent => write!(f, "Absent"),
@@ -604,14 +769,119 @@ impl std::fmt::Debug for ExportRead {
     }
 }
 
-/// Classify the local-state export sibling at `path`. See [`ExportRead`] for why the
-/// three-way split is load-bearing rather than tidy.
-fn read_optional_local_state_export(path: &std::path::Path) -> ExportRead {
+/// Classify a custody sibling file at `path`. See [`SiblingRead`] for why the three-way
+/// split is load-bearing rather than tidy.
+fn read_optional_sibling(path: &std::path::Path) -> SiblingRead {
     match std::fs::read(path) {
-        Ok(bytes) => ExportRead::Present(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ExportRead::Absent,
-        Err(e) => ExportRead::Unreadable(e),
+        Ok(bytes) => SiblingRead::Present(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SiblingRead::Absent,
+        Err(e) => SiblingRead::Unreadable(e),
     }
+}
+
+/// The three answers `backup` must tell apart about the `.lsk` **escrow sidecar** — #502
+/// item 3, and the reason [`SiblingRead`]'s split has a second consumer.
+///
+/// It merges "could not read the file" and "read it but it is not a `CAIRNX1` sidecar" into
+/// ONE operator-facing class, deliberately: the remedy is identical for both (move the file
+/// aside, re-establish, re-run `backup`), and — the part that made the old code wrong — for
+/// both of them the remedy the "absent" branch names, `establish-local-state-key`, REFUSES
+/// while the file is still there.
+enum EscrowRead {
+    /// No sidecar. Legitimate: a node that never ran `establish-local-state-key`.
+    Absent,
+    /// A parsed, usable escrow.
+    Ready(cairn_node::localstate::LskWraps),
+    /// A sidecar IS (or may be) there and cannot be used. Carries the reason, because
+    /// "unreadable" and "unparseable" send the operator to different diagnostics even
+    /// though they share a remedy.
+    Unusable(String),
+}
+
+/// Classify the `.lsk` escrow sidecar at `path`. Extracted from the `backup` arm so the
+/// three-way split can be tested without writing a backup medium.
+fn read_escrow_sidecar(path: &std::path::Path) -> EscrowRead {
+    match read_optional_sibling(path) {
+        SiblingRead::Absent => EscrowRead::Absent,
+        SiblingRead::Unreadable(e) => EscrowRead::Unusable(format!("could not be read: {e}")),
+        SiblingRead::Present(bytes) => match cairn_node::localstate::parse_sidecar(&bytes) {
+            Ok(wraps) => EscrowRead::Ready(wraps),
+            Err(e) => EscrowRead::Unusable(format!("is not a readable CAIRNX1 sidecar: {e}")),
+        },
+    }
+}
+
+/// How many times `restore` will ask for the dead node's recovery code before giving up.
+///
+/// Bounded, not infinite: an unattended restore must not hang forever on a prompt. Three is
+/// enough for a typo and a re-read of the paper the code is written on, and few enough that
+/// an operator who simply does not have the code is told so rather than asked a fourth time.
+const RECOVERY_CODE_ATTEMPTS: usize = 3;
+
+/// Print the warning that EVERY "this node ended up with no custody key" outcome owes the
+/// operator, whatever route reached it.
+///
+/// WHY ONE FUNCTION (review finding I2). Three degrade-and-continue exits land in the
+/// IDENTICAL end state — no custody key installed, none registered — and only one of them
+/// had been given the ADR-0066 treatment. The other two still said *"skipping local-state;
+/// node restores from events alone"*, which was true and harmless back when local-state
+/// carried nothing, and now describes a node that can neither open an inherited sealed body
+/// nor author a new one. Sharing the substance is what keeps them from drifting apart again.
+///
+/// `cause` is the one line that differs — WHY this node has no key — because the three
+/// routes point at different diagnostics even though the consequence and the trap are the
+/// same. `remedy` is what this particular operator can still do about it.
+fn warn_no_custody_key_installed(cause: &str, remedy: &str) {
+    eprintln!(
+        "WARNING: {cause}\n\
+         \x20        This node has NO custody key. It cannot open any sealed clinical body \
+         it inherits, and it cannot author a new sealed clinical event either — the in-DB \
+         door refuses every sealed write while `node_unwrap_key` is empty.\n\
+         \x20        Do NOT run `cairn-node establish-unwrap-key` while there is any chance \
+         of recovering an export that carries the real key. On a restored node that command \
+         adopts a secret derived from the NEW signing seed, and `node_unwrap_key` is a \
+         singleton whose registrar would then refuse the real key PERMANENTLY.\n\
+         \x20        {remedy}"
+    );
+}
+
+/// Ask for the dead node's recovery code and unseal `sealed` with it, re-prompting up to
+/// `attempts` times.
+///
+/// WHY THE RETRY EXISTS AT ALL. This prompt lands AFTER `finalize_identity` has fenced the
+/// restore door: `local_node` is written and a second restore into this database is refused.
+/// A single mistyped character therefore used to cost the node its custody key outright,
+/// with the only remaining option — restore again from the same medium into a DIFFERENT
+/// fresh database, accepting a second superseding identity — stated nowhere.
+///
+/// `ask` is injected rather than calling `rpassword` directly for one reason: so the retry
+/// BUDGET is testable without a tty. It takes the 1-based attempt number so a caller can
+/// word the second prompt differently from the first.
+///
+/// The three outcomes are deliberately distinct:
+/// - `Ok(Some(plaintext))` — a code worked; the loop stops immediately.
+/// - `Ok(None)` — the budget is spent. Every code was wrong; the export itself is fine.
+/// - `Err(..)` — the PROMPT could not be read at all (the scripted / non-tty case). Not a
+///   wrong guess, so it propagates at once: re-asking a prompt nothing can answer would
+///   spin the same error three times and tell the operator nothing new.
+fn unseal_local_state_with_retries(
+    sealed: &cairn_node::localstate::SealedLocalState,
+    attempts: usize,
+    mut ask: impl FnMut(usize) -> anyhow::Result<Zeroizing<String>>,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    for attempt in 1..=attempts {
+        let code = ask(attempt)?;
+        if let Some(plaintext) = cairn_node::localstate::unseal_local_state_rec(sealed, &code) {
+            return Ok(Some(plaintext));
+        }
+        if attempt < attempts {
+            eprintln!(
+                "that code did not unseal the export — {} attempt(s) left",
+                attempts - attempt
+            );
+        }
+    }
+    Ok(None)
 }
 
 /// Unseal a present local-state export and apply it — the whole ADR-0026 slice D / ADR-0066
@@ -631,8 +901,12 @@ fn read_optional_local_state_export(path: &std::path::Path) -> ExportRead {
 /// - `Ok(None)` — an honest degradation already reported to the operator. A corrupt or
 ///   bit-rotted export, or a wrong recovery code. Local-state is OPTIONAL and the events are
 ///   the load-bearing copy, so the restore stands and the process still succeeds.
-/// - `Err` — recovered key material we could not install. Reported, and the process exits
-///   non-zero *after* the summary has printed.
+/// - `Err` — either recovered key material we could not INSTALL, or a bundle we could not
+///   DECODE (`from_cbor` refuses a bundle written by a newer node, and that refusal is loud
+///   on purpose — silently dropping an unknown slot would drop key material). Both are
+///   reported, and the process exits non-zero *after* the summary has printed. The two are
+///   named separately because they are different problems: one is a local install failure,
+///   the other says this build is too old to read the export it was handed.
 async fn apply_local_state_export(
     db: &tokio_postgres::Client,
     bytes: &[u8],
@@ -643,22 +917,48 @@ async fn apply_local_state_export(
     // A corrupt/bit-rotted export sibling must NOT fail the restore: by this point the node
     // is already fully restored, and off-site media bit-rot is a likely failure.
     let Ok(sealed) = cairn_node::localstate::parse_container(bytes) else {
-        eprintln!(
-            "WARNING: local-state export present at {} but unreadable (corrupt/bit-rotted?) — \
-             skipping local-state; node restores from events alone.",
-            export_path.display()
+        warn_no_custody_key_installed(
+            &format!(
+                "the local-state export at {} is present but could not be parsed \
+                 (corrupt/bit-rotted?), so nothing was installed from it.",
+                export_path.display()
+            ),
+            "If another copy of that medium exists — a second off-site rotation, an earlier \
+             one — restore from THAT instead: this node is already restored, so re-running \
+             into a fresh database costs only a second superseding identity, which is \
+             auditable and expected.",
         );
         return Ok(None);
     };
 
     eprintln!("Local-state export found. Enter the OLD node's recovery code to unseal it:");
-    let old_code = Zeroizing::new(rpassword::prompt_password("old recovery code: ")?);
-    // A wrong recovery-code guess degrades the same way (warn + skip) — a bad guess at the
-    // OPTIONAL local-state must not kill an otherwise-complete restore.
-    let Some(plaintext) = cairn_node::localstate::unseal_local_state_rec(&sealed, &old_code) else {
-        eprintln!(
-            "WARNING: could not unseal the local-state export — wrong recovery code? \
-             Skipping local-state; node restores from events alone."
+    // Bounded re-prompt, because this prompt is past the point of no return — see
+    // `unseal_local_state_with_retries`. A wrong code still degrades the same way in the end
+    // (warn + skip): a bad guess at the OPTIONAL local-state must not kill an otherwise
+    // complete restore.
+    let plaintext = unseal_local_state_with_retries(&sealed, RECOVERY_CODE_ATTEMPTS, |attempt| {
+        Ok(Zeroizing::new(rpassword::prompt_password(
+            if attempt == 1 {
+                "old recovery code: "
+            } else {
+                "old recovery code (try again): "
+            },
+        )?))
+    })?;
+    let Some(plaintext) = plaintext else {
+        warn_no_custody_key_installed(
+            &format!(
+                "the local-state export at {} was not unsealed after {RECOVERY_CODE_ATTEMPTS} \
+                 attempts — every code entered was wrong. The export itself is intact; the \
+                 code is what failed.",
+                export_path.display()
+            ),
+            "Find the OLD node's recovery code (it is the one printed at that node's `init` \
+             or `seal-key`, stored off-site) and run `restore` again from the SAME medium \
+             into a DIFFERENT, freshly-created database — this database is now enrolled and \
+             will refuse a second restore. Doing so supersedes this node's identity a second \
+             time, which is auditable and expected; there is no way to re-open the prompt on \
+             this node.",
         );
         return Ok(None);
     };
@@ -822,7 +1122,15 @@ enum Cmd {
         role: String,
     },
     /// Print this node's honest assembly state (peers, keystore health, DR escrow stub).
-    Status,
+    Status {
+        /// Operational passphrase (else `CAIRN_KEY_PASSPHRASE`). OPTIONAL, and never
+        /// prompted for — `status` must stay scriptable. With it, `status` opens the sealed
+        /// `<key>.unwrap` and can say whether the file on disk really IS the key registered
+        /// in the database; without it that one line reads `NOT opened` rather than
+        /// claiming a match it never checked.
+        #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
+        passphrase: Option<String>,
+    },
     /// Back up this node's signed event set to a local cold-peer medium (ADR-0026 slice
     /// B). Reads `node_event`, writes a self-verifying medium, re-reads + verifies it,
     /// then records backup health beside the key. No signing key needed — the events are
@@ -1662,7 +1970,22 @@ async fn main() -> anyhow::Result<()> {
             let op_str: Option<&str> = op.as_deref().map(|s| s.as_str());
             let sk = cairn_node::keystore::load(&cli.key, op_str)?;
 
-            let secret = resolve_or_adopt_unwrap_secret(&unwrap_path, &cli.key, op_str, &sk)?;
+            // Read the registration BEFORE anything is written. `resolve_or_adopt_unwrap_secret`
+            // writes the adopted key to disk, and the registrar below cannot un-write it —
+            // see that function's doc for the full scenario (review finding I1).
+            // `query_opt`: no row is a legitimate "nothing claimed", not an error.
+            let registered: Option<Vec<u8>> = db
+                .query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])
+                .await?
+                .map(|row| row.get::<_, Vec<u8>>(0));
+
+            let secret = resolve_or_adopt_unwrap_secret(
+                &unwrap_path,
+                &cli.key,
+                op_str,
+                &sk,
+                registered.as_deref(),
+            )?;
 
             // Registering the public half is the whole point of the command: after this the
             // sealed-write path's `ensure_unwrap_key` check passes. Idempotent when the same
@@ -1754,7 +2077,7 @@ async fn main() -> anyhow::Result<()> {
                  (set a password with `ALTER ROLE {role} PASSWORD …` for a networked deployment)"
             );
         }
-        Cmd::Status => {
+        Cmd::Status { passphrase } => {
             let db = cairn_node::db::connect(&cli.conn).await?;
             let st = cairn_node::identity::status(&db, &cli.key).await?;
             println!("node_id       {}", st.node_id_hex);
@@ -1774,15 +2097,24 @@ async fn main() -> anyhow::Result<()> {
             // reports it separately from the signing key — and reports BOTH halves, the
             // file and the registration, because each half failing alone is a DIFFERENT
             // silent disaster and they are not interchangeable.
+            //
+            // The registered PUBLIC HALF, not merely "is a row there": a file that parses
+            // but holds a DIFFERENT key used to render exactly like a healthy node. See
+            // `CustodyRegistration`.
             let unwrap_path = cairn_node::keystore::unwrap_key_path_for(&cli.key);
-            let unwrap_registered: bool = db
-                .query_one("SELECT EXISTS (SELECT 1 FROM node_unwrap_key)", &[])
+            let registered: Option<Vec<u8>> = db
+                .query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])
                 .await?
-                .get(0);
+                .map(|row| row.get::<_, Vec<u8>>(0));
             let unwrap_state = cairn_node::keystore::key_at_rest_state(&unwrap_path);
+            let registration = classify_custody_registration(
+                &unwrap_path,
+                registered.as_deref(),
+                passphrase.as_deref(),
+            );
             println!(
                 "unwrap_key    {}",
-                unwrap_key_status_line(&unwrap_state, unwrap_registered, &unwrap_path)
+                unwrap_key_status_line(&unwrap_state, &registration, &unwrap_path)
             );
             println!("runtime_role  {}", st.runtime_role);
             if st.db_floor_enforced {
@@ -1864,12 +2196,18 @@ async fn main() -> anyhow::Result<()> {
             // ADR-0026 slice D: co-locate the sealed local-state export beside the medium,
             // IF the local-state escrow exists. Degrades honestly (warn, never fail the
             // event backup) when the escrow is absent — the events are the load-bearing copy.
+            //
+            // THREE-WAY, not two (#502 item 3, review finding I4). `std::fs::read(..).ok()
+            // .and_then(|b| parse_sidecar(&b).ok())` used to collapse unreadable / corrupt /
+            // absent into one branch that asserted "absent" and named
+            // `establish-local-state-key` — a remedy that REFUSES while the file exists. Since
+            // ADR-0066 that costs more than an empty export: the sealed export is the only
+            // vehicle carrying this node's custody KEY off the machine, so a node with a
+            // bit-rotted `.lsk` backs up nightly, passes `verify-backup`, and never lets its
+            // custody key leave.
             let sidecar = cairn_node::localstate::lsk_sidecar_path_for(&cli.key);
-            match std::fs::read(&sidecar)
-                .ok()
-                .and_then(|b| cairn_node::localstate::parse_sidecar(&b).ok())
-            {
-                Some(wraps) => {
+            match read_escrow_sidecar(&sidecar) {
+                EscrowRead::Ready(wraps) => {
                     // The sealed export is OPTIONAL — the event medium + health are ALREADY
                     // written (the load-bearing copy). So ANY failure here (a passphrase an
                     // unattended/cron run cannot supply, a wrong passphrase, an I/O error)
@@ -1895,7 +2233,22 @@ async fn main() -> anyhow::Result<()> {
                         ),
                     }
                 }
-                None => eprintln!(
+                // PRESENT but unusable. Deliberately worded so it can never be mistaken for
+                // the absent case below: the diagnosis differs, and so does the remedy —
+                // `establish-local-state-key` refuses while the file is there, so the operator
+                // has to move it aside FIRST or they will bounce between two refusals.
+                EscrowRead::Unusable(why) => eprintln!(
+                    "WARNING: the local-state escrow at {} {why}. This is NOT 'no escrow': no \
+                     sealed export was written, so this node's custody key (ADR-0066) did not \
+                     leave the machine and a restore from this medium would recover events \
+                     only.\n\
+                     \x20        `cairn-node establish-local-state-key` REFUSES while that \
+                     file exists — move it aside first, run it, then re-run `backup`. Exports \
+                     already written stay recoverable under the OLD recovery code (every \
+                     CAIRNL1 container carries its own wraps); only future ones use the new.",
+                    sidecar.display()
+                ),
+                EscrowRead::Absent => eprintln!(
                     "WARNING: no local-state escrow ({} absent) — backed up events only; \
                      run `cairn-node establish-local-state-key` to enable the sealed export",
                     sidecar.display()
@@ -1942,10 +2295,10 @@ async fn main() -> anyhow::Result<()> {
             //    vanished mount — so it stops the restore HERE, while stopping still costs
             //    nothing, instead of warning about it after the door has shut.
             let export_path = cairn_node::localstate::localstate_path_for(&from);
-            let export_bytes = match read_optional_local_state_export(&export_path) {
-                ExportRead::Absent => None,
-                ExportRead::Present(bytes) => Some(bytes),
-                ExportRead::Unreadable(e) => anyhow::bail!(
+            let export_bytes = match read_optional_sibling(&export_path) {
+                SiblingRead::Absent => None,
+                SiblingRead::Present(bytes) => Some(bytes),
+                SiblingRead::Unreadable(e) => anyhow::bail!(
                     "a local-state export exists at {} but could not be read ({e}) — refusing \
                      to restore. This is NOT the same as 'no export was written': that file \
                      may hold this node's only custody key, and a restore that skipped it \
@@ -2105,21 +2458,28 @@ async fn main() -> anyhow::Result<()> {
                             ),
                             // Not a footnote: with no `node_unwrap_key` row this node cannot
                             // even AUTHOR a sealed body — `submit_event` raises, and its error
-                            // text sends the operator to `establish-unwrap-key`. On a restored
-                            // node that command adopts a secret derived from the NEW signing
-                            // seed and registers it, after which the singleton registrar
-                            // refuses the real exported key FOREVER. So the warning has to
-                            // name that trap, or the operator's obvious next step forecloses
-                            // the fix permanently.
-                            None => eprintln!(
-                                "WARNING: the local-state export carries no unwrap key (does it \
-                                 predate ADR-0066?). This node has NO custody key: it cannot \
-                                 open any sealed body it inherits, and it cannot author a new \
-                                 sealed clinical event either.\n\
-                                 \x20        Do NOT run `cairn-node establish-unwrap-key` if \
-                                 there is any chance of recovering an export that carries the \
-                                 old key — it would register a DIFFERENT key, and the registrar \
-                                 then refuses the real one permanently."
+                            // text sends the operator to `establish-unwrap-key`, which is
+                            // exactly the trap the shared warning names.
+                            //
+                            // The cause names the LIVE possibility first (review finding M5).
+                            // "Does it predate ADR-0066?" was the only cause offered, but on a
+                            // current node the likelier one is this branch's own backup-side
+                            // degradation: `seal_and_write_local_state_export` warns and
+                            // exports the custody rows WITHOUT a key when `<key>.unwrap`
+                            // cannot be loaded. An operator sent looking for an ancient node
+                            // would never find the recent backup run that actually did this.
+                            None => warn_no_custody_key_installed(
+                                &format!(
+                                    "the local-state export at {} carries custody rows but NO \
+                                     unwrap key. Either the `backup` that wrote it could not \
+                                     load the old node's `<key>.unwrap` (it warns and exports \
+                                     the rows anyway — check that node's backup log), or the \
+                                     export predates ADR-0066.",
+                                    export_path.display()
+                                ),
+                                "If the old node or its keystore still exists anywhere, fix \
+                                 the unwrap key there, run `backup` again, and restore from \
+                                 THAT medium into a fresh database.",
                             ),
                         }
                         // Declared at the operator surface rather than buried in a comment:
@@ -3997,7 +4357,7 @@ mod tests {
             &cairn_node::keystore::KeyAtRest::Sealed {
                 dual_recipient: true,
             },
-            true,
+            &CustodyRegistration::ConfirmedMatch,
             std::path::Path::new("/nodes/a/node.key.unwrap"),
         );
         assert!(line.contains("SEALED") && line.contains("dual-recipient"));
@@ -4010,7 +4370,7 @@ mod tests {
             &cairn_node::keystore::KeyAtRest::Sealed {
                 dual_recipient: true,
             },
-            false,
+            &CustodyRegistration::NotRegistered,
             std::path::Path::new("/nodes/a/node.key.unwrap"),
         );
         assert!(
@@ -4029,7 +4389,10 @@ mod tests {
             cairn_node::keystore::KeyAtRest::Missing,
             cairn_node::keystore::KeyAtRest::Corrupt,
         ] {
-            let line = unwrap_key_status_line(&state, true, path);
+            // No usable file means there was nothing to compare, so the classifier's
+            // honest answer for a registered node is `Unverified` — and it must still land
+            // in the disaster branch, because the FILE is what is missing.
+            let line = unwrap_key_status_line(&state, &CustodyRegistration::Unverified, path);
             assert!(
                 line.contains("REGISTERED BUT NO USABLE KEY FILE"),
                 "an unopenable-custody node must say so loudly: {line}"
@@ -4045,7 +4408,7 @@ mod tests {
     fn an_unprovisioned_node_reads_as_unprovisioned_not_as_a_disaster() {
         let line = unwrap_key_status_line(
             &cairn_node::keystore::KeyAtRest::Missing,
-            false,
+            &CustodyRegistration::NotRegistered,
             std::path::Path::new("/nodes/a/node.key.unwrap"),
         );
         assert!(line.contains("not provisioned"));
@@ -4107,7 +4470,10 @@ mod tests {
         // recovery code they wrote down would no longer be the one it is sealed under.
         let before = std::fs::read(&unwrap).unwrap();
 
-        let secret = resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk)
+        // `None` for the registration: this branch never writes, so it does not need the
+        // pre-write comparison — the registrar downstream IS an adequate backstop when
+        // nothing has been put on disk yet.
+        let secret = resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, None)
             .expect("an existing custody key must be loaded, not replaced");
 
         assert_eq!(
@@ -4140,7 +4506,8 @@ mod tests {
             "precondition: a node that predates ADR-0066"
         );
 
-        let secret = resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk)
+        // `None`: a pre-ADR-0066 node has registered nothing this adoption could contradict.
+        let secret = resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, None)
             .expect("a node with no custody key must adopt its derived one");
 
         assert!(unwrap.exists(), "the adopted secret must be persisted");
@@ -4298,8 +4665,8 @@ mod tests {
         // classified as a warning, every honest restore would cry wolf.
         let dir = tempfile::tempdir().unwrap();
         assert!(matches!(
-            read_optional_local_state_export(&dir.path().join("cairn.medium.localstate")),
-            ExportRead::Absent
+            read_optional_sibling(&dir.path().join("cairn.medium.localstate")),
+            SiblingRead::Absent
         ));
     }
 
@@ -4311,8 +4678,8 @@ mod tests {
         let path = dir.path().join("cairn.medium.localstate");
         let contents = b"CAIRNL1\n-not-really-a-container-but-these-bytes-must-arrive".to_vec();
         std::fs::write(&path, &contents).unwrap();
-        match read_optional_local_state_export(&path) {
-            ExportRead::Present(bytes) => assert_eq!(bytes, contents),
+        match read_optional_sibling(&path) {
+            SiblingRead::Present(bytes) => assert_eq!(bytes, contents),
             other => panic!("a readable file must be Present, got {other:?}"),
         }
     }
@@ -4326,8 +4693,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cairn.medium.localstate");
         std::fs::create_dir(&path).unwrap();
-        match read_optional_local_state_export(&path) {
-            ExportRead::Unreadable(e) => assert_ne!(
+        match read_optional_sibling(&path) {
+            SiblingRead::Unreadable(e) => assert_ne!(
                 e.kind(),
                 std::io::ErrorKind::NotFound,
                 "only a genuine NotFound may be treated as absence"
@@ -4337,5 +4704,405 @@ mod tests {
                  one — that indistinguishability IS #502 item 1; got {other:?}"
             ),
         }
+    }
+    // --- I5: a custody-file existence check must FAIL CLOSED on an unreadable path ---
+    //
+    // `Path::exists()` is `fs::metadata(..).is_ok()`, so it answers `false` for EIO, ESTALE
+    // (a stale NFS handle on a NAS-mounted key directory), ELOOP and ENOTDIR — not only for
+    // ENOENT. Every custody caller uses that `false` as permission to WRITE, so an
+    // unreadable path becomes a licence to overwrite the very file the check protects. This
+    // is the same rule `keystore::key_at_rest_state` and `read_optional_sibling`
+    // already follow: "cannot read" is not "absent".
+
+    /// A path guaranteed to fail `stat()` with something OTHER than `NotFound`: a child of
+    /// a REGULAR FILE, which every platform we build on rejects with ENOTDIR. Portable, and
+    /// unlike a `chmod` fixture it does not quietly become readable when the suite runs as
+    /// root (CI, containers).
+    fn a_path_that_cannot_be_stated(dir: &std::path::Path) -> std::path::PathBuf {
+        let file = dir.join("a-regular-file");
+        std::fs::write(&file, b"not a directory").unwrap();
+        file.join("node.key.unwrap")
+    }
+
+    #[test]
+    fn an_unstattable_custody_path_is_an_error_never_an_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = a_path_that_cannot_be_stated(dir.path());
+        assert!(
+            !path.exists(),
+            "precondition: `Path::exists()` fails OPEN here — it reports the same `false` it \
+             reports for a genuinely absent file, which IS the defect"
+        );
+        assert!(
+            custody_file_exists(&path).is_err(),
+            "a path we cannot stat must be an error, not a licence to write a custody key"
+        );
+    }
+
+    #[test]
+    fn custody_file_exists_still_answers_the_two_ordinary_questions() {
+        // Positive controls: a checker that erred on everything would satisfy the test
+        // above while breaking every real `init` and every real `restore`.
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("node.key.unwrap");
+        std::fs::write(&present, b"anything at all").unwrap();
+        assert!(custody_file_exists(&present).unwrap(), "a real file exists");
+        assert!(
+            !custody_file_exists(&dir.path().join("nope")).unwrap(),
+            "and a genuinely absent one does not"
+        );
+    }
+
+    #[test]
+    fn the_restore_refusal_fails_closed_on_an_unstattable_path() {
+        // The restore arm is the site where failing open costs a LIVE clinic its custody:
+        // `Path::exists()` says `false`, restore proceeds, and step 6 writes over the
+        // running node's `<key>.unwrap`.
+        let dir = tempfile::tempdir().unwrap();
+        let path = a_path_that_cannot_be_stated(dir.path());
+        let msg = format!(
+            "{:#}",
+            refuse_restore_beside_a_live_unwrap_key(&path)
+                .expect_err("an unanswerable question must stop the restore, not wave it through")
+        );
+        assert!(
+            msg.contains("cannot tell whether"),
+            "the refusal must name the UNANSWERED question rather than pretend absence: {msg}"
+        );
+    }
+
+    #[test]
+    fn the_init_refusal_fails_closed_on_an_unstattable_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = a_path_that_cannot_be_stated(dir.path());
+        let msg = format!(
+            "{:#}",
+            refuse_to_replace_existing_unwrap_key(&path)
+                .expect_err("`init` must not mint a replacement key over a path it cannot read")
+        );
+        assert!(
+            msg.contains("cannot tell whether"),
+            "the refusal must name the UNANSWERED question rather than pretend absence: {msg}"
+        );
+    }
+
+    // --- #502 item 3 / I4: a corrupt `.lsk` must not be diagnosed as an absent one ---
+    //
+    // The two need different words because they need different REMEDIES: the absent branch
+    // names `establish-local-state-key`, and that command refuses while a file is there. An
+    // operator told "absent" therefore bounces between two refusals while every nightly
+    // backup leaves this node's custody key at home.
+
+    #[test]
+    fn an_absent_escrow_sidecar_is_absent() {
+        // Positive control first: a node that never ran `establish-local-state-key` is an
+        // ordinary, supported state, and must not be dressed up as corruption.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read_escrow_sidecar(&dir.path().join("node.key.lsk")),
+            EscrowRead::Absent
+        ));
+    }
+
+    #[test]
+    fn a_good_escrow_sidecar_parses() {
+        // The other positive control: without it, a classifier that called everything
+        // unusable would satisfy the corruption test below and break every real backup.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.lsk");
+        let wraps = cairn_node::localstate::establish_lsk(OP_PASS, REC_CODE).unwrap();
+        std::fs::write(&path, cairn_node::localstate::serialize_sidecar(&wraps)).unwrap();
+        assert!(matches!(read_escrow_sidecar(&path), EscrowRead::Ready(_)));
+    }
+
+    #[test]
+    fn a_bit_rotted_escrow_sidecar_is_unusable_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.lsk");
+        std::fs::write(&path, b"CAIRNX1 but the rest of me is noise").unwrap();
+        match read_escrow_sidecar(&path) {
+            EscrowRead::Unusable(why) => assert!(
+                !why.is_empty(),
+                "the class must carry WHY: 'unreadable' and 'unparseable' send the operator \
+                 to different diagnostics even though they share a remedy"
+            ),
+            other => panic!(
+                "a present-but-corrupt sidecar reported as anything else sends the operator \
+                 to a remedy that refuses; got {}",
+                match other {
+                    EscrowRead::Absent => "Absent",
+                    EscrowRead::Ready(_) => "Ready",
+                    EscrowRead::Unusable(_) => unreachable!(),
+                }
+            ),
+        }
+    }
+
+    #[test]
+    fn an_unreadable_escrow_sidecar_is_unusable_not_absent() {
+        // A directory at the sidecar path: the same portable "present but the read fails"
+        // stand-in the export classifier uses, and root-proof.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.lsk");
+        std::fs::create_dir(&path).unwrap();
+        assert!(matches!(
+            read_escrow_sidecar(&path),
+            EscrowRead::Unusable(_)
+        ));
+    }
+
+    // --- I1: adoption must not WRITE a key the registrar is going to refuse ---
+    //
+    // The adopt branch mints the pre-ADR-0066 DERIVED secret and writes it, and the write
+    // happens BEFORE `cairn_register_unwrap_key` is ever called. On a node provisioned
+    // AFTER ADR-0066 — whose registered key is GENERATED, independent of the seed — the
+    // derived secret is simply the wrong key, and a registrar refusing it afterwards does
+    // not un-write the file. The bogus file then makes `status` read healthy (it only
+    // checks parseability), and a later database recreation lets a re-run register the
+    // derived key for good, foreclosing the real one forever. So the comparison has to
+    // happen on THIS side of the write — the same asymmetry the replace direction already
+    // reasons about.
+
+    #[test]
+    fn adoption_refuses_a_key_that_contradicts_the_registration_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("node.key");
+        let unwrap = cairn_node::keystore::unwrap_key_path_for(&key);
+        cairn_node::keystore::generate_sealed(&key, OP_PASS, REC_CODE).unwrap();
+        let sk = cairn_node::keystore::load(&key, Some(OP_PASS)).unwrap();
+
+        // A node provisioned AFTER ADR-0066: its registered key is GENERATED, independent
+        // of the signing seed. Mint one exactly as `init` does — into a scratch path, then
+        // forget that file. That is the disaster state this test is about: the registered
+        // key is alive in the database and the custody file is gone from the disk.
+        let scratch = dir.path().join("the-real-custody-key");
+        let registered =
+            cairn_node::keystore::generate_unwrap_sealed(&scratch, OP_PASS, REC_CODE).unwrap();
+        assert!(!unwrap.exists(), "precondition: the custody file is gone");
+
+        let err =
+            resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, Some(&registered))
+                .expect_err(
+                    "adopting the DERIVED secret here writes a key that opens none of this \
+                     node's event_dek rows, and the registrar refuses it only afterwards",
+                );
+
+        assert!(
+            !unwrap.exists(),
+            "the refusal must land BEFORE the write — a bogus file on disk makes `status` \
+             read healthy and lets a later database recreation register it permanently"
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&unwrap.display().to_string()),
+            "the operator must be told which file is missing: {msg}"
+        );
+        assert!(
+            msg.contains("ALREADY REGISTERED"),
+            "and what it is being measured against: {msg}"
+        );
+        assert!(
+            msg.contains(&hex::encode(registered)),
+            "the registered key must be named, so the operator can recognise which custody \
+             file they are hunting for: {msg}"
+        );
+    }
+
+    #[test]
+    fn adoption_proceeds_when_the_registered_key_is_the_derived_one() {
+        // The ADR-0066 decision-5 migration itself: a pre-ADR-0066 node whose registered
+        // key IS the HKDF derivation of its signing seed. This is the case the whole adopt
+        // branch exists for, so a comparison that blocked it would be worse than none.
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("node.key");
+        let unwrap = cairn_node::keystore::unwrap_key_path_for(&key);
+        cairn_node::keystore::generate_sealed(&key, OP_PASS, REC_CODE).unwrap();
+        let sk = cairn_node::keystore::load(&key, Some(OP_PASS)).unwrap();
+        let derived_public = cairn_event::seal::unwrap_public(
+            &cairn_node::keystore::adopt_derived_unwrap_secret(&sk),
+        );
+
+        resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, Some(&derived_public))
+            .expect("a pre-ADR-0066 node must still be able to adopt its own derived key");
+        assert!(unwrap.exists(), "and the adopted secret must be persisted");
+    }
+
+    #[test]
+    fn adoption_proceeds_when_nothing_is_registered_yet() {
+        // The other legitimate shape, and the one the command's own doc names: a recreated
+        // database beside a node that has not registered anything. Nothing to contradict,
+        // so nothing to refuse.
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("node.key");
+        let unwrap = cairn_node::keystore::unwrap_key_path_for(&key);
+        cairn_node::keystore::generate_sealed(&key, OP_PASS, REC_CODE).unwrap();
+        let sk = cairn_node::keystore::load(&key, Some(OP_PASS)).unwrap();
+
+        resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, None)
+            .expect("an empty registrar contradicts nothing");
+        assert!(unwrap.exists());
+    }
+
+    // --- I1 (second half): `status` must not call a MISMATCHED custody file healthy ---
+    //
+    // `key_at_rest_state` only asks whether the file PARSES, so a file holding the wrong
+    // key reported as "registered" is indistinguishable from a healthy node — which is what
+    // let the bogus adopted file above hide. Comparing the file's public half against the
+    // registered one is the only thing that tells them apart, and where `status` cannot do
+    // the comparison it must say so rather than imply a match it never checked.
+
+    #[test]
+    fn a_plaintext_custody_file_is_confirmed_against_the_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let unwrap = dir.path().join("node.key.unwrap");
+        let public = cairn_node::keystore::generate_unwrap_plaintext(&unwrap).unwrap();
+        assert_eq!(
+            classify_custody_registration(&unwrap, Some(&public), None),
+            CustodyRegistration::ConfirmedMatch
+        );
+    }
+
+    #[test]
+    fn a_custody_file_holding_a_different_key_classifies_as_a_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let unwrap = dir.path().join("node.key.unwrap");
+        cairn_node::keystore::generate_unwrap_plaintext(&unwrap).unwrap();
+        // A DIFFERENT key is registered — the state `establish-unwrap-key` used to be able
+        // to create, and one a restore from the wrong medium can still reach.
+        let other =
+            cairn_node::keystore::generate_unwrap_plaintext(&dir.path().join("other")).unwrap();
+        assert_eq!(
+            classify_custody_registration(&unwrap, Some(&other), None),
+            CustodyRegistration::Mismatch
+        );
+    }
+
+    #[test]
+    fn a_sealed_custody_file_without_the_passphrase_is_unverified_not_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let unwrap = dir.path().join("node.key.unwrap");
+        let public =
+            cairn_node::keystore::generate_unwrap_sealed(&unwrap, OP_PASS, REC_CODE).unwrap();
+        assert_eq!(
+            classify_custody_registration(&unwrap, Some(&public), None),
+            CustodyRegistration::Unverified,
+            "`status` never prompts, so a sealed file it cannot open must say `unverified` \
+             rather than claim a match it did not check"
+        );
+        assert_eq!(
+            classify_custody_registration(&unwrap, Some(&public), Some(OP_PASS)),
+            CustodyRegistration::ConfirmedMatch,
+            "…and with the passphrase in hand it CAN check, so it must"
+        );
+    }
+
+    #[test]
+    fn an_empty_registrar_classifies_as_not_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let unwrap = dir.path().join("node.key.unwrap");
+        cairn_node::keystore::generate_unwrap_plaintext(&unwrap).unwrap();
+        assert_eq!(
+            classify_custody_registration(&unwrap, None, None),
+            CustodyRegistration::NotRegistered
+        );
+    }
+
+    #[test]
+    fn a_mismatched_custody_file_does_not_read_as_healthy() {
+        let path = std::path::Path::new("/nodes/a/node.key.unwrap");
+        let line = unwrap_key_status_line(
+            &cairn_node::keystore::KeyAtRest::Sealed {
+                dual_recipient: true,
+            },
+            &CustodyRegistration::Mismatch,
+            path,
+        );
+        assert!(
+            line.contains("MISMATCH"),
+            "a file that is not the registered key is a distinct disaster and must say so: \
+             {line}"
+        );
+        assert!(
+            line.contains(&path.display().to_string()),
+            "and must name the file: {line}"
+        );
+        assert!(
+            line.contains("Do NOT run"),
+            "and must warn off `establish-unwrap-key`, which would foreclose the real key \
+             permanently on a singleton registrar: {line}"
+        );
+    }
+
+    // --- I2: the old node's recovery code gets more than one keystroke's worth of chance ---
+    //
+    // The prompt lands AFTER `finalize_identity` has fenced the restore door, so a single
+    // mistyped character used to cost the custody key outright — with the only remaining
+    // option (restore again into a different fresh database, taking a second superseding
+    // identity) stated nowhere.
+
+    /// A real sealed `CAIRNL1` export the retry tests can try codes against. Every secret is
+    /// derived at runtime (house rule 6); the bundle is the zero value, because these tests
+    /// are about the PROMPT BUDGET, not the payload.
+    fn a_sealed_export(op: &str, code: &str) -> cairn_node::localstate::SealedLocalState {
+        let wraps = cairn_node::localstate::establish_lsk(op, code).unwrap();
+        let bytes = cairn_node::localstate::build_export_container(
+            &wraps,
+            op,
+            &cairn_node::localstate::LocalState::empty(),
+        )
+        .unwrap();
+        cairn_node::localstate::parse_container(&bytes).unwrap()
+    }
+
+    #[test]
+    fn a_mistyped_recovery_code_gets_another_attempt() {
+        let sealed = a_sealed_export(OP_PASS, REC_CODE);
+        let mut asked = 0;
+        let out = unseal_local_state_with_retries(&sealed, 3, |_| {
+            asked += 1;
+            Ok(Zeroizing::new(if asked == 1 {
+                "definitely-not-the-code".to_string()
+            } else {
+                REC_CODE.to_string()
+            }))
+        })
+        .unwrap();
+        assert!(
+            out.is_some(),
+            "one mistyped character must not cost a restored clinic its custody key"
+        );
+        assert_eq!(asked, 2, "and the loop must stop the moment a code works");
+    }
+
+    #[test]
+    fn the_recovery_code_prompt_is_bounded() {
+        // Bounded, not infinite: an unattended restore must not hang forever on a prompt,
+        // and an operator who does not have the code needs to be told what they have lost
+        // rather than asked a fourth time.
+        let sealed = a_sealed_export(OP_PASS, REC_CODE);
+        let mut asked = 0;
+        let out = unseal_local_state_with_retries(&sealed, 3, |_| {
+            asked += 1;
+            Ok(Zeroizing::new("still not the code".to_string()))
+        })
+        .unwrap();
+        assert!(out.is_none(), "three wrong codes is a failure, not a hang");
+        assert_eq!(asked, 3, "and exactly the budget it was given, no more");
+    }
+
+    #[test]
+    fn a_prompt_that_cannot_be_read_stops_immediately() {
+        // The scripted-restore shape: `rpassword::prompt_password` fails on any non-tty.
+        // Retrying a prompt that cannot be READ would spin the same error three times and
+        // tell the operator nothing new, so an `Err` from `ask` propagates at once.
+        let sealed = a_sealed_export(OP_PASS, REC_CODE);
+        let mut asked = 0;
+        let err = unseal_local_state_with_retries(&sealed, 3, |_| {
+            asked += 1;
+            Err(anyhow::anyhow!("not a tty"))
+        })
+        .expect_err("an unreadable prompt is an error, not a wrong guess");
+        assert_eq!(asked, 1, "no point re-asking a prompt that cannot be read");
+        assert!(format!("{err:#}").contains("not a tty"));
     }
 }

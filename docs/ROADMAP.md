@@ -427,7 +427,8 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
   federation-node tier has no clinical surface yet"* — had **EXPIRED** when ADR-0052 made every clinical
   body born-sealed, leaving the bundle empty and the derived unwrap key dead on a restored solo node
   (**#495**). The bundle now carries the **independent** unwrap secret and the surviving `event_dek` rows
-  (a shredded event's excluded by construction), and `restore` installs them. **Still owed: the clinical
+  (a shredded event's excluded by construction), and `restore` installs the secret (the carried rows wait for
+  the events they belong to — #500). **Still owed: the clinical
   event log itself does not travel — [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500), slice 2 —
   so ADR-0026 decision 1 must NOT be cited as met, and its promise 2 ("node-default data-at-rest keys
   survive") has no subject in the built system at all.** **ADR-0026 slices A, C and D complete; B is

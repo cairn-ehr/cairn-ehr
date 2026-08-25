@@ -13,15 +13,16 @@
   (the strict-submit / lenient-apply door precedent this ADR reuses); [ADR-0013](0013-attachments-content-addressed-lazy-blob-tier.md)
   (blob bytes inherit born-sealed via the per-blob DEK); [ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md)
   (additive-only wire — the custody sidecar and the sealed `schema_version` are its application).
-- **Errata:** **E1**, appended 2026-08-11 (under decision 4) — §4's *"any **admitted** peer"* described
-  an intent the code did not implement until [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231).
-  The decision is unchanged; only the record of what was built is corrected.
-  **E2**, appended 2026-08-24 (under decision 4) — decision 4's **derivation** clause (the node unwrap key
-  HKDF-derived from the Ed25519 signing seed) is **superseded by
-  [ADR-0066](0066-identity-dies-with-the-disk-custody-must-not.md)**, which makes it an independent X25519
-  keypair. Where E1 corrected the record of what was built, **E2 makes no change of its own — it records one
-  made by a superseding ADR**, which is what the errata rule requires. The rest of decision 4 — including the
-  no-second-ceremony rationale — stands unchanged.
+- **Errata:**
+  - **E1**, appended 2026-08-11 (under decision 4) — §4's *"any **admitted** peer"* described
+    an intent the code did not implement until [#231](https://github.com/cairn-ehr/cairn-ehr/issues/231).
+    The decision is unchanged; only the record of what was built is corrected.
+  - **E2**, appended 2026-08-24 (under decision 4) — decision 4's **derivation** clause (the node unwrap key
+    HKDF-derived from the Ed25519 signing seed) is **superseded by
+    [ADR-0066](0066-identity-dies-with-the-disk-custody-must-not.md)**, which makes it an independent X25519
+    keypair. Where E1 corrected the record of what was built, **E2 makes no change of its own — it records one
+    made by a superseding ADR**, which is what the errata rule requires. The rest of decision 4 — including the
+    no-second-ceremony rationale — stands unchanged.
 - **Resolves:** [#189](https://github.com/cairn-ehr/cairn-ehr/issues/189) (2026-07-15 review finding C1,
   Critical/window-closing — the seal-by-default posture), [#92](https://github.com/cairn-ehr/cairn-ehr/issues/92)
   (2026-07-02 — the ADR-0005 erasure-ladder composition collisions).

@@ -15,7 +15,8 @@
 >   signing seed: it is an **independent keypair** sealed in its own `<key>.unwrap` file, it rides the
 >   `CAIRNL1` local-state export beside the surviving `event_dek` rows (a **shredded** event's DEK excluded
 >   by construction), and `restore` **adopts** it instead of minting one. **A restored solo node can now
->   inherit and open its own custody.**
+>   inherit its custody KEY.** (Its own custody *records* are a different question — see #500 immediately
+>   below.)
 > - **✗ #500 — THE BYTES. STILL OPEN, AND IT IS THE NEXT BUILD (slice 2).** `backup.rs::read_event_set`
 >   still exports `SELECT signed_bytes FROM node_event`: the medium is the **federation plane only**, so
 >   NO `event_log` row travels — not clinical, not demographic, not identity, not registration. A solo
@@ -28,11 +29,26 @@
 > is useful alone. **Never cite ADR-0026 decision 1's clinical promises as met.** Its promise 2 —
 > *"node-default data-at-rest keys survive"* — has **no subject at all**: no node-default key tier exists,
 > so it is neither honoured nor violated and must not be read as satisfied by anything slice 1 did.
-> **[#502](https://github.com/cairn-ehr/cairn-ehr/issues/502) — item 1 ONLY is fixed** (a
+> **[#502](https://github.com/cairn-ehr/cairn-ehr/issues/502) — items 1 and 3 are fixed.** Item 1: a
 > present-but-unreadable export now **refuses the restore** before the door fences shut, rather than being
-> skipped in silence); **items 2–4 stay open** — `verify-backup` printing `backup OK: 0/0` over a medium
-> that restores nothing, a corrupt `.lsk` diagnosed as "absent" with a remedy that then refuses, and a
-> discarded keystore-load reason.
+> skipped in silence. Item 3: a `.lsk` escrow sidecar that is present but unreadable or corrupt is now
+> diagnosed as **present-but-unusable** — with the *move it aside first* remedy, because
+> `establish-local-state-key` refuses while the file exists — instead of being reported as "absent" and
+> sending the operator to a command that then refuses. That one mattered more since ADR-0066: the sealed
+> export is the only vehicle carrying a node's custody KEY off the machine, so a node with a bit-rotted
+> sidecar backed up nightly, passed `verify-backup`, and never let its custody key leave.
+> **Items 2 and 4 stay open** — `verify-backup` printing `backup OK: 0/0` over a medium that restores
+> nothing, and a discarded keystore-load reason.
+>
+> **⚠️ OPERATIONAL, AND NOTHING ELSE SAYS IT: federated sync is inoperable until
+> [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503) lands.** `cairn-sync` gained a startup fence
+> that compares the unwrap key it holds against the one the database has registered, and it still
+> **HKDF-derives** its key from the signing seed while `cairn-node init` now **generates** an independent
+> one (ADR-0066). Those disagree by construction, so `cairn-sync pull` / `serve` / `run` **refuse to start**
+> against any node provisioned by today's `cairn-node init`. That refusal is deliberate and loud — the
+> alternative is a daemon silently wrapping DEKs to a key the node cannot open — but it means **no node
+> built on this branch can federate** until #503 converts `cairn-sync` to load the provisioned key (a
+> shared keystore crate). Single-node work, `backup`, and `restore` are unaffected.
 >
 > **The reusable lesson, and the reason this hid for weeks:** *a deferral is only honest while its stated
 > precondition holds, and nothing in the repo watches for one expiring.* The `localstate.rs` module header

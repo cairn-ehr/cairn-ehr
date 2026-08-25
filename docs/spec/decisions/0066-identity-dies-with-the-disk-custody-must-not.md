@@ -122,10 +122,10 @@ named for `event_dek` custody; its dual-recipient seal (op-passphrase **or** rec
 escrow an unwrap secret needs; and it is written as a **sibling of the medium** on every backup, so it
 shares the medium's fate.
 
-The export therefore satisfies **point 3's** stated test unchanged — *"a stolen, unsealed artifact yields
-**read access but not a signing identity**"* — the same sentence decision 2 cites, and the locus to quote when
-citing this test anywhere (point 4 makes the related but differently-worded claim that *"a stolen backup cannot
-resurrect a node identity"*). Someone holding the export plus a secret can read the dead node's records; they still cannot
+The export therefore satisfies **ADR-0026 point 3's** stated test unchanged — *"a stolen, unsealed artifact
+yields **read access but not a signing identity**"* — the same sentence **this ADR's decision 2** cites, and the
+locus to quote when citing this test anywhere (**ADR-0026 point 4** makes the related but differently-worded
+claim that *"a stolen backup cannot resurrect a node identity"*). Someone holding the export plus a secret can read the dead node's records; they still cannot
 sign as it. That is the boundary ADR-0026 drew on purpose, and this ADR keeps it exactly where it was.
 
 The slot is **typed and additive** ([ADR-0012](0012-schema-evolution-event-format-and-legibility-across-time.md)):

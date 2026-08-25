@@ -606,11 +606,31 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
     )
     .await
     .unwrap();
-    // ADR-0052: register THIS node's unwrap key (derived from the device key) so the strict
-    // door can wrap every sealed event's DEK into custody — attestation events are
-    // clinical.* and born-sealed too. A node has exactly ONE unwrap key regardless of who
-    // signs individual events; deriving it from the human key would collide on the
-    // node_unwrap_key singleton.
+    // ADR-0052: register THIS node's unwrap key so the strict door can wrap every sealed
+    // event's DEK into custody — attestation events are clinical.* and born-sealed too. A
+    // node has exactly ONE unwrap key regardless of who signs individual events; deriving it
+    // from the human key would collide on the node_unwrap_key singleton.
+    //
+    // WHY THIS FIXTURE STILL DERIVES, SINCE ADR-0066 — read before "fixing" it. ADR-0066
+    // made a real node's unwrap key an INDEPENDENT X25519 keypair, PROVISIONED by
+    // `cairn-node init` / `establish-unwrap-key` rather than derived from the signing seed.
+    // This fixture keeps deriving from the device key on purpose, for two reasons:
+    //
+    //   1. It stands in for PROVISIONING. A DB-only test has no keystore file, so the
+    //      fixture needs some deterministic secret to register, and the derivation is the
+    //      cheapest one reproducible from a key the test already holds. The door cannot tell
+    //      a derived key from a generated one (that is ADR-0066 decision 1's whole point),
+    //      so nothing under test is weakened by the choice.
+    //   2. Other code DEPENDS on it being the derived one. `submit_medication_with_raw_safety`
+    //      and `build_raw_safety_medication` below re-register the same derived key so they
+    //      work whether or not this fixture ran first — and `node_unwrap_key`'s registrar is
+    //      a singleton that REFUSES a differing key, so a generated key here would break
+    //      them. `dr_clinical_guarantee_gap.rs` goes further and re-derives this exact secret
+    //      to get hold of the node's custody; it documents the dependency from its side, and
+    //      this is the same fact stated from ours.
+    //
+    // So: derived HERE is a test-fixture convention, never a claim about production. If it
+    // ever changes, all four sites change together.
     let secret = cairn_event::seal::derive_unwrap_secret(&sk_d.to_bytes());
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
