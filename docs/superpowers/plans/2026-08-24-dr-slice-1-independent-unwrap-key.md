@@ -967,9 +967,9 @@ Delete the `⚠️ #495 — THIS CEREMONY SUCCEEDS OVER AN EMPTY BUNDLE` warning
 
 In `dr_clinical_guarantee_gap.rs`:
 
-- **Delete** `local_state_export_carries_no_dek_though_the_database_holds_one` — Step 1's test replaces it. Keep its `node_default_store == 0` assertion by moving it into the new test verbatim, with its comment: promise 2 still has no subject, and that is still worth pinning.
+- **Delete** `local_state_export_carries_no_dek_though_the_database_holds_one` — Step 1's test replaces it. Keep its `node_default_store == 0` assertion by moving it into the new test verbatim, with its comment: promise 2 still has no subject, and that is still worth pinning. *(As built, the replacement is named `the_export_carries_the_unwrap_secret_and_the_surviving_dek` — the name changed during implementation.)*
 - **`export_carries_no_dek_for_the_survivor_and_none_for_the_shredded`**: invert the first assertion (the survivor's DEK **must** now be present) and leave the second exactly as written — the shredded event's key must still never appear. That asymmetry is the whole point of the test and it becomes load-bearing on this commit.
-- **`the_only_local_state_producer_is_the_empty_constructor`**: the producer moved to `localstate_read.rs`, so this guard's file scan must now cover both files and expect **2** producers, naming them. Update the doc comment to say why.
+- **`the_only_local_state_producer_is_the_empty_constructor`**: the producer moved to `localstate_read.rs`, so this guard's file scan must now cover both files and expect **2** producers, naming them. Update the doc comment to say why. *(As built, it was renamed `local_state_producers_are_the_empty_constructor_and_the_db_reader`, and the PR review widened it from two NAMED files to a walk over `crates/*/src` — a two-file scan would have stayed green on a third producer in a new file.)*
 - **`a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body`**: stays green — it describes the derivation's mechanics, which are unchanged. Update its doc to say the derivation is now migration-only, so a future reader does not mistake it for a description of the live path.
 - **`medium_carries_the_federation_plane_and_no_clinical_event`**: untouched. It is #500's pin and slice 2 inverts it.
 

@@ -231,8 +231,12 @@ record: paper's duplicate costs a photocopy per page, forever; Cairn's costs a n
 `dr_clinical_guarantee_gap.rs` was written to go red on the commit that fixes the gap, each assertion
 naming what it must be inverted to. **No pin may survive both slices unchanged.**
 
-- **Slice 1 inverts** `a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body` (a restored
-  node *can* now open it) and `local_state_export_carries_no_dek_though_the_database_holds_one`.
+- **Slice 1 inverts** `a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body` and
+  `local_state_export_carries_no_dek_though_the_database_holds_one`. *(Both names changed during
+  implementation. As built: the second was replaced by
+  `the_export_carries_the_unwrap_secret_and_the_surviving_dek`; the first was KEPT green rather than
+  inverted, because it describes the derivation's mechanics, which are unchanged — the derivation is now
+  the adoption migration only, and its doc says so.)*
 - **Slice 2 inverts** `medium_carries_the_federation_plane_and_no_clinical_event`.
 - **The MECHANISM test stays true** and its comment is updated to say why.
 
