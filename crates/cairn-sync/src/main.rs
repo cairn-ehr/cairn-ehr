@@ -2747,14 +2747,14 @@ fn representative_medication_payload() -> serde_json::Value {
 /// ADR-0052) and checks the whole pipeline against the Bet-B ~4 ms p95 latency budget:
 /// it is AEAD over ~1.5 KB, so it must land microseconds-scale, orders below the budget.
 ///
-/// House rule 6: the recipient unwrap keypair is DERIVED at runtime from a freshly
-/// generated seed (`generate_key`), never a hard-coded byte literal — and the seal/wrap
+/// House rule 6: the recipient unwrap secret is GENERATED at runtime from the OS RNG
+/// (`generate_unwrap_secret`), never a hard-coded byte literal — and the seal/wrap
 /// primitives draw their own fresh DEK + nonce from the OS RNG internally, so nothing in
 /// this bench presents hard-coded cryptographic material to the scanner.
 fn cmd_bench_seal(iters: usize) -> R<()> {
     use cairn_event::seal::{
-        derive_unwrap_secret, seal_event_payload, unseal_event_payload, unwrap_dek, unwrap_public,
-        wrap_dek_for,
+        generate_unwrap_secret, seal_event_payload, unseal_event_payload, unwrap_dek,
+        unwrap_public, wrap_dek_for,
     };
 
     let payload = representative_medication_payload();
@@ -2762,9 +2762,11 @@ fn cmd_bench_seal(iters: usize) -> R<()> {
     let twin = "metformin 500 mg tablet — one BD, patient-reported, started 2023";
     let event_id = uuid::Uuid::now_v7().to_string();
 
-    // Recipient (node) unwrap keypair, derived at runtime from a fresh random seed.
-    let (sk, _kid) = cairn_event::generate_key()?;
-    let secret = derive_unwrap_secret(&sk.to_bytes());
+    // Recipient (node) unwrap keypair, generated fresh for the benchmark. Deliberately
+    // NOT derived from a signing seed: this measures crypto cost, so the secret's
+    // provenance is irrelevant, and reaching for `derive_unwrap_secret` here would keep
+    // a dead coupling alive in a file that no longer has one (ADR-0066, issue #503).
+    let secret = generate_unwrap_secret()?;
     let public = unwrap_public(&secret);
 
     // Stage 1: seal the body under a fresh per-event DEK.

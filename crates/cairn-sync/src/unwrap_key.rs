@@ -211,6 +211,34 @@ pub fn unwrap_file_path(key_path: &str, override_path: Option<&str>) -> std::pat
     }
 }
 
+/// Turn the raw `node_unwrap_key.unwrap_pub` column value into the registered public key,
+/// or refuse.
+///
+/// `None` means no row exists — nothing has claimed custody on this node yet, a legitimate
+/// state that resolves to `Ok(None)`. `Some(bytes)` means a row exists; if it is not
+/// exactly 32 bytes, this is a REFUSAL, never "nothing registered" — A ROW THAT IS NOT 32
+/// BYTES MUST NEVER FOLD INTO `None`. db/037 CHECKs this column, so the error path is
+/// unreachable through this node's own schema today — but a daemon that does not own that
+/// schema must not stake a safety gate on a constraint living in it, and treating a
+/// malformed row as "nothing registered" would be fail-OPEN inside a fail-fast gate.
+///
+/// Pure — no IO, no database handle — so this one small but safety-relevant branch is
+/// unit-testable on its own. [`resolve_at_startup`] is the only caller.
+fn registered_from_row(bytes: Option<Vec<u8>>) -> Result<Option<[u8; 32]>, String> {
+    match bytes {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(bytes.as_slice().try_into().map_err(|_| {
+            format!(
+                "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody \
+                 plane is malformed and this daemon cannot tell whether its own unwrap key \
+                 agrees with it. Refusing to start rather than proceeding as though no key \
+                 were registered.",
+                bytes.len()
+            )
+        })?)),
+    }
+}
+
 /// Resolve this daemon's custody key at startup, or refuse to start.
 ///
 /// This is the one DB-touching step: it reads the registered public key, hands everything
@@ -227,27 +255,11 @@ pub fn resolve_at_startup(
     let path = unwrap_file_path(key_path, unwrap_path_override);
     let display = path.display().to_string();
 
-    // `query_opt`, not `query_one`: an absent row is a legitimate "nothing claimed".
+    // `query_opt`, not `query_one`: an absent row is a legitimate "nothing claimed". The
+    // malformed-vs-absent distinction itself lives in the pure `registered_from_row`,
+    // so it can be unit-tested without a database.
     let row = client.query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])?;
-    let registered: Option<[u8; 32]> = match row.map(|r| r.get::<_, Vec<u8>>(0)) {
-        None => None,
-        Some(bytes) => {
-            // A ROW THAT IS NOT 32 BYTES IS A REFUSAL, NEVER "nothing registered".
-            // db/037 CHECKs this column, so the branch is unreachable today — but a
-            // daemon that does not own this schema must not stake a safety gate on a
-            // constraint in it, and folding a malformed row into `None` would be
-            // fail-OPEN inside a fail-fast gate.
-            Some(bytes.as_slice().try_into().map_err(|_| {
-                format!(
-                    "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody \
-                     plane is malformed and this daemon cannot tell whether its own unwrap key \
-                     agrees with it. Refusing to start rather than proceeding as though no key \
-                     were registered.",
-                    bytes.len()
-                )
-            })?)
-        }
-    };
+    let registered = registered_from_row(row.map(|r| r.get::<_, Vec<u8>>(0)))?;
 
     // The passphrase for a sealed key file, the same environment variable cairn-node
     // reads. Absent, a sealed file classifies Unusable (with the remedy named) — it never
@@ -308,9 +320,11 @@ mod tests {
 
     #[test]
     fn a_loaded_file_diverging_from_the_registration_refuses() {
-        let registered = unwrap_public(&secret_fixture(0x33));
+        let registered_secret = secret_fixture(0x33);
+        let registered = unwrap_public(&registered_secret);
+        let loaded_secret = secret_fixture(0x44);
         let r = resolve(
-            FileOutcome::Loaded(secret_fixture(0x44)),
+            FileOutcome::Loaded(loaded_secret.clone()),
             secret_fixture(0x55),
             Some(&registered),
             "node.key.unwrap",
@@ -321,6 +335,27 @@ mod tests {
         assert!(
             m.contains("node.key.unwrap"),
             "the refusal names the file: {m}"
+        );
+        // The refusal is an operator's only lead at 3am: it must name BOTH keys (so a
+        // restored-vs-registered mismatch is diagnosable at a glance), the ADR that made
+        // this a hard refusal rather than a silent fallback, and the tracking issue.
+        // Pinned here because nothing else in the suite checks the message text, and a
+        // later edit that shortened it to e.g. "unwrap key mismatch" would leave every
+        // other test green.
+        let file_prefix = hex::encode(&unwrap_public(&loaded_secret)[..8]);
+        let registered_prefix = hex::encode(&registered[..8]);
+        assert!(
+            m.contains(&file_prefix),
+            "the refusal names the file's own key prefix ({file_prefix}): {m}"
+        );
+        assert!(
+            m.contains(&registered_prefix),
+            "the refusal names the registered key's prefix ({registered_prefix}): {m}"
+        );
+        assert!(m.contains("ADR-0066"), "the refusal names the ADR: {m}");
+        assert!(
+            m.contains("503"),
+            "the refusal names the tracking issue: {m}"
         );
     }
 
@@ -374,16 +409,35 @@ mod tests {
     fn an_absent_file_whose_derived_key_diverges_refuses() {
         // The RESTORED node: fresh signing seed, so the derived key cannot be the one
         // its inherited event_dek rows are wrapped to. This is the #495 shape, caught.
-        let registered = unwrap_public(&secret_fixture(0x99));
+        let registered_secret = secret_fixture(0x99);
+        let registered = unwrap_public(&registered_secret);
+        let derived = secret_fixture(0xAA);
         let r = resolve(
             FileOutcome::Absent,
-            secret_fixture(0xAA),
+            derived.clone(),
             Some(&registered),
             "node.key.unwrap",
         );
+        let Resolution::Refuse(m) = r else {
+            panic!("a restored node must never proceed on a derived key");
+        };
+        // Same pin as the loaded-divergence case above: both key prefixes, the ADR, and
+        // the issue must all survive in this message, or an operator debugging a
+        // restored node loses the one lead the refusal exists to give them.
+        let derived_prefix = hex::encode(&unwrap_public(&derived)[..8]);
+        let registered_prefix = hex::encode(&registered[..8]);
         assert!(
-            matches!(r, Resolution::Refuse(_)),
-            "a restored node must never proceed on a derived key"
+            m.contains(&derived_prefix),
+            "the refusal names the derived key's prefix ({derived_prefix}): {m}"
+        );
+        assert!(
+            m.contains(&registered_prefix),
+            "the refusal names the registered key's prefix ({registered_prefix}): {m}"
+        );
+        assert!(m.contains("ADR-0066"), "the refusal names the ADR: {m}");
+        assert!(
+            m.contains("503"),
+            "the refusal names the tracking issue: {m}"
         );
     }
 
@@ -543,6 +597,51 @@ mod tests {
             unwrap_file_path("/nodes/a/node.key", None),
             std::path::Path::new("/nodes/a/node.key.unwrap"),
             "same rule cairn-node uses to place the file it provisions"
+        );
+    }
+
+    #[test]
+    fn registered_from_row_with_no_row_is_nothing_claimed() {
+        assert_eq!(
+            registered_from_row(None),
+            Ok(None),
+            "an absent row is a legitimate 'nothing registered', never an error"
+        );
+    }
+
+    #[test]
+    fn registered_from_row_with_a_32_byte_row_parses_it() {
+        // Not a secret and not asserted as one — this is a stand-in for an opaque
+        // 32-byte column value, so plain derived bytes (no `secret_fixture`/crypto
+        // helper) are the right fixture here.
+        let bytes: Vec<u8> = (0..32u8).collect();
+        let expected: [u8; 32] = bytes.clone().try_into().unwrap();
+        assert_eq!(
+            registered_from_row(Some(bytes)),
+            Ok(Some(expected)),
+            "a well-formed row parses straight through"
+        );
+    }
+
+    #[test]
+    fn registered_from_row_with_a_short_row_refuses_and_names_the_count() {
+        let bytes: Vec<u8> = (0..31u8).collect();
+        let err = registered_from_row(Some(bytes)).expect_err("31 bytes must refuse");
+        assert!(
+            err.contains("31 bytes"),
+            "a malformed row must never fold into `None` — the refusal names the actual \
+             byte count: {err}"
+        );
+    }
+
+    #[test]
+    fn registered_from_row_with_a_long_row_refuses_and_names_the_count() {
+        let bytes: Vec<u8> = (0..33u8).collect();
+        let err = registered_from_row(Some(bytes)).expect_err("33 bytes must refuse");
+        assert!(
+            err.contains("33 bytes"),
+            "a malformed row must never fold into `None` — the refusal names the actual \
+             byte count: {err}"
         );
     }
 }
