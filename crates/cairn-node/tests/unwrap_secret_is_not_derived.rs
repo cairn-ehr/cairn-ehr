@@ -173,7 +173,7 @@ fn calls_derive_unwrap_secret(text: &str) -> bool {
 /// deleted. The entry is still correctly absent, now for the stronger reason.
 const ALLOWED: &[(&str, &str)] = &[
     (
-        "crates/cairn-node/src/keystore.rs",
+        "crates/cairn-keystore/src/keystore.rs",
         "the ADR-0066 adoption migration (`adopt_derived_unwrap_secret`) — the one place a \
          pre-ADR-0066 node re-derives its old secret to keep its existing event_dek rows openable",
     ),

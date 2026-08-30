@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/cairn-event",
+    "crates/cairn-keystore", # the shared at-rest key-file layer (#503)
     "crates/cairn-medication-view",
     "crates/cairn-patient-search",
     "crates/cairn-sync",

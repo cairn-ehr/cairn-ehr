@@ -182,7 +182,11 @@ impl SealedKey {
     }
 }
 
-pub(crate) fn rand_bytes<const N: usize>() -> Result<[u8; N], SealError> {
+// `pub`, not `pub(crate)`: cairn-node's localstate.rs (a separate crate since the #503
+// extraction) reuses this and the four helpers below directly rather than duplicating
+// them. `pub(crate)` stopped reaching across the new crate boundary — it never widened
+// exposure beyond that one known, audited call site.
+pub fn rand_bytes<const N: usize>() -> Result<[u8; N], SealError> {
     let mut b = [0u8; N];
     getrandom::fill(&mut b).map_err(|e| SealError::Entropy(e.to_string()))?;
     Ok(b)
@@ -211,18 +215,15 @@ fn derive_kek(
 // In both helpers below, `.into()` borrows the fixed-size key/nonce arrays as the
 // AEAD `Key`/`XNonce` types (zero-copy; chacha20poly1305 0.11 deprecated the
 // `from_slice` idiom they previously used).
-pub(crate) fn aead_encrypt(
-    key: &[u8; 32],
-    nonce: &[u8; 24],
-    pt: &[u8],
-) -> Result<Vec<u8>, SealError> {
+// `pub` for the same cross-crate reason as `rand_bytes` above.
+pub fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 24], pt: &[u8]) -> Result<Vec<u8>, SealError> {
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher
         .encrypt(nonce.into(), pt)
         .map_err(|_| SealError::Aead)
 }
 
-pub(crate) fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
+pub fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher.decrypt(nonce.into(), ct).ok()
 }
@@ -246,7 +247,8 @@ fn key_into_zeroizing(bytes: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
 
 /// Wrap one DEK copy under a secret. The recovery code is normalized first so any
 /// spacing/case the human re-types still derives the same KEK.
-pub(crate) fn wrap_dek(
+// `pub` for the same cross-crate reason as `rand_bytes` above.
+pub fn wrap_dek(
     dek: &[u8; 32],
     secret: &str,
     salt: &[u8; 16],
@@ -258,7 +260,8 @@ pub(crate) fn wrap_dek(
     Ok(Wrap { nonce, ct })
 }
 
-pub(crate) fn try_unwrap(
+// `pub` for the same cross-crate reason as `rand_bytes` above.
+pub fn try_unwrap(
     w: &Wrap,
     secret: &str,
     salt: &[u8; 16],

@@ -290,6 +290,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-keystore"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "cairn-event",
+ "chacha20poly1305",
+ "ciborium",
+ "getrandom 0.4.3",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "cairn-medication-view"
 version = "0.1.0"
 dependencies = [
@@ -306,6 +321,7 @@ dependencies = [
  "argon2",
  "base64",
  "cairn-event",
+ "cairn-keystore",
  "cairn-medication-view",
  "cairn-patient-search",
  "chacha20poly1305",
