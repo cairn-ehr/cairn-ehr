@@ -29,33 +29,28 @@
 > is useful alone. **Never cite ADR-0026 decision 1's clinical promises as met.** Its promise 2 —
 > *"node-default data-at-rest keys survive"* — has **no subject at all**: no node-default key tier exists,
 > so it is neither honoured nor violated and must not be read as satisfied by anything slice 1 did.
-> **[#502](https://github.com/cairn-ehr/cairn-ehr/issues/502) — items 1 and 3 are fixed.** Item 1: a
-> present-but-unreadable export now **refuses the restore** before the door fences shut, rather than being
-> skipped in silence. Item 3: a `.lsk` escrow sidecar that is present but unreadable or corrupt is now
-> diagnosed as **present-but-unusable** — with the *move it aside first* remedy, because
-> `establish-local-state-key` refuses while the file exists — instead of being reported as "absent" and
-> sending the operator to a command that then refuses. That one mattered more since ADR-0066: the sealed
-> export is the only vehicle carrying a node's custody KEY off the machine, so a node with a bit-rotted
-> sidecar backed up nightly, passed `verify-backup`, and never let its custody key leave.
-> **Item 2 is now fixed too**, in the review wave: `verify-backup` refuses a zero-event medium instead
-> of reporting `backup OK: 0/0` over an artifact that restores nothing. Checked in the CLI arm and NOT in
-> `all_intact()`, because `backup_to`'s verify-before-write calls the same predicate and a node with no
-> events yet must still be able to write its first medium — *is this medium internally consistent* and
-> *is this medium worth anything* are different questions. The same command also stopped printing an
-> all-clear it had not established: it now reports the sealed export sibling beside the medium and
-> **declares that the export's contents were not checked**, because `verify-backup` holds no recovery
-> code and cannot know whether the export carries a custody key. **Item 4 stays open** — a discarded
-> keystore-load reason.
+> **[#502](https://github.com/cairn-ehr/cairn-ehr/issues/502) — items 1, 2 and 3 are fixed; item 4
+> (a discarded keystore-load reason) stays open.** A present-but-unreadable export now **refuses the
+> restore** instead of being skipped in silence; a `.lsk` escrow sidecar that is present but corrupt is
+> diagnosed as **present-but-unusable** with the *move it aside first* remedy, rather than reported as
+> "absent" and sending the operator to a command that then refuses; and `verify-backup` refuses a
+> zero-event medium instead of reporting `backup OK: 0/0` over an artifact that restores nothing —
+> checked in the CLI arm and NOT in `all_intact()`, because *is this medium internally consistent* and
+> *is this medium worth anything* are different questions and a node with no events yet must still be
+> able to write its first medium. That command also stopped printing an all-clear it had not
+> established: it reports the sealed export sibling beside the medium and **declares that the export's
+> contents were not checked**, because it holds no recovery code and cannot know whether the export
+> carries a custody key.
 >
-> **⚠️ OPERATIONAL, AND NOTHING ELSE SAYS IT: federated sync is inoperable until
-> [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503) lands.** `cairn-sync` gained a startup fence
-> that compares the unwrap key it holds against the one the database has registered, and it still
-> **HKDF-derives** its key from the signing seed while `cairn-node init` now **generates** an independent
-> one (ADR-0066). Those disagree by construction, so `cairn-sync pull` / `serve` / `run` **refuse to start**
-> against any node provisioned by today's `cairn-node init`. That refusal is deliberate and loud — the
-> alternative is a daemon silently wrapping DEKs to a key the node cannot open — but it means **no node
-> built on this branch can federate** until #503 converts `cairn-sync` to load the provisioned key (a
-> shared keystore crate). Single-node work, `backup`, and `restore` are unaffected.
+> **✓ FEDERATED SYNC WORKS AGAIN — [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503) IS CLOSED**
+> (2026-08-30). `cairn-sync` briefly could not start against any node provisioned by today's
+> `cairn-node init`: it HKDF-derived its unwrap key from the signing seed while `init` generated an
+> independent one (ADR-0066), and those disagree by construction. The new `crates/cairn-keystore` carries
+> the sealed key-file format both binaries need, and `cairn-sync` now **LOADS** the provisioned key at
+> startup (`<key>.unwrap`, or `--unwrap-key`; `CAIRN_KEY_PASSPHRASE` unseals it) — resolved **once**, then
+> carried, instead of derived independently at six sites. **It still refuses to start** on a key that
+> diverges from the registered one, on a restored node's fresh-seed derivation, and on a **corrupt or
+> passphrase-less** key file. **One derived path survives by design** — see trap 3.
 >
 > **The reusable lesson, and the reason this hid for weeks:** *a deferral is only honest while its stated
 > precondition holds, and nothing in the repo watches for one expiring.* The `localstate.rs` module header
@@ -83,10 +78,16 @@
 >    existing key file needs `cairn-node establish-unwrap-key` before its first sealed write** — six test
 >    suites (one in another crate) depended on the old implicit behaviour. Never make a red fixture green
 >    by weakening `ensure_unwrap_key`.
-> 3. **`cairn-sync` still DERIVES its unwrap secret** — no production dependency on `cairn-node`, so it
->    cannot read the keystore file, and a freshly-provisioned node registers an independent key while the
->    daemon derives a different one. It now **fails fast at startup** rather than degrading into a serve arm
->    indistinguishable from a peer with no custody. Real fix: a shared `cairn-keystore` crate, **#503**.
+> 3. **`cairn-sync` LOADS its unwrap secret now (#503) — with ONE derived fallback, and the reason it is
+>    safe is the reason not to widen it.** With no `<key>.unwrap` file AND a derived key that **equals**
+>    the registered one, the daemon starts on the derived secret and **warns on every startup**: that node
+>    is provably pre-ADR-0066, and the derived key is provably the one its `event_dek` rows are wrapped to.
+>    A **restored** node derives a key that does *not* match and is refused — the #495 shape, caught. The
+>    load-bearing asymmetry: an **absent** file may fall back, a **present-but-unusable** one (corrupt, or
+>    sealed with no `CAIRN_KEY_PASSPHRASE`) **never** may, because a successful derive would mask the rot
+>    of the only file carrying this node's custody off the machine. **Never "simplify" those two into one
+>    arm.** The whole table is pure and unit-tested in `crates/cairn-sync/src/unwrap_key.rs`; retiring the
+>    fallback is **#514**.
 > 4. **⇒ NEVER RUN `establish-unwrap-key` ON A RESTORED NODE WHOSE EXPORT COULD NOT BE READ.** It adopts a
 >    secret derived from the **new** signing seed and registers it, and `node_unwrap_key`'s singleton
 >    registrar then refuses the real exported key **permanently**. It is the operator's obvious next step
@@ -191,7 +192,7 @@ clinical surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (through **ADR-0066** — *identity dies with the disk; custody must not*) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 1 adds no migration) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514, #515) · previous: 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (through **ADR-0066** — *identity dies with the disk; custody must not*) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 1 adds no migration) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -214,166 +215,146 @@ JS, no npm), with the pane/routing/freshness state machine tested but **not wire
 ROADMAP carries the per-slice narrative and **every open issue number** (including an index of the ones
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
-### 2026-08-24 (last) — DR slice 1: the unwrap key stops dying with the signing seed
+### 2026-08-30 (last) — #503: the shared keystore crate, and federated sync comes back
 
-**Closes [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495)
-([ADR-0066](spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md), spec v0.68); opens
-#503–#509 and #511–#513, and closes #502 item 2. No migration — SCHEMA stays 50.** Shipped: an independent X25519 unwrap keypair sealed in its own `<key>.unwrap` file
-(same dual-recipient envelope as the signing key); a **lossless adoption path** for pre-ADR nodes
-(`keystore::adopt_derived_unwrap_secret` re-derives the old secret **once**, so existing `event_dek` rows
-stay openable); the secret and the surviving custody rows riding the `CAIRNL1` export with a **shredded
-event's DEK excluded by construction**; and `restore` INSTALLING the inherited key instead of minting one.
-**#495's status, #500's, and the four traps are in ⇒ NEXT — read that split before citing this anywhere.**
-Opened: **#503** (cairn-sync derives — extract a shared `cairn-keystore`), **#504** (dead `_node_sk` on two
-orchestrators — removing it would silently drop a passphrase ceremony, so it is a decision, not a
-refactor), **#505** (the migration path mints a SECOND recovery code — the *documentation* half is
-closed, decision 1 was scoped before merge so no erratum is owed; the open half is whether to offer an
-opt-in single-code migration), **#506** (`establish-unwrap-key`'s CLI arm has no integration test), **#507**
-(provisioning duplicated across 8 fixtures), **#508** (CBOR serialization leaves unwiped copies of the
-unwrap secret in freed heap — the real fix is a container-format decision, not a patch), **#509** (a
-fourth fail-open of the class this slice fixed three of), **#511** (`Secret32`/`PublicKey32` newtypes —
-every key in the custody plane is a bare `[u8; 32]`, so public-for-secret compiles), **#512** (the
-`M > N` paper-parity defect house rule 7 required be filed), **#513** (no end-to-end test of the
-backup→export keystore seam). What generalises:
+**Closes [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503); opens #514, #515. No ADR, no spec
+bump, no migration — this IMPLEMENTS ADR-0066, it decides nothing ADR-0066 left open.** New crate
+`crates/cairn-keystore` (the `CAIRNK1` sealed-bundle format + the key-file loader + the crash-safe
+atomic write, moved verbatim out of `cairn-node`), which `cairn-sync` can depend on without depending
+on a whole node application. `cairn-node` re-exports the three modules, so its **221** call sites across
+~30 files compile untouched — that was the extraction's whole proof. `cairn-sync` then resolves its
+custody key **once at startup** through a pure decision table (`src/unwrap_key.rs`) and threads a
+`NodeCustody` value down, replacing six independent derivations. What generalises:
 
-0. **⇒ THE REVIEW WAVE FOUND THE SLICE'S OWN FAILURE SHAPE INSIDE THE SLICE — TWICE.** (a) `restore` told
-   an operator *"The export itself is intact; the code is what failed"* after a spent recovery-code
-   budget. It cannot know that: `parse_container` validates the `CAIRNL1` magic and the CBOR frame and
-   **nothing else**, so damage inside the sealed body and a mistyped code produce the identical `None`.
-   A **precise untruth in the reassuring direction, at the one moment the operator has no second
-   attempt** — principle 4 inverted, in the slice written to correct exactly that. It now names both
-   causes and claims neither. (b) **ADR-0066 decision 1 asserted a property this branch's own code
-   contradicted** — *"exactly one escrow ceremony, one printed code, one safe"*, while the migration
-   path mints a second code and says so in its own comment. ADRs are **immutable once merged**, so this
-   was a brand-new ADR being born owing an erratum; it was scoped pre-merge instead. ⇒ **The window in
-   which an ADR is ordinary editable prose closes at merge — spend it.**
+1. **⇒ A GUARD THAT REJECTS A DEAD ENTRY MAKES ITS OWN LIST A SEQUENCING CONSTRAINT.** The plan had the
+   `derive_unwrap_secret` allow-list entry merely *reworded* at the end. But the call MOVES file
+   mid-slice (`main.rs` → `unwrap_key.rs`) and then disappears, so the guard would have failed twice —
+   an unlisted offender, then a dead entry. **Caught by the pre-flight plan scan, not by a test**, which
+   is the argument for reading a plan against the gates before handing it to anyone. **When it fails,
+   delete the entry it names; never add one.**
+2. **⇒ `cargo test --bin X <filter>` COMPILES WITH `cfg(test)`, SO NEW ITEMS LOOK USED.** Tasks 2-3 left
+   four items with no production caller; the scoped test command hid it and only a plain build (which
+   `warnings = "deny"` fails on `dead_code`) surfaced it. Same trap already recorded for `--lib`:
+   **use `--all-targets`** when the question is "is this reachable from production".
+3. **⇒ DELETING A HELPER DELETES ITS TEST'S PIN, AND THE PIN MAY BE THE ONLY ONE.** Removing
+   `unwrap_key_matches` also removed the only assertion that a divergence refusal names both keys,
+   ADR-0066 and the issue. The surviving tests checked the file path alone — so a later edit shortening
+   the message would stay green, at the one moment (a restored node, at 3am) the message is all the
+   operator has. **Ask what a deleted test was pinning, not just what it was testing.**
+4. **⇒ A FAIL-OPEN BRANCH PROTECTED ONLY BY A COMMENT IS PROTECTED BY NOTHING.** The refusal of a
+   present-but-not-32-byte `node_unwrap_key` row sat inside a DB-touching function, unreachable by any
+   test, with a comment warning against exactly the "simplification" that would break it. Extracted as
+   the pure `registered_from_row` and tested. The rule: **if a comment has to warn future readers off a
+   change, a test should be making that change fail.**
+5. **The gate's real cost is macOS, not cargo.** A cross-cutting change (Cargo.lock + `cairn-node`)
+   relinks ~134 test binaries, each drawing a one-time Gatekeeper assessment: **~6 hours**, and a warm
+   `target/` does not help. Confined slices run `cargo test -p cairn-sync` — which **does** build
+   `tests/clinical_pull.rs`, the two-node custody suite; the cross-crate blindness the full gate exists
+   to cover belongs to `-p cairn-node`, not to it.
 
-1. **⇒ BREAKAGE HID FROM A GATE IN THREE DISTINCT WAYS IN ONE SLICE.** (a) **fail-fast** masked 13
-   failures in `medication_coding.rs` — one red binary and cargo stops looking; (b) **`cargo test … | tail`
-   masked cargo's exit status entirely**, so a run was reported as "exit 0" while containing a real failure
-   (the pipeline's status is `tail`'s); (c) a **cross-crate** suite (`cairn-sync/tests/clinical_pull.rs`)
-   was invisible because `-p cairn-node` never builds it while `cargo check --workspace` compiles it
-   **without running it**. ⇒ **`scripts/run-db-gated-tests.sh` is the only gate that catches all three.**
-   Use `--no-fail-fast`, never pipe cargo to `tail`, and never accept `cargo check --workspace` as proof
-   another crate's tests pass.
-2. **⇒ FOUR OF THIS SLICE'S DEFECTS WERE IN THE TASK BRIEFS, NOT THE IMPLEMENTATIONS.** Verbatim brief code
-   that was not rustfmt-clean (the CI fmt gate would have failed the PR); a gate invocation naming one of
-   the three required DB variables; a leaf shape (`event_id` as TEXT) that would have left a
-   shredded-event safety assertion **permanently vacuous** against its raw-16-byte scan; and a key install
-   placed where control flow could never reach it. **Root cause common to all four: the instructions were
-   checked against what the code should do, never against the gates and control flow the project actually
-   runs.** ⇒ **A plan that supplies verbatim code and commands must be run against the project's own gates
-   before it is handed to anyone.** Each was caught by an implementer or reviewer pushing back on the
-   brief — the process working, expensively.
-3. **⇒ REGISTERING CUSTODY AS A WRITE-PATH SIDE EFFECT IS WHAT LET THE DEFECT HIDE.** The old
-   `ensure_unwrap_key` registered a key on the first sealed write, so a node with no custody key never said
-   so — it silently minted one from whatever seed it held. Making it provisioning turned **six** suites red:
-   the measure of how much behaviour rested on the implicit act.
+### 2026-08-24 — DR slice 1: the unwrap key stops dying with the signing seed (condensed)
+
+**Closed [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495) (ADR-0066, spec v0.68) and #502 items
+1–3; opened #503–#509, #511–#513. No migration.** Shipped: an independent X25519 unwrap keypair sealed
+in its own `<key>.unwrap` file; a **lossless adoption path** for pre-ADR nodes
+(`keystore::adopt_derived_unwrap_secret`, the one place a node re-derives its old secret, **once**); the
+secret and the surviving custody rows riding the `CAIRNL1` export with a **shredded event's DEK excluded
+by construction**; and `restore` INSTALLING the inherited key instead of minting one. **#495's status,
+#500's, and the five traps are in ⇒ NEXT — read that split before citing this anywhere.** Still open:
+**#504** (dead `_node_sk` — a decision, not a refactor) · **#505** (the migration mints a SECOND recovery
+code) · **#506** · **#507** · **#508** (CBOR leaves unwiped copies of the unwrap secret in freed heap —
+a container-format decision) · **#509** · **#511** (`Secret32`/`PublicKey32` newtypes — every key in the
+custody plane is a bare `[u8; 32]`, so public-for-secret compiles) · **#512** · **#513**. What
+generalises:
+
+0. **⇒ THE REVIEW WAVE FOUND THE SLICE'S OWN FAILURE SHAPE INSIDE THE SLICE — TWICE.** `restore` told an
+   operator *"The export itself is intact; the code is what failed"* after a spent recovery-code budget —
+   it cannot know that, since damage inside the sealed body and a mistyped code produce the identical
+   `None`. **A precise untruth in the reassuring direction, at the one moment the operator has no second
+   attempt.** And **ADR-0066 decision 1 asserted a property this branch's own code contradicted**; ADRs
+   are immutable once merged, so it was scoped pre-merge instead. ⇒ **The window in which an ADR is
+   ordinary editable prose closes at merge — spend it.**
+1. **⇒ BREAKAGE HID FROM A GATE IN THREE DISTINCT WAYS IN ONE SLICE:** fail-fast masked 13 failures;
+   **`cargo test … | tail` masked cargo's exit status entirely**; and a **cross-crate** suite was
+   invisible because `-p cairn-node` never builds it while `cargo check --workspace` compiles it
+   **without running it**. ⇒ Use `--no-fail-fast`, never pipe cargo to `tail`, and never accept
+   `cargo check --workspace` as proof another crate's tests pass.
+2. **⇒ FOUR OF THIS SLICE'S DEFECTS WERE IN THE TASK BRIEFS, NOT THE IMPLEMENTATIONS** — code that was
+   not rustfmt-clean, a gate invocation naming one of three required DB variables, a leaf shape that
+   would have left a safety assertion permanently vacuous, and a key install control flow could never
+   reach. **Root cause: the instructions were checked against what the code should do, never against the
+   gates and control flow the project actually runs.**
+3. **⇒ REGISTERING CUSTODY AS A WRITE-PATH SIDE EFFECT IS WHAT LET THE DEFECT HIDE** — making it
+   provisioning turned **six** suites red: the measure of how much rested on the implicit act.
 4. **⇒ WHERE NO TEST CARRIES THE VALUE ACROSS THE DISK, THE ONE LINK THAT MATTERS IS PROVEN BY NOTHING.**
    `unwrap_secret` carries `#[serde(default)]`, so a `skip_serializing` mutant deserializes to `None`
-   **silently**: before a populated round-trip test existed, that mutant left every DR test green and every
-   restore keyless — this slice's own failure shape, one layer down. Mutation found it; the green suite
-   could not.
+   **silently** — every DR test green, every restore keyless. Mutation found it; the green suite could not.
 
-### 2026-08-23 (four passes) — the DR audit, §5.9 part C's design, and the misclassification cluster
 
-**Pass 4 — the DR-guarantee audit that produced the slice above.** Confirmed #495 in code, split #500 out
-of it, opened #502; added `dr_clinical_guarantee_gap.rs` (5 tests, every assertion mutation-checked).
-Status is in ⇒ NEXT. What still binds:
+### 2026-08-23 (four passes) — the DR audit, §5.9 part C's design, and the misclassification cluster (condensed)
 
-1. **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** The backup arm sealed an **empty** bundle
-   into a valid `CAIRNL1` container and reported success; `verify-backup` passed; `backup-status.json`
-   recorded a true count of what the medium actually held. **Every surface honest, the composite a precise
-   untruth** — principle 4, and ADR-0026 decision 7's *"must say so"*, violated by a system in which no
-   single component lies.
-2. **⇒ TWO DEFECTS THAT LOOK LIKE ONE MUST BE SPLIT WHEN FIXING EITHER ALONE IS USELESS.** #500 is the
-   bytes, #495 the key. Filed apart so neither could be closed on the strength of the other — which is
-   what let slice 1 close one and leave the other visibly, quotably open.
-3. **⇒ WHERE A GUARANTEE IS ALREADY FALSE, PIN THE DEFECT, NOT THE PROMISE.** A permanently-red test
-   blocks the gate for every unrelated change, so the suite asserts what is true **today**, each assertion
-   naming what it must be INVERTED to. Anti-vacuity explicit: the node is provisioned, the DEK is written
-   by the **production door**, and the pure test asserts the happy path *first*.
-4. **Cross-ADR claims about the same key material need checking where they meet, which is code.** The
-   derivation bought *"no new key-management mechanism"* and paid with a contradiction against ADR-0026
-   decision 4 that **neither ADR could see from inside itself**.
-
+**Pass 4 — the DR-guarantee audit** that produced DR slice 1: confirmed #495 in code, split #500 out of
+it, opened #502, added `dr_clinical_guarantee_gap.rs` (5 tests, every assertion mutation-checked).
 **Pass 3 — §5.9 parts C+D designed** (ADR-0065, spec v0.66 → v0.67; opened #494–#496, answered #376,
-merged #377). The ladder is in ⇒ NEXT; **#494**, **#496**, **#498**, **#499** stay open. Four lessons, all
-argued in full in the ADR: **⇒ a control a faithful peer defeats *by computing correctly* is not weak — it
-is incoherent** (the real quiet leaks are registry divergence and replication lag, not thread resolution) ·
-**⇒ "conservative" is a property of a DIRECTION, not of a value** — before reusing a bound, ask what it now
-drives · **⇒ *refuse at a door only what that door can drop whole*** — the question is never how defective
-the bytes are, it is what else dies with them · **⇒ fail-closed was affordable only because something else
-guaranteed reachability**, and that guarantee is already bounded (**#498**). ⇒ **That pass's ROADMAP
-condensation deleted the "Open-issue index", orphaning 22 live numbers in one edit. A line cap is never a
-reason to drop a live issue.**
-
-**Passes 1–2 — the misclassification cluster and the sweep's tail** (closed #489, #482, #480, #490 items
-1–2, #481, #479, #477; opened #485, #487–#492). All one species: **a failure wearing another subsystem's
-clothes.** Traps that still bind:
-
-1. **⇒ A CLASS IS AN OPERATOR INSTRUCTION, AND A DEFAULT-BY-ELIMINATION IS NOT ONE.** Both pull classifiers
-   used `partition` (*go and look at the link*) as catch-all **and** as a diagnosis. **⇒ The recogniser is
-   a TYPE or an `io::ErrorKind`, never the message text — and a TYPE outranks a KIND**, so `LocalFault` is
-   checked FIRST and a broad `ErrorKind` net cannot re-label what a concrete type already claimed.
-2. **⇒ FLATTENING A CAUSE IS WORSE THAN MIS-CLASSIFYING IT.** `format!`/`anyhow!("…: {e}")` consume the
-   source, so a classifier can never be *taught* to recognise it. **And a reachable cause can print TWICE.**
-3. **⇒ THE FIX HAD THE DEFECT IT WAS FIXING, ONE MATCH ARM ABOVE ITSELF**, and the existing `40001` test
-   was one assertion away from proving it. Sibling: **⇒ a guard for an ordering property that could not
-   observe the ordering** — `.context()` values are NOT reachable from `chain()`, so assert both signals
-   are present *before* asserting which wins.
-4. **⇒ WHERE A PIN'S FIXTURE IS BUILT BY THE TEST, THE PRODUCTION SITE IS UNPINNED**, and **a guard only
-   runs when its own crate is tested** — #450's DB-skip guard lives in `tests/common/db_gate.rs`,
-   `#[path]`-included by both crates, the obligation DERIVED from which crates read a gate variable. And
-   **`file!()` is the path the INCLUDING file wrote, not a canonical one** — caught only because the
-   assertion checks it fired **exactly once**.
-
-**Still open from the sweep:** **#490** item 3 · **#483** (`connection_label` will not compile on Windows;
-no exposure — CI is all `ubuntu-24.04`) · **#484** · **#487** · **#488** · **#491** · **#492** · **#485**
+merged #377); **#494**, **#496**, **#498**, **#499** stay open. **Passes 1–2 — the misclassification
+cluster** (closed #489, #482, #480, #490 items 1–2, #481, #479, #477; opened #485, #487–#492). Still
+open from the sweep: **#490** item 3 · **#483** (`connection_label` will not compile on Windows; no
+exposure — CI is all `ubuntu-24.04`) · **#484** · **#487** · **#488** · **#491** · **#492** · **#485**
 (23 further cairn-node files, 89 postgres call sites, name no operation) · **#476** (~124 test-guard
-comments calling a per-database advisory lock "cluster-wide").
+comments calling a per-database advisory lock "cluster-wide"). What still binds:
+
+1. **⇒ THE CEREMONY SUCCEEDING IS THE WORST SHAPE OF THIS BUG.** The backup arm sealed an **empty**
+   bundle into a valid `CAIRNL1` container and reported success; `verify-backup` passed;
+   `backup-status.json` recorded a true count of what the medium actually held. **Every surface honest,
+   the composite a precise untruth.**
+2. **⇒ TWO DEFECTS THAT LOOK LIKE ONE MUST BE SPLIT WHEN FIXING EITHER ALONE IS USELESS** (#500 the
+   bytes, #495 the key) — which is what let slice 1 close one and leave the other quotably open. And
+   **⇒ WHERE A GUARANTEE IS ALREADY FALSE, PIN THE DEFECT, NOT THE PROMISE**: a permanently-red test
+   blocks the gate for every unrelated change, so each assertion names what it must be INVERTED to.
+3. **⇒ A CLASS IS AN OPERATOR INSTRUCTION, AND A DEFAULT-BY-ELIMINATION IS NOT ONE.** **⇒ The
+   recogniser is a TYPE or an `io::ErrorKind`, never the message text — and a TYPE outranks a KIND.**
+   **⇒ FLATTENING A CAUSE IS WORSE THAN MIS-CLASSIFYING IT** (`format!`/`anyhow!("…: {e}")` consumes the
+   source, so a classifier can never be *taught* to recognise it).
+4. **⇒ WHERE A PIN'S FIXTURE IS BUILT BY THE TEST, THE PRODUCTION SITE IS UNPINNED**, and **a guard only
+   runs when its own crate is tested**. **`file!()` is the path the INCLUDING file wrote, not a canonical
+   one.** ⇒ **That pass's ROADMAP condensation deleted the "Open-issue index", orphaning 22 live numbers
+   in one edit. A line cap is never a reason to drop a live issue.**
 
 ### 2026-08-22 → 08-20 — the db-error sweep, the freeze that hid, the flake that lied (condensed)
 
-**Closed #460, #465, #467, #469, #471, #473–#475 (`db/050`, SCHEMA 49 → 50, no new ADR); #370, #457,
-#449–#453, #386, #381/#382/#385/#439, #446/#442/#443; opened #458.** ROADMAP carries each pass in full.
+**Closed #460, #465, #467, #469, #471, #473–#475 (`db/050`, SCHEMA 49 → 50); #370, #457, #449–#453,
+#386, #381/#382/#385/#439, #446/#442/#443; opened #458.** ROADMAP carries each pass in full. Still open:
+**#463** (attachment-flag resolution — a DECISION, overlay vs delete) · **#464** · **#458** (non-object
+attachment element — a loud UI, NOT a floor rule) · **#470** · **#447** · **#327**.
 
-1. **⇒ `tokio_postgres::Error`'s `Display` IS THE STRING `"db error"`** — a bare kind match never chains to
-   the source holding the message, DETAIL and SQLSTATE. **`LocalDbFault` IS NOT A RENDERING and must not be
-   "tidied" into an `anyhow!`**: `Display` is the legible text, `source()` is what a classifier walks, and
-   `anyhow!` takes a formatted `String`, **silently reverting every local fault to `partition`.**
+1. **⇒ `tokio_postgres::Error`'s `Display` IS THE STRING `"db error"`** — a bare kind match never chains
+   to the source holding the message, DETAIL and SQLSTATE. **`LocalDbFault` IS NOT A RENDERING and must
+   not be "tidied" into an `anyhow!`**, which takes a formatted `String` and **silently reverts every
+   local fault to `partition`.**
 2. **⇒ A FROZEN CURSOR LOOKED EXACTLY LIKE A HEALTHY CYCLE.** All three of `pull_into`'s freeze paths
    `break` and return `Ok` (correct — freezing is the deliberate availability choice), so a `53100`
    disk-full emitted **neither** `LOCAL FAULT` nor `PARTITION`.
 3. **⇒ THE CATEGORY TEST:** a sensitivity assertion **IS** an event (refusing a malformed one drops that
-   assertion alone); `safety`, `clock_grade` and a rendition reference are **FIELDS ON** a clinical event,
-   and refusing those forks the event set between honest peers — the **#342** trap, hit five times (ADR-0065
-   NAMES the rule). Do not "align" db/027, which raises where db/050 records: **`WHEN OTHERS` there would
-   write a disk error into the ledger as peer garbage.**
+   assertion alone); `safety`, `clock_grade` and a rendition reference are **FIELDS ON** a clinical
+   event, and refusing those forks the event set between honest peers — the **#342** trap. Do not
+   "align" db/027, which raises where db/050 records: **`WHEN OTHERS` there would write a disk error
+   into the ledger as peer garbage.**
 4. **⇒ A FLAG CAN BE BORN ON A RE-APPLY**, so the report is keyed on the admitted addresses **and** a
-   `flag_id` watermark. **A failed read reports `null`, never `0`.** And **peer text is not display text**:
-   `custody_withheld` is unbounded prose from an unadmitted peer, printed raw. Related: **a guard that
-   punishes the precise description of its own bug** pushes future writers toward vaguer prose, **and a
-   rename is not proof.**
+   `flag_id` watermark. **A failed read reports `null`, never `0`.** And **peer text is not display
+   text**: `custody_withheld` is unbounded prose from an unadmitted peer, printed raw.
 5. **⇒ PROBE THE FAMILY BEFORE FIXING THE MEMBER.** #370 named one field; measured, that function had
-   **nine** freeze paths across four SQLSTATE classes **and four SILENT paths that wrote something wrong**.
-   The rule: **refuse what already FAILED plus what was silently WRONG; accept everything that worked** —
-   every refusal at a remote door is a new way to pen a peer's clinical event.
-6. **⚠️ A DATABASE-FREE `cargo test` FAILS UNLESS YOU DECLARE IT: `export CAIRN_ALLOW_DB_SKIP=1`** (#450;
-   #451 the matcher, #481 the per-crate runs). An **opt-out** must read an unrecognised value as *NOT
-   permission*. And **check a claim against the pinned source before writing it down** — a false comment
-   about `std`'s `TcpListener` and `SO_REUSEADDR` steered two rounds of fixes; **a mutation that does not
-   change the property tests nothing**; #457's harness polled a PORT and never the CHILD (cause named, not
-   fixed — a macOS `_dyld_start` stall).
+   **nine** freeze paths across four SQLSTATE classes **and four SILENT paths that wrote something
+   wrong**. The rule: **refuse what already FAILED plus what was silently WRONG; accept everything that
+   worked** — every refusal at a remote door is a new way to pen a peer's clinical event.
+6. **⚠️ A DATABASE-FREE `cargo test` FAILS UNLESS YOU DECLARE IT: `export CAIRN_ALLOW_DB_SKIP=1`**
+   (#450). An **opt-out** must read an unrecognised value as *NOT permission*. **A mutation that does
+   not change the property tests nothing.**
 7. **Mechanics worth reusing.** To force a write failure in a SHARED test database take a LOCK from a
    second connection under a short `lock_timeout` — never a trigger or a `REVOKE`, which persist past a
-   panic and poison every later suite (`FOR UPDATE` for a write, `ACCESS EXCLUSIVE` for a read). **`Debug`
-   must delegate to `Display`** on any error reaching `main`. PostgreSQL checks a function called inside a
-   VIEW against the **INVOKING** user — the INNER call too. `git check-ignore` needs `--no-index` and has
-   **THREE** exit codes (0/1/**128**).
+   panic and poison every later suite. **`Debug` must delegate to `Display`** on any error reaching
+   `main`. PostgreSQL checks a function called inside a VIEW against the **INVOKING** user — the INNER
+   call too. `git check-ignore` needs `--no-index` and has **THREE** exit codes (0/1/**128**).
 
-**Still open from those passes:** #463 (attachment-flag resolution — a DECISION, overlay vs delete) ·
-#464 · #458 (non-object attachment element — a loud UI, NOT a floor rule) · #470 · **#447** · **#327**.
 
 ### Older passes (Slices 61–69, 2026-08-02 → 08-20) — the lessons still worth holding
 
@@ -468,7 +449,8 @@ CLAUDE.md carries the document hierarchy in full; this adds only what it does no
 ADR-0029/0030); 0003 (Postgres on Android, G0–G3 ✓); 0004 (iced UI — FAIL on a11y → Tauri 2).
 **`docs/case-studies/0001`**: 16 GP-software failure modes, all absorbed, **0 new architecture**.
 **`docs/ecosystem/`** 0001, 0003 · **`docs/principles/`** — mission/governance. Code workspace: `/crates`
-(`cairn-event`, `cairn-sync`, `cairn-node`, `cairn-medication-view`, `cairn-patient-search`),
+(`cairn-event`, `cairn-keystore`, `cairn-sync`, `cairn-node`, `cairn-medication-view`,
+`cairn-patient-search`),
 `/extensions` (`cairn_pgx`), `/db`, `/cairn-gui` (separate workspace); `poc/` is frozen historical spikes.
 
 ---
@@ -513,8 +495,14 @@ ADR-0029/0030); 0003 (Postgres on Android, G0–G3 ✓); 0004 (iced UI — FAIL 
   **only** gate that catches all three of this repo's demonstrated hiding modes (fail-fast · a piped exit
   status · a cross-crate suite `-p <crate>` never builds): the `db/tests/*.sql` mirrors *and* the full
   workspace with `CAIRN_TEST_PG`/`PG2`/`PG3` baked in (PG18 + cairn_pgx on `127.0.0.1:5532`, databases
-  `cairn_test`/`2`/`3`). A warm `CARGO_TARGET_DIR` makes it ~15 min, not 2 h; last full pass **EXIT 0 over
-  139 binaries** (2026-08-24). Without the three strings the DB-gated suites **self-skip and cargo counts
+  `cairn_test`/`2`/`3`); last full pass **EXIT 0 over 139
+  binaries** (2026-08-24; re-run 2026-08-30 after #503 added a crate). **⇒ COST DEPENDS ON WHAT CHANGED,
+  NOT ON TARGET-DIR WARMTH — a warm `target/` does NOT make it ~15 min, and believing it does cost this
+  project a 6-hour surprise** (#503, 2026-08-30). A change that touches `Cargo.lock` or `cairn-node`
+  relinks ~134 test binaries, and macOS runs a one-time-per-binary Gatekeeper assessment on each: **budget
+  HOURS.** A slice confined to one crate reruns almost nothing — run `cargo test -p <crate>` and let CI
+  gate the rest. Note `-p cairn-sync` **does** build `tests/clinical_pull.rs`: the cross-crate blindness
+  above belongs to `-p cairn-node`. Without the three strings the DB-gated suites **self-skip and cargo counts
   them as passed**, so **since #450 a run without them FAILS unless it declares `CAIRN_ALLOW_DB_SKIP=1`**
   (only `1`/`true`/`yes`/`on` opts out). The mirrors are DESTRUCTIVE and refuse any database lacking the
   `cairn_scratch_database` marker (#169). Matcher: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline
