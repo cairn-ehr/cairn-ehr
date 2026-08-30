@@ -1,4 +1,4 @@
-//! At-rest key sealing for cairn-node (ADR-0026 slice A).
+//! At-rest key sealing shared by cairn-node and cairn-sync (ADR-0026 slice A).
 //!
 //! WHY THIS EXISTS: a node's Ed25519 signing key must survive on disk without being
 //! readable by anyone who copies the file, and must be recoverable off-node after a
@@ -223,6 +223,8 @@ pub fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 24], pt: &[u8]) -> Result<Vec<u
         .map_err(|_| SealError::Aead)
 }
 
+// `pub` for the same cross-crate reason as `rand_bytes` above: cairn-node's
+// localstate.rs calls this directly. Tightening it back to `pub(crate)` is issue #516.
 pub fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher.decrypt(nonce.into(), ct).ok()

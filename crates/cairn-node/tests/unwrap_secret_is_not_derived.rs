@@ -183,7 +183,7 @@ const ALLOWED: &[(&str, &str)] = &[
          derived one has no `.unwrap` file to load, and refusing to start would strand it. \
          Admissible ONLY because the derived key is checked against the registration first: a \
          restored node's derivation does not match and is refused. Retire this once no \
-         pre-ADR-0066 node can exist — tracked by the #503 follow-up",
+         pre-ADR-0066 node can exist — tracked by issue #514, the #503 follow-up",
     ),
 ];
 
