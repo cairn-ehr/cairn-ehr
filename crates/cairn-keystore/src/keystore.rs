@@ -372,14 +372,33 @@ mod tests {
     use crate::fsio::tmp_sibling; // the atomic-write mechanics now live in fsio
     use tempfile::tempdir;
 
+    /// House rule 6 (CLAUDE.md / issue #146): an operational-passphrase or recovery-code
+    /// fixture built at RUNTIME, never a literal. These strings reach Argon2id key
+    /// derivation via `seal()`/`unseal()` below — a crypto context — so a hard-coded one
+    /// trips CodeQL's `rust/hard-coded-cryptographic-value` (critical) exactly like a
+    /// hard-coded byte array does. The same `tag` always yields the same string, so a
+    /// seal/load round-trip stays deterministic; a different tag yields a genuinely
+    /// different secret, which is what a "wrong secret" test needs to still test
+    /// something.
+    fn secret_fixture(tag: u8) -> String {
+        (0..16u8)
+            .map(|i| char::from(b'a' + ((tag ^ i) % 26)))
+            .collect()
+    }
+
     #[test]
     fn sealed_key_roundtrips_via_both_secrets() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("node.key");
-        let (sk, _kid) = generate_sealed(&p, "op", "REC-CODE").unwrap();
-        assert_eq!(load(&p, Some("op")).unwrap().to_bytes(), sk.to_bytes());
+        let op = secret_fixture(1);
+        let rec = secret_fixture(2);
+        let (sk, _kid) = generate_sealed(&p, &op, &rec).unwrap();
         assert_eq!(
-            load(&p, Some("REC-CODE")).unwrap().to_bytes(),
+            load(&p, Some(op.as_str())).unwrap().to_bytes(),
+            sk.to_bytes()
+        );
+        assert_eq!(
+            load(&p, Some(rec.as_str())).unwrap().to_bytes(),
             sk.to_bytes()
         );
         // No secret on a sealed key yields the DISTINCT `Sealed` variant (so the CLI
@@ -388,7 +407,7 @@ mod tests {
             matches!(load(&p, None), Err(KeystoreError::Sealed)),
             "sealed key with no secret must return the Sealed variant"
         );
-        assert!(load(&p, Some("wrong")).is_err());
+        assert!(load(&p, Some(secret_fixture(3).as_str())).is_err());
         assert!(matches!(
             key_at_rest_state(&p),
             KeyAtRest::Sealed {
@@ -411,15 +430,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("node.key");
         let (sk, _kid) = generate_plaintext(&p).unwrap();
-        seal_existing(&p, "op", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let rec = secret_fixture(2);
+        seal_existing(&p, &op, &rec).unwrap();
         // Both recipients must survive migration: op passphrase and recovery code.
         assert_eq!(
-            load(&p, Some("op")).unwrap().to_bytes(),
+            load(&p, Some(op.as_str())).unwrap().to_bytes(),
             sk.to_bytes(),
             "op passphrase must unseal migrated key"
         );
         assert_eq!(
-            load(&p, Some("REC-CODE")).unwrap().to_bytes(),
+            load(&p, Some(rec.as_str())).unwrap().to_bytes(),
             sk.to_bytes(),
             "recovery code must unseal migrated key (off-node escrow path)"
         );
@@ -428,7 +449,7 @@ mod tests {
             "after sealing, no-secret load must fail"
         );
         assert!(
-            seal_existing(&p, "op", "REC-CODE").is_err(),
+            seal_existing(&p, &op, &rec).is_err(),
             "double-seal must error"
         );
     }
@@ -437,7 +458,7 @@ mod tests {
     fn write_is_atomic_and_leaves_no_temp_litter() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("node.key");
-        generate_sealed(&p, "op", "REC-CODE").unwrap();
+        generate_sealed(&p, &secret_fixture(1), &secret_fixture(2)).unwrap();
         // The temp sibling used during the atomic write must be cleaned up (renamed away).
         assert!(
             !tmp_sibling(&p).exists(),
@@ -453,8 +474,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("node.key");
         std::fs::write(tmp_sibling(&p), b"garbage from a half-finished write").unwrap();
-        let (sk, _kid) = generate_sealed(&p, "op", "REC-CODE").unwrap();
-        assert_eq!(load(&p, Some("op")).unwrap().to_bytes(), sk.to_bytes());
+        let op = secret_fixture(1);
+        let (sk, _kid) = generate_sealed(&p, &op, &secret_fixture(2)).unwrap();
+        assert_eq!(
+            load(&p, Some(op.as_str())).unwrap().to_bytes(),
+            sk.to_bytes()
+        );
         assert!(
             !tmp_sibling(&p).exists(),
             "stale temp must be gone after a successful write"
@@ -470,7 +495,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempdir().unwrap();
         let p = dir.path().join("node.key");
-        generate_sealed(&p, "op", "REC-CODE").unwrap();
+        generate_sealed(&p, &secret_fixture(1), &secret_fixture(2)).unwrap();
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "key file must be owner-read/write only");
     }
@@ -490,7 +515,7 @@ mod tests {
         let tmp = tmp_sibling(&p);
         std::fs::write(&tmp, b"stale junk from a foreign write").unwrap();
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
-        generate_sealed(&p, "op", "REC-CODE").unwrap();
+        generate_sealed(&p, &secret_fixture(1), &secret_fixture(2)).unwrap();
         let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             mode, 0o600,
@@ -528,10 +553,12 @@ mod tests {
     fn unwrap_key_roundtrips_under_both_secrets_and_is_owner_only() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("node.unwrap");
-        let public = generate_unwrap_sealed(&p, "op", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let rec = secret_fixture(2);
+        let public = generate_unwrap_sealed(&p, &op, &rec).unwrap();
 
-        let via_op = load_unwrap_secret(&p, Some("op")).unwrap();
-        let via_rec = load_unwrap_secret(&p, Some("REC-CODE")).unwrap();
+        let via_op = load_unwrap_secret(&p, Some(op.as_str())).unwrap();
+        let via_rec = load_unwrap_secret(&p, Some(rec.as_str())).unwrap();
         assert_eq!(*via_op, *via_rec, "both secrets recover the same key");
         assert_eq!(
             cairn_event::seal::unwrap_public(&via_op),
@@ -564,9 +591,10 @@ mod tests {
                 .unwrap();
 
         let adopted = adopt_derived_unwrap_secret(&sk);
-        write_unwrap_sealed(&p, &adopted, "op", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        write_unwrap_sealed(&p, &adopted, &op, &secret_fixture(2)).unwrap();
 
-        let loaded = load_unwrap_secret(&p, Some("op")).unwrap();
+        let loaded = load_unwrap_secret(&p, Some(op.as_str())).unwrap();
         assert_eq!(
             cairn_event::seal::unwrap_dek(&wrapped, &loaded)
                 .expect("an adopted key must open a pre-adoption wrap")
@@ -584,7 +612,7 @@ mod tests {
             KeyAtRest::Missing
         ));
         let p = dir.path().join("node.unwrap");
-        generate_unwrap_sealed(&p, "op", "REC-CODE").unwrap();
+        generate_unwrap_sealed(&p, &secret_fixture(1), &secret_fixture(2)).unwrap();
         assert!(matches!(
             key_at_rest_state(&p),
             KeyAtRest::Sealed {

@@ -350,6 +350,21 @@ mod tests {
         Zeroizing::new(std::array::from_fn(|i| tag ^ (i as u8).wrapping_mul(7)))
     }
 
+    /// House rule 6's STRING-valued sibling of `secret_fixture` above: an operational
+    /// passphrase built at RUNTIME, never a literal. These reach
+    /// `cairn_keystore::seal::seal()`, which feeds them to Argon2id as key-derivation
+    /// input — a crypto context — so a hard-coded passphrase here trips CodeQL's
+    /// `rust/hard-coded-cryptographic-value` (critical) exactly like a hard-coded byte
+    /// array does (#146). The same `tag` always yields the same passphrase, so a
+    /// seal/unseal round-trip stays deterministic; a different tag yields a genuinely
+    /// different passphrase, which is what a "wrong passphrase" test needs to still
+    /// test something.
+    fn passphrase_fixture(tag: u8) -> String {
+        (0..24u8)
+            .map(|i| char::from(b'a' + ((tag ^ i) % 26)))
+            .collect()
+    }
+
     #[test]
     fn a_loaded_file_matching_the_registration_is_used() {
         let provisioned = secret_fixture(0x11);
@@ -622,10 +637,11 @@ mod tests {
         // value across the disk, the one link that matters is proven by nothing.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("node.key.unwrap");
-        let pass = "op-passphrase-for-this-test";
+        let pass = passphrase_fixture(0xE1);
         let code = cairn_keystore::seal::generate_recovery_code();
-        let public = cairn_keystore::keystore::generate_unwrap_sealed(&path, pass, &code).unwrap();
-        let FileOutcome::Loaded(loaded) = load_file_outcome(&path, Some(pass), false) else {
+        let public = cairn_keystore::keystore::generate_unwrap_sealed(&path, &pass, &code).unwrap();
+        let FileOutcome::Loaded(loaded) = load_file_outcome(&path, Some(pass.as_str()), false)
+        else {
             panic!("a sealed unwrap key must load under its passphrase");
         };
         assert_eq!(
@@ -642,7 +658,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("node.key.unwrap");
         let code = cairn_keystore::seal::generate_recovery_code();
-        cairn_keystore::keystore::generate_unwrap_sealed(&path, "op-pass", &code).unwrap();
+        cairn_keystore::keystore::generate_unwrap_sealed(&path, &passphrase_fixture(0xE2), &code)
+            .unwrap();
         let FileOutcome::Unusable(cause) = load_file_outcome(&path, None, false) else {
             panic!("a sealed file with no passphrase is Unusable, never Absent");
         };
@@ -671,10 +688,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("node.key.unwrap");
         let code = cairn_keystore::seal::generate_recovery_code();
-        cairn_keystore::keystore::generate_unwrap_sealed(&path, "right-pass", &code).unwrap();
+        let right = passphrase_fixture(0xE3);
+        let wrong = passphrase_fixture(0xE4);
+        cairn_keystore::keystore::generate_unwrap_sealed(&path, &right, &code).unwrap();
         assert!(
             matches!(
-                load_file_outcome(&path, Some("wrong-pass"), false),
+                load_file_outcome(&path, Some(wrong.as_str()), false),
                 FileOutcome::Unusable(_)
             ),
             "a wrong passphrase must never degrade into Absent"
