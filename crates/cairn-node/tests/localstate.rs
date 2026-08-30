@@ -172,12 +172,30 @@ fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
         "precondition: the correct recovery code must open an undamaged export"
     );
 
-    // Damage one byte of the SEALED BODY, not the frame. The ciphertext is the largest
-    // run in the container, so the last byte is inside `payload_ct`'s tag — past the
-    // magic, past every CBOR key, and therefore invisible to the parser.
-    let mut damaged = container.clone();
-    let last = damaged.len() - 1;
-    damaged[last] ^= 0xFF;
+    // Damage the ciphertext BEFORE serialization, not by flipping a byte of the already-
+    // serialized container.
+    //
+    // An earlier version of this test flipped the LAST byte of the serialized container,
+    // reasoning that the ciphertext is the largest run so the tail must land inside it,
+    // "past every CBOR key, and therefore invisible to the parser." That reasoning was
+    // wrong: `SealedLocalState.payload_ct` (localstate.rs) is a plain `Vec<u8>` with no
+    // `serde_bytes` attribute, so ciborium encodes it not as a CBOR byte string but as a
+    // CBOR ARRAY OF INTEGERS — one structural element per byte. Ciphertext bytes are
+    // therefore parser-VISIBLE, not invisible: whenever the damaged byte happens to be
+    // < 24 (0x18), it round-trips as a single-byte CBOR integer, and `^= 0xFF` turns it
+    // into major type 7 (a CBOR "simple" value), which `parse_container` rejects as
+    // malformed framing instead of the frame surviving intact. That is roughly a 1-in-11
+    // chance per run (P(byte < 24) = 24/256 ~= 9.4%) — measured as 7 failures in 40
+    // consecutive local runs (~17%, consistent with the last byte of ciphertext not being
+    // uniform), and it flaked CI on an unrelated PR.
+    //
+    // The honest fix: mutate `sealed.payload_ct` (still a plain in-memory `Vec<u8>` at this
+    // point) BEFORE calling `serialize_container`, so the frame is intact by construction —
+    // never by an assumption about how ciborium happens to encode an untyped byte vector.
+    let mut sealed_damaged = sealed.clone();
+    let last = sealed_damaged.payload_ct.len() - 1;
+    sealed_damaged.payload_ct[last] ^= 0xFF;
+    let damaged = serialize_container(&sealed_damaged);
 
     let parsed = parse_container(&damaged)
         .expect("THE POINT: ciphertext damage still parses — the frame is intact");

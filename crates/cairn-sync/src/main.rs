@@ -30,6 +30,12 @@ use cairn_event::{
 };
 use serde::{Deserialize, Serialize};
 
+// The node's custody-key resolution (issue #503). A module rather than another
+// function in this file: main.rs is ~11,700 lines, and the decision table below is
+// the safety argument of the ADR-0066 conversion — it belongs somewhere a reviewer
+// can hold in one screen, and it is testable with no database and no filesystem.
+mod unwrap_key;
+
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 //
@@ -307,94 +313,6 @@ fn assert_pgx_floor(client: &mut postgres::Client) -> R<()> {
     };
     if !pgx_version_ok(&loaded, REQUIRED_PGX_FLOOR) {
         return Err(pgx_floor_message(&loaded).into());
-    }
-    Ok(())
-}
-
-/// True iff this daemon's unwrap public half agrees with what the database has registered.
-/// `None` (nothing registered) is NOT a divergence: the node has claimed no custody key yet, and
-/// refusing there would break a legitimate first-run flow (a brand-new node that has never run
-/// `cairn-node init`). Pure, so the decision is testable without a database — see
-/// `a_divergent_unwrap_key_is_detected_rather_than_degraded` in `mod tests`.
-///
-/// # Why this check exists at all (ADR-0066 / issue #495)
-///
-/// `cairn-node` provisions an INDEPENDENT X25519 unwrap keypair per ADR-0066 and registers its
-/// public half in `node_unwrap_key` (the singleton table). `cairn-sync` has not been converted
-/// (issue #503 tracks the real fix — a shared keystore crate) and still HKDF-DERIVES its unwrap
-/// secret from the node's Ed25519 signing seed at two call sites (`do_pull`, `serve_conn`). On a
-/// node provisioned by today's `cairn-node init` those two keys disagree, and a disagreement here
-/// is NOT cosmetic: `rewrap_custody_for_peer` silently degrades a failed re-wrap to "no custody
-/// for this slot", which is bit-for-bit indistinguishable from a peer that legitimately has no
-/// custody to offer. Catching the mismatch at startup turns that silent, misleading degradation
-/// into a loud, actionable refusal instead.
-fn unwrap_key_matches(mine: &[u8; 32], registered: Option<&[u8; 32]>) -> bool {
-    match registered {
-        None => true,
-        Some(theirs) => mine == theirs,
-    }
-}
-
-/// The actionable message for a divergent unwrap key (see `unwrap_key_matches`). Pure so the
-/// message contract is unit-testable independent of a live database connection — mirrors
-/// `pgx_floor_message`'s split from `assert_pgx_floor` just above.
-fn unwrap_key_divergence_message(mine: &[u8; 32], registered: &[u8; 32], issue: u32) -> String {
-    format!(
-        "this daemon derives unwrap key {} from its signing key, but the database has {} \
-         registered (ADR-0066: cairn-node now provisions an INDEPENDENT unwrap key). This \
-         daemon cannot open this node's custody. See issue #{issue} — point --key at the same \
-         key this node was provisioned with, or run cairn-sync against a node provisioned \
-         before ADR-0066.",
-        hex::encode(&mine[..8]),
-        hex::encode(&registered[..8]),
-    )
-}
-
-/// The tracking issue named in `unwrap_key_divergence_message` — cairn-sync deriving instead of
-/// loading the node's provisioned unwrap key (the real fix: a shared keystore crate).
-const UNWRAP_KEY_DIVERGENCE_ISSUE: u32 = 503;
-
-/// Fail fast if this daemon's DERIVED unwrap key (ADR-0052/ADR-0026: HKDF from the signing seed)
-/// disagrees with the unwrap key the database has REGISTERED (ADR-0066: cairn-node's
-/// independently-provisioned key). Beside `assert_pgx_floor` deliberately: same shape, a startup
-/// gate rather than a runtime degrade, because a silent mismatch here is indistinguishable from
-/// "this peer has no custody to offer" (issue #495 / #503).
-///
-/// Called only from call sites that ALREADY hold both a connected client and this node's signing
-/// key for custody purposes (`cmd_pull`, `cmd_run`, the `serve` CLI arm) — a command with no
-/// custody-bearing key (e.g. `init`, `requeue`) never derives an unwrap secret and so has nothing
-/// to check here.
-fn assert_unwrap_key_registered(client: &mut postgres::Client, mine: &[u8; 32]) -> R<()> {
-    // `query_opt`, not `query_one`: an absent row (no unwrap key registered yet) is a legitimate
-    // "nothing claimed", not an error — see `unwrap_key_matches`'s `None` case.
-    let row = client.query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])?;
-    let Some(registered) = row.map(|r| r.get::<_, Vec<u8>>(0)) else {
-        // No row: nothing has been claimed yet — see `unwrap_key_matches`'s `None` case.
-        return Ok(());
-    };
-    // A ROW THAT IS NOT 32 BYTES IS A REFUSAL, NEVER "nothing registered".
-    //
-    // db/037 CHECKs this column to exactly 32 bytes, so today the branch is unreachable, and
-    // the first draft leaned on that: `try_into().ok()` folded a malformed row into `None`,
-    // which this function reads as "no key claimed" and passes. That is fail-OPEN inside a
-    // fail-fast gate — and it is the same shape as the defect this very file fixes 400 lines
-    // below, where "cannot parse" was read as "does not exist" and destroyed a sealed signing
-    // key. The whole lesson of ADR-0066 is that two individually-sound layers contradict each
-    // other exactly where they meet, so a daemon that does not own this schema should not
-    // stake a safety gate on a constraint in it. Refusing costs nothing while the CHECK holds
-    // and is correct the day it does not.
-    let registered: [u8; 32] = registered.as_slice().try_into().map_err(|_| {
-        format!(
-            "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody plane is \
-             malformed and this daemon cannot tell whether its own unwrap key agrees with it. \
-             Refusing to start rather than proceeding as though no key were registered.",
-            registered.len()
-        )
-    })?;
-    if !unwrap_key_matches(mine, Some(&registered)) {
-        return Err(
-            unwrap_key_divergence_message(mine, &registered, UNWRAP_KEY_DIVERGENCE_ISSUE).into(),
-        );
     }
     Ok(())
 }
@@ -2829,14 +2747,14 @@ fn representative_medication_payload() -> serde_json::Value {
 /// ADR-0052) and checks the whole pipeline against the Bet-B ~4 ms p95 latency budget:
 /// it is AEAD over ~1.5 KB, so it must land microseconds-scale, orders below the budget.
 ///
-/// House rule 6: the recipient unwrap keypair is DERIVED at runtime from a freshly
-/// generated seed (`generate_key`), never a hard-coded byte literal — and the seal/wrap
+/// House rule 6: the recipient unwrap secret is GENERATED at runtime from the OS RNG
+/// (`generate_unwrap_secret`), never a hard-coded byte literal — and the seal/wrap
 /// primitives draw their own fresh DEK + nonce from the OS RNG internally, so nothing in
 /// this bench presents hard-coded cryptographic material to the scanner.
 fn cmd_bench_seal(iters: usize) -> R<()> {
     use cairn_event::seal::{
-        derive_unwrap_secret, seal_event_payload, unseal_event_payload, unwrap_dek, unwrap_public,
-        wrap_dek_for,
+        generate_unwrap_secret, seal_event_payload, unseal_event_payload, unwrap_dek,
+        unwrap_public, wrap_dek_for,
     };
 
     let payload = representative_medication_payload();
@@ -2844,9 +2762,11 @@ fn cmd_bench_seal(iters: usize) -> R<()> {
     let twin = "metformin 500 mg tablet — one BD, patient-reported, started 2023";
     let event_id = uuid::Uuid::now_v7().to_string();
 
-    // Recipient (node) unwrap keypair, derived at runtime from a fresh random seed.
-    let (sk, _kid) = cairn_event::generate_key()?;
-    let secret = derive_unwrap_secret(&sk.to_bytes());
+    // Recipient (node) unwrap keypair, generated fresh for the benchmark. Deliberately
+    // NOT derived from a signing seed: this measures crypto cost, so the secret's
+    // provenance is irrelevant, and reaching for `derive_unwrap_secret` here would keep
+    // a dead coupling alive in a file that no longer has one (ADR-0066, issue #503).
+    let secret = generate_unwrap_secret()?;
     let public = unwrap_public(&secret);
 
     // Stage 1: seal the body under a fresh per-event DEK.
@@ -3102,12 +3022,13 @@ fn do_pull(
     peer: &str,
     peer_name: &str,
     full_sweep: bool,
-    // This node's signing key, when the caller wants custody on the wire (ADR-0052).
-    // From it we derive our unwrap secret and present the matching CERT to the peer,
-    // so the peer can re-wrap each sealed event's DEK for us. `None` (older call
-    // paths, DB tests) pulls WITHOUT custody: events still sync, sealed rows admit
+    // This node's custody for the wire (ADR-0052): the signing key that proves who we
+    // are and the unwrap secret that opens DEKs a peer re-wraps back for us. Since
+    // ADR-0066 the secret is NOT derivable from the key, so it is resolved once at
+    // startup (see `unwrap_key::resolve`) and carried here. `None` (older call paths,
+    // DB tests) pulls WITHOUT custody: events still sync and sealed rows admit
     // structurally at the door — custody is simply not gained on this cycle.
-    key: Option<&SigningKey>,
+    custody: Option<&unwrap_key::NodeCustody>,
 ) -> R<serde_json::Value> {
     // The first two statements happen BEFORE any network I/O, so a failure here is
     // always this node's own database — and `cmd_run` builds its client once, outside the
@@ -3151,18 +3072,20 @@ fn do_pull(
         floor_seq.map_or(last_seq, |f| f.saturating_sub(1).min(last_seq))
     };
 
-    // This node's unwrap identity for the pull (ADR-0052 custody sidecar). When a
-    // signing key is available we keep our unwrap SECRET (to open re-wrapped DEKs the
-    // peer sends back) and present our unwrap CERT (so the peer can re-wrap for us).
-    // The cert binds our X25519 unwrap public key to our Ed25519 identity — the same
-    // key the DEKs come back wrapped for. Absent a key we pull without custody.
-    let unwrap_secret = key.map(|sk| cairn_event::seal::derive_unwrap_secret(&sk.to_bytes()));
-    let unwrap_cert: Option<String> = match (key, &unwrap_secret) {
-        (Some(sk), Some(secret)) => {
-            let public = cairn_event::seal::unwrap_public(secret);
-            Some(hex::encode(cairn_event::sign_unwrap_key_cert(sk, &public)?))
+    // This node's unwrap identity for the pull (ADR-0052 custody sidecar). We keep our
+    // unwrap SECRET (to open re-wrapped DEKs the peer sends back) and present our unwrap
+    // CERT (so the peer can re-wrap for us). The cert binds our X25519 unwrap public key
+    // to our Ed25519 identity — the same key the DEKs come back wrapped for.
+    let unwrap_secret = custody.map(|c| c.unwrap_secret.clone());
+    let unwrap_cert: Option<String> = match custody {
+        Some(c) => {
+            let public = cairn_event::seal::unwrap_public(&c.unwrap_secret);
+            Some(hex::encode(cairn_event::sign_unwrap_key_cert(
+                &c.signing_key,
+                &public,
+            )?))
         }
-        _ => None,
+        None => None,
     };
 
     let started = Instant::now();
@@ -4303,22 +4226,20 @@ fn cmd_pull(
     metrics: bool,
     full: bool,
     key_path: &str,
+    unwrap_key_path: Option<&str>,
 ) -> R<()> {
     let mut client = connect_checked_apply(conn)?;
     // Load this node's signing key so the pull presents an unwrap cert and gains
     // custody of any sealed events it replicates (ADR-0052 custody sidecar).
     let (sk, _kid) = load_or_create_key(key_path)?;
-    // ADR-0066 fail-fast: this daemon still DERIVES its unwrap key from `sk` (issue #503
-    // tracks loading the node's own provisioned key instead). If that derived key
-    // disagrees with what the database has registered, any custody DEK the peer re-wraps
-    // back for us would silently fail to open — see assert_unwrap_key_registered's doc.
-    let mine =
-        cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(&sk.to_bytes()));
-    assert_unwrap_key_registered(&mut client, &mine)?;
+    // ADR-0066: LOAD this node's provisioned unwrap key rather than deriving one that
+    // cannot match it. Refuses to start on a divergence, on a restored node, or on a
+    // corrupt key file; warns loudly on the pre-ADR-0066 fallback (issue #503).
+    let custody = unwrap_key::resolve_at_startup(&mut client, key_path, unwrap_key_path, sk)?;
     // A manual one-shot pull defaults to incremental; `--full` requests a sweep
     // from seq 0 (an explicit "reconcile everything now", the same path cmd_run
     // takes on cadence — issue #196).
-    let m = do_pull(&mut client, peer, peer_name, full, Some(&sk))?;
+    let m = do_pull(&mut client, peer, peer_name, full, Some(&custody))?;
     if metrics {
         println!("{m}");
     } else {
@@ -4555,10 +4476,16 @@ fn cmd_blobd(conn: &str, peers: &[String], window: usize, budget_ms: u64, metric
     Ok(())
 }
 
-/// `own_key` (ADR-0052): this node's signing key, wrapped in an `Arc` so a clone can
-/// move into each per-connection thread where `serve_conn` derives the unwrap secret
-/// to re-wrap DEKs. `None` serves without custody (events still sync).
-fn cmd_serve(conn: String, listen: &str, corrupt: bool, own_key: Option<Arc<SigningKey>>) -> R<()> {
+/// `custody` (ADR-0052): this node's signing key and unwrap secret, wrapped in an
+/// `Arc` so a clone can move into each per-connection thread where `serve_conn` uses
+/// the carried secret to re-wrap DEKs. `None` serves without custody (events still
+/// sync).
+fn cmd_serve(
+    conn: String,
+    listen: &str,
+    corrupt: bool,
+    custody: Option<Arc<unwrap_key::NodeCustody>>,
+) -> R<()> {
     let listener = TcpListener::bind(listen)?;
     eprintln!(
         "serving on {listen}{}",
@@ -4571,9 +4498,9 @@ fn cmd_serve(conn: String, listen: &str, corrupt: bool, own_key: Option<Arc<Sign
     for stream in listener.incoming() {
         let stream = stream?;
         let conn = conn.clone();
-        let own_key = own_key.clone();
+        let custody = custody.clone();
         std::thread::spawn(move || {
-            if let Err(e) = serve_conn(&conn, stream, corrupt, own_key) {
+            if let Err(e) = serve_conn(&conn, stream, corrupt, custody) {
                 eprintln!("connection error: {e}");
             }
         });
@@ -4631,26 +4558,29 @@ fn cmd_run(
     log_path: &str,
     duration_s: u64,
     key_path: &str,
+    unwrap_key_path: Option<&str>,
 ) -> R<()> {
     // Load the node signing key ONCE up front (ADR-0052): the serve thread and the
-    // pull loop must share the SAME key — deriving it twice would race to create the
-    // file and could leave serve and pull on different identities. One Arc feeds both.
-    let node_key = Arc::new(load_or_create_key(key_path)?.0);
-    // Connect and fail fast BEFORE spawning the serve thread (ADR-0066): this run's
-    // derived unwrap key (shared by both the pull loop below and the serve thread, via
-    // the one `node_key` Arc) must agree with what the database registered, or the serve
-    // thread's re-wraps would silently degrade into "no custody to offer" the moment a
-    // peer pulls from it — see assert_unwrap_key_registered's doc (issue #503).
+    // pull loop must share the SAME custody — deriving it twice would race to create
+    // the file and could leave serve and pull on different identities. One Arc feeds
+    // both.
+    let (sk, _kid) = load_or_create_key(key_path)?;
+    // Connect and fail fast BEFORE spawning the serve thread. ADR-0066: LOAD this
+    // node's provisioned unwrap key rather than deriving one that cannot match it.
+    // Refuses to start on a divergence, on a restored node, or on a corrupt key file;
+    // warns loudly on the pre-ADR-0066 fallback (issue #503).
     let mut client = connect_checked_apply(conn)?;
-    let mine = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
-        &node_key.to_bytes(),
-    ));
-    assert_unwrap_key_registered(&mut client, &mine)?;
+    let custody = Arc::new(unwrap_key::resolve_at_startup(
+        &mut client,
+        key_path,
+        unwrap_key_path,
+        sk,
+    )?);
     {
         let (c, l) = (conn.to_string(), listen.to_string());
-        let own_key = Arc::clone(&node_key);
+        let own_custody = Arc::clone(&custody);
         std::thread::spawn(move || {
-            if let Err(e) = cmd_serve(c, &l, false, Some(own_key)) {
+            if let Err(e) = cmd_serve(c, &l, false, Some(own_custody)) {
                 eprintln!("serve thread exited: {e}");
             }
         });
@@ -4719,7 +4649,7 @@ fn cmd_run(
             peer,
             peer_name,
             full_sweep,
-            Some(node_key.as_ref()),
+            Some(custody.as_ref()),
         ) {
             Ok(m) => {
                 status += &format!(": pull {} shipped / {} new", m["shipped"], m["applied_new"]);
@@ -5165,23 +5095,20 @@ fn rewrap_custody_for_peer(
         .collect()
 }
 
-/// `own_key` (ADR-0052): this node's signing key, from which we derive the unwrap
-/// SECRET used to open our locally-stored DEKs before re-wrapping them for a pulling
-/// peer. `None` serves without custody (events still sync). One `Arc` is cloned into
-/// each per-connection thread; the secret is derived per connection (a cheap HKDF).
+/// `custody` (ADR-0052): this node's signing key and unwrap secret, resolved once at
+/// startup and shared across connection threads. `None` serves without custody (events
+/// still sync). One `Arc` is cloned into each per-connection thread.
 fn serve_conn(
     conn: &str,
     mut stream: TcpStream,
     corrupt: bool,
-    own_key: Option<Arc<SigningKey>>,
+    custody: Option<Arc<unwrap_key::NodeCustody>>,
 ) -> R<()> {
     let mut client = connect_db(conn)?;
-    // Our own unwrap secret, derived once per connection from this node's signing
-    // seed (ADR-0026 escrow: the secret is never in the DB). Used only to open our
+    // Our own unwrap secret, resolved once at startup and shared across connection
+    // threads (ADR-0026 escrow: the secret is never in the DB). Used only to open our
     // locally-stored DEKs so the EventsAfterSeq arm can re-wrap them for the peer.
-    let own_secret = own_key
-        .as_ref()
-        .map(|k| cairn_event::seal::derive_unwrap_secret(&k.to_bytes()));
+    let own_secret = custody.as_ref().map(|c| c.unwrap_secret.clone());
     let raw = read_frame(&mut stream)?;
     let req: Request = serde_json::from_slice(&raw)?;
     let resp: Vec<u8> = match req {
@@ -5419,20 +5346,21 @@ USAGE (all take --conn <postgres-uri>):
   gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
   put-blob    --conn URI --file PATH --media MEDIA_TYPE
   gen-blob    --conn URI [--size-mb N] [--media MEDIA_TYPE]   (mint a large local blob to fetch)
-  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full] [--key PATH]
-              (--key: this node's key; presents an unwrap cert so sealed events arrive with shred custody — ADR-0052)
+  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full] [--key PATH] [--unwrap-key PATH]
+              (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
   attachment-flags --conn URI
               (list attachment references this node admitted but cannot fetch: type, reason, count, example)
   requeue     --conn URI [--metrics]
               (re-process quarantined events through the apply door after fixing the cause)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
-  serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH]
-              (--key: this node's key; re-wraps sealed events' DEKs for pulling peers — ADR-0052)
+  serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH] [--unwrap-key PATH]
+              (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
   fingerprint --conn URI    (convergence/honest-state JSON for the harness)
   run         --conn URI --listen HOST:PORT --peer HOST:PORT --peer-name NAME
-              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N] [--key PATH]
-              (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops; --key enables custody both ways — ADR-0052)
+              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N] [--key PATH] [--unwrap-key PATH]
+              (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops;
+              --key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
   bench-insert --conn URI --node NAME --key PATH [--count N]   (Bet B B1: maintained-write latency)
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
   bench       [--hash-mb N] [--sig-iters N] [--dek-iters N]    (Bet B B3/B4: crypto throughput, no DB)
@@ -5521,6 +5449,7 @@ fn main() -> R<()> {
             args.iter().any(|a| a == "--metrics"),
             args.iter().any(|a| a == "--full"),
             &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
+            flag(&args, "--unwrap-key").as_deref(),
         )?,
         "quarantine" => cmd_quarantine(&need(conn))?,
         "attachment-flags" => cmd_attachment_flags(&need(conn))?,
@@ -5553,24 +5482,27 @@ fn main() -> R<()> {
         "serve" => {
             // Load this node's key so the serve arm can re-wrap sealed events' DEKs
             // for pulling peers (ADR-0052). Defaults to node.key like the other verbs.
-            let own_key = Arc::new(
-                load_or_create_key(&flag(&args, "--key").unwrap_or_else(|| "node.key".into()))?.0,
-            );
-            // ADR-0066 fail-fast, BEFORE this daemon starts accepting connections: a
-            // one-off connection just to check the registered unwrap key, since (unlike
-            // `pull`/`run`) `serve` otherwise never touches the database until its first
-            // accepted connection — see assert_unwrap_key_registered's doc (issue #503).
+            let key_path = flag(&args, "--key").unwrap_or_else(|| "node.key".into());
+            let (sk, _kid) = load_or_create_key(&key_path)?;
+            // ADR-0066: LOAD this node's provisioned unwrap key rather than deriving one
+            // that cannot match it — a one-off connection just to resolve it, since
+            // (unlike `pull`/`run`) `serve` otherwise never touches the database until
+            // its first accepted connection. Refuses to start on a divergence, on a
+            // restored node, or on a corrupt key file; warns loudly on the pre-ADR-0066
+            // fallback (issue #503).
             let mut startup_client = connect_checked_apply(&need(conn.clone()))?;
-            let mine = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
-                &own_key.to_bytes(),
-            ));
-            assert_unwrap_key_registered(&mut startup_client, &mine)?;
+            let custody = Arc::new(unwrap_key::resolve_at_startup(
+                &mut startup_client,
+                &key_path,
+                flag(&args, "--unwrap-key").as_deref(),
+                sk,
+            )?);
             drop(startup_client);
             cmd_serve(
                 need(conn),
                 &need(flag(&args, "--listen")),
                 args.iter().any(|a| a == "--corrupt"),
-                Some(own_key),
+                Some(custody),
             )?
         }
         "run" => cmd_run(
@@ -5593,6 +5525,7 @@ fn main() -> R<()> {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
             &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
+            flag(&args, "--unwrap-key").as_deref(),
         )?,
         "sign-stdin" => {
             cmd_sign_stdin(&flag(&args, "--key").unwrap_or_else(|| "agent.key".into()))?
@@ -6381,59 +6314,6 @@ mod tests {
         // Guards against a typo in the const turning every floor check into a
         // fail-closed refusal of a perfectly good library.
         assert!(parse_pgx_version(REQUIRED_PGX_FLOOR).is_some());
-    }
-
-    /// ADR-0066: cairn-sync still DERIVES its unwrap secret while cairn-node now loads an
-    /// independent one. When they disagree the serve arm cannot open this node's own custody,
-    /// so it must stop and say so — degrading silently would look exactly like a peer that
-    /// simply has no custody to offer.
-    #[test]
-    fn a_divergent_unwrap_key_is_detected_rather_than_degraded() {
-        // Runtime-computed, never literal byte arrays (house rule 6): these are not real
-        // keys, just two distinct 32-byte fixtures derived from a simple formula.
-        let mine: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(1));
-        let other: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(9));
-        assert!(unwrap_key_matches(&mine, Some(&mine)), "agreement passes");
-        assert!(
-            !unwrap_key_matches(&mine, Some(&other)),
-            "divergence is caught"
-        );
-        assert!(
-            unwrap_key_matches(&mine, None),
-            "an unregistered key is not a divergence — nothing has been claimed yet"
-        );
-    }
-
-    /// Pins the divergence message's CONTENT, not just that a divergence is detected: it must
-    /// name both keys (short hex prefixes), point at ADR-0066, say plainly that this daemon
-    /// cannot open the node's custody, and carry the tracking issue number — an operator
-    /// reading this line off a crashed daemon's stderr has no other context to go on.
-    #[test]
-    fn the_divergence_message_names_both_keys_the_adr_and_the_issue() {
-        let mine: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(3));
-        let registered: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(7));
-        let msg = unwrap_key_divergence_message(&mine, &registered, 503);
-
-        let mine_prefix = hex::encode(&mine[..8]);
-        let registered_prefix = hex::encode(&registered[..8]);
-        assert!(
-            msg.contains(&mine_prefix),
-            "must name this daemon's own derived key: {msg}"
-        );
-        assert!(
-            msg.contains(&registered_prefix),
-            "must name the database's registered key: {msg}"
-        );
-        assert_ne!(
-            mine_prefix, registered_prefix,
-            "the two fixture keys must actually differ, or this test proves nothing"
-        );
-        assert!(msg.contains("ADR-0066"), "must cite the ADR: {msg}");
-        assert!(
-            msg.contains("cannot open this node's custody"),
-            "must say plainly what the daemon cannot do: {msg}"
-        );
-        assert!(msg.contains("#503"), "must name the tracking issue: {msg}");
     }
 
     #[test]

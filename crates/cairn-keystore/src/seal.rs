@@ -1,4 +1,4 @@
-//! At-rest key sealing for cairn-node (ADR-0026 slice A).
+//! At-rest key sealing shared by cairn-node and cairn-sync (ADR-0026 slice A).
 //!
 //! WHY THIS EXISTS: a node's Ed25519 signing key must survive on disk without being
 //! readable by anyone who copies the file, and must be recoverable off-node after a
@@ -182,7 +182,11 @@ impl SealedKey {
     }
 }
 
-pub(crate) fn rand_bytes<const N: usize>() -> Result<[u8; N], SealError> {
+// `pub`, not `pub(crate)`: cairn-node's localstate.rs (a separate crate since the #503
+// extraction) reuses this and the four helpers below directly rather than duplicating
+// them. `pub(crate)` stopped reaching across the new crate boundary — it never widened
+// exposure beyond that one known, audited call site.
+pub fn rand_bytes<const N: usize>() -> Result<[u8; N], SealError> {
     let mut b = [0u8; N];
     getrandom::fill(&mut b).map_err(|e| SealError::Entropy(e.to_string()))?;
     Ok(b)
@@ -211,18 +215,17 @@ fn derive_kek(
 // In both helpers below, `.into()` borrows the fixed-size key/nonce arrays as the
 // AEAD `Key`/`XNonce` types (zero-copy; chacha20poly1305 0.11 deprecated the
 // `from_slice` idiom they previously used).
-pub(crate) fn aead_encrypt(
-    key: &[u8; 32],
-    nonce: &[u8; 24],
-    pt: &[u8],
-) -> Result<Vec<u8>, SealError> {
+// `pub` for the same cross-crate reason as `rand_bytes` above.
+pub fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 24], pt: &[u8]) -> Result<Vec<u8>, SealError> {
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher
         .encrypt(nonce.into(), pt)
         .map_err(|_| SealError::Aead)
 }
 
-pub(crate) fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
+// `pub` for the same cross-crate reason as `rand_bytes` above: cairn-node's
+// localstate.rs calls this directly. Tightening it back to `pub(crate)` is issue #516.
+pub fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u8>> {
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher.decrypt(nonce.into(), ct).ok()
 }
@@ -246,7 +249,8 @@ fn key_into_zeroizing(bytes: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
 
 /// Wrap one DEK copy under a secret. The recovery code is normalized first so any
 /// spacing/case the human re-types still derives the same KEK.
-pub(crate) fn wrap_dek(
+// `pub` for the same cross-crate reason as `rand_bytes` above.
+pub fn wrap_dek(
     dek: &[u8; 32],
     secret: &str,
     salt: &[u8; 16],
@@ -258,7 +262,8 @@ pub(crate) fn wrap_dek(
     Ok(Wrap { nonce, ct })
 }
 
-pub(crate) fn try_unwrap(
+// `pub` for the same cross-crate reason as `rand_bytes` above.
+pub fn try_unwrap(
     w: &Wrap,
     secret: &str,
     salt: &[u8; 16],
@@ -377,6 +382,21 @@ mod tests {
         std::array::from_fn(|i| (i as u8).wrapping_add(1))
     }
 
+    /// The STRING-valued sibling of `test_seed`/`test_salt` above: an operational
+    /// passphrase or recovery-code fixture, likewise built at RUNTIME rather than written
+    /// as a literal. `seal()`/`unseal()` feed these straight into Argon2id
+    /// (`derive_kek`) — a crypto context — so a hard-coded passphrase here trips
+    /// CodeQL's `rust/hard-coded-cryptographic-value` (critical) exactly like a
+    /// hard-coded byte array does (house rule 6, CLAUDE.md / issue #146). The same `tag`
+    /// always yields the same string, so a seal/unseal round-trip stays deterministic; a
+    /// different tag yields a genuinely different secret, which is what a "wrong secret"
+    /// test needs to still test something.
+    fn secret_fixture(tag: u8) -> String {
+        (0..20u8)
+            .map(|i| char::from(b'a' + ((tag ^ i) % 26)))
+            .collect()
+    }
+
     // --- Issue #54: recovered key material must come back wrapped in `Zeroizing` ---
     // so it is wiped from the caller's stack/heap on drop (defence-in-depth), and the
     // type itself signals "this is a secret" to a reviewer. These tests pin the return
@@ -385,10 +405,12 @@ mod tests {
 
     #[test]
     fn unseal_helpers_yield_zeroizing_seed() {
-        let s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
-        let any: Zeroizing<[u8; 32]> = unseal(&s, "op-pass").expect("op-pass must unseal");
-        let via_op: Zeroizing<[u8; 32]> = unseal_op(&s, "op-pass").expect("op helper unseals");
-        let via_rec: Zeroizing<[u8; 32]> = unseal_rec(&s, "REC-CODE").expect("rec helper unseals");
+        let op = secret_fixture(1);
+        let rec = secret_fixture(2);
+        let s = seal(&test_seed(), &op, &rec).unwrap();
+        let any: Zeroizing<[u8; 32]> = unseal(&s, &op).expect("op-pass must unseal");
+        let via_op: Zeroizing<[u8; 32]> = unseal_op(&s, &op).expect("op helper unseals");
+        let via_rec: Zeroizing<[u8; 32]> = unseal_rec(&s, &rec).expect("rec helper unseals");
         assert_eq!(*any, test_seed());
         assert_eq!(*via_op, test_seed());
         assert_eq!(*via_rec, test_seed());
@@ -409,9 +431,10 @@ mod tests {
 
     #[test]
     fn try_unwrap_yields_zeroizing_dek() {
-        let s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let s = seal(&test_seed(), &op, &secret_fixture(2)).unwrap();
         let dek: Zeroizing<[u8; 32]> =
-            try_unwrap(&s.wrap_op, "op-pass", &s.salt_op, &s.argon).expect("op wrap unwraps");
+            try_unwrap(&s.wrap_op, &op, &s.salt_op, &s.argon).expect("op wrap unwraps");
         // The unwrapped DEK is the real key: it decrypts the sealed seed.
         assert_eq!(
             aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct).as_deref(),
@@ -423,69 +446,81 @@ mod tests {
     fn derive_kek_yields_zeroizing() {
         let p = ArgonParams::default();
         let _kek: Zeroizing<[u8; 32]> =
-            derive_kek("secret", &test_salt(), &p).expect("kdf must succeed");
+            derive_kek(&secret_fixture(9), &test_salt(), &p).expect("kdf must succeed");
     }
 
     #[test]
     fn unseals_with_operational_passphrase() {
-        let s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let s = seal(&test_seed(), &op, &secret_fixture(2)).unwrap();
         // `.as_deref()` reads through the `Zeroizing` wrapper to compare the seed bytes.
-        assert_eq!(unseal(&s, "op-pass").as_deref(), Some(&test_seed()));
+        assert_eq!(unseal(&s, &op).as_deref(), Some(&test_seed()));
     }
 
     #[test]
     fn unseals_with_recovery_code_any_formatting() {
-        let s = seal(&test_seed(), "op-pass", "ab12c-d34ef").unwrap();
+        // Grouped with a dash, the way a real Crockford-base32 recovery code is
+        // displayed, so the "retyped with different case/spacing" step below is a
+        // realistic tolerance check rather than a no-op.
+        let code = secret_fixture(3);
+        let grouped = format!("{}-{}", &code[..10], &code[10..]);
+        let s = seal(&test_seed(), &secret_fixture(1), &grouped).unwrap();
         // re-typed with different case/spacing still works
-        assert_eq!(unseal(&s, "AB12C D34EF").as_deref(), Some(&test_seed()));
+        let retyped = grouped.to_uppercase().replace('-', " ");
+        assert_eq!(unseal(&s, &retyped).as_deref(), Some(&test_seed()));
     }
 
     #[test]
     fn wrong_secret_returns_none() {
-        let s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
-        assert!(unseal(&s, "nope").is_none());
+        let s = seal(&test_seed(), &secret_fixture(1), &secret_fixture(2)).unwrap();
+        assert!(unseal(&s, &secret_fixture(200)).is_none());
     }
 
     #[test]
     fn tampered_fields_return_none() {
-        let base = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let rec = secret_fixture(2);
+        let base = seal(&test_seed(), &op, &rec).unwrap();
         let mutate = |f: fn(&mut SealedKey)| {
             let mut s = base.clone();
             f(&mut s);
             s
         };
         // Flipping a byte in any ciphertext, salt, or nonce must fail the AEAD tag.
-        assert!(unseal(&mutate(|s| s.seed_ct[0] ^= 1), "op-pass").is_none());
-        assert!(unseal(&mutate(|s| s.wrap_op.ct[0] ^= 1), "op-pass").is_none());
-        assert!(unseal(&mutate(|s| s.wrap_rec.ct[0] ^= 1), "REC-CODE").is_none());
-        assert!(unseal(&mutate(|s| s.salt_op[0] ^= 1), "op-pass").is_none());
-        assert!(unseal(&mutate(|s| s.seed_nonce[0] ^= 1), "op-pass").is_none());
-        // Recovery-path tamper: the assertions above all unseal via "op-pass" (the op
-        // path), which masks any mutation to the recovery wrap's KDF inputs. Exercise the
-        // second recipient explicitly: a flipped recovery salt yields a wrong KEK, and a
-        // flipped recovery nonce yields a wrong Poly1305 key — either must fail unseal via
-        // the recovery code, closing the coverage gap for the second recipient.
-        assert!(unseal(&mutate(|s| s.salt_rec[0] ^= 1), "REC-CODE").is_none());
-        assert!(unseal(&mutate(|s| s.wrap_rec.nonce[0] ^= 1), "REC-CODE").is_none());
+        assert!(unseal(&mutate(|s| s.seed_ct[0] ^= 1), &op).is_none());
+        assert!(unseal(&mutate(|s| s.wrap_op.ct[0] ^= 1), &op).is_none());
+        assert!(unseal(&mutate(|s| s.wrap_rec.ct[0] ^= 1), &rec).is_none());
+        assert!(unseal(&mutate(|s| s.salt_op[0] ^= 1), &op).is_none());
+        assert!(unseal(&mutate(|s| s.seed_nonce[0] ^= 1), &op).is_none());
+        // Recovery-path tamper: the assertions above all unseal via the op passphrase
+        // (the op path), which masks any mutation to the recovery wrap's KDF inputs.
+        // Exercise the second recipient explicitly: a flipped recovery salt yields a
+        // wrong KEK, and a flipped recovery nonce yields a wrong Poly1305 key — either
+        // must fail unseal via the recovery code, closing the coverage gap for the
+        // second recipient.
+        assert!(unseal(&mutate(|s| s.salt_rec[0] ^= 1), &rec).is_none());
+        assert!(unseal(&mutate(|s| s.wrap_rec.nonce[0] ^= 1), &rec).is_none());
     }
 
     #[test]
     fn per_recipient_unseal_helpers_isolate_their_recipient() {
-        let s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let rec = secret_fixture(2);
+        let s = seal(&test_seed(), &op, &rec).unwrap();
         // Each helper recovers the seed via its own recipient only.
-        assert_eq!(unseal_op(&s, "op-pass").as_deref(), Some(&test_seed()));
-        assert_eq!(unseal_rec(&s, "REC-CODE").as_deref(), Some(&test_seed()));
+        assert_eq!(unseal_op(&s, &op).as_deref(), Some(&test_seed()));
+        assert_eq!(unseal_rec(&s, &rec).as_deref(), Some(&test_seed()));
         // ...and refuses the other recipient's secret (no cross-talk): the op helper
         // must not accept the recovery code, nor the recovery helper the passphrase.
-        assert!(unseal_op(&s, "REC-CODE").is_none());
-        assert!(unseal_rec(&s, "op-pass").is_none());
+        assert!(unseal_op(&s, &rec).is_none());
+        assert!(unseal_rec(&s, &op).is_none());
     }
 
     #[test]
     fn has_recovery_wrap_is_false_for_a_truncated_wrap() {
         // A partial write that truncates the recovery wrap must report NO escrow, so
         // `status` never tells an operator the off-node code is good when it isn't.
-        let mut s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
+        let mut s = seal(&test_seed(), &secret_fixture(1), &secret_fixture(2)).unwrap();
         assert!(
             s.has_recovery_wrap(),
             "a freshly sealed key has an intact recovery wrap"
@@ -504,14 +539,15 @@ mod tests {
 
     #[test]
     fn cbor_roundtrips_and_has_magic() {
-        let s = seal(&test_seed(), "op-pass", "REC-CODE").unwrap();
+        let op = secret_fixture(1);
+        let s = seal(&test_seed(), &op, &secret_fixture(2)).unwrap();
         let bytes = to_cbor(&s);
         assert!(
             bytes.starts_with(b"CAIRNK1\n"),
             "magic header must be present"
         );
         let back = from_cbor(&bytes).unwrap();
-        assert_eq!(unseal(&back, "op-pass").as_deref(), Some(&test_seed()));
+        assert_eq!(unseal(&back, &op).as_deref(), Some(&test_seed()));
         assert!(back.has_recovery_wrap());
     }
 

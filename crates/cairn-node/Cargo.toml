@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 cairn-event = { path = "../cairn-event" }
+cairn-keystore = { path = "../cairn-keystore" }
 cairn-medication-view = { path = "../cairn-medication-view" }
 cairn-patient-search = { path = "../cairn-patient-search" }
 clap = { version = "4", features = ["derive", "env"] }

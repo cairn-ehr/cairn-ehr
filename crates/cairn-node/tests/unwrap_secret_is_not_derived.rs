@@ -173,18 +173,17 @@ fn calls_derive_unwrap_secret(text: &str) -> bool {
 /// deleted. The entry is still correctly absent, now for the stronger reason.
 const ALLOWED: &[(&str, &str)] = &[
     (
-        "crates/cairn-node/src/keystore.rs",
+        "crates/cairn-keystore/src/keystore.rs",
         "the ADR-0066 adoption migration (`adopt_derived_unwrap_secret`) — the one place a \
          pre-ADR-0066 node re-derives its old secret to keep its existing event_dek rows openable",
     ),
-    // The one site ADR-0066 has not yet reached. Listed now so every commit leaves the
-    // suite green (house rule 6), never so the coupling is tolerated.
     (
-        "crates/cairn-sync/src/main.rs",
-        "PRE-ADR-0066 — cairn-sync cannot read cairn-node's keystore (no production \
-         dependency on cairn-node, and argon2/the sealed-bundle format live there). Fails \
-         fast on divergence instead (assert_unwrap_key_registered / unwrap_key_matches) — \
-         tracked by #503, which is the real fix (extract a shared cairn-keystore crate)",
+        "crates/cairn-sync/src/unwrap_key.rs",
+        "the pre-ADR-0066 fallback in `resolve_at_startup` — a node whose registered key IS its \
+         derived one has no `.unwrap` file to load, and refusing to start would strand it. \
+         Admissible ONLY because the derived key is checked against the registration first: a \
+         restored node's derivation does not match and is refused. Retire this once no \
+         pre-ADR-0066 node can exist — tracked by issue #514, the #503 follow-up",
     ),
 ];
 

@@ -16,6 +16,10 @@ workspace = true
 
 [dependencies]
 cairn-event = { path = "../cairn-event" }
+# The node's at-rest key files: cairn-sync LOADS the unwrap secret cairn-node
+# provisioned, rather than deriving one that cannot match (issue #503, ADR-0066).
+cairn-keystore = { path = "../cairn-keystore" }
+zeroize = "1"              # hold the loaded unwrap secret in Zeroizing (issue #54)
 postgres = "0.19"          # sync client; NoTls — WireGuard is the transport (spike assumption)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
