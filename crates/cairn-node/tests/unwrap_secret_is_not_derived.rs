@@ -177,14 +177,28 @@ const ALLOWED: &[(&str, &str)] = &[
         "the ADR-0066 adoption migration (`adopt_derived_unwrap_secret`) — the one place a \
          pre-ADR-0066 node re-derives its old secret to keep its existing event_dek rows openable",
     ),
-    // The one site ADR-0066 has not yet reached. Listed now so every commit leaves the
-    // suite green (house rule 6), never so the coupling is tolerated.
+    // Task 5 (issue #503) moved the real startup decision into `unwrap_key.rs`'s
+    // `resolve_at_startup` — see the entry for that file below. This one remains ONLY
+    // because `cmd_bench_seal` (the Bet B B3/B4 crypto-throughput bench, no DB) still
+    // derives a throwaway recipient unwrap keypair purely to exercise the seal/wrap/
+    // unwrap/unseal pipeline at realistic cost — it never touches a registered key or a
+    // startup decision. Task 6 retires the bench's use of `derive_unwrap_secret` (it can
+    // use `generate_unwrap_secret` instead, since nothing here needs to match a
+    // registration) and removes this entry with it.
     (
         "crates/cairn-sync/src/main.rs",
-        "PRE-ADR-0066 — cairn-sync cannot read cairn-node's keystore (no production \
-         dependency on cairn-node, and argon2/the sealed-bundle format live there). Fails \
-         fast on divergence instead (assert_unwrap_key_registered / unwrap_key_matches) — \
-         tracked by #503, which is the real fix (extract a shared cairn-keystore crate)",
+        "cmd_bench_seal (Bet B B3/B4 crypto-throughput bench, no DB) derives a throwaway \
+         recipient unwrap keypair to exercise seal/wrap/unwrap/unseal at realistic cost — \
+         not a startup decision, and not checked against any registration. Task 6 switches \
+         it to generate_unwrap_secret and removes this entry",
+    ),
+    (
+        "crates/cairn-sync/src/unwrap_key.rs",
+        "the pre-ADR-0066 fallback in `resolve_at_startup` — a node whose registered key IS its \
+         derived one has no `.unwrap` file to load, and refusing to start would strand it. \
+         Admissible ONLY because the derived key is checked against the registration first: a \
+         restored node's derivation does not match and is refused. Retire this once no \
+         pre-ADR-0066 node can exist — tracked by the #503 follow-up",
     ),
 ];
 

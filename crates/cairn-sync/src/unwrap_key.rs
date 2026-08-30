@@ -32,12 +32,6 @@ use zeroize::Zeroizing;
 /// What reading the `<key>.unwrap` file yielded. Three outcomes, not two: "there is no
 /// file" and "there is a file I cannot use" lead to OPPOSITE decisions below, and
 /// collapsing them is the defect #502 item 3 recorded.
-// `allow(dead_code)`: Task 4 (issue #503) carries `NodeCustody` but does not yet wire
-// `resolve`/`load_file_outcome` into the three startup call sites — that is Task 5's
-// job. Until then this type is reachable only from this module's own unit tests, and
-// the workspace's `warnings = "deny"` policy (Cargo.toml) would otherwise fail a plain
-// build. Remove this allow when Task 5 adds the call site.
-#[allow(dead_code)]
 pub enum FileOutcome {
     /// The file was read and unsealed; this is the secret it holds.
     Loaded(Zeroizing<[u8; 32]>),
@@ -49,9 +43,6 @@ pub enum FileOutcome {
 }
 
 /// What the daemon should do about its custody key.
-// See the `allow(dead_code)` note on `FileOutcome` above — same reason, same removal
-// point (Task 5, issue #503).
-#[allow(dead_code)]
 pub enum Resolution {
     /// Start, using `secret`. A `warning` is present only on the pre-ADR-0066 fallback,
     /// and must be printed on EVERY startup — see [`resolve`].
@@ -88,9 +79,6 @@ pub enum Resolution {
 /// sync happily for months and discover the loss at restore, which is precisely the
 /// "every surface honest, the composite a precise untruth" failure ADR-0066 exists to
 /// correct. So: absent may fall back; unusable never may.
-// See the `allow(dead_code)` note on `FileOutcome` above — same reason, same removal
-// point (Task 5, issue #503).
-#[allow(dead_code)]
 pub fn resolve(
     file: FileOutcome,
     derived: Zeroizing<[u8; 32]>,
@@ -176,9 +164,6 @@ pub fn resolve(
 ///   possible response to it.
 /// - `Key(_)` — corrupt bytes, a wrong passphrase, a bundle that is neither sealed nor 32
 ///   bytes. **Unusable.**
-// See the `allow(dead_code)` note on `FileOutcome` above — same reason, same removal
-// point (Task 5, issue #503).
-#[allow(dead_code)]
 pub fn load_file_outcome(path: &std::path::Path, passphrase: Option<&str>) -> FileOutcome {
     use cairn_keystore::keystore::KeystoreError;
     match cairn_keystore::keystore::load_unwrap_secret(path, passphrase) {
@@ -211,6 +196,80 @@ pub fn load_file_outcome(path: &std::path::Path, passphrase: Option<&str>) -> Fi
 pub struct NodeCustody {
     pub signing_key: cairn_event::SigningKey,
     pub unwrap_secret: Zeroizing<[u8; 32]>,
+}
+
+/// Where this daemon's unwrap-key file lives: the `<key>.unwrap` sibling of the signing
+/// key by default — the same rule `cairn-node` uses to PLACE the file it provisions, so
+/// the two agree without configuration — or the explicit `--unwrap-key` path when the
+/// daemon's key file is not co-located with the node's.
+///
+/// Pure (no IO) so the rule is testable on its own.
+pub fn unwrap_file_path(key_path: &str, override_path: Option<&str>) -> std::path::PathBuf {
+    match override_path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => cairn_keystore::keystore::unwrap_key_path_for(std::path::Path::new(key_path)),
+    }
+}
+
+/// Resolve this daemon's custody key at startup, or refuse to start.
+///
+/// This is the one DB-touching step: it reads the registered public key, hands everything
+/// to the pure [`resolve`], prints any warning, and returns the custody the process runs
+/// with. Called from `cmd_pull`, `cmd_run` and the `serve` CLI arm — every command that
+/// puts custody on the wire — BEFORE any network IO, so a misconfigured node fails at
+/// startup rather than degrading into a peer that looks like it has no custody to offer.
+pub fn resolve_at_startup(
+    client: &mut postgres::Client,
+    key_path: &str,
+    unwrap_path_override: Option<&str>,
+    signing_key: cairn_event::SigningKey,
+) -> Result<NodeCustody, Box<dyn std::error::Error>> {
+    let path = unwrap_file_path(key_path, unwrap_path_override);
+    let display = path.display().to_string();
+
+    // `query_opt`, not `query_one`: an absent row is a legitimate "nothing claimed".
+    let row = client.query_opt("SELECT unwrap_pub FROM node_unwrap_key", &[])?;
+    let registered: Option<[u8; 32]> = match row.map(|r| r.get::<_, Vec<u8>>(0)) {
+        None => None,
+        Some(bytes) => {
+            // A ROW THAT IS NOT 32 BYTES IS A REFUSAL, NEVER "nothing registered".
+            // db/037 CHECKs this column, so the branch is unreachable today — but a
+            // daemon that does not own this schema must not stake a safety gate on a
+            // constraint in it, and folding a malformed row into `None` would be
+            // fail-OPEN inside a fail-fast gate.
+            Some(bytes.as_slice().try_into().map_err(|_| {
+                format!(
+                    "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody \
+                     plane is malformed and this daemon cannot tell whether its own unwrap key \
+                     agrees with it. Refusing to start rather than proceeding as though no key \
+                     were registered.",
+                    bytes.len()
+                )
+            })?)
+        }
+    };
+
+    // The passphrase for a sealed key file, the same environment variable cairn-node
+    // reads. Absent, a sealed file classifies Unusable (with the remedy named) — it never
+    // degrades into "absent" and a derived key.
+    let passphrase = std::env::var("CAIRN_KEY_PASSPHRASE").ok();
+    let file = load_file_outcome(&path, passphrase.as_deref());
+    let derived = cairn_event::seal::derive_unwrap_secret(&signing_key.to_bytes());
+
+    match resolve(file, derived, registered.as_ref(), &display) {
+        Resolution::Refuse(message) => Err(message.into()),
+        Resolution::Use { secret, warning } => {
+            if let Some(w) = warning {
+                // Every startup, deliberately. A once-only notice is how a deleted key
+                // file stays invisible until a restore needs it.
+                eprintln!("cairn-sync: {w}");
+            }
+            Ok(NodeCustody {
+                signing_key,
+                unwrap_secret: secret,
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -464,6 +523,26 @@ mod tests {
                 FileOutcome::Unusable(_)
             ),
             "a wrong passphrase must never degrade into Absent"
+        );
+    }
+
+    #[test]
+    fn the_override_wins_over_the_sibling_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("custody.key");
+        assert_eq!(
+            unwrap_file_path("/nodes/a/node.key", Some(elsewhere.to_str().unwrap())),
+            elsewhere,
+            "--unwrap-key names the file outright"
+        );
+    }
+
+    #[test]
+    fn the_default_is_the_sibling_of_the_signing_key() {
+        assert_eq!(
+            unwrap_file_path("/nodes/a/node.key", None),
+            std::path::Path::new("/nodes/a/node.key.unwrap"),
+            "same rule cairn-node uses to place the file it provisions"
         );
     }
 }
