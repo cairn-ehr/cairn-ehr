@@ -29,6 +29,28 @@
 
 use zeroize::Zeroizing;
 
+/// The short, human-comparable fingerprint of an X25519 unwrap **public** key.
+///
+/// SAFE TO PRINT, AND THE REASON IS WORTH KNOWING. This takes the PUBLIC half, never a
+/// secret. A node's unwrap public key is published by design: `cairn-node` registers it in
+/// the `node_unwrap_key` table at provisioning, and it travels on the wire inside the
+/// node-signed unwrap certificate a pulling peer uses to re-wrap DEKs. Eight bytes of it
+/// leak nothing an admitted peer does not already hold.
+///
+/// It exists so an operator staring at a refusal can compare two keys AND check either
+/// against `SELECT encode(unwrap_pub, 'hex') FROM node_unwrap_key` — which is why this is a
+/// prefix of the real key rather than a hash of it.
+///
+/// EVERY key prefix this module prints goes through here, deliberately. CodeQL's
+/// `rust/cleartext-logging` query flags these call sites: it cannot model
+/// `cairn_event::seal::unwrap_public` as the one-way derivation it is, so it treats the
+/// `Zeroizing` secret upstream as a taint source and follows it into the message. That is a
+/// false positive, but a recurring one — concentrating it at a single sink makes it one
+/// thing to assess instead of four, and puts the argument next to the code.
+fn public_key_prefix(public: &[u8; 32]) -> String {
+    hex::encode(&public[..8])
+}
+
 /// What reading the `<key>.unwrap` file yielded. Three outcomes, not two: "there is no
 /// file" and "there is a file I cannot use" lead to OPPOSITE decisions below, and
 /// collapsing them is the defect #502 item 3 recorded.
@@ -103,8 +125,8 @@ pub fn resolve(
                      (file {}, database {}). This daemon cannot open this node's custody. Point \
                      --key/--unwrap-key at the files this node was provisioned with (ADR-0066, \
                      issue #503).",
-                    hex::encode(&cairn_event::seal::unwrap_public(&secret)[..8]),
-                    hex::encode(&reg[..8]),
+                    public_key_prefix(&cairn_event::seal::unwrap_public(&secret)),
+                    public_key_prefix(reg),
                 ))
             }
             _ => Resolution::Use {
@@ -145,8 +167,8 @@ pub fn resolve(
                  --unwrap-key at it directly. If it genuinely does not exist, recover it from \
                  the node's sealed local-state export. Refusing to start rather than guess \
                  which case this is (ADR-0066, issue #503).",
-                hex::encode(&cairn_event::seal::unwrap_public(&derived)[..8]),
-                hex::encode(&reg[..8]),
+                public_key_prefix(&cairn_event::seal::unwrap_public(&derived)),
+                public_key_prefix(reg),
             )),
         },
     }
