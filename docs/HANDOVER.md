@@ -414,7 +414,17 @@ ROADMAP carries every slice in full. These are the ones a next session can still
 > never cancel one.** Hold decision 2 (partial completion reported, never implied) and decision 7 (check
 > the transaction boundaries).
 
-**Five repo conventions these runs learned the hard way:**
+**Six repo conventions these runs learned the hard way:**
+- **⇒ THIS REPO HAS THREE CARGO TREES, AND A NEW CRATE LANDS IN ALL THREE LOCKFILES.** The root
+  workspace, `extensions/cairn_pgx` and `cairn-gui` — the last two are `exclude`d from the root
+  workspace but **ship anyway**, and both depend on the root crates **by path**. Adding
+  `cairn-keystore` made `cairn-gui/Cargo.lock` stale, and CI runs clippy there with `--locked`, which
+  **refuses to regenerate it** (`error: cannot update the lock file … because --locked was passed`).
+  **No root-workspace gate can see this** — not `cargo test --workspace`, not the full local gate —
+  because neither tree is a member. Refresh `cairn-gui/Cargo.lock` and
+  `extensions/cairn_pgx/Cargo.lock` whenever the root workspace gains or loses a crate. Same shape as
+  the `PRODUCTION_TREES` lesson: **workspace membership is a build-graph fact; "does it ship" is the
+  question, and they are not the same question** (#503, 2026-08-30).
 - **A pinned COUNT lives beside the thing it counts, and a new member must be added to it.** A new
   `cairn_decode_hex_or_raise` call site fails `hex_decode_helper.rs`'s exact per-file list; the twin and
   projection registries and `db_errors_stay_legible.rs`'s three counts carry the same shape. The count
