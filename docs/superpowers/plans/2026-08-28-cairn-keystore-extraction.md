@@ -10,6 +10,10 @@
 
 **Spec:** [`docs/superpowers/specs/2026-08-28-cairn-keystore-extraction-design.md`](../specs/2026-08-28-cairn-keystore-extraction-design.md)
 
+Paper-parity: not clinical-surface — this plan moves an existing key-file format verbatim into a
+shared crate and changes how `cairn-sync` resolves its custody key at startup; it touches no
+clinical workflow, UI, or patient data model (house rule 7, CLAUDE.md).
+
 ## Global Constraints
 
 - **Licence:** AGPL-3.0. Every dependency the new crate takes is **already a vetted `cairn-node` dependency** — no new licence surface enters the project. Do not add any dependency not listed in Task 1.
