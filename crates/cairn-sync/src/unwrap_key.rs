@@ -32,6 +32,12 @@ use zeroize::Zeroizing;
 /// What reading the `<key>.unwrap` file yielded. Three outcomes, not two: "there is no
 /// file" and "there is a file I cannot use" lead to OPPOSITE decisions below, and
 /// collapsing them is the defect #502 item 3 recorded.
+// `allow(dead_code)`: Task 4 (issue #503) carries `NodeCustody` but does not yet wire
+// `resolve`/`load_file_outcome` into the three startup call sites — that is Task 5's
+// job. Until then this type is reachable only from this module's own unit tests, and
+// the workspace's `warnings = "deny"` policy (Cargo.toml) would otherwise fail a plain
+// build. Remove this allow when Task 5 adds the call site.
+#[allow(dead_code)]
 pub enum FileOutcome {
     /// The file was read and unsealed; this is the secret it holds.
     Loaded(Zeroizing<[u8; 32]>),
@@ -43,6 +49,9 @@ pub enum FileOutcome {
 }
 
 /// What the daemon should do about its custody key.
+// See the `allow(dead_code)` note on `FileOutcome` above — same reason, same removal
+// point (Task 5, issue #503).
+#[allow(dead_code)]
 pub enum Resolution {
     /// Start, using `secret`. A `warning` is present only on the pre-ADR-0066 fallback,
     /// and must be printed on EVERY startup — see [`resolve`].
@@ -79,6 +88,9 @@ pub enum Resolution {
 /// sync happily for months and discover the loss at restore, which is precisely the
 /// "every surface honest, the composite a precise untruth" failure ADR-0066 exists to
 /// correct. So: absent may fall back; unusable never may.
+// See the `allow(dead_code)` note on `FileOutcome` above — same reason, same removal
+// point (Task 5, issue #503).
+#[allow(dead_code)]
 pub fn resolve(
     file: FileOutcome,
     derived: Zeroizing<[u8; 32]>,
@@ -164,6 +176,9 @@ pub fn resolve(
 ///   possible response to it.
 /// - `Key(_)` — corrupt bytes, a wrong passphrase, a bundle that is neither sealed nor 32
 ///   bytes. **Unusable.**
+// See the `allow(dead_code)` note on `FileOutcome` above — same reason, same removal
+// point (Task 5, issue #503).
+#[allow(dead_code)]
 pub fn load_file_outcome(path: &std::path::Path, passphrase: Option<&str>) -> FileOutcome {
     use cairn_keystore::keystore::KeystoreError;
     match cairn_keystore::keystore::load_unwrap_secret(path, passphrase) {
@@ -182,6 +197,20 @@ pub fn load_file_outcome(path: &std::path::Path, passphrase: Option<&str>) -> Fi
         ),
         Err(KeystoreError::Key(m)) => FileOutcome::Unusable(m),
     }
+}
+
+/// This node's custody identity for the life of one process: the Ed25519 signing key that
+/// proves who it is, and the X25519 unwrap secret that opens what it holds.
+///
+/// WHY THEY TRAVEL TOGETHER. Presenting custody on the wire needs both at once — the
+/// unwrap CERT is the node's unwrap public key SIGNED by its signing key, so a peer can
+/// trust that re-wrapping a DEK for that public key gives it to this node and nobody else.
+/// Passing them as two separate `Option`s let them disagree: before ADR-0066 the secret
+/// was a pure function of the key so they could not, but that is exactly the coupling
+/// ADR-0066 removed. One struct makes the mismatch unrepresentable.
+pub struct NodeCustody {
+    pub signing_key: cairn_event::SigningKey,
+    pub unwrap_secret: Zeroizing<[u8; 32]>,
 }
 
 #[cfg(test)]

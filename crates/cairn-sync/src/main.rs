@@ -3108,12 +3108,13 @@ fn do_pull(
     peer: &str,
     peer_name: &str,
     full_sweep: bool,
-    // This node's signing key, when the caller wants custody on the wire (ADR-0052).
-    // From it we derive our unwrap secret and present the matching CERT to the peer,
-    // so the peer can re-wrap each sealed event's DEK for us. `None` (older call
-    // paths, DB tests) pulls WITHOUT custody: events still sync, sealed rows admit
+    // This node's custody for the wire (ADR-0052): the signing key that proves who we
+    // are and the unwrap secret that opens DEKs a peer re-wraps back for us. Since
+    // ADR-0066 the secret is NOT derivable from the key, so it is resolved once at
+    // startup (see `unwrap_key::resolve`) and carried here. `None` (older call paths,
+    // DB tests) pulls WITHOUT custody: events still sync and sealed rows admit
     // structurally at the door — custody is simply not gained on this cycle.
-    key: Option<&SigningKey>,
+    custody: Option<&unwrap_key::NodeCustody>,
 ) -> R<serde_json::Value> {
     // The first two statements happen BEFORE any network I/O, so a failure here is
     // always this node's own database — and `cmd_run` builds its client once, outside the
@@ -3157,18 +3158,20 @@ fn do_pull(
         floor_seq.map_or(last_seq, |f| f.saturating_sub(1).min(last_seq))
     };
 
-    // This node's unwrap identity for the pull (ADR-0052 custody sidecar). When a
-    // signing key is available we keep our unwrap SECRET (to open re-wrapped DEKs the
-    // peer sends back) and present our unwrap CERT (so the peer can re-wrap for us).
-    // The cert binds our X25519 unwrap public key to our Ed25519 identity — the same
-    // key the DEKs come back wrapped for. Absent a key we pull without custody.
-    let unwrap_secret = key.map(|sk| cairn_event::seal::derive_unwrap_secret(&sk.to_bytes()));
-    let unwrap_cert: Option<String> = match (key, &unwrap_secret) {
-        (Some(sk), Some(secret)) => {
-            let public = cairn_event::seal::unwrap_public(secret);
-            Some(hex::encode(cairn_event::sign_unwrap_key_cert(sk, &public)?))
+    // This node's unwrap identity for the pull (ADR-0052 custody sidecar). We keep our
+    // unwrap SECRET (to open re-wrapped DEKs the peer sends back) and present our unwrap
+    // CERT (so the peer can re-wrap for us). The cert binds our X25519 unwrap public key
+    // to our Ed25519 identity — the same key the DEKs come back wrapped for.
+    let unwrap_secret = custody.map(|c| c.unwrap_secret.clone());
+    let unwrap_cert: Option<String> = match custody {
+        Some(c) => {
+            let public = cairn_event::seal::unwrap_public(&c.unwrap_secret);
+            Some(hex::encode(cairn_event::sign_unwrap_key_cert(
+                &c.signing_key,
+                &public,
+            )?))
         }
-        _ => None,
+        None => None,
     };
 
     let started = Instant::now();
@@ -4318,13 +4321,17 @@ fn cmd_pull(
     // tracks loading the node's own provisioned key instead). If that derived key
     // disagrees with what the database has registered, any custody DEK the peer re-wraps
     // back for us would silently fail to open — see assert_unwrap_key_registered's doc.
-    let mine =
-        cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(&sk.to_bytes()));
+    let unwrap_secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    let mine = cairn_event::seal::unwrap_public(&unwrap_secret);
     assert_unwrap_key_registered(&mut client, &mine)?;
+    let custody = unwrap_key::NodeCustody {
+        signing_key: sk,
+        unwrap_secret,
+    };
     // A manual one-shot pull defaults to incremental; `--full` requests a sweep
     // from seq 0 (an explicit "reconcile everything now", the same path cmd_run
     // takes on cadence — issue #196).
-    let m = do_pull(&mut client, peer, peer_name, full, Some(&sk))?;
+    let m = do_pull(&mut client, peer, peer_name, full, Some(&custody))?;
     if metrics {
         println!("{m}");
     } else {
@@ -4561,10 +4568,16 @@ fn cmd_blobd(conn: &str, peers: &[String], window: usize, budget_ms: u64, metric
     Ok(())
 }
 
-/// `own_key` (ADR-0052): this node's signing key, wrapped in an `Arc` so a clone can
-/// move into each per-connection thread where `serve_conn` derives the unwrap secret
-/// to re-wrap DEKs. `None` serves without custody (events still sync).
-fn cmd_serve(conn: String, listen: &str, corrupt: bool, own_key: Option<Arc<SigningKey>>) -> R<()> {
+/// `custody` (ADR-0052): this node's signing key and unwrap secret, wrapped in an
+/// `Arc` so a clone can move into each per-connection thread where `serve_conn` uses
+/// the carried secret to re-wrap DEKs. `None` serves without custody (events still
+/// sync).
+fn cmd_serve(
+    conn: String,
+    listen: &str,
+    corrupt: bool,
+    custody: Option<Arc<unwrap_key::NodeCustody>>,
+) -> R<()> {
     let listener = TcpListener::bind(listen)?;
     eprintln!(
         "serving on {listen}{}",
@@ -4577,9 +4590,9 @@ fn cmd_serve(conn: String, listen: &str, corrupt: bool, own_key: Option<Arc<Sign
     for stream in listener.incoming() {
         let stream = stream?;
         let conn = conn.clone();
-        let own_key = own_key.clone();
+        let custody = custody.clone();
         std::thread::spawn(move || {
-            if let Err(e) = serve_conn(&conn, stream, corrupt, own_key) {
+            if let Err(e) = serve_conn(&conn, stream, corrupt, custody) {
                 eprintln!("connection error: {e}");
             }
         });
@@ -4639,24 +4652,28 @@ fn cmd_run(
     key_path: &str,
 ) -> R<()> {
     // Load the node signing key ONCE up front (ADR-0052): the serve thread and the
-    // pull loop must share the SAME key — deriving it twice would race to create the
-    // file and could leave serve and pull on different identities. One Arc feeds both.
-    let node_key = Arc::new(load_or_create_key(key_path)?.0);
+    // pull loop must share the SAME custody — deriving it twice would race to create
+    // the file and could leave serve and pull on different identities. One Arc feeds
+    // both.
+    let (sk, _kid) = load_or_create_key(key_path)?;
     // Connect and fail fast BEFORE spawning the serve thread (ADR-0066): this run's
     // derived unwrap key (shared by both the pull loop below and the serve thread, via
-    // the one `node_key` Arc) must agree with what the database registered, or the serve
+    // the one `custody` Arc) must agree with what the database registered, or the serve
     // thread's re-wraps would silently degrade into "no custody to offer" the moment a
     // peer pulls from it — see assert_unwrap_key_registered's doc (issue #503).
     let mut client = connect_checked_apply(conn)?;
-    let mine = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
-        &node_key.to_bytes(),
-    ));
+    let unwrap_secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    let mine = cairn_event::seal::unwrap_public(&unwrap_secret);
     assert_unwrap_key_registered(&mut client, &mine)?;
+    let custody = Arc::new(unwrap_key::NodeCustody {
+        signing_key: sk,
+        unwrap_secret,
+    });
     {
         let (c, l) = (conn.to_string(), listen.to_string());
-        let own_key = Arc::clone(&node_key);
+        let own_custody = Arc::clone(&custody);
         std::thread::spawn(move || {
-            if let Err(e) = cmd_serve(c, &l, false, Some(own_key)) {
+            if let Err(e) = cmd_serve(c, &l, false, Some(own_custody)) {
                 eprintln!("serve thread exited: {e}");
             }
         });
@@ -4725,7 +4742,7 @@ fn cmd_run(
             peer,
             peer_name,
             full_sweep,
-            Some(node_key.as_ref()),
+            Some(custody.as_ref()),
         ) {
             Ok(m) => {
                 status += &format!(": pull {} shipped / {} new", m["shipped"], m["applied_new"]);
@@ -5171,23 +5188,20 @@ fn rewrap_custody_for_peer(
         .collect()
 }
 
-/// `own_key` (ADR-0052): this node's signing key, from which we derive the unwrap
-/// SECRET used to open our locally-stored DEKs before re-wrapping them for a pulling
-/// peer. `None` serves without custody (events still sync). One `Arc` is cloned into
-/// each per-connection thread; the secret is derived per connection (a cheap HKDF).
+/// `custody` (ADR-0052): this node's signing key and unwrap secret, resolved once at
+/// startup and shared across connection threads. `None` serves without custody (events
+/// still sync). One `Arc` is cloned into each per-connection thread.
 fn serve_conn(
     conn: &str,
     mut stream: TcpStream,
     corrupt: bool,
-    own_key: Option<Arc<SigningKey>>,
+    custody: Option<Arc<unwrap_key::NodeCustody>>,
 ) -> R<()> {
     let mut client = connect_db(conn)?;
-    // Our own unwrap secret, derived once per connection from this node's signing
-    // seed (ADR-0026 escrow: the secret is never in the DB). Used only to open our
+    // Our own unwrap secret, resolved once at startup and shared across connection
+    // threads (ADR-0026 escrow: the secret is never in the DB). Used only to open our
     // locally-stored DEKs so the EventsAfterSeq arm can re-wrap them for the peer.
-    let own_secret = own_key
-        .as_ref()
-        .map(|k| cairn_event::seal::derive_unwrap_secret(&k.to_bytes()));
+    let own_secret = custody.as_ref().map(|c| c.unwrap_secret.clone());
     let raw = read_frame(&mut stream)?;
     let req: Request = serde_json::from_slice(&raw)?;
     let resp: Vec<u8> = match req {
@@ -5559,24 +5573,26 @@ fn main() -> R<()> {
         "serve" => {
             // Load this node's key so the serve arm can re-wrap sealed events' DEKs
             // for pulling peers (ADR-0052). Defaults to node.key like the other verbs.
-            let own_key = Arc::new(
-                load_or_create_key(&flag(&args, "--key").unwrap_or_else(|| "node.key".into()))?.0,
-            );
+            let (sk, _kid) =
+                load_or_create_key(&flag(&args, "--key").unwrap_or_else(|| "node.key".into()))?;
             // ADR-0066 fail-fast, BEFORE this daemon starts accepting connections: a
             // one-off connection just to check the registered unwrap key, since (unlike
             // `pull`/`run`) `serve` otherwise never touches the database until its first
             // accepted connection — see assert_unwrap_key_registered's doc (issue #503).
             let mut startup_client = connect_checked_apply(&need(conn.clone()))?;
-            let mine = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
-                &own_key.to_bytes(),
-            ));
+            let unwrap_secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+            let mine = cairn_event::seal::unwrap_public(&unwrap_secret);
             assert_unwrap_key_registered(&mut startup_client, &mine)?;
             drop(startup_client);
+            let custody = Arc::new(unwrap_key::NodeCustody {
+                signing_key: sk,
+                unwrap_secret,
+            });
             cmd_serve(
                 need(conn),
                 &need(flag(&args, "--listen")),
                 args.iter().any(|a| a == "--corrupt"),
-                Some(own_key),
+                Some(custody),
             )?
         }
         "run" => cmd_run(
