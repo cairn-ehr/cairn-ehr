@@ -144,6 +144,46 @@ pub fn resolve(
     }
 }
 
+/// Read the node's `<key>.unwrap` file and classify the result for [`resolve`].
+///
+/// THE CLASSIFICATION IS THE POINT. `Absent` may fall back to a derived key; `Unusable`
+/// may not. Getting that boundary wrong in the permissive direction re-creates the exact
+/// defect this module exists to prevent, so the recogniser is the error's TYPE and, for
+/// IO, its [`std::io::ErrorKind`] — never its message text (a repo-wide convention: a
+/// formatted message flattens the cause permanently and can never be taught to a
+/// classifier).
+///
+/// Note which way each variant falls:
+///
+/// - `Io(NotFound)` — genuinely no file. **Absent.**
+/// - `Io(_)` — a permissions error, an IO error, a directory where a file should be. The
+///   file may well exist and be perfectly good; we simply could not read it. **Unusable.**
+/// - `Sealed` — the file is there and valid, we just hold no secret for it. **Unusable**,
+///   with the remedy named: this is the shape an operator hits by forgetting
+///   `CAIRN_KEY_PASSPHRASE`, and silently deriving a key instead would be the worst
+///   possible response to it.
+/// - `Key(_)` — corrupt bytes, a wrong passphrase, a bundle that is neither sealed nor 32
+///   bytes. **Unusable.**
+pub fn load_file_outcome(path: &std::path::Path, passphrase: Option<&str>) -> FileOutcome {
+    use cairn_keystore::keystore::KeystoreError;
+    match cairn_keystore::keystore::load_unwrap_secret(path, passphrase) {
+        Ok(secret) => FileOutcome::Loaded(secret),
+        Err(KeystoreError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            FileOutcome::Absent
+        }
+        Err(KeystoreError::Io(e)) => FileOutcome::Unusable(format!(
+            "cannot read it ({e}) — the file may exist and be intact; this daemon could not \
+             open it"
+        )),
+        Err(KeystoreError::Sealed) => FileOutcome::Unusable(
+            "it is sealed and no passphrase was supplied — set CAIRN_KEY_PASSPHRASE to the \
+             node's operational passphrase (or its recovery code)"
+                .into(),
+        ),
+        Err(KeystoreError::Key(m)) => FileOutcome::Unusable(m),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +350,91 @@ mod tests {
         assert!(
             matches!(r, Resolution::Refuse(_)),
             "a garbage key file is a defect whether or not custody is claimed"
+        );
+    }
+
+    #[test]
+    fn a_missing_file_classifies_as_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.unwrap");
+        assert!(
+            matches!(load_file_outcome(&path, None), FileOutcome::Absent),
+            "a file that is not there is Absent, never Unusable"
+        );
+    }
+
+    #[test]
+    fn a_plaintext_secret_file_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.unwrap");
+        let secret = cairn_event::seal::generate_unwrap_secret().unwrap();
+        cairn_keystore::keystore::write_unwrap_plaintext(&path, &secret).unwrap();
+        let FileOutcome::Loaded(loaded) = load_file_outcome(&path, None) else {
+            panic!("a plaintext unwrap key must load");
+        };
+        assert_eq!(*loaded, *secret, "the bytes cross the disk intact");
+    }
+
+    #[test]
+    fn a_sealed_file_loads_with_its_passphrase() {
+        // The cross-crate link that nothing tests today: cairn-node SEALS the file and
+        // cairn-sync must OPEN it. DR slice 1's lesson 4 — where no test carries the
+        // value across the disk, the one link that matters is proven by nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.unwrap");
+        let pass = "op-passphrase-for-this-test";
+        let code = cairn_keystore::seal::generate_recovery_code();
+        let public = cairn_keystore::keystore::generate_unwrap_sealed(&path, pass, &code).unwrap();
+        let FileOutcome::Loaded(loaded) = load_file_outcome(&path, Some(pass)) else {
+            panic!("a sealed unwrap key must load under its passphrase");
+        };
+        assert_eq!(
+            cairn_event::seal::unwrap_public(&loaded),
+            public,
+            "the secret loaded is the one whose public half was registered"
+        );
+    }
+
+    #[test]
+    fn a_sealed_file_without_a_passphrase_is_unusable_not_absent() {
+        // The case that MUST NOT fall back: the key is right there, we simply have no
+        // secret for it. Treating this as "absent" would derive a key and carry on.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.unwrap");
+        let code = cairn_keystore::seal::generate_recovery_code();
+        cairn_keystore::keystore::generate_unwrap_sealed(&path, "op-pass", &code).unwrap();
+        let FileOutcome::Unusable(cause) = load_file_outcome(&path, None) else {
+            panic!("a sealed file with no passphrase is Unusable, never Absent");
+        };
+        assert!(
+            cause.contains("CAIRN_KEY_PASSPHRASE"),
+            "the cause names the remedy: {cause}"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_file_is_unusable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.unwrap");
+        std::fs::write(&path, b"not a sealed bundle and not 32 bytes").unwrap();
+        assert!(
+            matches!(load_file_outcome(&path, None), FileOutcome::Unusable(_)),
+            "garbage is Unusable"
+        );
+    }
+
+    #[test]
+    fn a_wrong_passphrase_is_unusable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node.key.unwrap");
+        let code = cairn_keystore::seal::generate_recovery_code();
+        cairn_keystore::keystore::generate_unwrap_sealed(&path, "right-pass", &code).unwrap();
+        assert!(
+            matches!(
+                load_file_outcome(&path, Some("wrong-pass")),
+                FileOutcome::Unusable(_)
+            ),
+            "a wrong passphrase must never degrade into Absent"
         );
     }
 }
