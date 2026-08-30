@@ -30,6 +30,12 @@ use cairn_event::{
 };
 use serde::{Deserialize, Serialize};
 
+// The node's custody-key resolution (issue #503). A module rather than another
+// function in this file: main.rs is ~11,700 lines, and the decision table below is
+// the safety argument of the ADR-0066 conversion — it belongs somewhere a reviewer
+// can hold in one screen, and it is testable with no database and no filesystem.
+mod unwrap_key;
+
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 //

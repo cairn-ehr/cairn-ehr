@@ -360,6 +360,7 @@ name = "cairn-sync"
 version = "0.0.0"
 dependencies = [
  "cairn-event",
+ "cairn-keystore",
  "cairn-node",
  "chacha20poly1305",
  "hex",
@@ -370,6 +371,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
