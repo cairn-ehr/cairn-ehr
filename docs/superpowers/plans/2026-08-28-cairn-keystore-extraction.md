@@ -914,9 +914,18 @@ Every `do_pull(..., None)` in the test modules keeps compiling — the parameter
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --tests -- -D warnings
-scripts/run-db-gated-tests.sh
+cargo clippy -p cairn-sync --tests -- -D warnings
+CAIRN_ALLOW_DB_SKIP=1 cargo test -p cairn-sync --bin cairn-sync unwrap_key
+cargo test -p cairn-sync
+cargo test -p cairn-node --test unwrap_secret_is_not_derived
 ```
+
+**Do NOT run `scripts/run-db-gated-tests.sh` here.** On this machine a cross-cutting rebuild takes
+~6 HOURS: macOS runs a one-time-per-binary Gatekeeper assessment over ~134 relinked test binaries,
+and a warm target dir does not help. This task's changes are confined to `cairn-sync`, and
+`cargo test -p cairn-sync` **does** build `tests/clinical_pull.rs` — the cross-crate suite the full
+gate exists to catch is only invisible to `-p cairn-node`, not to this. The full gate runs once, in
+Task 6. Check exit codes with `echo $?`; never pipe cargo to `tail`.
 
 Expected: **PASS.** Behaviour is unchanged by construction — the same derived secret reaches the same two places, now carried rather than recomputed. `cairn-sync/tests/clinical_pull.rs` is the suite that proves it end to end, and `-p cairn-sync` alone does build it, but run the whole gate: it is the only one that catches a cross-crate break.
 
@@ -1087,9 +1096,38 @@ In each of `cmd_pull` (~4310), `cmd_run` (~4640) and the serve CLI arm (~5558), 
 
 where `unwrap_key_path: Option<&str>` comes from the new `--unwrap-key` flag. The serve CLI arm builds its own one-off `startup_client` exactly as it does today, and `drop`s it after.
 
+**The serve CLI arm has no `key_path` binding** — it computes the path inline today. Bind it first:
+
+```rust
+            let key_path = flag(&args, "--key").unwrap_or_else(|| "node.key".into());
+```
+
+and pass `&key_path`.
+
 `assert_unwrap_key_registered`, `unwrap_key_matches` and `unwrap_key_divergence_message` are now **dead** — their job moved into `resolve`. Delete all three plus their unit tests at ~6396. Do not leave them behind "in case": a second, unreachable copy of a safety decision is worse than none.
 
-- [ ] **Step 6: Add the CLI flag**
+- [ ] **Step 6: Move the guard's cairn-sync `ALLOWED` entry to its new file**
+
+After this task the only `derive_unwrap_secret` call in `cairn-sync` outside the bench lives in
+`unwrap_key.rs::resolve_at_startup`, **not** in `main.rs`. The guard fails on an unlisted offender, so
+**add** a second cairn-sync entry to `ALLOWED` in `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`:
+
+```rust
+    (
+        "crates/cairn-sync/src/unwrap_key.rs",
+        "the pre-ADR-0066 fallback in `resolve_at_startup` — a node whose registered key IS its \
+         derived one has no `.unwrap` file to load, and refusing to start would strand it. \
+         Admissible ONLY because the derived key is checked against the registration first: a \
+         restored node's derivation does not match and is refused. Retire this once no \
+         pre-ADR-0066 node can exist — tracked by the #503 follow-up",
+    ),
+```
+
+**Leave the `crates/cairn-sync/src/main.rs` entry in place for now** — the bench still calls the function,
+so it is still live, and the guard rejects a dead entry. Task 6 removes the bench call and the entry
+together.
+
+- [ ] **Step 7: Add the CLI flag**
 
 `pull`, `serve` and `run` each accept `--unwrap-key PATH`, read with the existing `flag(&args, "--unwrap-key")` helper. Update the usage text at ~5415-5436, e.g. for `pull`:
 
@@ -1098,17 +1136,26 @@ where `unwrap_key_path: Option<&str>` comes from the new `--unwrap-key` flag. Th
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
 ```
 
-- [ ] **Step 7: Run the full gate**
+- [ ] **Step 8: Run the full gate**
 
 ```bash
 cargo fmt --all
-cargo clippy --workspace --tests -- -D warnings
-scripts/run-db-gated-tests.sh
+cargo clippy -p cairn-sync --tests -- -D warnings
+CAIRN_ALLOW_DB_SKIP=1 cargo test -p cairn-sync --bin cairn-sync unwrap_key
+cargo test -p cairn-sync
+cargo test -p cairn-node --test unwrap_secret_is_not_derived
 ```
+
+**Do NOT run `scripts/run-db-gated-tests.sh` here.** On this machine a cross-cutting rebuild takes
+~6 HOURS: macOS runs a one-time-per-binary Gatekeeper assessment over ~134 relinked test binaries,
+and a warm target dir does not help. This task's changes are confined to `cairn-sync`, and
+`cargo test -p cairn-sync` **does** build `tests/clinical_pull.rs` — the cross-crate suite the full
+gate exists to catch is only invisible to `-p cairn-node`, not to this. The full gate runs once, in
+Task 6. Check exit codes with `echo $?`; never pipe cargo to `tail`.
 
 Expected: **PASS.** `clinical_pull.rs` is the suite most likely to break here — it provisions both nodes and registers a **derived** unwrap key deliberately (`clinical_pull.rs:409`), which is now the *fallback* row: absent file, derived matches registered. It should pass **and print the warning**. If it fails, the classification is wrong — do not "fix" it by weakening `resolve`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -1161,22 +1208,17 @@ and
 
 Delete the now-unused `let (sk, _kid) = cairn_event::generate_key()?;` if nothing else in the function uses `sk`.
 
-- [ ] **Step 2: Rewrite the guard's `ALLOWED` reason**
+- [ ] **Step 2: Delete the guard's now-dead `main.rs` entry**
 
-In `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`, the `crates/cairn-sync/src/main.rs` entry's reason is now **false** — cairn-sync *can* read the keystore, and #503 is closed. Replace the reason (keep the entry):
+Step 1 removed the last `derive_unwrap_secret` call in `crates/cairn-sync/src/main.rs`. The guard
+asserts every `ALLOWED` entry is **live** and fails on a dead one, so **delete** the
+`crates/cairn-sync/src/main.rs` entry from `ALLOWED` in
+`crates/cairn-node/tests/unwrap_secret_is_not_derived.rs` entirely.
 
-```rust
-    (
-        "crates/cairn-sync/src/main.rs",
-        "the pre-ADR-0066 fallback in `unwrap_key::resolve_at_startup` — a node whose \
-         registered key IS its derived one has no `.unwrap` file to load, and refusing to \
-         start would strand it. Admissible ONLY because the derived key is checked against \
-         the registration first: a restored node's derivation does not match and is refused. \
-         Retire this once no pre-ADR-0066 node can exist — tracked by the #503 follow-up",
-    ),
-```
-
-Confirm the guard still passes: it must find a live call in that file (it will — `resolve_at_startup` derives) and no others.
+Two entries remain: `crates/cairn-keystore/src/keystore.rs` (the ADR-0066 adoption migration, moved in
+Task 1) and `crates/cairn-sync/src/unwrap_key.rs` (the guarded fallback, added in Task 5). The guard's
+own dead-entry check is the proof this step was done right — **when it fails, delete the entry it
+names; never add one.**
 
 - [ ] **Step 3: File the two follow-up issues**
 
