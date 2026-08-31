@@ -27,6 +27,14 @@ Every task's requirements implicitly include this section.
 - **rustfmt defaults.** Run `cargo fmt` before every commit; CI gates on `cargo fmt --check`.
 - **Three Cargo trees, three lockfiles.** The root workspace, `extensions/cairn_pgx` and `cairn-gui` are separate trees; the last two are `exclude`d but ship anyway and depend on the root crates **by path**. `cairn-gui/cairn-gui-tauri` depends on `cairn-node`, so any change to `cairn-node`'s dependency set makes `cairn-gui/Cargo.lock` stale. **No root-workspace gate sees this** — CI runs clippy on the GUI tree with `--locked`, which *refuses* to regenerate.
 - **Test commands.** Use `--all-targets` when the question is "is this reachable from production" (`--lib` and `--bin X` compile with `cfg(test)`, so unused items look used). Use `--no-fail-fast`. **Never pipe cargo to `tail`** — it masks cargo's exit status.
+- **Bottom-up construction means each task leaves code with no production caller until the next
+  task wires it.** The workspace denies `warnings`, so `dead_code` fails a plain
+  `cargo build -p cairn-node`. Mark such items
+  `#[cfg_attr(not(test), expect(dead_code, reason = "wired in Task N"))]` — **`expect`, never
+  `allow`**: `expect` itself fires once the lint stops applying, so the attribute becomes a build
+  error the moment a real caller arrives and cannot decay into a stale suppression. **Each task
+  must DELETE its predecessor's `expect(dead_code)` attributes as part of wiring the caller.**
+  (Found by Task 4's implementer; my plan did not anticipate it.)
 - **This slice needs no database.** Every test here is pure. If you run a wider suite, `export CAIRN_ALLOW_DB_SKIP=1` or the DB-gated suites fail rather than self-skip (#450).
 - **Gate cost.** Adding a workspace member touches `Cargo.lock`, which relinks ~134 test binaries; macOS runs a one-time-per-binary Gatekeeper assessment on each. **Budget hours for the full local gate** and start it in the background. During development use `cargo test -p cairn-medium` and `cargo test -p cairn-node`.
 - **Honesty constraint, specific to this slice.** 2a **closes nothing.** When it merges, the medium still carries no clinical event, `backup.rs::read_event_set` still reads `node_event` only, and `dr_clinical_guarantee_gap.rs::medium_carries_the_federation_plane_and_no_clinical_event` still passes **as a pin on the defect**. No doc comment, test name, or commit message may imply #500 is fixed. Every deferral written here names the slice that retires it.
