@@ -1,8 +1,10 @@
-//! Shared test fixtures for this crate's unit tests, used by `chunk`, `marker`, `container` and
-//! `verify`'s `mod tests`. Centralised rather than copied into each module: the `enroll()`
-//! fixture is what every attestation test's meaning rests on, and four independent copies would
-//! be four places for it to quietly drift apart.
+//! Shared test fixtures for this crate's unit tests, used by `chunk`, `marker`, `container`,
+//! `verify`, `record` and `segment`'s `mod tests`. Centralised rather than copied into each
+//! module: the `enroll()` fixture is what every attestation test's meaning rests on, and
+//! `bytes()`/`record()` are what every custody assertion in `record` and `segment` rests on —
+//! independent copies would be independent places for one of them to quietly drift apart.
 
+use crate::record::MediumRecord;
 use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
 
 pub(crate) fn sk() -> SigningKey {
@@ -39,4 +41,27 @@ pub(crate) fn enroll(sk: &SigningKey, name: &str) -> Vec<u8> {
         safety: None,
     };
     sign(&body, sk).unwrap().signed_bytes
+}
+
+/// Runtime-derived bytes for a fixture field. NEVER a literal: a byte-array literal in a
+/// crypto context trips CodeQL's `rust/hard-coded-cryptographic-value` (house rule 6,
+/// issue #146), and a wrapped DEK is exactly such a context.
+pub(crate) fn bytes(seed: u8, len: usize) -> Vec<u8> {
+    (0..len).map(|i| seed.wrapping_add(i as u8)).collect()
+}
+
+/// A `MediumRecord` fixture with the optional fields selected by `flags` (the same
+/// three-bit layout `put_record`/`take_record` encode). Shared between `record`'s tests
+/// (which exercise the record codec directly) and `segment`'s tests (which build `Segment`
+/// fixtures out of these records) for the same reason as `bytes`: a second definition
+/// would be a second place for the fixture's custody shape to drift from what the
+/// record-layer tests assert against.
+pub(crate) fn record(flags: u8) -> MediumRecord {
+    MediumRecord {
+        signed_bytes: bytes(1, 40),
+        attestation: (flags & 0b001 != 0).then(|| bytes(2, 16)),
+        attester_key: (flags & 0b010 != 0).then(|| bytes(3, 32)),
+        dek_wrapped: (flags & 0b100 != 0).then(|| bytes(4, 48)),
+        source_seq: 7,
+    }
 }

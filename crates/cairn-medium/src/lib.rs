@@ -57,6 +57,12 @@
 //!   whole-set commitment. It serves media that already exist and gains nothing:
 //!   CAIRNB3's equivalent is `segment`, because a whole-set commitment cannot
 //!   survive an append (see the crate docs). Do not extend this module.
+//! - `record` — one event as the medium carries it. Tracks the sync WIRE shape; changes
+//!   when `cairn-sync`'s `EventsResponse` shape changes.
+//! - `segment` — the append-only, plane-tagged, chained GROUP of records. Tracks the
+//!   append/chain durability design, a separate concern from `record` with a separate
+//!   reason to change (see its module doc for why this, not `marker`, is CAIRNB3's
+//!   appendable unit).
 //! - `container` — magic dispatch and the on-disk framing of every revision.
 //! - `verify` — signature verification, and (from slice 2a) the chain pass.
 
@@ -64,6 +70,7 @@ mod chunk;
 mod container;
 mod error;
 mod marker;
+mod record;
 mod segment;
 mod verify;
 
@@ -78,7 +85,8 @@ pub use marker::{
     build_self_attestation, enrolls, event_set_commitment, scan_enrolls, verify_self_attestation,
     EnrollScan, SelfMarker, SELF_ATTEST_TYPE,
 };
-pub use segment::{MediumRecord, Plane, Segment, UnknownSegment};
+pub use record::MediumRecord;
+pub use segment::{Plane, Segment, UnknownSegment};
 pub use verify::{
     serialize_and_verify_container, verify_event, verify_events, verify_medium_bytes, VerifyReport,
 };
