@@ -78,7 +78,7 @@ pub use marker::{
     build_self_attestation, enrolls, event_set_commitment, scan_enrolls, verify_self_attestation,
     EnrollScan, SelfMarker, SELF_ATTEST_TYPE,
 };
-pub use segment::MediumRecord;
+pub use segment::{MediumRecord, Plane, Segment, UnknownSegment};
 pub use verify::{
     serialize_and_verify_container, verify_event, verify_events, verify_medium_bytes, VerifyReport,
 };
