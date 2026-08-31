@@ -97,5 +97,6 @@ pub use marker::{
 pub use record::MediumRecord;
 pub use segment::{Plane, Segment, UnknownSegment};
 pub use verify::{
-    serialize_and_verify_container, verify_event, verify_events, verify_medium_bytes, VerifyReport,
+    chain_report, self_id_from_chain, serialize_and_verify_container, verify_event, verify_events,
+    verify_medium_bytes, verify_records, watermark, ChainReport, SegmentFault, VerifyReport,
 };

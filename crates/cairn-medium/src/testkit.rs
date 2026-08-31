@@ -5,6 +5,8 @@
 //! `record`, `segment` and `attest` rests on — independent copies would be independent
 //! places for one of them to quietly drift apart.
 
+use crate::attest::{segment_commitment, tests_support};
+use crate::container::MediumV3;
 use crate::record::MediumRecord;
 use crate::segment::{Plane, Segment};
 use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
@@ -85,5 +87,106 @@ pub(crate) fn segment(plane: Plane, index: u32, n: usize) -> Segment {
         self_node_id_hex: "abcd".into(),
         attestation: Some(bytes(9, 64)),
         records: (0..n).map(|_| record(0b111)).collect(),
+    }
+}
+
+/// `n` signed CLINICAL segments, correctly chained, with ascending `source_seq`.
+/// Returns the medium and every seq it wrote, so a caller can assert on the watermark.
+///
+/// `salt` is load-bearing, not decoration: it is threaded straight through to
+/// `tests_support::salted_record`, so two chains built with different salts hold
+/// genuinely different records. Verify's splice test relies on that — with one shared
+/// salt both chains would be byte-identical and "spliced from another medium" would
+/// prove nothing.
+pub(crate) fn chain_of(n: usize, salt: u8) -> (MediumV3, Vec<i64>) {
+    let sk = sk();
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut seqs = Vec::new();
+    let mut prev = String::new();
+    for i in 0..n {
+        let records = vec![tests_support::salted_record(salt, i as u8)];
+        seqs.extend(records.iter().map(|r| r.source_seq));
+        let seg = tests_support::signed(&sk, "abcd", Plane::Clinical, i as u32, &prev, records);
+        prev = segment_commitment(&seg.records);
+        segments.push(seg);
+    }
+    (
+        MediumV3 {
+            segments,
+            unknown: vec![],
+            truncated_tail: false,
+        },
+        seqs,
+    )
+}
+
+/// A medium whose segment 0 is a NODE-plane segment carrying a real `node.enrolled`, so
+/// `self_id_from_chain`'s genesis bind has something to bind to; segment 1 is clinical.
+/// The attested self id is the genesis's own content address — that is what a node-id IS.
+pub(crate) fn chain_with_genesis() -> (MediumV3, SigningKey) {
+    let sk = sk();
+    let genesis = enroll(&sk, "a");
+    let self_id = hex::encode(cairn_event::event_address(&genesis));
+    let node_records = vec![MediumRecord {
+        signed_bytes: genesis,
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: None,
+        source_seq: 1,
+    }];
+    let s0 = tests_support::signed(&sk, &self_id, Plane::Node, 0, "", node_records);
+    let prev = segment_commitment(&s0.records);
+    let s1 = tests_support::signed(
+        &sk,
+        &self_id,
+        Plane::Clinical,
+        1,
+        &prev,
+        vec![tests_support::salted_record(9, 0)],
+    );
+    (
+        MediumV3 {
+            segments: vec![s0, s1],
+            unknown: vec![],
+            truncated_tail: false,
+        },
+        sk,
+    )
+}
+
+/// `n` clinical segments written with NO signing key available — correctly chained, and
+/// carrying their self id, but not tamper-evident.
+///
+/// Its records hold GENUINELY SIGNED events (via `enroll`), unlike `salted_record`'s
+/// arbitrary bytes. `verify_records` checks Ed25519 signatures, so a fixture built from
+/// salted bytes would fail verification before any test tampered with it — and the test
+/// would then pass for the wrong reason, proving nothing about tampering.
+pub(crate) fn unsigned_chain_of(n: usize) -> MediumV3 {
+    let sk = sk();
+    let mut segments = Vec::new();
+    let mut prev = String::new();
+    for i in 0..n {
+        let records = vec![MediumRecord {
+            signed_bytes: enroll(&sk, &format!("node-{i}")),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: i as i64 + 1,
+        }];
+        let seg = Segment {
+            plane: Plane::Clinical,
+            index: i as u32,
+            prev_commitment: prev.clone(),
+            self_node_id_hex: "abcd".into(),
+            attestation: None,
+            records,
+        };
+        prev = segment_commitment(&seg.records);
+        segments.push(seg);
+    }
+    MediumV3 {
+        segments,
+        unknown: vec![],
+        truncated_tail: false,
     }
 }
