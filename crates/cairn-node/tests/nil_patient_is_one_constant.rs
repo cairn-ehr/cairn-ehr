@@ -56,8 +56,11 @@ fn production_sources() -> Vec<PathBuf> {
 /// a scan whose recogniser is untested can report "exactly one" because it recognises nothing.
 fn declares_nil_patient(line: &str) -> bool {
     let l = line.trim_start();
-    (l.starts_with("const NIL_PATIENT") || l.starts_with("pub const NIL_PATIENT"))
-        && l.contains('=')
+    // `contains`, not `starts_with("const "|"pub const ")`: the old prefix check let a
+    // `pub(crate) const NIL_PATIENT` (or any other visibility qualifier) slip past
+    // undetected — a second, differently-visible declaration would have compiled and
+    // compared equal today while being invisible to this guard (final review, #500).
+    l.contains("const NIL_PATIENT") && l.contains('=')
 }
 
 #[test]
@@ -96,6 +99,13 @@ fn nil_patient_declaration_recogniser_is_not_vacuous() {
     assert!(declares_nil_patient(
         "    const NIL_PATIENT: &str = \"00000000-0000-0000-0000-000000000000\";"
     ));
+    assert!(
+        declares_nil_patient(
+            "pub(crate) const NIL_PATIENT: &str = \"00000000-0000-0000-0000-000000000000\";"
+        ),
+        "a pub(crate) declaration must be recognised too — the old \
+         starts_with(\"const \"|\"pub const \") check let this slip past entirely"
+    );
     assert!(
         !declares_nil_patient("pub use cairn_event::NIL_PATIENT;"),
         "a re-export is not a declaration — recognising it would make the scan permanently red"

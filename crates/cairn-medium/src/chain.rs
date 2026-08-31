@@ -68,10 +68,29 @@ pub struct ChainReport {
     /// tamper-evident, and no caller may treat it as if it were.
     pub unsigned: usize,
     pub faults: Vec<SegmentFault>,
-    /// Position (into `MediumV3::segments`) of the last segment verified with every
-    /// preceding one. `None` when the first segment already fails. Everything at or before
-    /// this is trustworthy; everything after it is not, which is what bounds the loss from
-    /// a torn or damaged tail to exactly the increments after this point.
+    /// Position (into `MediumV3::segments`) of the last segment whose chain link held (and
+    /// whose attestation, when SIGNED, also verified and bound to a genesis where one
+    /// exists) with every preceding one. `None` when the first segment already fails.
+    ///
+    /// WHAT THIS DOES NOT MEAN (I5, #500 final review — an earlier doc here overclaimed
+    /// "everything at or before this is trustworthy"): `verified_through` is STRUCTURAL
+    /// CHAIN CONTINUITY, not a tamper-evidence boundary. Two ways it is weaker than that:
+    ///   1. An UNSIGNED segment sets `ok = true` on a matching `prev_commitment` ALONE, and
+    ///      `prev_commitment` is `segment_commitment` over PUBLIC bytes — derivable by
+    ///      anyone holding the preceding segment's records, no key required. So anyone can
+    ///      append a well-formed unsigned segment carrying ARBITRARY `source_seq` and
+    ///      advance this (and hence the watermark) with zero tamper-evidence. This is
+    ///      operationally NECESSARY (principle 7: an unavailable signing key must never
+    ///      block a backup), not an oversight — closing it needs an operator-facing signal
+    ///      that does not exist yet, deferred to the slice that adds that surface.
+    ///   2. `SelfIdUnbound` (a forged self-id claim) does NOT retract this, deliberately:
+    ///      the records in that segment ARE validly signed and chain-linked — only the
+    ///      identity CLAIM is forged (`self_node_id_hex` is attacker-supplied, not
+    ///      derived). Only "which node captured this" is in doubt, which is what
+    ///      [`self_id_from_chain`] (not this field) answers.
+    ///
+    /// What this DOES bound honestly: a torn or structurally-broken tail costs exactly the
+    /// increments after this point, never more, and never silently more than that.
     pub verified_through: Option<usize>,
 }
 
@@ -145,21 +164,25 @@ pub fn chain_report(m: &MediumV3) -> ChainReport {
                         ok = false;
                     }
                     Some(claimed_id) if any_genesis => {
-                        // Infallible: verify_segment_attestation above already verified
-                        // this exact signature via the same call, so re-deriving the
-                        // signed body here cannot fail.
-                        let body = cairn_event::verify_self_described(att)
-                            .expect("verify_segment_attestation already verified this signature");
-                        let attester = body.signer_key_id;
-                        let bound = genesis.iter().any(|(gid, gbody)| {
-                            *gid == claimed_id && gbody.signer_key_id == attester
-                        });
-                        if !bound {
-                            faults.push(SegmentFault::SelfIdUnbound {
-                                plane: seg.plane,
-                                index: seg.index,
-                                self_node_id_hex: claimed_id,
+                        // Infallible in practice: verify_segment_attestation above already
+                        // verified this exact signature via the same call, so re-deriving
+                        // the signed body here should never fail. But this is a
+                        // hostile-input recovery path (minor, #500 final review) — an
+                        // `.expect` here would hand an attacker a process crash instead of
+                        // a refusal. Degrade to "cannot confirm the bind" instead, the same
+                        // way `self_id_from_chain`'s sibling handles this below.
+                        if let Ok(body) = cairn_event::verify_self_described(att) {
+                            let attester = body.signer_key_id;
+                            let bound = genesis.iter().any(|(gid, gbody)| {
+                                *gid == claimed_id && gbody.signer_key_id == attester
                             });
+                            if !bound {
+                                faults.push(SegmentFault::SelfIdUnbound {
+                                    plane: seg.plane,
+                                    index: seg.index,
+                                    self_node_id_hex: claimed_id,
+                                });
+                            }
                         }
                     }
                     Some(_) => {} // attestation verifies; no genesis anywhere to bind to yet

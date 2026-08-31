@@ -34,7 +34,7 @@
 
 use crate::record::MediumRecord;
 use crate::segment::{Plane, Segment};
-use cairn_event::{sign, verify_self_described, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, sign, verify_self_described, EventBody, Hlc, SigningKey};
 
 /// Event type of the in-container segment attestation. Like `node.self_attested` it NEVER
 /// enters `node_event`, never syncs and is never registered in the in-DB twin registry —
@@ -42,13 +42,45 @@ use cairn_event::{sign, verify_self_described, EventBody, Hlc, SigningKey};
 /// self-distinction that set-union convergence would otherwise erase.
 pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 
-/// Commitment over a segment's records — over their `signed_bytes` only, since that is the
-/// event; the sidecar fields (attestation, key, DEK) are custody that a legitimate
-/// re-capture may re-wrap. Order-independent, sharing `marker::commitment_over` — the same
-/// helper `event_set_commitment` shares, so there is one definition of what "a commitment
-/// over these bytes" means for the whole crate.
+/// Commitment over a segment's records — over each record's `(event_address(signed_bytes),
+/// source_seq)` PAIR. Order-independent, sharing `marker::commitment_over` (the per-record
+/// digest is fed straight back through it, so the crate keeps ONE definition of what "a
+/// commitment over these bytes" means) — a build that reorders the byte inputs before
+/// hashing would defeat that reuse, so don't; frame reordering is harmless under set-union
+/// sync and must stay harmless here too.
+///
+/// WHY `source_seq` IS INCLUDED (C1, #500 final review — this used to commit to
+/// `signed_bytes` alone): `source_seq` is the medium's cursor — `watermark()` returns
+/// `max(source_seq)` over the verified prefix, and the NEXT capture trusts that value to
+/// decide what to write. Before this fix nothing signed or committed to it: a single
+/// flipped bit inside an 8-byte in-container field left every signature and every chain
+/// link genuinely valid while silently jumping the watermark to ~4.6e18 — every future
+/// capture on that medium then writes nothing, forever, while the medium reports itself
+/// healthy and growing. That is the exact failure this whole slice exists to prevent.
+///
+/// The sidecar fields (`attestation`, `attester_key`, `dek_wrapped`) stay OUT of the
+/// commitment: a legitimate re-capture may re-wrap that custody (which path owns the
+/// re-wrap is a decision the NEXT slice makes, not this one), so committing to it would
+/// break a re-capture that changed nothing clinically meaningful. That re-wrap rationale
+/// never applied to `source_seq` — it is not custody a re-capture legitimately changes; it
+/// is a fixed local fact about the capturing node's own insertion order, recorded once and
+/// never revisited.
+///
+/// RESIDUAL EXPOSURE, named plainly rather than fixed here: because `dek_wrapped` stays
+/// outside the commitment, deleting it from an already-verified segment leaves that
+/// segment's attestation intact and the medium reporting fully healthy end to end — while a
+/// later restore finds a sealed body it can never open. Nothing in this crate catches that
+/// today; only a custody-aware check at the slice that owns re-wrap can.
 pub fn segment_commitment(records: &[MediumRecord]) -> String {
-    let refs: Vec<&[u8]> = records.iter().map(|r| r.signed_bytes.as_slice()).collect();
+    let per_record: Vec<Vec<u8>> = records
+        .iter()
+        .map(|r| {
+            let mut item = event_address(&r.signed_bytes);
+            item.extend_from_slice(&r.source_seq.to_be_bytes());
+            item
+        })
+        .collect();
+    let refs: Vec<&[u8]> = per_record.iter().map(Vec::as_slice).collect();
     crate::marker::commitment_over(&refs)
 }
 
@@ -288,6 +320,26 @@ mod tests {
         }
     }
 
+    /// C1 (#500 final review): `source_seq` is the medium's cursor — `watermark()` trusts
+    /// `max(source_seq)` over the verified prefix — yet it is COSE-signed nowhere (only
+    /// `signed_bytes` is) and, before this fix, was not committed to either. Altering it
+    /// after signing must now break the segment's attestation exactly like altering any
+    /// other field of a record does.
+    #[test]
+    fn altering_source_seq_breaks_the_attestation() {
+        let sk = sk();
+        let mut seg = signed_segment(&sk, "abcd", Plane::Clinical, 0, "", 2);
+        // Flip the sign bit: the same shape of damage the finding describes — a single bit
+        // turning a modest seq into a huge one (~4.6e18), which is what would silently wreck
+        // the watermark if this field were uncommitted.
+        seg.records[0].source_seq ^= i64::MIN;
+        assert_eq!(
+            verify_segment_attestation(&seg),
+            None,
+            "source_seq must be bound into the commitment, or a corrupted cursor verifies clean"
+        );
+    }
+
     /// An unsigned segment yields no attested id — never a wrong one. Fail closed.
     #[test]
     fn an_unsigned_segment_attests_nothing() {
@@ -314,6 +366,17 @@ mod tests {
     /// `event_set_commitment` keeps its exact CAIRNB2 value after being refactored to
     /// share `commitment_over` with `segment_commitment`. A changed value would
     /// invalidate every existing signed medium in the field.
+    ///
+    /// I9 (#500 final review): the ORIGINAL version of this test derived N=1 independently
+    /// but only `assert_ne!`'d N=2 against itself — and N=1 alone does not pin the JOIN.
+    /// The most plausible future change (inserting a separator between the concatenated
+    /// addresses before hashing) is IDENTICAL to today's value at N=1 (there is only one
+    /// address to "separate" from nothing) and also satisfies a bare `assert_ne!` at N=2 (a
+    /// different-but-still-wrong value is still different from `one`). So the guard passed
+    /// while the exact case it claims to pin — every medium with more than one record —
+    /// silently broke. Derive N=2 independently too, by the same recipe `commitment_over`
+    /// documents (sort the addresses, concatenate with NO separator, hash), and assert
+    /// EQUALITY, not just difference.
     #[test]
     fn event_set_commitment_is_unchanged_by_the_shared_helper() {
         let sk = sk();
@@ -322,9 +385,29 @@ mod tests {
         // Pinned by construction: the commitment of a one-event set is the multihash of
         // that event's own address, which we can compute here independently.
         let one = crate::marker::event_set_commitment(std::slice::from_ref(&e1));
-        let expected = hex::encode(cairn_event::event_address(&cairn_event::event_address(&e1)));
-        assert_eq!(one, expected, "the CAIRNB2 commitment must not change");
-        assert_ne!(one, crate::marker::event_set_commitment(&[e1, e2]));
+        let expected_one =
+            hex::encode(cairn_event::event_address(&cairn_event::event_address(&e1)));
+        assert_eq!(
+            one, expected_one,
+            "the CAIRNB2 commitment must not change (N=1)"
+        );
+
+        let two = crate::marker::event_set_commitment(&[e1.clone(), e2.clone()]);
+        let mut addresses = [
+            cairn_event::event_address(&e1),
+            cairn_event::event_address(&e2),
+        ];
+        addresses.sort();
+        let expected_two = hex::encode(cairn_event::event_address(&addresses.concat()));
+        assert_eq!(
+            two, expected_two,
+            "the CAIRNB2 commitment must not change (N=2) — a changed join (e.g. an \
+             inserted separator) is invisible at N=1 and would still pass a bare assert_ne!"
+        );
+        assert_ne!(
+            one, two,
+            "sanity: different sets must commit to different values"
+        );
     }
 
     /// `record_count` is checked as its OWN conjunct, not merely riding along with

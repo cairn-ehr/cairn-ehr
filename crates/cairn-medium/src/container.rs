@@ -151,6 +151,15 @@ pub struct MediumV3 {
     /// intact. Remedy: run the backup again; the watermark did not advance past the last
     /// verified segment, so the lost increment is re-captured.
     pub truncated_tail: bool,
+    /// The offset, in the ORIGINAL bytes handed to [`parse_any`], one past the last
+    /// COMPLETE section: `bytes[..complete_bytes]` is the intact prefix (magic included);
+    /// `bytes[complete_bytes..]` is empty (clean parse) or the torn remnant.
+    ///
+    /// I4 (#500 final review): a WRITER recovering from a torn medium MUST
+    /// `medium.truncate(complete_bytes)` before appending — otherwise the torn remnant
+    /// becomes the next section's `[u32 length]` prefix and parsing stops there FOREVER,
+    /// silently orphaning every later backup.
+    pub complete_bytes: usize,
 }
 
 /// Either revision of the format, as parsed. Legacy media keep their exact prior code path.
@@ -162,23 +171,33 @@ pub enum MediumImage {
     V3(MediumV3),
 }
 
-/// Serialize a fresh CAIRNB3 image. Pure.
-pub fn serialize_v3(segments: &[Segment]) -> Vec<u8> {
+/// Serialize a fresh CAIRNB3 image. Pure. Returns `Result` (I6, #500 final review): each
+/// segment is refused at the source, per `put_segment`'s doc, rather than silently writing
+/// one `take_section` could never read back.
+pub fn serialize_v3(segments: &[Segment]) -> Result<Vec<u8>, BackupError> {
     let mut out = Vec::from(MEDIUM_MAGIC_V3);
     for seg in segments {
-        put_segment(&mut out, seg);
+        put_segment(&mut out, seg)?;
     }
-    out
+    Ok(out)
 }
 
 /// Append one segment to an existing CAIRNB3 image, in place.
 ///
-/// Byte-wise append: nothing already in `medium` is read or rewritten, which is what makes
-/// a capture cost O(new records). The caller writing this to disk owes the durability half
-/// — `write` then `sync_all()` BEFORE advancing any health record, so health can only ever
-/// under-claim (slice 2c owns that; this crate does no I/O).
-pub fn append_segment(medium: &mut Vec<u8>, seg: &Segment) {
-    put_segment(medium, seg);
+/// Byte-wise append: nothing already in `medium` is read or rewritten BY THIS CALL, which is
+/// what makes the APPEND ITSELF cost O(new records) — narrower than "a capture costs
+/// O(new records)" (an earlier version of this doc overclaimed exactly that — minor, #500
+/// final review): the caller must first PARSE THE WHOLE IMAGE, an O(medium size) operation
+/// with no streaming parse yet, to learn the watermark and predecessor before it can even
+/// build the segment to append. So the append is O(new records); the capture around it is
+/// not, until a streaming parse exists (deferred).
+///
+/// The caller writing this to disk owes the durability half — `write` then `sync_all()`
+/// BEFORE advancing any health record (slice 2c; this crate does no I/O). Returns `Result`
+/// (I6): see `put_segment`'s doc for why an over-cap segment is refused, not silently
+/// written unreadable.
+pub fn append_segment(medium: &mut Vec<u8>, seg: &Segment) -> Result<(), BackupError> {
+    put_segment(medium, seg)
 }
 
 /// Parse a medium of any revision, dispatching on its magic.
@@ -212,10 +231,14 @@ pub fn parse_any(bytes: &[u8]) -> Result<MediumImage, BackupError> {
             }
         }
     }
+    // Bytes consumed == the offset one past the last COMPLETE section (I4): `rest` here is
+    // either empty or the torn remnant either way. See `MediumV3::complete_bytes`'s doc.
+    let complete_bytes = bytes.len() - rest.len();
     Ok(MediumImage::V3(MediumV3 {
         segments,
         unknown,
         truncated_tail,
+        complete_bytes,
     }))
 }
 
@@ -319,7 +342,7 @@ mod tests {
             &segment_commitment(&node.records),
             3,
         );
-        let bytes = serialize_v3(&[node.clone(), clin.clone()]);
+        let bytes = serialize_v3(&[node.clone(), clin.clone()]).unwrap();
         match parse_any(&bytes).unwrap() {
             MediumImage::V3(m) => {
                 assert_eq!(m.segments, vec![node, clin]);
@@ -336,7 +359,7 @@ mod tests {
     fn appending_leaves_the_existing_bytes_untouched() {
         let sk = sk();
         let first = signed_segment(&sk, "abcd", Plane::Node, 0, "", 1);
-        let mut image = serialize_v3(std::slice::from_ref(&first));
+        let mut image = serialize_v3(std::slice::from_ref(&first)).unwrap();
         let before = image.clone();
         let second = signed_segment(
             &sk,
@@ -346,7 +369,7 @@ mod tests {
             &segment_commitment(&first.records),
             1,
         );
-        append_segment(&mut image, &second);
+        append_segment(&mut image, &second).unwrap();
         assert_eq!(
             &image[..before.len()],
             &before[..],
@@ -358,24 +381,31 @@ mod tests {
         }
     }
 
-    /// A torn append yields every complete segment before it, plus the flag. Nothing
-    /// earlier is lost, and the loss that did occur is visible.
-    #[test]
-    fn a_torn_append_yields_the_complete_prefix_and_says_so() {
-        let sk = sk();
-        let a = signed_segment(&sk, "abcd", Plane::Node, 0, "", 1);
+    /// Shared fixture for the two torn-medium tests below: a two-segment CAIRNB3 image
+    /// where `b` is cut short 12 bytes in, plus the offset where the intact prefix ends.
+    /// One definition, so "what counts as torn here" cannot drift between the two tests.
+    fn torn_two_segment_image(sk: &cairn_event::SigningKey) -> (Vec<u8>, Segment, usize) {
+        let a = signed_segment(sk, "abcd", Plane::Node, 0, "", 1);
         let b = signed_segment(
-            &sk,
+            sk,
             "abcd",
             Plane::Clinical,
             1,
             &segment_commitment(&a.records),
             4,
         );
-        let mut image = serialize_v3(std::slice::from_ref(&a));
+        let mut image = serialize_v3(std::slice::from_ref(&a)).unwrap();
         let intact = image.len();
-        append_segment(&mut image, &b);
-        image.truncate(intact + 12); // a crash partway through the second section
+        append_segment(&mut image, &b).unwrap();
+        image.truncate(intact + 12); // a crash partway through the second section — torn
+        (image, a, intact)
+    }
+
+    /// A torn append yields every complete segment before it, plus the flag. Nothing
+    /// earlier is lost, and the loss that did occur is visible.
+    #[test]
+    fn a_torn_append_yields_the_complete_prefix_and_says_so() {
+        let (image, a, _intact) = torn_two_segment_image(&sk());
         match parse_any(&image).unwrap() {
             MediumImage::V3(m) => {
                 assert_eq!(m.segments, vec![a], "the complete prefix survives whole");
@@ -383,6 +413,39 @@ mod tests {
                     m.truncated_tail,
                     "and the torn tail is REPORTED, never silent"
                 );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// I4 (#500 final review): `complete_bytes` is what makes a torn medium safely
+    /// resumable — without it, appending after a torn tail's partial bytes makes them the
+    /// next section's length prefix, and parsing stops there FOREVER. Performs the recovery
+    /// recipe the field's doc prescribes: truncate, THEN append, then confirm a clean parse.
+    #[test]
+    fn a_writer_can_resume_after_a_torn_tail_by_truncating_to_complete_bytes() {
+        let sk = sk();
+        let (mut image, a, intact) = torn_two_segment_image(&sk);
+        let torn = match parse_any(&image).unwrap() {
+            MediumImage::V3(m) => m,
+            other => panic!("{other:?}"),
+        };
+        assert!(torn.truncated_tail, "must report the tear before recovery");
+        assert_eq!(torn.complete_bytes, intact);
+        image.truncate(torn.complete_bytes); // the recipe: truncate BEFORE appending
+        let fresh = signed_segment(
+            &sk,
+            "abcd",
+            Plane::Clinical,
+            1,
+            &segment_commitment(&a.records),
+            2,
+        );
+        append_segment(&mut image, &fresh).unwrap();
+        match parse_any(&image).unwrap() {
+            MediumImage::V3(m) => {
+                assert_eq!(m.segments, vec![a, fresh], "every segment is present");
+                assert!(!m.truncated_tail, "a properly recovered medium is not torn");
             }
             other => panic!("{other:?}"),
         }
@@ -401,7 +464,7 @@ mod tests {
             &segment_commitment(&a.records),
             2,
         );
-        let mut image = serialize_v3(&[a.clone(), b.clone()]);
+        let mut image = serialize_v3(&[a.clone(), b.clone()]).unwrap();
         // Corrupt the FIRST section's plane tag: 8 magic bytes + 4 length bytes.
         image[MEDIUM_MAGIC_V3.len() + 4] = 77;
         match parse_any(&image).unwrap() {

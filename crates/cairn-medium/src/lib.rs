@@ -15,8 +15,6 @@
 //! decide what goes on a medium — `cairn-node`'s `backup.rs` still reads `node_event`
 //! and nothing else, which is issue #500 and is NOT fixed by this crate existing.
 //!
-//! The backup-medium container format and its self-marker (ADR-0026 slice B + issue #53).
-//!
 //! WHY A SELF-MARKER: a backup medium is a node's `node_event` set. By set-union sync that
 //! set CONVERGES with every peer's — two fully-synced mutual peers hold byte-identical event
 //! sets. So nothing *in the events* can say which node a given backup belongs to; on restore
@@ -86,12 +84,27 @@
 //! 3. **Every segment is chained.** Its attestation binds its contents, its plane, its
 //!    position and its predecessor's commitment. A genuine segment replayed elsewhere in a
 //!    chain, or spliced from another medium, fails.
-//! 4. **A torn tail is not corruption.** Fewer bytes than a section claims means an
-//!    interrupted append: keep the complete prefix, flag the tail, re-capture. An over-cap
-//!    length prefix IS corruption. The two verdicts never collapse, because they send an
-//!    operator to different places.
-//! 5. **Trust stops at `verified_through`.** The watermark is derived from it, never from
-//!    the file's tail, which bounds the loss from any tail damage to one increment.
+//! 4. **A torn tail never reads as corruption, but the reverse is not proven.** Fewer bytes
+//!    than a section's length prefix claims always reads as an interrupted append: keep the
+//!    complete prefix, flag the tail, re-capture — that direction is airtight. A length
+//!    prefix BEYOND the section cap is always corruption. But a corrupt length prefix
+//!    UNDER the cap is INDISTINGUISHABLE from a genuine torn tail (I3, #500 final review —
+//!    corrects an earlier overclaim that the two verdicts never collapse): a mid-file bit
+//!    flip that lands inside the length field and still decodes under the cap reads as
+//!    "your last backup was interrupted, run it again," and a naive re-run then appends
+//!    after the damage, permanently orphaning everything between. A sentinel-based fix is
+//!    deliberately NOT attempted here — filed as a follow-up instead.
+//! 5. **`verified_through` bounds STRUCTURAL loss, not tamper-evidence.** It marks the last
+//!    segment whose chain link (and, when signed, attestation and self-id bind) held — the
+//!    watermark is derived from it, never from the file's tail, which bounds the loss from
+//!    any tail damage or break to one increment. It is NOT a tamper-evidence boundary: an
+//!    UNSIGNED segment advances it on a matching `prev_commitment` alone (a value derivable
+//!    from public bytes, since principle 7 forbids ever blocking a backup on a missing
+//!    key), so anyone able to append a well-formed unsigned segment can advance the
+//!    watermark with arbitrary `source_seq` and no tamper-evidence — deferred, not fixed,
+//!    to the slice that adds the operator surface (I5, #500 final review). See
+//!    `chain::ChainReport::verified_through`'s doc for the full nuance, including why
+//!    `SelfIdUnbound` deliberately does NOT retract it.
 //! 6. **Nothing unrecognised is skipped in silence.** An unknown plane tag is reported with
 //!    its index and record count; an unknown record flag bit is REFUSED. A medium that
 //!    parses cleanly while missing a plane is the exact failure shape #500 is about.

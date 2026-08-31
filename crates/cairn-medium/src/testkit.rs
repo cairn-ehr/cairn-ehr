@@ -6,10 +6,28 @@
 //! places for one of them to quietly drift apart.
 
 use crate::attest::{segment_commitment, tests_support};
-use crate::container::MediumV3;
+use crate::container::{serialize_v3, MediumV3};
 use crate::record::MediumRecord;
 use crate::segment::{Plane, Segment};
 use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
+
+/// Build a "clean" `MediumV3` fixture (no unknown segments, no torn tail) out of a
+/// complete segment list, with an HONEST `complete_bytes`: these fixtures are hand-built,
+/// not parsed, but `complete_bytes` is meant to be "the length of the intact prefix" — for
+/// a fixture with no tear, that IS its full serialized length. Computing it this way (via
+/// the crate's own `serialize_v3`) rather than a placeholder keeps the fixture from quietly
+/// asserting something `parse_any` would never actually produce.
+pub(crate) fn medium_v3(segments: Vec<Segment>) -> MediumV3 {
+    let complete_bytes = serialize_v3(&segments)
+        .expect("fixture segments fit the cap")
+        .len();
+    MediumV3 {
+        segments,
+        unknown: vec![],
+        truncated_tail: false,
+        complete_bytes,
+    }
+}
 
 pub(crate) fn sk() -> SigningKey {
     cairn_event::generate_key().unwrap().0
@@ -110,14 +128,7 @@ pub(crate) fn chain_of(n: usize, salt: u8) -> (MediumV3, Vec<i64>) {
         prev = segment_commitment(&seg.records);
         segments.push(seg);
     }
-    (
-        MediumV3 {
-            segments,
-            unknown: vec![],
-            truncated_tail: false,
-        },
-        seqs,
-    )
+    (medium_v3(segments), seqs)
 }
 
 /// A medium whose segment 0 is a NODE-plane segment carrying a real `node.enrolled`, so
@@ -144,14 +155,7 @@ pub(crate) fn chain_with_genesis() -> (MediumV3, SigningKey) {
         &prev,
         vec![tests_support::salted_record(9, 0)],
     );
-    (
-        MediumV3 {
-            segments: vec![s0, s1],
-            unknown: vec![],
-            truncated_tail: false,
-        },
-        sk,
-    )
+    (medium_v3(vec![s0, s1]), sk)
 }
 
 /// `n` clinical segments written with NO signing key available — correctly chained, and
@@ -184,9 +188,5 @@ pub(crate) fn unsigned_chain_of(n: usize) -> MediumV3 {
         prev = segment_commitment(&seg.records);
         segments.push(seg);
     }
-    MediumV3 {
-        segments,
-        unknown: vec![],
-        truncated_tail: false,
-    }
+    medium_v3(segments)
 }
