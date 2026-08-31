@@ -2305,3 +2305,4 @@ The PR body must open with what this does **not** do — that the medium still c
 - **Which path owns custody**, and the shared `erasure_shred_log` exclusion both must apply → **2c**
 - **Whether an unsigned segment should be restorable without operator confirmation** → **2d**
 - **The superseding ADR** → **2e**
+- **Custody newtypes** (`Secret32`/`PublicKey32`) → **[#511](https://github.com/cairn-ehr/cairn-ehr/issues/511), its own slice, after 2a and before 2c.** Deliberately not here: this crate holds zero `[u8; 32]`, and the migration's 83 sites across four crates would cost 2a its only proof — that every existing call site compiled untouched.

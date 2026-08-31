@@ -67,7 +67,22 @@ settled (2026-08-31):
 | **2b** | Transport seam + paged pull | `request(peer, req)` behind a trait (`TcpTransport` + `MediumTransport`); a batch limit on `EventsAfterSeq`. |
 | **2c** | Backup captures both planes | `cairn-node backup` drives the clinical capture from the medium's own watermark; shred-aware; health reports *scope*. |
 | **2d** | Restore brings the record back | Registry rides `CAIRNL1`; `apply_local_state` installs it; restore pulls the medium through `apply_remote_event` **unchanged**. |
+| **#511** | Custody newtypes | `Secret32`/`PublicKey32` across the custody plane. **Must land before 2c** — see below. |
 | **2e** | The ADR | Supersedes ADR-0026 decision 2's implementation wording; records the two planes, the export-borne registry and its caveat, and what is *still* not true. |
+
+### Why #511 is sequenced into the middle of this programme
+
+Every key in the custody plane is a bare `[u8; 32]` — the X25519 secret half, the X25519 public half, the
+Ed25519 signing seed and a DEK are all the same type — so installing a *public* key as this node's
+*secret* custody key compiles today ([#511](https://github.com/cairn-ehr/cairn-ehr/issues/511), re-opened
+2026-08-31 after being closed-as-completed with nothing implementing it).
+
+**2c and 2d are where key material starts moving again** (the medium carrying wrapped DEKs, the `CAIRNL1`
+export carrying the unwrap secret and the actor registry). The newtypes therefore land *before* that code
+is written, not retrofitted onto it. They are **not** part of 2a: this slice's crate contains zero
+`[u8; 32]`, and the migration touches 83 sites across four crates including `cairn-sync/src/main.rs`, which
+would cost 2a the only proof it has — that the extraction changed nothing and every call site compiled
+untouched (maintainer decision, 2026-08-31).
 
 ### Two constraints that forced this shape
 
