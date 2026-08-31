@@ -55,7 +55,7 @@
 //! - `chunk` — the `[u32 BE len][bytes]` primitive every other module frames with.
 //! - `marker` — **CAIRNB2 only, and frozen.** The head self-marker and its
 //!   whole-set commitment. It serves media that already exist and gains nothing:
-//!   CAIRNB3's equivalent is `segment`, because a whole-set commitment cannot
+//!   CAIRNB3's equivalent is `segment` + `attest`, because a whole-set commitment cannot
 //!   survive an append (see the crate docs). Do not extend this module.
 //! - `record` — one event as the medium carries it. Tracks the sync WIRE shape; changes
 //!   when `cairn-sync`'s `EventsResponse` shape changes.
@@ -63,9 +63,14 @@
 //!   append/chain durability design, a separate concern from `record` with a separate
 //!   reason to change (see its module doc for why this, not `marker`, is CAIRNB3's
 //!   appendable unit).
+//! - `attest` — the signed, per-segment attestation: names the node and binds a
+//!   segment's contents, plane, position and predecessor, so appending costs one
+//!   signature instead of a whole-file rewrite. CAIRNB3's counterpart to `marker`'s
+//!   whole-set self-attestation.
 //! - `container` — magic dispatch and the on-disk framing of every revision.
 //! - `verify` — signature verification, and (from slice 2a) the chain pass.
 
+mod attest;
 mod chunk;
 mod container;
 mod error;
@@ -77,6 +82,9 @@ mod verify;
 #[cfg(test)]
 mod testkit;
 
+pub use attest::{
+    build_segment_attestation, segment_commitment, verify_segment_attestation, SEGMENT_ATTEST_TYPE,
+};
 pub use container::{
     parse_container, parse_medium, serialize_container, Container, MEDIUM_MAGIC_V1, MEDIUM_MAGIC_V2,
 };

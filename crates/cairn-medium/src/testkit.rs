@@ -1,10 +1,12 @@
 //! Shared test fixtures for this crate's unit tests, used by `chunk`, `marker`, `container`,
-//! `verify`, `record` and `segment`'s `mod tests`. Centralised rather than copied into each
-//! module: the `enroll()` fixture is what every attestation test's meaning rests on, and
-//! `bytes()`/`record()` are what every custody assertion in `record` and `segment` rests on —
-//! independent copies would be independent places for one of them to quietly drift apart.
+//! `verify`, `record`, `segment` and `attest`'s `mod tests`. Centralised rather than copied
+//! into each module: the `enroll()` fixture is what every attestation test's meaning rests
+//! on, and `bytes()`/`record()`/`segment()` are what every custody and framing assertion in
+//! `record`, `segment` and `attest` rests on — independent copies would be independent
+//! places for one of them to quietly drift apart.
 
 use crate::record::MediumRecord;
+use crate::segment::{Plane, Segment};
 use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
 
 pub(crate) fn sk() -> SigningKey {
@@ -63,5 +65,25 @@ pub(crate) fn record(flags: u8) -> MediumRecord {
         attester_key: (flags & 0b010 != 0).then(|| bytes(3, 32)),
         dek_wrapped: (flags & 0b100 != 0).then(|| bytes(4, 48)),
         source_seq: 7,
+    }
+}
+
+/// A `Segment` fixture with `n` records, an unsigned-shape self id, and an arbitrary
+/// (not-actually-signed) attestation chunk. Shared between `segment`'s tests (which
+/// exercise section framing) and `attest`'s tests (which need a plain `Segment` to mutate,
+/// e.g. to check that an unsigned segment attests nothing) for the same reason as `bytes`
+/// and `record`: one definition, so the two modules' fixtures cannot quietly drift apart.
+pub(crate) fn segment(plane: Plane, index: u32, n: usize) -> Segment {
+    Segment {
+        plane,
+        index,
+        prev_commitment: if index == 0 {
+            String::new()
+        } else {
+            "beef".into()
+        },
+        self_node_id_hex: "abcd".into(),
+        attestation: Some(bytes(9, 64)),
+        records: (0..n).map(|_| record(0b111)).collect(),
     }
 }

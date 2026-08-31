@@ -79,6 +79,21 @@ pub fn enrolls(events: &[Vec<u8>]) -> Vec<(String, EventBody)> {
 // Self-attestation (the SIGNED marker payload).
 // ---------------------------------------------------------------------------
 
+/// Hash a set of byte strings, order-independently: content-address each, sort, concatenate,
+/// hash the concatenation. Pure.
+///
+/// Shared by [`event_set_commitment`] (CAIRNB2's whole-set bind) and
+/// `crate::attest::segment_commitment` (CAIRNB3's per-segment bind) so there is ONE
+/// definition of what "a commitment over these bytes" means. The sort is what makes it
+/// order-independent: frame reordering is harmless under set-union sync, so it must not
+/// invalidate a signature.
+pub(crate) fn commitment_over(items: &[&[u8]]) -> String {
+    let mut addresses: Vec<Vec<u8>> = items.iter().map(|e| event_address(e)).collect();
+    addresses.sort();
+    // Reuse event_address as a plain multihash(sha2-256) over the concatenation — no new dep.
+    hex::encode(event_address(&addresses.concat()))
+}
+
 /// A deterministic, order-independent commitment to a medium's event SET. Each event's
 /// content-address is sorted (frame reordering — harmless under set-union — does not change it),
 /// concatenated, and hashed. Pure. BINDS a self-attestation to the exact event set it was written
@@ -87,10 +102,8 @@ pub fn enrolls(events: &[Vec<u8>]) -> Vec<(String, EventBody)> {
 /// fully-converged peers hold IDENTICAL sets, so this commitment is identical on both and cannot
 /// distinguish their media — it binds to set CONTENT, not to a node.
 pub fn event_set_commitment(events: &[Vec<u8>]) -> String {
-    let mut addresses: Vec<Vec<u8>> = events.iter().map(|e| event_address(e)).collect();
-    addresses.sort();
-    // Reuse event_address as a plain multihash(sha2-256) over the concatenation — no new dep.
-    hex::encode(event_address(&addresses.concat()))
+    let refs: Vec<&[u8]> = events.iter().map(Vec::as_slice).collect();
+    commitment_over(&refs)
 }
 
 /// Build a signed self-attestation naming `self_node_id_hex`, authored by the live node key and

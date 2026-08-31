@@ -96,6 +96,15 @@ pub struct Segment {
     pub self_node_id_hex: String,
     /// The signed `node.segment_attested` bytes, or `None` when the signing key was not
     /// available at capture. An unavailable key never BLOCKS a backup; it travels flagged.
+    ///
+    /// NOTE the asymmetry with `crate::record::MediumRecord::attestation`: on decode, an
+    /// EMPTY attestation chunk collapses into this same `None` (see `take_section` below),
+    /// deliberately — an empty segment attestation is not a meaningful state to preserve
+    /// on its own, `attest::verify_segment_attestation` treats it exactly like "absent",
+    /// and no door distinguishes the two. `MediumRecord` cannot make the same
+    /// simplification: there, `None` (no token travelled) vs. `Some(vec![])` (an empty
+    /// token travelled) is load-bearing at the clinical apply door, which reacts to each
+    /// differently. Two neighbouring layers, two different rules — deliberate, not drift.
     pub attestation: Option<Vec<u8>>,
     pub records: Vec<MediumRecord>,
 }
@@ -240,22 +249,7 @@ pub(crate) fn take_section(rest: &[u8]) -> Result<Option<(TakenSection, &[u8])>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{bytes, record};
-
-    fn segment(plane: Plane, index: u32, n: usize) -> Segment {
-        Segment {
-            plane,
-            index,
-            prev_commitment: if index == 0 {
-                String::new()
-            } else {
-                "beef".into()
-            },
-            self_node_id_hex: "abcd".into(),
-            attestation: Some(bytes(9, 64)),
-            records: (0..n).map(|_| record(0b111)).collect(),
-        }
-    }
+    use crate::testkit::segment;
 
     #[test]
     fn a_segment_roundtrips_through_its_section_framing() {
