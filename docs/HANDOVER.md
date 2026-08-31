@@ -104,6 +104,14 @@
 >    reads `node_unwrap_key` first now. The remedy it names is `establish-unwrap-key`, which is
 >    idempotent — see trap 4 before running it on a restored node.
 
+> [!WARNING]
+> **[#511](https://github.com/cairn-ehr/cairn-ehr/issues/511) is CLOSED-as-COMPLETED and nothing
+> implements it.** `grep -rn 'Secret32\|PublicKey32' crates/` returns **nothing**, and no commit
+> references the number. Its subject — every key in the custody plane is a bare `[u8; 32]`, so
+> installing a *public* half as this node's secret compiles — is a live type-design hole that
+> **DR slice 2 works directly inside**. Treat it as open; re-open it or record the decision not to,
+> but **do not read the closed state as evidence the newtypes exist** (noticed 2026-08-31).
+
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A
 and B, the authority floor and the operator surface are BUILT (and enforce nothing beyond display and
 emission); C+D are DESIGNED and C1 is the next §5.9 BUILD — behind #500, which now outranks it.** Read
@@ -192,7 +200,7 @@ clinical surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514, #515) · previous: 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (through **ADR-0066** — *identity dies with the disk; custody must not*) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 1 adds no migration) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514–#518, #520, #521) · previous: 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (through **ADR-0066** — *identity dies with the disk; custody must not*) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 1 adds no migration) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -217,14 +225,24 @@ its prose does not name). This section keeps only what a *next* session needs �
 that generalise past the slice that found them.
 ### 2026-08-30 (last) — #503: the shared keystore crate, and federated sync comes back
 
-**Closes [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503); opens #514, #515. No ADR, no spec
+**Closes [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503); opens #514–#518, #520, #521. No ADR, no spec
 bump, no migration — this IMPLEMENTS ADR-0066, it decides nothing ADR-0066 left open.** New crate
 `crates/cairn-keystore` (the `CAIRNK1` sealed-bundle format + the key-file loader + the crash-safe
 atomic write, moved verbatim out of `cairn-node`), which `cairn-sync` can depend on without depending
 on a whole node application. `cairn-node` re-exports the three modules, so its **221** call sites across
 ~30 files compile untouched — that was the extraction's whole proof. `cairn-sync` then resolves its
 custody key **once at startup** through a pure decision table (`src/unwrap_key.rs`) and threads a
-`NodeCustody` value down, replacing six independent derivations. What generalises:
+`NodeCustody` value down, replacing six independent derivations.
+
+**Opened by its review wave (recorded 2026-08-31):** **#516** (the extraction forced five `seal.rs`
+AEAD/wrap helpers `pub(crate)` → `pub`; `derive_kek` stayed private, which is why it was accepted) ·
+**#517** (**no test starts `cairn-sync` from a PROVISIONED key file** — all ~14 `clinical_pull.rs`
+scenarios register a *derived* key, so every one takes the fallback arm the daemon is meant to be
+leaving) · **#518** (the every-startup fallback warning is printed by untested code — delete the
+`eprintln!` and the suite stays green, so trap 3's "loud" is unpinned) · **#520** (7 CodeQL
+`rust/cleartext-logging` alerts over the 8-byte hex prefixes of X25519 **public** keys — false
+positives; needs a human dismissal) · **#521** (`payload_ct` has no `serde_bytes`, so CBOR encodes it
+as an array-of-integers, one element per byte). What generalises:
 
 1. **⇒ A GUARD THAT REJECTS A DEAD ENTRY MAKES ITS OWN LIST A SEQUENCING CONSTRAINT.** The plan had the
    `derive_unwrap_secret` allow-list entry merely *reworded* at the end. But the call MOVES file
@@ -263,8 +281,8 @@ by construction**; and `restore` INSTALLING the inherited key instead of minting
 #500's, and the five traps are in ⇒ NEXT — read that split before citing this anywhere.** Still open:
 **#504** (dead `_node_sk` — a decision, not a refactor) · **#505** (the migration mints a SECOND recovery
 code) · **#506** · **#507** · **#508** (CBOR leaves unwiped copies of the unwrap secret in freed heap —
-a container-format decision) · **#509** · **#511** (`Secret32`/`PublicKey32` newtypes — every key in the
-custody plane is a bare `[u8; 32]`, so public-for-secret compiles) · **#512** · **#513**. What
+a container-format decision) · **#509** · **#512** · **#513**. **#511** (`Secret32`/`PublicKey32`
+newtypes) is CLOSED-as-completed, but **no such type exists in the tree** — see ⇒ NEXT. What
 generalises:
 
 0. **⇒ THE REVIEW WAVE FOUND THE SLICE'S OWN FAILURE SHAPE INSIDE THE SLICE — TWICE.** `restore` told an
