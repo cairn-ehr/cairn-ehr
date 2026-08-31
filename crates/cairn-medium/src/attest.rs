@@ -237,7 +237,7 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{enroll, record, segment, sk};
+    use crate::testkit::{enroll, segment, sk};
 
     /// Shorthand for this module's tests: `n` salted records under one signed segment.
     /// Delegates to `tests_support::signed` rather than building its own segment — ONE
@@ -266,10 +266,28 @@ mod tests {
 
     /// The commitment is order-independent: frame reordering is harmless under set-union,
     /// so it must not invalidate an attestation.
+    ///
+    /// `a` and `b` MUST genuinely differ in `signed_bytes` and/or `source_seq` — the only
+    /// fields `segment_commitment` covers (see its doc comment above). `testkit::record(flags)`
+    /// varies only the sidecar fields (`attestation`, `attester_key`, `dek_wrapped`), which the
+    /// commitment deliberately excludes, so two `record(_)` fixtures are byte-identical on the
+    /// covered axis — swapping two identical items proves nothing, and this test would still
+    /// pass even if a refactor made the commitment order-DEPENDENT. Use `salted_record(salt, n)`
+    /// (which varies both covered fields by `(salt, n)`) or build records inline with distinct
+    /// values instead — do NOT simplify this fixture back to `record(...)`.
     #[test]
     fn the_commitment_is_order_independent() {
-        let a = record(0b001);
-        let b = record(0b100);
+        let a = tests_support::salted_record(1, 0);
+        let b = tests_support::salted_record(1, 1);
+        // Prove the fixtures are genuinely distinct on exactly the axis that matters: if the
+        // single-record commitments differ, `signed_bytes`/`source_seq` differ too — so a
+        // future edit that quietly re-vacuums this fixture (e.g. back to `record(flags)`)
+        // trips this assertion before the order-independence check below could go vacuous again.
+        assert_ne!(
+            segment_commitment(std::slice::from_ref(&a)),
+            segment_commitment(std::slice::from_ref(&b)),
+            "fixture bug: a and b must differ in the fields segment_commitment covers"
+        );
         assert_eq!(
             segment_commitment(&[a.clone(), b.clone()]),
             segment_commitment(&[b, a]),
