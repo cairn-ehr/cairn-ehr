@@ -497,5 +497,4 @@ frozen historical spikes.
   momentum/funding geography is clearer; trademark registration — principle recorded, instrument deferred.
 - **CLAUDE.md carries the working context in full and is loaded every session.** Canonical docs win.
 - **Governance done** ([GOVERNANCE.md](principles/GOVERNANCE.md) + root `CONTRIBUTING.md`): AGPL-3.0
-  inbound=outbound, DCO, **no CLA**; mission as tie-breaker. Names/domains/packages secured (`cairn-ehr`
-  org; `cairn-ehr.org`+`.com`; PyPI/crates.io/npm `@cairn-ehr` placeholders).
+  inbound=outbound, DCO, **no CLA**; mission as tie-breaker. Names/domains/packages secured.
