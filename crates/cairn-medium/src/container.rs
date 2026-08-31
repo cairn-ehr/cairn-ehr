@@ -1,12 +1,13 @@
 //! Magic dispatch and the on-disk framing of every medium revision: the CAIRNB1/CAIRNB2 magic
 //! headers, the marker-kind discriminant, the [`Container`] parse result, and the
 //! serialize/parse pair that round-trips a medium image. This is the "outermost" format layer —
-//! it decides which revision a byte slice claims to be and hands off the marker block to
-//! `marker::put_marker` and the event frames to `chunk`'s primitive.
+//! it decides which revision a byte slice claims to be, writes and reads the marker block
+//! itself (see `put_marker`, below, for why that writer lives here rather than in `marker`),
+//! and hands the event frames to `chunk`'s primitive.
 
 use crate::chunk::{put_chunk, take_chunk};
 use crate::error::BackupError;
-use crate::marker::{put_marker, SelfMarker};
+use crate::marker::SelfMarker;
 
 /// Magic header for the original marker-less medium (ADR-0026 slice B). Kept for backward
 /// compatibility: such a medium parses to events with `self_marker == None`.
@@ -15,12 +16,12 @@ pub const MEDIUM_MAGIC_V1: &[u8] = b"CAIRNB1\n";
 /// event frames. Distinct from the keystore's `CAIRNK1` so the artifacts can never be confused.
 pub const MEDIUM_MAGIC_V2: &[u8] = b"CAIRNB2\n";
 
-/// Marker kind discriminant bytes (first byte of the CAIRNB2 marker block). `pub(crate)`
-/// because `marker::put_marker` writes the same bytes this module's `parse_container` reads —
-/// the two must agree on the wire, so they share one definition rather than two.
-pub(crate) const KIND_NONE: u8 = 0;
-pub(crate) const KIND_UNSIGNED: u8 = 1;
-pub(crate) const KIND_SIGNED: u8 = 2;
+/// Marker kind discriminant bytes (first byte of the CAIRNB2 marker block). File-private: the
+/// only writer (`put_marker`) and the only reader (`parse_container`, below) both live in
+/// this file, so nothing outside it needs to see these bytes.
+const KIND_NONE: u8 = 0;
+const KIND_UNSIGNED: u8 = 1;
+const KIND_SIGNED: u8 = 2;
 
 /// A parsed backup medium: the (optional) self-marker plus the signed event set.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +34,26 @@ pub struct Container {
 // ---------------------------------------------------------------------------
 // Container serialize / parse (pure).
 // ---------------------------------------------------------------------------
+
+/// Serialize a self-marker into its kind-tagged block. Pure. Lives here, not in `marker.rs`,
+/// because it is the WRITER of the discriminant `parse_container` (below) READS — a writer and
+/// reader of one wire tag scheme belong in the same file, so the two can never drift apart.
+/// `marker.rs` also carries a FROZEN header ("CAIRNB2 only ... Do not extend this module"):
+/// container-wire-framing glue has no business living in a module future work is told to leave
+/// alone. `serialize_container` is this function's only caller and lives right below it.
+fn put_marker(out: &mut Vec<u8>, marker: Option<&SelfMarker>) {
+    match marker {
+        None => out.push(KIND_NONE),
+        Some(SelfMarker::Unsigned(id)) => {
+            out.push(KIND_UNSIGNED);
+            put_chunk(out, id.as_bytes());
+        }
+        Some(SelfMarker::Signed(att)) => {
+            out.push(KIND_SIGNED);
+            put_chunk(out, att);
+        }
+    }
+}
 
 /// Serialize a full CAIRNB2 container: magic ++ marker block ++ event frames. Pure. The event
 /// order is preserved for legibility but is set-union-independent on restore (convergence is

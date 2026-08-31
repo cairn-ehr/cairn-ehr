@@ -9,8 +9,6 @@
 //! append — appending one event changes the commitment of everything already committed to it.
 //! Do not extend this module; a CAIRNB3 concern belongs in `segment`.
 
-use crate::chunk::put_chunk;
-use crate::container::{KIND_NONE, KIND_SIGNED, KIND_UNSIGNED};
 use cairn_event::{event_address, sign, verify_self_described, EventBody, Hlc, SigningKey};
 
 /// Event-type of the in-container self-attestation. NOT a clinical/node event — it never
@@ -174,25 +172,6 @@ pub fn verify_self_attestation(attestation: &[u8], events: &[Vec<u8>]) -> Option
         .find(|(id, _)| *id == self_id)
         .filter(|(_, genesis)| genesis.signer_key_id == attester_key)
         .map(|_| self_id)
-}
-
-// ---------------------------------------------------------------------------
-// Self-marker serialization (pure). `container::serialize_container` calls this.
-// ---------------------------------------------------------------------------
-
-/// Serialize a self-marker into its kind-tagged block. Pure.
-pub(crate) fn put_marker(out: &mut Vec<u8>, marker: Option<&SelfMarker>) {
-    match marker {
-        None => out.push(KIND_NONE),
-        Some(SelfMarker::Unsigned(id)) => {
-            out.push(KIND_UNSIGNED);
-            put_chunk(out, id.as_bytes());
-        }
-        Some(SelfMarker::Signed(att)) => {
-            out.push(KIND_SIGNED);
-            put_chunk(out, att);
-        }
-    }
 }
 
 #[cfg(test)]
