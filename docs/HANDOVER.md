@@ -29,11 +29,10 @@
 >   head marker, so appending costs one signature, not a full re-sign and rewrite. **No database read
 >   exists in this crate, by construction** — the medium still carries no clinical event until 2c writes
 >   one. **Next build is 2b** (the transport seam + the paged pull). Detail in ROADMAP's slice 2a entry.
->   **Its final review opened #522–#525. #522 and #523 are FORMAT decisions, cheapest NOW while no
->   CAIRNB3 medium exists:** no `chain_tail` helper, so two crates must each derive the next GLOBAL
->   chain index and agree (#522); and a corrupt section length UNDER the cap is indistinguishable
->   from a torn tail, whose remedies are opposite (#523). **#524** is 2c's to answer with the
->   custody-authority decision, not separately. **#525** is hygiene.
+>   **Its final review opened #522–#525; #522/#523 are FORMAT decisions, cheapest NOW while no
+>   CAIRNB3 medium exists** — no `chain_tail` so two crates each derive the global chain index and
+>   must agree; a corrupt length UNDER the cap is indistinguishable from a torn tail, opposite
+>   remedies. **#524** follows 2c's custody-authority call, not separate. **#525** hygiene.
 > - **⇒ THE LOOSE END NAMED SO IT CANNOT BE LOST.** Custody must apply the same `erasure_shred_log`
 >   exclusion on **both** the medium path and the `CAIRNL1` export path, or a shredded body comes back on
 >   restore. 2a only makes both expressible; **2c decides which is authoritative.**
@@ -440,7 +439,7 @@ frozen historical spikes.
   ~124 comments still say otherwise, **#476**), so every caller takes the guard against `CAIRN_TEST_PG`.
 - **Tech-debt loop** — `/techdebt-loop` triages into `loop:*` labels, `/techdebt-next` runs one fresh
   headless session per issue. Auto-merge ENABLED; works unattended (12 PRs); STOPPED by maintainer
-  decision — see ⇒ NEXT. Live gaps: **#326**, **#312**, **#322**.
+  decision (⇒ NEXT). Live gaps **#326**, **#312**, **#322**.
 
 ---
 
@@ -454,10 +453,10 @@ frozen historical spikes.
 - **`clinical.medication` — slices 1–6b DONE** (ADR-0059). Next: **drugref term→anchor lookup** (⇒
   NEXT); fuzzy/automatic reconciliation + a Tier-A dictionary; structured sig/frequency; correcting a
   dose event's effective date. Cross-cutting debt **#185**. Spine: `db/031`–`db/033`, `db/041`, `db/042`.
-- **Demographics / matcher / identity — next slices** (`db/010`–`db/030` + `cairn-event::demographics`).
-  Next (B3-driven): a large gold set; locale comparator packs; hub-tier duplicate sweep; proposal
-  retraction. Identity: C5+ `reattribute` (waits on a clinical-note surface); §5.12 push-alert. Deferred
-  **#168**, **#287**; rest in ROADMAP.
+- **Demographics / matcher / identity — next slices** (`db/010`–`db/030` +
+  `cairn-event::demographics`). B3-driven: gold set, locale packs, hub-tier duplicate sweep, proposal
+  retraction. Identity: C5+ `reattribute` (waits on a clinical-note surface); §5.12 push-alert.
+  Deferred **#168**, **#287**; rest in ROADMAP.
 - **⇒ Test env — `scripts/run-db-gated-tests.sh` is the ONE command for the local gate** — the only one
   catching all three demonstrated hiding modes (fail-fast · a piped exit status · a cross-crate suite
   `-p <crate>` never builds): the `db/tests/*.sql` mirrors and the full workspace with
@@ -494,11 +493,9 @@ frozen historical spikes.
 
 ## Parked · Working context
 
-- **Parked (don't re-litigate without new reason):** stewarding legal entity & jurisdiction — deferred
-  until momentum/funding geography is clearer; formal trademark registration — principle recorded
-  (stewardship doc), legal instrument deferred.
-- **CLAUDE.md carries the working context in full and is loaded every session** — working conventions,
-  the twelve founding principles, the §9 defect-blast-radius language rule. Canonical docs win.
+- **Parked (don't re-litigate without new reason):** legal entity & jurisdiction — deferred until
+  momentum/funding geography is clearer; trademark registration — principle recorded, instrument deferred.
+- **CLAUDE.md carries the working context in full and is loaded every session.** Canonical docs win.
 - **Governance done** ([GOVERNANCE.md](principles/GOVERNANCE.md) + root `CONTRIBUTING.md`): AGPL-3.0
   inbound=outbound, DCO, **no CLA**; mission as tie-breaker. Names/domains/packages secured (`cairn-ehr`
   org; `cairn-ehr.org`+`.com`; PyPI/crates.io/npm `@cairn-ehr` placeholders).
