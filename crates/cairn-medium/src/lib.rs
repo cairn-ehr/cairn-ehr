@@ -73,6 +73,35 @@
 //!   chain pass over CAIRNB3 segments, the per-plane watermark, and self-identification.
 //!   Split out of `verify` in task 8 review (#500) — same seam as `attest`/`segment`: a
 //!   responsibility boundary, not a line-count cut.
+//!
+//! # The invariants, in one place
+//!
+//! A reader arriving at this crate needs the rules, not a tour of the modules above.
+//!
+//! 1. **CAIRNB1 and CAIRNB2 are frozen.** They parse today exactly as they did before this
+//!    crate existed, through untouched code (`container`, `marker`). Media in the field are
+//!    unaffected, forever.
+//! 2. **CAIRNB3 is append-only.** `append_segment` writes bytes and reads none. Nothing
+//!    already on a medium is ever rewritten.
+//! 3. **Every segment is chained.** Its attestation binds its contents, its plane, its
+//!    position and its predecessor's commitment. A genuine segment replayed elsewhere in a
+//!    chain, or spliced from another medium, fails.
+//! 4. **A torn tail is not corruption.** Fewer bytes than a section claims means an
+//!    interrupted append: keep the complete prefix, flag the tail, re-capture. An over-cap
+//!    length prefix IS corruption. The two verdicts never collapse, because they send an
+//!    operator to different places.
+//! 5. **Trust stops at `verified_through`.** The watermark is derived from it, never from
+//!    the file's tail, which bounds the loss from any tail damage to one increment.
+//! 6. **Nothing unrecognised is skipped in silence.** An unknown plane tag is reported with
+//!    its index and record count; an unknown record flag bit is REFUSED. A medium that
+//!    parses cleanly while missing a plane is the exact failure shape #500 is about.
+//! 7. **Unsigned is a declared limitation, not a fault.** An unavailable signing key never
+//!    blocks a backup. It travels flagged, and no caller may treat it as tamper-evident.
+//! 8. **`None` is not zero.** A plane with no verified segment has no watermark. Zero is a
+//!    claim; absence is the honest answer.
+//! 9. **A fault is located, never merely counted.** Every `SegmentFault` carries its plane
+//!    and index — *"clinical segment 7 breaks the chain"* sends an operator somewhere,
+//!    *"chain invalid"* does not.
 
 mod attest;
 mod chain;

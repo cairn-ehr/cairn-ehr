@@ -302,8 +302,12 @@ unverifiable trailing segment does not advance the cursor, so its records are re
 3. each segment's `prev_commitment` equals the preceding segment's `segment_commitment`;
 4. each signed segment's `self_node_id_hex` is bound as in §5.1.
 
-A break is reported **by segment index and plane** — *"clinical segment 7 of 12 breaks the chain"* sends an
-operator somewhere; *"chain invalid"* does not. `VerifyReport` grows these fields **additively**, so every
+A break is reported **by segment plane and index** — *"clinical segment 7 breaks the chain"* sends an
+operator somewhere; *"chain invalid"* does not. **The index is medium-wide, not per-plane**: the built
+chain is **one global chain in file order** over both planes together, not two independent per-plane
+chains. One chain is what lets it detect a reorder or a splice **across** planes — a segment lifted from
+the node plane and reinserted into the clinical plane's position, or vice versa — which two chains, each
+blind to the other's positions, could not. `VerifyReport` grows these fields **additively**, so every
 existing caller keeps compiling and keeps meaning what it meant.
 
 The chain also narrows the documented converged-peer splice: a genuine segment lifted from another medium
@@ -405,3 +409,7 @@ against paper's `N = 2` and must not be made worse by them.
 - **Whether an unsigned segment should ever be restorable without operator confirmation.** Today's unsigned
   *marker* is surfaced as `Provenance::Unsigned` for confirmation; segments should probably inherit that.
   **2d decides.**
+- **Streaming parse.** `parse_any` reads a whole image into memory. The section framing is
+  exactly what makes a streaming reader possible as a later, purely additive change, but a
+  medium larger than RAM cannot be parsed today. **2b decides**, since `MediumTransport` is
+  the first consumer that can meet one.
