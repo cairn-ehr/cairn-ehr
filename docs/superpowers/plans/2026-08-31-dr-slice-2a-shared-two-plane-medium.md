@@ -361,7 +361,7 @@ and a production dependency on a node application is the wrong direction. Same s
 Moved whole, with three edits and no others: NIL_PATIENT now comes from cairn-event,
 two intra-doc links into cairn-node became plain text (they cannot resolve from here
 and cargo doc runs with -D warnings), and a crate header. cairn-node re-exports the
-crate as its own \`medium\` module, so all 12 call sites compile untouched — that is
+crate as its own 'medium' module, so all 12 call sites compile untouched - that is
 the move's whole proof.
 
 This fixes NOTHING. backup.rs still reads node_event and only node_event; the medium
