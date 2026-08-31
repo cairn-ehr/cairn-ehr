@@ -7,8 +7,8 @@ use tokio_postgres::Client;
 // The nil patient id is a WIRE constant (it is serialized inside signed bodies), so it
 // lives in `cairn-event` with the rest of the wire format. Re-exported — not
 // re-declared — so there is exactly one value in the workspace; `tests/
-// nil_patient_is_one_constant.rs` asserts that with pointer equality, because two
-// identical literals would compare equal and still drift apart later.
+// nil_patient_is_one_constant.rs` asserts that by scanning the filesystem, because two
+// identical literals would compare equal and still drift apart later if one is edited.
 pub use cairn_event::NIL_PATIENT;
 
 pub struct Identity {
