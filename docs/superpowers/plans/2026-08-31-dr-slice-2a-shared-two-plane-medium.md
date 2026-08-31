@@ -390,14 +390,14 @@ No behaviour changes. Move each item **and the tests that exercise it**:
 |---|---|---|
 | `error.rs` | `BackupError` | — |
 | `chunk.rs` | `MAX_CHUNK_BYTES`, `put_chunk`, `take_chunk` (both `pub(crate)`) | `parse_rejects_a_truncated_frame` |
-| `marker.rs` | `SELF_ATTEST_TYPE`, `SelfMarker`, `EnrollScan`, `scan_enrolls`, `enrolls`, `event_set_commitment`, `build_self_attestation`, `verify_self_attestation`, `put_marker` | the six `signed_attestation_*` tests and `tampered_signed_attestation_fails_closed` |
+| `marker.rs` | `SELF_ATTEST_TYPE`, `SelfMarker`, `EnrollScan`, `scan_enrolls`, `enrolls`, `event_set_commitment`, `build_self_attestation`, `verify_self_attestation` (**not** `put_marker` — it writes the discriminant `container.rs` reads, so it belongs there) | the six `signed_attestation_*` tests and `tampered_signed_attestation_fails_closed` |
 | `container.rs` | `MEDIUM_MAGIC_V1`, `MEDIUM_MAGIC_V2`, `KIND_NONE/UNSIGNED/SIGNED`, `Container`, `serialize_container`, `parse_container`, `take_frames`, `parse_medium` | the four `container_roundtrips_*` / `legacy_cairnb1_*` tests and `parse_rejects_missing_magic_and_unknown_kind` |
 | `verify.rs` | `VerifyReport`, `verify_event`, `verify_events`, `verify_medium_bytes`, `serialize_and_verify_container` | `verify_pinpoints_a_tampered_event_through_the_container`, `serialize_and_verify_refuses_a_tampered_set` |
 
 **Visibility the split forces.** Splitting one file into five turns three previously-private
 calls into cross-module ones. Make exactly these `pub(crate)`, and nothing else:
 `chunk::{MAX_CHUNK_BYTES, put_chunk, take_chunk}` (every module frames with them),
-`marker::put_marker` (called by `container::serialize_container`). Everything else that was
+`put_marker` needs no widening — it lives in `container.rs` beside its reader. Everything else that was
 private stays private — widening more than the compiler demands is how a crate's public
 surface grows without anyone deciding to grow it.
 
