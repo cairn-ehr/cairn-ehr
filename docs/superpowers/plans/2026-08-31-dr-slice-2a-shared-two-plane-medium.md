@@ -443,10 +443,10 @@ pub use verify::{
 
 Explicit re-exports, not `pub use module::*` — a glob makes it impossible to see from `lib.rs` what this crate promises, and this crate's promise is the thing three other crates read.
 
-- [ ] **Step 3: Run the tests — the same 19, still passing**
+- [ ] **Step 3: Run the tests — the same 15, still passing**
 
 Run: `cargo test -p cairn-medium --all-targets --no-fail-fast`
-Expected: **19 tests, all PASS**, the same names as before the split. A test that vanished was dropped, not moved; a test that failed means the split changed behaviour.
+Expected: **15 tests, all PASS**, the same names as before the split. A test that vanished was dropped, not moved; a test that failed means the split changed behaviour.
 
 Run: `cargo test -p cairn-node --all-targets --no-fail-fast backup restore`
 Expected: PASS, still with zero edits to `cairn-node`.
@@ -463,7 +463,7 @@ cargo fmt
 git add -A
 git commit -m "refactor(#500): split cairn-medium by responsibility
 
-Pure code motion, no behaviour change: the same 19 tests pass under the same names,
+Pure code motion, no behaviour change: the same 15 tests pass under the same names,
 and cairn-node still needs no edits. The moved file was 706 lines and grows in the
 next five tasks; house rule 4 wants it under 500.
 
