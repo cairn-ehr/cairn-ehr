@@ -68,9 +68,14 @@
 //!   signature instead of a whole-file rewrite. CAIRNB3's counterpart to `marker`'s
 //!   whole-set self-attestation.
 //! - `container` — magic dispatch and the on-disk framing of every revision.
-//! - `verify` — signature verification, and (from slice 2a) the chain pass.
+//! - `verify` — flat, whole-set signature verification: "do these bytes verify".
+//! - `chain` — (from slice 2a, task 8) "what can this whole medium be trusted for": the
+//!   chain pass over CAIRNB3 segments, the per-plane watermark, and self-identification.
+//!   Split out of `verify` in task 8 review (#500) — same seam as `attest`/`segment`: a
+//!   responsibility boundary, not a line-count cut.
 
 mod attest;
+mod chain;
 mod chunk;
 mod container;
 mod error;
@@ -85,6 +90,9 @@ mod testkit;
 pub use attest::{
     build_segment_attestation, segment_commitment, verify_segment_attestation, SEGMENT_ATTEST_TYPE,
 };
+pub use chain::{
+    chain_report, self_id_from_chain, verify_records, watermark, ChainReport, SegmentFault,
+};
 pub use container::{
     append_segment, parse_any, parse_container, parse_medium, serialize_container, serialize_v3,
     Container, MediumImage, MediumV3, MEDIUM_MAGIC_V1, MEDIUM_MAGIC_V2, MEDIUM_MAGIC_V3,
@@ -97,6 +105,5 @@ pub use marker::{
 pub use record::MediumRecord;
 pub use segment::{Plane, Segment, UnknownSegment};
 pub use verify::{
-    chain_report, self_id_from_chain, serialize_and_verify_container, verify_event, verify_events,
-    verify_medium_bytes, verify_records, watermark, ChainReport, SegmentFault, VerifyReport,
+    serialize_and_verify_container, verify_event, verify_events, verify_medium_bytes, VerifyReport,
 };
