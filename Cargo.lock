@@ -314,6 +314,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-medium"
+version = "0.1.0"
+dependencies = [
+ "cairn-event",
+ "hex",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "cairn-node"
 version = "0.1.0"
 dependencies = [
@@ -323,6 +334,7 @@ dependencies = [
  "cairn-event",
  "cairn-keystore",
  "cairn-medication-view",
+ "cairn-medium",
  "cairn-patient-search",
  "chacha20poly1305",
  "ciborium",

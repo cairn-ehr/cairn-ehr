@@ -1,3 +1,20 @@
+//! The backup-medium container format (ADR-0026 slice B, issue #53).
+//!
+//! WHY A CRATE: `cairn-node` writes the federation plane and orchestrates restore, and
+//! from slice 2b `cairn-sync` writes the clinical plane — it owns the clinical event
+//! log, the wire protocol and the transport seam. Both need this format, and a
+//! production dependency from `cairn-sync` onto `cairn-node` (an application crate
+//! carrying clap, rustls, rcgen and tokio-postgres) is the wrong direction. Same shape
+//! as `cairn-keystore`, extracted for the same reason in #503.
+//!
+//! Pure by construction: no database, no I/O, no async. Serialization, parsing and
+//! signature checks only, so every property below is unit-testable without a fixture
+//! larger than a byte slice.
+//!
+//! SCOPE TODAY: this crate carries the format. It does NOT read a database and does not
+//! decide what goes on a medium — `cairn-node`'s `backup.rs` still reads `node_event`
+//! and nothing else, which is issue #500 and is NOT fixed by this crate existing.
+//!
 //! The backup-medium container format and its self-marker (ADR-0026 slice B + issue #53).
 //!
 //! WHY A SELF-MARKER: a backup medium is a node's `node_event` set. By set-union sync that
@@ -24,7 +41,7 @@
 //! shared bytes that distinguishes the two media. The splice is IMPOSSIBLE on a sole-enroll
 //! medium (a foreign marker would name an absent enroll → fail closed), so the residual risk is
 //! exactly the multi-enroll / federated case. Its defences are not in this module: restore-time
-//! provenance ([`crate::restore::Provenance::SignedFederated`] → confirm the echoed name/address)
+//! provenance (`cairn_node::restore::Provenance::SignedFederated` → confirm the echoed name/address)
 //! plus physical custody of the medium. So: forgery-proof always; misdirect-proof for sole-enroll
 //! media and for splices from a *different* set; a peer-medium splice between converged peers is a
 //! confirm-on-restore residual, not a silent misdirect.
@@ -95,7 +112,7 @@ pub struct Container {
 /// because the medium is empty of them" and "0 enrolls because every event failed
 /// verification (corrupt, or signed before the ADR-0040 signing contexts)" are very
 /// different operator situations and must stay distinguishable — see
-/// [`crate::restore::RestoreError::NoVerifiableGenesis`].
+/// `cairn_node::restore::RestoreError::NoVerifiableGenesis`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnrollScan {
     /// Every verified `node.enrolled` as (node_id_hex, body) pairs.
@@ -169,7 +186,7 @@ pub fn build_self_attestation(
 ) -> Vec<u8> {
     let body = EventBody {
         event_id: uuid::Uuid::now_v7().to_string(),
-        patient_id: crate::identity::NIL_PATIENT.into(),
+        patient_id: cairn_event::NIL_PATIENT.into(),
         event_type: SELF_ATTEST_TYPE.into(),
         schema_version: "node/1".into(),
         hlc: Hlc {
@@ -205,7 +222,7 @@ pub fn build_self_attestation(
 ///     attestation lifted from a backup whose set DIFFERS commits to a different value and is
 ///     rejected). NOTE: this binds to set CONTENT, so it CANNOT reject a peer's genuine marker
 ///     spliced from a byte-identical converged medium — that residual is handled at restore time
-///     (see [`crate::restore::Provenance::SignedFederated`] and the module docs), not here;
+///     (see `cairn_node::restore::Provenance::SignedFederated` and the module docs), not here;
 ///   - that id is the content-address of an enroll ON THIS medium; AND
 ///   - that enroll's genesis signer == the attestation's signer (the UNFORGEABLE bind: only the
 ///     node that signed its own genesis could have signed this attestation).
@@ -453,7 +470,7 @@ mod tests {
     fn enroll(sk: &SigningKey, name: &str) -> Vec<u8> {
         let body = EventBody {
             event_id: uuid::Uuid::now_v7().to_string(),
-            patient_id: crate::identity::NIL_PATIENT.into(),
+            patient_id: cairn_event::NIL_PATIENT.into(),
             event_type: "node.enrolled".into(),
             schema_version: "node/1".into(),
             hlc: Hlc {
