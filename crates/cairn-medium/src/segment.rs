@@ -21,21 +21,6 @@ use crate::chunk::{put_chunk, take_chunk};
 use crate::error::BackupError;
 use crate::record::{put_record, take_record, MediumRecord};
 
-// NOTE ON THE `expect(dead_code)` ATTRIBUTES BELOW: this module lands one task ahead of
-// its own caller. `put_segment`/`take_section` are the entry points a production caller
-// will use, but nothing in this crate calls them yet — the CAIRNB3 container task wires
-// them into `container.rs`. `expect` rather than `allow` is deliberate: it is
-// self-cleaning — once that caller lands, the lint stops firing, the `expect` itself
-// becomes an "unfulfilled expectation" error, and the build forces its removal instead of
-// it going stale silently. The attribute goes ONLY on the two unreferenced entry points —
-// dead-code liveness propagates from an allowed/expected root to whatever it calls, so
-// `MAX_SECTION_BYTES`, `Plane`, `Segment`, `UnknownSegment` and `TakenSection` are already
-// covered through them and must NOT carry their own `expect`, or that second attribute
-// finds nothing left to suppress and itself becomes an "unfulfilled expectation" error.
-// `put_record`/`take_record` (in `crate::record`) carry no such attribute of their own:
-// `put_segment` calls `put_record` and `take_section` calls `take_record`, which makes
-// them live from this file — their sole production caller today.
-
 /// Upper bound on one section. A section holds ONE capture increment, which slice 2b
 /// bounds by a batch limit; 256 MiB is generous for that and still caps a corrupt length
 /// prefix. Note the real protection against a bogus prefix is that decoding works over an
@@ -131,10 +116,6 @@ pub(crate) enum TakenSection {
 /// The outer `[u32 len]` is what makes a torn append detectable without parsing the
 /// segment: a reader that has fewer than `len` bytes left knows the append was cut short,
 /// and stops cleanly at the last complete section.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the CAIRNB3 container task")
-)]
 pub(crate) fn put_segment(out: &mut Vec<u8>, seg: &Segment) {
     let mut body = Vec::new();
     body.push(seg.plane.tag());
@@ -163,10 +144,6 @@ pub(crate) fn put_segment(out: &mut Vec<u8>, seg: &Segment) {
 ///     the tail. Remedy: run the backup again.
 ///   - `Err(..)` — CORRUPTION: a length prefix beyond the cap, or a malformed body. The
 ///     remedy is different ("this medium is damaged"), so the verdicts never collapse.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired up by the CAIRNB3 container task")
-)]
 pub(crate) fn take_section(rest: &[u8]) -> Result<Option<(TakenSection, &[u8])>, BackupError> {
     if rest.len() < 4 {
         return Ok(None); // not even a complete length prefix — torn

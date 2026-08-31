@@ -86,7 +86,8 @@ pub use attest::{
     build_segment_attestation, segment_commitment, verify_segment_attestation, SEGMENT_ATTEST_TYPE,
 };
 pub use container::{
-    parse_container, parse_medium, serialize_container, Container, MEDIUM_MAGIC_V1, MEDIUM_MAGIC_V2,
+    append_segment, parse_any, parse_container, parse_medium, serialize_container, serialize_v3,
+    Container, MediumImage, MediumV3, MEDIUM_MAGIC_V1, MEDIUM_MAGIC_V2, MEDIUM_MAGIC_V3,
 };
 pub use error::BackupError;
 pub use marker::{

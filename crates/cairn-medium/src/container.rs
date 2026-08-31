@@ -8,6 +8,7 @@
 use crate::chunk::{put_chunk, take_chunk};
 use crate::error::BackupError;
 use crate::marker::SelfMarker;
+use crate::segment::{put_segment, take_section, Segment, TakenSection, UnknownSegment};
 
 /// Magic header for the original marker-less medium (ADR-0026 slice B). Kept for backward
 /// compatibility: such a medium parses to events with `self_marker == None`.
@@ -128,11 +129,123 @@ pub fn parse_medium(bytes: &[u8]) -> Result<Vec<Vec<u8>>, BackupError> {
     Ok(parse_container(bytes)?.events)
 }
 
+// ---------------------------------------------------------------------------
+// CAIRNB3 — the append-only, two-plane medium (issue #500 slice 2a).
+// ---------------------------------------------------------------------------
+
+/// Magic for the append-only, two-plane medium (issue #500 slice 2a). Distinct from
+/// CAIRNB1/CAIRNB2 so a reader never has to guess, and from the keystore's CAIRNK1 and the
+/// local-state export's CAIRNL1 so the four artifacts can never be confused.
+pub const MEDIUM_MAGIC_V3: &[u8] = b"CAIRNB3\n";
+
+/// A parsed CAIRNB3 image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediumV3 {
+    /// Every complete, recognised segment, in file order.
+    pub segments: Vec<Segment>,
+    /// Segments whose plane tag this build does not recognise — NAMED, never skipped, so a
+    /// consumer that needs completeness can refuse rather than silently restore a medium
+    /// that is missing a plane.
+    pub unknown: Vec<UnknownSegment>,
+    /// The final section was cut short: an interrupted append. Everything before it is
+    /// intact. Remedy: run the backup again; the watermark did not advance past the last
+    /// verified segment, so the lost increment is re-captured.
+    pub truncated_tail: bool,
+}
+
+/// Either revision of the format, as parsed. Legacy media keep their exact prior code path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediumImage {
+    /// CAIRNB1 / CAIRNB2 — a head marker plus bare event frames.
+    Legacy(Container),
+    /// CAIRNB3 — chained, plane-tagged segments.
+    V3(MediumV3),
+}
+
+/// Serialize a fresh CAIRNB3 image. Pure.
+pub fn serialize_v3(segments: &[Segment]) -> Vec<u8> {
+    let mut out = Vec::from(MEDIUM_MAGIC_V3);
+    for seg in segments {
+        put_segment(&mut out, seg);
+    }
+    out
+}
+
+/// Append one segment to an existing CAIRNB3 image, in place.
+///
+/// Byte-wise append: nothing already in `medium` is read or rewritten, which is what makes
+/// a capture cost O(new records). The caller writing this to disk owes the durability half
+/// — `write` then `sync_all()` BEFORE advancing any health record, so health can only ever
+/// under-claim (slice 2c owns that; this crate does no I/O).
+pub fn append_segment(medium: &mut Vec<u8>, seg: &Segment) {
+    put_segment(medium, seg);
+}
+
+/// Parse a medium of any revision, dispatching on its magic.
+///
+/// `parse_container`/`serialize_container` (above) are untouched: a CAIRNB1/CAIRNB2 image
+/// takes its exact prior code path, so existing media in the field are unaffected by this
+/// function's existence. Only the CAIRNB3 magic is new behaviour.
+pub fn parse_any(bytes: &[u8]) -> Result<MediumImage, BackupError> {
+    let Some(mut rest) = bytes.strip_prefix(MEDIUM_MAGIC_V3) else {
+        // Not CAIRNB3 — hand it to the untouched legacy parser, which refuses anything
+        // that is not CAIRNB1/CAIRNB2.
+        return Ok(MediumImage::Legacy(parse_container(bytes)?));
+    };
+    let mut segments = Vec::new();
+    let mut unknown = Vec::new();
+    let mut truncated_tail = false;
+    while !rest.is_empty() {
+        match take_section(rest)? {
+            None => {
+                // A torn tail: fewer bytes remain than the next section claims. Everything
+                // read so far is complete and kept; the loss is flagged, never silent.
+                truncated_tail = true;
+                break;
+            }
+            Some((taken, next)) => {
+                match taken {
+                    TakenSection::Known(s) => segments.push(s),
+                    TakenSection::Unknown(u) => unknown.push(u),
+                }
+                rest = next;
+            }
+        }
+    }
+    Ok(MediumImage::V3(MediumV3 {
+        segments,
+        unknown,
+        truncated_tail,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attest::{segment_commitment, tests_support};
     use crate::marker::build_self_attestation;
+    use crate::segment::Plane;
     use crate::testkit::{enroll, kid, node_id, sk};
+
+    /// This module's shorthand for building a signed segment fixture: `n` salted records
+    /// under one signed segment, mirroring `attest.rs`'s own `signed_segment` test helper
+    /// so the two files don't each grow a slightly different way of doing the same thing.
+    /// Salt is fixed at 1 — none of this module's tests splice segments between two
+    /// DIFFERENT media, which is the only case where distinct salts are load-bearing (see
+    /// `tests_support::salted_record`'s doc comment).
+    fn signed_segment(
+        sk: &cairn_event::SigningKey,
+        self_id: &str,
+        plane: Plane,
+        index: u32,
+        prev: &str,
+        n: usize,
+    ) -> Segment {
+        let records = (0..n)
+            .map(|i| tests_support::salted_record(1, i as u8))
+            .collect();
+        tests_support::signed(sk, self_id, plane, index, prev, records)
+    }
 
     #[test]
     fn container_roundtrips_unsigned_marker_and_events() {
@@ -192,5 +305,132 @@ mod tests {
         let mut bad = MEDIUM_MAGIC_V2.to_vec();
         bad.push(99);
         assert!(matches!(parse_container(&bad), Err(BackupError::Decode(_))));
+    }
+
+    #[test]
+    fn a_v3_medium_roundtrips_both_planes() {
+        let sk = sk();
+        let node = signed_segment(&sk, "abcd", Plane::Node, 0, "", 2);
+        let clin = signed_segment(
+            &sk,
+            "abcd",
+            Plane::Clinical,
+            1,
+            &segment_commitment(&node.records),
+            3,
+        );
+        let bytes = serialize_v3(&[node.clone(), clin.clone()]);
+        match parse_any(&bytes).unwrap() {
+            MediumImage::V3(m) => {
+                assert_eq!(m.segments, vec![node, clin]);
+                assert!(m.unknown.is_empty());
+                assert!(!m.truncated_tail);
+            }
+            MediumImage::Legacy(_) => panic!("CAIRNB3 magic must not parse as legacy"),
+        }
+    }
+
+    /// Appending is byte-wise: the existing image is untouched and the new section lands
+    /// at the end. This is the property that makes capture O(new records).
+    #[test]
+    fn appending_leaves_the_existing_bytes_untouched() {
+        let sk = sk();
+        let first = signed_segment(&sk, "abcd", Plane::Node, 0, "", 1);
+        let mut image = serialize_v3(std::slice::from_ref(&first));
+        let before = image.clone();
+        let second = signed_segment(
+            &sk,
+            "abcd",
+            Plane::Clinical,
+            1,
+            &segment_commitment(&first.records),
+            1,
+        );
+        append_segment(&mut image, &second);
+        assert_eq!(
+            &image[..before.len()],
+            &before[..],
+            "an append must not rewrite a byte"
+        );
+        match parse_any(&image).unwrap() {
+            MediumImage::V3(m) => assert_eq!(m.segments.len(), 2),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A torn append yields every complete segment before it, plus the flag. Nothing
+    /// earlier is lost, and the loss that did occur is visible.
+    #[test]
+    fn a_torn_append_yields_the_complete_prefix_and_says_so() {
+        let sk = sk();
+        let a = signed_segment(&sk, "abcd", Plane::Node, 0, "", 1);
+        let b = signed_segment(
+            &sk,
+            "abcd",
+            Plane::Clinical,
+            1,
+            &segment_commitment(&a.records),
+            4,
+        );
+        let mut image = serialize_v3(std::slice::from_ref(&a));
+        let intact = image.len();
+        append_segment(&mut image, &b);
+        image.truncate(intact + 12); // a crash partway through the second section
+        match parse_any(&image).unwrap() {
+            MediumImage::V3(m) => {
+                assert_eq!(m.segments, vec![a], "the complete prefix survives whole");
+                assert!(
+                    m.truncated_tail,
+                    "and the torn tail is REPORTED, never silent"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// An unknown plane is collected and named while parsing continues past it.
+    #[test]
+    fn an_unknown_plane_is_collected_and_parsing_continues() {
+        let sk = sk();
+        let a = signed_segment(&sk, "abcd", Plane::Node, 0, "", 1);
+        let b = signed_segment(
+            &sk,
+            "abcd",
+            Plane::Clinical,
+            1,
+            &segment_commitment(&a.records),
+            2,
+        );
+        let mut image = serialize_v3(&[a.clone(), b.clone()]);
+        // Corrupt the FIRST section's plane tag: 8 magic bytes + 4 length bytes.
+        image[MEDIUM_MAGIC_V3.len() + 4] = 77;
+        match parse_any(&image).unwrap() {
+            MediumImage::V3(m) => {
+                assert_eq!(m.segments, vec![b], "the readable segment still parses");
+                assert_eq!(m.unknown.len(), 1, "and the unreadable one is NAMED");
+                assert_eq!(m.unknown[0].plane_tag, 77);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// CAIRNB1 and CAIRNB2 still dispatch to the legacy path, byte for byte.
+    #[test]
+    fn legacy_media_still_parse_as_legacy() {
+        let sk = sk();
+        let events = vec![enroll(&sk, "a")];
+        let v2 = serialize_container(Some(&SelfMarker::Unsigned("abcd".into())), &events);
+        match parse_any(&v2).unwrap() {
+            MediumImage::Legacy(c) => {
+                assert_eq!(c.events, events);
+                assert_eq!(c.self_marker, Some(SelfMarker::Unsigned("abcd".into())));
+            }
+            other => panic!("a CAIRNB2 medium must not become a V3 image: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_medium_with_no_recognised_magic_is_refused() {
+        assert!(parse_any(b"NOTACAIRN\n").is_err());
     }
 }
