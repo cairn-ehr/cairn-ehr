@@ -4,7 +4,12 @@ use cairn_event::{
 use std::path::Path;
 use tokio_postgres::Client;
 
-pub const NIL_PATIENT: &str = "00000000-0000-0000-0000-000000000000";
+// The nil patient id is a WIRE constant (it is serialized inside signed bodies), so it
+// lives in `cairn-event` with the rest of the wire format. Re-exported — not
+// re-declared — so there is exactly one value in the workspace; `tests/
+// nil_patient_is_one_constant.rs` asserts that with pointer equality, because two
+// identical literals would compare equal and still drift apart later.
+pub use cairn_event::NIL_PATIENT;
 
 pub struct Identity {
     pub node_id_hex: String,
