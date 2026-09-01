@@ -78,6 +78,7 @@ printf '%s' "$alerts" | jq -s -r '
   + "      \(.most_recent_instance.location.path // "?"):"
   + "\(.most_recent_instance.location.start_line // 0)\n"
   + "      \(.rule.description // .rule.name // "")\n"
+  + "      \(.most_recent_instance.message.text // "(no message)")\n"
   + "      ref: \(.most_recent_instance.ref // "?")\n"
   + "      \(.html_url)\n"
 '
