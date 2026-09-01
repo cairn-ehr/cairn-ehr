@@ -491,9 +491,14 @@ fn self_id_returns_the_attested_id_not_the_plaintext_field() {
 
     // Make the plaintext field DISAGREE with the signed one. Nothing re-signs, so the
     // attestation still binds the real id; only the untrusted field changes.
-    let decoy = "decoy0000000000000000000000000000000000000000000000000000000000";
+    // Runtime-derived, not a literal: a 64-hex-char string in an identity slot is the shape
+    // CodeQL's hard-coded-cryptographic-value rule reacts to (house rule 6, #146), and a
+    // derived value is exactly as deterministic.
+    let decoy: String = (0..32u8)
+        .map(|i| format!("{:02x}", i.wrapping_mul(7).wrapping_add(3)))
+        .collect();
     for seg in &mut m.segments {
-        seg.self_node_id_hex = decoy.into();
+        seg.self_node_id_hex.clone_from(&decoy);
     }
     assert_ne!(
         attested, decoy,
