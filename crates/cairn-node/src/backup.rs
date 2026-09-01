@@ -100,7 +100,9 @@ pub fn read_health(path: &Path) -> Option<BackupHealth> {
 /// never corrupt the freshness reading; the flip from old→new is a single rename.
 pub fn write_health(path: &Path, health: &BackupHealth) -> Result<(), BackupError> {
     let json = serde_json::to_vec_pretty(health)
-        .map_err(|e| BackupError::Decode(format!("serializing backup health: {e}")))?;
+        // `Encode`, not a decode fault: this is a failure to SERIALIZE our own data, not a
+        // property of any medium on disk (the fault taxonomy is `cairn_medium::BackupError`).
+        .map_err(|e| BackupError::Encode(format!("serializing backup health: {e}")))?;
     crate::fsio::atomic_write(path, &json, Some(0o600))?;
     Ok(())
 }

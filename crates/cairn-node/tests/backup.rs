@@ -171,7 +171,8 @@ async fn a_bitrotted_medium_fails_self_verification() {
     let mut parsed = backup::parse_medium(&std::fs::read(&medium).unwrap()).unwrap();
     let mid = parsed[0].len() / 2;
     parsed[0][mid] ^= 0xff;
-    let corrupted = cairn_node::medium::serialize_container(None, &parsed);
+    let corrupted = cairn_node::medium::serialize_container(None, &parsed)
+        .expect("the corrupted set still fits the frame cap");
     let report = backup::verify_medium_bytes(&corrupted).unwrap();
     assert!(
         !report.all_intact(),

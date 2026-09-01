@@ -1,0 +1,28 @@
+[package]
+name = "cairn-medium"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# The backup-medium container format, shared by cairn-node (which writes the node
+# plane and orchestrates restore) and, from slice 2b, cairn-sync (which owns the
+# clinical plane). Not published: like the sibling crates it carries a version-less
+# `cairn-event` path dependency, which cargo-deny's wildcard gate allows only for an
+# unpublished crate.
+publish = false
+
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
+[dependencies]
+cairn-event = { path = "../cairn-event" }
+# Every dependency below is already a vetted cairn-node dependency — this crate is an
+# extraction, so it adds no new licence surface (house rule 1). hex, thiserror and
+# uuid are dual MIT/Apache-2.0; serde_json is dual MIT/Apache-2.0. All
+# AGPL-3.0-compatible.
+hex = "0.4"
+serde_json = "1"
+thiserror = "1"
+uuid = { version = "1", features = ["v7"] }

@@ -52,6 +52,14 @@ pub mod sensitivity;
 pub const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20]; // sha2-256, 32 bytes
 pub const BLAKE3_MULTIHASH_PREFIX: [u8; 2] = [0x1e, 0x20]; // blake3, 32 bytes
 
+/// The nil UUID, used as `patient_id` on events that are about the NODE rather than a
+/// patient — node enrolments, pairings, and the backup medium's own attestations.
+///
+/// It lives in `cairn-event` because it is a **wire** constant: it is serialized inside
+/// signed bodies, so a second spelling in another crate would be a second wire format
+/// that no test compares. `cairn_node::identity::NIL_PATIENT` re-exports this one value.
+pub const NIL_PATIENT: &str = "00000000-0000-0000-0000-000000000000";
+
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
     #[error("CBOR encode/decode: {0}")]
@@ -2078,5 +2086,22 @@ mod tests {
             "the signal is inside the signature"
         );
         assert_eq!(decoded.safety.as_ref().unwrap()["rung"], "kind");
+    }
+
+    /// The nil UUID used as `patient_id` on events that are about the NODE, not a
+    /// patient (node enrolments, pairings, backup-medium attestations). It lives here
+    /// because it is a WIRE constant: it appears inside signed bodies, so a second
+    /// spelling anywhere would be a second wire format.
+    #[test]
+    fn nil_patient_is_the_zero_uuid() {
+        assert_eq!(
+            crate::NIL_PATIENT,
+            "00000000-0000-0000-0000-000000000000",
+            "the nil patient id is a wire constant and must never drift"
+        );
+        assert!(
+            crate::NIL_PATIENT.parse::<uuid::Uuid>().is_ok(),
+            "it must parse as a UUID — it is bound as one at every apply door"
+        );
     }
 }
