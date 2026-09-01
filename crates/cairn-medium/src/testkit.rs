@@ -121,18 +121,19 @@ pub(crate) fn segment(plane: Plane, index: u32, n: usize) -> Segment {
 /// `n` signed CLINICAL segments, correctly chained, with ascending `source_seq`.
 /// Returns the medium and every seq it wrote, so a caller can assert on the watermark.
 ///
-/// `salt` is load-bearing, not decoration: it is threaded straight through to
-/// `tests_support::salted_record`, so two chains built with different salts hold
+/// `lineage` is load-bearing, not decoration: it is threaded straight through to
+/// `tests_support::distinct_record`, so two chains built with different lineages hold
 /// genuinely different records. Verify's splice test relies on that — with one shared
-/// salt both chains would be byte-identical and "spliced from another medium" would
-/// prove nothing.
-pub(crate) fn chain_of(n: usize, salt: u8) -> (MediumV3, Vec<i64>) {
+/// lineage both chains would be byte-identical and "spliced from another medium" would
+/// prove nothing. It is NOT called `salt`: see `distinct_record`'s doc comment for the
+/// nineteen critical CodeQL alerts that name cost (#527).
+pub(crate) fn chain_of(n: usize, lineage: u8) -> (MediumV3, Vec<i64>) {
     let sk = sk();
     let mut segments: Vec<Segment> = Vec::new();
     let mut seqs = Vec::new();
     let mut prev = String::new();
     for i in 0..n {
-        let records = vec![tests_support::salted_record(salt, i as u8)];
+        let records = vec![tests_support::distinct_record(lineage, i as u8)];
         seqs.extend(records.iter().map(|r| r.source_seq));
         let seg = tests_support::signed(&sk, "abcd", Plane::Clinical, i as u32, &prev, records);
         prev = segment_commitment(&seg.records);
@@ -163,7 +164,7 @@ pub(crate) fn chain_with_genesis() -> (MediumV3, SigningKey) {
         Plane::Clinical,
         1,
         &prev,
-        vec![tests_support::salted_record(9, 0)],
+        vec![tests_support::distinct_record(9, 0)],
     );
     (medium_v3(vec![s0, s1]), sk)
 }
@@ -171,7 +172,7 @@ pub(crate) fn chain_with_genesis() -> (MediumV3, SigningKey) {
 /// `n` signed CLINICAL segments whose records are GENUINELY SIGNED events, correctly
 /// chained, with ascending `source_seq`.
 ///
-/// Distinct from `chain_of`, whose records are `salted_record`'s arbitrary bytes: those are
+/// Distinct from `chain_of`, whose records are `distinct_record`'s arbitrary bytes: those are
 /// fine for chain/commitment assertions (a commitment is over a content address, which any
 /// bytes have) but they FAIL signature verification, so a fixture built from them can never
 /// be used to assert that a medium is SOUND. `health`'s composed verdict needs both halves to
@@ -200,9 +201,9 @@ pub(crate) fn verifiable_chain_of(n: usize) -> (MediumV3, Vec<i64>) {
 /// `n` clinical segments written with NO signing key available — correctly chained, and
 /// carrying their self id, but not tamper-evident.
 ///
-/// Its records hold GENUINELY SIGNED events (via `enroll`), unlike `salted_record`'s
+/// Its records hold GENUINELY SIGNED events (via `enroll`), unlike `distinct_record`'s
 /// arbitrary bytes. `verify_records` checks Ed25519 signatures, so a fixture built from
-/// salted bytes would fail verification before any test tampered with it — and the test
+/// those arbitrary bytes would fail verification before any test tampered with it — and the test
 /// would then pass for the wrong reason, proving nothing about tampering.
 pub(crate) fn unsigned_chain_of(n: usize) -> MediumV3 {
     let sk = sk();

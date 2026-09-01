@@ -155,7 +155,7 @@ fn a_plane_with_no_verified_segment_has_no_watermark() {
         Plane::Clinical,
         0,
         "",
-        vec![tests_support::salted_record(1, 0)],
+        vec![tests_support::distinct_record(1, 0)],
     );
     let prev = segment_commitment(&clinical.records);
     let mut node = tests_support::signed(
@@ -164,7 +164,7 @@ fn a_plane_with_no_verified_segment_has_no_watermark() {
         Plane::Node,
         1,
         &prev,
-        vec![tests_support::salted_record(2, 0)],
+        vec![tests_support::distinct_record(2, 0)],
     );
     node.records[0].signed_bytes[0] ^= 0xff; // tamper: breaks its own attestation
     let m2 = crate::testkit::medium_v3(vec![clinical, node]);
@@ -254,7 +254,7 @@ fn a_forged_self_id_naming_a_real_genesis_is_withheld_not_misdirected() {
         Plane::Clinical,
         1,
         &prev,
-        vec![tests_support::salted_record(9, 0)],
+        vec![tests_support::distinct_record(9, 0)],
     );
     let m = crate::testkit::medium_v3(vec![s0, s1]);
     let r = chain_report(&m);
@@ -309,7 +309,7 @@ fn a_signed_segment_naming_an_unbound_id_is_located_as_a_fault() {
         Plane::Clinical,
         1,
         &prev,
-        vec![tests_support::salted_record(9, 0)],
+        vec![tests_support::distinct_record(9, 0)],
     );
 
     let m = crate::testkit::medium_v3(vec![s0, s1]);
@@ -369,7 +369,7 @@ fn self_id_unbound_does_not_retract_verified_through() {
         Plane::Clinical,
         1,
         &prev,
-        vec![tests_support::salted_record(9, 0)],
+        vec![tests_support::distinct_record(9, 0)],
     );
     let m = crate::testkit::medium_v3(vec![s0, s1]);
     let r = chain_report(&m);
