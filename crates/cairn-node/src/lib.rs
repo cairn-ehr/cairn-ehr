@@ -36,7 +36,7 @@ pub use cairn_keystore::{fsio, keystore, seal};
 // write the clinical plane onto the same medium this node writes its federation plane
 // to (issue #500 slice 2a), without depending on a node application. Re-exported rather
 // than renamed at the call sites — `crate::medium::…` and `cairn_node::medium::…` appear
-// at 12 sites across backup.rs, restore.rs, main.rs and two test suites, and every one of
+// at 15 sites across backup.rs, restore.rs, main.rs and two test suites, and every one of
 // them compiling untouched is what proves the move changed no behaviour. This is not a
 // deprecated shim: `cairn-node` genuinely still offers this module, implemented elsewhere.
 pub use cairn_medium as medium;

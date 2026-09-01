@@ -4,7 +4,7 @@
 
 **Goal:** Extract the backup-medium container format into a shared crate both binaries can use, and give it an append-only, chained, two-plane revision (`CAIRNB3`) that can carry clinical events alongside the federation plane.
 
-**Architecture:** `crates/cairn-medium` is a pure crate (no DB, no I/O, no async). Today's `crates/cairn-node/src/medium.rs` moves into it verbatim and is then split by responsibility; `cairn-node` re-exports it so all 12 existing call sites compile untouched. On top of that, a new `CAIRNB3` revision replaces CAIRNB2's unappendable head marker with **one uniform structure repeated**: a length-prefixed, plane-tagged segment carrying its own signed attestation, chained to its predecessor. Appending costs O(new records), a torn append is self-limiting, and CAIRNB1/CAIRNB2 media keep parsing byte-for-byte as they do today.
+**Architecture:** `crates/cairn-medium` is a pure crate (no DB, no I/O, no async). Today's `crates/cairn-node/src/medium.rs` moves into it verbatim and is then split by responsibility; `cairn-node` re-exports it so all 15 existing call sites compile untouched. On top of that, a new `CAIRNB3` revision replaces CAIRNB2's unappendable head marker with **one uniform structure repeated**: a length-prefixed, plane-tagged segment carrying its own signed attestation, chained to its predecessor. Appending costs O(new records), a torn append is self-limiting, and CAIRNB1/CAIRNB2 media keep parsing byte-for-byte as they do today.
 
 **Tech Stack:** Rust 1.96, `cairn-event` (Ed25519/COSE sign + verify, content addressing), `hex`, `thiserror`, `uuid`, `serde_json`. No new third-party dependency is introduced.
 
@@ -369,7 +369,7 @@ and a production dependency on a node application is the wrong direction. Same s
 Moved whole, with three edits and no others: NIL_PATIENT now comes from cairn-event,
 two intra-doc links into cairn-node became plain text (they cannot resolve from here
 and cargo doc runs with -D warnings), and a crate header. cairn-node re-exports the
-crate as its own 'medium' module, so all 12 call sites compile untouched - that is
+crate as its own 'medium' module, so all 15 call sites compile untouched - that is
 the move's whole proof.
 
 This fixes NOTHING. backup.rs still reads node_event and only node_event; the medium
@@ -2263,7 +2263,7 @@ The container format every later piece reads and writes.
 - **`crates/cairn-medium`** — today's `medium.rs` moved verbatim then split by
   responsibility, so `cairn-sync` can write the clinical plane onto the same medium
   `cairn-node` writes its federation plane to without depending on a node application. All
-  12 existing call sites compile untouched; that is the extraction's proof (#503's pattern).
+  15 existing call sites compile untouched; that is the extraction's proof (#503's pattern).
 - **`CAIRNB3`** — an append-only revision. CAIRNB2's head marker commits to the whole
   sorted event set, so any append needs it re-signed and rewriting it shifts every following
   byte: a whole-file rewrite per backup, over a log that grows for the life of a clinic.

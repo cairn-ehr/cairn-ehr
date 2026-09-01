@@ -23,9 +23,19 @@ pub(crate) fn medium_v3(segments: Vec<Segment>) -> MediumV3 {
         .len();
     MediumV3 {
         segments,
-        unknown: vec![],
         truncated_tail: false,
         complete_bytes,
+    }
+}
+
+/// A `MediumV3` whose TORN-TAIL flag is set, for the health tests.
+///
+/// `medium_v3` hard-codes `truncated_tail: false`, which is precisely why no chain test had
+/// ever seen a torn medium and why a torn tail could report as sound (#500 slice 2a review).
+pub(crate) fn medium_v3_torn(segments: Vec<Segment>) -> MediumV3 {
+    MediumV3 {
+        truncated_tail: true,
+        ..medium_v3(segments)
     }
 }
 
@@ -156,6 +166,35 @@ pub(crate) fn chain_with_genesis() -> (MediumV3, SigningKey) {
         vec![tests_support::salted_record(9, 0)],
     );
     (medium_v3(vec![s0, s1]), sk)
+}
+
+/// `n` signed CLINICAL segments whose records are GENUINELY SIGNED events, correctly
+/// chained, with ascending `source_seq`.
+///
+/// Distinct from `chain_of`, whose records are `salted_record`'s arbitrary bytes: those are
+/// fine for chain/commitment assertions (a commitment is over a content address, which any
+/// bytes have) but they FAIL signature verification, so a fixture built from them can never
+/// be used to assert that a medium is SOUND. `health`'s composed verdict needs both halves to
+/// pass, so it needs this.
+pub(crate) fn verifiable_chain_of(n: usize) -> (MediumV3, Vec<i64>) {
+    let sk = sk();
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut seqs = Vec::new();
+    let mut prev = String::new();
+    for i in 0..n {
+        let records = vec![MediumRecord {
+            signed_bytes: enroll(&sk, &format!("node-{i}")),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: i as i64 + 1,
+        }];
+        seqs.extend(records.iter().map(|r| r.source_seq));
+        let seg = tests_support::signed(&sk, "abcd", Plane::Clinical, i as u32, &prev, records);
+        prev = segment_commitment(&seg.records);
+        segments.push(seg);
+    }
+    (medium_v3(segments), seqs)
 }
 
 /// `n` clinical segments written with NO signing key available — correctly chained, and

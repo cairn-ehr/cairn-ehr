@@ -8,7 +8,7 @@
 use crate::chunk::{put_chunk, take_chunk};
 use crate::error::BackupError;
 use crate::marker::SelfMarker;
-use crate::segment::{put_segment, take_section, Segment, TakenSection, UnknownSegment};
+use crate::segment::{put_segment, take_section, Segment};
 
 /// Magic header for the original marker-less medium (ADR-0026 slice B). Kept for backward
 /// compatibility: such a medium parses to events with `self_marker == None`.
@@ -42,31 +42,35 @@ pub struct Container {
 /// `marker.rs` also carries a FROZEN header ("CAIRNB2 only ... Do not extend this module"):
 /// container-wire-framing glue has no business living in a module future work is told to leave
 /// alone. `serialize_container` is this function's only caller and lives right below it.
-fn put_marker(out: &mut Vec<u8>, marker: Option<&SelfMarker>) {
+fn put_marker(out: &mut Vec<u8>, marker: Option<&SelfMarker>) -> Result<(), BackupError> {
     match marker {
         None => out.push(KIND_NONE),
         Some(SelfMarker::Unsigned(id)) => {
             out.push(KIND_UNSIGNED);
-            put_chunk(out, id.as_bytes());
+            put_chunk(out, id.as_bytes())?;
         }
         Some(SelfMarker::Signed(att)) => {
             out.push(KIND_SIGNED);
-            put_chunk(out, att);
+            put_chunk(out, att)?;
         }
     }
+    Ok(())
 }
 
 /// Serialize a full CAIRNB2 container: magic ++ marker block ++ event frames. Pure. The event
 /// order is preserved for legibility but is set-union-independent on restore (convergence is
 /// by content-address).
-pub fn serialize_container(marker: Option<&SelfMarker>, events: &[Vec<u8>]) -> Vec<u8> {
+pub fn serialize_container(
+    marker: Option<&SelfMarker>,
+    events: &[Vec<u8>],
+) -> Result<Vec<u8>, BackupError> {
     let mut out = Vec::with_capacity(MEDIUM_MAGIC_V2.len() + 1 + 32 * events.len());
     out.extend_from_slice(MEDIUM_MAGIC_V2);
-    put_marker(&mut out, marker);
+    put_marker(&mut out, marker)?;
     for e in events {
-        put_chunk(&mut out, e);
+        put_chunk(&mut out, e)?;
     }
-    out
+    Ok(out)
 }
 
 /// Parse a medium image into its marker + event set. Handles BOTH formats: a CAIRNB2 medium
@@ -76,14 +80,14 @@ pub fn parse_container(bytes: &[u8]) -> Result<Container, BackupError> {
     if let Some(rest) = bytes.strip_prefix(MEDIUM_MAGIC_V2) {
         let (&kind, mut rest) = rest
             .split_first()
-            .ok_or_else(|| BackupError::Decode("CAIRNB2 medium missing marker kind".into()))?;
+            .ok_or_else(|| BackupError::Damaged("CAIRNB2 medium missing marker kind".into()))?;
         let self_marker = match kind {
             KIND_NONE => None,
             KIND_UNSIGNED => {
                 let (id, r) = take_chunk(rest)?;
                 rest = r;
                 let id = std::str::from_utf8(id)
-                    .map_err(|_| BackupError::Decode("unsigned marker is not UTF-8".into()))?;
+                    .map_err(|_| BackupError::Damaged("unsigned marker is not UTF-8".into()))?;
                 Some(SelfMarker::Unsigned(id.to_string()))
             }
             KIND_SIGNED => {
@@ -92,7 +96,7 @@ pub fn parse_container(bytes: &[u8]) -> Result<Container, BackupError> {
                 Some(SelfMarker::Signed(att.to_vec()))
             }
             other => {
-                return Err(BackupError::Decode(format!("unknown marker kind {other}")));
+                return Err(BackupError::Damaged(format!("unknown marker kind {other}")));
             }
         };
         let events = take_frames(rest)?;
@@ -105,8 +109,18 @@ pub fn parse_container(bytes: &[u8]) -> Result<Container, BackupError> {
             self_marker: None,
             events: take_frames(rest)?,
         })
+    } else if bytes.starts_with(MEDIUM_MAGIC_V3) {
+        // Say what it actually IS. This function reads the legacy revisions only, and a
+        // CAIRNB3 medium reaching it is a caller on the wrong code path, not a bad file —
+        // telling an operator "this is not a backup medium" about a perfectly good CAIRNB3
+        // medium is the wrong-remedy failure the error taxonomy exists to prevent.
+        Err(BackupError::UnsupportedByThisBuild(
+            "this is a CAIRNB3 medium; parse_container reads CAIRNB1/CAIRNB2 only — use \
+             parse_any"
+                .into(),
+        ))
     } else {
-        Err(BackupError::Decode(
+        Err(BackupError::NotAMedium(
             "missing CAIRNB1/CAIRNB2 magic header".into(),
         ))
     }
@@ -141,12 +155,16 @@ pub const MEDIUM_MAGIC_V3: &[u8] = b"CAIRNB3\n";
 /// A parsed CAIRNB3 image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediumV3 {
-    /// Every complete, recognised segment, in file order.
+    /// Every complete section, in file order — INCLUDING those whose plane tag this build
+    /// does not recognise, which carry [`crate::segment::Plane::Unknown`].
+    ///
+    /// Unknown-plane segments used to live in a separate `unknown` list, which stranded them:
+    /// the chain walk iterated only this field, so an unknown segment broke the chain for
+    /// everything after it, and `chain_report` never saw it at all. Keeping one list is what
+    /// lets the single global chain traverse a newer Cairn's plane, and what lets
+    /// `chain::chain_report` raise a located `UnknownPlane` fault instead of silently
+    /// reporting a medium sound while a whole plane is missing (#500 slice 2a review).
     pub segments: Vec<Segment>,
-    /// Segments whose plane tag this build does not recognise — NAMED, never skipped, so a
-    /// consumer that needs completeness can refuse rather than silently restore a medium
-    /// that is missing a plane.
-    pub unknown: Vec<UnknownSegment>,
     /// The final section was cut short: an interrupted append. Everything before it is
     /// intact. Remedy: run the backup again; the watermark did not advance past the last
     /// verified segment, so the lost increment is re-captured.
@@ -212,7 +230,6 @@ pub fn parse_any(bytes: &[u8]) -> Result<MediumImage, BackupError> {
         return Ok(MediumImage::Legacy(parse_container(bytes)?));
     };
     let mut segments = Vec::new();
-    let mut unknown = Vec::new();
     let mut truncated_tail = false;
     while !rest.is_empty() {
         match take_section(rest)? {
@@ -222,11 +239,8 @@ pub fn parse_any(bytes: &[u8]) -> Result<MediumImage, BackupError> {
                 truncated_tail = true;
                 break;
             }
-            Some((taken, next)) => {
-                match taken {
-                    TakenSection::Known(s) => segments.push(s),
-                    TakenSection::Unknown(u) => unknown.push(u),
-                }
+            Some((seg, next)) => {
+                segments.push(seg);
                 rest = next;
             }
         }
@@ -236,7 +250,6 @@ pub fn parse_any(bytes: &[u8]) -> Result<MediumImage, BackupError> {
     let complete_bytes = bytes.len() - rest.len();
     Ok(MediumImage::V3(MediumV3 {
         segments,
-        unknown,
         truncated_tail,
         complete_bytes,
     }))
@@ -276,7 +289,7 @@ mod tests {
         let g = enroll(&k, "Self");
         let events = vec![g.clone()];
         let marker = SelfMarker::Unsigned(node_id(&g));
-        let image = serialize_container(Some(&marker), &events);
+        let image = serialize_container(Some(&marker), &events).expect("fixture fits the cap");
         assert!(
             image.starts_with(MEDIUM_MAGIC_V2),
             "self-marked medium carries CAIRNB2 magic"
@@ -291,7 +304,8 @@ mod tests {
         let k = sk();
         let g = enroll(&k, "Self");
         let att = build_self_attestation(&k, &kid(&k), &node_id(&g), std::slice::from_ref(&g));
-        let image = serialize_container(Some(&SelfMarker::Signed(att.clone())), &[g]);
+        let image = serialize_container(Some(&SelfMarker::Signed(att.clone())), &[g])
+            .expect("fixture fits the cap");
         let got = parse_container(&image).unwrap();
         assert_eq!(got.self_marker, Some(SelfMarker::Signed(att)));
     }
@@ -300,7 +314,7 @@ mod tests {
     fn container_roundtrips_no_marker() {
         let k = sk();
         let events = vec![enroll(&k, "Self")];
-        let image = serialize_container(None, &events);
+        let image = serialize_container(None, &events).expect("fixture fits the cap");
         let got = parse_container(&image).unwrap();
         assert_eq!(got.self_marker, None);
         assert_eq!(got.events, events);
@@ -312,7 +326,7 @@ mod tests {
         let k = sk();
         let g = enroll(&k, "Self");
         let mut image = MEDIUM_MAGIC_V1.to_vec();
-        put_chunk(&mut image, &g);
+        put_chunk(&mut image, &g).expect("fixture fits the cap");
         let got = parse_container(&image).unwrap();
         assert_eq!(got.self_marker, None, "legacy medium has no marker");
         assert_eq!(got.events, vec![g]);
@@ -320,14 +334,45 @@ mod tests {
 
     #[test]
     fn parse_rejects_missing_magic_and_unknown_kind() {
-        assert!(matches!(
-            parse_container(b"not a medium"),
-            Err(BackupError::Decode(_))
-        ));
-        // CAIRNB2 with an out-of-range marker kind.
+        // Not a medium at all: the operator picked the wrong file. Nothing is damaged, and
+        // saying "damaged" here would send them looking for a second copy that does not exist.
+        assert!(
+            matches!(
+                parse_container(b"not a medium"),
+                Err(BackupError::NotAMedium(_))
+            ),
+            "bytes with no recognised magic are NOT a medium, not a damaged one"
+        );
+        // CAIRNB2 with an out-of-range marker kind: real damage.
         let mut bad = MEDIUM_MAGIC_V2.to_vec();
         bad.push(99);
-        assert!(matches!(parse_container(&bad), Err(BackupError::Decode(_))));
+        assert!(matches!(
+            parse_container(&bad),
+            Err(BackupError::Damaged(_))
+        ));
+    }
+
+    /// A CAIRNB3 medium handed to the LEGACY parser must say what it actually is.
+    ///
+    /// `parse_container` reads CAIRNB1/CAIRNB2 only, and `cairn-node`'s `verify-backup` still
+    /// routes through it — so without this arm, pointing that command at a perfectly good
+    /// CAIRNB3 medium reports "this is not a backup medium". That is the wrong-remedy failure
+    /// the error taxonomy exists to prevent: an operator told their good medium is not a
+    /// medium may well go looking for another copy, mid-disaster.
+    #[test]
+    fn a_cairnb3_medium_is_named_not_dismissed_by_the_legacy_parser() {
+        let sk = sk();
+        let seg = signed_segment(&sk, "abcd", Plane::Node, 0, "", 1);
+        let bytes = serialize_v3(&[seg]).unwrap();
+        let err = parse_container(&bytes).expect_err("the legacy parser cannot read CAIRNB3");
+        assert!(
+            matches!(err, BackupError::UnsupportedByThisBuild(_)),
+            "a CAIRNB3 medium is not damaged and is not a non-medium: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("CAIRNB3"),
+            "and the error must name what it actually is: {err}"
+        );
     }
 
     #[test]
@@ -346,7 +391,7 @@ mod tests {
         match parse_any(&bytes).unwrap() {
             MediumImage::V3(m) => {
                 assert_eq!(m.segments, vec![node, clin]);
-                assert!(m.unknown.is_empty());
+                assert!(m.segments.iter().all(|s| s.plane.is_known()));
                 assert!(!m.truncated_tail);
             }
             MediumImage::Legacy(_) => panic!("CAIRNB3 magic must not parse as legacy"),
@@ -469,9 +514,18 @@ mod tests {
         image[MEDIUM_MAGIC_V3.len() + 4] = 77;
         match parse_any(&image).unwrap() {
             MediumImage::V3(m) => {
-                assert_eq!(m.segments, vec![b], "the readable segment still parses");
-                assert_eq!(m.unknown.len(), 1, "and the unreadable one is NAMED");
-                assert_eq!(m.unknown[0].plane_tag, 77);
+                assert_eq!(
+                    m.segments.len(),
+                    2,
+                    "an unknown plane stays IN the segment list — dropping it is what broke \
+                     the chain for every segment after it"
+                );
+                assert_eq!(m.segments[0].plane, Plane::Unknown(77), "carried verbatim");
+                assert_eq!(
+                    m.segments[0].records, a.records,
+                    "and with every record intact, so the chain can still traverse it"
+                );
+                assert_eq!(m.segments[1], b, "the known segment is untouched");
             }
             other => panic!("{other:?}"),
         }
@@ -482,7 +536,8 @@ mod tests {
     fn legacy_media_still_parse_as_legacy() {
         let sk = sk();
         let events = vec![enroll(&sk, "a")];
-        let v2 = serialize_container(Some(&SelfMarker::Unsigned("abcd".into())), &events);
+        let v2 = serialize_container(Some(&SelfMarker::Unsigned("abcd".into())), &events)
+            .expect("fixture fits the cap");
         match parse_any(&v2).unwrap() {
             MediumImage::Legacy(c) => {
                 assert_eq!(c.events, events);

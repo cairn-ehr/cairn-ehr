@@ -3,11 +3,23 @@
 //! (`node_event` converges by set-union, so nothing *in the events* can say whose backup this
 //! is) and for the converged-peer splice this module's commitment cannot close.
 //!
-//! **CAIRNB2 only, and frozen.** This module serves media that already exist and gains
-//! nothing from further work: CAIRNB3's equivalent of "which node does this belong to" is
-//! `segment`, because a whole-set commitment ([`event_set_commitment`]) cannot survive an
-//! append — appending one event changes the commitment of everything already committed to it.
-//! Do not extend this module; a CAIRNB3 concern belongs in `segment`.
+//! **CAIRNB2's WIRE BEHAVIOUR is frozen.** That is the precise claim, and it is narrower than
+//! "this module is frozen" — which this module's own header used to say, and which is not
+//! true: `commitment_over` below is new, and CAIRNB3 depends on this module in two places
+//! (`attest::segment_commitment` calls `commitment_over`; `chain` calls [`enrolls`] for the
+//! genesis bind). What may never change is the OBSERVABLE BEHAVIOUR that media already in the
+//! field depend on: the value [`event_set_commitment`] computes, [`SelfMarker`]'s encoding,
+//! and [`verify_self_attestation`]'s verdict. Refactor freely underneath those; change any of
+//! them and every CAIRNB2 medium ever written stops verifying.
+//!
+//! CAIRNB2's whole-set marker has no CAIRNB3 successor, because a whole-set commitment cannot
+//! survive an append — adding one event changes the commitment of everything already
+//! committed to it. CAIRNB3 answers "which node does this belong to" with `attest`
+//! (per-segment signed attestation) and `chain::self_id_from_chain` (the whole-medium
+//! verdict). It is emphatically NOT answered by `segment`, which an earlier version of this
+//! header pointed at: `Segment::self_node_id_hex` is documented in capitals as UNTRUSTED, so
+//! sending a maintainer there for identity work aims them at the one field the code warns
+//! against.
 
 use cairn_event::{event_address, sign, verify_self_described, EventBody, Hlc, SigningKey};
 
@@ -322,6 +334,81 @@ mod tests {
             verify_self_attestation(&att, &[g]),
             None,
             "a flipped byte must fail closed"
+        );
+    }
+
+    /// A validly-signed event of the WRONG TYPE is not a self-attestation.
+    ///
+    /// Deleting the `event_type` check survived the whole suite — every existing fixture
+    /// failed on a later payload-key lookup, so the check was never exercised. It is the bind
+    /// that stops a genuine signed object being replayed into the marker role.
+    #[test]
+    fn a_signed_event_of_the_wrong_type_is_not_a_self_attestation() {
+        let k = sk();
+        let g = enroll(&k, "Self");
+        let events = std::slice::from_ref(&g);
+        let self_id = node_id(&g);
+
+        // Every field a real self-attestation carries, correct — only the type is wrong.
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: cairn_event::NIL_PATIENT.into(),
+            event_type: "node.enrolled".into(),
+            schema_version: "node/1".into(),
+            hlc: Hlc {
+                wall: 0,
+                counter: 0,
+                node_origin: self_id.clone(),
+            },
+            t_effective: None,
+            signer_key_id: kid(&k),
+            contributors: serde_json::json!([{"actor_id": kid(&k), "role": "recorded"}]),
+            payload: serde_json::json!({
+                "self_node_id_hex": self_id,
+                "event_set_commitment": event_set_commitment(events),
+            }),
+            attachments: vec![],
+            plaintext_twin: None,
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        let impostor = sign(&body, &k).expect("signing").signed_bytes;
+        assert_eq!(
+            verify_self_attestation(&impostor, events),
+            None,
+            "the payload keys alone are not a type"
+        );
+
+        // Positive control: the real thing, over the same medium, verifies.
+        let real = build_self_attestation(&k, &kid(&k), &self_id, events);
+        assert_eq!(verify_self_attestation(&real, events), Some(self_id));
+    }
+
+    /// A node id is compared case-insensitively, and the crate's own ids are lowercase hex.
+    ///
+    /// Removing `to_ascii_lowercase` survived, because every fixture id is already lowercase.
+    /// The normalisation is fail-closed as written, but nothing would catch a change in the
+    /// other direction (upper-casing), which would break the genesis bind against
+    /// `hex::encode`'s lowercase output.
+    #[test]
+    fn an_upper_case_attested_id_still_binds_to_its_lower_case_genesis() {
+        let k = sk();
+        let g = enroll(&k, "Self");
+        let events = std::slice::from_ref(&g);
+        let self_id = node_id(&g);
+        assert_eq!(
+            self_id,
+            self_id.to_ascii_lowercase(),
+            "ids are lowercase hex"
+        );
+
+        let shouty = self_id.to_ascii_uppercase();
+        let att = build_self_attestation(&k, &kid(&k), &shouty, events);
+        assert_eq!(
+            verify_self_attestation(&att, events),
+            Some(self_id),
+            "an id attested in upper case must still bind, and must be RETURNED lowercased \
+             so callers can compare it against `hex::encode` output directly"
         );
     }
 }

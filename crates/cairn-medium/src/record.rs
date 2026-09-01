@@ -45,9 +45,10 @@ pub struct MediumRecord {
     pub source_seq: i64,
 }
 
-/// Encode one record. Pure.
-pub(crate) fn put_record(out: &mut Vec<u8>, r: &MediumRecord) {
-    put_chunk(out, &r.signed_bytes);
+/// Encode one record. Pure. Fallible only because `put_chunk` refuses an over-cap chunk at
+/// the source rather than writing one that could never be read back (see `chunk::put_chunk`).
+pub(crate) fn put_record(out: &mut Vec<u8>, r: &MediumRecord) -> Result<(), BackupError> {
+    put_chunk(out, &r.signed_bytes)?;
     let mut flags = 0u8;
     if r.attestation.is_some() {
         flags |= FLAG_ATTESTATION;
@@ -63,9 +64,10 @@ pub(crate) fn put_record(out: &mut Vec<u8>, r: &MediumRecord) {
         .into_iter()
         .flatten()
     {
-        put_chunk(out, v);
+        put_chunk(out, v)?;
     }
     out.extend_from_slice(&r.source_seq.to_be_bytes());
+    Ok(())
 }
 
 /// Read one optional field iff its flag bit is set, advancing `rest`. Pure and reusable —
@@ -85,16 +87,18 @@ fn take_optional(flags: u8, bit: u8, rest: &mut &[u8]) -> Result<Option<Vec<u8>>
 pub(crate) fn take_record(rest: &[u8]) -> Result<(MediumRecord, &[u8]), BackupError> {
     let (signed_bytes, rest) = take_chunk(rest)?;
     let (&flags, mut rest) = rest.split_first().ok_or_else(|| {
-        BackupError::Decode("truncated record: no flags byte after signed_bytes".into())
+        BackupError::Damaged("truncated record: no flags byte after signed_bytes".into())
     })?;
     // Fail closed on an unknown bit. A newer writer setting bit 3 has put a field here we
     // cannot locate, so everything after it — including this record's source_seq and every
     // following record — would decode as garbage. Refusing names what we did not
     // understand; decoding the prefix would silently drop it.
     if flags & !KNOWN_FLAGS != 0 {
-        return Err(BackupError::Decode(format!(
+        return Err(BackupError::UnsupportedByThisBuild(format!(
             "record sets unknown flag bit(s) {:04b} (this build understands {KNOWN_FLAGS:03b}); \
-             the medium was written by a newer Cairn — upgrade this node before reading it",
+             the medium was written by a newer Cairn — upgrade this node before reading it. \
+             The medium is INTACT: do not re-run a backup over it and do not append to it, \
+             because this build cannot see everything already on it",
             flags & !KNOWN_FLAGS
         )));
     }
@@ -102,7 +106,7 @@ pub(crate) fn take_record(rest: &[u8]) -> Result<(MediumRecord, &[u8]), BackupEr
     let attester_key = take_optional(flags, FLAG_ATTESTER_KEY, &mut rest)?;
     let dek_wrapped = take_optional(flags, FLAG_DEK, &mut rest)?;
     if rest.len() < 8 {
-        return Err(BackupError::Decode(format!(
+        return Err(BackupError::Damaged(format!(
             "truncated record: {} byte(s) where an 8-byte source_seq was expected",
             rest.len()
         )));
@@ -134,7 +138,7 @@ mod tests {
         for flags in 0..8u8 {
             let r = record(flags);
             let mut out = Vec::new();
-            put_record(&mut out, &r);
+            put_record(&mut out, &r).expect("fixture fits the cap");
             let (back, rest) = take_record(&out).expect("decodes");
             assert_eq!(back, r, "flags {flags:03b} did not round-trip");
             assert!(
@@ -160,7 +164,7 @@ mod tests {
             (None, None, None)
         );
         let mut out = Vec::new();
-        put_record(&mut out, &r);
+        put_record(&mut out, &r).expect("fixture fits the cap");
         assert_eq!(take_record(&out).unwrap().0, r);
     }
 
@@ -176,7 +180,7 @@ mod tests {
         let mut absent = record(0b000);
         absent.source_seq = -1; // the codec does not police the range; any i64 must round-trip
         let mut out = Vec::new();
-        put_record(&mut out, &absent);
+        put_record(&mut out, &absent).expect("fixture fits the cap");
         assert_eq!(take_record(&out).unwrap().0.attestation, None);
 
         let present_but_empty = MediumRecord {
@@ -184,7 +188,7 @@ mod tests {
             ..record(0b000)
         };
         let mut out2 = Vec::new();
-        put_record(&mut out2, &present_but_empty);
+        put_record(&mut out2, &present_but_empty).expect("fixture fits the cap");
         assert_eq!(
             take_record(&out2).unwrap().0.attestation,
             Some(Vec::new()),
@@ -198,27 +202,31 @@ mod tests {
     #[test]
     fn an_unknown_flag_bit_is_refused_by_name() {
         let mut out = Vec::new();
-        put_record(&mut out, &record(0b000));
+        put_record(&mut out, &record(0b000)).expect("fixture fits the cap");
         // The flags byte sits immediately after the signed_bytes chunk.
         let flags_at = 4 + 40;
         out[flags_at] = 0b1000;
         let err = take_record(&out).expect_err("must refuse");
+        // A newer writer is NOT damage: the medium is intact and the remedy is "upgrade this
+        // node", the opposite of "fetch another copy". The variant is what carries that.
+        assert!(
+            matches!(err, BackupError::UnsupportedByThisBuild(_)),
+            "an unknown flag bit means a NEWER WRITER, not a damaged medium: {err:?}"
+        );
         let msg = err.to_string();
         assert!(
             msg.contains("flag"),
             "the error must name the flags byte: {msg}"
         );
-        assert!(
-            msg.contains("1000") || msg.contains('8'),
-            "and the unknown bits: {msg}"
-        );
+        // The exact bit pattern, not a substring that half the crate's messages contain.
+        assert!(msg.contains("1000"), "and the unknown bits, exactly: {msg}");
     }
 
     /// A truncated record is reported, never panics.
     #[test]
     fn a_truncated_record_is_an_error_not_a_panic() {
         let mut out = Vec::new();
-        put_record(&mut out, &record(0b111));
+        put_record(&mut out, &record(0b111)).expect("fixture fits the cap");
         for cut in [1usize, 5, 20, out.len() - 1] {
             assert!(take_record(&out[..cut]).is_err(), "cut at {cut} must error");
         }

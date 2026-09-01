@@ -15,9 +15,9 @@ use crate::testkit::{enroll, sk};
 fn a_well_formed_chain_verifies_through_its_last_segment() {
     let (m, _) = crate::testkit::chain_of(3, 1);
     let r = chain_report(&m);
-    assert!(r.intact(), "faults: {:?}", r.faults);
+    assert!(r.chain_intact(), "faults: {:?}", r.faults);
     assert_eq!(r.verified_through, Some(2));
-    assert_eq!((r.segments, r.signed, r.unsigned), (3, 3, 0));
+    assert_eq!((r.segments, r.signed_valid, r.unsigned), (3, 3, 0));
 }
 
 /// A break is located by plane AND index. "chain invalid" sends an operator nowhere.
@@ -36,7 +36,7 @@ fn a_chain_break_is_located_not_merely_counted() {
     let real_predecessor_commitment = segment_commitment(&m.segments[1].records);
     m.segments[2].prev_commitment = "deadbeef".into();
     let r = chain_report(&m);
-    assert!(!r.intact());
+    assert!(!r.chain_intact());
     assert_eq!(
         r.verified_through,
         Some(1),
@@ -45,15 +45,21 @@ fn a_chain_break_is_located_not_merely_counted() {
     let broken = r.faults.iter().find_map(|f| match f {
         SegmentFault::ChainBroken {
             plane,
+            position,
             index: 2,
             expected,
             found,
-        } => Some((plane, expected, found)),
+        } => Some((plane, position, expected, found)),
         _ => None,
     });
     match broken {
-        Some((plane, expected, found)) => {
+        Some((plane, position, expected, found)) => {
             assert_eq!(*plane, Plane::Clinical);
+            assert_eq!(
+                *position, 2,
+                "located by the TRUSTED coordinate — where the reader found it — as well as \
+                 by the segment's own self-declared index"
+            );
             assert_eq!(
                 *expected, real_predecessor_commitment,
                 "expected must be the REAL predecessor's commitment"
@@ -70,7 +76,7 @@ fn a_chain_break_is_located_not_merely_counted() {
 /// A genuine segment spliced from ANOTHER medium fails on its predecessor, even though
 /// its own signature and commitment are perfectly valid.
 ///
-/// I8 (#500 final review): the ORIGINAL test asserted only `!r.intact()`, which is true for
+/// I8 (#500 final review): the ORIGINAL test asserted only `!r.chain_intact()`, which is true for
 /// a dozen unrelated reasons and proves nothing about WHICH check caught the splice. This
 /// asserts the property the test's own name claims: the spliced segment's own attestation
 /// verifies fine in isolation (it is not a forgery), and `chain_report` flags it
@@ -86,7 +92,10 @@ fn a_spliced_segment_fails_on_its_predecessor() {
     );
     mine.segments[1] = spliced;
     let r = chain_report(&mine);
-    assert!(!r.intact(), "a foreign segment must not validate here");
+    assert!(
+        !r.chain_intact(),
+        "a foreign segment must not validate here"
+    );
     assert!(
         r.faults
             .iter()
@@ -429,7 +438,7 @@ fn no_genesis_on_the_medium_raises_no_self_id_unbound_fault() {
 #[test]
 fn a_tampered_record_is_caught_even_in_an_unsigned_segment() {
     let mut m = crate::testkit::unsigned_chain_of(2);
-    assert!(chain_report(&m).intact(), "unsigned but well-formed");
+    assert!(chain_report(&m).chain_intact(), "unsigned but well-formed");
     let clean = verify_records(&m);
     assert_eq!(
         clean.first_bad, None,
@@ -452,10 +461,411 @@ fn a_tampered_record_is_caught_even_in_an_unsigned_segment() {
 fn an_unsigned_medium_identifies_nobody_and_is_not_a_fault() {
     let m = crate::testkit::unsigned_chain_of(2);
     let r = chain_report(&m);
-    assert_eq!((r.signed, r.unsigned), (0, 2));
+    assert_eq!((r.signed_valid, r.unsigned), (0, 2));
     assert!(
-        r.intact(),
+        r.chain_intact(),
         "unsigned is not a FAULT — it is a declared limitation"
     );
     assert_eq!(self_id_from_chain(&m, &r), None);
+}
+
+// ---------------------------------------------------------------------------
+// Mutation-killers (#500 slice 2a review). Each test below was written because a
+// single-line mutation to production code survived the whole suite.
+// ---------------------------------------------------------------------------
+
+/// `self_id_from_chain` must return the ATTESTED id — never the segment's untrusted
+/// plaintext `self_node_id_hex`.
+///
+/// The mutation `return Some(id)` -> `return Some(seg.self_node_id_hex.clone())` survived
+/// every test in this crate, because every fixture set the plaintext field EQUAL to the
+/// attested id, making the two indistinguishable. `segment.rs` documents this footgun in
+/// prose ("a future caller easily could reach for the obviously-named field") — this is the
+/// test that makes the prose enforceable. If it ever regressed, restore would record an
+/// immutable supersede edge against an attacker-supplied node id, which is the single
+/// failure issue #53 exists to prevent.
+#[test]
+fn self_id_returns_the_attested_id_not_the_plaintext_field() {
+    let (mut m, _) = crate::testkit::chain_with_genesis();
+    let attested = self_id_from_chain(&m, &chain_report(&m)).expect("the fixture identifies");
+
+    // Make the plaintext field DISAGREE with the signed one. Nothing re-signs, so the
+    // attestation still binds the real id; only the untrusted field changes.
+    let decoy = "decoy0000000000000000000000000000000000000000000000000000000000";
+    for seg in &mut m.segments {
+        seg.self_node_id_hex = decoy.into();
+    }
+    assert_ne!(
+        attested, decoy,
+        "the fixture must actually distinguish the two"
+    );
+
+    let r = chain_report(&m);
+    assert_eq!(
+        self_id_from_chain(&m, &r),
+        Some(attested),
+        "the identification must come from the SIGNED payload; returning the plaintext field \
+         would hand a caller an attacker-supplied string as a node identity"
+    );
+}
+
+/// A broken chain link retracts `verified_through` even on an UNSIGNED segment.
+///
+/// Deleting `ok = false` from the `ChainBroken` arm survived the whole suite: every test that
+/// broke a chain link did so on a SIGNED segment, where the attestation independently failed
+/// and set `ok = false` anyway. So the chain-link half of the retraction was never the thing
+/// under test. On an unsigned segment there is no attestation to mask it, and a spliced
+/// predecessor would otherwise advance the watermark past records nothing verified.
+#[test]
+fn a_broken_link_retracts_verified_through_even_when_unsigned() {
+    let mut m = crate::testkit::unsigned_chain_of(3);
+    m.segments[1].prev_commitment = "deadbeef".into();
+    let r = chain_report(&m);
+    assert_eq!(
+        (r.signed_valid, r.signed_invalid, r.unsigned),
+        (0, 0, 3),
+        "the fixture must be entirely unsigned, or an attestation could mask the break"
+    );
+    assert_eq!(
+        r.verified_through,
+        Some(0),
+        "the walk must stop at the last segment before the break, on the chain link ALONE"
+    );
+    assert_eq!(
+        watermark(&m, &r, Plane::Clinical),
+        Some(1),
+        "and the watermark must retreat with it, not run on to the file's tail"
+    );
+}
+
+/// The watermark is `max`, not "the last segment's seq".
+///
+/// `.max()` -> `.last()` survived the suite because every fixture had exactly ONE record per
+/// segment with `source_seq` ascending in lockstep with segment order, making `max`, `last`
+/// and "the last segment's only record" indistinguishable. Records within a segment are NOT
+/// ordered — frame reordering is harmless under set-union sync, and `segment_commitment` is
+/// explicitly order-independent — so a watermark that depended on order would be wrong for
+/// any real capture batch.
+#[test]
+fn the_watermark_is_the_maximum_not_the_last_record() {
+    let sk = sk();
+    // One segment, several records, seqs deliberately NOT in ascending order.
+    let records = vec![
+        MediumRecord {
+            signed_bytes: enroll(&sk, "a"),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 40,
+        },
+        MediumRecord {
+            signed_bytes: enroll(&sk, "b"),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 7,
+        },
+    ];
+    let seg = tests_support::signed(&sk, "abcd", Plane::Clinical, 0, "", records);
+    let m = crate::testkit::medium_v3(vec![seg]);
+    let r = chain_report(&m);
+    assert_eq!(
+        watermark(&m, &r, Plane::Clinical),
+        Some(40),
+        "the highest seq held, regardless of the order records happen to sit in"
+    );
+}
+
+/// A record legitimately AT seq 0 yields `Some(0)` — invariant 8 cuts both ways.
+///
+/// Every fixture used seqs >= 1, so `.max()` -> `.max().filter(|v| *v != 0)` survived. The
+/// invariant is that `None` and `Some(0)` are DIFFERENT statements ("I do not know" versus
+/// "I hold through seq 0"); a test that only ever exercises the `None` side proves half of it.
+#[test]
+fn a_watermark_of_zero_is_some_zero_not_none() {
+    let sk = sk();
+    let records = vec![MediumRecord {
+        signed_bytes: enroll(&sk, "a"),
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: None,
+        source_seq: 0,
+    }];
+    let seg = tests_support::signed(&sk, "abcd", Plane::Clinical, 0, "", records);
+    let m = crate::testkit::medium_v3(vec![seg]);
+    let r = chain_report(&m);
+    assert_eq!(
+        watermark(&m, &r, Plane::Clinical),
+        Some(0),
+        "zero is a CLAIM ('I hold through 0'); collapsing it to None would report a medium \
+         that holds something as holding nothing"
+    );
+    assert_eq!(
+        watermark(&m, &r, Plane::Node),
+        None,
+        "while a plane with no verified segment at all really does hold nothing knowable"
+    );
+}
+
+/// A hole in a plane's seq run is reported, so `watermark` can never be mistaken for a
+/// completeness claim.
+///
+/// `watermark` is `max`: for seqs 1,2,3,5,6 it returns `Some(6)`, and a caller using that as
+/// a cursor would start after 6 and never capture seq 4 — while the medium reported itself
+/// complete through 6. `seq_gaps` is the mechanism that makes the hole visible; the policy
+/// (refuse? re-capture? warn?) belongs to the slice that owns capture.
+#[test]
+fn a_gap_in_the_seq_run_is_reported_not_absorbed() {
+    let sk = sk();
+    let mk = |seq: i64, name: &str| MediumRecord {
+        signed_bytes: enroll(&sk, name),
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: None,
+        source_seq: seq,
+    };
+    // 1,2,3 then 5,6 — seq 4 is missing.
+    let records = vec![mk(1, "a"), mk(2, "b"), mk(3, "c"), mk(5, "e"), mk(6, "f")];
+    let seg = tests_support::signed(&sk, "abcd", Plane::Clinical, 0, "", records);
+    let m = crate::testkit::medium_v3(vec![seg]);
+    let r = chain_report(&m);
+    assert_eq!(watermark(&m, &r, Plane::Clinical), Some(6));
+    assert_eq!(
+        seq_gaps(&m, &r, Plane::Clinical),
+        vec![(3, 5)],
+        "the hole between 3 and 6 must be named; a caller trusting the watermark alone would \
+         skip seq 4 forever while the medium reported itself complete"
+    );
+    // A contiguous run has no gaps — without this the function could return everything.
+    let (clean, _) = crate::testkit::verifiable_chain_of(3);
+    let cr = chain_report(&clean);
+    assert!(seq_gaps(&clean, &cr, Plane::Clinical).is_empty());
+}
+
+/// A segment whose self-declared index disagrees with where it sits is a located fault.
+///
+/// Nothing checked this, so on an unsigned segment `index` was free for an attacker to set —
+/// and EVERY other fault is "located" by it. `IndexMismatch` is what makes the other faults'
+/// locations trustworthy, and it turns #522 (two crates deriving the next index with no
+/// shared helper) from a silent divergence into a loud one.
+#[test]
+fn a_segment_that_lies_about_its_index_is_caught() {
+    let mut m = crate::testkit::unsigned_chain_of(2);
+    m.segments[1].index = 4_000_000_000;
+    let r = chain_report(&m);
+    assert!(
+        r.faults.iter().any(|f| matches!(
+            f,
+            SegmentFault::IndexMismatch {
+                position: 1,
+                declared: 4_000_000_000,
+                ..
+            }
+        )),
+        "the fault must carry BOTH the trusted position and the declared value: {:?}",
+        r.faults
+    );
+    assert_eq!(
+        r.verified_through,
+        Some(0),
+        "and an unverifiable ordering claim must not advance the cursor"
+    );
+}
+
+/// Two planes interleaved in ONE medium keep independent watermarks, and the single global
+/// chain runs across both.
+///
+/// Every existing fixture was node@0 then clinical@1, never interleaved, so nothing proved
+/// the per-plane filter worked rather than both reads returning the file's tail.
+#[test]
+fn interleaved_planes_keep_independent_watermarks() {
+    let sk = sk();
+    let mk = |seq: i64, name: &str| MediumRecord {
+        signed_bytes: enroll(&sk, name),
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: None,
+        source_seq: seq,
+    };
+    // node@0, clinical@1, node@2 — the interleaving the fixtures never had.
+    //
+    // The node-plane records are real `node.enrolled` events, so this medium carries a
+    // genesis and the self-id bind is live: the segments must therefore name the genesis's
+    // own content address (which is what a node id IS), not an arbitrary string, or every
+    // segment would correctly fail `SelfIdUnbound` and the test would be measuring that
+    // instead of the watermarks.
+    let genesis = mk(10, "n0");
+    let self_id = hex::encode(cairn_event::event_address(&genesis.signed_bytes));
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut prev = String::new();
+    for (i, (plane, rec)) in [
+        (Plane::Node, genesis.clone()),
+        (Plane::Clinical, mk(500, "n1")),
+        (Plane::Node, mk(11, "n2")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let seg = tests_support::signed(&sk, &self_id, plane, i as u32, &prev, vec![rec]);
+        prev = segment_commitment(&seg.records);
+        segments.push(seg);
+    }
+    let m = crate::testkit::medium_v3(segments);
+    let r = chain_report(&m);
+    assert!(r.chain_intact(), "{:?}", r.faults);
+    assert_eq!(
+        r.verified_through,
+        Some(2),
+        "one chain spans BOTH planes in file order — that is what detects a cross-plane splice"
+    );
+    assert_eq!(
+        watermark(&m, &r, Plane::Node),
+        Some(11),
+        "the node plane's own maximum, not the file's last record"
+    );
+    assert_eq!(
+        watermark(&m, &r, Plane::Clinical),
+        Some(500),
+        "and the clinical plane's, independently"
+    );
+}
+
+/// A failing record is resolved from its flat ordinal back to the segment holding it.
+///
+/// `VerifyReport::first_bad` is an index into a synthetic flattened list that exists nowhere
+/// on the medium — "record 14372 of 20000" sends an operator nowhere. Invariant 9 requires a
+/// location, and `locate_record` is it. The fixture uses UNEVEN segment sizes deliberately:
+/// with one record per segment the flat ordinal and the segment position coincide by
+/// accident, and the mapping would prove nothing.
+#[test]
+fn a_failing_record_is_located_within_its_segment() {
+    let sk = sk();
+    let mk = |name: &str| MediumRecord {
+        signed_bytes: enroll(&sk, name),
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: None,
+        source_seq: 1,
+    };
+    let mut segments = vec![
+        tests_support::signed(
+            &sk,
+            "abcd",
+            Plane::Node,
+            0,
+            "",
+            vec![mk("a"), mk("b"), mk("c")],
+        ),
+        Segment {
+            plane: Plane::Clinical,
+            index: 1,
+            prev_commitment: String::new(),
+            self_node_id_hex: "abcd".into(),
+            attestation: None,
+            records: vec![mk("d"), mk("e")],
+        },
+    ];
+    segments[1].prev_commitment = segment_commitment(&segments[0].records);
+    // Corrupt the SECOND record of the SECOND segment: flat ordinal 4.
+    segments[1].records[1].signed_bytes[0] ^= 0xff;
+    let m = crate::testkit::medium_v3(segments);
+
+    let report = verify_records(&m);
+    assert_eq!(report.first_bad, Some(4), "the flat ordinal");
+    assert_eq!(
+        locate_record(&m, 4),
+        Some((1, Plane::Clinical, 1, 1)),
+        "which must resolve to (position, plane, declared index, ordinal WITHIN the segment)"
+    );
+    assert_eq!(locate_record(&m, 0), Some((0, Plane::Node, 0, 0)));
+    assert_eq!(
+        locate_record(&m, 5),
+        None,
+        "past the end is None, not a panic"
+    );
+}
+
+/// `first_bad` is the FIRST bad record, not the last.
+///
+/// Changing `else if first_bad.is_none()` to a bare `else` survived, because every fixture
+/// had exactly one bad record. An operator pointed at the LAST corruption instead of the
+/// first would cut a partial recovery in the wrong place.
+#[test]
+fn first_bad_is_the_first_not_the_last() {
+    let sk = sk();
+    let mut m = crate::testkit::unsigned_chain_of(3);
+    let _ = &sk;
+    for i in [1usize, 2] {
+        m.segments[i].records[0].signed_bytes[0] ^= 0xff;
+    }
+    let report = verify_records(&m);
+    assert_eq!(report.total, 3);
+    assert_eq!(report.intact, 1);
+    assert_eq!(
+        report.first_bad,
+        Some(1),
+        "with corruption at ordinals 1 AND 2, the report must name the FIRST"
+    );
+}
+
+/// `signed_valid` counts attestations that VERIFIED, not attestation blobs that were present.
+///
+/// The old single `signed` tally incremented on `Some(att)` before verification and was never
+/// decremented, so a medium whose every attestation had been tampered with reported "fully
+/// signed" beside a list of faults. Counts are what an operator surface renders.
+#[test]
+fn signed_counts_distinguish_verified_from_merely_present() {
+    let (mut m, _) = crate::testkit::verifiable_chain_of(2);
+    // Tamper the first segment's attestation bytes: still PRESENT, no longer valid.
+    let att = m.segments[0].attestation.as_mut().unwrap();
+    let mid = att.len() / 2;
+    att[mid] ^= 0xff;
+
+    let r = chain_report(&m);
+    assert_eq!(
+        (r.signed_valid, r.signed_invalid, r.unsigned),
+        (1, 1, 0),
+        "a present-but-invalid attestation must not be counted as signed: {:?}",
+        r.faults
+    );
+}
+
+/// A segment carrying no records is a located fault.
+///
+/// `put_segment` refuses to write one, so finding one means the medium came from somewhere
+/// else — and it is dangerous: `segment_commitment(&[])` is the multihash of the empty
+/// string, the same constant on every medium, so anything chaining off it can be spliced in
+/// from another medium with its predecessor matching.
+#[test]
+fn an_empty_segment_is_a_fault_and_does_not_anchor_a_chain() {
+    let sk = sk();
+    let empty = Segment {
+        plane: Plane::Clinical,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: "abcd".into(),
+        attestation: None,
+        records: vec![],
+    };
+    let _ = &sk;
+    // Built directly, not via `medium_v3`: `put_segment` REFUSES to write an empty segment,
+    // so this shape can only arrive from a writer that is not us — which is precisely the
+    // case the read-side fault exists to catch.
+    let m = crate::container::MediumV3 {
+        segments: vec![empty],
+        truncated_tail: false,
+        complete_bytes: 0,
+    };
+    let r = chain_report(&m);
+    assert!(
+        r.faults
+            .iter()
+            .any(|f| matches!(f, SegmentFault::EmptySegment { position: 0, .. })),
+        "an empty segment must be named: {:?}",
+        r.faults
+    );
+    assert_eq!(
+        r.verified_through, None,
+        "and must anchor nothing — its commitment is identical on every medium ever written"
+    );
 }

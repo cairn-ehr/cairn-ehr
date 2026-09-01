@@ -66,11 +66,19 @@ pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 /// is a fixed local fact about the capturing node's own insertion order, recorded once and
 /// never revisited.
 ///
-/// RESIDUAL EXPOSURE, named plainly rather than fixed here: because `dek_wrapped` stays
-/// outside the commitment, deleting it from an already-verified segment leaves that
-/// segment's attestation intact and the medium reporting fully healthy end to end — while a
-/// later restore finds a sealed body it can never open. Nothing in this crate catches that
-/// today; only a custody-aware check at the slice that owns re-wrap can.
+/// RESIDUAL EXPOSURE, named plainly rather than fixed here — and it is ALL THREE sidecars,
+/// not just the DEK (an earlier version of this paragraph named only `dek_wrapped`, narrower
+/// than the truth already recorded in issue #524):
+///   - deleting `dek_wrapped` from an already-verified segment leaves that segment's
+///     attestation intact and the medium reporting fully healthy end to end — while a later
+///     restore finds a sealed body it can never open;
+///   - deleting `attestation` (the human authorship token) is the same shape at lower stakes:
+///     the medium still reports healthy, and a suppressing event is then refused fail-closed
+///     at the clinical apply door for want of a token that was silently dropped in transit —
+///     see `crate::record::MediumRecord::attestation`, which documents that dependence.
+///
+/// Nothing in this crate catches either today; only a custody-aware check at the slice that
+/// owns re-wrap can (#524).
 pub fn segment_commitment(records: &[MediumRecord]) -> String {
     let per_record: Vec<Vec<u8>> = records
         .iter()
@@ -99,6 +107,14 @@ pub fn build_segment_attestation(
     prev_commitment: &str,
     records: &[MediumRecord],
 ) -> Vec<u8> {
+    // Signing a plane this build cannot name is a programming error, not a runtime
+    // condition: an unknown plane only ever arrives by READING a newer Cairn's medium, and
+    // nothing in this build can legitimately author one.
+    debug_assert!(
+        plane.is_known(),
+        "refusing to author an attestation for an unknown plane tag {}",
+        plane.tag()
+    );
     let body = EventBody {
         event_id: uuid::Uuid::now_v7().to_string(),
         patient_id: cairn_event::NIL_PATIENT.into(),
@@ -115,7 +131,12 @@ pub fn build_segment_attestation(
         contributors: serde_json::json!([{"actor_id": key_id, "role": "recorded"}]),
         payload: serde_json::json!({
             "self_node_id_hex": self_node_id_hex,
+            // BOTH the human-legible label and the numeric on-disk tag are bound. The tag is
+            // the load-bearing one: it is knowable for EVERY plane, including one this build
+            // does not recognise, so a segment relabelled to an unknown plane tag still fails
+            // its attestation rather than slipping past a conjunct we had to skip.
             "plane": plane.label(),
+            "plane_tag": plane.tag(),
             "segment_index": index,
             "record_count": records.len(),
             "segment_commitment": segment_commitment(records),
@@ -164,8 +185,16 @@ pub fn verify_segment_attestation(seg: &Segment) -> Option<String> {
         return None;
     }
     let p = &body.payload;
+    // The numeric tag binds for EVERY plane, known or not — see `build_segment_attestation`.
+    // The label is checked only when this build knows the plane's name; for an unknown plane
+    // the tag conjunct still holds, so nothing is skipped, only unnameable.
+    let label_ok = match seg.plane.label() {
+        Some(known) => p.get("plane")?.as_str()? == known,
+        None => true,
+    };
     let matches = p.get("segment_commitment")?.as_str()? == segment_commitment(&seg.records)
-        && p.get("plane")?.as_str()? == seg.plane.label()
+        && u8::try_from(p.get("plane_tag")?.as_u64()?).ok()? == seg.plane.tag()
+        && label_ok
         && p.get("segment_index")?.as_u64()? == u64::from(seg.index)
         && p.get("record_count")?.as_u64()? == seg.records.len() as u64
         && p.get("prev_commitment")?.as_str()? == seg.prev_commitment;
@@ -492,5 +521,138 @@ mod tests {
             None,
             "record_count must be checked even when segment_commitment matches"
         );
+    }
+
+    /// `segment_commitment`'s recipe is pinned by an INDEPENDENT derivation, exactly as
+    /// `event_set_commitment` already is.
+    ///
+    /// `source_seq.to_be_bytes()` -> `to_le_bytes()` survived the whole suite, because every
+    /// other assertion computes the expected value with the very function under test. This
+    /// value is written ONTO the medium as every segment's `prev_commitment` and is verified
+    /// by OTHER NODES ON OTHER BUILDS — principle 11 makes a mixed-version fleet the normal
+    /// case, so a changed recipe splits the fleet silently. N=1 and N=2 both, because the
+    /// N=2 case is what pins the separator-free sorted join.
+    #[test]
+    fn segment_commitment_recipe_is_pinned_independently() {
+        // Derive the expectation by hand, from the format definition rather than from the
+        // function: content-address each record's bytes, append its big-endian source_seq,
+        // and feed the pair through the crate's one commitment primitive.
+        let by_hand = |records: &[MediumRecord]| -> String {
+            let items: Vec<Vec<u8>> = records
+                .iter()
+                .map(|r| {
+                    let mut v = cairn_event::event_address(&r.signed_bytes);
+                    v.extend_from_slice(&r.source_seq.to_be_bytes());
+                    v
+                })
+                .collect();
+            let refs: Vec<&[u8]> = items.iter().map(Vec::as_slice).collect();
+            crate::marker::commitment_over(&refs)
+        };
+
+        let one = vec![tests_support::salted_record(1, 0)];
+        assert_eq!(
+            segment_commitment(&one),
+            by_hand(&one),
+            "N=1 recipe drifted"
+        );
+
+        let two = vec![
+            tests_support::salted_record(1, 0),
+            tests_support::salted_record(1, 1),
+        ];
+        assert_eq!(
+            segment_commitment(&two),
+            by_hand(&two),
+            "N=2 recipe drifted"
+        );
+
+        // And the two differ, so the N=2 case is not vacuously equal to the N=1 case.
+        assert_ne!(segment_commitment(&one), segment_commitment(&two));
+
+        // `source_seq` really is inside the commitment: changing only it must change the
+        // value. (This is the C1 fix from the earlier review; pinned here against the
+        // endianness mutation as well.)
+        let mut moved = one.clone();
+        moved[0].source_seq += 1;
+        assert_ne!(
+            segment_commitment(&one),
+            segment_commitment(&moved),
+            "source_seq must be bound, or the watermark is authenticated by nothing"
+        );
+    }
+
+    /// A validly-signed event of the WRONG TYPE is not a segment attestation.
+    ///
+    /// Deleting the `event_type` check survived the suite: every existing fixture failed on a
+    /// later payload-key lookup instead, so the type check was never the thing under test.
+    /// It is the one bind that stops a GENUINE signed object being replayed into the wrong
+    /// role — the payload keys alone are not a type.
+    #[test]
+    fn a_signed_event_of_the_wrong_type_is_not_a_segment_attestation() {
+        let sk = crate::testkit::sk();
+        let key_id = crate::testkit::kid(&sk);
+        let records = vec![tests_support::salted_record(1, 0)];
+        let seg = Segment {
+            plane: Plane::Clinical,
+            index: 0,
+            prev_commitment: String::new(),
+            self_node_id_hex: "abcd".into(),
+            attestation: None,
+            records: records.clone(),
+        };
+
+        // Every payload field a real attestation carries, correct in every particular —
+        // only `event_type` is wrong.
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: cairn_event::NIL_PATIENT.into(),
+            event_type: "clinical.medication".into(),
+            schema_version: "node/1".into(),
+            hlc: Hlc {
+                wall: 0,
+                counter: 0,
+                node_origin: "abcd".into(),
+            },
+            t_effective: None,
+            signer_key_id: key_id.clone(),
+            contributors: serde_json::json!([{"actor_id": key_id, "role": "recorded"}]),
+            payload: serde_json::json!({
+                "self_node_id_hex": "abcd",
+                "plane": Plane::Clinical.label(),
+                "plane_tag": Plane::Clinical.tag(),
+                "segment_index": 0,
+                "record_count": records.len(),
+                "segment_commitment": segment_commitment(&records),
+                "prev_commitment": "",
+            }),
+            attachments: vec![],
+            plaintext_twin: None,
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        let impostor = sign(&body, &sk).expect("signing").signed_bytes;
+
+        let seg = Segment {
+            attestation: Some(impostor),
+            ..seg
+        };
+        assert_eq!(
+            verify_segment_attestation(&seg),
+            None,
+            "a genuinely signed event whose payload happens to match is still not a \
+             `node.segment_attested`; without the type check any signed object with the \
+             right keys could be replayed into this role"
+        );
+
+        // Positive control: the SAME segment with a real attestation verifies, so the
+        // rejection above is about the type and nothing else.
+        let real =
+            build_segment_attestation(&sk, &key_id, "abcd", Plane::Clinical, 0, "", &records);
+        let good = Segment {
+            attestation: Some(real),
+            ..seg
+        };
+        assert_eq!(verify_segment_attestation(&good), Some("abcd".into()));
     }
 }
