@@ -29,11 +29,21 @@ async fn pairing_records_an_active_peer_and_unpeer_revokes_it() {
     // for the test we only need a stable hex + B's pubkey + matching fingerprint).
     let (sk_b, kid_b) = cairn_event::generate_key().unwrap();
     let b_node_id = hex::encode(cairn_event::event_address(b"B-genesis"));
-    // The pairing nonce is built at runtime, never a hard-coded literal: a literal here
-    // trips CodeQL's `rust/hard-coded-cryptographic-value` on a test fixture (a false
-    // positive — see the house rule in CLAUDE.md). Its value is arbitrary for this test;
-    // only that it is a stable, non-empty freshness token matters.
-    let nonce = format!("nonce-{}", "B");
+    // The pairing nonce is DERIVED FROM RUNTIME KEY MATERIAL — house rule 6 (#146).
+    //
+    // An earlier version wrote `format!("nonce-{}", "B")` under a comment asserting it was
+    // "built at runtime, never a hard-coded literal". It was not: every input is a literal,
+    // so the whole expression is constant-foldable and CodeQL's dataflow still saw a
+    // hard-coded value reaching a nonce. Alert #24
+    // (`rust/hard-coded-cryptographic-value`, CRITICAL) stayed open on main for exactly
+    // that reason — the mitigation was cosmetic, and a comment claiming a property the code
+    // does not have is worse than no comment at all.
+    //
+    // `kid_b` is the hex of a keypair generated one line above, so this genuinely varies
+    // per run and breaks the constant chain. It is B's PUBLIC key id, so no secret enters
+    // the nonce. The value itself is arbitrary here — only that it is a stable, non-empty
+    // freshness token matters, and nothing asserts on it.
+    let nonce = format!("nonce-{}", &kid_b[..16]);
     let offer =
         pairing::make_offer_for(&b_node_id, &kid_b, "127.0.0.1:7801", &nonce, &sk_b).unwrap();
     let bundle = pairing::read_offer(&offer).unwrap();
