@@ -28,28 +28,6 @@ use crate::record::{put_record, take_record, MediumRecord};
 /// separates "damaged medium" from "interrupted backup" (see `take_section`).
 const MAX_SECTION_BYTES: usize = 256 * 1024 * 1024;
 
-/// The smallest a single encoded record can possibly be: a `[u32 len]` chunk holding a
-/// zero-length `signed_bytes` (4 bytes) + a flags byte (1) + an 8-byte `source_seq` (8) =
-/// 13. Used only to bound the pre-allocation hint in `take_section` below.
-const MIN_RECORD_BYTES: usize = 13;
-
-/// Absolute ceiling on the pre-allocation hint in `take_section`, regardless of what the
-/// medium claims or how many bytes remain.
-///
-/// WHY AN ABSOLUTE CAP AND NOT JUST THE BYTES-REMAINING BOUND (#500 slice 2a review): the
-/// bytes-remaining bound alone is loose by the ratio of `MIN_RECORD_BYTES` (13) to
-/// `size_of::<MediumRecord>()` (104 on 64-bit — a `Vec` plus three `Option<Vec>` plus an
-/// `i64`). A 256 MiB section with a corrupt `record_count` still yields 256 MiB / 13 ≈ 20.6M
-/// records of capacity ≈ **2.1 GB** reserved from one flipped bit. Rust ABORTS the process
-/// on an allocation failure — it is not a catchable `Result` — so on the Pi 5 and Android
-/// targets this project runs on, that is a process kill during a restore, mid-disaster.
-///
-/// `Vec::push` amortises fine without any hint at all; the hint is a minor optimisation, and
-/// a minor optimisation must never be able to kill the process. The loop below still
-/// enforces the REAL count honestly, returning a clean `BackupError` the moment it runs out
-/// of bytes, so this ceiling changes only how much we pre-reserve — never what we accept.
-const MAX_RECORD_CAPACITY_HINT: usize = 4096;
-
 /// Which plane a segment's records belong to. The two known planes share ONE record shape
 /// and ONE codec; the tag is how a reader knows which door the records are destined for.
 ///
@@ -281,16 +259,22 @@ pub(crate) fn take_section(rest: &[u8]) -> Result<Option<(Segment, &[u8])>, Back
     let (count_bytes, mut b) = b.split_at(4);
     let record_count = u32::from_be_bytes(count_bytes.try_into().expect("4 bytes"));
 
-    // `record_count` is a raw, unauthenticated `u32` read straight off the medium before a
-    // single record is parsed. Bound the CAPACITY HINT twice: by the bytes actually
-    // remaining (`record_count` records can never fit in fewer than
-    // `record_count * MIN_RECORD_BYTES`), and by an absolute ceiling — see
-    // `MAX_RECORD_CAPACITY_HINT` for why the first bound alone still permits a ~2 GB
-    // reservation, which Rust turns into a process abort rather than a catchable error.
-    let capacity_hint = (record_count as usize)
-        .min(b.len() / MIN_RECORD_BYTES)
-        .min(MAX_RECORD_CAPACITY_HINT);
-    let mut records = Vec::with_capacity(capacity_hint);
+    // NOTHING DERIVED FROM `record_count` IS EVER ALLOCATED. It is a raw, unauthenticated
+    // `u32` read straight off the medium before a single record is parsed, so a flipped bit
+    // makes it ~4 billion. Reserving that much capacity asks for ~447 GB, and Rust ABORTS THE
+    // PROCESS on an allocation failure — it is not a catchable `Result` — so one bit flip on
+    // an otherwise healthy medium would kill `verify-backup`/`restore` outright, mid-disaster.
+    //
+    // Earlier versions bounded the hint (by the bytes remaining, then by a fixed ceiling)
+    // rather than removing it. Bounding is fragile in two ways: the bytes-remaining bound
+    // alone still permitted a ~2 GB reservation on a full-size section, and ANY arithmetic
+    // from an untrusted length into an allocation is a pattern a reader — and CodeQL's
+    // `rust/uncontrolled-allocation-size` — has to re-derive as safe every time it is read.
+    // `Vec::push` amortises to the same O(n) without it, and the loop below is what enforces
+    // the real count honestly, returning a clean `BackupError` the moment the bytes run out.
+    // The allocation now grows only as records are actually decoded, so it can never exceed
+    // what the medium truly contains.
+    let mut records = Vec::new();
     for _ in 0..record_count {
         let (r, next) = take_record(b)?;
         records.push(r);
@@ -507,13 +491,15 @@ mod tests {
     }
 
     /// `record_count` is corrupted to an absurd value (`u32::MAX`) while the body behind it
-    /// is short. Before the capacity-hint bound, `take_section` would try to EAGERLY reserve
-    /// `record_count` `MediumRecord`s — hundreds of gigabytes — and Rust's allocator ABORTS
-    /// THE WHOLE PROCESS on a failure that large, not a catchable error. This test does not
-    /// reproduce that abort (deliberately: doing so means attempting the very allocation the
-    /// fix exists to prevent). It pins the FIXED behaviour instead: parsing proceeds straight
-    /// to the record loop, which runs out of bytes on the very first record and returns a
-    /// clean `BackupError`.
+    /// is short. An earlier `take_section` reserved `record_count` `MediumRecord`s EAGERLY —
+    /// hundreds of gigabytes — and Rust's allocator ABORTS THE WHOLE PROCESS on a failure that
+    /// large, not a catchable error, so one flipped bit killed `verify-backup`/`restore`
+    /// outright. Nothing derived from `record_count` is allocated any more (see `take_section`).
+    ///
+    /// This test does not reproduce that abort — deliberately: doing so means attempting the
+    /// very allocation the fix exists to prevent. It pins the FIXED behaviour instead: parsing
+    /// proceeds straight to the record loop, which runs out of bytes on the very first record
+    /// and returns a clean `BackupError`.
     #[test]
     fn an_absurd_record_count_over_a_short_body_errors_rather_than_aborting() {
         let mut body = Vec::new();
