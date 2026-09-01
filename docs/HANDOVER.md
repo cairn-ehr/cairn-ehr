@@ -40,7 +40,11 @@
 >   **`Plane::Unknown(tag)`** that keeps its records and chains normally, so a newer Cairn's medium no
 >   longer reads as damaged. `BackupError` splits into **`NotAMedium`/`UnsupportedByThisBuild`/`Damaged`**
 >   — "upgrade this node" and "fetch another copy" are opposite remedies. **#522 is now LOUD**
->   (`IndexMismatch`); **#523/#524 stay open as filed**; **#525's items are done**.
+>   (`IndexMismatch`); **#523/#524 stay open as filed**; **#525's items are done**. **#527 opened:**
+>   CI's `CodeQL` check is red on every run while all four `Analyze` jobs pass — it is default
+>   setup's ALERT GATE (no `codeql.yml` exists), it is **non-required so it does not block merge**,
+>   and the alert list is unreadable from a Claude session because `gh api` is deny-listed. Needs a
+>   human on the Security tab; likely the #146/#520 false-positive class that wants dismissal.
 > - **⇒ THE LOOSE END NAMED SO IT CANNOT BE LOST.** Custody must apply the same `erasure_shred_log`
 >   exclusion on **both** the medium path and the `CAIRNL1` export path, or a shredded body comes back on
 >   restore. 2a only makes both expressible; **2c decides which is authoritative.**
