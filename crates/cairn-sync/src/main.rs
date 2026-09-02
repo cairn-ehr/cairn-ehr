@@ -36,6 +36,12 @@ use cairn_wire::{read_frame, write_frame, EventsResponse, Request, TcpTransport,
 // can hold in one screen, and it is testable with no database and no filesystem.
 mod unwrap_key;
 
+// The per-page and per-cycle pull tallies, and the pure quarantine-floor rule they feed
+// (slice 2b Task 5, #500/#101). Lifted out ahead of Task 7's paging loop so the folding
+// rules are testable on their own, with no peer and no database — main.rs is already
+// ~11.5k lines (#531 tracks its decomposition) and this is where new pull-loop logic goes.
+mod pull_page;
+
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 //
@@ -3383,18 +3389,13 @@ fn do_pull(
     //     overwriting would CLEAR a floor guarding a slot the cursor is already
     //     above — permanent exclusion. Keep the most conservative of
     //     (existing floor, new pin).
-    let new_floor: Option<i64> =
-        if skipped_unverifiable == 0 && refused_verifiable == 0 && pen_refused.is_none() {
-            None
-        } else if pen_refused.is_none() {
-            pin
-        } else {
-            match (floor_seq, pin) {
-                (Some(f), Some(p)) => Some(f.min(p)),
-                (Some(f), None) => Some(f),
-                (None, p) => p,
-            }
-        };
+    let new_floor: Option<i64> = pull_page::quarantine_floor(
+        skipped_unverifiable,
+        refused_verifiable,
+        pen_refused.is_some(),
+        pin,
+        floor_seq,
+    );
     // BUILT BEFORE THE CURSOR COMMIT (issue #469). The commit is the only `?` between the
     // apply loop and this function's return — it used to sit ABOVE this object, so a bare
     // `?` there threw away every number describing work that had ALREADY happened — events

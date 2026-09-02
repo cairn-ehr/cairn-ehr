@@ -30,12 +30,14 @@
 
 mod framing;
 mod medium;
+mod page;
 mod tcp;
 mod transport;
 mod wire;
 
 pub use framing::{read_frame, write_frame, MAX_FRAME_BYTES};
 pub use medium::MediumTransport;
+pub use page::{page_decision, PageDecision, DEFAULT_PAGE_EVENTS};
 pub use tcp::TcpTransport;
 pub use transport::{Transport, TransportError};
 pub use wire::{EventsResponse, Request};
