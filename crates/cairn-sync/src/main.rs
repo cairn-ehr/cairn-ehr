@@ -28,7 +28,7 @@ use cairn_event::{
     blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
     verify_self_described, AttestationBody, ClockGrade, EventBody, Hlc, SigningKey, CTX_EVENT,
 };
-use serde::{Deserialize, Serialize};
+use cairn_wire::{read_frame, write_frame, EventsResponse, Request};
 
 // The node's custody-key resolution (issue #503). A module rather than another
 // function in this file: main.rs is ~11,700 lines, and the decision table below is
@@ -488,111 +488,6 @@ type WireEntry = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 // ---------------------------------------------------------------------------
 // Wire protocol — one JSON request, one JSON response, per connection.
 // ---------------------------------------------------------------------------
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "op")]
-enum Request {
-    /// Clinical plane, HLC-cursored (legacy). KEPT so an older puller still works;
-    /// a new puller uses EventsAfterSeq. Every event at or after this HLC watermark.
-    EventsAfter { wall: i64, counter: i32 },
-    /// Clinical plane, seq-cursored (issue #196): every event whose serving-node
-    /// `seq` is strictly greater than `after_seq`, in `seq` order. `after_seq = 0`
-    /// returns the full set (the full-sweep path). `seq` is the server's LOCAL
-    /// insertion order — the only ordering where newly-learned events always sort
-    /// above a puller's cursor, so incremental can never silently skip (#196).
-    /// Additive (principle 12): the older EventsAfter variant stays served.
-    ///
-    /// `unwrap_cert` (ADR-0052 custody sidecar) is the puller's signed unwrap-key
-    /// certificate (hex CBOR): it binds the puller's X25519 unwrap public key to its
-    /// Ed25519 identity. When present, the server re-wraps each sealed event's DEK
-    /// for that key so the puller gains crypto-shred custody of what it replicates
-    /// (see rewrap_custody_for_peer). Additive (serde default): an old puller omits
-    /// it and the server serves the events with no custody — sealed rows still admit
-    /// structurally at the apply door, so nothing fails to sync.
-    EventsAfterSeq {
-        after_seq: i64,
-        #[serde(default)]
-        unwrap_cert: Option<String>,
-    },
-    /// Byte tier: a BLAKE3 verified-streaming slice of a blob.
-    BlobSlice {
-        addr_hex: String,
-        offset: u64,
-        len: u64,
-    },
-}
-
-#[derive(Serialize, Deserialize)]
-struct EventsResponse {
-    /// Verbatim signed_bytes, hex-encoded (skeleton simplification; the real
-    /// tier ships raw). The receiver reconstructs everything from these bytes.
-    events: Vec<String>,
-    /// Per-event attestation token (hex), PARALLEL to `events` (issue #91). A
-    /// suppressing event (or asserted responsibility) is admitted at the in-DB
-    /// apply door only against its human attestation token, so the token must
-    /// travel with the event or a legitimately-attested suppress could never
-    /// replicate. Additive field (serde default): an older peer's response
-    /// decodes with empty arrays, which simply means "no attestation shipped" —
-    /// its suppressing events are then refused fail-closed at the door.
-    #[serde(default)]
-    attestations: Vec<Option<String>>,
-    /// Per-event attester public key (hex), parallel to `attestations`.
-    #[serde(default)]
-    attester_keys: Vec<Option<String>>,
-    /// Per-event serving-node `seq` (issue #196), PARALLEL to `events`. The puller
-    /// checkpoints its per-peer cursor on the max handled seq. Additive (serde
-    /// default): an older peer's response decodes with an empty vec — a new puller
-    /// that sent EventsAfterSeq treats an events-without-seqs response as a
-    /// wire-format error rather than checkpointing blindly (see do_pull).
-    #[serde(default)]
-    seqs: Vec<i64>,
-    /// The ADR-0040 signing context this server's events are minted under
-    /// (issue #108). Lets the puller tell deterministic wire-format skew ("your
-    /// events are signed for a context I don't speak") from tampering BEFORE
-    /// burning a whole batch on per-event verify failures. Additive (serde
-    /// default): a response from a peer predating this field decodes as None —
-    /// "undeclared" — and the puller falls back to the all-unverifiable
-    /// heuristic for the mixed-version diagnosis.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    signing_context: Option<String>,
-    /// Per-event wrapped DEK (hex), PARALLEL to `events` (ADR-0052 custody sidecar).
-    /// `wrapped_deks[i]` is the sealed event's data-encryption key RE-WRAPPED for the
-    /// pulling peer's unwrap key (from the cert in its request) — the puller opens it
-    /// with its own unwrap secret and hands it to the apply door as the 4th arg, so a
-    /// replicated sealed event becomes crypto-shreddable on the puller too. A slot is
-    /// None whenever no custody travels: the event is unsealed, this node holds no
-    /// DEK for it, it has been SHREDDED here (the serve SQL nulls a shredded row's DEK
-    /// — the wire-level half of the shred guarantee), or the peer sent no/invalid
-    /// cert. Additive (serde default): an old peer omits the field entirely and it
-    /// decodes to an empty vec — the puller then applies every event without custody
-    /// (sealed rows still admit structurally at the door).
-    #[serde(default)]
-    wrapped_deks: Vec<Option<String>>,
-    /// WHY no custody travelled, when the server deliberately withheld it (issue #231
-    /// review). `None` means either "custody was granted" or "there was nothing to
-    /// grant" — an empty `wrapped_deks` alone cannot tell those apart, which is exactly
-    /// how the puller went blind.
-    ///
-    /// The serving node prints this on its own stderr, but the node that experiences
-    /// the consequence is the PULLER: its sealed bodies will not render, and the
-    /// remedy names steps its operator must run, at what is usually another site. So
-    /// the reason travels with the refusal. It is operator prose, never a control
-    /// signal: the puller prints it and counts it, and applies exactly the events it
-    /// would have applied anyway (withhold the key, never the bytes).
-    ///
-    /// **It is sent to an UNADMITTED peer, deliberately.** The line does disclose a
-    /// little about this node — whether it has peers, whether its node plane is
-    /// provisioned — to a party the trust set just refused. Accepted, because that
-    /// party has already been served the entire event log, including every UNSEALED
-    /// event in plaintext (this pin protects sealed bodies; it is not an authorisation
-    /// layer over replication). Against that, "this node has admitted no peers yet" is
-    /// not the disclosure worth guarding, and an operator who cannot see why a chart is
-    /// blank is a real safety cost. Revisit if replication itself ever becomes gated.
-    ///
-    /// Additive (serde default): an older peer omits it and it decodes as None.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    custody_withheld: Option<String>,
-}
-
 /// Byte-tier slice response — a **binary** frame, deliberately NOT JSON. The blob
 /// tier is throughput-bound on the WAN, so it ships the bao slice as raw bytes
 /// rather than hex (hex doubled every transferred byte, halving measured throughput
@@ -615,51 +510,6 @@ fn decode_blob_slice(raw: &[u8]) -> (bool, u64, &[u8]) {
     let found = raw[0] != 0;
     let total_len = u64::from_be_bytes(raw[1..9].try_into().unwrap());
     (found, total_len, &raw[9..])
-}
-
-/// Read-side frame cap (issue #202, porting the cairn-node `MAX_FRAME_BYTES`
-/// discipline). The 4-byte length prefix is attacker-controlled on both wire ends —
-/// the server reads request frames from ANY client that can reach the port (WireGuard
-/// is the assumed perimeter, not authentication), and the puller reads response frames
-/// from its peer — so an unchecked prefix lets one hostile/corrupt u32 demand a 4 GiB
-/// allocation. Unlike the node plane (one frame per event, 8 MiB), the events response
-/// here is deliberately UNPAGINATED (issue #101: a full sweep ships the whole log
-/// suffix as one hex-encoded JSON frame), so the cap is batch-scale: 64 MiB holds
-/// ~20k typical events (~1.5 KiB signed, hex-doubled on the wire) with room to spare.
-/// A log that outgrows it fails the sweep LOUDLY with this cap named in the error —
-/// pagination (#101) is the real fix for that, tracked there.
-const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
-
-fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
-    // Refuse at the SOURCE, mirroring read_frame's cap (PR #225 review): an over-cap
-    // frame would cross the wire in full only to be refused by the peer's read cap,
-    // with nothing in the SERVING node's log to say why its peer stopped converging.
-    // The decision (cap + u32-truncation-unreachable) lives in the shared
-    // cairn_event::framing core (#212); refusing before the prefix is written stays
-    // here — a bare length prefix with no body would wedge the reader.
-    // A log that outgrows the cap needs pagination: issue #101.
-    let prefix =
-        cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("refusing to send: {e} (pagination: issue #101)"),
-            )
-        })?;
-    s.write_all(&prefix)?;
-    s.write_all(b)?;
-    s.flush()
-}
-
-fn read_frame(s: &mut impl Read) -> io::Result<Vec<u8>> {
-    let mut len = [0u8; 4];
-    s.read_exact(&mut len)?;
-    // Refuse BEFORE allocating: the prefix is untrusted input (see MAX_FRAME_BYTES);
-    // the decision is the shared cairn_event::framing core (#212).
-    let n = cairn_event::framing::decode_len_prefix(len, MAX_FRAME_BYTES)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    let mut buf = vec![0u8; n];
-    s.read_exact(&mut buf)?;
-    Ok(buf)
 }
 
 fn try_request(peer: &str, req: &Request) -> R<Vec<u8>> {
@@ -994,7 +844,7 @@ fn merge_pen_refusal(first: Option<PenRefusal>, next: PenRefusal) -> PenRefusal 
 /// `String` error with no `source()`. That is the exact trap [`pen_refusal`]'s doc warns
 /// about two hundred lines up, applied to the transport instead of the database — and it
 /// had already cost a classification: [`read_frame`] returns `io::ErrorKind::InvalidData`
-/// for a length prefix over [`MAX_FRAME_BYTES`], the identical condition `cairn-node`'s
+/// for a length prefix over [`MAX_FRAME_BYTES`](cairn_wire::MAX_FRAME_BYTES), the identical condition `cairn-node`'s
 /// `pull_failure_class` calls `Integrity`, and on this plane it fell to `partition`. The
 /// two planes gave one failure two operator words, which is what issue #482 was filed to
 /// end.
@@ -1039,7 +889,7 @@ impl Error for PeerRequestError {
 /// The recogniser is `io::ErrorKind::InvalidData`, exactly as on the node plane — see
 /// `cairn_node::sync::pull_failure_class`, whose doc carries the full argument for why a
 /// KIND and not message text. On this plane exactly one thing produces it: [`read_frame`]
-/// refusing a length prefix over [`MAX_FRAME_BYTES`] before allocating. A link that went
+/// refusing a length prefix over [`MAX_FRAME_BYTES`](cairn_wire::MAX_FRAME_BYTES) before allocating. A link that went
 /// away produces `ConnectionRefused` / `ConnectionReset` / `UnexpectedEof` / `TimedOut`,
 /// none of which reach here.
 ///
@@ -6413,71 +6263,6 @@ mod tests {
     // ---- issue #202: wire-frame cap + fingerprint collation + byte-tier legibility ----
 
     #[test]
-    fn read_frame_refuses_an_over_cap_length_prefix() {
-        // A length prefix is attacker-controlled on BOTH sides of the wire: the
-        // server reads request frames from any client that can reach the port
-        // (WireGuard is the assumed perimeter, not authentication), and the puller
-        // reads response frames from its peer. A hostile/corrupt u32 prefix of up
-        // to 4 GiB must be refused BEFORE the read buffer is allocated — as
-        // InvalidData with a legible message, never a doomed multi-GiB allocation
-        // that surfaces as an opaque UnexpectedEof.
-        let mut hostile = std::io::Cursor::new(u32::MAX.to_be_bytes().to_vec());
-        let err = read_frame(&mut hostile).expect_err("an over-cap prefix must be refused");
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::InvalidData,
-            "cap refusal must be InvalidData, got: {err}"
-        );
-        assert!(
-            err.to_string().contains("cap"),
-            "the refusal names the cap so an operator can tell it from line noise: {err}"
-        );
-
-        // The boundary is exact: one byte over the cap is refused too.
-        let over = (MAX_FRAME_BYTES as u32 + 1).to_be_bytes();
-        let mut s = std::io::Cursor::new(over.to_vec());
-        assert_eq!(
-            read_frame(&mut s).unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
-        );
-    }
-
-    #[test]
-    fn read_frame_round_trips_an_in_cap_frame() {
-        // The cap must never break a legitimate exchange: an in-cap frame still
-        // round-trips byte-identically through write_frame/read_frame.
-        let payload = vec![0xAB_u8; 1024];
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &payload).unwrap();
-        let mut r = std::io::Cursor::new(wire);
-        assert_eq!(read_frame(&mut r).unwrap(), payload);
-    }
-
-    #[test]
-    // The asserts ARE on constants — deliberately: this is a standing bounds guard
-    // on MAX_FRAME_BYTES itself (same class as required_pgx_floor_is_itself_a_valid
-    // _triple), so a future edit of the const outside the #101-safe window fails a
-    // named test instead of silently shipping.
-    #[allow(clippy::assertions_on_constants)]
-    fn frame_cap_holds_a_realistic_event_batch() {
-        // The events response is deliberately UNPAGINATED (issue #101): a full
-        // sweep ships the whole log suffix as ONE hex-encoded JSON frame, so the
-        // node plane's per-event 8 MiB cap cannot be ported verbatim. The cap must
-        // sit far above a realistic harness batch (~1.5 KiB/event, hex doubling →
-        // ~3 KiB/event on the wire) while still bounding a hostile 4 GiB prefix.
-        // If a deployment's log outgrows the cap, the sweep fails LOUDLY with the
-        // cap message — pagination (#101) is the real fix, tracked there.
-        assert!(
-            MAX_FRAME_BYTES >= 16 * 1024 * 1024,
-            "cap must hold a realistic unpaginated batch (issue #101)"
-        );
-        assert!(
-            MAX_FRAME_BYTES <= 256 * 1024 * 1024,
-            "cap must still bound a hostile 4 GiB prefix to a refusable size"
-        );
-    }
-
-    #[test]
     fn fingerprint_orderings_compare_under_collate_c() {
         // ADR-0045 (#69) discipline applied to the convergence PROBE itself
         // (issue #202): both fingerprint hashes aggregate in an order that
@@ -6840,40 +6625,6 @@ mod tests {
             !line.contains('\n'),
             "one line per event, like every other line here: {line}"
         );
-    }
-
-    #[test]
-    fn write_frame_refuses_an_over_cap_frame() {
-        // PR #225 review: the read cap alone is asymmetric — a serving node whose
-        // log outgrew MAX_FRAME_BYTES would serialize and SHIP the whole over-cap
-        // response, which then fails only at the peer's read cap: the bytes cross
-        // the wire for nothing and the serving operator's own log shows no error.
-        // Refusing at the source puts the failure next to its cause (and past
-        // u32::MAX the length prefix would silently truncate — the write cap makes
-        // that unreachable). Nothing may hit the wire before the refusal: a bare
-        // length prefix with no body would wedge the reading peer.
-        let payload = vec![0u8; MAX_FRAME_BYTES + 1];
-        let mut wire = Vec::new();
-        let err = write_frame(&mut wire, &payload).expect_err("an over-cap frame must be refused");
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::InvalidData,
-            "cap refusal must be InvalidData, got: {err}"
-        );
-        assert!(
-            err.to_string().contains("cap"),
-            "the refusal names the cap so the operator can tell it from an I/O fault: {err}"
-        );
-        assert!(
-            wire.is_empty(),
-            "nothing may be written before the refusal (a bare prefix would wedge the peer)"
-        );
-
-        // The boundary is exact: a frame of exactly MAX_FRAME_BYTES still ships.
-        let at_cap = vec![0u8; MAX_FRAME_BYTES];
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &at_cap).expect("an at-cap frame must still ship");
-        assert_eq!(wire.len(), 4 + MAX_FRAME_BYTES);
     }
 
     #[test]

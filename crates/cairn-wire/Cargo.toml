@@ -1,0 +1,23 @@
+[package]
+name = "cairn-wire"
+version = "0.0.0"
+description = "Cairn clinical-plane sync protocol: wire types, framing, and the transport seam (a network peer or a backup medium)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# A workspace-internal library, not a crates.io crate: never published. Also lets the
+# internal path dependencies omit a version without tripping the cargo-deny wildcard gate.
+publish = false
+
+# Inherit the central workspace lint policy (#144).
+[lints]
+workspace = true
+
+[dependencies]
+cairn-event = { path = "../cairn-event" }   # the shared length-prefix framing core (#212)
+# The CAIRNB3 backup-medium format, so a medium can answer as a peer (#500 slice 2b).
+cairn-medium = { path = "../cairn-medium" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
