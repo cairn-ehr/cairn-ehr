@@ -29,11 +29,13 @@
 //! and gives them back in slice 2d.
 
 mod framing;
+mod medium;
 mod tcp;
 mod transport;
 mod wire;
 
 pub use framing::{read_frame, write_frame, MAX_FRAME_BYTES};
+pub use medium::MediumTransport;
 pub use tcp::TcpTransport;
 pub use transport::{Transport, TransportError};
 pub use wire::{EventsResponse, Request};
