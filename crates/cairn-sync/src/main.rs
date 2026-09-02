@@ -19,7 +19,7 @@ use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,7 +28,7 @@ use cairn_event::{
     blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
     verify_self_described, AttestationBody, ClockGrade, EventBody, Hlc, SigningKey, CTX_EVENT,
 };
-use cairn_wire::{read_frame, write_frame, EventsResponse, Request};
+use cairn_wire::{read_frame, write_frame, EventsResponse, Request, TcpTransport, Transport};
 
 // The node's custody-key resolution (issue #503). A module rather than another
 // function in this file: main.rs is ~11,700 lines, and the decision table below is
@@ -512,40 +512,6 @@ fn decode_blob_slice(raw: &[u8]) -> (bool, u64, &[u8]) {
     (found, total_len, &raw[9..])
 }
 
-fn try_request(peer: &str, req: &Request) -> R<Vec<u8>> {
-    // Bounded connect so a dead link fails fast instead of hanging for minutes.
-    let addr = peer
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve peer address")?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-    write_frame(&mut stream, &serde_json::to_vec(req)?)?;
-    Ok(read_frame(&mut stream)?)
-}
-
-/// Retry with exponential backoff. A Starlink link drops constantly; a transient
-/// failure must not fail the whole pull/fetch — it retries, and only a sustained
-/// outage surfaces as an error (which the `run` loop logs as a partition).
-fn request(peer: &str, req: &Request) -> R<Vec<u8>> {
-    let mut delay = Duration::from_millis(250);
-    let mut last: Option<Box<dyn Error>> = None;
-    for attempt in 0..4 {
-        match try_request(peer, req) {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                last = Some(e);
-                if attempt < 3 {
-                    std::thread::sleep(delay);
-                    delay *= 2;
-                }
-            }
-        }
-    }
-    Err(last.unwrap())
-}
-
 // ---------------------------------------------------------------------------
 // Key handling (skeleton: a per-node key file; the registry is ADR-0011).
 // ---------------------------------------------------------------------------
@@ -855,9 +821,10 @@ struct PeerRequestError {
     /// The operator-facing sentence, including the pre-#196 skew reading. It is the whole
     /// of `Display`; the cause is reached through `source()`, not spliced into it.
     message: String,
-    /// The transport failure itself, kept REACHABLE. `Box<dyn Error>` rather than
-    /// `io::Error` because [`request`] boxes whatever `try_request` produced — an address
-    /// resolution failure and a frame read failure are both legitimate here.
+    /// The transport failure itself, kept REACHABLE. `Box<dyn Error>` rather than the
+    /// concrete [`cairn_wire::TransportError`] it always holds today, so this struct
+    /// never needs to change shape if a future [`Transport`] impl's failure does — an
+    /// address resolution failure and a frame read failure are both legitimate here.
     source: Box<dyn Error>,
 }
 
@@ -2869,7 +2836,7 @@ fn quarantine_event(
 /// residual BIGSERIAL out-of-order-commit gap); cmd_run drives the cadence.
 fn do_pull(
     client: &mut postgres::Client,
-    peer: &str,
+    transport: &dyn Transport,
     peer_name: &str,
     full_sweep: bool,
     // This node's custody for the wire (ADR-0052): the signing key that proves who we
@@ -2944,34 +2911,32 @@ fn do_pull(
     // rejects the unknown tag, the connection drops with no response frame, and
     // all this side sees is an EOF. Say so, alongside the plain-partition reading,
     // instead of leaving the operator a bare "failed to fill whole buffer".
-    let raw = request(
-        peer,
-        &Request::EventsAfterSeq {
+    let raw = transport
+        .request(&Request::EventsAfterSeq {
             after_seq,
             unwrap_cert,
-        },
-    )
-    .map_err(|e| PeerRequestError {
-        // THE CAUSE IS THE SUFFIX, and that placement is load-bearing, not stylistic.
-        // `operator_chain` drops a layer only when the layer above it ENDS WITH that
-        // layer's rendering; with `{e}` mid-sentence (where the first draft of this type
-        // put it) the same transport error would be printed twice on the `run` path —
-        // the double-render the sweep's own tail had to fix one file over. Keeping it
-        // last also makes `Display`/`Debug` self-contained for the one-shot `pull`, whose
-        // only error printer is `Termination`.
-        message: format!(
-            "pull {peer_name}: no usable response to EventsAfterSeq. If the peer is down \
+        })
+        .map_err(|e| PeerRequestError {
+            // THE CAUSE IS THE SUFFIX, and that placement is load-bearing, not stylistic.
+            // `operator_chain` drops a layer only when the layer above it ENDS WITH that
+            // layer's rendering; with `{e}` mid-sentence (where the first draft of this type
+            // put it) the same transport error would be printed twice on the `run` path —
+            // the double-render the sweep's own tail had to fix one file over. Keeping it
+            // last also makes `Display`/`Debug` self-contained for the one-shot `pull`, whose
+            // only error printer is `Termination`.
+            message: format!(
+                "pull {peer_name}: no usable response to EventsAfterSeq. If the peer is down \
              this is a plain partition (retry later); but if it is reachable and hangs up \
              without answering, it likely predates the #196 seq-cursor wire (db/036) and \
              cannot decode this request — upgrade the peer binary (an OLD puller against \
              THIS node still works; an old server cannot be seq-pulled). The transport \
              reported: {e}"
-        ),
-        // Kept, never flattened (PR #493 review): an over-cap length prefix arrives here
-        // as `InvalidData` and is the PEER's doing, not the link's. See
-        // `chain_reaches_a_peer_frame_error`.
-        source: e,
-    })?;
+            ),
+            // Kept, never flattened (PR #493 review): an over-cap length prefix arrives here
+            // as `InvalidData` and is the PEER's doing, not the link's. See
+            // `chain_reaches_a_peer_frame_error`.
+            source: Box::new(e),
+        })?;
     let wire_bytes = raw.len();
     // The peer ANSWERED and what it sent is unusable — an integrity condition, not a
     // partition (issue #489). A bare `?` here handed `classify_pull_failure` a
@@ -4089,7 +4054,13 @@ fn cmd_pull(
     // A manual one-shot pull defaults to incremental; `--full` requests a sweep
     // from seq 0 (an explicit "reconcile everything now", the same path cmd_run
     // takes on cadence — issue #196).
-    let m = do_pull(&mut client, peer, peer_name, full, Some(&custody))?;
+    let m = do_pull(
+        &mut client,
+        &TcpTransport::new(peer),
+        peer_name,
+        full,
+        Some(&custody),
+    )?;
     if metrics {
         println!("{m}");
     } else {
@@ -4203,14 +4174,11 @@ fn do_blobd(
                         for k in 0..peers.len() {
                             let peer = &peers[(w + idx + k) % peers.len()];
                             std::thread::sleep(Duration::from_millis(budget_ms)); // preemptible budget
-                            let raw = match try_request(
-                                peer,
-                                &Request::BlobSlice {
-                                    addr_hex: addr_hex.clone(),
-                                    offset,
-                                    len,
-                                },
-                            ) {
+                            let raw = match TcpTransport::new(peer).try_once(&Request::BlobSlice {
+                                addr_hex: addr_hex.clone(),
+                                offset,
+                                len,
+                            }) {
                                 Ok(r) => r,
                                 Err(_) => continue, // link drop / dead peer -> next source
                             };
@@ -4481,6 +4449,10 @@ fn cmd_run(
         );
     }
 
+    // Built ONCE, outside the cycle loop: `do_pull` is transport-agnostic (slice 2b,
+    // #500) and this daemon's clinical pull always goes to the same TCP peer for the
+    // life of the process — the same reuse the signing key above already gets.
+    let transport = TcpTransport::new(peer);
     let start = Instant::now();
     let mut cycle: u64 = 0;
     loop {
@@ -4496,7 +4468,7 @@ fn cmd_run(
         let full_sweep = cycle % FULL_SWEEP_EVERY == 0;
         match do_pull(
             &mut client,
-            peer,
+            &transport,
             peer_name,
             full_sweep,
             Some(custody.as_ref()),
@@ -7791,7 +7763,7 @@ mod quarantine_tests {
         c.batch_execute("SET lock_timeout = '750ms'").unwrap();
 
         let addr = serve_canned(response_json(&[&garbage], Some(CTX_EVENT.as_str())), 1);
-        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect_err("the pen write cannot acquire the row lock");
 
         c.batch_execute("RESET lock_timeout").unwrap();
@@ -7840,7 +7812,7 @@ mod quarantine_tests {
         let mut c = locked_client(&base);
         let addr = serve_canned(b"{ this is not an EventsResponse".to_vec(), 1);
 
-        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect_err("a body that will not deserialize cannot be applied");
         let (classes, _) = classify_pull_failure(err.as_ref());
         assert_eq!(
@@ -7868,7 +7840,7 @@ mod quarantine_tests {
         resp["seqs"] = serde_json::json!([]);
         let addr = serve_canned(serde_json::to_vec(&resp).unwrap(), 1);
 
-        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect_err("events without seqs cannot checkpoint the cursor");
         let (classes, _) = classify_pull_failure(err.as_ref());
         assert_eq!(classes, &["integrity"], "{err}");
@@ -7892,7 +7864,7 @@ mod quarantine_tests {
         resp["seqs"] = serde_json::json!([7, 3]); // descending: the freeze logic relies on order
         let addr = serve_canned(serde_json::to_vec(&resp).unwrap(), 1);
 
-        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect_err("descending seqs must not poison the persistent cursor");
         let (classes, _) = classify_pull_failure(err.as_ref());
         assert_eq!(classes, &["integrity"], "{err}");
@@ -7904,7 +7876,7 @@ mod quarantine_tests {
         addr: &str,
         peer: &str,
     ) -> (String, serde_json::Value) {
-        let err = do_pull(c, addr, peer, false, None).unwrap_err();
+        let err = do_pull(c, &TcpTransport::new(addr), peer, false, None).unwrap_err();
         let ie = err
             .downcast_ref::<PullIntegrityError>()
             .expect("pull must fail as an INTEGRITY error, not transport");
@@ -7956,7 +7928,7 @@ mod quarantine_tests {
         // trip it on some unrelated statement.
         c.batch_execute("SET lock_timeout = '750ms'").unwrap();
 
-        let err = do_pull(&mut c, &addr, "peer-a", false, None)
+        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect_err("the cursor commit cannot acquire the row lock");
 
         c.batch_execute("RESET lock_timeout").unwrap();
@@ -8060,8 +8032,14 @@ mod quarantine_tests {
 
         // Port 1 is privileged and nothing listens on it: if the pull got this far it
         // would fail as a genuine partition, which is exactly what must NOT happen here.
-        let err = do_pull(&mut victim, "127.0.0.1:1", "peer-a", false, None)
-            .expect_err("the client's backend has been terminated");
+        let err = do_pull(
+            &mut victim,
+            &TcpTransport::new("127.0.0.1:1"),
+            "peer-a",
+            false,
+            None,
+        )
+        .expect_err("the client's backend has been terminated");
 
         let (classes, metrics) = classify_pull_failure(err.as_ref());
         assert_eq!(
@@ -8236,7 +8214,7 @@ mod quarantine_tests {
         let repaired = peer_note(&sk, &kid, WALL_2026 + 1_500);
         let raw = response_json(&[&e1, &repaired, &e2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
         assert_eq!(
             m["applied_new"], 1,
             "the repaired event is admitted automatically"
@@ -8344,7 +8322,7 @@ mod quarantine_tests {
         let raw = response_json(&[&clean, &bad, &bad2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
 
-        let m = do_pull(&mut c, &addr, "peer-a", false, None)
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect("a malformed attachment reference must NOT fail the cycle (#460)");
 
         assert_eq!(m["applied_new"], 3, "every event is in the record");
@@ -8460,7 +8438,7 @@ mod quarantine_tests {
         // Now a peer re-offers those same bytes. Nothing is NEW to event_log…
         let raw = response_json(&[&bad], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
         assert_eq!(
             m["applied_new"], 0,
             "set-union no-op: the event was already held"
@@ -8554,11 +8532,11 @@ mod quarantine_tests {
         let raw = response_json(&[&bad], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 2);
 
-        let first = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let first = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
         assert_eq!(first["applied_new"], 1);
         assert_eq!(first["references_unlearnable"], 1, "the cycle's own news");
 
-        let second = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let second = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
         assert_eq!(second["applied_new"], 0, "set-union no-op on re-apply");
         assert_eq!(
             second["references_unlearnable"], 0,
@@ -8656,7 +8634,7 @@ mod quarantine_tests {
         let clean = peer_note(&sk, &kid, WALL_2026 + 2_000);
         let raw = response_json(&[&clean], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
 
         assert_eq!(m["applied_new"], 1);
         assert_eq!(
@@ -8999,7 +8977,7 @@ mod quarantine_tests {
             &[&kid_x],
         )
         .unwrap();
-        let m = do_pull(&mut c, &addr, "peer-a", false, None)
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
             .expect("the repaired cycle is clean and must not fail");
         assert_eq!(m["applied_new"], 1, "delayed, never lost");
         assert_eq!(m["refused_verifiable"], 0);
@@ -9060,7 +9038,7 @@ mod quarantine_tests {
         // The error object is kept (rather than going through `pull_integrity_err`)
         // because its CLASS is half of what this test now pins — see the assertion below
         // the metrics — and the canned serve answers exactly once.
-        let boxed = do_pull(&mut c, &addr, "peer-t", false, None)
+        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-t", false, None)
             .expect_err("a non-refusal apply failure freezes the cycle loudly");
         let ie = boxed
             .downcast_ref::<PullIntegrityError>()
@@ -9170,7 +9148,7 @@ mod quarantine_tests {
         )
         .unwrap();
 
-        let boxed = do_pull(&mut c, &addr, "peer-b", false, None)
+        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-b", false, None)
             .expect_err("a non-refusal apply failure freezes the cycle loudly");
         let (classes, _) = classify_pull_failure(boxed.as_ref());
 
@@ -9214,7 +9192,7 @@ mod quarantine_tests {
             .unwrap();
 
         // Same wire content again: quiet success, floor released.
-        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
         assert_eq!(m["skipped_unverifiable"], 0);
         assert_eq!(
             m["skipped_acked"], 1,
@@ -9269,7 +9247,14 @@ mod quarantine_tests {
 
         // The next cycle fails loudly AGAIN (no silent livelock) and the
         // quarantine dedupes rather than growing without bound.
-        assert!(do_pull(&mut c, &addr, "peer-legacy", false, None).is_err());
+        assert!(do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-legacy",
+            false,
+            None
+        )
+        .is_err());
         let rows = quarantine_rows(&mut c);
         assert_eq!(rows.len(), 2);
         assert!(
@@ -9295,7 +9280,7 @@ mod quarantine_tests {
         let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
         let raw = response_json(&[&e1], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &addr, "peer-a", false, None).unwrap();
+        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
         assert_eq!(m["applied_new"], 1);
 
         // Now the peer's new tail is garbage; the boundary event re-ships (a
@@ -9408,7 +9393,7 @@ mod quarantine_tests {
             }))
             .unwrap();
             let addr = serve_canned(raw, 1);
-            let err = do_pull(&mut c, &addr, "peer-a", false, None)
+            let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -9450,7 +9435,8 @@ mod quarantine_tests {
                 // Dropping the stream closes it with no response frame written.
             }
         });
-        let boxed = do_pull(&mut c, &addr, "peer-old", false, None).unwrap_err();
+        let boxed =
+            do_pull(&mut c, &TcpTransport::new(&addr), "peer-old", false, None).unwrap_err();
         let err = boxed.to_string();
         assert!(
             err.contains("db/036"),
@@ -9500,8 +9486,9 @@ mod quarantine_tests {
     /// a peer problem on the other, which is what issue #482 was filed to end.
     ///
     /// The flattening was the worse half: with no `source()` the classifier could never be
-    /// TAUGHT to recognise it. Driven through the real `do_pull` and the real `request`
-    /// retry loop, so a revert to `format!` at that site is caught here.
+    /// TAUGHT to recognise it. Driven through the real `do_pull` and the real
+    /// `TcpTransport::request` retry loop, so a revert to `format!` at that site is
+    /// caught here.
     #[test]
     fn an_oversized_response_frame_is_the_peer_not_the_link() {
         let Some(base) = cs() else {
@@ -9515,8 +9502,9 @@ mod quarantine_tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
-            // `request` retries four times before giving up; answer every attempt, or the
-            // last one becomes an ordinary connection failure and the test proves nothing.
+            // `TcpTransport::request` retries four times before giving up; answer every
+            // attempt, or the last one becomes an ordinary connection failure and the
+            // test proves nothing.
             for _ in 0..4 {
                 let Ok((mut s, _)) = listener.accept() else {
                     break;
@@ -9527,7 +9515,7 @@ mod quarantine_tests {
             }
         });
 
-        let boxed = do_pull(&mut c, &addr, "peer-fat", false, None)
+        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-fat", false, None)
             .expect_err("a length prefix over the cap is refused before allocating");
         let (classes, _) = classify_pull_failure(boxed.as_ref());
         assert_eq!(
@@ -9566,7 +9554,7 @@ mod quarantine_tests {
         // The error object itself is kept (rather than going through
         // `pull_integrity_err`) because its CLASS is half of what this test now pins, and
         // the canned serve answers exactly once.
-        let boxed = do_pull(&mut c, &addr, "peer-flood", false, None)
+        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-flood", false, None)
             .expect_err("a pen at its quota freezes the cycle loudly");
         let ie = boxed
             .downcast_ref::<PullIntegrityError>()
