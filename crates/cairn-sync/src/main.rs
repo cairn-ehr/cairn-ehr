@@ -28,7 +28,10 @@ use cairn_event::{
     blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
     verify_self_described, AttestationBody, ClockGrade, EventBody, Hlc, SigningKey, CTX_EVENT,
 };
-use cairn_wire::{read_frame, write_frame, EventsResponse, Request, TcpTransport, Transport};
+use cairn_wire::{
+    page_decision, read_frame, write_frame, EventsResponse, PageDecision, Request, TcpTransport,
+    Transport, DEFAULT_PAGE_EVENTS,
+};
 
 // The node's custody-key resolution (issue #503). A module rather than another
 // function in this file: main.rs is ~11,700 lines, and the decision table below is
@@ -2845,6 +2848,12 @@ fn do_pull(
     transport: &dyn Transport,
     peer_name: &str,
     full_sweep: bool,
+    // Events per request (slice 2b, #101 item 1). The cycle loops until the peer declares
+    // the stream complete, checkpointing after every page, so this is a ROUND-TRIP/FRAME-SIZE
+    // trade — never a cap on how much one cycle can pull. `main` refuses 0 rather than
+    // silently correcting it (see `parse_page_limit`): with a limit of 0 the serve returns
+    // nothing and the empty-page refusal would fire on every cycle.
+    page_limit: u32,
     // This node's custody for the wire (ADR-0052): the signing key that proves who we
     // are and the unwrap secret that opens DEKs a peer re-wraps back for us. Since
     // ADR-0066 the secret is NOT derivable from the key, so it is resolved once at
@@ -2912,138 +2921,255 @@ fn do_pull(
     };
 
     let started = Instant::now();
-    // A transport failure here has one skew-shaped cause worth naming (PR #223
-    // review): a pre-#196 serve cannot decode the EventsAfterSeq op — its serde
-    // rejects the unknown tag, the connection drops with no response frame, and
-    // all this side sees is an EOF. Say so, alongside the plain-partition reading,
-    // instead of leaving the operator a bare "failed to fill whole buffer".
-    let raw = transport
-        .request(&Request::EventsAfterSeq {
-            after_seq,
-            unwrap_cert,
-            // Slice 2b (#101 item 1): paging lands wired-but-off. This puller does not
-            // yet loop on `complete`, so asking for an unbounded batch is still correct
-            // — turning this on before the pull loop can honour it would silently
-            // truncate a real clinic's log. Task 7 flips it.
-            limit: None,
-        })
-        .map_err(|e| PeerRequestError {
-            // THE CAUSE IS THE SUFFIX, and that placement is load-bearing, not stylistic.
-            // `operator_chain` drops a layer only when the layer above it ENDS WITH that
-            // layer's rendering; with `{e}` mid-sentence (where the first draft of this type
-            // put it) the same transport error would be printed twice on the `run` path —
-            // the double-render the sweep's own tail had to fix one file over. Keeping it
-            // last also makes `Display`/`Debug` self-contained for the one-shot `pull`, whose
-            // only error printer is `Termination`.
-            message: format!(
-                "pull {peer_name}: no usable response to EventsAfterSeq. If the peer is down \
-             this is a plain partition (retry later); but if it is reachable and hangs up \
-             without answering, it likely predates the #196 seq-cursor wire (db/036) and \
-             cannot decode this request — upgrade the peer binary (an OLD puller against \
-             THIS node still works; an old server cannot be seq-pulled). The transport \
-             reported: {e}"
-            ),
-            // Kept, never flattened (PR #493 review): an over-cap length prefix arrives here
-            // as `InvalidData` and is the PEER's doing, not the link's. See
-            // `chain_reaches_a_peer_frame_error`.
-            source: Box::new(e),
-        })?;
-    let wire_bytes = raw.len();
-    // The peer ANSWERED and what it sent is unusable — an integrity condition, not a
-    // partition (issue #489). A bare `?` here handed `classify_pull_failure` a
-    // `serde_json::Error`, which its default arm claimed by elimination was a peer that
-    // never answered; `bet_a.py` then counted a truncated or foreign response as link
-    // downtime. Nothing was reached beyond the response itself, so there are no metrics.
-    let resp: EventsResponse = serde_json::from_slice(&raw).map_err(|e| PullIntegrityError {
-        message: format!(
-            "pull {peer_name}: the peer answered with {wire_bytes} byte(s) that are not an \
-             EventsResponse: {e}. The link delivered them — the peer is serving a corrupt, \
-             truncated, or entirely different payload on this port."
-        ),
-        metrics: serde_json::Value::Null,
-        also_local_fault: false,
-    })?;
 
-    // The three response-shape guards moved to `validate_page` ahead of Task 7's
-    // paging loop (slice 2b Task 6, #500): each page's response has to pass them on
-    // its own, independent of how many pages came before it in this cycle.
-    validate_page(&resp, peer_name)?;
-
-    // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
-    // to the node-local seq for #196:
-    //   * an UNVERIFIABLE entry (bad signature, garbage bytes, non-hex text) is
-    //     quarantined durably (db/021) AND pins the re-offer floor at its seq. The
-    //     cursor still advances for valid events, but the floor keeps the refused
-    //     slot on the wire every cycle, so a later repaired/re-signed version is
-    //     admitted automatically — a durable trace alone is NOT a license to move
-    //     past an event. Only a human `acked` row or a clean cycle releases the slot;
-    //   * a VERIFIABLE event this node's floor DELIBERATELY refused (`P0001`:
-    //     unenrolled/revoked signer, oversize, t_effective past the ceiling, an
-    //     unlawful contributor shape) takes the SAME path — penned verbatim, slot
-    //     pinned (ADR-0056 decision 5, issue #267). It used to persist nothing and
-    //     freeze, which wedged the whole peer link behind one bad author's event;
-    //   * a VERIFIABLE event that fails to apply for any OTHER reason is transient
-    //     infrastructure trouble (dropped connection, deadlock, timeout, disk full),
-    //     where the very same bytes may apply next cycle. That FREEZES the cursor at
-    //     the contiguous handled prefix — retried next cycle, never skipped (A1).
-    //     (During a FULL SWEEP a failing event may sit BELOW the committed cursor;
-    //     the freeze then leaves the cursor as-is and the retry rides the NEXT sweep,
-    //     not the next incremental — up to FULL_SWEEP_EVERY cycles later. Delayed,
-    //     never lost.);
-    //   * if the pen itself refuses (insert failure, per-peer quota), the cursor
-    //     freezes exactly as for a transient apply failure — delayed, never lost.
-    // Any unacked refusal — and any freeze (issue #270) — makes the whole pull FAIL
-    // LOUDLY at the end.
-    // The peer deliberately withheld custody for this batch (issue #231 review). Printed
-    // BEFORE applying, so the reason sits above the "N applied" line rather than buried
-    // under it; the line itself, and why its peer text is escaped, is
-    // `custody_withheld_message`.
-    if let Some(reason) = resp.custody_withheld.as_deref() {
-        eprintln!("{}", custody_withheld_message(peer_name, reason));
-    }
-    // The watermark is read HERE, before the first apply, and its failure is carried
-    // rather than raised: it feeds the same `Err` arm the ledger read does, so an
-    // unreadable ledger reports UNKNOWN instead of costing the pull its progress.
-    let flag_watermark = attachment_flag_watermark(client);
-
-    // Everything `apply_page` needs from `do_pull` that isn't `resp` itself (Task 7
-    // rebuilds this once per page; `floor_seq` and the custody pair are constant across
-    // a whole cycle, so they cost nothing to recompute).
+    // Everything `apply_page` needs from `do_pull` that isn't `resp` itself. Built ONCE
+    // for the whole cycle: `floor_seq` and the custody pair are cycle constants, so no
+    // page can end up with a different view of them than its predecessor.
     let ctx = PageContext {
         peer_name,
         unwrap_secret: unwrap_secret.as_deref(),
         floor_seq,
     };
-    let page = apply_page(client, &ctx, &resp, wire_bytes, last_seq);
-    let mut cycle = pull_page::CycleTally::new(last_seq);
-    cycle.fold(page);
+    // The watermark is read HERE, and its failure is carried rather than raised: it feeds
+    // the same `Err` arm the ledger read does, so an unreadable ledger reports UNKNOWN
+    // instead of costing the pull its progress.
+    //
+    // ONCE, BEFORE THE FIRST PAGE — never per page (slice 2b Task 7). It is the "before any
+    // of this cycle's events landed" high-water mark the #465 report is read back on; taking
+    // it per page would move it past pages 1..n-1 and blind the report to every reference
+    // they admitted. Reading it before the first REQUEST (rather than after it, where it
+    // used to sit) is the same value and one less thing to keep true.
+    let flag_watermark = attachment_flag_watermark(client);
 
-    // Persist progress FIRST — even a loudly-failing cycle keeps what it
-    // legitimately gained (applied events, advanced cursor). The floor (same
-    // 3-branch discipline as the HLC version, re-keyed to seq):
-    //   * CLEAN cycle (no unacked refusals AND no pen failures) → clear: the
-    //     whole suffix from the fetch point was admitted or human-acked, so
-    //     nothing is being withheld any more;
-    //   * unacked refusals, pen healthy → pin at the first refused slot's seq
-    //     (everything below it applied or was acked this cycle, so raising an
-    //     older floor to the new pin is safe and shrinks re-shipping);
-    //   * ANY pen failure → this cycle's view is unreliable: a re-offered slot
-    //     whose pen write failed produced NO pin (skips stayed 0), so blindly
-    //     overwriting would CLEAR a floor guarding a slot the cursor is already
-    //     above — permanent exclusion. Keep the most conservative of
-    //     (existing floor, new pin).
-    let new_floor: Option<i64> = pull_page::quarantine_floor(
-        cycle.skipped_unverifiable,
-        cycle.refused_verifiable,
-        cycle.pen_refused.is_some(),
-        cycle.pin,
-        floor_seq,
-    );
-    // BUILT BEFORE THE CURSOR COMMIT (issue #469). The commit is the only `?` between the
-    // apply loop and this function's return — it used to sit ABOVE this object, so a bare
-    // `?` there threw away every number describing work that had ALREADY happened — events
-    // applied and durable, flags written — and the cycle reported nothing at all about it.
-    // Moving the object above the commit is the fix; the commit is now the block below.
+    // The running totals for the whole cycle. `max_seq` starts at the COMMITTED cursor —
+    // see `CycleTally::new`, and see `page_cursor` below for why that is NOT the value the
+    // next page is fetched from.
+    let mut cycle = pull_page::CycleTally::new(last_seq);
+    // The FETCH point for the next request. Starts where this cycle was told to start and
+    // then follows the last seq RECEIVED; it is emphatically not `cycle.max_seq`.
+    let mut page_cursor = after_seq;
+    // The FIRST page's declared signing context, for the all-unverifiable diagnosis at the
+    // end. A peer does not change identity mid-cycle, and taking the first makes the
+    // reported value independent of where the loop stopped — the last page's declaration
+    // would be quoted beside a count covering every page.
+    let mut first_signing_context: Option<String> = None;
+    // Both assigned by EVERY pass of the loop below, which cannot exit before assigning
+    // them, so both are deliberately left uninitialized: a seed value here would be one no
+    // path ever reads, and the compiler says so (`unused_assignments`).
+    let mut cursor_commit: Result<(), String>;
+    let mut new_floor: Option<i64>;
+
+    // ONE PAGE PER PASS, until the peer declares the stream complete (#101 item 1). Before
+    // this loop a catch-up bigger than the 30 s read timeout re-requested the SAME oversized
+    // response forever and never progressed; now every page commits its cursor and floor
+    // before the next is asked for, so an interruption at page 39 of 40 resumes at 39.
+    loop {
+        // A transport failure here has one skew-shaped cause worth naming (PR #223
+        // review): a pre-#196 serve cannot decode the EventsAfterSeq op — its serde
+        // rejects the unknown tag, the connection drops with no response frame, and
+        // all this side sees is an EOF. Say so, alongside the plain-partition reading,
+        // instead of leaving the operator a bare "failed to fill whole buffer".
+        let raw = transport
+            .request(&Request::EventsAfterSeq {
+                after_seq: page_cursor,
+                // Cloned per page: the cert is this node's unwrap identity for the whole
+                // cycle, and every page's sealed events come back wrapped for it.
+                unwrap_cert: unwrap_cert.clone(),
+                // Slice 2b (#101 item 1): the puller now loops on `complete`, so a bounded
+                // batch is safe — a page is a round-trip/frame-size trade, never a cap on what
+                // one cycle pulls. (`main` refuses a limit of 0; see `parse_page_limit`.)
+                limit: Some(page_limit),
+            })
+            .map_err(|e| PeerRequestError {
+                // THE CAUSE IS THE SUFFIX, and that placement is load-bearing, not stylistic.
+                // `operator_chain` drops a layer only when the layer above it ENDS WITH that
+                // layer's rendering; with `{e}` mid-sentence (where the first draft of this type
+                // put it) the same transport error would be printed twice on the `run` path —
+                // the double-render the sweep's own tail had to fix one file over. Keeping it
+                // last also makes `Display`/`Debug` self-contained for the one-shot `pull`, whose
+                // only error printer is `Termination`.
+                message: format!(
+                    "pull {peer_name}: no usable response to EventsAfterSeq. If the peer is \
+                     down this is a plain partition (retry later); but if it is reachable \
+                     and hangs up without answering, it likely predates the #196 seq-cursor \
+                     wire (db/036) and cannot decode this request — upgrade the peer binary \
+                     (an OLD puller against THIS node still works; an old server cannot be \
+                     seq-pulled). The transport reported: {e}"
+                ),
+                // Kept, never flattened (PR #493 review): an over-cap length prefix arrives here
+                // as `InvalidData` and is the PEER's doing, not the link's. See
+                // `chain_reaches_a_peer_frame_error`.
+                source: Box::new(e),
+            })?;
+        let wire_bytes = raw.len();
+        // The peer ANSWERED and what it sent is unusable — an integrity condition, not a
+        // partition (issue #489). A bare `?` here handed `classify_pull_failure` a
+        // `serde_json::Error`, which its default arm claimed by elimination was a peer that
+        // never answered; `bet_a.py` then counted a truncated or foreign response as link
+        // downtime. Nothing was reached beyond the response itself, so there are no metrics.
+        let resp: EventsResponse =
+            serde_json::from_slice(&raw).map_err(|e| PullIntegrityError {
+                message: format!(
+                    "pull {peer_name}: the peer answered with {wire_bytes} byte(s) that are \
+                     not an EventsResponse: {e}. The link delivered them — the peer is \
+                     serving a corrupt, truncated, or entirely different payload on this port."
+                ),
+                metrics: serde_json::Value::Null,
+                also_local_fault: false,
+            })?;
+
+        // The three response-shape guards moved to `validate_page` ahead of the paging
+        // loop (slice 2b Task 6, #500): each page's response has to pass them on its own,
+        // independent of how many pages came before it in this cycle.
+        validate_page(&resp, peer_name)?;
+
+        // `cycle.pages` is incremented by `fold`, below, so it is still the count of pages
+        // ALREADY folded here — zero on the first pass. One counter, not two.
+        if cycle.pages == 0 {
+            first_signing_context = resp.signing_context.clone();
+        }
+
+        // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
+        // to the node-local seq for #196:
+        //   * an UNVERIFIABLE entry (bad signature, garbage bytes, non-hex text) is
+        //     quarantined durably (db/021) AND pins the re-offer floor at its seq. The
+        //     cursor still advances for valid events, but the floor keeps the refused
+        //     slot on the wire every cycle, so a later repaired/re-signed version is
+        //     admitted automatically — a durable trace alone is NOT a license to move
+        //     past an event. Only a human `acked` row or a clean cycle releases the slot;
+        //   * a VERIFIABLE event this node's floor DELIBERATELY refused (`P0001`:
+        //     unenrolled/revoked signer, oversize, t_effective past the ceiling, an
+        //     unlawful contributor shape) takes the SAME path — penned verbatim, slot
+        //     pinned (ADR-0056 decision 5, issue #267). It used to persist nothing and
+        //     freeze, which wedged the whole peer link behind one bad author's event;
+        //   * a VERIFIABLE event that fails to apply for any OTHER reason is transient
+        //     infrastructure trouble (dropped connection, deadlock, timeout, disk full),
+        //     where the very same bytes may apply next cycle. That FREEZES the cursor at
+        //     the contiguous handled prefix — retried next cycle, never skipped (A1).
+        //     (During a FULL SWEEP a failing event may sit BELOW the committed cursor;
+        //     the freeze then leaves the cursor as-is and the retry rides the NEXT sweep,
+        //     not the next incremental — up to FULL_SWEEP_EVERY cycles later. Delayed,
+        //     never lost.);
+        //   * if the pen itself refuses (insert failure, per-peer quota), the cursor
+        //     freezes exactly as for a transient apply failure — delayed, never lost.
+        // Any unacked refusal — and any freeze (issue #270) — makes the whole pull FAIL
+        // LOUDLY at the end.
+        // The peer deliberately withheld custody for this batch (issue #231 review). Printed
+        // BEFORE applying, so the reason sits above the "N applied" line rather than buried
+        // under it; the line itself, and why its peer text is escaped, is
+        // `custody_withheld_message`. PER PAGE, because the peer may withhold on one page
+        // and not another; the METRIC is `cycle.custody_withheld`, true if ANY page did.
+        if let Some(reason) = resp.custody_withheld.as_deref() {
+            eprintln!("{}", custody_withheld_message(peer_name, reason));
+        }
+
+        // THE NEXT PAGE'S FETCH POINT IS THE LAST SEQ *RECEIVED* — never `cycle.max_seq`.
+        //
+        // The two are different values and conflating them is the defect this loop could
+        // most easily have shipped. `cycle.max_seq` is the contiguous HANDLED prefix and
+        // starts at the COMMITTED cursor; on a full sweep (`after_seq = 0`) the two differ
+        // by the entire history below that cursor, so fetching page 2 from the checkpoint
+        // would jump straight past exactly the events a sweep exists to reconcile —
+        // silently, in the one code path whose whole job is to be the correctness floor.
+        // (Its test: `a_full_sweep_pages_from_the_last_seq_received_not_from_the_checkpoint`.)
+        //
+        // Captured BEFORE the fold below, which consumes the page.
+        let next_cursor = resp.seqs.last().copied();
+
+        cycle.fold(apply_page(client, &ctx, &resp, wire_bytes, cycle.max_seq));
+
+        // Persist progress FIRST — even a loudly-failing cycle keeps what it
+        // legitimately gained (applied events, advanced cursor). The floor (same
+        // 3-branch discipline as the HLC version, re-keyed to seq):
+        //   * CLEAN cycle (no unacked refusals AND no pen failures) → clear: the
+        //     whole suffix from the fetch point was admitted or human-acked, so
+        //     nothing is being withheld any more;
+        //   * unacked refusals, pen healthy → pin at the first refused slot's seq
+        //     (everything below it applied or was acked this cycle, so raising an
+        //     older floor to the new pin is safe and shrinks re-shipping);
+        //   * ANY pen failure → this cycle's view is unreliable: a re-offered slot
+        //     whose pen write failed produced NO pin (skips stayed 0), so blindly
+        //     overwriting would CLEAR a floor guarding a slot the cursor is already
+        //     above — permanent exclusion. Keep the most conservative of
+        //     (existing floor, new pin).
+        //
+        // OVER THE CYCLE, NEVER THE PAGE, and that is load-bearing now that there are
+        // several: computed per page, a clean page 2 would CLEAR the pin a refusing page 1
+        // set — and the cursor has already advanced past that refused event, so it would
+        // never be re-offered again. Silent permanent exclusion is precisely what this
+        // floor exists to prevent. (`quarantine_floor`'s own doc says the same, and
+        // `a_clean_later_page_cannot_clear_a_pin_an_earlier_page_set` pins it.)
+        new_floor = pull_page::quarantine_floor(
+            cycle.skipped_unverifiable,
+            cycle.refused_verifiable,
+            cycle.pen_refused.is_some(),
+            cycle.pin,
+            floor_seq,
+        );
+        // CHECKPOINT EVERY PAGE — cursor and floor together. This is #101 item 1's fix: an
+        // interruption at page 39 of 40 leaves a durable, conservative state instead of
+        // restarting from zero. Only the LAST page's result is inspected after the loop,
+        // deliberately: a later successful commit SUBSUMES an earlier failed one (the
+        // statement is `GREATEST(last_seq, $2)` over the running `cycle.max_seq`, which
+        // already covers every page before it), so a transient failure that healed is not
+        // a failure of the cycle.
+        cursor_commit = commit_cursor(client, peer_name, cycle.max_seq, new_floor);
+
+        match page_decision(resp.complete, resp.events.len(), cycle.frozen) {
+            PageDecision::Done => break,
+            // The peer answered with something no puller can act on. What it already
+            // legitimately gained is durable — every page above committed its cursor — so
+            // unlike the #469 case this error is not the only record of the cycle's work:
+            // `sync_state` is.
+            PageDecision::Refuse(why) => {
+                return Err(Box::new(PullIntegrityError {
+                    message: format!("pull {peer_name}: {why}"),
+                    metrics: serde_json::Value::Null,
+                    also_local_fault: false,
+                }))
+            }
+            // `Continue` implies a non-empty page (`page_decision` refuses an empty one),
+            // so `next_cursor` is Some; the fallback ends the loop rather than unwrapping.
+            PageDecision::Continue => match next_cursor {
+                // THE ANTI-LOOP INVARIANT: the next cursor must be STRICTLY above the one
+                // we just asked from. `first > after_seq` is not this invariant and neither
+                // is a non-strict `>=`: a single-event page whose first and last seq both
+                // EQUAL the cursor is perfectly well-ordered and still cannot advance.
+                //
+                // It guards the ADVANCE step rather than `validate_page`, because a
+                // repeated page is not malformed — applying it again is harmless (same
+                // in-DB door, set-union idempotent, and `max_seq` only advances over the
+                // contiguous handled prefix from `last_seq`, so the cursor cannot rewind).
+                // The only hazard is the loop spinning, so that is what is refused, and it
+                // is the PEER that is named: both real transports satisfy this by
+                // construction (`serve_conn` streams `WHERE seq > $1` ascending;
+                // `MediumTransport` slices after the same partition point), so nothing but
+                // a buggy or hostile peer can reach it.
+                Some(next) if next > page_cursor => page_cursor = next,
+                Some(next) => {
+                    return Err(Box::new(PullIntegrityError {
+                        message: format!(
+                            "pull {peer_name}: the peer answered an INCOMPLETE page whose \
+                             last seq ({next}) does not advance the cursor it was asked \
+                             from ({page_cursor}) — the next request would repeat this one \
+                             forever. The peer is not honouring `after_seq` (it must serve \
+                             `seq > after_seq`, ascending). Refusing to loop; this cycle's \
+                             progress is committed and the next cycle resumes from it."
+                        ),
+                        metrics: serde_json::Value::Null,
+                        // Nothing about this is this node's database: the peer's seqs are.
+                        also_local_fault: false,
+                    }));
+                }
+                None => break,
+            },
+        }
+    }
+    // BUILT BEFORE THE CURSOR-COMMIT CHECK (issue #469). The commit's failure used to be
+    // raised with a bare `?` ABOVE this object, which threw away every number describing
+    // work that had ALREADY happened — events applied and durable, flags written — and the
+    // cycle reported nothing at all about it. The commit itself now happens per page inside
+    // the loop (`commit_cursor`) and only its outcome is inspected, below.
     // Two fields are filled in afterwards because they are not knowable yet; both are
     // seeded `null` rather than `0` so a path that somehow skipped them can never publish
     // a claim.
@@ -3075,37 +3201,11 @@ fn do_pull(
         "bytes_per_event": if cycle.shipped == 0 { 0.0 }
                            else { cycle.event_bytes as f64 / cycle.shipped as f64 },
         "elapsed_ms": serde_json::Value::Null,
-        "cursor_seq": cycle.max_seq, "full_sweep": full_sweep
+        "cursor_seq": cycle.max_seq, "full_sweep": full_sweep,
+        // How many round trips this cycle took (slice 2b, #101 item 1) — the thing to look
+        // at when a cycle is slow for a reason no other counter explains.
+        "pages": cycle.pages
     });
-
-    // Advance-only cursor (GREATEST) + the recomputed seq floor. A re-offer cycle
-    // whose max_seq did not exceed the committed cursor therefore never rewinds it.
-    //
-    // NOT a bare `?` (issue #469): this is the one write whose failure means "the work
-    // happened but the bookmark did not move", and it is neither an integrity condition
-    // nor a partition. Held as a Result so the report below still runs either way.
-    let cursor_commit = client
-        .execute(
-            "UPDATE sync_state
-                SET last_seq = GREATEST(last_seq, $2), last_pull_at = clock_timestamp(),
-                    quarantine_floor_seq = $3
-              WHERE peer = $1",
-            &[&peer_name, &cycle.max_seq, &new_floor],
-        )
-        .map_err(|e| legible_db_error(&e))
-        // A statement that matched NO row is `Ok` and commits nothing: the cursor silently
-        // does not move while the cycle reports `cursor_seq` as fact. The upsert at the top
-        // of this function makes the row, so this needs a concurrent `DELETE FROM
-        // sync_state` or an RLS change to happen at all — but a silent zero is exactly the
-        // shape #465/#469 exist to end, and checking a rowcount we already have is free
-        // (PR #472 review).
-        .and_then(|rows| match rows {
-            0 => Err(format!(
-                "the sync_state row for peer '{peer_name}' matched no row — it was deleted \
-                 mid-cycle, or this role cannot see it"
-            )),
-            _ => Ok(()),
-        });
     metrics["elapsed_ms"] = serde_json::json!(started.elapsed().as_secs_f64() * 1000.0);
 
     // Issue #465: what did this cycle admit that it cannot fetch the bytes for? Read
@@ -3142,7 +3242,11 @@ fn do_pull(
     let loud_message = loud.then(|| {
         let all = cycle.shipped != 0 && cycle.skipped_unverifiable == cycle.shipped;
         let diagnosis = if all {
-            let declared = match &resp.signing_context {
+            // The FIRST page's declaration, not the last response's (slice 2b Task 7): the
+            // count beside it covers the whole cycle, so quoting the final page's context
+            // would put a per-page fact next to a per-cycle one — and which page that was
+            // depends on where the loop happened to stop.
+            let declared = match &first_signing_context {
                 Some(ctx) => format!("declares signing context '{ctx}'"),
                 None => "declares no signing context (a pre-ADR-0040 build would not)".to_string(),
             };
@@ -3214,8 +3318,48 @@ fn do_pull(
     Ok(metrics)
 }
 
+/// Checkpoint one page: the advance-only seq cursor and the recomputed re-offer floor,
+/// committed together (slice 2b Task 7, #500 / #101 item 1). Called after EVERY page, so a
+/// cycle interrupted at page 39 of 40 resumes at 39 instead of restarting from zero.
+///
+/// Returns the failure as a `String` rather than raising it: this is the one write whose
+/// failure means "the work happened but the bookmark did not move", which is neither an
+/// integrity condition nor a partition (issue #469). The caller holds the result so the
+/// #465 report still runs either way.
+fn commit_cursor(
+    client: &mut postgres::Client,
+    peer_name: &str,
+    max_seq: i64,
+    floor: Option<i64>,
+) -> Result<(), String> {
+    // Advance-only cursor (GREATEST) + the recomputed seq floor. A re-offer cycle
+    // whose max_seq did not exceed the committed cursor therefore never rewinds it.
+    client
+        .execute(
+            "UPDATE sync_state
+                SET last_seq = GREATEST(last_seq, $2), last_pull_at = clock_timestamp(),
+                    quarantine_floor_seq = $3
+              WHERE peer = $1",
+            &[&peer_name, &max_seq, &floor],
+        )
+        .map_err(|e| legible_db_error(&e))
+        // A statement that matched NO row is `Ok` and commits nothing: the cursor silently
+        // does not move while the cycle reports `cursor_seq` as fact. The upsert at the top
+        // of `do_pull` makes the row, so this needs a concurrent `DELETE FROM
+        // sync_state` or an RLS change to happen at all — but a silent zero is exactly the
+        // shape #465/#469 exist to end, and checking a rowcount we already have is free
+        // (PR #472 review).
+        .and_then(|rows| match rows {
+            0 => Err(format!(
+                "the sync_state row for peer '{peer_name}' matched no row — it was deleted \
+                 mid-cycle, or this role cannot see it"
+            )),
+            _ => Ok(()),
+        })
+}
+
 /// Everything `apply_page` needs from `do_pull` besides the response itself and the
-/// per-page cursor value — grouped so Task 7's loop can rebuild it once per page rather
+/// per-page cursor value — grouped so the paging loop can build it once per cycle rather
 /// than growing `apply_page`'s argument list (slice 2b Task 6, #500).
 struct PageContext<'a> {
     peer_name: &'a str,
@@ -4123,12 +4267,20 @@ fn cmd_quarantine(conn: &str) -> R<()> {
     Ok(())
 }
 
+// One-shot `pull` is a CLI verb, so its parameters are its flags: the same shape (and the
+// same allow) `cmd_run` below already carries. Grouping them into a struct would move the
+// flag list one level away from `main`'s parsing without removing anything from it — and
+// main.rs's decomposition is tracked as a whole in #531.
+#[allow(clippy::too_many_arguments)]
 fn cmd_pull(
     conn: &str,
     peer: &str,
     peer_name: &str,
     metrics: bool,
     full: bool,
+    // Events per request (slice 2b, #101 item 1) — `--page`, defaulting to
+    // `DEFAULT_PAGE_EVENTS`. Passed through untouched: `main` has already refused 0.
+    page_limit: u32,
     key_path: &str,
     unwrap_key_path: Option<&str>,
 ) -> R<()> {
@@ -4148,6 +4300,7 @@ fn cmd_pull(
         &TcpTransport::new(peer),
         peer_name,
         full,
+        page_limit,
         Some(&custody),
     )?;
     if metrics {
@@ -4462,6 +4615,9 @@ fn cmd_run(
     window: usize,
     interval_ms: u64,
     budget_ms: u64,
+    // Events per clinical-pull request (slice 2b, #101 item 1) — `--page`, defaulting to
+    // `DEFAULT_PAGE_EVENTS`. Constant for the life of the daemon, like the transport below.
+    page_limit: u32,
     log_path: &str,
     duration_s: u64,
     key_path: &str,
@@ -4560,6 +4716,7 @@ fn cmd_run(
             &transport,
             peer_name,
             full_sweep,
+            page_limit,
             Some(custody.as_ref()),
         ) {
             Ok(m) => {
@@ -5276,6 +5433,41 @@ fn flags(args: &[String], name: &str) -> Vec<String> {
         .collect()
 }
 
+/// `--page N` for `pull`/`run`: events per request, defaulting to [`DEFAULT_PAGE_EVENTS`]
+/// (slice 2b, #101 item 1). **Pure**, so the refusal is unit-tested with no process.
+///
+/// REFUSES rather than corrects, and that is the whole reason this is not the one-liner
+/// every other numeric flag in `main` uses. `--page 0` is not merely a poor choice: the
+/// serve would return no rows, `page_decision` would see an empty page that does not
+/// declare the stream complete, and every cycle would fail loudly against a healthy peer.
+/// Silently substituting 500 would hide that from the operator who typed it — a flag that
+/// lies about what was asked for. Unparseable input takes the same path for the same
+/// reason: `--page tomorrow` is a typo the operator wants to hear about, not a default.
+fn parse_page_limit(raw: Option<&str>) -> Result<u32, String> {
+    match raw {
+        None => Ok(DEFAULT_PAGE_EVENTS),
+        Some(text) => match text.parse::<u32>() {
+            Ok(n) if n >= 1 => Ok(n),
+            _ => Err(format!(
+                "--page must be a positive whole number of events per request \
+                 (got '{text}'); omit it for the default of {DEFAULT_PAGE_EVENTS}. \
+                 A page of 0 would ask the peer for nothing and fail every cycle."
+            )),
+        },
+    }
+}
+
+/// [`parse_page_limit`] for `main`: print the refusal and exit like any other bad flag.
+fn need_page_limit(args: &[String]) -> u32 {
+    match parse_page_limit(flag(args, "--page").as_deref()) {
+        Ok(n) => n,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2)
+        }
+    }
+}
+
 fn usage() -> ! {
     eprintln!(
         "cairn-sync — Cairn walking skeleton (Spike 0001)
@@ -5289,8 +5481,9 @@ USAGE (all take --conn <postgres-uri>):
   gen         --conn URI --node NAME --key PATH [--patients N] [--count N] [--rate EV_PER_SEC]
   put-blob    --conn URI --file PATH --media MEDIA_TYPE
   gen-blob    --conn URI [--size-mb N] [--media MEDIA_TYPE]   (mint a large local blob to fetch)
-  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full] [--key PATH] [--unwrap-key PATH]
+  pull        --conn URI --peer HOST:PORT --peer-name NAME [--metrics] [--full] [--page N] [--key PATH] [--unwrap-key PATH]
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
+              (--page: events per request; default 500. A larger page trades round trips for a bigger frame.)
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
   attachment-flags --conn URI
               (list attachment references this node admitted but cannot fetch: type, reason, count, example)
@@ -5301,9 +5494,10 @@ USAGE (all take --conn <postgres-uri>):
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
   fingerprint --conn URI    (convergence/honest-state JSON for the harness)
   run         --conn URI --listen HOST:PORT --peer HOST:PORT --peer-name NAME
-              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--log PATH] [--duration-s N] [--key PATH] [--unwrap-key PATH]
+              [--blob-peer HOST:PORT ...] [--window N] [--interval-ms N] [--budget-ms N] [--page N] [--log PATH] [--duration-s N] [--key PATH] [--unwrap-key PATH]
               (unattended: serve+pull+blob, logs one JSON line/cycle, survives drops;
               --key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
+              (--page: events per request; default 500. A larger page trades round trips for a bigger frame.)
   bench-insert --conn URI --node NAME --key PATH [--count N]   (Bet B B1: maintained-write latency)
   chart       --conn URI --patient UUID                        (Bet B B2: chart-read latency)
   bench       [--hash-mb N] [--sig-iters N] [--dek-iters N]    (Bet B B3/B4: crypto throughput, no DB)
@@ -5391,6 +5585,7 @@ fn main() -> R<()> {
             &need(flag(&args, "--peer-name")),
             args.iter().any(|a| a == "--metrics"),
             args.iter().any(|a| a == "--full"),
+            need_page_limit(&args),
             &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
             flag(&args, "--unwrap-key").as_deref(),
         )?,
@@ -5463,6 +5658,7 @@ fn main() -> R<()> {
             flag(&args, "--budget-ms")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(20),
+            need_page_limit(&args),
             &flag(&args, "--log").unwrap_or_else(|| "cairn-run.jsonl".into()),
             flag(&args, "--duration-s")
                 .and_then(|s| s.parse().ok())
@@ -5486,6 +5682,28 @@ fn main() -> R<()> {
 mod tests {
     use super::*;
     use cairn_event::{event_address, generate_key, verify_attestation};
+
+    /// `--page` (slice 2b Task 7, #500). The default is the point of the flag being
+    /// optional; the REFUSALS are the point of it not being a one-line `unwrap_or`.
+    #[test]
+    fn page_limit_defaults_and_refuses_rather_than_correcting() {
+        assert_eq!(parse_page_limit(None), Ok(DEFAULT_PAGE_EVENTS));
+        assert_eq!(parse_page_limit(Some("1")), Ok(1));
+        assert_eq!(parse_page_limit(Some("2000")), Ok(2000));
+
+        // A page of 0 would ask the peer for nothing; the serve returns no rows, and the
+        // empty-page refusal fires on every cycle against a perfectly healthy peer.
+        // Silently substituting the default would hide that from whoever typed it.
+        for bad in ["0", "-1", "tomorrow", "", "1.5"] {
+            let refusal = parse_page_limit(Some(bad))
+                .expect_err(&format!("'{bad}' is not a usable page size"));
+            assert!(
+                refusal.contains(bad) || bad.is_empty(),
+                "the refusal must quote what was typed: {refusal}"
+            );
+            assert!(refusal.contains("--page"), "…and name the flag: {refusal}");
+        }
+    }
 
     /// **#469.** A local database write failure must not be logged as link downtime.
     ///
@@ -7421,6 +7639,71 @@ mod quarantine_tests {
         sign(&body, sk).unwrap().signed_bytes
     }
 
+    /// Serves canned frames in order and records what was asked for (slice 2b Task 7, #500).
+    ///
+    /// WHY IT EXISTS: `serve_canned` below replays the SAME bytes for every connection and
+    /// throws the request away, so it can neither vary a response per page nor answer "what
+    /// cursor did the puller actually ask from?" — which is the whole question the paging
+    /// loop's subtle bug lives in. `Request` is not `Clone`, so the interesting fields are
+    /// recorded rather than the whole value. This is also the first time `do_pull` is
+    /// exercised with no socket at all.
+    struct FakeTransport {
+        pages: Mutex<VecDeque<Vec<u8>>>,
+        seen: Mutex<Vec<(i64, Option<u32>)>>,
+    }
+
+    impl FakeTransport {
+        fn new(pages: Vec<Vec<u8>>) -> Self {
+            Self {
+                pages: Mutex::new(pages.into()),
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+        /// The `(after_seq, limit)` of every request, in order.
+        fn requests(&self) -> Vec<(i64, Option<u32>)> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl Transport for FakeTransport {
+        fn label(&self) -> &str {
+            "fake"
+        }
+        fn request(&self, req: &Request) -> Result<Vec<u8>, cairn_wire::TransportError> {
+            match req {
+                Request::EventsAfterSeq {
+                    after_seq, limit, ..
+                } => self.seen.lock().unwrap().push((*after_seq, *limit)),
+                other => panic!("the puller must only send EventsAfterSeq, got {other:?}"),
+            }
+            match self.pages.lock().unwrap().pop_front() {
+                Some(page) => Ok(page),
+                // Running out of canned pages is a TEST bug, not a transport failure, and it
+                // must not masquerade as a partition the puller then reports as downtime.
+                // It is also how a "the loop must STOP here" test fails when the loop does
+                // not: loudly, at the request that should never have been made.
+                None => panic!("the puller asked for more pages than the test canned"),
+            }
+        }
+    }
+
+    /// A page of `events` at explicit seqs, with an explicit completeness declaration.
+    /// `response_json` always seqs from 1 and always says complete; paging needs both varied.
+    fn page_json(events: &[&[u8]], seqs: &[i64], complete: bool) -> Vec<u8> {
+        assert_eq!(events.len(), seqs.len(), "parallel arrays");
+        serde_json::to_vec(&EventsResponse {
+            events: events.iter().map(hex::encode).collect(),
+            attestations: vec![None; events.len()],
+            attester_keys: vec![None; events.len()],
+            seqs: seqs.to_vec(),
+            signing_context: Some(CTX_EVENT.as_str().to_string()),
+            wrapped_deks: vec![None; events.len()],
+            custody_withheld: None,
+            complete,
+        })
+        .unwrap()
+    }
+
     /// Serve `raw` (a pre-encoded EventsResponse JSON) to up to `times` connections
     /// on a throwaway local port; returns the address for `do_pull`.
     fn serve_canned(raw: Vec<u8>, times: usize) -> String {
@@ -7452,7 +7735,9 @@ mod quarantine_tests {
             wrapped_deks: vec![None; events.len()],
             custody_withheld: None,
             // A canned response is the WHOLE answer for these tests — none of them
-            // exercise paging (that is Task 7's job) — so it always declares complete.
+            // exercise paging (`page_json` above is what varies it) — so it always
+            // declares complete. An omitted/false `complete` would make the paged puller
+            // ask for a SECOND page, which `serve_canned` cannot meaningfully answer.
             complete: true,
         })
         .unwrap()
@@ -7513,6 +7798,387 @@ mod quarantine_tests {
             assert_eq!(resp.seqs.len(), want_len, "limit={limit:?}");
             assert_eq!(resp.complete, want_complete, "limit={limit:?}");
         }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // The pull loop (slice 2b Task 7, #500 / #101 item 1). Every test below drives
+    // `do_pull` through `FakeTransport`, so the assertions can be about the SEQUENCE of
+    // requests the loop makes — which is where paging's real defects live.
+    // ---------------------------------------------------------------------------------
+
+    /// Three pages of two events each converge, and the cursor ends at the last seq.
+    #[test]
+    fn a_paged_pull_converges_across_pages() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..6)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+        let t = FakeTransport::new(vec![
+            page_json(&[&ev[0], &ev[1]], &[1, 2], false),
+            page_json(&[&ev[2], &ev[3]], &[3, 4], false),
+            page_json(&[&ev[4], &ev[5]], &[5, 6], true),
+        ]);
+
+        let m = do_pull(&mut c, &t, "peer-a", false, 2, None).unwrap();
+
+        assert_eq!(m["shipped"], 6, "counters sum across pages");
+        assert_eq!(m["applied_new"], 6);
+        assert_eq!(m["cursor_seq"], 6);
+        assert_eq!(m["pages"], 3);
+        assert_eq!(
+            t.requests(),
+            vec![(0, Some(2)), (2, Some(2)), (4, Some(2))],
+            "each page is fetched from the last seq RECEIVED"
+        );
+        assert_eq!(cursor(&mut c, "peer-a"), 6);
+    }
+
+    /// #101 item 1, the actual fix. A cycle that dies after page 2 must leave a durable
+    /// checkpoint, so the next pull RESUMES rather than restarting from zero.
+    #[test]
+    fn an_interrupted_cycle_resumes_from_its_per_page_checkpoint() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..6)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+
+        // Two good pages, then a page whose seqs go BACKWARDS within itself — a
+        // wire-format fault `validate_page` refuses, aborting the cycle after page 2 has
+        // already been applied and checkpointed.
+        let dying = FakeTransport::new(vec![
+            page_json(&[&ev[0], &ev[1]], &[1, 2], false),
+            page_json(&[&ev[2], &ev[3]], &[3, 4], false),
+            page_json(&[&ev[4], &ev[5]], &[6, 5], false),
+        ]);
+        do_pull(&mut c, &dying, "peer-a", false, 2, None).expect_err("page 3 is malformed");
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            4,
+            "pages 1-2 are durable: the whole point of a per-page checkpoint"
+        );
+
+        // The next pull picks up at 4, not 0.
+        let resumed = FakeTransport::new(vec![page_json(&[&ev[4], &ev[5]], &[5, 6], true)]);
+        do_pull(&mut c, &resumed, "peer-a", false, 2, None).unwrap();
+        assert_eq!(resumed.requests(), vec![(4, Some(2))]);
+        assert_eq!(cursor(&mut c, "peer-a"), 6);
+    }
+
+    /// An empty page that does not declare completeness is an INTEGRITY condition — the peer
+    /// answered and the answer is unusable — never a partition, and never a quiet stop.
+    #[test]
+    fn an_empty_page_without_complete_fails_the_pull_loudly() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev = peer_note(&sk, &kid, WALL_2026);
+        let t = FakeTransport::new(vec![
+            page_json(&[&ev], &[1], false),
+            page_json(&[], &[], false),
+        ]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 1, None).expect_err("must refuse");
+        assert!(
+            boxed.downcast_ref::<PullIntegrityError>().is_some(),
+            "integrity, not partition: {boxed}"
+        );
+        assert!(boxed.to_string().contains("complete"), "{boxed}");
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            1,
+            "page 1's progress is still durable"
+        );
+    }
+
+    /// Break the apply door the way `a_transient_apply_failure_freezes_and_pens_nothing`
+    /// does — a non-`P0001` SQLSTATE that is NOT a floor verdict — and return a validly
+    /// signed event that will therefore fail to apply for a non-refusal reason: the freeze.
+    /// The override is on the door itself, so it freezes EVERY event in the page; the loop's
+    /// behaviour is identical either way, and inventing a second way to provoke a freeze
+    /// would be a second thing to keep true. `locked_client` re-applies the whole SCHEMA at
+    /// the start of every DB-gated test, so it cannot leak into another test.
+    fn freezing_event(c: &mut postgres::Client, sk: &SigningKey, kid: &str) -> Vec<u8> {
+        c.batch_execute(
+            "CREATE OR REPLACE FUNCTION apply_remote_event(
+                 p_signed       BYTEA,
+                 p_attestation  BYTEA DEFAULT NULL,
+                 p_attester_key BYTEA DEFAULT NULL,
+                 p_dek          BYTEA DEFAULT NULL
+             ) RETURNS UUID LANGUAGE plpgsql AS $$
+             BEGIN
+                 RAISE EXCEPTION 'could not serialize access due to concurrent update'
+                       USING ERRCODE = '40001';
+             END $$;",
+        )
+        .unwrap();
+        peer_note(sk, kid, WALL_2026 + 5_000)
+    }
+
+    /// A freeze must stop the loop. Asserted on the REQUEST COUNT, because a puller that kept
+    /// asking would keep re-fetching events it has already declined to handle.
+    #[test]
+    fn a_freeze_stops_the_loop_and_no_further_page_is_requested() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let good = peer_note(&sk, &kid, WALL_2026);
+        let t = FakeTransport::new(vec![
+            page_json(&[&good, &freezing_event(&mut c, &sk, &kid)], &[1, 2], false),
+            page_json(&[&good], &[3], true), // must never be requested
+        ]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 2, None)
+            .expect_err("a frozen cycle fails loudly (#270)");
+        assert!(
+            boxed.downcast_ref::<PullIntegrityError>().is_some(),
+            "the freeze is an integrity condition: {boxed}"
+        );
+        assert_eq!(t.requests().len(), 1, "the loop must stop at the freeze");
+    }
+
+    /// A full sweep's page 2 continues from the last seq RECEIVED, not from the checkpoint.
+    ///
+    /// THE SUBTLE ONE. `max_seq` starts at the COMMITTED cursor, so paging from it would make
+    /// page 2 of a sweep jump from 2 straight past everything up to the old cursor — silently
+    /// skipping exactly the events a sweep exists to reconcile. With a cursor already at 4 and
+    /// a sweep starting at 0, the two candidate values differ visibly.
+    #[test]
+    fn a_full_sweep_pages_from_the_last_seq_received_not_from_the_checkpoint() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..4)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+
+        // Get the committed cursor to 4 with an ordinary incremental pull.
+        let warm = FakeTransport::new(vec![page_json(
+            &[&ev[0], &ev[1], &ev[2], &ev[3]],
+            &[1, 2, 3, 4],
+            true,
+        )]);
+        do_pull(&mut c, &warm, "peer-a", false, 10, None).unwrap();
+        assert_eq!(cursor(&mut c, "peer-a"), 4);
+
+        // Now sweep from 0 with a page size of 2.
+        let sweep = FakeTransport::new(vec![
+            page_json(&[&ev[0], &ev[1]], &[1, 2], false),
+            page_json(&[&ev[2], &ev[3]], &[3, 4], true),
+        ]);
+        do_pull(&mut c, &sweep, "peer-a", true, 2, None).unwrap();
+        assert_eq!(
+            sweep.requests(),
+            vec![(0, Some(2)), (2, Some(2))],
+            "page 2 must ask from 2 (the last seq RECEIVED), never from 4 (the checkpoint)"
+        );
+    }
+
+    /// The all-unverifiable diagnosis quotes the FIRST page's declared signing context.
+    ///
+    /// The count it sits beside (`ALL n shipped events…`) covers the whole cycle, so
+    /// quoting the LAST page's declaration would put a per-page fact next to a per-cycle
+    /// one — and WHICH page that is depends on where the loop happened to stop, which is
+    /// not a property of the peer at all. A peer does not change identity mid-cycle, so
+    /// taking the first is both the honest value and the stable one.
+    #[test]
+    fn the_all_unverifiable_diagnosis_quotes_the_first_pages_signing_context() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+
+        // Page 1 is a pre-ADR-0040 shape: it declares NO signing context. Page 2 declares
+        // the current one. Both ship bytes that cannot verify, so the cycle reaches the
+        // all-unverifiable diagnosis, and the two pages disagree about what to quote.
+        let mut undeclared: serde_json::Value =
+            serde_json::from_slice(&page_json(&[b"legacy or corrupt blob one"], &[1], false))
+                .unwrap();
+        undeclared
+            .as_object_mut()
+            .expect("page_json builds an object")
+            .remove("signing_context");
+        let t = FakeTransport::new(vec![
+            serde_json::to_vec(&undeclared).unwrap(),
+            page_json(&[b"legacy or corrupt blob two"], &[2], true),
+        ]);
+
+        let err = do_pull(&mut c, &t, "peer-legacy", false, 1, None)
+            .expect_err("every event unverifiable is a loud cycle")
+            .to_string();
+        assert!(
+            err.contains("ALL 2 shipped events are unverifiable"),
+            "the count covers the whole cycle: {err}"
+        );
+        assert!(
+            err.contains("declares no signing context"),
+            "…so the context beside it must be page 1's, not the last page's: {err}"
+        );
+    }
+
+    /// Custody withheld on ANY page is a fact about the cycle.
+    ///
+    /// The withholding page is deliberately the FIRST one: a metric read from whatever
+    /// response the loop happened to end on would report `false` here, which is the exact
+    /// blindness issue #231 closed — this node knowingly lacks keys the peer holds, and
+    /// its sealed bodies will not render.
+    #[test]
+    fn custody_withheld_on_any_page_is_reported_for_the_whole_cycle() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..2)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+
+        let mut withholding: serde_json::Value =
+            serde_json::from_slice(&page_json(&[&ev[0]], &[1], false)).unwrap();
+        withholding.as_object_mut().unwrap().insert(
+            "custody_withheld".to_string(),
+            serde_json::json!("this node's peer plane holds no admitted peers"),
+        );
+        let t = FakeTransport::new(vec![
+            serde_json::to_vec(&withholding).unwrap(),
+            page_json(&[&ev[1]], &[2], true), // page 2 grants custody normally
+        ]);
+
+        let m = do_pull(&mut c, &t, "peer-a", false, 1, None).unwrap();
+        assert_eq!(m["pages"], 2, "{m}");
+        assert_eq!(
+            m["custody_withheld"], true,
+            "page 1 withheld; a cycle-scoped metric must still say so after a page that \
+             did not: {m}"
+        );
+    }
+
+    /// THE OTHER DEFECT PAGING COULD HAVE SHIPPED: the floor is computed over the CYCLE,
+    /// never over a page.
+    ///
+    /// Page 1 refuses an unverifiable event and pins the re-offer floor at its slot; page 2
+    /// is spotless. Computed per page, page 2 would CLEAR the pin page 1 set — and the
+    /// cursor has by then advanced past the refused slot, so it would never be re-offered
+    /// again: silent, permanent exclusion of a clinical event, which is the precise thing
+    /// the floor exists to prevent. (`quarantine_floor`'s unit tests pin the pure rule;
+    /// this one pins that `do_pull` actually feeds it the CYCLE.)
+    #[test]
+    fn a_clean_later_page_cannot_clear_the_floor_an_earlier_page_pinned() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        // Bytes that cannot verify (they are not an event at all) → penned, slot pinned.
+        let corrupt = b"legacy or corrupt blob".to_vec();
+        let good = peer_note(&sk, &kid, WALL_2026);
+        let t = FakeTransport::new(vec![
+            page_json(&[&corrupt], &[1], false),
+            page_json(&[&good], &[2], true),
+        ]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 1, None)
+            .expect_err("an unacked refusal fails the cycle loudly (#108)");
+        let m = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("integrity, not partition: {boxed}"))
+            .metrics
+            .clone();
+        assert_eq!(m["pages"], 2, "both pages ran: {m}");
+        assert_eq!(m["skipped_unverifiable"], 1, "{m}");
+        assert_eq!(m["applied_new"], 1, "page 2 was clean AND applied: {m}");
+        assert_eq!(m["floor_active"], true, "{m}");
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            Some(1),
+            "the clean page 2 must NOT clear the pin page 1 set — the cursor is already \
+             above that slot, so clearing it excludes the refused event permanently"
+        );
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            2,
+            "the cursor still advances over the penned (handled) slot"
+        );
+    }
+
+    /// The anti-loop invariant, and the ONE place it belongs (controller ruling, Task 7).
+    ///
+    /// A page that is well-formed on its own can still fail to ADVANCE: its last seq is not
+    /// above the cursor it was asked from, so the next request would repeat this one, and the
+    /// one after that, forever. That is a different fault from a malformed batch — applying a
+    /// repeated page is harmless (same in-DB door, set-union idempotent, and `max_seq` only
+    /// advances over the contiguous handled prefix, so the cursor cannot rewind) — so the
+    /// guard belongs on the loop's ADVANCE step, not in `validate_page`.
+    ///
+    /// Note the predicate: `seqs.last() > after_seq`, not `first`. A single-event page whose
+    /// first and last seq both EQUAL the cursor is well-ordered and still cannot advance.
+    /// Both real transports satisfy this by construction (`serve_conn` streams
+    /// `WHERE seq > $1` ascending; `MediumTransport` slices after the same partition point),
+    /// so it can only fire on a buggy or hostile peer.
+    #[test]
+    fn a_page_that_cannot_advance_the_cursor_is_refused_rather_than_looped() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..2)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+
+        // The SAME page twice: a peer that ignores `after_seq`. Page 2 is what a puller
+        // without the guard would keep asking for — the canned list runs out at three, so a
+        // looping puller fails this test at the request it should never have made.
+        let repeat = || page_json(&[&ev[0], &ev[1]], &[1, 2], false);
+        let t = FakeTransport::new(vec![repeat(), repeat()]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 2, None)
+            .expect_err("a page that cannot advance the cursor must not be looped on");
+        assert!(
+            boxed.downcast_ref::<PullIntegrityError>().is_some(),
+            "the peer answered and its seqs are the problem — integrity, not partition: {boxed}"
+        );
+        let text = boxed.to_string();
+        assert!(
+            text.contains("peer-a"),
+            "name the peer, not the link: {text}"
+        );
+        assert!(
+            text.contains('2') && text.contains("advance"),
+            "say WHICH cursor could not advance: {text}"
+        );
+        assert_eq!(
+            t.requests(),
+            vec![(0, Some(2)), (2, Some(2))],
+            "exactly two requests: the loop stops at the page that cannot advance it"
+        );
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            2,
+            "what the repeated page legitimately gained is still durable"
+        );
     }
 
     #[derive(Debug, PartialEq)]
@@ -7949,8 +8615,15 @@ mod quarantine_tests {
         c.batch_execute("SET lock_timeout = '750ms'").unwrap();
 
         let addr = serve_canned(response_json(&[&garbage], Some(CTX_EVENT.as_str())), 1);
-        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect_err("the pen write cannot acquire the row lock");
+        let err = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("the pen write cannot acquire the row lock");
 
         c.batch_execute("RESET lock_timeout").unwrap();
         blocker.batch_execute("ROLLBACK;").unwrap();
@@ -7998,8 +8671,15 @@ mod quarantine_tests {
         let mut c = locked_client(&base);
         let addr = serve_canned(b"{ this is not an EventsResponse".to_vec(), 1);
 
-        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect_err("a body that will not deserialize cannot be applied");
+        let err = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("a body that will not deserialize cannot be applied");
         let (classes, _) = classify_pull_failure(err.as_ref());
         assert_eq!(
             classes,
@@ -8026,8 +8706,15 @@ mod quarantine_tests {
         resp["seqs"] = serde_json::json!([]);
         let addr = serve_canned(serde_json::to_vec(&resp).unwrap(), 1);
 
-        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect_err("events without seqs cannot checkpoint the cursor");
+        let err = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("events without seqs cannot checkpoint the cursor");
         let (classes, _) = classify_pull_failure(err.as_ref());
         assert_eq!(classes, &["integrity"], "{err}");
     }
@@ -8050,8 +8737,15 @@ mod quarantine_tests {
         resp["seqs"] = serde_json::json!([7, 3]); // descending: the freeze logic relies on order
         let addr = serve_canned(serde_json::to_vec(&resp).unwrap(), 1);
 
-        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect_err("descending seqs must not poison the persistent cursor");
+        let err = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("descending seqs must not poison the persistent cursor");
         let (classes, _) = classify_pull_failure(err.as_ref());
         assert_eq!(classes, &["integrity"], "{err}");
     }
@@ -8062,7 +8756,15 @@ mod quarantine_tests {
         addr: &str,
         peer: &str,
     ) -> (String, serde_json::Value) {
-        let err = do_pull(c, &TcpTransport::new(addr), peer, false, None).unwrap_err();
+        let err = do_pull(
+            c,
+            &TcpTransport::new(addr),
+            peer,
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap_err();
         let ie = err
             .downcast_ref::<PullIntegrityError>()
             .expect("pull must fail as an INTEGRITY error, not transport");
@@ -8114,8 +8816,15 @@ mod quarantine_tests {
         // trip it on some unrelated statement.
         c.batch_execute("SET lock_timeout = '750ms'").unwrap();
 
-        let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect_err("the cursor commit cannot acquire the row lock");
+        let err = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("the cursor commit cannot acquire the row lock");
 
         c.batch_execute("RESET lock_timeout").unwrap();
         blocker.batch_execute("ROLLBACK;").unwrap();
@@ -8223,6 +8932,7 @@ mod quarantine_tests {
             &TcpTransport::new("127.0.0.1:1"),
             "peer-a",
             false,
+            DEFAULT_PAGE_EVENTS,
             None,
         )
         .expect_err("the client's backend has been terminated");
@@ -8400,7 +9110,15 @@ mod quarantine_tests {
         let repaired = peer_note(&sk, &kid, WALL_2026 + 1_500);
         let raw = response_json(&[&e1, &repaired, &e2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             m["applied_new"], 1,
             "the repaired event is admitted automatically"
@@ -8508,8 +9226,15 @@ mod quarantine_tests {
         let raw = response_json(&[&clean, &bad, &bad2], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
 
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect("a malformed attachment reference must NOT fail the cycle (#460)");
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect("a malformed attachment reference must NOT fail the cycle (#460)");
 
         assert_eq!(m["applied_new"], 3, "every event is in the record");
         assert_eq!(m["skipped_unverifiable"], 0, "nothing was penned");
@@ -8624,7 +9349,15 @@ mod quarantine_tests {
         // Now a peer re-offers those same bytes. Nothing is NEW to event_log…
         let raw = response_json(&[&bad], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             m["applied_new"], 0,
             "set-union no-op: the event was already held"
@@ -8718,11 +9451,27 @@ mod quarantine_tests {
         let raw = response_json(&[&bad], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 2);
 
-        let first = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let first = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
         assert_eq!(first["applied_new"], 1);
         assert_eq!(first["references_unlearnable"], 1, "the cycle's own news");
 
-        let second = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let second = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
         assert_eq!(second["applied_new"], 0, "set-union no-op on re-apply");
         assert_eq!(
             second["references_unlearnable"], 0,
@@ -8820,7 +9569,15 @@ mod quarantine_tests {
         let clean = peer_note(&sk, &kid, WALL_2026 + 2_000);
         let raw = response_json(&[&clean], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(m["applied_new"], 1);
         assert_eq!(
@@ -9163,8 +9920,15 @@ mod quarantine_tests {
             &[&kid_x],
         )
         .unwrap();
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-            .expect("the repaired cycle is clean and must not fail");
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect("the repaired cycle is clean and must not fail");
         assert_eq!(m["applied_new"], 1, "delayed, never lost");
         assert_eq!(m["refused_verifiable"], 0);
         assert_eq!(
@@ -9224,8 +9988,15 @@ mod quarantine_tests {
         // The error object is kept (rather than going through `pull_integrity_err`)
         // because its CLASS is half of what this test now pins — see the assertion below
         // the metrics — and the canned serve answers exactly once.
-        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-t", false, None)
-            .expect_err("a non-refusal apply failure freezes the cycle loudly");
+        let boxed = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-t",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("a non-refusal apply failure freezes the cycle loudly");
         let ie = boxed
             .downcast_ref::<PullIntegrityError>()
             .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
@@ -9334,8 +10105,15 @@ mod quarantine_tests {
         )
         .unwrap();
 
-        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-b", false, None)
-            .expect_err("a non-refusal apply failure freezes the cycle loudly");
+        let boxed = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-b",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("a non-refusal apply failure freezes the cycle loudly");
         let (classes, _) = classify_pull_failure(boxed.as_ref());
 
         for (name, sql) in SCHEMA {
@@ -9378,7 +10156,15 @@ mod quarantine_tests {
             .unwrap();
 
         // Same wire content again: quiet success, floor released.
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
         assert_eq!(m["skipped_unverifiable"], 0);
         assert_eq!(
             m["skipped_acked"], 1,
@@ -9404,9 +10190,14 @@ mod quarantine_tests {
         // Legacy peer shape: NO signing_context field (pre-ADR-0040), but the seqs
         // travel (a #196 serve always ships them) so the puller reaches the
         // per-event verify + all-unverifiable diagnosis rather than the seq guard.
+        // `complete` IS declared, even though a peer this old would not send it: this
+        // test is about the all-unverifiable diagnosis, not paging, and an omitted
+        // `complete` decodes as "there may be more" (deliberately — cairn_wire::wire),
+        // which would send the paged puller after a second page.
         let raw = serde_json::to_vec(&serde_json::json!({
             "events": [hex::encode(&g1), hex::encode(&g2)],
             "seqs": [1, 2],
+            "complete": true,
         }))
         .unwrap();
 
@@ -9438,6 +10229,7 @@ mod quarantine_tests {
             &TcpTransport::new(&addr),
             "peer-legacy",
             false,
+            DEFAULT_PAGE_EVENTS,
             None
         )
         .is_err());
@@ -9466,7 +10258,15 @@ mod quarantine_tests {
         let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
         let raw = response_json(&[&e1], Some(CTX_EVENT.as_str()));
         let addr = serve_canned(raw, 1);
-        let m = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None).unwrap();
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-a",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap();
         assert_eq!(m["applied_new"], 1);
 
         // Now the peer's new tail is garbage; the boundary event re-ships (a
@@ -9494,10 +10294,14 @@ mod quarantine_tests {
         let (sk, kid) = enrolled_key(&mut c);
 
         let e1 = peer_note(&sk, &kid, WALL_2026 + 1_000);
+        // `complete` declared for the same reason `response_json` always declares it: this
+        // test is about the non-hex entry, and an omitted `complete` means "there may be
+        // more", which would send the paged puller after a second page.
         let raw = serde_json::to_vec(&serde_json::json!({
             "events": [hex::encode(&e1), "zz-not-hex-at-all"],
             "seqs": [1, 2],
             "signing_context": CTX_EVENT.as_str(),
+            "complete": true,
         }))
         .unwrap();
 
@@ -9579,9 +10383,16 @@ mod quarantine_tests {
             }))
             .unwrap();
             let addr = serve_canned(raw, 1);
-            let err = do_pull(&mut c, &TcpTransport::new(&addr), "peer-a", false, None)
-                .unwrap_err()
-                .to_string();
+            let err = do_pull(
+                &mut c,
+                &TcpTransport::new(&addr),
+                "peer-a",
+                false,
+                DEFAULT_PAGE_EVENTS,
+                None,
+            )
+            .unwrap_err()
+            .to_string();
             assert!(
                 err.contains("ascending"),
                 "malformed seqs must be named, got: {err}"
@@ -9621,8 +10432,15 @@ mod quarantine_tests {
                 // Dropping the stream closes it with no response frame written.
             }
         });
-        let boxed =
-            do_pull(&mut c, &TcpTransport::new(&addr), "peer-old", false, None).unwrap_err();
+        let boxed = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-old",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .unwrap_err();
         let err = boxed.to_string();
         assert!(
             err.contains("db/036"),
@@ -9701,8 +10519,15 @@ mod quarantine_tests {
             }
         });
 
-        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-fat", false, None)
-            .expect_err("a length prefix over the cap is refused before allocating");
+        let boxed = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-fat",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("a length prefix over the cap is refused before allocating");
         let (classes, _) = classify_pull_failure(boxed.as_ref());
         assert_eq!(
             classes,
@@ -9740,8 +10565,15 @@ mod quarantine_tests {
         // The error object itself is kept (rather than going through
         // `pull_integrity_err`) because its CLASS is half of what this test now pins, and
         // the canned serve answers exactly once.
-        let boxed = do_pull(&mut c, &TcpTransport::new(&addr), "peer-flood", false, None)
-            .expect_err("a pen at its quota freezes the cycle loudly");
+        let boxed = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-flood",
+            false,
+            DEFAULT_PAGE_EVENTS,
+            None,
+        )
+        .expect_err("a pen at its quota freezes the cycle loudly");
         let ie = boxed
             .downcast_ref::<PullIntegrityError>()
             .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
