@@ -365,6 +365,41 @@ mod tests {
     }
 
     #[test]
+    fn a_structurally_broken_complete_segment_is_not_served() {
+        // The torn-tail test above proves nothing about `verified_through` on its own: a torn
+        // section never reaches `MediumV3::segments` in the first place (`parse_any`'s
+        // `take_section` excludes an incomplete trailing section before `chain_report` ever
+        // runs — see `crates/cairn-medium/src/container.rs`), so that test would pass even if
+        // `MediumTransport::new` served every segment `m.segments` contains, unbounded.
+        //
+        // This test is the one that actually exercises the bound: two COMPLETE segments —
+        // both parse cleanly, both have well-formed records — where segment 1's
+        // `prev_commitment` is deliberately wrong. This is `cairn_medium::chain`'s own
+        // established fixture shape for a structural break on an unsigned segment (see
+        // `chain::tests::a_broken_link_retracts_verified_through_even_when_unsigned`, which
+        // mangles `m.segments[1].prev_commitment` the same way). `chain_report` retracts
+        // `verified_through` to `Some(0)` on the mismatch alone (`SegmentFault::ChainBroken`),
+        // so segment 1's clinical record must be absent from the response even though the
+        // bytes parsed fine and nothing about segment 1 itself is torn.
+        let mut segs = segments(&[
+            (Plane::Clinical, vec![record(1, 1)]),
+            (Plane::Clinical, vec![record(2, 2)]),
+        ]);
+        segs[1].prev_commitment = "deadbeef".into();
+        let bytes = serialize_v3(&segs).expect("serialize");
+        let t = MediumTransport::new("medium /tmp/broken.b3", parse_any(&bytes).expect("parse"))
+            .expect(
+                "a structural chain fault is a MILD fault too — see the module doc's \
+                     'trust stops at verified_through', never a refusal",
+            );
+        assert_eq!(
+            events(&t, 0, None).seqs,
+            vec![1],
+            "segment 0 verifies and is served; segment 1 sits past the broken link and must not be"
+        );
+    }
+
+    #[test]
     fn an_empty_clinical_plane_has_no_watermark_and_never_zero() {
         // 2a invariant 8: zero is a claim, absence is the honest answer.
         let t = transport_over(&[(Plane::Node, vec![record(9, 1)])]);
@@ -378,5 +413,47 @@ mod tests {
     fn a_medium_never_declares_a_signing_context_it_does_not_record() {
         let t = transport_over(&[(Plane::Clinical, vec![record(1, 1)])]);
         assert!(events(&t, 0, None).signing_context.is_none());
+    }
+
+    #[test]
+    fn an_unwrap_cert_is_ignored_but_never_silently_and_changes_nothing_served() {
+        // "Told it was ignored, never silently ignored" (module doc). The telling half is an
+        // `eprintln!` in `request` — asserting on stderr would mean either restructuring
+        // production code to make it capturable (out of scope for this fix) or shelling out to
+        // capture a child process's stderr (a new dependency this crate does not otherwise
+        // need), so that half is covered by inspection of the `if unwrap_cert.is_some()` call
+        // site in `request`, not by assertion here.
+        //
+        // What THIS test asserts is the observable contract: sending a request WITH an
+        // unwrap_cert must not change what is served, must not fail, and must not cause
+        // anything to be withheld. `wrapped_deks` travels exactly as it would with no cert at
+        // all (verbatim, wrapped to the CAPTURING node's key — the medium cannot re-wrap it
+        // for the requester because it holds no secret), which is the whole point: an ignored
+        // cert is a no-op on the data path, not a partial answer.
+        let mut r = record(1, 1);
+        r.dek_wrapped = Some(vec![7, 7, 7]);
+        let t = transport_over(&[(Plane::Clinical, vec![r])]);
+        let raw = t
+            .request(&Request::EventsAfterSeq {
+                after_seq: 0,
+                unwrap_cert: Some("deadbeef".into()),
+                limit: None,
+            })
+            .expect("an unwrap cert must not cause a refusal");
+        let resp: EventsResponse = serde_json::from_slice(&raw).expect("decode");
+        assert_eq!(
+            resp.seqs,
+            vec![1],
+            "the cert must not change which records are served"
+        );
+        assert_eq!(
+            resp.wrapped_deks,
+            vec![Some("070707".to_string())],
+            "verbatim — the medium cannot re-wrap for the requester's cert"
+        );
+        assert!(
+            resp.custody_withheld.is_none(),
+            "an ignored cert is a no-op, not a withhold"
+        );
     }
 }
