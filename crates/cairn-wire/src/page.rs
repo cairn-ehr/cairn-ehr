@@ -39,7 +39,10 @@ pub fn page_decision(complete: bool, page_len: usize, frozen: bool) -> PageDecis
              neither an end nor a continuation: treating it as the end would checkpoint the \
              cursor as though the log were drained and silently strand every event above it, \
              and continuing would re-request the same cursor forever. The peer answered and \
-             its wire format is the problem — check that it sets `complete` on every response."
+             its wire format is the problem — check that it sets `complete` on every \
+             response. If earlier pages of this same cycle DID deliver events with \
+             `complete` unset, the peer most likely predates paging (slice 2b, #101 item 1) \
+             and never sets the field at all — upgrade the peer binary."
                 .to_string(),
         );
     }
@@ -69,7 +72,21 @@ mod tests {
         // forever against the same cursor. The peer ANSWERED and the answer is unusable,
         // which is an integrity condition.
         match page_decision(false, 0, false) {
-            PageDecision::Refuse(why) => assert!(why.contains("complete"), "{why}"),
+            PageDecision::Refuse(why) => {
+                assert!(why.contains("complete"), "{why}");
+                // …and it must name the CAUSE, not only the field. This is the line an
+                // operator sees every cycle, forever, on a link that is otherwise healthy:
+                // a pre-paging peer never sets `complete`, so its response decodes as
+                // "there may be more", the puller asks once more, and gets exactly this
+                // empty page. Naming the version boundary and the remedy is the house
+                // standard `do_pull`'s pre-#196 transport message already sets. The
+                // sentence is conditional in its own prose, so no state is needed to
+                // decide whether to say it.
+                assert!(
+                    why.contains("predates paging") && why.contains("upgrade the peer"),
+                    "the refusal must name the likeliest cause and its remedy: {why}"
+                );
+            }
             other => panic!("must refuse, got {other:?}"),
         }
     }

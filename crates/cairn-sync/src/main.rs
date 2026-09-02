@@ -395,9 +395,15 @@ struct CursorCommitError {
     /// The same metrics JSON a successful pull returns, with the fields that describe
     /// the FAILED write marked unknown — see [`mark_cursor_outcome_unknown`].
     metrics: serde_json::Value,
-    /// Was this ALSO a `cycle_is_loud` cycle? Then the log line carries BOTH class keys
+    /// Was this ALSO an integrity cycle? Then the log line carries BOTH class keys
     /// and the message carries both diagnoses; the integrity condition is not swallowed
     /// just because the commit failed on the same pass (PR #472 review, finding 5).
+    ///
+    /// Named for `cycle_is_loud`, which was the only integrity condition that could reach
+    /// it. Since slice 2b a PAGE REFUSAL (an empty page that does not declare the stream
+    /// complete; a page that cannot advance the cursor) is a second one, and it sets this
+    /// flag too — the question the field really answers is *does the message carry an
+    /// integrity condition as well*, and the class key it adds is `integrity` either way.
     also_loud: bool,
 }
 
@@ -2958,6 +2964,16 @@ fn do_pull(
     // path ever reads, and the compiler says so (`unused_assignments`).
     let mut cursor_commit: Result<(), String>;
     let mut new_floor: Option<i64>;
+    // A page this puller cannot act on ends the cycle, but NOT with an early `return`
+    // (fix round 1, I1). The metrics object is the cycle's REPORT, not its record: `cmd_run`
+    // logs it as one JSON line per cycle and `bet_a.py` aggregates every cycle behind
+    // `if "pull" in r`, so returning here with `metrics: null` would make a cycle that
+    // applied 39 pages contribute ZERO to applied_new, bytes_per_event and the A4 latency
+    // list — and would falsify `record_pull_failure`'s own comment ("Null only for the
+    // classes that failed before any work was measurable"). `sync_state` carries `last_seq`
+    // and `last_pull_at`; it carries no count of what this cycle did. So the refusal is held
+    // and raised BELOW, once the report describing the pages that DID land is built.
+    let mut refusal: Option<String> = None;
 
     // ONE PAGE PER PASS, until the peer declares the stream complete (#101 item 1). Before
     // this loop a catch-up bigger than the 30 s read timeout re-requested the SAME oversized
@@ -3097,8 +3113,9 @@ fn do_pull(
         // several: computed per page, a clean page 2 would CLEAR the pin a refusing page 1
         // set — and the cursor has already advanced past that refused event, so it would
         // never be re-offered again. Silent permanent exclusion is precisely what this
-        // floor exists to prevent. (`quarantine_floor`'s own doc says the same, and
-        // `a_clean_later_page_cannot_clear_a_pin_an_earlier_page_set` pins it.)
+        // floor exists to prevent. (`quarantine_floor`'s own doc says the same, and its
+        // unit test pins the pure RULE; that `do_pull` feeds it the CYCLE is pinned by
+        // `a_clean_later_page_cannot_clear_the_floor_an_earlier_page_pinned`.)
         new_floor = pull_page::quarantine_floor(
             cycle.skipped_unverifiable,
             cycle.refused_verifiable,
@@ -3117,19 +3134,15 @@ fn do_pull(
 
         match page_decision(resp.complete, resp.events.len(), cycle.frozen) {
             PageDecision::Done => break,
-            // The peer answered with something no puller can act on. What it already
-            // legitimately gained is durable — every page above committed its cursor — so
-            // unlike the #469 case this error is not the only record of the cycle's work:
-            // `sync_state` is.
+            // The peer answered with something no puller can act on. Held rather than
+            // raised, so the pages that DID land are still reported — see `refusal`.
             PageDecision::Refuse(why) => {
-                return Err(Box::new(PullIntegrityError {
-                    message: format!("pull {peer_name}: {why}"),
-                    metrics: serde_json::Value::Null,
-                    also_local_fault: false,
-                }))
+                refusal = Some(format!("pull {peer_name}: {why}"));
+                break;
             }
             // `Continue` implies a non-empty page (`page_decision` refuses an empty one),
-            // so `next_cursor` is Some; the fallback ends the loop rather than unwrapping.
+            // so `next_cursor` is Some — but nothing here UNWRAPS that: both the
+            // cannot-advance case and the impossible no-seqs case are refused explicitly.
             PageDecision::Continue => match next_cursor {
                 // THE ANTI-LOOP INVARIANT: the next cursor must be STRICTLY above the one
                 // we just asked from. `first > after_seq` is not this invariant and neither
@@ -3147,21 +3160,31 @@ fn do_pull(
                 // a buggy or hostile peer can reach it.
                 Some(next) if next > page_cursor => page_cursor = next,
                 Some(next) => {
-                    return Err(Box::new(PullIntegrityError {
-                        message: format!(
-                            "pull {peer_name}: the peer answered an INCOMPLETE page whose \
-                             last seq ({next}) does not advance the cursor it was asked \
-                             from ({page_cursor}) — the next request would repeat this one \
-                             forever. The peer is not honouring `after_seq` (it must serve \
-                             `seq > after_seq`, ascending). Refusing to loop; this cycle's \
-                             progress is committed and the next cycle resumes from it."
-                        ),
-                        metrics: serde_json::Value::Null,
-                        // Nothing about this is this node's database: the peer's seqs are.
-                        also_local_fault: false,
-                    }));
+                    refusal = Some(format!(
+                        "pull {peer_name}: the peer answered an INCOMPLETE page whose \
+                         last seq ({next}) does not advance the cursor it was asked from \
+                         ({page_cursor}) — the next request would repeat this one forever. \
+                         The peer is not honouring `after_seq` (it must serve \
+                         `seq > after_seq`, ascending). Refusing to loop; this cycle's \
+                         progress is committed and the next cycle resumes from it."
+                    ));
+                    break;
                 }
-                None => break,
+                // UNREACHABLE TODAY, and refused anyway (fix round 1, M2). `Continue`
+                // implies a non-empty page, and `validate_page` refuses a page whose seqs
+                // array is shorter than its events, so there is always a last seq. But a
+                // silent `break` here would be precisely the outcome `page_decision`'s own
+                // refusal text warns about — checkpointing the cursor as though the log
+                // were drained — and refusing costs nothing and cannot be wrong.
+                None => {
+                    refusal = Some(format!(
+                        "pull {peer_name}: the peer answered a non-empty page carrying NO \
+                         seqs, so there is no cursor to continue from. Stopping here would \
+                         checkpoint as though the log were drained; the peer answered and \
+                         its wire format is the problem."
+                    ));
+                    break;
+                }
             },
         }
     }
@@ -3273,8 +3296,25 @@ fn do_pull(
         )
     });
 
+    // A page REFUSAL and a LOUD cycle are both integrity conditions, and one cycle can be
+    // both (page 1 quarantines an unverifiable event; page 4 comes back empty and not
+    // complete). Compose them rather than letting either shadow the other — the same rule
+    // `CursorCommitError::also_loud` already encodes one class over: collapsing two
+    // conditions into one drops the diagnosis carrying the other remedy. The loud text
+    // leads, because it is the one that names the quarantine an operator must act on.
+    let integrity_message = match (refusal, loud_message) {
+        (Some(refused), Some(loud_text)) => Some(format!(
+            "{loud_text} ALSO, ON THIS CYCLE'S LAST PAGE: {refused}"
+        )),
+        (Some(refused), None) => Some(refused),
+        (None, loud_text) => loud_text,
+    };
+
     // The local-fault class (issue #469). Everything above describes work that genuinely
-    // happened; only the two fields describing the failed write are withdrawn.
+    // happened; only the two fields describing the failed write are withdrawn. It is
+    // checked FIRST, so a genuine commit failure still wins the class: an integrity
+    // condition on the same cycle is carried in the message and the second class key
+    // rather than replacing it.
     if let Err(cause) = cursor_commit {
         mark_cursor_outcome_unknown(&mut metrics);
         return Err(Box::new(CursorCommitError {
@@ -3283,10 +3323,10 @@ fn do_pull(
                 cycle.applied,
                 cycle.max_seq,
                 &cause,
-                loud_message.as_deref(),
+                integrity_message.as_deref(),
             ),
             metrics,
-            also_loud: loud,
+            also_loud: integrity_message.is_some(),
         }));
     }
 
@@ -3300,7 +3340,9 @@ fn do_pull(
     // of its own by exiting SUCCESS with a halted cursor. `run` logs this as an
     // integrity condition, not a partition. The message itself was composed above,
     // so that a cycle which ALSO failed its cursor commit still carries it.
-    if let Some(message) = loud_message {
+    // …and a page refusal joins it here (fix round 1, I1): same class, same metrics
+    // object describing every page that DID land, composed above.
+    if let Some(message) = integrity_message {
         return Err(Box::new(PullIntegrityError {
             message,
             metrics,
@@ -3397,7 +3439,9 @@ fn validate_page(resp: &EventsResponse, peer_name: &str) -> Result<(), PullInteg
                 message: format!(
                     "pull {peer_name}: peer declares signing context '{peer_ctx}' but this \
                      node expects '{}' — wire-format skew, not tampering; upgrade the older \
-                     side. Batch refused, cursor untouched.",
+                     side. This page is refused; the cursor keeps whatever earlier pages of \
+                     this cycle committed (fix round 1, M1: from page 2 on, \"cursor \
+                     untouched\" was no longer true).",
                     CTX_EVENT.as_str()
                 ),
                 metrics: serde_json::Value::Null,
@@ -7747,16 +7791,30 @@ mod quarantine_tests {
     /// existing `serve_canned` serves a pre-encoded response, which cannot exercise the serve
     /// arm itself — and the serve arm is what this test is about.
     fn serve_one_request(conn: &str, req: &Request) -> Vec<u8> {
+        let (addr, server) = real_serve(conn, 1);
+        let raw = TcpTransport::new(&addr).try_once(req).unwrap();
+        server.join().unwrap();
+        raw
+    }
+
+    /// Spawn a REAL `serve_conn` answering up to `times` connections on a throwaway port;
+    /// returns its address and the thread handle. `TcpTransport` opens one connection per
+    /// request, so `times` is the number of PAGES the puller may fetch (slice 2b Task 7).
+    ///
+    /// Join the handle only when the caller knows exactly how many connections will be
+    /// made — a join that outnumbers them blocks forever. Joining is what surfaces a
+    /// serve-side panic as a test failure instead of a bare connection error.
+    fn real_serve(conn: &str, times: usize) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let conn = conn.to_string();
         let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            serve_conn(&conn, stream, false, None).unwrap();
+            for _ in 0..times {
+                let (stream, _) = listener.accept().unwrap();
+                serve_conn(&conn, stream, false, None).unwrap();
+            }
         });
-        let raw = TcpTransport::new(&addr).try_once(req).unwrap();
-        server.join().unwrap();
-        raw
+        (addr, server)
     }
 
     /// A limited request must return at most `limit` events and must declare `complete`
@@ -7805,6 +7863,82 @@ mod quarantine_tests {
     // `do_pull` through `FakeTransport`, so the assertions can be about the SEQUENCE of
     // requests the loop makes — which is where paging's real defects live.
     // ---------------------------------------------------------------------------------
+
+    /// **Fix round 1, I3. The only test that composes the REAL serve with the REAL puller
+    /// across more than one page.**
+    ///
+    /// The paging contract has two halves and they are otherwise only ever tested apart:
+    /// serve decides `complete` with a limit+1 probe
+    /// (`serve_honours_the_page_limit_and_declares_completeness`), and the puller decides
+    /// the next fetch point with `seqs.last()` (`FakeTransport`, everything below). The
+    /// seam between them is where an off-by-one loses events silently, and
+    /// `tests/clinical_pull.rs` cannot reach it: it uses the 500-event default over a
+    /// handful of events, so every cycle there is exactly ONE page.
+    ///
+    /// Three events, `--page 1`. `pages == 3` is the tight assertion: it fails if the
+    /// puller re-asks (4+ pages, or the advance guard fires) AND it fails if serve's
+    /// completeness probe is wrong on the last page — a `complete: false` there would make
+    /// the puller fetch a fourth, empty-but-complete page. `shipped == 3` fails if any
+    /// event is skipped or repeated. Together they pin the seam from both sides.
+    ///
+    /// Serving and pulling share ONE database, so every event is an idempotent set-union
+    /// no-op on arrival (`applied_new == 0`) — which is ADR-0004's own property, not a
+    /// weakness of the fixture: what is being tested is which events crossed the wire.
+    #[test]
+    fn the_real_serve_and_the_real_puller_page_together_over_tcp() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        for i in 0..3 {
+            let bytes = peer_note(&sk, &kid, WALL_2026 + i);
+            c.execute("SELECT apply_remote_event($1, NULL, NULL, NULL)", &[&bytes])
+                .unwrap();
+        }
+
+        // Exactly three connections: one per page. See `real_serve` on why joining is
+        // safe only when the count is known.
+        let (addr, server) = real_serve(&base, 3);
+        let m = do_pull(
+            &mut c,
+            &TcpTransport::new(&addr),
+            "peer-real",
+            false,
+            1,
+            None,
+        )
+        .expect("a healthy paged pull over a real socket");
+        server.join().expect("the serve thread must not panic");
+
+        assert_eq!(
+            m["pages"], 3,
+            "three events at one per page is three round trips — a fourth means serve \
+             mis-declared `complete` on the last page, or the puller re-asked: {m}"
+        );
+        assert_eq!(
+            m["shipped"], 3,
+            "every event crossed the wire exactly once: fewer means the puller's \
+             `after_seq` skipped one, more means it repeated one: {m}"
+        );
+        assert_eq!(m["applied_new"], 0, "same database: set-union no-ops: {m}");
+        assert_eq!(m["skipped_unverifiable"], 0, "{m}");
+        assert_eq!(m["watermark_frozen"], false, "{m}");
+        // Against the LIVE log's own high seq, not a literal: `TRUNCATE` (without RESTART
+        // IDENTITY) leaves event_log.seq climbing across tests in this database, so the
+        // three events sit at whatever the sequence had reached. Hard-coding 3 here passed
+        // only by luck of test order.
+        let top: i64 = c
+            .query_one("SELECT max(seq) FROM event_log", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            m["cursor_seq"], top,
+            "the cursor reached the end of the log: {m}"
+        );
+        assert_eq!(cursor(&mut c, "peer-real"), top, "and it is durable");
+    }
 
     /// Three pages of two events each converge, and the cursor ends at the last seq.
     #[test]
@@ -7891,15 +8025,72 @@ mod quarantine_tests {
         ]);
 
         let boxed = do_pull(&mut c, &t, "peer-a", false, 1, None).expect_err("must refuse");
-        assert!(
-            boxed.downcast_ref::<PullIntegrityError>().is_some(),
-            "integrity, not partition: {boxed}"
-        );
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("integrity, not partition: {boxed}"));
         assert!(boxed.to_string().contains("complete"), "{boxed}");
         assert_eq!(
             cursor(&mut c, "peer-a"),
             1,
             "page 1's progress is still durable"
+        );
+        // …AND THE CYCLE STILL REPORTS WHAT IT DID (fix round 1, I1). The metrics object
+        // is the cycle's report, not its record: `cmd_run` logs it per cycle and
+        // `bet_a.py` aggregates every cycle that has one, so a refusal on page 40 that
+        // published `null` would erase 39 pages of applied events, bytes and latency from
+        // the operator's view — and `record_pull_failure` promises the opposite ("Null
+        // only for the classes that failed before any work was measurable").
+        let m = &ie.metrics;
+        assert!(
+            !m.is_null(),
+            "the pages that DID land must still be reported"
+        );
+        assert_eq!(m["applied_new"], 1, "page 1's event applied: {m}");
+        assert_eq!(m["shipped"], 1, "{m}");
+        assert_eq!(m["pages"], 2, "the empty page is a page that happened: {m}");
+        assert_eq!(m["cursor_seq"], 1, "{m}");
+    }
+
+    /// A cycle can be BOTH loud and refused, and it must report both (fix round 1, I1).
+    ///
+    /// Page 1 quarantines an unverifiable event — a loud cycle, whose message names the pen
+    /// and the operator's remedy. Page 2 comes back empty without declaring completeness — a
+    /// refusal, whose message names the peer's wire fault and the likely upgrade. Neither
+    /// diagnosis may shadow the other: they have DIFFERENT remedies, which is the same
+    /// reason `CursorCommitError::also_loud` exists one class over.
+    #[test]
+    fn a_cycle_that_is_both_loud_and_refused_reports_both_diagnoses() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let t = FakeTransport::new(vec![
+            page_json(&[b"legacy or corrupt blob"], &[1], false),
+            page_json(&[], &[], false),
+        ]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 1, None)
+            .expect_err("an unacked refusal AND an unusable page");
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("integrity: {boxed}"));
+        assert!(
+            ie.message.contains("unverifiable") && ie.message.contains("sync_quarantine"),
+            "the LOUD diagnosis and its remedy must survive: {}",
+            ie.message
+        );
+        assert!(
+            ie.message.contains("EMPTY page") && ie.message.contains("upgrade the peer"),
+            "…and so must the page refusal and ITS remedy: {}",
+            ie.message
+        );
+        assert_eq!(ie.metrics["pages"], 2, "{}", ie.metrics);
+        assert_eq!(ie.metrics["skipped_unverifiable"], 1, "{}", ie.metrics);
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            Some(1),
+            "the refusal does not cost the refused slot its floor"
         );
     }
 
@@ -7970,7 +8161,12 @@ mod quarantine_tests {
             .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
             .collect();
 
-        // Get the committed cursor to 4 with an ordinary incremental pull.
+        // Get the committed cursor to 4 with an ordinary incremental pull. THIS WARM-UP
+        // IS THE TEST. Without it `cycle.max_seq` and the last seq received coincide on
+        // every page, and paging from the checkpoint — the defect this test exists to
+        // catch — survives untouched. Do not "simplify" it away by sweeping a fresh
+        // database: that silently deletes the coverage, exactly as `pull_page.rs` warns
+        // about its own structurally identical descending-max_seq pair.
         let warm = FakeTransport::new(vec![page_json(
             &[&ev[0], &ev[1], &ev[2], &ev[3]],
             &[1, 2, 3, 4],
@@ -8070,6 +8266,51 @@ mod quarantine_tests {
             m["custody_withheld"], true,
             "page 1 withheld; a cycle-scoped metric must still say so after a page that \
              did not: {m}"
+        );
+    }
+
+    /// **Fix round 1, I2.** The attachment-flag watermark is read ONCE, before page 1.
+    ///
+    /// It is the "before any of this cycle's events landed" high-water mark the #465 report
+    /// is read back on. Taken PER PAGE it would advance past pages 1..n-1, so every
+    /// reference they admitted-but-could-not-learn would be filtered out of the report —
+    /// and a monitor watching `references_unlearnable` would see zero on exactly the
+    /// multi-page catch-up cycles most likely to carry one. That is the blindness #465
+    /// exists to end, re-created by paging.
+    ///
+    /// The bad reference is deliberately on page 1 and the clean event on page 2: a
+    /// per-page read only hides what an EARLIER page found.
+    #[test]
+    fn the_attachment_flag_watermark_is_read_once_before_the_first_page() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let (bad, bad_id) = peer_note_with_bad_references(&sk, &kid, WALL_2026 + 1_000, 1);
+        let clean = peer_note(&sk, &kid, WALL_2026 + 2_000);
+        let t = FakeTransport::new(vec![
+            page_json(&[&bad], &[1], false),
+            page_json(&[&clean], &[2], true),
+        ]);
+
+        let m = do_pull(&mut c, &t, "peer-a", false, 1, None)
+            .expect("a malformed attachment reference must NOT fail the cycle (#460)");
+
+        assert_eq!(m["pages"], 2, "both pages ran: {m}");
+        assert_eq!(m["applied_new"], 2, "every event is in the record: {m}");
+        assert_eq!(
+            m["references_unlearnable"], 1,
+            "the reference page 1 could not learn must still be reported at the end of \
+             the cycle — a watermark re-read before page 2 would filter it out and report \
+             0: {m}"
+        );
+        assert_eq!(
+            flag_count(&mut c, &bad_id),
+            1,
+            "the ledger holds the standing fact either way; the METRIC is what a \
+             per-page watermark loses"
         );
     }
 
@@ -8179,6 +8420,20 @@ mod quarantine_tests {
             2,
             "what the repeated page legitimately gained is still durable"
         );
+        // …and is REPORTED, not just durable — see the empty-page test above for why the
+        // report and the record are different things (fix round 1, I1).
+        let m = &boxed
+            .downcast_ref::<PullIntegrityError>()
+            .expect("integrity")
+            .metrics;
+        assert!(
+            !m.is_null(),
+            "the pages that DID land must still be reported"
+        );
+        assert_eq!(m["applied_new"], 2, "page 1's two events applied: {m}");
+        assert_eq!(m["shipped"], 4, "both pages shipped two events each: {m}");
+        assert_eq!(m["pages"], 2, "{m}");
+        assert_eq!(m["cursor_seq"], 2, "{m}");
     }
 
     #[derive(Debug, PartialEq)]
@@ -10193,7 +10448,10 @@ mod quarantine_tests {
         // `complete` IS declared, even though a peer this old would not send it: this
         // test is about the all-unverifiable diagnosis, not paging, and an omitted
         // `complete` decodes as "there may be more" (deliberately — cairn_wire::wire),
-        // which would send the paged puller after a second page.
+        // which would send the paged puller after a second page. The load-bearing marker
+        // here is the ABSENT signing context; `complete` is orthogonal to it, and the
+        // termination shape of a peer that never sets the field is covered by
+        // `an_empty_page_without_complete_fails_the_pull_loudly`.
         let raw = serde_json::to_vec(&serde_json::json!({
             "events": [hex::encode(&g1), hex::encode(&g2)],
             "seqs": [1, 2],
