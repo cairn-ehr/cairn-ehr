@@ -14,7 +14,7 @@ use crate::{merge_pen_refusal, PenRefusal};
 /// with `..PageTally::default()` instead of naming thirteen it does not care about.
 ///
 /// `#[allow(dead_code)]`: nothing constructs this outside `#[cfg(test)]` yet — `do_pull` still
-/// makes a single request and holds its counters as local `mut` bindings (Task 7 of this slice
+/// makes a single request and holds its counters as local `mut` bindings (Task 6 of this slice
 /// folds pages through it and removes this attribute).
 #[allow(dead_code)]
 #[derive(Debug, Default)]
@@ -53,7 +53,7 @@ pub(crate) struct PageTally {
 /// What the whole cycle has contributed so far. Same fields, accumulated.
 ///
 /// `#[allow(dead_code)]`: see [`PageTally`] — `do_pull` does not fold pages into this yet
-/// (Task 7 of this slice wires it in and removes this attribute).
+/// (Task 6 of this slice wires it in and removes this attribute).
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct CycleTally {
@@ -169,6 +169,16 @@ mod tests {
         assert_eq!(quarantine_floor(0, 0, false, None, Some(5)), None);
     }
 
+    /// Fix round 1, finding 6: the test above passes `pin: None`, so flipping the first
+    /// branch's `!pen_failed` to `pen_failed` would fall through to the `pin` branch, which
+    /// ALSO yields `None` there — the mutant survives. A stale `pin: Some(9)` (left over from
+    /// a PRIOR cycle's refusal, now clean) makes the two branches disagree: the clean-cycle
+    /// branch must still clear it even though a pin value is sitting right there.
+    #[test]
+    fn a_clean_cycle_clears_the_floor_even_over_a_stale_pin() {
+        assert_eq!(quarantine_floor(0, 0, false, Some(9), Some(5)), None);
+    }
+
     #[test]
     fn unacked_refusals_with_a_healthy_pen_pin_at_the_first_refused_slot() {
         assert_eq!(quarantine_floor(1, 0, false, Some(7), Some(5)), Some(7));
@@ -212,6 +222,8 @@ mod tests {
 
     #[test]
     fn the_earliest_pin_wins_whichever_page_carried_it() {
+        // Descending (9 then 4): min and "first wins" happen to agree — both give 4 — so this
+        // pair alone does not rule out first-wins as the rule actually implemented.
         let mut cycle = CycleTally::new(0);
         cycle.fold(PageTally {
             refused_verifiable: 1,
@@ -228,6 +240,27 @@ mod tests {
             Some(4),
             "min, not first-wins: order-independent by construction"
         );
+
+        // Fix round 1, finding 5: ascending (4 then 9) is the pair's other half. Here min and
+        // "first wins" also agree (both give 4), but "last wins" would wrongly give 9. Only
+        // the TWO cases TOGETHER pin down MIN specifically against both first-wins and
+        // last-wins mutants.
+        let mut ascending = CycleTally::new(0);
+        ascending.fold(PageTally {
+            refused_verifiable: 1,
+            pin: Some(4),
+            ..PageTally::default()
+        });
+        ascending.fold(PageTally {
+            refused_verifiable: 1,
+            pin: Some(9),
+            ..PageTally::default()
+        });
+        assert_eq!(
+            ascending.pin,
+            Some(4),
+            "min, not last-wins: order-independent by construction"
+        );
     }
 
     #[test]
@@ -237,6 +270,12 @@ mod tests {
             applied: 3,
             shipped: 5,
             event_bytes: 100,
+            // wire_bytes/skipped_acked given DIFFERENT values on each page (fix round 1,
+            // finding 7): a `+=` -> `=` regression on either would make the total equal the
+            // LAST page's value alone (30 / 2) rather than the sum (70 / 3), so distinct
+            // per-page values are what makes the mutant visible.
+            wire_bytes: 40,
+            skipped_acked: 1,
             max_seq: 14,
             custody_withheld: true,
             ..PageTally::default()
@@ -245,15 +284,108 @@ mod tests {
             applied: 2,
             shipped: 5,
             event_bytes: 90,
+            wire_bytes: 30,
+            skipped_acked: 2,
             max_seq: 19,
             frozen: true,
             ..PageTally::default()
         });
         assert_eq!(
-            (cycle.applied, cycle.shipped, cycle.event_bytes),
-            (5, 10, 190)
+            (
+                cycle.applied,
+                cycle.shipped,
+                cycle.event_bytes,
+                cycle.wire_bytes,
+                cycle.skipped_acked,
+            ),
+            (5, 10, 190, 70, 3)
         );
         assert_eq!(cycle.max_seq, 19);
         assert!(cycle.frozen && cycle.custody_withheld);
+    }
+
+    /// Fix round 1, finding 4: the test above folds `max_seq` ASCENDING (14 then 19), which
+    /// cannot distinguish TAKE (`self.max_seq = page.max_seq`) from MAX
+    /// (`self.max_seq = self.max_seq.max(page.max_seq)`) — both give 19. Folding a page with a
+    /// LOWER `max_seq` than the one before it is the only way to tell them apart: TAKE gives
+    /// the lower, later value; MAX would wrongly keep the higher, earlier one. Do not "tidy"
+    /// this back to an ascending pair — that silently deletes the coverage.
+    #[test]
+    fn max_seq_takes_the_latest_page_even_when_it_is_lower() {
+        let mut cycle = CycleTally::new(0);
+        cycle.fold(PageTally {
+            max_seq: 19,
+            ..PageTally::default()
+        });
+        cycle.fold(PageTally {
+            max_seq: 14,
+            ..PageTally::default()
+        });
+        assert_eq!(
+            cycle.max_seq, 14,
+            "TAKE, not MAX: a page's max_seq is already the running answer over its own \
+             contiguous handled prefix, seeded from the value before it"
+        );
+    }
+
+    /// Fix round 1, finding 2: `fold`'s `pen_refused` arm is the only part of the function that
+    /// is not a plain sum/OR/take — it delegates to `merge_pen_refusal` across the module
+    /// boundary, and nothing exercised that delegation. `expected` is computed by calling the
+    /// REAL `merge_pen_refusal` directly, so this test fails if `fold` ever stops calling it
+    /// (a naive overwrite, or a naive first-wins-only merge, both diverge from `expected`).
+    /// The two pages deliberately DISAGREE on `local_fault` (false, then true) — an OR that
+    /// isn't exercised by a disagreeing pair proves nothing.
+    #[test]
+    fn fold_delegates_the_pen_refused_merge_to_merge_pen_refusal() {
+        let first = PenRefusal {
+            message: "quota exceeded".to_string(),
+            local_fault: false,
+        };
+        let second = PenRefusal {
+            message: "disk full".to_string(),
+            local_fault: true,
+        };
+        let expected = merge_pen_refusal(Some(first.clone()), second.clone());
+
+        let mut cycle = CycleTally::new(0);
+        cycle.fold(PageTally {
+            pen_refused: Some(first),
+            ..PageTally::default()
+        });
+        cycle.fold(PageTally {
+            pen_refused: Some(second),
+            ..PageTally::default()
+        });
+
+        let merged = cycle
+            .pen_refused
+            .expect("a pen refusal folded in must survive the fold");
+        assert_eq!(merged.message, expected.message);
+        assert_eq!(merged.local_fault, expected.local_fault);
+        assert!(
+            merged.local_fault,
+            "local_fault is OR-ed across pages (a fact about this node's uptime), not \
+             first-wins — the first page alone was healthy, but the cycle as a whole was not"
+        );
+    }
+
+    /// Fix round 1, finding 3: nothing populated `applied_addresses` before, so deleting the
+    /// `.extend(...)` call outright still passed every test. Two pages, two different address
+    /// sets, asserted concatenated IN ORDER.
+    #[test]
+    fn fold_extends_applied_addresses_in_order() {
+        let mut cycle = CycleTally::new(0);
+        cycle.fold(PageTally {
+            applied_addresses: vec![vec![1, 2, 3]],
+            ..PageTally::default()
+        });
+        cycle.fold(PageTally {
+            applied_addresses: vec![vec![4, 5], vec![6]],
+            ..PageTally::default()
+        });
+        assert_eq!(
+            cycle.applied_addresses,
+            vec![vec![1, 2, 3], vec![4, 5], vec![6]]
+        );
     }
 }
