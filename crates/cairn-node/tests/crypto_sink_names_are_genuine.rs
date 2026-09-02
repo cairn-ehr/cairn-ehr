@@ -21,7 +21,7 @@
 //!     This hard-coded value is used as a salt.
 //! ```
 //!
-//! **Nineteen critical alerts, one per call site**, all on `main` at once.
+//! **Eighteen critical alerts, one per call site**, all on `main` at once.
 //!
 //! ## Why house rule 6's stated remedy did not help, and the correction it forces
 //!
@@ -57,12 +57,12 @@
 //!   literal (that is house rule 6's other half, and this guard does not check it).
 //! * It is anything else — a fixture discriminator, a counter, a tag → **rename it.** That is
 //!   what `cairn-medium` did: `salted_record(salt, n)` became
-//!   `distinct_record(lineage, n)`, and nineteen critical alerts went away without one byte
+//!   `distinct_record(lineage, n)`, and eighteen critical alerts went away without one byte
 //!   of fixture material changing.
 //!
 //! ## Scope, and what is deliberately NOT checked
 //!
-//! * **`#[cfg(test)]` modules inside `src/` are IN scope, deliberately.** All nineteen alerts
+//! * **`#[cfg(test)]` modules inside `src/` are IN scope, deliberately.** All eighteen alerts
 //!   were in them. CodeQL analyses whatever the compiler is pointed at; "it is only a test"
 //!   is not a distinction the alert list makes. (`tests/` directories are out of scope only
 //!   because [`sources::production_rust_files`] does not walk them — see its doc for why that
@@ -264,7 +264,7 @@ fn every_cryptographic_name_in_a_shipping_tree_is_real_cryptography() {
         offenders.is_empty(),
         "these bindings wear a cryptographic name without being cryptography:\n  {}\n\n\
          Each one makes CodeQL's rust/hard-coded-cryptographic-value fire (critical) at \
-         EVERY call site that passes it a constant — nineteen alerts at once was the #527 \
+         EVERY call site that passes it a constant — eighteen alerts at once was the #527 \
          case. If it is real cryptography, add it to ALLOWED with the construction named. \
          Otherwise RENAME it: a discriminator is not a salt.",
         offenders

@@ -126,7 +126,7 @@ pub(crate) fn segment(plane: Plane, index: u32, n: usize) -> Segment {
 /// genuinely different records. Verify's splice test relies on that — with one shared
 /// lineage both chains would be byte-identical and "spliced from another medium" would
 /// prove nothing. It is NOT called `salt`: see `distinct_record`'s doc comment for the
-/// nineteen critical CodeQL alerts that name cost (#527).
+/// eighteen critical CodeQL alerts that name cost (#527).
 pub(crate) fn chain_of(n: usize, lineage: u8) -> (MediumV3, Vec<i64>) {
     let sk = sk();
     let mut segments: Vec<Segment> = Vec::new();

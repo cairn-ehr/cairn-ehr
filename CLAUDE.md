@@ -199,7 +199,7 @@ These are load-bearing working agreements — hold to them on proof-of-concept s
    into**. `salt`, `nonce` and `iv` are sinks; a *constant argument* passed to a parameter wearing one is a critical
    alert **per call site**, and no amount of runtime derivation clears it, because a derivation whose inputs are all
    literals is constant-folded straight through. This is not hypothetical: `cairn-medium`'s fixture helpers
-   `salted_record(salt, n)` / `chain_of(n, salt)` built nothing cryptographic whatsoever and minted **nineteen
+   `salted_record(salt, n)` / `chain_of(n, salt)` built nothing cryptographic whatsoever and minted **eighteen
    critical alerts at once**, while the sibling helpers `bytes(seed, …)` / `placeholder(seed, …)` ran the *identical*
    arithmetic unflagged — the only difference was the word (#527). So reserve `salt`/`nonce`/`iv` for real
    constructions and call a discriminator a `lineage`, a `variant`, a `seed`. It is a legibility rule before it is a

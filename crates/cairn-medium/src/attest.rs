@@ -225,7 +225,7 @@ pub(crate) mod tests_support {
     ///
     /// ## Why this parameter is not called `salt` (#527)
     ///
-    /// It was, and it cost nineteen critical CodeQL alerts at once. `rust/hard-coded-
+    /// It was, and it cost eighteen critical CodeQL alerts at once. `rust/hard-coded-
     /// cryptographic-value` picks its sink by the NAME of the binding a value flows into, so
     /// every call site passing a constant to a parameter called `salt` was reported as
     /// "this hard-coded value is used as a salt" — even though nothing in this crate derives

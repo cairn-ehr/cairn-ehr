@@ -37,9 +37,9 @@
 >   (`IndexMismatch`); **#523/#524 open as filed**; **#525 done**. Detail: the 2026-09-01 entry.
 > - **⇒ #527: THE ALERT LIST IS READABLE NOW, AND THE ASSUMPTION IN IT WAS WRONG (2026-09-02).**
 >   `scripts/codeql-alerts.sh` reads it (read-only, script-shaped because `gh api` is deny-listed
->   repo-wide and must stay so). **30 open alerts; the critical 19 were a REAL defect, not the
+>   repo-wide and must stay so). **30 open alerts; the critical 18 were a REAL defect, not the
 >   #146/#520 false-positive class** — see the 2026-09-02 entry. **Two human acts still owed:**
->   dismiss the 11 `rust/cleartext-logging` alerts (per-alert verdicts are in #527's comment), then
+>   dismiss the 12 `rust/cleartext-logging` alerts (per-alert verdicts are in #527's comment), then
 >   **make the `CodeQL` gate a REQUIRED check** — but only in that order: a permanently-red required
 >   check trains everyone to merge past it, which is how a genuine critical sat unread for a week.
 > - **⇒ THE LOOSE END NAMED SO IT CANNOT BE LOST.** Custody must apply the same `erasure_shred_log`
@@ -166,7 +166,7 @@ VoiceOver run through the runbook's eight checks, keyboard-only
 (`cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`), DOM
 assertions automated by **#332**; (3) **make CI jobs REQUIRED status checks** (**#444**, admin-only —
 "clippy + cargo test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per
-`CONTRIBUTING.md`'s dated table; (4) **#527's two Security-tab acts** — dismiss the 11 triaged
+`CONTRIBUTING.md`'s dated table; (4) **#527's two Security-tab acts** — dismiss the 12 triaged
 `cleartext-logging` alerts, THEN make `CodeQL` a fourth required check, in that order (see ⇒ NEXT).
 **If a measurement falls outside its budget, that is the finding — file an issue, never adjust the
 budget.**
@@ -193,7 +193,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-02 (**#527 — the CodeQL backlog**: the 19 critical alerts were a real defect, not the familiar false positive; renamed, guarded, house rule 6 corrected; opened #529) · previous: 2026-09-01 (**slice 2a review wave**: mutation audit 19/19 surviving → 18/18 killed; `health::assess` composed verdict; `Plane::Unknown`; `BackupError` taxonomy; #525 done) · previous: 2026-08-31 (**DR slice 2a — the shared medium format**: new crate `crates/cairn-medium` + `CAIRNB3`; closes nothing, #500 stays open; next is 2b; opened #522–#525, re-opened #511) · 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (ADR-0066; slice 2a adds no ADR/spec bump) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 2a adds no migration — pure crate, no DB) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-02 (**#527 — the CodeQL backlog**: the 18 critical alerts were a real defect, not the familiar false positive; renamed, guarded, house rule 6 corrected; opened #529) · previous: 2026-09-01 (**slice 2a review wave**: mutation audit 19/19 surviving → 18/18 killed; `health::assess` composed verdict; `Plane::Unknown`; `BackupError` taxonomy; #525 done) · previous: 2026-08-31 (**DR slice 2a — the shared medium format**: new crate `crates/cairn-medium` + `CAIRNB3`; closes nothing, #500 stays open; next is 2b; opened #522–#525, re-opened #511) · 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (ADR-0066; slice 2a adds no ADR/spec bump) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 2a adds no migration — pure crate, no DB) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -226,7 +226,7 @@ under a comment asserting it was runtime-derived; fixed on the #526 branch). Gat
 tests unchanged, new guard 7/7, fmt + `clippy --all-targets -D warnings` clean.
 
 1. **⇒ CodeQL PICKS ITS SINK BY THE NAME OF THE BINDING, and house rule 6's remedy does not touch that.**
-   All 19 criticals were one per call site of two `cairn-medium` fixture helpers whose discriminator
+   All 18 criticals were one per call site of two `cairn-medium` fixture helpers whose discriminator
    parameter was called `salt` — `salted_record(salt, n)`, `chain_of(n, salt)`. Nothing in that crate
    derives a key. Rule 6 says *compute it at runtime*; **both already did**, and it made no difference,
    because a derivation whose inputs are all literals is constant-folded straight through. The disproof
@@ -235,21 +235,21 @@ tests unchanged, new guard 7/7, fmt + `clippy --all-targets -D warnings` clean.
    `distinct_record(lineage, n)` / `chain_of(n, lineage)` — **no fixture byte changed.** A legibility fix
    first: a reviewer who greps `salt` in a crate that seals bodies thinks they found a KDF.
 2. **⇒ A TRIAGE TOOL THAT DROPS THE MESSAGE TURNS A DEFECT INTO NOISE.** `codeql-alerts.sh` printed the
-   rule id and location but not `message.text`, so 19 alerts read `Hard-coded cryptographic value` —
+   rule id and location but not `message.text`, so 18 alerts read `Hard-coded cryptographic value` —
    indistinguishable from the #146/#520 class dismissed twice before, and the obvious next step was to
    dismiss them again. With it they read *"This hard-coded value is used as a salt"*. **The rule id says
    which query fired; only the message says why.** Its allow rule was also never committed, so on a
    fresh clone the one tool that can read the list still prompted.
 3. **Guarded, not just written down.** `crates/cairn-node/tests/crypto_sink_names_are_genuine.rs` sweeps
    every shipping `src/` tree for a binding named exactly `salt`/`nonce`/`iv` and requires it in
-   `ALLOWED` with the real construction named — 7 entries, 4 files. **Not a suppression list: the
-   inventory of this tree's actual cryptography.** `#[cfg(test)]` inside `src/` is IN scope (all 19 were
+   `ALLOWED` with the real construction named — 7 entries, 6 files. **Not a suppression list: the
+   inventory of this tree's actual cryptography.** `#[cfg(test)]` inside `src/` is IN scope (all 18 were
    there). Carries a swept-file floor, 6 unit tests on its own matcher, and a **positive control** —
    cairn-keystore's Argon2id salt must still be found, or the matcher is broken rather than the tree
    clean. **CLAUDE.md house rule 6 gained the missing half.**
-4. **The other 11 (`rust/cleartext-logging`, high) are all dismissable, for three different reasons** —
+4. **The other 12 (`rust/cleartext-logging`, high) are all dismissable, for three different reasons** —
    per-alert verdicts in #527's comment: taint through a tuple/struct return (5 — the printed value is an
-   address, a path or a count); **CLI receipts naming a patient** (3); test assertion text (3). Checked
+   address, a path or a count); **CLI receipts naming a patient** (3); test assertion text (4). Checked
    rather than assumed: **no daemon path prints a patient identifier** — but that holds by accident, not
    by rule, and `cairn-sync` carries CLI and daemon in one `main.rs`. **#529** filed: if a guard cannot
    state the boundary, the boundary is in the wrong place.
