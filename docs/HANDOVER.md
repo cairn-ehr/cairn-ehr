@@ -193,7 +193,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-02 (**#527 — the CodeQL backlog**: the 18 critical alerts were a real defect, not the familiar false positive; renamed, guarded, house rule 6 corrected; opened #529) · previous: 2026-09-01 (**slice 2a review wave**: mutation audit 19/19 surviving → 18/18 killed; `health::assess` composed verdict; `Plane::Unknown`; `BackupError` taxonomy; #525 done) · previous: 2026-08-31 (**DR slice 2a — the shared medium format**: new crate `crates/cairn-medium` + `CAIRNB3`; closes nothing, #500 stays open; next is 2b; opened #522–#525, re-opened #511) · 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (ADR-0066; slice 2a adds no ADR/spec bump) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 2a adds no migration — pure crate, no DB) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-02 (**#527 — the CodeQL backlog**: the 18 critical alerts were a real defect, not the familiar false positive; renamed, guarded, house rule 6 corrected; opened #529, #530) · previous: 2026-09-01 (**slice 2a review wave**: mutation audit 19/19 surviving → 18/18 killed; `health::assess` composed verdict; `Plane::Unknown`; `BackupError` taxonomy; #525 done) · previous: 2026-08-31 (**DR slice 2a — the shared medium format**: new crate `crates/cairn-medium` + `CAIRNB3`; closes nothing, #500 stays open; next is 2b; opened #522–#525, re-opened #511) · 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (ADR-0066; slice 2a adds no ADR/spec bump) · **`SCHEMA_GENERATION`:** 50 (`db/050`; slice 2a adds no migration — pure crate, no DB) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -219,7 +219,7 @@ that generalise past the slice that found them.
 
 ### 2026-09-02 (last) — #527: a discriminator is not a salt, and a scanner reads NAMES
 
-**Closes nothing; #500 untouched. No ADR, spec bump or migration. Opened #529.** `main` carried **30
+**Closes nothing; #500 untouched. No ADR, spec bump or migration. Opened #529, #530.** `main` carried **30
 open CodeQL alerts**, the `CodeQL` check red on every PR run for weeks and **non-required** — so a
 genuine critical would not have blocked a merge, and one was in there (#24, `format!("nonce-{}", "B")`
 under a comment asserting it was runtime-derived; fixed on the #526 branch). Gate: 94 `cairn-medium`
@@ -253,6 +253,14 @@ tests unchanged, new guard 7/7, fmt + `clippy --all-targets -D warnings` clean.
    rather than assumed: **no daemon path prints a patient identifier** — but that holds by accident, not
    by rule, and `cairn-sync` carries CLI and daemon in one `main.rs`. **#529** filed: if a guard cannot
    state the boundary, the boundary is in the wrong place.
+5. **⇒ CHECKING THE GUARD'S OWN PROSE FOUND A SECOND ONE.** Verifying each `ALLOWED` entry said what the
+   code does — not what it plausibly does — showed **`PairingBundle.nonce` is signed and never read back
+   by ANYTHING**: no freshness window, no seen-nonce store, and `pair-offer` defaults it to the literal
+   `"cairn"`. Nothing is broken (the offer is signed, out-of-band, and `pair-accept` needs a typed YES on
+   a fingerprint), but the NAME promises replay protection that does not exist — the same shape as alert
+   #24's comment. **#530** filed with three exits; it wants a DECISION, not a patch. The two `ALLOWED`
+   entries now carry the finding rather than excusing it. **Two of my own counts were also wrong and are
+   corrected in their own commit** — 18 critical/12 high, not 19/11; ALLOWED spans 6 files, not 4.
 
 ### 2026-09-01 — slice 2a's review wave: the format's guarantees, actually pinned (condensed)
 

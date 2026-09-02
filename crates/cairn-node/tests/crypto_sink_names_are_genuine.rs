@@ -120,20 +120,27 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "salt",
         "the 16-byte Argon2id salt that stretches CAIRN_KEY_PASSPHRASE into the KEK",
     ),
+    // The next two are listed because the tree NAMES them cryptographically, not because
+    // they earn it: `PairingBundle.nonce` is signed and never read back by anything — no
+    // freshness window, no seen-nonce store — and `pair-offer` defaults it to the literal
+    // "cairn". It is a name promising replay protection that does not exist (#530). Kept
+    // here rather than quietly excused, so the entries themselves carry the finding; if
+    // #530 resolves by renaming the field, DELETE both and the guard will correctly flag
+    // any return of the old name.
     (
         "crates/cairn-node/src/pairing.rs",
         "nonce",
-        "the pairing challenge nonce — replay protection for a peering offer",
+        "the PairingBundle nonce — INERT, see #530; carried into the signed offer, never verified",
     ),
     (
         "crates/cairn-node/src/main.rs",
         "nonce",
-        "the `pair-offer`/`pair-accept` CLI surface carrying that same pairing nonce",
+        "the `pair-offer` CLI arg feeding that same inert nonce (default_value = \"cairn\", #530)",
     ),
     (
         "crates/cairn-sync/src/main.rs",
         "nonce",
-        "the XChaCha20-Poly1305 nonce on the daemon's own seal/unseal path",
+        "the seal benchmark's derived XChaCha nonce, plus a PairingBundle fixture in its tests",
     ),
 ];
 
