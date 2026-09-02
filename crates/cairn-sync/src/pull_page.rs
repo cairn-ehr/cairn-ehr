@@ -222,8 +222,10 @@ mod tests {
 
     #[test]
     fn the_earliest_pin_wins_whichever_page_carried_it() {
-        // Descending (9 then 4): min and "first wins" happen to agree — both give 4 — so this
-        // pair alone does not rule out first-wins as the rule actually implemented.
+        // Descending (9 then 4): min and "last wins" happen to agree — both give 4 — so this
+        // pair alone does not rule out last-wins. ("First wins" would wrongly give 9, so this
+        // pair DOES rule out first-wins on its own; the ascending case below is what closes
+        // the last-wins gap.)
         let mut cycle = CycleTally::new(0);
         cycle.fold(PageTally {
             refused_verifiable: 1,
