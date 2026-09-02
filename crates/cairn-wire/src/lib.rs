@@ -18,8 +18,8 @@
 //! - `medium` — a CAIRNB3 backup medium answering as a peer.
 //! - `page` — the paging contract: the default page size and the termination rule.
 //!
-//! `transport`, `tcp`, `medium` and `page` arrive in later tasks of this slice; this task
-//! (Task 1) moves only `wire` and `framing` out of `cairn-sync`, verbatim.
+//! All six modules are here. Task 1 moved `wire` and `framing` out of `cairn-sync` verbatim;
+//! `transport`, `tcp`, `medium` and `page` landed across the rest of slice 2b.
 //!
 //! # Scope today
 //!

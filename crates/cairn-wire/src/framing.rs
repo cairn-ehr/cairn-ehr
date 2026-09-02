@@ -12,12 +12,17 @@ use std::io::{self, Read, Write};
 /// the server reads request frames from ANY client that can reach the port (WireGuard
 /// is the assumed perimeter, not authentication), and the puller reads response frames
 /// from its peer — so an unchecked prefix lets one hostile/corrupt u32 demand a 4 GiB
-/// allocation. Unlike the node plane (one frame per event, 8 MiB), the events response
-/// here is deliberately UNPAGINATED (issue #101: a full sweep ships the whole log
-/// suffix as one hex-encoded JSON frame), so the cap is batch-scale: 64 MiB holds
-/// ~20k typical events (~1.5 KiB signed, hex-doubled on the wire) with room to spare.
-/// A log that outgrows it fails the sweep LOUDLY with this cap named in the error —
-/// pagination (#101) is the real fix for that, tracked there.
+/// allocation. Unlike the node plane (one frame per event, 8 MiB), a response here
+/// carries a whole BATCH of events, so the cap is batch-scale: 64 MiB holds ~20k
+/// typical events (~1.5 KiB signed, hex-doubled on the wire) with room to spare.
+///
+/// Since slice 2b the cap is a BACKSTOP rather than the sizing constraint. A paged
+/// request ([`crate::DEFAULT_PAGE_EVENTS`] = 500 events, ≈2 MiB) lands 32× under it.
+/// Two paths can still reach it: a request that omits `limit`, and the legacy
+/// `EventsAfter` arm, which is unpaginated by construction. A response on either that
+/// outgrows the cap fails LOUDLY with this cap named in the error, and the remedy is
+/// to ask for pages — #101 item 1, closed by slice 2b; items 2 and 3 stay open, so
+/// #101 does too.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
@@ -27,12 +32,18 @@ pub fn write_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
     // The decision (cap + u32-truncation-unreachable) lives in the shared
     // cairn_event::framing core (#212); refusing before the prefix is written stays
     // here — a bare length prefix with no body would wedge the reader.
-    // A log that outgrows the cap needs pagination: issue #101.
+    // A response that outgrows the cap is an UNPAGED one (slice 2b closed #101 item
+    // 1), so the refusal names the remedy an operator can actually apply rather than
+    // an issue number to go and read.
     let prefix =
         cairn_event::framing::encode_len_prefix(b.len(), MAX_FRAME_BYTES).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("refusing to send: {e} (pagination: issue #101)"),
+                format!(
+                    "refusing to send: {e}. This response is UNPAGED: have the puller \
+                     ask for pages (`--page N`), or upgrade a peer that is still \
+                     serving unpaginated responses."
+                ),
             )
         })?;
     s.write_all(&prefix)?;
@@ -100,20 +111,22 @@ mod tests {
     #[test]
     // The asserts ARE on constants — deliberately: this is a standing bounds guard
     // on MAX_FRAME_BYTES itself (same class as required_pgx_floor_is_itself_a_valid
-    // _triple), so a future edit of the const outside the #101-safe window fails a
-    // named test instead of silently shipping.
+    // _triple), so a future edit of the const outside the window these asserts fix
+    // fails a named test instead of silently shipping.
     #[allow(clippy::assertions_on_constants)]
     fn frame_cap_holds_a_realistic_event_batch() {
-        // The events response is deliberately UNPAGINATED (issue #101): a full
-        // sweep ships the whole log suffix as ONE hex-encoded JSON frame, so the
-        // node plane's per-event 8 MiB cap cannot be ported verbatim. The cap must
-        // sit far above a realistic harness batch (~1.5 KiB/event, hex doubling →
-        // ~3 KiB/event on the wire) while still bounding a hostile 4 GiB prefix.
-        // If a deployment's log outgrows the cap, the sweep fails LOUDLY with the
-        // cap message — pagination (#101) is the real fix, tracked there.
+        // A response here carries a whole BATCH of events, so the node plane's
+        // per-event 8 MiB cap cannot be ported verbatim. What this cap has to bound
+        // is an UNLIMITED request — one that omits `limit`, plus the legacy
+        // `EventsAfter` arm — which ships the whole log suffix as ONE hex-encoded
+        // JSON frame. So it must sit far above a realistic harness batch (~1.5
+        // KiB/event, hex doubling → ~3 KiB/event on the wire) while still bounding a
+        // hostile 4 GiB prefix. A PAGED request is nowhere near it: 500 events is
+        // ≈2 MiB. If an unlimited response outgrows the cap it fails LOUDLY with the
+        // cap message, and the remedy is to ask for pages.
         assert!(
             MAX_FRAME_BYTES >= 16 * 1024 * 1024,
-            "cap must hold a realistic unpaginated batch (issue #101)"
+            "cap must hold a realistic unlimited batch (a paged one is ≈2 MiB)"
         );
         assert!(
             MAX_FRAME_BYTES <= 256 * 1024 * 1024,

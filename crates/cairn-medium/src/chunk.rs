@@ -9,8 +9,8 @@ use crate::error::BackupError;
 /// Upper bound on a single length-prefixed chunk on the medium (event frame OR marker). A
 /// signed node-event is a few hundred bytes; 8 MiB caps a corrupt length prefix so a bit-flip
 /// can never force a multi-GiB allocation during parse. Mirrors the wire frame cap in
-/// `cairn-node/src/sync.rs` (note `cairn-sync`'s `MAX_FRAME_BYTES` is a different, larger
-/// bound: it caps a whole unpaginated BATCH response, not one event).
+/// `cairn-node/src/sync.rs` (note `cairn-wire`'s `MAX_FRAME_BYTES` is a different, larger
+/// bound: it caps a whole BATCH response — paged or not — rather than one event).
 pub(crate) const MAX_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 /// Append a `[u32 big-endian length][bytes]` chunk, refusing an over-cap chunk at the source.

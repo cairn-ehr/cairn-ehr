@@ -233,11 +233,14 @@ const MAX_QUARANTINE_BYTES_PER_PEER: i64 = 64 * 1024 * 1024;
 /// floor — it reconciles any event a residual hazard (BIGSERIAL out-of-order
 /// commit) caused incremental to skip. Incremental = optimization; sweep = floor.
 ///
-/// KNOWN COST (issue #101, unpaginated batches): a sweep re-ships the ENTIRE
-/// peer log, hex-inflated, in ONE JSON frame inside the 30 s read window. Once a
-/// node's history outgrows that window the sweep fails loudly every cadence —
-/// the correctness floor stops floor-ing exactly on the largest-history nodes.
-/// #101 pagination is the fix; until it lands this cadence assumes a small log.
+/// COST, since slice 2b: the sweep is PAGED (#101 item 1). It still re-ships the
+/// ENTIRE peer log, but in `--page` batches (`DEFAULT_PAGE_EVENTS` events, ≈2 MiB
+/// each) with the cursor and the quarantine floor committed after EVERY page, so
+/// what a sweep costs is ROUND TRIPS — not one frame that has to fit inside the
+/// 30 s read window. A 20k-event sweep is ~40 of them, and an interruption at page
+/// 39 of 40 resumes where it stopped instead of starting over. #101 itself stays
+/// open: only item 1 went, and items 2 (first-writer-wins blob `byte_len`) and 3
+/// (BLAKE3 verification is L2-only) are untouched.
 const FULL_SWEEP_EVERY: u64 = 10;
 
 type R<T> = Result<T, Box<dyn Error>>;
@@ -4496,7 +4499,9 @@ fn do_blobd(
                         // Try peers (offset by worker+index for swarm spread) until one
                         // returns a slice that VERIFIES. A lying/faulty source is rejected
                         // here and the next source is tried — the per-slice-verify payoff.
-                        // try_request (single attempt) fails over fast, unlike request's backoff.
+                        // `TcpTransport::try_once` (one attempt, no backoff) fails over
+                        // fast; `Transport::request` would spend four backoff attempts on
+                        // a source that is simply down before trying the next one.
                         let mut got: Option<Vec<u8>> = None;
                         for k in 0..peers.len() {
                             let peer = &peers[(w + idx + k) % peers.len()];
@@ -5312,8 +5317,10 @@ fn serve_conn(
             // the untouched signed core (principle 12). `after_seq = 0` = full sweep.
             // ORDER BY seq is load-bearing: the puller freezes its cursor at the
             // contiguous handled prefix and relies on strictly-ascending arrival.
-            // Unpaginated (issue #101): the whole suffix — the whole LOG on a sweep —
-            // ships in one frame; see the FULL_SWEEP_EVERY note for the known cost.
+            // The whole suffix — the whole LOG on a sweep — ships in ONE frame only
+            // when the request carries no `limit`. A paged request gets `limit` events
+            // and `complete: false` until the log is drained (slice 2b, #101 item 1);
+            // see the FULL_SWEEP_EVERY note for what a sweep costs now.
             // The 5th column is THIS node's own wrapped DEK for the event, hex-encoded
             // — but ONLY when the event has NOT been shredded here (ADR-0052). The
             // LEFT JOIN to erasure_shred_log + `CASE WHEN s.target_event_id IS NULL`
@@ -10722,7 +10729,7 @@ mod quarantine_tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
-            // request() retries 4 times; hang up on every attempt.
+            // `Transport::request` retries 4 times; hang up on every attempt.
             for _ in 0..4 {
                 let Ok((mut s, _)) = listener.accept() else {
                     break;
