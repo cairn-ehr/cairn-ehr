@@ -110,6 +110,7 @@ mod tests {
             .try_once(&Request::EventsAfterSeq {
                 after_seq: 0,
                 unwrap_cert: None,
+                limit: None,
             })
             .expect_err("nothing listens on port 1");
         assert!(matches!(err, TransportError::Exchange { .. }), "{err}");

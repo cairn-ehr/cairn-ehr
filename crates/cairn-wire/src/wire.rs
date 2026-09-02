@@ -39,6 +39,16 @@ pub enum Request {
         after_seq: i64,
         #[serde(default)]
         unwrap_cert: Option<String>,
+        /// The maximum number of events to return in this response (slice 2b, #101 item 1).
+        ///
+        /// `None` means UNPAGINATED — the whole suffix in one frame, which is what this
+        /// protocol did before paging existed and what a caller that has no reason to page
+        /// still gets. A serving node applies it as a plain SQL `LIMIT`.
+        ///
+        /// Additive (serde default): the field's ABSENCE is the old behaviour, so a request
+        /// that predates paging means exactly what it always meant.
+        #[serde(default)]
+        limit: Option<u32>,
     },
     /// Byte tier: a BLAKE3 verified-streaming slice of a blob.
     BlobSlice {
@@ -118,6 +128,19 @@ pub struct EventsResponse {
     /// Additive (serde default): an older peer omits it and it decodes as None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custody_withheld: Option<String>,
+    /// Did this response drain the peer's log above `after_seq`? (slice 2b, #101 item 1.)
+    ///
+    /// A paged puller loops until this is `true`. The default is FALSE — "there may be more" —
+    /// and the DIRECTION is the decision, not an accident. A server that fails to set it makes
+    /// a puller ask once more: wasted work. A `true` default would make the same omission stop
+    /// the puller early and SILENTLY LOSE EVENTS, with the cursor checkpointed as though the
+    /// log had been drained. Principle 4 applied to a protocol field: an imprecise near-truth
+    /// beats a precise untruth.
+    ///
+    /// An empty response that does not set this is neither an end nor a continuation, and a
+    /// puller must REFUSE it rather than guess — see `cairn_wire::page_decision`.
+    #[serde(default)]
+    pub complete: bool,
 }
 
 #[cfg(test)]
@@ -132,6 +155,7 @@ mod tests {
         let req = Request::EventsAfterSeq {
             after_seq: 7,
             unwrap_cert: None,
+            limit: None,
         };
         let json = serde_json::to_string(&req).expect("serialize");
         assert!(
@@ -154,5 +178,36 @@ mod tests {
         assert!(resp.signing_context.is_none());
         assert!(resp.wrapped_deks.is_empty());
         assert!(resp.custody_withheld.is_none());
+    }
+
+    /// The additive fields must decode ABSENT, and to the values §3 of the design specifies.
+    /// This is principle 12's whole guarantee, and a default that drifted would be silent.
+    #[test]
+    fn the_paging_fields_decode_absent_to_their_documented_defaults() {
+        let old_req = r#"{"op":"EventsAfterSeq","after_seq":0}"#;
+        match serde_json::from_str::<Request>(old_req).expect("decode") {
+            Request::EventsAfterSeq {
+                limit,
+                unwrap_cert,
+                after_seq,
+            } => {
+                assert_eq!(after_seq, 0);
+                assert!(unwrap_cert.is_none());
+                assert!(
+                    limit.is_none(),
+                    "an absent limit means UNPAGINATED, not zero"
+                );
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        let old_resp = r#"{"events":[]}"#;
+        let resp: EventsResponse = serde_json::from_str(old_resp).expect("decode");
+        assert!(
+            !resp.complete,
+            "an absent `complete` must mean THERE MAY BE MORE. The opposite default would let a \
+             server that omits the field stop a puller early and silently lose events, with the \
+             cursor checkpointed as if the log had been drained."
+        );
     }
 }

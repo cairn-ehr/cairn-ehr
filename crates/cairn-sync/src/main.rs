@@ -2915,6 +2915,11 @@ fn do_pull(
         .request(&Request::EventsAfterSeq {
             after_seq,
             unwrap_cert,
+            // Slice 2b (#101 item 1): paging lands wired-but-off. This puller does not
+            // yet loop on `complete`, so asking for an unbounded batch is still correct
+            // — turning this on before the pull loop can honour it would silently
+            // truncate a real clinic's log. Task 7 flips it.
+            limit: None,
         })
         .map_err(|e| PeerRequestError {
             // THE CAUSE IS THE SUFFIX, and that placement is load-bearing, not stylistic.
@@ -4966,11 +4971,15 @@ fn serve_conn(
                 // receive an unwrap cert, so it never re-wraps DEKs. Empty = no
                 // custody; sealed events still sync (admitted structurally).
                 wrapped_deks: vec![],
+                // This arm is unpaginated BY CONSTRUCTION (it has no `limit` to honour
+                // and ships the whole suffix), so it always drains the log (slice 2b).
+                complete: true,
             })?
         }
         Request::EventsAfterSeq {
             after_seq,
             unwrap_cert,
+            limit,
         } => {
             // Serve LOCAL insertion order (seq), STRICTLY above the puller's cursor
             // (issue #196). The seq prefix is transport metadata; signed_bytes are
@@ -4986,7 +4995,17 @@ fn serve_conn(
             // ships its DEK, so custody can never be reconstituted from a peer's serve
             // after a local crypto-shred. A non-sealed event (or one this node holds
             // no custody for) has no event_dek row, so dek_hex is NULL there too.
-            let rows = client.query(
+            //
+            // Fetch ONE MORE than asked for, then serve `limit` (slice 2b, #101 item
+            // 1). `rows.len() == limit` cannot distinguish "the log ends exactly here"
+            // from "there is a next event we cut off", and `complete` is the puller's
+            // only termination signal — a wrong `true` at that boundary strands every
+            // event above it, forever, with the cursor checkpointed past them. The
+            // extra row answers the question instead of inferring it. `LIMIT NULL` is
+            // Postgres for "no limit", so the unpaginated path stays the SAME
+            // statement with a NULL parameter rather than a second query.
+            let probe: Option<i64> = limit.map(|n| i64::from(n) + 1);
+            let mut rows = client.query(
                 "SELECT e.seq,
                         encode(e.signed_bytes,'hex'),
                         encode(e.attestation,'hex'),
@@ -4997,9 +5016,23 @@ fn serve_conn(
                  LEFT JOIN event_dek d          ON d.event_id = e.event_id
                  LEFT JOIN erasure_shred_log s  ON s.target_event_id = e.event_id
                  WHERE e.seq > $1
-                 ORDER BY e.seq",
-                &[&after_seq],
+                 ORDER BY e.seq
+                 LIMIT $2",
+                &[&after_seq, &probe],
             )?;
+            // Did that fetch drain the log? `None` (unpaginated) always does, by
+            // construction. Otherwise: more rows came back than the caller asked for
+            // means there is at least one more beyond `limit` — truncate the probe row
+            // back off (it must never reach the wire) and report `complete: false`.
+            let complete = match limit {
+                None => true,
+                Some(n) => {
+                    let n = n as usize;
+                    let more_remain = rows.len() > n;
+                    rows.truncate(n);
+                    !more_remain
+                }
+            };
             let seqs = rows.iter().map(|r| r.get::<_, i64>(0)).collect();
             let events = rows.iter().map(|r| r.get::<_, String>(1)).collect();
             let attestations = rows.iter().map(|r| r.get::<_, Option<String>>(2)).collect();
@@ -5099,6 +5132,10 @@ fn serve_conn(
                 // another site with another operator, and the remedy names steps THEY
                 // must run. Additive + serde-default, so an older peer simply ignores it.
                 custody_withheld,
+                // The limit+1 probe above answered this precisely (slice 2b) — never
+                // inferred from `rows.len() == limit`, which cannot tell "drained" from
+                // "cut off at the boundary" apart.
+                complete,
             })?
         }
         Request::BlobSlice {
@@ -6218,15 +6255,18 @@ mod tests {
         let req = Request::EventsAfterSeq {
             after_seq: 42,
             unwrap_cert: None,
+            limit: None,
         };
         let bytes = serde_json::to_vec(&req).unwrap();
         match serde_json::from_slice::<Request>(&bytes).unwrap() {
             Request::EventsAfterSeq {
                 after_seq,
                 unwrap_cert,
+                limit,
             } => {
                 assert_eq!(after_seq, 42);
                 assert!(unwrap_cert.is_none());
+                assert!(limit.is_none());
             }
             other => panic!("wrong variant: {other:?}"),
         }
@@ -6620,6 +6660,7 @@ mod tests {
             signing_context: None,
             wrapped_deks: vec![None],
             custody_withheld: None,
+            complete: false,
         };
         let back: EventsResponse =
             serde_json::from_slice(&serde_json::to_vec(&with).unwrap()).unwrap();
@@ -6648,6 +6689,7 @@ mod tests {
             signing_context: None,
             wrapped_deks: vec![],
             custody_withheld: Some(reason.into()),
+            complete: false,
         };
         let back: EventsResponse =
             serde_json::from_slice(&serde_json::to_vec(&with).unwrap()).unwrap();
@@ -7325,8 +7367,68 @@ mod quarantine_tests {
             // report no refusal — nothing was withheld, there was simply nothing to send.
             wrapped_deks: vec![None; events.len()],
             custody_withheld: None,
+            // A canned response is the WHOLE answer for these tests — none of them
+            // exercise paging (that is Task 7's job) — so it always declares complete.
+            complete: true,
         })
         .unwrap()
+    }
+
+    /// Run the REAL `serve_conn` against one request and return its response frame. The
+    /// existing `serve_canned` serves a pre-encoded response, which cannot exercise the serve
+    /// arm itself — and the serve arm is what this test is about.
+    fn serve_one_request(conn: &str, req: &Request) -> Vec<u8> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let conn = conn.to_string();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve_conn(&conn, stream, false, None).unwrap();
+        });
+        let raw = TcpTransport::new(&addr).try_once(req).unwrap();
+        server.join().unwrap();
+        raw
+    }
+
+    /// A limited request must return at most `limit` events and must declare `complete`
+    /// truthfully at, below and above the boundary. `complete` is the puller's ONLY
+    /// termination signal, so a serve that reports it wrongly either strands events
+    /// forever or spins the puller.
+    #[test]
+    fn serve_honours_the_page_limit_and_declares_completeness() {
+        let Some(base) = cs() else { return };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        // Three events, applied locally so this node has something to serve.
+        for i in 0..3 {
+            let bytes = peer_note(&sk, &kid, WALL_2026 + i);
+            c.execute("SELECT apply_remote_event($1, NULL, NULL, NULL)", &[&bytes])
+                .unwrap();
+        }
+
+        // (limit, expected event count, expected `complete`)
+        let cases: [(Option<u32>, usize, bool); 4] = [
+            (Some(2), 2, false),
+            // THE BOUNDARY. `rows.len() == limit` is ambiguous on its own — the limit+1
+            // probe is what makes this case answerable rather than guessable.
+            (Some(3), 3, true),
+            (Some(9), 3, true),
+            (None, 3, true),
+        ];
+        for (limit, want_len, want_complete) in cases {
+            let raw = serve_one_request(
+                &base,
+                &Request::EventsAfterSeq {
+                    after_seq: 0,
+                    unwrap_cert: None,
+                    limit,
+                },
+            );
+            let resp: EventsResponse = serde_json::from_slice(&raw).unwrap();
+            assert_eq!(resp.events.len(), want_len, "limit={limit:?}");
+            assert_eq!(resp.seqs.len(), want_len, "limit={limit:?}");
+            assert_eq!(resp.complete, want_complete, "limit={limit:?}");
+        }
     }
 
     #[derive(Debug, PartialEq)]
