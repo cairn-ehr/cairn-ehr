@@ -4,7 +4,9 @@
 //! local `mut` bindings. Paging turns that into a loop, and the folding rules — which counters
 //! sum, which flags are sticky, which value wins when two pages disagree — become decisions
 //! worth testing on their own. They are pure, so they are tested with no peer and no database.
-//! (New code lives here rather than in `main.rs`, which is 11.5k lines: #531.)
+//! (New code lives here rather than in `main.rs`, whose size is #531's whole subject. No
+//! line count: the figure this line used to carry was already wrong by the end of the slice
+//! that wrote it, and the issue number says the same thing without going stale.)
 
 use crate::{merge_pen_refusal, PenRefusal};
 
@@ -145,6 +147,60 @@ pub(crate) fn quarantine_floor(
             (Some(f), None) => Some(f),
             (None, p) => p,
         }
+    }
+}
+
+/// What may actually be COMMITTED as the floor after one page. **Pure.**
+///
+/// THE OTHER HALF OF THE FLOOR RULE, and the one the first draft of paging missed.
+/// [`quarantine_floor`] makes the PIN cumulative, so a clean page 2 cannot clear a pin page 1
+/// set. This is its mirror image: the clean branch returns `None`, and `None` is not silence,
+/// it is a positive claim — *nothing is being withheld any more* — and paging commits it after
+/// EVERY page, including page 1 of a cycle that has not yet reached the slot the floor guards.
+///
+/// On an INCREMENTAL cycle the claim is always true by construction, because `do_pull` fetches
+/// from `floor_seq - 1`: the guarded slot is the first row of page 1, so any page at all has
+/// seen it. On a FULL SWEEP it is not. A sweep fetches from seq 0 and ignores the floor
+/// entirely, so a floor at seq 900 sits several pages in — and the first cycle after every
+/// daemon start is a full sweep. The failure needs no hostile peer:
+///
+/// * `sync_state`: `last_seq = 1000`, `quarantine_floor_seq = 900` (an unverifiable event
+///   penned at seq 900, kept on the wire so a repaired version is admitted automatically);
+/// * a full sweep at the default page size. Page 1 is seqs 1..500, every one an idempotent
+///   no-op — a clean page — so the floor is computed `None` and written NULL;
+/// * the cycle ends before page 2. A dropped link on a 700 ms double-Starlink hop, or, with
+///   nothing wrong anywhere, ONE transient apply failure in page 1: that freezes, and
+///   `page_decision` ends the loop;
+/// * the next cycle is incremental, reads a NULL floor, and fetches from `last_seq = 1000`.
+///   **Seq 900 is never re-offered again.** `skipped_unverifiable` is 0, so the cycle is not
+///   even loud — the pull goes quiet while the pen row stands.
+///
+/// This is a REGRESSION the loop introduced: before paging the floor was written once, after
+/// the whole suffix had been offered, so the clean branch could only fire on a cycle that had
+/// actually seen the slot. So the rule is that **the tally may only speak for seqs the cycle
+/// has actually been offered.** A clear is withheld unless one of two things licenses it:
+///
+/// * `complete` — the peer says nothing exists above this page, so a clean cycle really has
+///   seen everything the floor could guard. This is the pre-paging behaviour, unchanged; or
+/// * the cycle has already been offered past the guarded slot (`floor_at_start <= reached`),
+///   which is the same evidence a single-shot cycle had.
+///
+/// A PIN needs no such guard. It comes from a refusal in a page this cycle handled, so it is
+/// at or below `reached` by construction, and where it is *below* an existing floor it only
+/// widens what gets re-offered next cycle — conservative in the safe direction.
+///
+/// `reached` is the highest seq this cycle has been offered so far — the last seq of this
+/// page, or the cursor the page was fetched from when it carried no seqs.
+pub(crate) fn committable_floor(
+    computed: Option<i64>,
+    complete: bool,
+    reached: i64,
+    floor_at_start: Option<i64>,
+) -> Option<i64> {
+    match computed {
+        Some(pin) => Some(pin),
+        None if complete => None,
+        None => floor_at_start.filter(|guarded| *guarded > reached),
     }
 }
 
@@ -357,6 +413,65 @@ mod tests {
             "local_fault is OR-ed across pages (a fact about this node's uptime), not \
              first-wins — the first page alone was healthy, but the cycle as a whole was not"
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // `committable_floor` — the mid-cycle clear guard (final review, Critical 1).
+    // -----------------------------------------------------------------------------------
+
+    /// THE REGRESSION. A clean page 1 of a FULL SWEEP must not clear a floor the cycle has
+    /// not yet reached: the numbers here are the scenario from the function's own doc, with
+    /// the floor at 900 and page 1 ending at 500.
+    #[test]
+    fn a_clean_page_cannot_clear_a_floor_the_cycle_has_not_reached_yet() {
+        assert_eq!(
+            committable_floor(None, false, 500, Some(900)),
+            Some(900),
+            "the cycle has been offered 1..500 and says nothing about seq 900 — clearing \
+             would claim it, and one freeze or dropped link later that slot is unreachable"
+        );
+    }
+
+    /// …but a clean cycle that HAS reached past the guarded slot clears it, exactly as
+    /// before. Without this the floor would only ever clear on a `complete` page, and a
+    /// resolved refusal would keep re-shipping from a low seq for no reason.
+    #[test]
+    fn a_clean_page_that_has_passed_the_guarded_slot_still_clears_it() {
+        assert_eq!(committable_floor(None, false, 500, Some(300)), None);
+        // THE BOUNDARY, and it is `>` not `>=` for a reason: seq 500 was IN this page (the
+        // page's last seq IS `reached`), so it has been offered and found clean.
+        assert_eq!(committable_floor(None, false, 500, Some(500)), None);
+        // One above the boundary is the first slot the page did not reach.
+        assert_eq!(committable_floor(None, false, 500, Some(501)), Some(501));
+    }
+
+    /// `complete` is the peer's statement that nothing exists above this page, so a clean
+    /// cycle really has seen everything the floor could guard. This is the pre-paging rule,
+    /// and it must survive: a floor set on a seq the peer no longer serves would otherwise
+    /// never clear.
+    #[test]
+    fn a_complete_page_clears_the_floor_even_above_what_it_reached() {
+        assert_eq!(committable_floor(None, true, 500, Some(900)), None);
+        // An empty complete page (`reached` falls back to the cursor) is the same statement.
+        assert_eq!(committable_floor(None, true, 0, Some(900)), None);
+    }
+
+    /// A PIN is committed unguarded, and both directions matter. It is at or below `reached`
+    /// by construction (it came from a page this cycle handled), and where it sits BELOW an
+    /// existing floor it lowers it — which only widens next cycle's re-offer window. The
+    /// dangerous direction is clearing, never pinning.
+    #[test]
+    fn a_pin_is_committed_whatever_the_cycle_reached() {
+        assert_eq!(committable_floor(Some(7), false, 500, Some(900)), Some(7));
+        assert_eq!(committable_floor(Some(7), true, 500, None), Some(7));
+    }
+
+    /// No floor to begin with and nothing refused: there is nothing to withhold, on any page.
+    /// (Without the `filter`'s `Option` handling this would be the arm that panicked.)
+    #[test]
+    fn a_clean_page_with_no_floor_at_all_commits_none() {
+        assert_eq!(committable_floor(None, false, 500, None), None);
+        assert_eq!(committable_floor(None, true, 500, None), None);
     }
 
     /// Fix round 1, finding 3: nothing populated `applied_addresses` before, so deleting the

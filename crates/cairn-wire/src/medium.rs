@@ -17,6 +17,30 @@ use cairn_medium::{assess, chain_report, MediumHealth, MediumImage, MediumRecord
 use crate::transport::{Transport, TransportError};
 use crate::wire::{EventsResponse, Request};
 
+/// The operator line an ignored unwrap cert earns. **Pure**, and that is the whole point.
+///
+/// The module doc promises the cert is "ignored with a named warning — never silently", and
+/// before this existed only the DATA half of that promise was tested: delete the `eprintln!`
+/// in `request` and every test stayed green, so the loudest half of the contract was held up
+/// by nothing. Asserting on stderr would mean capturing a child process's output (a
+/// dependency this crate does not otherwise need); lifting the words into a pure function is
+/// what `cairn-sync` already does with `custody_withheld_message` and `loud_pull_message`, and
+/// it costs nothing.
+///
+/// It names ADR-0066 deliberately: the adoption path is the ONLY reason ignoring the cert is
+/// safe, so whoever changes that path meets this sentence from either direction — reading the
+/// warning at 3am, or breaking the test that pins it.
+fn ignored_cert_warning(label: &str) -> String {
+    format!(
+        "{label}: the unwrap cert in this request is IGNORED. A medium holds no secret and \
+         cannot re-wrap; every DEK travels wrapped to the CAPTURING node's unwrap key, \
+         verbatim. That is correct only because ADR-0066 makes `restore` ADOPT the exported \
+         unwrap secret, so the restoring node's secret IS the capturing node's. If that \
+         adoption path ever changes, this stops working and a restored node will hold DEKs \
+         it cannot open."
+    )
+}
+
 #[derive(Debug)]
 pub struct MediumTransport {
     label: String,
@@ -58,6 +82,23 @@ impl MediumTransport {
         // had not yet delivered. `partition_point` in `request` below depends on this sort —
         // the two must not drift apart.
         servable.sort_by_key(|r| r.source_seq);
+        // …AND THE SAME RE-CAPTURE PRODUCES OVERLAPS, not merely re-ordering. Interrupt a
+        // capture and run it again and the second pass re-writes source_seqs the first pass
+        // already wrote: two segments, byte-identical records, one `source_seq` each. Served
+        // as-is that is a page whose seqs are not STRICTLY ascending, which `cairn-sync`'s
+        // `validate_page` refuses outright — "peer returned malformed seqs … refusing to
+        // checkpoint" — failing this page and every page after it, and naming the medium a
+        // buggy or hostile peer. In slice 2d that lands mid-disaster, as an opaque refusal of
+        // a perfectly recoverable backup: precisely the outcome `BackupError`'s three-way
+        // split exists to prevent. `cairn_medium::chain::seq_gaps` builds the identical
+        // prefix/plane/flat_map pipeline and calls `seqs.dedup()` for the same reason — a
+        // repeated seq on a medium is expected DATA, not a fault.
+        //
+        // BYTE-IDENTICAL ONLY. Two DIFFERENT bodies at one `source_seq` is a genuine medium
+        // fault — the capturing node's log forked, or the file was tampered with — and
+        // collapsing it would hide that behind whichever copy happened to sort first. It is
+        // left in place so the refusal above fires and 2d can name it.
+        servable.dedup_by(|a, b| a.source_seq == b.source_seq && a.signed_bytes == b.signed_bytes);
         Ok(Self {
             label,
             servable,
@@ -116,16 +157,9 @@ impl Transport for MediumTransport {
         if unwrap_cert.is_some() {
             // NEVER SILENTLY. The cert asks the server to re-wrap each DEK for the requester,
             // and a medium holds no secret, so it cannot. Saying so is the difference between
-            // an operator who knows why a chart will not render and one who does not.
-            eprintln!(
-                "{}: the unwrap cert in this request is IGNORED. A medium holds no secret and \
-                 cannot re-wrap; every DEK travels wrapped to the CAPTURING node's unwrap key, \
-                 verbatim. That is correct only because ADR-0066 makes `restore` ADOPT the \
-                 exported unwrap secret, so the restoring node's secret IS the capturing \
-                 node's. If that adoption path ever changes, this stops working and a restored \
-                 node will hold DEKs it cannot open.",
-                self.label
-            );
+            // an operator who knows why a chart will not render and one who does not. The
+            // words live in `ignored_cert_warning` so a test can assert them; see there.
+            eprintln!("{}", ignored_cert_warning(&self.label));
         }
 
         // `servable` is sorted ascending by `source_seq` (see `new`), which is what makes
@@ -415,14 +449,92 @@ mod tests {
         assert!(events(&t, 0, None).signing_context.is_none());
     }
 
+    /// The RE-CAPTURE OVERLAP: one `source_seq` carried twice, byte-identical, must be served
+    /// ONCE and strictly ascending.
+    ///
+    /// This is the same motivating case the sort's own comment names. Interrupt a capture,
+    /// run it again, and the second pass re-writes seqs the first pass already wrote — so the
+    /// two segments overlap. Sorted but not de-duplicated, the page's seqs are non-strictly
+    /// ascending, and `cairn-sync`'s `validate_page` refuses the whole page as a malformed
+    /// peer, mid-disaster, for a medium that is perfectly recoverable. The overlap here is
+    /// seq 3, carried by BOTH segments; the second segment then runs on to 5 and 6, so the
+    /// merged order is not simply "segment 0 then segment 1" and both the sort and the
+    /// dedupe have to work for this to pass.
+    #[test]
+    fn a_re_capture_overlap_is_served_once_and_strictly_ascending() {
+        let t = transport_over(&[
+            (Plane::Clinical, vec![record(1, 3), record(2, 4)]),
+            // The re-capture: seq 3 again, the SAME record, plus seqs the first pass missed.
+            (
+                Plane::Clinical,
+                vec![record(1, 3), record(3, 5), record(4, 6)],
+            ),
+        ]);
+        let seqs = events(&t, 0, None).seqs;
+        assert_eq!(
+            seqs,
+            vec![3, 4, 5, 6],
+            "a byte-identical repeat is one record, not two"
+        );
+        assert!(
+            seqs.windows(2).all(|w| w[0] < w[1]),
+            "STRICTLY ascending is what `validate_page` requires: {seqs:?}"
+        );
+        assert_eq!(
+            t.clinical_watermark(),
+            Some(6),
+            "the watermark is unaffected by the collapse"
+        );
+    }
+
+    /// A GENUINE conflict — two DIFFERENT bodies at one `source_seq` — must stay visible.
+    ///
+    /// The dedupe above must not become "one record per seq, whichever sorts first". That
+    /// would hide a forked capture or a tampered file behind an arbitrary choice, in the one
+    /// subsystem whose job is to tell an operator what a backup actually contains. The
+    /// downstream refusal is the point: `validate_page` sees the repeat and says so, and 2d
+    /// gets to name it.
+    #[test]
+    fn two_different_bodies_at_one_source_seq_are_not_collapsed() {
+        let t = transport_over(&[(Plane::Clinical, vec![record(1, 3), record(2, 3)])]);
+        assert_eq!(
+            events(&t, 0, None).seqs,
+            vec![3, 3],
+            "different bytes at one seq is a medium FAULT and must reach the puller's \
+             malformed-seqs refusal, not be silently resolved here"
+        );
+    }
+
+    /// The "never silently" half of the ignored-cert contract, which nothing asserted before.
+    ///
+    /// The data half is the test below; this one pins the WARNING. It is asserted on the pure
+    /// `ignored_cert_warning` rather than on stderr, so it holds without capturing a child
+    /// process's output — the same shape `cairn-sync` uses for `custody_withheld_message`.
+    #[test]
+    fn the_ignored_cert_warning_names_the_medium_and_the_adr_that_makes_it_safe() {
+        let warning = ignored_cert_warning("medium /tmp/test.b3");
+        assert!(
+            warning.contains("medium /tmp/test.b3"),
+            "WHICH transport ignored it: {warning}"
+        );
+        assert!(
+            warning.contains("IGNORED"),
+            "the fact itself, unmissable: {warning}"
+        );
+        assert!(
+            warning.contains("ADR-0066"),
+            "…and the adoption path that is the ONLY reason ignoring it is safe: {warning}"
+        );
+    }
+
     #[test]
     fn an_unwrap_cert_is_ignored_but_never_silently_and_changes_nothing_served() {
         // "Told it was ignored, never silently ignored" (module doc). The telling half is an
-        // `eprintln!` in `request` — asserting on stderr would mean either restructuring
-        // production code to make it capturable (out of scope for this fix) or shelling out to
-        // capture a child process's stderr (a new dependency this crate does not otherwise
-        // need), so that half is covered by inspection of the `if unwrap_cert.is_some()` call
-        // site in `request`, not by assertion here.
+        // `eprintln!` in `request`; its WORDS are pinned by
+        // `the_ignored_cert_warning_names_the_medium_and_the_adr_that_makes_it_safe` above,
+        // via the pure `ignored_cert_warning`. That the `eprintln!` is reached at all is still
+        // covered by inspection of the `if unwrap_cert.is_some()` call site, not by assertion:
+        // capturing stderr here would need a child process this crate has no dependency for.
         //
         // What THIS test asserts is the observable contract: sending a request WITH an
         // unwrap_cert must not change what is served, must not fail, and must not cause

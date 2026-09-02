@@ -25,8 +25,17 @@ pub enum PageDecision {
 pub fn page_decision(complete: bool, page_len: usize, frozen: bool) -> PageDecision {
     // FROZEN FIRST, and the order is load-bearing. A freeze is this node's decision, not a
     // peer fault; letting the empty-page refusal below claim it would send an operator to
-    // audit a healthy peer. It also cannot make progress: the checkpoint will not advance
-    // past the freeze, so a next page would re-fetch what we have already declined to handle.
+    // audit a healthy peer.
+    //
+    // WHY STOPPING IS RIGHT, stated carefully — an earlier draft said the next page would
+    // re-fetch "events the puller has already decided it will not handle", which is not true
+    // of page 2's events: the puller has decided nothing about those, it has not seen them.
+    // The honest statement is about the CHECKPOINT. It is frozen at the contiguous handled
+    // prefix and cannot advance past the freeze, so no further page of this cycle can make
+    // DURABLE progress however much it applies — the cursor would still be committed at the
+    // same seq, and every page above it re-fetched next cycle regardless. Stopping costs
+    // nothing but round trips, the work is delayed and never lost (the events stay on the
+    // peer, offered again next cycle), and the cycle fails loudly (#270) either way.
     if frozen {
         return PageDecision::Done;
     }
@@ -93,8 +102,10 @@ mod tests {
 
     #[test]
     fn a_frozen_cursor_ends_the_loop_whatever_the_page_said() {
-        // Fetching another page after a freeze would pull events the puller has already
-        // decided it will not handle, and the checkpoint cannot advance past the freeze.
+        // The checkpoint is frozen at the contiguous handled prefix, so no further page of
+        // this cycle could make durable progress — whatever it applied, the cursor would be
+        // committed at the same seq and every page above the freeze re-fetched next cycle.
+        // The work is delayed, never lost.
         assert_eq!(page_decision(false, 500, true), PageDecision::Done);
         assert_eq!(page_decision(false, 0, true), PageDecision::Done);
     }

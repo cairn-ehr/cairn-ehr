@@ -34,15 +34,20 @@ use cairn_wire::{
 };
 
 // The node's custody-key resolution (issue #503). A module rather than another
-// function in this file: main.rs is ~11,700 lines, and the decision table below is
-// the safety argument of the ADR-0066 conversion — it belongs somewhere a reviewer
-// can hold in one screen, and it is testable with no database and no filesystem.
+// function in this file: main.rs is long past the size anyone can hold in their head
+// (#531 tracks its decomposition), and the decision table below is the safety argument
+// of the ADR-0066 conversion — it belongs somewhere a reviewer can hold in one screen,
+// and it is testable with no database and no filesystem.
+//
+// (These headers used to quote a line count. Three of them, all stale within one slice —
+// a number is the easiest thing in a comment to make version-free, and the issue number
+// says the same thing without going out of date.)
 mod unwrap_key;
 
 // The per-page and per-cycle pull tallies, and the pure quarantine-floor rule they feed
 // (slice 2b Task 5, #500/#101). Lifted out ahead of Task 7's paging loop so the folding
 // rules are testable on their own, with no peer and no database — main.rs is already
-// ~11.5k lines (#531 tracks its decomposition) and this is where new pull-loop logic goes.
+// oversized (#531) and this is where new pull-loop logic goes.
 mod pull_page;
 
 // A slice (not a fixed-size array) so appending a migration is a one-line change
@@ -2970,7 +2975,9 @@ fn do_pull(
     // them, so both are deliberately left uninitialized: a seed value here would be one no
     // path ever reads, and the compiler says so (`unused_assignments`).
     let mut cursor_commit: Result<(), String>;
-    let mut new_floor: Option<i64>;
+    // The floor value actually WRITTEN by the last page's checkpoint — which is not always
+    // what `quarantine_floor` computed for the cycle so far. See the mid-cycle guard below.
+    let mut committed_floor: Option<i64>;
     // A page this puller cannot act on ends the cycle, but NOT with an early `return`
     // (fix round 1, I1). The metrics object is the cycle's REPORT, not its record: `cmd_run`
     // logs it as one JSON line per cycle and `bet_a.py` aggregates every cycle behind
@@ -2986,6 +2993,19 @@ fn do_pull(
     // this loop a catch-up bigger than the 30 s read timeout re-requested the SAME oversized
     // response forever and never progressed; now every page commits its cursor and floor
     // before the next is asked for, so an interruption at page 39 of 40 resumes at 39.
+    //
+    // NO CAP ON PAGES PER CYCLE, deliberately — and the bound that makes that safe is
+    // EMERGENT, so it is written down here rather than left to be re-derived. The obvious
+    // worry is a peer that serves strictly-increasing FABRICATED seqs: every page advances
+    // the cursor, so the anti-loop invariant below never fires and the loop never ends. Two
+    // things bound it. Anything that VERIFIES is legitimate work — a real event this node
+    // wanted, and no cap should refuse it, which is why there is no cap. Anything that does
+    // not verify is penned, and the per-peer quarantine quota
+    // (MAX_QUARANTINE_ROWS_PER_PEER / MAX_QUARANTINE_BYTES_PER_PEER) is finite: once it is
+    // full the pen REFUSES, which freezes the cursor, which ends the cycle at the top of the
+    // next `page_decision`. So a garbage flood costs one quota's worth of pages, not an
+    // unbounded run. If a cap is ever added it must be an operator-visible refusal, never a
+    // silent `break`: a silent stop would checkpoint as though the log were drained.
     loop {
         // A transport failure here has one skew-shaped cause worth naming (PR #223
         // review): a pre-#196 serve cannot decode the EventsAfterSeq op — its serde
@@ -3123,13 +3143,34 @@ fn do_pull(
         // floor exists to prevent. (`quarantine_floor`'s own doc says the same, and its
         // unit test pins the pure RULE; that `do_pull` feeds it the CYCLE is pinned by
         // `a_clean_later_page_cannot_clear_the_floor_an_earlier_page_pinned`.)
-        new_floor = pull_page::quarantine_floor(
+        let new_floor = pull_page::quarantine_floor(
             cycle.skipped_unverifiable,
             cycle.refused_verifiable,
             cycle.pen_refused.is_some(),
             cycle.pin,
             floor_seq,
         );
+
+        // …AND THE TALLY MAY ONLY SPEAK FOR SEQS THIS CYCLE HAS ACTUALLY BEEN OFFERED.
+        //
+        // The paragraph above is only half the rule, and the half that was missing is the
+        // one that loses events. Making the PIN cumulative stops a clean page 2 from
+        // clearing a pin page 1 set. It says nothing about the mirror image: the clean
+        // branch returns `None`, `None` is a positive CLAIM — "nothing is being withheld any
+        // more" — and paging commits that claim after every page, including page 1 of a
+        // sweep that has not yet reached the slot the floor guards. A clean page 1 of a full
+        // sweep would clear a floor at seq 900, and one freeze or one dropped link later
+        // that slot is never re-offered again, silently. `committable_floor` withholds a
+        // mid-cycle clear the cycle cannot support; its doc carries the whole scenario and
+        // its unit tests pin the rule with no peer and no database.
+        //
+        // `reached` is the highest seq this cycle has been offered so far: `next_cursor` —
+        // this page's last seq, captured above BEFORE `fold` consumed the page — or the
+        // cursor this page was fetched from, when the page carried no seqs at all.
+        let reached = next_cursor.unwrap_or(page_cursor);
+        committed_floor =
+            pull_page::committable_floor(new_floor, resp.complete, reached, floor_seq);
+
         // CHECKPOINT EVERY PAGE — cursor and floor together. This is #101 item 1's fix: an
         // interruption at page 39 of 40 leaves a durable, conservative state instead of
         // restarting from zero. Only the LAST page's result is inspected after the loop,
@@ -3137,7 +3178,7 @@ fn do_pull(
         // statement is `GREATEST(last_seq, $2)` over the running `cycle.max_seq`, which
         // already covers every page before it), so a transient failure that healed is not
         // a failure of the cycle.
-        cursor_commit = commit_cursor(client, peer_name, cycle.max_seq, new_floor);
+        cursor_commit = commit_cursor(client, peer_name, cycle.max_seq, committed_floor);
 
         match page_decision(resp.complete, resp.events.len(), cycle.frozen) {
             PageDecision::Done => break,
@@ -3226,7 +3267,10 @@ fn do_pull(
         // be read at all.
         // Seeded null and filled in after the cursor commit — see below.
         "references_unlearnable": serde_json::Value::Null,
-        "floor_active": new_floor.is_some(),
+        // The floor as it was actually PERSISTED, not as `quarantine_floor` computed it: a
+        // mid-cycle clear that the guard above withheld leaves a floor standing, and a metric
+        // reading the computed value would report `false` beside a non-NULL column.
+        "floor_active": committed_floor.is_some(),
         "event_bytes": cycle.event_bytes, "wire_bytes": cycle.wire_bytes,
         "bytes_per_event": if cycle.shipped == 0 { 0.0 }
                            else { cycle.event_bytes as f64 / cycle.shipped as f64 },
@@ -5789,9 +5833,16 @@ mod tests {
         for bad in ["0", "-1", "tomorrow", "", "1.5"] {
             let refusal = parse_page_limit(Some(bad))
                 .expect_err(&format!("'{bad}' is not a usable page size"));
+            // THE SHAPE, not merely the substring. This used to read
+            // `refusal.contains(bad) || bad.is_empty()`, which cannot fail: the refusal is
+            // built as `format!("… (got '{text}') …")`, so it contains `bad` by
+            // construction for every input, and the `|| bad.is_empty()` was dead on top of
+            // that. Matching `got '<bad>'` is the claim that was meant — that the operator
+            // can find what they typed, quoted, in the line they get back — and it fails if
+            // the interpolation is ever dropped or the quoting changed.
             assert!(
-                refusal.contains(bad) || bad.is_empty(),
-                "the refusal must quote what was typed: {refusal}"
+                refusal.contains(&format!("got '{bad}'")),
+                "the refusal must quote what was typed, verbatim and delimited: {refusal}"
             );
             assert!(refusal.contains("--page"), "…and name the flag: {refusal}");
         }
@@ -7871,7 +7922,13 @@ mod quarantine_tests {
     /// forever or spins the puller.
     #[test]
     fn serve_honours_the_page_limit_and_declares_completeness() {
-        let Some(base) = cs() else { return };
+        // Say so, like every other DB-gated test in this file. A silent green is the wrong
+        // thing to hand whoever runs the suite without a database — and worst of all here,
+        // since this is the only test pinning serve's limit+1 completeness probe.
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
         let mut c = locked_client(&base);
         let (sk, kid) = enrolled_key(&mut c);
         // Three events, applied locally so this node has something to serve.
@@ -8166,8 +8223,10 @@ mod quarantine_tests {
         peer_note(sk, kid, WALL_2026 + 5_000)
     }
 
-    /// A freeze must stop the loop. Asserted on the REQUEST COUNT, because a puller that kept
-    /// asking would keep re-fetching events it has already declined to handle.
+    /// A freeze must stop the loop. Asserted on the REQUEST COUNT, because the checkpoint is
+    /// frozen at the contiguous handled prefix: no further page of this cycle could make
+    /// durable progress, so every extra round trip buys nothing and the events above the
+    /// freeze are re-fetched next cycle regardless — delayed, never lost.
     #[test]
     fn a_freeze_stops_the_loop_and_no_further_page_is_requested() {
         let Some(base) = cs() else {
@@ -8408,6 +8467,92 @@ mod quarantine_tests {
             cursor(&mut c, "peer-a"),
             2,
             "the cursor still advances over the penned (handled) slot"
+        );
+    }
+
+    /// **THE DEFECT PAGING DID SHIP, and only a full sweep can see it (final review,
+    /// Critical 1).** A clean page 1 must not CLEAR a floor the cycle has not reached yet.
+    ///
+    /// The sibling test above pins the pin's cumulative half: a clean page 2 cannot clear a
+    /// pin page 1 set. This is the mirror image, and it is the half that loses an event. The
+    /// clean branch of `quarantine_floor` returns `None`, `None` is committed after EVERY
+    /// page, and on an INCREMENTAL cycle that is harmless — the fetch point is `floor - 1`,
+    /// so the guarded slot is the first row of page 1. On a FULL SWEEP the fetch point is 0
+    /// and the guarded slot is several pages in.
+    ///
+    /// Here: a floor pinned at seq 4, then a sweep with a page size of 2 whose page 1 (seqs
+    /// 1..2) refuses nothing — it is CLEAN by every input the floor rule reads — and freezes,
+    /// so the cycle ends before page 2 ever reaches seq 4. A dropped link would do the same
+    /// thing, and the first cycle after every daemon start is a sweep. Without the guard the
+    /// floor is written NULL here, the next incremental cycle fetches from `last_seq`, and
+    /// the penned event at seq 4 is never re-offered again — silently, with
+    /// `skipped_unverifiable` at 0, so not even a loud cycle marks the loss.
+    #[test]
+    fn a_clean_page_of_a_sweep_cannot_clear_a_floor_the_cycle_has_not_reached() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..3)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+        let corrupt = b"legacy or corrupt blob".to_vec();
+
+        // SET THE FLOOR THE HONEST WAY — through a real refusal, not an UPDATE. Seq 4 will
+        // not verify, so it is penned and the floor pins there; seqs 1..3 apply and the
+        // cursor advances over the whole handled prefix.
+        let setup = FakeTransport::new(vec![page_json(
+            &[&ev[0], &ev[1], &ev[2], &corrupt],
+            &[1, 2, 3, 4],
+            true,
+        )]);
+        do_pull(&mut c, &setup, "peer-a", false, 10, None)
+            .expect_err("an unacked refusal fails the cycle loudly (#108)");
+        assert_eq!(floor(&mut c, "peer-a"), Some(4), "the fixture's premise");
+        assert_eq!(cursor(&mut c, "peer-a"), 4, "penned counts as handled");
+
+        // NOW THE SWEEP. Page 1 is seqs 1..2 — nothing refused, nothing penned, so the floor
+        // rule's three inputs are all clean — and the door is broken underneath it, so the
+        // cycle freezes and stops there. Page 2 (which is where seq 4 lives) is canned so a
+        // loop that kept going would be visible, and `FakeTransport` panics past the end.
+        let sweep = FakeTransport::new(vec![
+            page_json(
+                &[&ev[0], &freezing_event(&mut c, &sk, &kid)],
+                &[1, 2],
+                false,
+            ),
+            page_json(&[&ev[2], &corrupt], &[3, 4], true), // must never be requested
+        ]);
+        let boxed = do_pull(&mut c, &sweep, "peer-a", true, 2, None)
+            .expect_err("a frozen cycle fails loudly (#270)");
+        assert_eq!(
+            sweep.requests(),
+            vec![(0, Some(2))],
+            "a sweep fetches from 0, and the freeze ends it at page 1 — which is exactly \
+             why page 1 never reaches the guarded slot"
+        );
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            Some(4),
+            "the floor MUST survive: this page was offered seqs 1..2 and says nothing \
+             whatever about seq 4. Clearing it here strands a penned clinical event forever"
+        );
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            4,
+            "the cursor is advance-only and the freeze cannot rewind it"
+        );
+        let m = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("a freeze is an integrity condition: {boxed}"))
+            .metrics
+            .clone();
+        assert_eq!(
+            m["floor_active"], true,
+            "and the METRIC must report the floor that was persisted, not the one the \
+             clean-cycle rule computed: {m}"
         );
     }
 
