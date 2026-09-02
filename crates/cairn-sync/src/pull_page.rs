@@ -12,11 +12,6 @@ use crate::{merge_pen_refusal, PenRefusal};
 ///
 /// `Default` is what makes the fold tests readable: a test that cares about one field says so
 /// with `..PageTally::default()` instead of naming thirteen it does not care about.
-///
-/// `#[allow(dead_code)]`: nothing constructs this outside `#[cfg(test)]` yet — `do_pull` still
-/// makes a single request and holds its counters as local `mut` bindings (Task 6 of this slice
-/// folds pages through it and removes this attribute).
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub(crate) struct PageTally {
     /// Events the peer shipped in this page (`resp.events.len()`).
@@ -51,10 +46,6 @@ pub(crate) struct PageTally {
 }
 
 /// What the whole cycle has contributed so far. Same fields, accumulated.
-///
-/// `#[allow(dead_code)]`: see [`PageTally`] — `do_pull` does not fold pages into this yet
-/// (Task 6 of this slice wires it in and removes this attribute).
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct CycleTally {
     pub(crate) shipped: usize,
@@ -76,9 +67,6 @@ pub(crate) struct CycleTally {
     pub(crate) pages: usize,
 }
 
-// `#[allow(dead_code)]`: `new`/`fold` have no caller outside `#[cfg(test)]` until Task 6 of
-// this slice folds pages through `do_pull` (see the struct-level doc above).
-#[allow(dead_code)]
 impl CycleTally {
     /// `max_seq` starts at the COMMITTED cursor so re-offered low-seq events (below it, kept
     /// on the wire by the floor) never rewind the checkpoint.

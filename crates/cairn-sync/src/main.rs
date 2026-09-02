@@ -2964,77 +2964,10 @@ fn do_pull(
         also_local_fault: false,
     })?;
 
-    // Deterministic wire-format skew check (issue #108): a peer that DECLARES a
-    // signing context we don't speak would fail verification for every event it
-    // ships — refuse the batch up front with an error naming both contexts,
-    // rather than burning per-event failures whose generic "unverifiable" reason
-    // misdirects the operator toward tampering. Nothing is quarantined and the
-    // cursor is untouched: the peer still holds the events, and they apply
-    // normally once the skew (one side needs upgrading) is fixed. A peer that
-    // declares NOTHING is an older build — per-event verification decides, and
-    // the all-unverifiable diagnosis below catches the pure-legacy case.
-    // (Per-event verification binds CTX_EVENT cryptographically anyway; this
-    // gate adds no new rejection, only a legible one-line diagnosis.)
-    if let Some(peer_ctx) = &resp.signing_context {
-        if peer_ctx != CTX_EVENT.as_str() {
-            return Err(Box::new(PullIntegrityError {
-                message: format!(
-                    "pull {peer_name}: peer declares signing context '{peer_ctx}' but this \
-                     node expects '{}' — wire-format skew, not tampering; upgrade the older \
-                     side. Batch refused, cursor untouched.",
-                    CTX_EVENT.as_str()
-                ),
-                metrics: serde_json::Value::Null,
-                // Nothing was written here: the batch is refused before any per-event
-                // work, so this node's database was never asked to do anything.
-                also_local_fault: false,
-            }));
-        }
-    }
-
-    // The per-event seq is load-bearing for the cursor (issue #196): a response
-    // carrying events but a short/empty seqs array is a malformed or unexpectedly-old
-    // serve — fail LOUDLY rather than checkpoint the cursor blind.
-    if !resp.events.is_empty() && resp.seqs.len() != resp.events.len() {
-        // Integrity, not partition (issue #489): the peer answered, and its WIRE FORMAT is
-        // the problem. This is the structural sibling of the signing-context skew sixteen
-        // lines above, which has returned a `PullIntegrityError` since #108 — the two
-        // returned different classes for the same kind of fault until now.
-        return Err(Box::new(PullIntegrityError {
-            message: format!(
-                "pull {peer_name}: peer returned {} events but {} seqs — cannot checkpoint \
-                 the seq cursor safely; the peer serves an incompatible/older wire format",
-                resp.events.len(),
-                resp.seqs.len()
-            ),
-            metrics: serde_json::Value::Null,
-            // Refused before any per-event work: this node's database was never asked.
-            also_local_fault: false,
-        }));
-    }
-    // …and the VALUES are untrusted wire input that persists into sync_state (the
-    // advance-only cursor + the re-offer floor). A well-formed serve (`WHERE seq >
-    // $1 ORDER BY seq` over an IDENTITY starting at 1) always produces strictly-
-    // ascending positive seqs; the contiguous-prefix freeze below RELIES on the
-    // ordering, and the floor's `-1` fetch arithmetic on positivity. A batch
-    // violating either (a buggy or hostile peer) is refused loudly with the cursor
-    // untouched — wire values must not poison persistent cursor state (PR #223
-    // review). (A peer lying HIGH about its own seqs only starves its own
-    // incremental serving; the periodic full sweep remains the correctness floor.)
-    if resp.seqs.first().is_some_and(|&s| s < 1) || resp.seqs.windows(2).any(|w| w[1] <= w[0]) {
-        // Integrity, not partition (issue #489). A buggy or hostile peer is the ONLY thing
-        // that produces this — a link cannot reorder a JSON array — so classifying it as
-        // link downtime both misdirected the operator and hid a peer worth looking at.
-        return Err(Box::new(PullIntegrityError {
-            message: format!(
-                "pull {peer_name}: peer returned malformed seqs (must be strictly ascending \
-                 and positive) — refusing to checkpoint the seq cursor from these values"
-            ),
-            metrics: serde_json::Value::Null,
-            // Refused before any per-event work: this node's database was never asked.
-            also_local_fault: false,
-        }));
-    }
+    // The three response-shape guards moved to `validate_page` ahead of Task 7's
+    // paging loop (slice 2b Task 6, #500): each page's response has to pass them on
+    // its own, independent of how many pages came before it in this cycle.
+    validate_page(&resp, peer_name)?;
 
     // Cursor discipline (review fix A1 + issue #108 + the PR #110 review), re-keyed
     // to the node-local seq for #196:
@@ -3068,6 +3001,331 @@ fn do_pull(
     if let Some(reason) = resp.custody_withheld.as_deref() {
         eprintln!("{}", custody_withheld_message(peer_name, reason));
     }
+    // The watermark is read HERE, before the first apply, and its failure is carried
+    // rather than raised: it feeds the same `Err` arm the ledger read does, so an
+    // unreadable ledger reports UNKNOWN instead of costing the pull its progress.
+    let flag_watermark = attachment_flag_watermark(client);
+
+    // Everything `apply_page` needs from `do_pull` that isn't `resp` itself (Task 7
+    // rebuilds this once per page; `floor_seq` and the custody pair are constant across
+    // a whole cycle, so they cost nothing to recompute).
+    let ctx = PageContext {
+        peer_name,
+        unwrap_secret: unwrap_secret.as_deref().map(|s| &s[..]),
+        floor_seq,
+    };
+    let page = apply_page(client, &ctx, &resp, wire_bytes, last_seq);
+    let mut cycle = pull_page::CycleTally::new(last_seq);
+    cycle.fold(page);
+
+    // Persist progress FIRST — even a loudly-failing cycle keeps what it
+    // legitimately gained (applied events, advanced cursor). The floor (same
+    // 3-branch discipline as the HLC version, re-keyed to seq):
+    //   * CLEAN cycle (no unacked refusals AND no pen failures) → clear: the
+    //     whole suffix from the fetch point was admitted or human-acked, so
+    //     nothing is being withheld any more;
+    //   * unacked refusals, pen healthy → pin at the first refused slot's seq
+    //     (everything below it applied or was acked this cycle, so raising an
+    //     older floor to the new pin is safe and shrinks re-shipping);
+    //   * ANY pen failure → this cycle's view is unreliable: a re-offered slot
+    //     whose pen write failed produced NO pin (skips stayed 0), so blindly
+    //     overwriting would CLEAR a floor guarding a slot the cursor is already
+    //     above — permanent exclusion. Keep the most conservative of
+    //     (existing floor, new pin).
+    let new_floor: Option<i64> = pull_page::quarantine_floor(
+        cycle.skipped_unverifiable,
+        cycle.refused_verifiable,
+        cycle.pen_refused.is_some(),
+        cycle.pin,
+        floor_seq,
+    );
+    // BUILT BEFORE THE CURSOR COMMIT (issue #469). The commit is the only `?` between the
+    // apply loop and this function's return — it used to sit ABOVE this object, so a bare
+    // `?` there threw away every number describing work that had ALREADY happened — events
+    // applied and durable, flags written — and the cycle reported nothing at all about it.
+    // Moving the object above the commit is the fix; the commit is now the block below.
+    // Two fields are filled in afterwards because they are not knowable yet; both are
+    // seeded `null` rather than `0` so a path that somehow skipped them can never publish
+    // a claim.
+    let mut metrics = serde_json::json!({
+        "op": "pull", "peer": peer_name,
+        "shipped": cycle.shipped, "applied_new": cycle.applied,
+        "skipped_unverifiable": cycle.skipped_unverifiable,
+        "refused_verifiable": cycle.refused_verifiable,
+        "skipped_acked": cycle.skipped_acked,
+        "watermark_frozen": cycle.frozen,
+        // Deliberately NOT folded into `cycle_is_loud` (issue #231 review). It IS a
+        // state in which this node knowingly lacks something the peer holds, which is
+        // that predicate's stated test — but the events themselves all arrived, the
+        // degradation is the sanctioned ADR-0052 one, and failing every cycle would
+        // turn a peering gap into a link that reads as broken. Surfaced as its own
+        // metric + its own stderr line instead, so a monitor can alert on it without
+        // the pull having to fail. Revisit if a real deployment finds the line alone
+        // too quiet to notice.
+        "custody_withheld": cycle.custody_withheld,
+        // Attachment references admitted-but-unlearnable this cycle (issue #465), for
+        // the same reason and on the same terms as `custody_withheld` above: a real
+        // degradation this node must know about, which must not fail the cycle. Counts
+        // REFERENCES, not events, and is `null` — never 0 — when the ledger could not
+        // be read at all.
+        // Seeded null and filled in after the cursor commit — see below.
+        "references_unlearnable": serde_json::Value::Null,
+        "floor_active": new_floor.is_some(),
+        "event_bytes": cycle.event_bytes, "wire_bytes": cycle.wire_bytes,
+        "bytes_per_event": if cycle.shipped == 0 { 0.0 }
+                           else { cycle.event_bytes as f64 / cycle.shipped as f64 },
+        "elapsed_ms": serde_json::Value::Null,
+        "cursor_seq": cycle.max_seq, "full_sweep": full_sweep
+    });
+
+    // Advance-only cursor (GREATEST) + the recomputed seq floor. A re-offer cycle
+    // whose max_seq did not exceed the committed cursor therefore never rewinds it.
+    //
+    // NOT a bare `?` (issue #469): this is the one write whose failure means "the work
+    // happened but the bookmark did not move", and it is neither an integrity condition
+    // nor a partition. Held as a Result so the report below still runs either way.
+    let cursor_commit = client
+        .execute(
+            "UPDATE sync_state
+                SET last_seq = GREATEST(last_seq, $2), last_pull_at = clock_timestamp(),
+                    quarantine_floor_seq = $3
+              WHERE peer = $1",
+            &[&peer_name, &cycle.max_seq, &new_floor],
+        )
+        .map_err(|e| legible_db_error(&e))
+        // A statement that matched NO row is `Ok` and commits nothing: the cursor silently
+        // does not move while the cycle reports `cursor_seq` as fact. The upsert at the top
+        // of this function makes the row, so this needs a concurrent `DELETE FROM
+        // sync_state` or an RLS change to happen at all — but a silent zero is exactly the
+        // shape #465/#469 exist to end, and checking a rowcount we already have is free
+        // (PR #472 review).
+        .and_then(|rows| match rows {
+            0 => Err(format!(
+                "the sync_state row for peer '{peer_name}' matched no row — it was deleted \
+                 mid-cycle, or this role cannot see it"
+            )),
+            _ => Ok(()),
+        });
+    metrics["elapsed_ms"] = serde_json::json!(started.elapsed().as_secs_f64() * 1000.0);
+
+    // Issue #465: what did this cycle admit that it cannot fetch the bytes for? Read
+    // AFTER the cursor commit on purpose — this is a report about work already done, and
+    // a failure to produce it must never cost the pull its progress. Either read failing
+    // (the watermark above, or the ledger here) reports UNKNOWN (null), never zero, and
+    // says what actually failed rather than "db error" — see `unlearnable_report` and
+    // `legible_db_error`.
+    //
+    // It runs even when the commit above FAILED, and that is deliberate: the events and
+    // their flags are durable regardless, so this is still a true report about completed
+    // work. If the database is the thing that broke, the read fails too and reports
+    // UNKNOWN with the cause named — which is the honest answer, not a missing line.
+    metrics["references_unlearnable"] = emit_unlearnable_report(
+        &mut io::stderr(),
+        &format!("pull {peer_name}"),
+        flag_watermark
+            .and_then(|since| unlearnable_references(client, &cycle.applied_addresses, since))
+            .map_err(|e| legible_db_error(&e)),
+    );
+
+    // The loud-integrity diagnosis is composed BEFORE the cursor-commit check, because the
+    // two conditions are independent and a cycle can be both. Composing it here (rather
+    // than only in the `if` below, as the first draft did) is what stops a failed commit
+    // from swallowing an integrity condition that needs a human — PR #472 review, finding
+    // 5. `loud_pull_message` is pure, so composing it on a path that may not use it costs
+    // one allocation and no I/O.
+    let loud = cycle_is_loud(
+        cycle.skipped_unverifiable,
+        cycle.refused_verifiable,
+        cycle.frozen,
+        cycle.pen_refused.is_some(),
+    );
+    let loud_message = loud.then(|| {
+        let all = cycle.shipped != 0 && cycle.skipped_unverifiable == cycle.shipped;
+        let diagnosis = if all {
+            let declared = match &resp.signing_context {
+                Some(ctx) => format!("declares signing context '{ctx}'"),
+                None => "declares no signing context (a pre-ADR-0040 build would not)".to_string(),
+            };
+            format!(
+                " ALL {} shipped events are unverifiable and the peer {declared} — it \
+                 appears to serve pre-ADR-0040 (or corrupt) signatures; re-initialize/\
+                 re-sign the peer, or if THIS node was at fault run `cairn-sync requeue` \
+                 after fixing it.",
+                cycle.shipped
+            )
+        } else {
+            String::new()
+        };
+        // Every clause is conditional on the state that makes it true — see
+        // `loud_pull_message`, where the four loud states and their (different)
+        // operator actions are composed and unit-tested with no database.
+        loud_pull_message(
+            peer_name,
+            cycle.skipped_unverifiable,
+            cycle.refused_verifiable,
+            cycle.frozen.then_some(cycle.max_seq),
+            cycle.pen_refused.as_ref().map(|p| p.message.as_str()),
+            &diagnosis,
+        )
+    });
+
+    // The local-fault class (issue #469). Everything above describes work that genuinely
+    // happened; only the two fields describing the failed write are withdrawn.
+    if let Err(cause) = cursor_commit {
+        mark_cursor_outcome_unknown(&mut metrics);
+        return Err(Box::new(CursorCommitError {
+            message: cursor_commit_failure_message(
+                peer_name,
+                cycle.applied,
+                cycle.max_seq,
+                &cause,
+                loud_message.as_deref(),
+            ),
+            metrics,
+            also_loud: loud,
+        }));
+    }
+
+    // LOUD failure (issue #108, generalised by the #110 review, extended to the
+    // freeze by issue #270): ANY state in which this node knowingly does not hold
+    // something the peer offered it fails the pull, every cycle, until the cause is
+    // fixed or a human acks the exclusion. The old `skipped == len` heuristic
+    // structurally missed the two common cases (a mixed legacy+new batch, and an
+    // already-synced link whose boundary event re-applies idempotently), which is
+    // exactly where the silent livelock lived; the freeze arm then reintroduced one
+    // of its own by exiting SUCCESS with a halted cursor. `run` logs this as an
+    // integrity condition, not a partition. The message itself was composed above,
+    // so that a cycle which ALSO failed its cursor commit still carries it.
+    if let Some(message) = loud_message {
+        return Err(Box::new(PullIntegrityError {
+            message,
+            metrics,
+            // #489 part 1: a pen write the DATABASE refused makes this cycle a local
+            // fault as well as an integrity condition. A quota refusal does not.
+            //
+            // PR #493 review: so does an APPLY that failed on this node's database, which
+            // reaches the loud path through `frozen` and never touches the pen at all —
+            // the arm this fix originally missed.
+            also_local_fault: cycle.local_apply_fault
+                || cycle.pen_refused.is_some_and(|p| p.local_fault),
+        }));
+    }
+
+    Ok(metrics)
+}
+
+/// Everything `apply_page` needs from `do_pull` besides the response itself and the
+/// per-page cursor value — grouped so Task 7's loop can rebuild it once per page rather
+/// than growing `apply_page`'s argument list (slice 2b Task 6, #500).
+struct PageContext<'a> {
+    peer_name: &'a str,
+    /// This node's unwrap secret (ADR-0052), if this cycle is pulling WITH custody. A
+    /// plain slice, not the `Zeroizing<[u8; 32]>` `do_pull` holds it as — see the
+    /// DEK-unwrap arm in `apply_page` for the (infallible) conversion back.
+    unwrap_secret: Option<&'a [u8]>,
+    /// The seq re-offer floor at the START of this cycle (db/036) — constant across
+    /// every page of one cycle, unlike the running cursor `apply_page` also takes.
+    floor_seq: Option<i64>,
+}
+
+/// The response-shape guards a pull's page must pass before any per-event work begins —
+/// moved out of `do_pull` ahead of Task 7's paging loop (slice 2b Task 6, #500), so each
+/// page's response validates on its own, independent of how many pages came before it in
+/// this cycle. Nothing here touches the database: every violation is refused before any
+/// per-event work, so `metrics` is always `null` and `also_local_fault` always `false`.
+fn validate_page(resp: &EventsResponse, peer_name: &str) -> Result<(), PullIntegrityError> {
+    // Deterministic wire-format skew check (issue #108): a peer that DECLARES a
+    // signing context we don't speak would fail verification for every event it
+    // ships — refuse the batch up front with an error naming both contexts,
+    // rather than burning per-event failures whose generic "unverifiable" reason
+    // misdirects the operator toward tampering. Nothing is quarantined and the
+    // cursor is untouched: the peer still holds the events, and they apply
+    // normally once the skew (one side needs upgrading) is fixed. A peer that
+    // declares NOTHING is an older build — per-event verification decides, and
+    // the all-unverifiable diagnosis below catches the pure-legacy case.
+    // (Per-event verification binds CTX_EVENT cryptographically anyway; this
+    // gate adds no new rejection, only a legible one-line diagnosis.)
+    if let Some(peer_ctx) = &resp.signing_context {
+        if peer_ctx != CTX_EVENT.as_str() {
+            return Err(PullIntegrityError {
+                message: format!(
+                    "pull {peer_name}: peer declares signing context '{peer_ctx}' but this \
+                     node expects '{}' — wire-format skew, not tampering; upgrade the older \
+                     side. Batch refused, cursor untouched.",
+                    CTX_EVENT.as_str()
+                ),
+                metrics: serde_json::Value::Null,
+                // Nothing was written here: the batch is refused before any per-event
+                // work, so this node's database was never asked to do anything.
+                also_local_fault: false,
+            });
+        }
+    }
+
+    // The per-event seq is load-bearing for the cursor (issue #196): a response
+    // carrying events but a short/empty seqs array is a malformed or unexpectedly-old
+    // serve — fail LOUDLY rather than checkpoint the cursor blind.
+    if !resp.events.is_empty() && resp.seqs.len() != resp.events.len() {
+        // Integrity, not partition (issue #489): the peer answered, and its WIRE FORMAT is
+        // the problem. This is the structural sibling of the signing-context skew sixteen
+        // lines above, which has returned a `PullIntegrityError` since #108 — the two
+        // returned different classes for the same kind of fault until now.
+        return Err(PullIntegrityError {
+            message: format!(
+                "pull {peer_name}: peer returned {} events but {} seqs — cannot checkpoint \
+                 the seq cursor safely; the peer serves an incompatible/older wire format",
+                resp.events.len(),
+                resp.seqs.len()
+            ),
+            metrics: serde_json::Value::Null,
+            // Refused before any per-event work: this node's database was never asked.
+            also_local_fault: false,
+        });
+    }
+    // …and the VALUES are untrusted wire input that persists into sync_state (the
+    // advance-only cursor + the re-offer floor). A well-formed serve (`WHERE seq >
+    // $1 ORDER BY seq` over an IDENTITY starting at 1) always produces strictly-
+    // ascending positive seqs; the contiguous-prefix freeze below RELIES on the
+    // ordering, and the floor's `-1` fetch arithmetic on positivity. A batch
+    // violating either (a buggy or hostile peer) is refused loudly with the cursor
+    // untouched — wire values must not poison persistent cursor state (PR #223
+    // review). (A peer lying HIGH about its own seqs only starves its own
+    // incremental serving; the periodic full sweep remains the correctness floor.)
+    if resp.seqs.first().is_some_and(|&s| s < 1) || resp.seqs.windows(2).any(|w| w[1] <= w[0]) {
+        // Integrity, not partition (issue #489). A buggy or hostile peer is the ONLY thing
+        // that produces this — a link cannot reorder a JSON array — so classifying it as
+        // link downtime both misdirected the operator and hid a peer worth looking at.
+        return Err(PullIntegrityError {
+            message: format!(
+                "pull {peer_name}: peer returned malformed seqs (must be strictly ascending \
+                 and positive) — refusing to checkpoint the seq cursor from these values"
+            ),
+            metrics: serde_json::Value::Null,
+            // Refused before any per-event work: this node's database was never asked.
+            also_local_fault: false,
+        });
+    }
+
+    Ok(())
+}
+
+/// One page's worth of apply — the body `do_pull` used to run inline, lifted out
+/// ahead of Task 7's paging loop so each page can be applied on its own and the
+/// results folded (`pull_page::CycleTally::fold`) rather than accumulated in a dozen
+/// local `mut` bindings that outlive one request (slice 2b Task 6, #500). Pure move:
+/// every counting/quarantine/freeze rule below is unchanged from `do_pull`'s old
+/// inline loop, comments included.
+///
+/// `max_seq_in` seeds the page's running cursor — the committed cursor for page 1,
+/// the PREVIOUS page's `max_seq` from page 2 on (Task 7) — so a page never rewinds
+/// what an earlier page in the same cycle already advanced past.
+fn apply_page(
+    client: &mut postgres::Client,
+    ctx: &PageContext<'_>,
+    resp: &EventsResponse,
+    wire_bytes: usize,
+    max_seq_in: i64,
+) -> pull_page::PageTally {
     let (mut applied, mut skipped_unverifiable, mut skipped_acked, mut event_bytes) =
         (0usize, 0usize, 0usize, 0usize);
     // Verifiable events the floor refused and we penned this cycle (issue #267).
@@ -3078,15 +3336,10 @@ fn do_pull(
     // keys and why neither alone is enough are in `unlearnable_references`). Held rather
     // than counted because the report has to NAME an event, and because attributing a
     // flag to this peer means proving the event came from this batch.
-    //
-    // The watermark is read HERE, before the first apply, and its failure is carried
-    // rather than raised: it feeds the same `Err` arm the ledger read does, so an
-    // unreadable ledger reports UNKNOWN instead of costing the pull its progress.
     let mut applied_addresses: Vec<Vec<u8>> = Vec::new();
-    let flag_watermark = attachment_flag_watermark(client);
     // Highest CONTIGUOUS handled seq. Starts at the cursor so re-offered low-seq
     // events (below it) never rewind the checkpoint; new events above it advance it.
-    let mut max_seq = last_seq;
+    let mut max_seq = max_seq_in;
     let mut frozen = false;
     // Did any apply failure this cycle land on THIS NODE'S database? (PR #493 review.)
     // Tracked separately from `frozen` because the two answer different questions: `frozen`
@@ -3099,6 +3352,12 @@ fn do_pull(
     // The seq of the FIRST unacked refused event this cycle (the stream is
     // seq-ascending, so the first is the lowest) — persisted as the new floor.
     let mut pin: Option<i64> = None;
+    // Aliased so the per-event branching below — moved verbatim from `do_pull` —
+    // reads exactly as it did before extraction. Only the DEK-unwrap arm (below)
+    // needed adapting: `PageContext` carries the unwrap secret as a plain slice,
+    // not the `Zeroizing<[u8; 32]>` `do_pull` holds it as.
+    let peer_name = ctx.peer_name;
+    let floor_seq = ctx.floor_seq;
 
     for (i, hexed) in resp.events.iter().enumerate() {
         // The serving-node seq for THIS entry (parallel array; length-checked above).
@@ -3146,13 +3405,19 @@ fn do_pull(
                                                    // is never a reason to drop or freeze the event. The unwrapped DEK is
                                                    // held only for the apply call below (Zeroizing clears it on drop).
                 let dek = match (
-                    &unwrap_secret,
+                    ctx.unwrap_secret,
                     resp.wrapped_deks.get(i).and_then(|o| o.as_deref()),
                 ) {
-                    (Some(secret), Some(hexed)) => match hex::decode(hexed)
-                        .ok()
-                        .and_then(|w| cairn_event::seal::unwrap_dek(&w, secret).ok())
-                    {
+                    (Some(secret), Some(hexed)) => match hex::decode(hexed).ok().and_then(|w| {
+                        // `PageContext` carries the unwrap secret as `&[u8]` (a plain
+                        // slice crosses the function boundary more easily than the
+                        // `Zeroizing<[u8; 32]>` `do_pull` holds it as); `unwrap_dek`
+                        // wants the fixed-size array back. The secret is always
+                        // exactly 32 bytes, so this conversion cannot fail in practice.
+                        <&[u8; 32]>::try_from(secret)
+                            .ok()
+                            .and_then(|secret| cairn_event::seal::unwrap_dek(&w, secret).ok())
+                    }) {
                         Some(d) => Some(d),
                         None => {
                             eprintln!(
@@ -3375,199 +3640,22 @@ fn do_pull(
         }
     }
 
-    // Persist progress FIRST — even a loudly-failing cycle keeps what it
-    // legitimately gained (applied events, advanced cursor). The floor (same
-    // 3-branch discipline as the HLC version, re-keyed to seq):
-    //   * CLEAN cycle (no unacked refusals AND no pen failures) → clear: the
-    //     whole suffix from the fetch point was admitted or human-acked, so
-    //     nothing is being withheld any more;
-    //   * unacked refusals, pen healthy → pin at the first refused slot's seq
-    //     (everything below it applied or was acked this cycle, so raising an
-    //     older floor to the new pin is safe and shrinks re-shipping);
-    //   * ANY pen failure → this cycle's view is unreliable: a re-offered slot
-    //     whose pen write failed produced NO pin (skips stayed 0), so blindly
-    //     overwriting would CLEAR a floor guarding a slot the cursor is already
-    //     above — permanent exclusion. Keep the most conservative of
-    //     (existing floor, new pin).
-    let new_floor: Option<i64> = pull_page::quarantine_floor(
+    pull_page::PageTally {
+        shipped: resp.events.len(),
+        applied,
         skipped_unverifiable,
         refused_verifiable,
-        pen_refused.is_some(),
-        pin,
-        floor_seq,
-    );
-    // BUILT BEFORE THE CURSOR COMMIT (issue #469). The commit is the only `?` between the
-    // apply loop and this function's return — it used to sit ABOVE this object, so a bare
-    // `?` there threw away every number describing work that had ALREADY happened — events
-    // applied and durable, flags written — and the cycle reported nothing at all about it.
-    // Moving the object above the commit is the fix; the commit is now the block below.
-    // Two fields are filled in afterwards because they are not knowable yet; both are
-    // seeded `null` rather than `0` so a path that somehow skipped them can never publish
-    // a claim.
-    let mut metrics = serde_json::json!({
-        "op": "pull", "peer": peer_name,
-        "shipped": resp.events.len(), "applied_new": applied,
-        "skipped_unverifiable": skipped_unverifiable,
-        "refused_verifiable": refused_verifiable,
-        "skipped_acked": skipped_acked,
-        "watermark_frozen": frozen,
-        // Deliberately NOT folded into `cycle_is_loud` (issue #231 review). It IS a
-        // state in which this node knowingly lacks something the peer holds, which is
-        // that predicate's stated test — but the events themselves all arrived, the
-        // degradation is the sanctioned ADR-0052 one, and failing every cycle would
-        // turn a peering gap into a link that reads as broken. Surfaced as its own
-        // metric + its own stderr line instead, so a monitor can alert on it without
-        // the pull having to fail. Revisit if a real deployment finds the line alone
-        // too quiet to notice.
-        "custody_withheld": resp.custody_withheld.is_some(),
-        // Attachment references admitted-but-unlearnable this cycle (issue #465), for
-        // the same reason and on the same terms as `custody_withheld` above: a real
-        // degradation this node must know about, which must not fail the cycle. Counts
-        // REFERENCES, not events, and is `null` — never 0 — when the ledger could not
-        // be read at all.
-        // Seeded null and filled in after the cursor commit — see below.
-        "references_unlearnable": serde_json::Value::Null,
-        "floor_active": new_floor.is_some(),
-        "event_bytes": event_bytes, "wire_bytes": wire_bytes,
-        "bytes_per_event": if resp.events.is_empty() { 0.0 }
-                           else { event_bytes as f64 / resp.events.len() as f64 },
-        "elapsed_ms": serde_json::Value::Null,
-        "cursor_seq": max_seq, "full_sweep": full_sweep
-    });
-
-    // Advance-only cursor (GREATEST) + the recomputed seq floor. A re-offer cycle
-    // whose max_seq did not exceed the committed cursor therefore never rewinds it.
-    //
-    // NOT a bare `?` (issue #469): this is the one write whose failure means "the work
-    // happened but the bookmark did not move", and it is neither an integrity condition
-    // nor a partition. Held as a Result so the report below still runs either way.
-    let cursor_commit = client
-        .execute(
-            "UPDATE sync_state
-                SET last_seq = GREATEST(last_seq, $2), last_pull_at = clock_timestamp(),
-                    quarantine_floor_seq = $3
-              WHERE peer = $1",
-            &[&peer_name, &max_seq, &new_floor],
-        )
-        .map_err(|e| legible_db_error(&e))
-        // A statement that matched NO row is `Ok` and commits nothing: the cursor silently
-        // does not move while the cycle reports `cursor_seq` as fact. The upsert at the top
-        // of this function makes the row, so this needs a concurrent `DELETE FROM
-        // sync_state` or an RLS change to happen at all — but a silent zero is exactly the
-        // shape #465/#469 exist to end, and checking a rowcount we already have is free
-        // (PR #472 review).
-        .and_then(|rows| match rows {
-            0 => Err(format!(
-                "the sync_state row for peer '{peer_name}' matched no row — it was deleted \
-                 mid-cycle, or this role cannot see it"
-            )),
-            _ => Ok(()),
-        });
-    metrics["elapsed_ms"] = serde_json::json!(started.elapsed().as_secs_f64() * 1000.0);
-
-    // Issue #465: what did this cycle admit that it cannot fetch the bytes for? Read
-    // AFTER the cursor commit on purpose — this is a report about work already done, and
-    // a failure to produce it must never cost the pull its progress. Either read failing
-    // (the watermark above, or the ledger here) reports UNKNOWN (null), never zero, and
-    // says what actually failed rather than "db error" — see `unlearnable_report` and
-    // `legible_db_error`.
-    //
-    // It runs even when the commit above FAILED, and that is deliberate: the events and
-    // their flags are durable regardless, so this is still a true report about completed
-    // work. If the database is the thing that broke, the read fails too and reports
-    // UNKNOWN with the cause named — which is the honest answer, not a missing line.
-    metrics["references_unlearnable"] = emit_unlearnable_report(
-        &mut io::stderr(),
-        &format!("pull {peer_name}"),
-        flag_watermark
-            .and_then(|since| unlearnable_references(client, &applied_addresses, since))
-            .map_err(|e| legible_db_error(&e)),
-    );
-
-    // The loud-integrity diagnosis is composed BEFORE the cursor-commit check, because the
-    // two conditions are independent and a cycle can be both. Composing it here (rather
-    // than only in the `if` below, as the first draft did) is what stops a failed commit
-    // from swallowing an integrity condition that needs a human — PR #472 review, finding
-    // 5. `loud_pull_message` is pure, so composing it on a path that may not use it costs
-    // one allocation and no I/O.
-    let loud = cycle_is_loud(
-        skipped_unverifiable,
-        refused_verifiable,
+        skipped_acked,
+        event_bytes,
+        wire_bytes,
+        max_seq,
         frozen,
-        pen_refused.is_some(),
-    );
-    let loud_message = loud.then(|| {
-        let all = !resp.events.is_empty() && skipped_unverifiable == resp.events.len();
-        let diagnosis = if all {
-            let declared = match &resp.signing_context {
-                Some(ctx) => format!("declares signing context '{ctx}'"),
-                None => "declares no signing context (a pre-ADR-0040 build would not)".to_string(),
-            };
-            format!(
-                " ALL {} shipped events are unverifiable and the peer {declared} — it \
-                 appears to serve pre-ADR-0040 (or corrupt) signatures; re-initialize/\
-                 re-sign the peer, or if THIS node was at fault run `cairn-sync requeue` \
-                 after fixing it.",
-                resp.events.len()
-            )
-        } else {
-            String::new()
-        };
-        // Every clause is conditional on the state that makes it true — see
-        // `loud_pull_message`, where the four loud states and their (different)
-        // operator actions are composed and unit-tested with no database.
-        loud_pull_message(
-            peer_name,
-            skipped_unverifiable,
-            refused_verifiable,
-            frozen.then_some(max_seq),
-            pen_refused.as_ref().map(|p| p.message.as_str()),
-            &diagnosis,
-        )
-    });
-
-    // The local-fault class (issue #469). Everything above describes work that genuinely
-    // happened; only the two fields describing the failed write are withdrawn.
-    if let Err(cause) = cursor_commit {
-        mark_cursor_outcome_unknown(&mut metrics);
-        return Err(Box::new(CursorCommitError {
-            message: cursor_commit_failure_message(
-                peer_name,
-                applied,
-                max_seq,
-                &cause,
-                loud_message.as_deref(),
-            ),
-            metrics,
-            also_loud: loud,
-        }));
+        local_apply_fault,
+        pen_refused,
+        pin,
+        custody_withheld: resp.custody_withheld.is_some(),
+        applied_addresses,
     }
-
-    // LOUD failure (issue #108, generalised by the #110 review, extended to the
-    // freeze by issue #270): ANY state in which this node knowingly does not hold
-    // something the peer offered it fails the pull, every cycle, until the cause is
-    // fixed or a human acks the exclusion. The old `skipped == len` heuristic
-    // structurally missed the two common cases (a mixed legacy+new batch, and an
-    // already-synced link whose boundary event re-applies idempotently), which is
-    // exactly where the silent livelock lived; the freeze arm then reintroduced one
-    // of its own by exiting SUCCESS with a halted cursor. `run` logs this as an
-    // integrity condition, not a partition. The message itself was composed above,
-    // so that a cycle which ALSO failed its cursor commit still carries it.
-    if let Some(message) = loud_message {
-        return Err(Box::new(PullIntegrityError {
-            message,
-            metrics,
-            // #489 part 1: a pen write the DATABASE refused makes this cycle a local
-            // fault as well as an integrity condition. A quota refusal does not.
-            //
-            // PR #493 review: so does an APPLY that failed on this node's database, which
-            // reaches the loud path through `frozen` and never touches the pen at all —
-            // the arm this fix originally missed.
-            also_local_fault: local_apply_fault || pen_refused.is_some_and(|p| p.local_fault),
-        }));
-    }
-
-    Ok(metrics)
 }
 
 /// Re-process every quarantined event through the real apply door (issue #108's
