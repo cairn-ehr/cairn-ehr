@@ -215,17 +215,31 @@ pub(crate) mod tests_support {
     use super::*;
     use cairn_event::SigningKey;
 
-    /// Runtime-derived record bytes. `salt` distinguishes one fixture chain from another.
+    /// Runtime-derived record bytes, made distinct by `(lineage, n)`.
     ///
-    /// **It is load-bearing, not decoration.** Without it every fixture chain is
+    /// `lineage` says which fixture MEDIUM a record belongs to; `n` its position within that
+    /// medium. **`lineage` is load-bearing, not decoration.** Without it every fixture chain is
     /// byte-identical, so a segment "spliced from another medium" would carry an identical
     /// predecessor commitment and a cross-medium splice test would pass while asserting
     /// nothing. NEVER a literal byte array — house rule 6 (#146).
-    pub(crate) fn salted_record(salt: u8, n: u8) -> MediumRecord {
+    ///
+    /// ## Why this parameter is not called `salt` (#527)
+    ///
+    /// It was, and it cost eighteen critical CodeQL alerts at once. `rust/hard-coded-
+    /// cryptographic-value` picks its sink by the NAME of the binding a value flows into, so
+    /// every call site passing a constant to a parameter called `salt` was reported as
+    /// "this hard-coded value is used as a salt" — even though nothing in this crate derives
+    /// a key, and the sibling helpers `testkit::bytes(seed, …)` and
+    /// `wire_pins::placeholder(seed, …)` run the identical arithmetic unflagged.
+    ///
+    /// Runtime derivation does not clear it: the loop below is a pure function of its two
+    /// arguments, which the scanner folds straight through. The name is the whole finding.
+    /// Guarded by `cairn-node`'s `crypto_sink_names_are_genuine.rs`.
+    pub(crate) fn distinct_record(lineage: u8, n: u8) -> MediumRecord {
         let mk = |seed: u8, len: usize| -> Vec<u8> {
             (0..len)
                 .map(|i| {
-                    seed.wrapping_add(salt)
+                    seed.wrapping_add(lineage)
                         .wrapping_mul(n.wrapping_add(1))
                         .wrapping_add(i as u8)
                 })
@@ -268,7 +282,7 @@ mod tests {
     use super::*;
     use crate::testkit::{enroll, segment, sk};
 
-    /// Shorthand for this module's tests: `n` salted records under one signed segment.
+    /// Shorthand for this module's tests: `n` distinct records under one signed segment.
     /// Delegates to `tests_support::signed` rather than building its own segment — ONE
     /// fixture builder for the whole crate, because every attestation assertion below
     /// rests on exactly what it produces.
@@ -281,7 +295,7 @@ mod tests {
         n: usize,
     ) -> Segment {
         let records = (0..n)
-            .map(|i| tests_support::salted_record(1, i as u8))
+            .map(|i| tests_support::distinct_record(1, i as u8))
             .collect();
         tests_support::signed(sk, self_id, plane, index, prev, records)
     }
@@ -301,13 +315,14 @@ mod tests {
     /// varies only the sidecar fields (`attestation`, `attester_key`, `dek_wrapped`), which the
     /// commitment deliberately excludes, so two `record(_)` fixtures are byte-identical on the
     /// covered axis — swapping two identical items proves nothing, and this test would still
-    /// pass even if a refactor made the commitment order-DEPENDENT. Use `salted_record(salt, n)`
-    /// (which varies both covered fields by `(salt, n)`) or build records inline with distinct
+    /// pass even if a refactor made the commitment order-DEPENDENT. Use
+    /// `distinct_record(lineage, n)` (which varies both covered fields by `(lineage, n)`) or
+    /// build records inline with distinct
     /// values instead — do NOT simplify this fixture back to `record(...)`.
     #[test]
     fn the_commitment_is_order_independent() {
-        let a = tests_support::salted_record(1, 0);
-        let b = tests_support::salted_record(1, 1);
+        let a = tests_support::distinct_record(1, 0);
+        let b = tests_support::distinct_record(1, 1);
         // Prove the fixtures are genuinely distinct on exactly the axis that matters: if the
         // single-record commitments differ, `signed_bytes`/`source_seq` differ too — so a
         // future edit that quietly re-vacuums this fixture (e.g. back to `record(flags)`)
@@ -476,8 +491,8 @@ mod tests {
         let sk = sk();
         let kid = hex::encode(sk.verifying_key().to_bytes());
         let records = vec![
-            tests_support::salted_record(1, 0),
-            tests_support::salted_record(1, 1),
+            tests_support::distinct_record(1, 0),
+            tests_support::distinct_record(1, 1),
         ];
         let body = EventBody {
             event_id: uuid::Uuid::now_v7().to_string(),
@@ -550,7 +565,7 @@ mod tests {
             crate::marker::commitment_over(&refs)
         };
 
-        let one = vec![tests_support::salted_record(1, 0)];
+        let one = vec![tests_support::distinct_record(1, 0)];
         assert_eq!(
             segment_commitment(&one),
             by_hand(&one),
@@ -558,8 +573,8 @@ mod tests {
         );
 
         let two = vec![
-            tests_support::salted_record(1, 0),
-            tests_support::salted_record(1, 1),
+            tests_support::distinct_record(1, 0),
+            tests_support::distinct_record(1, 1),
         ];
         assert_eq!(
             segment_commitment(&two),
@@ -592,7 +607,7 @@ mod tests {
     fn a_signed_event_of_the_wrong_type_is_not_a_segment_attestation() {
         let sk = crate::testkit::sk();
         let key_id = crate::testkit::kid(&sk);
-        let records = vec![tests_support::salted_record(1, 0)];
+        let records = vec![tests_support::distinct_record(1, 0)];
         let seg = Segment {
             plane: Plane::Clinical,
             index: 0,

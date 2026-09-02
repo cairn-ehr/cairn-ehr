@@ -187,12 +187,27 @@ These are load-bearing working agreements — hold to them on proof-of-concept s
 5. **Fix review findings; if you can't, file an issue.** When a code review surfaces an error, **fix it.** If it
    can't be fixed in place (out of scope, needs a decision, blocked), **open a GitHub issue** capturing it — never
    let a known defect pass silently. (Mirrors the project's "surface flaws early" principle, made actionable.)
-6. **Never hard-code cryptographic material in tests.** Test keys, seeds, salts, nonces, and IVs must be **computed
-   at runtime** (e.g. `std::array::from_fn(|i| …)` or a small helper), never written as byte-array/string literals —
-   a literal in a crypto context trips CodeQL's `rust/hard-coded-cryptographic-value` (critical) as a recurring false
-   positive that blocks the scan until a human dismisses it (issue #146). Deriving keeps the fixture deterministic
-   while presenting no hard-coded value to the scanner, and it keeps the query live for *production* code, where it
-   is a real defense (production derives all key material from `rand_bytes`).
+6. **Never hard-code cryptographic material in tests — and never give a non-cryptographic value a cryptographic
+   NAME.** Two halves, and the second is the one that bites.
+   **(a) The value.** Test keys, seeds, salts, nonces, and IVs must be **computed at runtime**
+   (e.g. `std::array::from_fn(|i| …)` or a small helper), never written as byte-array/string literals — a literal in
+   a crypto context trips CodeQL's `rust/hard-coded-cryptographic-value` (critical) as a recurring false positive
+   that blocks the scan until a human dismisses it (issue #146). Deriving keeps the fixture deterministic while
+   presenting no hard-coded value to the scanner, and it keeps the query live for *production* code, where it is a
+   real defense (production derives all key material from `rand_bytes`).
+   **(b) The name — and (a) does NOT cover it.** CodeQL picks its sink by the **name of the binding a value flows
+   into**. `salt`, `nonce` and `iv` are sinks; a *constant argument* passed to a parameter wearing one is a critical
+   alert **per call site**, and no amount of runtime derivation clears it, because a derivation whose inputs are all
+   literals is constant-folded straight through. This is not hypothetical: `cairn-medium`'s fixture helpers
+   `salted_record(salt, n)` / `chain_of(n, salt)` built nothing cryptographic whatsoever and minted **eighteen
+   critical alerts at once**, while the sibling helpers `bytes(seed, …)` / `placeholder(seed, …)` ran the *identical*
+   arithmetic unflagged — the only difference was the word (#527). So reserve `salt`/`nonce`/`iv` for real
+   constructions and call a discriminator a `lineage`, a `variant`, a `seed`. It is a legibility rule before it is a
+   scanner rule: a reviewer who greps `salt` in a crate that seals bodies has every reason to think they found a KDF.
+   Enforced by `crates/cairn-node/tests/crypto_sink_names_are_genuine.rs`, whose `ALLOWED` list is the inventory of
+   the tree's actual cryptography; **read the open alert list with `scripts/codeql-alerts.sh`** (read-only; `gh api`
+   is deny-listed repo-wide and must stay that way) rather than assuming a finding is the familiar false positive —
+   alert #24 was assumed to be one for a week and was a real defect.
 7. **Every clinical-surface slice plan carries a falsifiable paper-parity benchmark (§1.2).** A plan
    for a slice that adds or changes a clinical workflow — at ANY layer, the in-DB floor and event core
    included — must carry a `## Paper-parity benchmark (§1.2)` section: the named paper counterpart, the

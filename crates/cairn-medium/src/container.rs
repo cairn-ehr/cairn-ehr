@@ -263,12 +263,12 @@ mod tests {
     use crate::segment::Plane;
     use crate::testkit::{enroll, kid, node_id, sk};
 
-    /// This module's shorthand for building a signed segment fixture: `n` salted records
+    /// This module's shorthand for building a signed segment fixture: `n` distinct records
     /// under one signed segment, mirroring `attest.rs`'s own `signed_segment` test helper
     /// so the two files don't each grow a slightly different way of doing the same thing.
-    /// Salt is fixed at 1 — none of this module's tests splice segments between two
-    /// DIFFERENT media, which is the only case where distinct salts are load-bearing (see
-    /// `tests_support::salted_record`'s doc comment).
+    /// The lineage is fixed at 1 — none of this module's tests splice segments between two
+    /// DIFFERENT media, which is the only case where distinct lineages are load-bearing (see
+    /// `tests_support::distinct_record`'s doc comment).
     fn signed_segment(
         sk: &cairn_event::SigningKey,
         self_id: &str,
@@ -278,7 +278,7 @@ mod tests {
         n: usize,
     ) -> Segment {
         let records = (0..n)
-            .map(|i| tests_support::salted_record(1, i as u8))
+            .map(|i| tests_support::distinct_record(1, i as u8))
             .collect();
         tests_support::signed(sk, self_id, plane, index, prev, records)
     }
