@@ -3011,7 +3011,7 @@ fn do_pull(
     // a whole cycle, so they cost nothing to recompute).
     let ctx = PageContext {
         peer_name,
-        unwrap_secret: unwrap_secret.as_deref().map(|s| &s[..]),
+        unwrap_secret: unwrap_secret.as_deref(),
         floor_seq,
     };
     let page = apply_page(client, &ctx, &resp, wire_bytes, last_seq);
@@ -3219,10 +3219,12 @@ fn do_pull(
 /// than growing `apply_page`'s argument list (slice 2b Task 6, #500).
 struct PageContext<'a> {
     peer_name: &'a str,
-    /// This node's unwrap secret (ADR-0052), if this cycle is pulling WITH custody. A
-    /// plain slice, not the `Zeroizing<[u8; 32]>` `do_pull` holds it as — see the
-    /// DEK-unwrap arm in `apply_page` for the (infallible) conversion back.
-    unwrap_secret: Option<&'a [u8]>,
+    /// This node's unwrap secret (ADR-0052), if this cycle is pulling WITH custody.
+    /// `&[u8; 32]`, not a plain slice: `cairn_event::seal::unwrap_dek` takes
+    /// `&[u8; 32]`, and keeping the fixed size here means a wrong-length secret is
+    /// unrepresentable rather than a runtime `try_from` that could fail into the
+    /// "admit without custody" arm and misattribute a LOCAL fault to the peer.
+    unwrap_secret: Option<&'a [u8; 32]>,
     /// The seq re-offer floor at the START of this cycle (db/036) — constant across
     /// every page of one cycle, unlike the running cursor `apply_page` also takes.
     floor_seq: Option<i64>,
@@ -3353,11 +3355,10 @@ fn apply_page(
     // seq-ascending, so the first is the lowest) — persisted as the new floor.
     let mut pin: Option<i64> = None;
     // Aliased so the per-event branching below — moved verbatim from `do_pull` —
-    // reads exactly as it did before extraction. Only the DEK-unwrap arm (below)
-    // needed adapting: `PageContext` carries the unwrap secret as a plain slice,
-    // not the `Zeroizing<[u8; 32]>` `do_pull` holds it as.
+    // reads exactly as it did before extraction, with no adaptation anywhere in it.
     let peer_name = ctx.peer_name;
     let floor_seq = ctx.floor_seq;
+    let unwrap_secret = ctx.unwrap_secret;
 
     for (i, hexed) in resp.events.iter().enumerate() {
         // The serving-node seq for THIS entry (parallel array; length-checked above).
@@ -3405,19 +3406,13 @@ fn apply_page(
                                                    // is never a reason to drop or freeze the event. The unwrapped DEK is
                                                    // held only for the apply call below (Zeroizing clears it on drop).
                 let dek = match (
-                    ctx.unwrap_secret,
+                    &unwrap_secret,
                     resp.wrapped_deks.get(i).and_then(|o| o.as_deref()),
                 ) {
-                    (Some(secret), Some(hexed)) => match hex::decode(hexed).ok().and_then(|w| {
-                        // `PageContext` carries the unwrap secret as `&[u8]` (a plain
-                        // slice crosses the function boundary more easily than the
-                        // `Zeroizing<[u8; 32]>` `do_pull` holds it as); `unwrap_dek`
-                        // wants the fixed-size array back. The secret is always
-                        // exactly 32 bytes, so this conversion cannot fail in practice.
-                        <&[u8; 32]>::try_from(secret)
-                            .ok()
-                            .and_then(|secret| cairn_event::seal::unwrap_dek(&w, secret).ok())
-                    }) {
+                    (Some(secret), Some(hexed)) => match hex::decode(hexed)
+                        .ok()
+                        .and_then(|w| cairn_event::seal::unwrap_dek(&w, secret).ok())
+                    {
                         Some(d) => Some(d),
                         None => {
                             eprintln!(
