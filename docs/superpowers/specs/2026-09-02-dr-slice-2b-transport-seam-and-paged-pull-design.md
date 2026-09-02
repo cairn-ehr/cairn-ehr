@@ -295,6 +295,39 @@ retries the same oversized response forever.
   not change identity mid-cycle, and picking the first makes the reported value independent of where
   the loop stopped.
 
+### Erratum E1
+
+This is a dated design record, so a correction lands as an erratum rather than a rewrite of the prose
+above (the same convention ADR-0052 uses for its E2).
+
+**What §5 got right.** "The floor is cumulative, never per-page" is correct about **pinning**: a cycle
+with unacked refusals must not have a later clean page clear the pin an earlier page set, and computing
+`quarantine_floor` over the cycle tally rather than the page is the right fix for that half.
+
+**What it omitted.** §5 is silent on **clearing**. `quarantine_floor`'s clean branch returns `None`, and
+`None` is not silence — it is the positive claim "nothing is being withheld any more." §5's own
+per-page-commit design ("Each page commits cursor and floor together," above) commits that claim after
+**every** page, including page 1 of a cycle that has not yet reached the seq the floor guards. Nothing in
+§5 gates the clear on how far the cycle has actually gotten.
+
+**The failure that omission produced.** On a full sweep (`after_seq = 0`, which ignores the floor
+entirely), the guarded slot is routinely several pages in — the first cycle after every daemon start is
+a full sweep. A clean page 1 computes the floor `None` and commits it. If the cycle then ends before
+reaching the guarded slot — a dropped link, or an ordinary transient apply failure elsewhere in that same
+page, which sets `frozen` and makes `page_decision` return `Done` — the loop breaks having cleared a
+floor it never actually re-verified. The next cycle reads a null floor, fetches from `last_seq`, and the
+refused event the floor was pinning is never re-offered again. `skipped_unverifiable` stays 0 for that
+cycle, so nothing about it is even loud.
+
+**The live rule.** The code, not this section, is the authority: `pull_page::committable_floor` withholds
+a mid-cycle clear unless it is licensed — a clean cycle may only clear a floor **at or below the last seq
+it was actually offered**, unless the peer declared the page `complete` (nothing exists above it, so a
+clean cycle really has seen everything the floor could guard). A PIN carries no such guard, since it
+comes from a refusal in a page the cycle already handled and only ever widens what gets re-offered.
+
+§5 as written above is incomplete on the clearing side; treat `committable_floor`'s doc comment and tests
+as the current word on this rule.
+
 ---
 
 ## 6. What is still broken when 2b merges — read this before quoting it

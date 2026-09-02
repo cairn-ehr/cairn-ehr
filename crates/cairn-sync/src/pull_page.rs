@@ -158,9 +158,16 @@ pub(crate) fn quarantine_floor(
 /// it is a positive claim — *nothing is being withheld any more* — and paging commits it after
 /// EVERY page, including page 1 of a cycle that has not yet reached the slot the floor guards.
 ///
-/// On an INCREMENTAL cycle the claim is always true by construction, because `do_pull` fetches
-/// from `floor_seq - 1`: the guarded slot is the first row of page 1, so any page at all has
-/// seen it. On a FULL SWEEP it is not. A sweep fetches from seq 0 and ignores the floor
+/// On an INCREMENTAL cycle the claim USUALLY holds without this guard doing any work, because
+/// `do_pull` fetches from `floor_seq.saturating_sub(1).min(last_seq)`: ordinarily
+/// `floor_seq <= last_seq` (the floor was pinned at a slot the cursor has since advanced past),
+/// so the fetch point is `floor_seq - 1` and the guarded slot is the first row of page 1. But
+/// that expression is a MIN, not an unconditional `floor_seq - 1` — when `last_seq` is the
+/// smaller of the two, the fetch starts there instead, and the guarded slot can sit several
+/// pages in, exactly as on a full sweep below. This function does not special-case either
+/// cycle kind; it is what makes BOTH safe, by asking whether `floor_at_start` is at or below
+/// what THIS page actually reached, never by assuming the fetch point put it in page 1. On a
+/// FULL SWEEP the gap is the common case. A sweep fetches from seq 0 and ignores the floor
 /// entirely, so a floor at seq 900 sits several pages in — and the first cycle after every
 /// daemon start is a full sweep. The failure needs no hostile peer:
 ///

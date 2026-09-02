@@ -94,11 +94,22 @@ impl MediumTransport {
         // prefix/plane/flat_map pipeline and calls `seqs.dedup()` for the same reason — a
         // repeated seq on a medium is expected DATA, not a fault.
         //
-        // BYTE-IDENTICAL ONLY. Two DIFFERENT bodies at one `source_seq` is a genuine medium
-        // fault — the capturing node's log forked, or the file was tampered with — and
-        // collapsing it would hide that behind whichever copy happened to sort first. It is
-        // left in place so the refusal above fires and 2d can name it.
-        servable.dedup_by(|a, b| a.source_seq == b.source_seq && a.signed_bytes == b.signed_bytes);
+        // BYTE-IDENTICAL RECORD, not merely byte-identical BODY. `MediumRecord` carries three
+        // custody sidecars beside `signed_bytes` — `attestation`, `attester_key`, and
+        // `dek_wrapped` — and a re-capture can straddle a change to any of them: an unwrap-key
+        // rotation re-wraps `dek_wrapped` to a different key between the two passes, or a
+        // CRYPTO-SHRED lands between them and drives it `Some -> None`. Crypto-shredding IS
+        // this project's erasure (ADR-0005), and the wire path is built so a shredded event
+        // NEVER ships its DEK again — comparing `signed_bytes` alone would silently keep
+        // whichever copy sorted first and could hand a restore a DEK it cannot open, or worse,
+        // resurrect a DEK that was supposed to be gone for good. `MediumRecord` derives
+        // `PartialEq` over all five fields for exactly this reason, so plain `Vec::dedup`
+        // (which uses `PartialEq` directly) collapses a pair only when EVERY field agrees. Two
+        // records that still differ after that — in the body or in a sidecar — are a genuine
+        // medium fault (a forked log, a tampered file, or a sidecar rewritten out of step with
+        // its body) and are left as a duplicate `source_seq`, so the refusal above fires and 2d
+        // can name it.
+        servable.dedup();
         Ok(Self {
             label,
             servable,
@@ -502,6 +513,28 @@ mod tests {
             vec![3, 3],
             "different bytes at one seq is a medium FAULT and must reach the puller's \
              malformed-seqs refusal, not be silently resolved here"
+        );
+    }
+
+    /// A re-capture straddling a CRYPTO-SHRED: same `source_seq`, same `signed_bytes`, but
+    /// `dek_wrapped` goes `Some -> None` between the two passes. This is the sidecar shape the
+    /// whole-record dedupe exists for — a predicate that compares bodies only would keep
+    /// whichever copy sorted first, silently resurrecting a shredded DEK or handing a restore
+    /// one it cannot open. Both copies must survive so the seq repeats and the puller's
+    /// malformed-seqs refusal fires, exactly as it does for the differing-body case above.
+    #[test]
+    fn a_shred_straddling_a_recapture_is_not_collapsed() {
+        let mut before_shred = record(1, 3);
+        before_shred.dek_wrapped = Some(vec![7, 7, 7]);
+        let mut after_shred = record(1, 3); // same body, same seq — only the sidecar changed
+        after_shred.dek_wrapped = None;
+        let t = transport_over(&[(Plane::Clinical, vec![before_shred, after_shred])]);
+        assert_eq!(
+            events(&t, 0, None).seqs,
+            vec![3, 3],
+            "a shredded DEK sidecar must not be collapsed away — the seq must repeat so the \
+             puller's malformed-seqs refusal fires instead of silently resurrecting or losing \
+             a DEK"
         );
     }
 
