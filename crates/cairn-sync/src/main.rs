@@ -1187,8 +1187,12 @@ fn record_pull_failure(line: &mut serde_json::Value, e: &(dyn Error + 'static)) 
     for class in classes {
         line[*class] = serde_json::json!(true);
     }
-    // Null only for the classes that failed before any work was measurable; every other
-    // class publishes what the cycle actually did.
+    // Null for the classes that failed before any work was measurable — and, still, for
+    // three paths where that is NOT true: `validate_page`'s three refusals, the
+    // response-decode error and the transport error all return Null from INSIDE the paging
+    // loop, so a cycle that applied 39 pages and met a malformed page 40 reports nothing
+    // about the 39 (#532). Every other class publishes what the cycle actually did — the
+    // two page refusals were moved onto that footing by #500's paging loop.
     if !metrics.is_null() {
         line["pull"] = metrics;
     }
@@ -3242,6 +3246,14 @@ fn do_pull(
     // their flags are durable regardless, so this is still a true report about completed
     // work. If the database is the thing that broke, the read fails too and reports
     // UNKNOWN with the cause named — which is the honest answer, not a missing line.
+    //
+    // IT ALSO RUNS ON A REFUSED CYCLE NOW, and that is a real behaviour change, not just a
+    // consequence of moving the refusal out of the loop: before paging carried the refusal
+    // down here, an unusable page returned immediately and this read — and its stderr line —
+    // never happened. The direction is right (the earlier pages' events ARE admitted and
+    // their unfetchable references ARE this node's problem, whatever the last page did), but
+    // it means a refused cycle now costs two extra database reads and can print a line it
+    // previously did not.
     metrics["references_unlearnable"] = emit_unlearnable_report(
         &mut io::stderr(),
         &format!("pull {peer_name}"),
@@ -3297,11 +3309,25 @@ fn do_pull(
     });
 
     // A page REFUSAL and a LOUD cycle are both integrity conditions, and one cycle can be
-    // both (page 1 quarantines an unverifiable event; page 4 comes back empty and not
-    // complete). Compose them rather than letting either shadow the other — the same rule
-    // `CursorCommitError::also_loud` already encodes one class over: collapsing two
-    // conditions into one drops the diagnosis carrying the other remedy. The loud text
-    // leads, because it is the one that names the quarantine an operator must act on.
+    // both: page 1 quarantines an unverifiable event (loud, cursor still advancing) and
+    // page 4 comes back empty without declaring completeness (refused). Compose them rather
+    // than letting either shadow the other — the same rule `CursorCommitError::also_loud`
+    // already encodes one class over: collapsing two conditions into one drops the diagnosis
+    // carrying the other remedy, and here those remedies are different (ack or repair the
+    // quarantined event / upgrade the peer). The loud text leads, because it is the one that
+    // names the quarantine a human must act on. `a_cycle_that_is_both_loud_and_refused_
+    // reports_both_diagnoses` is the test.
+    //
+    // WHICH LOUD STATES CAN ACTUALLY PAIR WITH A REFUSAL — worth stating, so the next reader
+    // does not re-derive it and so nobody "hardens" this against a case that cannot happen
+    // (fix round 2 corrected exactly that mistake in an earlier draft of this comment):
+    // only the two that leave the cursor MOVING — unverifiable events and floor-refused
+    // events, both penned. A pen failure and a local apply fault cannot, because each is
+    // written at exactly one site in `apply_page` and each of those sites has just set
+    // `frozen = true`; `fold` makes `frozen` sticky, and `page_decision` checks `frozen`
+    // FIRST and returns `Done`. So a frozen cycle never reaches `Refuse` or `Continue`, and
+    // `refusal` stays `None`: `also_local_fault` and a page refusal are mutually exclusive
+    // by construction.
     let integrity_message = match (refusal, loud_message) {
         (Some(refused), Some(loud_text)) => Some(format!(
             "{loud_text} ALSO, ON THIS CYCLE'S LAST PAGE: {refused}"
@@ -3420,7 +3446,16 @@ struct PageContext<'a> {
 /// moved out of `do_pull` ahead of Task 7's paging loop (slice 2b Task 6, #500), so each
 /// page's response validates on its own, independent of how many pages came before it in
 /// this cycle. Nothing here touches the database: every violation is refused before any
-/// per-event work, so `metrics` is always `null` and `also_local_fault` always `false`.
+/// per-event work *on this page*, so `also_local_fault` is always `false`.
+///
+/// ⚠️ `metrics` is always `null`, and since paging (#500) that is a DEFECT of the cycle even
+/// though it is accurate about the function: earlier pages of the same cycle may have
+/// applied thousands of events and committed their cursor, and a refusal here reports none
+/// of it — the run log line carries no `pull` object at all. **#532** tracks lifting these
+/// three refusals onto the same footing as the two page refusals in `do_pull`, which is a
+/// bigger change than it looks: it needs the metrics object to be reachable from here, and
+/// `pull_refuses_declared_context_mismatch_deterministically` actively pins `m.is_null()`
+/// for the single-page case, so that assertion must be re-scoped rather than deleted.
 fn validate_page(resp: &EventsResponse, peer_name: &str) -> Result<(), PullIntegrityError> {
     // Deterministic wire-format skew check (issue #108): a peer that DECLARES a
     // signing context we don't speak would fail verification for every event it
@@ -3433,6 +3468,13 @@ fn validate_page(resp: &EventsResponse, peer_name: &str) -> Result<(), PullInteg
     // the all-unverifiable diagnosis below catches the pure-legacy case.
     // (Per-event verification binds CTX_EVENT cryptographically anyway; this
     // gate adds no new rejection, only a legible one-line diagnosis.)
+    //
+    // The message used to end "Batch refused, cursor untouched." Paging (#500 / #101 item 1)
+    // made the second half false from page 2 on: earlier pages of the same cycle have
+    // already committed their cursor and floor. It now says only what is true — this PAGE is
+    // refused, and the cursor keeps what earlier pages committed. Operator-facing strings
+    // cite things an operator can look up (#196, db/036); the review that caught this
+    // belongs here in the comment, not in the line they read at 3am.
     if let Some(peer_ctx) = &resp.signing_context {
         if peer_ctx != CTX_EVENT.as_str() {
             return Err(PullIntegrityError {
@@ -3440,8 +3482,7 @@ fn validate_page(resp: &EventsResponse, peer_name: &str) -> Result<(), PullInteg
                     "pull {peer_name}: peer declares signing context '{peer_ctx}' but this \
                      node expects '{}' — wire-format skew, not tampering; upgrade the older \
                      side. This page is refused; the cursor keeps whatever earlier pages of \
-                     this cycle committed (fix round 1, M1: from page 2 on, \"cursor \
-                     untouched\" was no longer true).",
+                     this cycle committed.",
                     CTX_EVENT.as_str()
                 ),
                 metrics: serde_json::Value::Null,
