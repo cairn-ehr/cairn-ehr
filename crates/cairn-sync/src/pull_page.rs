@@ -10,11 +10,75 @@
 
 use crate::{merge_pen_refusal, PenRefusal};
 
+/// Events one cycle will pull before YIELDING to the next (final review, Critical 2).
+///
+/// # Why a budget exists at all, when the loop's own comment argued none was needed
+///
+/// `do_pull`'s loop used to carry an "emergent bound" argument: a garbage flood is penned,
+/// the per-peer quarantine quota is finite, the pen eventually REFUSES, which freezes the
+/// cursor, which ends the cycle. That argument is **wrong**, and it is wrong for the two
+/// cheapest streams a peer can serve:
+///
+/// * events this node ALREADY HOLDS — `apply_signed` returns `Ok(false)`, nothing is penned,
+///   no quota moves, nothing freezes, and `max_seq` still advances because "handled" includes
+///   an idempotent no-op;
+/// * bytes ALREADY PENNED — `quarantine_event` dedupes *before* the quota-checked INSERT and
+///   returns, so the pen never grows and never refuses.
+///
+/// A peer re-serving a handful of genuine events at strictly ascending FABRICATED seqs, never
+/// setting `complete`, therefore satisfies `validate_page` and the anti-loop invariant on
+/// every page for ever. `do_pull` never returns, and `cmd_run`'s cycle loop is blocked with
+/// it: no further pulls, no fingerprint, **no periodic full sweep** — and the sweep is the
+/// consolation `validate_page`'s own comment offers against a peer lying high about its seqs.
+///
+/// # Why a YIELD and not a refusal
+///
+/// Exceeding the budget is not an accusation. A legitimate first sweep of a very large log
+/// genuinely needs many pages, and every page has already committed its cursor and floor, so
+/// stopping costs nothing but the round trips already spent: the next cycle resumes exactly
+/// where this one stopped. Refusing would turn an honest catch-up into a failing link.
+///
+/// It is emphatically **not a silent `break`**, which is the outcome `page_decision`'s own
+/// refusal text warns about: the cycle prints an operator line and publishes
+/// `budget_exhausted` in its metrics, and it never claims `complete`, so the cursor is
+/// checkpointed at real progress rather than as though the log were drained.
+///
+/// # The value
+///
+/// One million events. Before paging, ONE cycle was implicitly capped by the 64 MiB frame at
+/// roughly twenty thousand events — the whole log had to fit in a single response — so this
+/// budget is fifty times more generous than the bound paging removed, and no deployment this
+/// project has (or plans) reaches it in one cycle.
+pub(crate) const MAX_EVENTS_PER_CYCLE: usize = 1_000_000;
+
+/// How many pages [`MAX_EVENTS_PER_CYCLE`] buys at `page_limit`. **Pure**, so the rule is
+/// tested with no peer and no database.
+///
+/// Never zero, and never divides by zero: `main` already refuses `--page 0` (see
+/// `parse_page_limit`), but a cycle that fetched no pages at all would checkpoint nothing and
+/// spin on the same cursor for ever — the exact shape the budget exists to prevent — so the
+/// floor of one is enforced here too rather than assumed from a caller.
+pub(crate) fn page_budget(page_limit: u32) -> usize {
+    (MAX_EVENTS_PER_CYCLE / (page_limit.max(1) as usize)).max(1)
+}
+
 /// What ONE page contributed.
 ///
-/// `Default` is what makes the fold tests readable: a test that cares about one field says so
-/// with `..PageTally::default()` instead of naming thirteen it does not care about.
-#[derive(Debug, Default)]
+/// # No `Default`, and that is deliberate (final review)
+///
+/// `Default` would give `max_seq: 0`, which VIOLATES this struct's own documented rule: the
+/// field is seeded from the cycle's running value, and `fold` TAKES it rather than maxing it,
+/// so folding a defaulted page would rewind the cycle cursor to zero. Production never did
+/// (`apply_page` always seeds it, and `commit_cursor`'s `GREATEST` guards the database
+/// besides) but `metrics["cursor_seq"]` would have published a false zero, and the illegal
+/// state was not merely representable — it was the default.
+///
+/// `PageTally::seeded` (test-only, so NOT an intra-doc link — `cargo doc` does not compile
+/// `#[cfg(test)]` items and a link to one fails the doc build under `-D warnings`) keeps what
+/// `Default` was FOR: a test that cares about one field says so with `..PageTally::seeded(0)`
+/// instead of naming thirteen it does not, while making the one field that must not be
+/// guessed impossible to skip.
+#[derive(Debug)]
 pub(crate) struct PageTally {
     /// Events the peer shipped in this page (`resp.events.len()`).
     pub(crate) shipped: usize,
@@ -45,6 +109,38 @@ pub(crate) struct PageTally {
     pub(crate) custody_withheld: bool,
     /// Content addresses of every event the door ADMITTED, for the #465 ledger read.
     pub(crate) applied_addresses: Vec<Vec<u8>>,
+}
+
+impl PageTally {
+    /// An empty page whose running cursor starts at `max_seq_in` — the cycle's current value,
+    /// which is the committed cursor for page 1 and the previous page's answer thereafter.
+    /// Every other field starts at "this page did nothing", which is true of a page that has
+    /// not been applied yet.
+    ///
+    /// TEST-ONLY, deliberately. Production builds the full struct literal in `apply_page`,
+    /// where the compiler already forces every field including `max_seq`; the hazard removing
+    /// `Default` closed lived entirely in the TESTS, where `..PageTally::default()` silently
+    /// supplied `max_seq: 0` and would have rewound a folded cycle's cursor. Gating it here
+    /// keeps that fix without adding an unused production constructor.
+    #[cfg(test)]
+    pub(crate) fn seeded(max_seq_in: i64) -> Self {
+        Self {
+            shipped: 0,
+            applied: 0,
+            skipped_unverifiable: 0,
+            refused_verifiable: 0,
+            skipped_acked: 0,
+            event_bytes: 0,
+            wire_bytes: 0,
+            max_seq: max_seq_in,
+            frozen: false,
+            local_apply_fault: false,
+            pen_refused: None,
+            pin: None,
+            custody_withheld: false,
+            applied_addresses: Vec::new(),
+        }
+    }
 }
 
 /// What the whole cycle has contributed so far. Same fields, accumulated.
@@ -94,27 +190,51 @@ impl CycleTally {
 
     /// Fold one page in. See the module doc for why each rule is what it is.
     pub(crate) fn fold(&mut self, page: PageTally) {
-        self.shipped += page.shipped;
-        self.applied += page.applied;
-        self.skipped_unverifiable += page.skipped_unverifiable;
-        self.refused_verifiable += page.refused_verifiable;
-        self.skipped_acked += page.skipped_acked;
-        self.event_bytes += page.event_bytes;
-        self.wire_bytes += page.wire_bytes;
+        // DESTRUCTURED EXHAUSTIVELY, with no `..`, and that is the point (final review).
+        // Reading `page.x` field by field compiled untouched when a field was added to both
+        // structs — `apply_page`'s literal and `CycleTally::new` both force an update, but
+        // this function, the only place a field's FOLD RULE can be written, did not. A
+        // forgotten counter reports a permanent zero; a forgotten sticky safety flag (a
+        // sibling of `frozen`, `pin` or `local_apply_fault`) reports a cycle as clean when it
+        // was not. `error[E0027]: pattern does not mention field` is the guard, and it costs
+        // one line. Do not "tidy" a `..` back in.
+        let PageTally {
+            shipped,
+            applied,
+            skipped_unverifiable,
+            refused_verifiable,
+            skipped_acked,
+            event_bytes,
+            wire_bytes,
+            max_seq,
+            frozen,
+            local_apply_fault,
+            pen_refused,
+            pin,
+            custody_withheld,
+            applied_addresses,
+        } = page;
+        self.shipped += shipped;
+        self.applied += applied;
+        self.skipped_unverifiable += skipped_unverifiable;
+        self.refused_verifiable += refused_verifiable;
+        self.skipped_acked += skipped_acked;
+        self.event_bytes += event_bytes;
+        self.wire_bytes += wire_bytes;
         // TAKE, not max: a page's `max_seq` is seeded from this value and only ever advances
         // over its own contiguous handled prefix, so it is already the running answer.
-        self.max_seq = page.max_seq;
-        self.frozen |= page.frozen;
-        self.local_apply_fault |= page.local_apply_fault;
-        self.custody_withheld |= page.custody_withheld;
-        self.applied_addresses.extend(page.applied_addresses);
-        if let Some(next) = page.pen_refused {
+        self.max_seq = max_seq;
+        self.frozen |= frozen;
+        self.local_apply_fault |= local_apply_fault;
+        self.custody_withheld |= custody_withheld;
+        self.applied_addresses.extend(applied_addresses);
+        if let Some(next) = pen_refused {
             // `merge_pen_refusal` already encodes the cross-refusal rule for a CYCLE:
             // message first-wins (text and class must describe the same event), `local_fault`
             // OR-ed (it is a fact about this node's uptime, not about one event).
             self.pen_refused = Some(merge_pen_refusal(self.pen_refused.take(), next));
         }
-        self.pin = match (self.pin, page.pin) {
+        self.pin = match (self.pin, pin) {
             // MIN, not first-wins. Pages arrive in ascending seq so the two agree today, but
             // min is order-independent, and the floor's whole job is to be conservative.
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -124,13 +244,42 @@ impl CycleTally {
     }
 }
 
-/// The re-offer floor for this cycle. **Pure**, and computed over the CYCLE, never a page.
-///
-/// The three branches are unchanged from the single-shot version; what is new is the subject.
-/// Per page, a clean page 2 would clear the pin a refusing page 1 set — and the cursor has
-/// already advanced past that refused event, so it would never be re-offered again. Silent
-/// exclusion is precisely what this floor exists to prevent.
-pub(crate) fn quarantine_floor(
+impl CycleTally {
+    /// The re-offer floor for this cycle. **Pure**, and computed over the CYCLE, never a page.
+    ///
+    /// The three branches are unchanged from the single-shot version; what is new is the
+    /// subject. Per page, a clean page 2 would clear the pin a refusing page 1 set — and the
+    /// cursor has already advanced past that refused event, so it would never be re-offered
+    /// again. Silent exclusion is precisely what this floor exists to prevent.
+    ///
+    /// # Why this is a METHOD and not a free function taking five scalars
+    ///
+    /// It used to be one, and `PageTally` carries the same four fields at the same types — so
+    /// `quarantine_floor(page.skipped_unverifiable, page.refused_verifiable,
+    /// page.pen_refused.is_some(), page.pin, floor_seq)` compiled, and it is verbatim "THE
+    /// defect paging could introduce" from this function's own test name. The doc said "over
+    /// the CYCLE, never a page" in three files; the signature said nothing. It also put `pin`
+    /// and `floor_at_start` — two adjacent `Option<i64>` — next to each other, where a
+    /// transposition compiles and silently returns the old floor instead of the new pin.
+    ///
+    /// Taking `&self` makes both a compile error. The RULE stays pure and separately testable
+    /// in [`quarantine_floor_rule`] (final review).
+    pub(crate) fn quarantine_floor(&self, floor_at_start: Option<i64>) -> Option<i64> {
+        quarantine_floor_rule(
+            self.skipped_unverifiable,
+            self.refused_verifiable,
+            self.pen_refused.is_some(),
+            self.pin,
+            floor_at_start,
+        )
+    }
+}
+
+/// The floor rule itself, over bare values. **Pure**, private, and unit-tested directly so the
+/// three branches can be pinned without building a cycle for each — but not reachable from
+/// outside this module, so nothing can hand it a page's counters. See
+/// [`CycleTally::quarantine_floor`].
+fn quarantine_floor_rule(
     skipped_unverifiable: usize,
     refused_verifiable: usize,
     pen_failed: bool,
@@ -153,7 +302,8 @@ pub(crate) fn quarantine_floor(
 /// What may actually be COMMITTED as the floor after one page. **Pure.**
 ///
 /// THE OTHER HALF OF THE FLOOR RULE, and the one the first draft of paging missed.
-/// [`quarantine_floor`] makes the PIN cumulative, so a clean page 2 cannot clear a pin page 1
+/// [`CycleTally::quarantine_floor`] makes the PIN cumulative, so a clean page 2 cannot clear a
+/// pin page 1
 /// set. This is its mirror image: the clean branch returns `None`, and `None` is not silence,
 /// it is a positive claim — *nothing is being withheld any more* — and paging commits it after
 /// EVERY page, including page 1 of a cycle that has not yet reached the slot the floor guards.
@@ -214,10 +364,60 @@ pub(crate) fn committable_floor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cairn_wire::DEFAULT_PAGE_EVENTS;
+
+    /// The budget is an EVENT count, so the page count it buys has to move inversely with the
+    /// page size — a bigger page must not buy a bigger cycle.
+    #[test]
+    fn the_page_budget_is_an_event_budget_divided_by_the_page_size() {
+        assert_eq!(page_budget(1), MAX_EVENTS_PER_CYCLE);
+        assert_eq!(page_budget(1000), MAX_EVENTS_PER_CYCLE / 1000);
+        assert_eq!(
+            page_budget(DEFAULT_PAGE_EVENTS),
+            MAX_EVENTS_PER_CYCLE / DEFAULT_PAGE_EVENTS as usize,
+            "the default page size must buy the whole event budget, not a rounded-down slice"
+        );
+    }
+
+    /// Never zero, from either direction. A cycle that fetched no pages would checkpoint
+    /// nothing and re-ask the same cursor for ever — the very shape the budget prevents — and
+    /// a `page_limit` of 0 must not divide by zero even though `parse_page_limit` refuses it
+    /// one layer up.
+    #[test]
+    fn the_page_budget_is_never_zero_and_never_divides_by_zero() {
+        assert_eq!(page_budget(0), MAX_EVENTS_PER_CYCLE, "0 is clamped to 1");
+        assert_eq!(
+            page_budget(u32::MAX),
+            1,
+            "a page larger than the budget still gets one"
+        );
+        assert_eq!(
+            page_budget(MAX_EVENTS_PER_CYCLE as u32),
+            1,
+            "the exact boundary is one page, not zero"
+        );
+    }
+
+    /// A standing bounds guard on the constant itself (same class as
+    /// `frame_cap_holds_a_realistic_event_batch`): the budget must stay far above the ~20k
+    /// events ONE cycle could carry before paging, or it would be a regression rather than a
+    /// backstop — and finite, or it would not bound the livelock at all.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn the_cycle_budget_is_far_above_the_bound_paging_removed() {
+        assert!(
+            MAX_EVENTS_PER_CYCLE >= 500_000,
+            "must dwarf the ~20k events one 64 MiB frame held before paging"
+        );
+        assert!(
+            MAX_EVENTS_PER_CYCLE <= 50_000_000,
+            "must still bound a peer serving fabricated ascending seqs for ever"
+        );
+    }
 
     #[test]
     fn a_clean_cycle_clears_the_floor() {
-        assert_eq!(quarantine_floor(0, 0, false, None, Some(5)), None);
+        assert_eq!(quarantine_floor_rule(0, 0, false, None, Some(5)), None);
     }
 
     /// Fix round 1, finding 6: the test above passes `pin: None`, so flipping the first
@@ -227,13 +427,16 @@ mod tests {
     /// branch must still clear it even though a pin value is sitting right there.
     #[test]
     fn a_clean_cycle_clears_the_floor_even_over_a_stale_pin() {
-        assert_eq!(quarantine_floor(0, 0, false, Some(9), Some(5)), None);
+        assert_eq!(quarantine_floor_rule(0, 0, false, Some(9), Some(5)), None);
     }
 
     #[test]
     fn unacked_refusals_with_a_healthy_pen_pin_at_the_first_refused_slot() {
-        assert_eq!(quarantine_floor(1, 0, false, Some(7), Some(5)), Some(7));
-        assert_eq!(quarantine_floor(0, 1, false, Some(7), None), Some(7));
+        assert_eq!(
+            quarantine_floor_rule(1, 0, false, Some(7), Some(5)),
+            Some(7)
+        );
+        assert_eq!(quarantine_floor_rule(0, 1, false, Some(7), None), Some(7));
     }
 
     #[test]
@@ -241,9 +444,9 @@ mod tests {
         // A re-offered slot whose pen write FAILED produced no pin, so overwriting blindly
         // would clear a floor guarding a slot the cursor is already above — permanent
         // exclusion.
-        assert_eq!(quarantine_floor(1, 0, true, Some(9), Some(5)), Some(5));
-        assert_eq!(quarantine_floor(1, 0, true, None, Some(5)), Some(5));
-        assert_eq!(quarantine_floor(0, 0, true, Some(9), None), Some(9));
+        assert_eq!(quarantine_floor_rule(1, 0, true, Some(9), Some(5)), Some(5));
+        assert_eq!(quarantine_floor_rule(1, 0, true, None, Some(5)), Some(5));
+        assert_eq!(quarantine_floor_rule(0, 0, true, Some(9), None), Some(9));
     }
 
     /// THE defect paging could introduce. Page 1 refuses a slot and pins the floor; page 2 is
@@ -256,18 +459,13 @@ mod tests {
         cycle.fold(PageTally {
             skipped_unverifiable: 1,
             pin: Some(7),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
-        cycle.fold(PageTally::default()); // a wholly clean page 2
+        cycle.fold(PageTally::seeded(0)); // a wholly clean page 2
         assert_eq!(
-            quarantine_floor(
-                cycle.skipped_unverifiable,
-                cycle.refused_verifiable,
-                cycle.pen_refused.is_some(),
-                cycle.pin,
-                None
-            ),
-            Some(7)
+            cycle.quarantine_floor(None),
+            Some(7),
+            "over the CYCLE, so page 1's refusal still counts and the floor still stands"
         );
     }
 
@@ -281,12 +479,12 @@ mod tests {
         cycle.fold(PageTally {
             refused_verifiable: 1,
             pin: Some(9),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         cycle.fold(PageTally {
             refused_verifiable: 1,
             pin: Some(4),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         assert_eq!(
             cycle.pin,
@@ -302,12 +500,12 @@ mod tests {
         ascending.fold(PageTally {
             refused_verifiable: 1,
             pin: Some(4),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         ascending.fold(PageTally {
             refused_verifiable: 1,
             pin: Some(9),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         assert_eq!(
             ascending.pin,
@@ -331,7 +529,7 @@ mod tests {
             skipped_acked: 1,
             max_seq: 14,
             custody_withheld: true,
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         cycle.fold(PageTally {
             applied: 2,
@@ -341,7 +539,7 @@ mod tests {
             skipped_acked: 2,
             max_seq: 19,
             frozen: true,
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         assert_eq!(
             (
@@ -368,11 +566,11 @@ mod tests {
         let mut cycle = CycleTally::new(0);
         cycle.fold(PageTally {
             max_seq: 19,
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         cycle.fold(PageTally {
             max_seq: 14,
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         assert_eq!(
             cycle.max_seq, 14,
@@ -403,11 +601,11 @@ mod tests {
         let mut cycle = CycleTally::new(0);
         cycle.fold(PageTally {
             pen_refused: Some(first),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         cycle.fold(PageTally {
             pen_refused: Some(second),
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
 
         let merged = cycle
@@ -489,11 +687,11 @@ mod tests {
         let mut cycle = CycleTally::new(0);
         cycle.fold(PageTally {
             applied_addresses: vec![vec![1, 2, 3]],
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         cycle.fold(PageTally {
             applied_addresses: vec![vec![4, 5], vec![6]],
-            ..PageTally::default()
+            ..PageTally::seeded(0)
         });
         assert_eq!(
             cycle.applied_addresses,

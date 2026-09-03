@@ -30,6 +30,10 @@ pub trait Transport {
 
 /// Why a request produced no usable response. **Two variants, because they have opposite
 /// remedies** — the same reasoning that split `cairn_medium::BackupError` three ways.
+///
+/// Build these with [`TransportError::exchange`] and [`TransportError::unsupported`]; the
+/// fields are private so the `Exchange` invariant is a compile error rather than a review
+/// catch. See `exchange`'s doc for why that matters.
 #[derive(Debug)]
 pub enum TransportError {
     /// The exchange failed: resolve, connect, write, or read. Retrying may help.
@@ -47,6 +51,46 @@ pub enum TransportError {
     /// a pre-CAIRNB3 image asked for clinical events. NOT a link failure: no retry helps, and
     /// a caller that cannot tell the two apart will retry four times for nothing.
     Unsupported { label: String, reason: String },
+}
+
+impl TransportError {
+    /// An exchange that failed, keeping `source` as a REAL, reachable cause.
+    ///
+    /// The bound is `impl Error`, not `impl Into<Box<dyn Error + Send + Sync>>`, and that is
+    /// the whole point of the constructor existing (final review). std provides
+    /// `impl From<String> for Box<dyn Error + Send + Sync>`, so with a public field
+    /// `source: format!("{e}").into()` compiled — precisely the flattening the ⚠️ on
+    /// `Exchange` forbids, and the sort of thing only a reviewer would ever catch. `String`
+    /// does not implement `Error`, so that line is now a compile error and the comment is an
+    /// invariant.
+    pub fn exchange(label: impl Into<String>, source: impl Error + Send + Sync + 'static) -> Self {
+        TransportError::Exchange {
+            label: label.into(),
+            source: Box::new(source),
+        }
+    }
+
+    /// The same, for a cause that is already boxed — a `?` on an inner call whose error type
+    /// the caller never named. Still a real chain: the box is the cause, not a rendering of
+    /// it.
+    pub fn exchange_boxed(
+        label: impl Into<String>,
+        source: Box<dyn Error + Send + Sync + 'static>,
+    ) -> Self {
+        TransportError::Exchange {
+            label: label.into(),
+            source,
+        }
+    }
+
+    /// A request this transport can never answer. `reason` is prose by design — there is no
+    /// cause to keep, because nothing failed: the answer is "not here, and no retry helps".
+    pub fn unsupported(label: impl Into<String>, reason: impl Into<String>) -> Self {
+        TransportError::Unsupported {
+            label: label.into(),
+            reason: reason.into(),
+        }
+    }
 }
 
 impl fmt::Display for TransportError {
@@ -98,6 +142,27 @@ mod tests {
             .filter_map(|e| e.downcast_ref::<io::Error>())
             .any(|io| io.kind() == io::ErrorKind::InvalidData);
         assert!(found, "the io::Error must stay reachable through source()");
+    }
+
+    /// The constructor must keep the chain too — it is the whole reason it exists. If
+    /// `exchange` ever took `impl Into<Box<dyn Error + Send + Sync>>` instead of
+    /// `impl Error`, `TransportError::exchange(label, format!("{e}"))` would compile again
+    /// and flatten the cause, and the test above would still pass because it builds its own
+    /// error by hand.
+    #[test]
+    fn the_exchange_constructor_keeps_the_cause_reachable() {
+        let err = TransportError::exchange(
+            "tcp 10.0.0.3:9443",
+            io::Error::new(io::ErrorKind::InvalidData, "frame length 99 exceeds cap"),
+        );
+        let found = std::iter::successors(Some(&err as &(dyn Error + 'static)), |e| (*e).source())
+            .filter_map(|e| e.downcast_ref::<io::Error>())
+            .any(|io| io.kind() == io::ErrorKind::InvalidData);
+        assert!(found, "the constructor must not flatten the cause: {err}");
+        assert!(
+            err.to_string().ends_with("frame length 99 exceeds cap"),
+            "the cause stays the SUFFIX, or `operator_chain` double-renders it: {err}"
+        );
     }
 
     /// An unsupported request is not a failure of the link and no retry helps. It must be a

@@ -6,9 +6,16 @@
 //! is a binary-only crate that dev-depends on `cairn-node`, so it cannot grow a `lib.rs` without
 //! a dependency cycle. Same reasoning as `cairn-keystore` (#503) and `cairn-medium` (slice 2a).
 //!
-//! These types are MOVED VERBATIM out of `cairn-sync/src/main.rs`. Every field, doc comment and
-//! serde attribute is byte-for-byte what it was, and the extraction's proof is that every call
-//! site compiled untouched.
+//! THE EXTRACTION was verbatim: Task 1 moved these types out of `cairn-sync/src/main.rs` with
+//! every field, doc comment and serde attribute byte-for-byte what it was, and its proof is
+//! that every call site compiled untouched.
+//!
+//! THE FILE IS NOT VERBATIM ANY MORE, and saying so matters more than the tidy sentence it
+//! replaces (final review). Later tasks in the same slice ADDED two fields here —
+//! `EventsAfterSeq::limit` and `EventsResponse::complete`, the whole of #101 item 1's wire
+//! change. A reader who took the old unqualified claim at face value would conclude those two
+//! predate slice 2b and that an older peer already speaks them. It does not: both are additive
+//! with serde defaults precisely because older peers do NOT.
 //!
 //! EVOLUTION IS ADDITIVE (principle 12, ADR-0021). A new field arrives with `#[serde(default)]`
 //! and a default that is safe when it is ABSENT; an existing field never changes meaning.
@@ -163,6 +170,40 @@ mod tests {
             "op tag must be the literal wire string, got {json}"
         );
         assert!(json.contains(r#""after_seq":7"#), "got {json}");
+    }
+
+    /// The two paging fields are WIRE CONSTANTS too, and nothing pinned them (final review).
+    ///
+    /// The sibling test above pins `op` and `after_seq` against a mirrored rename; `limit` and
+    /// `complete` had only the absent-default test below, which decodes from a literal
+    /// containing NEITHER name. A mirrored rename of `limit` (the Rust field and its serde
+    /// attribute together) is invisible to any round trip through this same enum — both sides
+    /// of a same-version pair agree — but a new puller's page request then decodes at an
+    /// existing peer as `limit: None`, i.e. UNPAGINATED: the whole log suffix in one frame,
+    /// refused at `write_frame`'s cap, and the link stops converging. That is #101 item 1
+    /// un-fixed, silently, by a rename.
+    #[test]
+    fn the_paging_fields_encode_under_their_literal_wire_names() {
+        let req = Request::EventsAfterSeq {
+            after_seq: 0,
+            unwrap_cert: None,
+            limit: Some(500),
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(json.contains(r#""limit":500"#), "got {json}");
+
+        let resp = EventsResponse {
+            events: vec![],
+            attestations: vec![],
+            attester_keys: vec![],
+            seqs: vec![],
+            signing_context: None,
+            wrapped_deks: vec![],
+            custody_withheld: None,
+            complete: true,
+        };
+        let json = serde_json::to_string(&resp).expect("serialize");
+        assert!(json.contains(r#""complete":true"#), "got {json}");
     }
 
     /// A response from a peer that omits every additive field must still decode — that is

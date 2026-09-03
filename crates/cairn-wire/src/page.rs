@@ -32,10 +32,28 @@ pub fn page_decision(complete: bool, page_len: usize, frozen: bool) -> PageDecis
     // of page 2's events: the puller has decided nothing about those, it has not seen them.
     // The honest statement is about the CHECKPOINT. It is frozen at the contiguous handled
     // prefix and cannot advance past the freeze, so no further page of this cycle can make
-    // DURABLE progress however much it applies — the cursor would still be committed at the
-    // same seq, and every page above it re-fetched next cycle regardless. Stopping costs
-    // nothing but round trips, the work is delayed and never lost (the events stay on the
-    // peer, offered again next cycle), and the cycle fails loudly (#270) either way.
+    // DURABLE CURSOR progress however much it applies — the cursor would still be committed
+    // at the same seq, and every page above it re-fetched next cycle regardless. The events
+    // stay on the peer and are offered again next cycle, and the cycle fails loudly (#270)
+    // either way.
+    //
+    // ⚠️ "STOPPING COSTS NOTHING BUT ROUND TRIPS" is what this used to claim, and it is NOT
+    // true — the correction matters enough to keep (final review). Applied events are durable
+    // independently of the cursor: each `apply_signed` is its own transaction. Before paging,
+    // one request carried the whole suffix and `apply_page`'s per-event loop ran PAST the
+    // freeze (only `max_seq` stopped advancing), so every event above the failing one still
+    // landed on that same cycle. Stopping means pages 2..N are never REQUESTED, so what is
+    // given up is CONTENT CONVERGENCE, not just round trips.
+    //
+    // For a transient freeze that is a fair trade: next cycle re-fetches from the same
+    // cursor and gets everything. For a PERSISTENTLY failing event — a non-`P0001` apply
+    // failure that recurs, a constraint the door does not classify as a deliberate refusal —
+    // this node stops receiving anything above roughly one page, indefinitely, where before
+    // it kept converging on content while only the bookmark stalled. The cycle is loud every
+    // time, so it is not silent; but the loud line says "cursor halted", not "you are no
+    // longer receiving clinical content from this peer". Whether the freeze should instead
+    // end the cycle only when it is a LOCAL fault is a design question, tracked separately —
+    // do not re-derive this trade-off from the paragraph above, which is only about cursors.
     if frozen {
         return PageDecision::Done;
     }
