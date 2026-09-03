@@ -18,8 +18,9 @@
 //!    unreachable.
 //!
 //! The **cap is a per-plane policy**, deliberately NOT shared: the node plane caps
-//! at 8 MiB (envelopes are tiny), the clinical plane at 64 MiB (an unpaginated full
-//! sweep — issue #101). Each caller passes its own cap and owns its refusal
+//! at 8 MiB (envelopes are tiny), the clinical plane at 64 MiB (a whole batch
+//! response; paged since slice 2b, unlimited when a request omits `limit`). Each
+//! caller passes its own cap and owns its refusal
 //! message; this module owns the decision.
 
 /// A frame length that exceeds the caller's cap (or, on encode, the u32 wire

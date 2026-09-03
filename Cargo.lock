@@ -374,6 +374,7 @@ dependencies = [
  "cairn-event",
  "cairn-keystore",
  "cairn-node",
+ "cairn-wire",
  "chacha20poly1305",
  "hex",
  "postgres",
@@ -384,6 +385,17 @@ dependencies = [
  "tokio-postgres",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "cairn-wire"
+version = "0.0.0"
+dependencies = [
+ "cairn-event",
+ "cairn-medium",
+ "hex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
