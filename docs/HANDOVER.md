@@ -64,7 +64,8 @@
 > declared its seam truthfully — *"the federation-node tier has no clinical surface yet"* — and ADR-0052
 > made that false without reopening it, while ROADMAP kept recording slices A–D as ✓ done. **Before
 > trusting any ✓, check whether the sentence that justified it is still true.** **Slice 2b's grep found
-> SEVEN more of exactly this shape, in three crates, where memory said one.**
+> SEVEN more of exactly this shape, in FOUR crates, where memory said one — and the write-up then said
+> "three", because that number was recalled rather than grepped, in the very bullet whose moral is grep.**
 
 > [!IMPORTANT]
 > **Five traps slice 1 minted. Each is a step a next session takes in good faith.**
@@ -225,13 +226,22 @@ and custody handling included — against a file. **`do_pull` pages** (`DEFAULT_
    `max_seq` is the contiguous *handled* prefix and starts at the *committed* cursor. On a full sweep the two differ
    by the whole history below the cursor, so conflating them makes page 2 skip exactly what a sweep exists to
    reconcile.
-2. **⇒ A PER-PAGE QUARANTINE FLOOR SILENTLY UN-PINS AN EARLIER PAGE'S REFUSAL** — a clean page 2 clears the pin a
-   refusing page 1 set, and the cursor has already moved past that event. **Compute it over the CYCLE.** ⇒
+2. **⇒ THE QUARANTINE FLOOR RULE HAS TWO HALVES, AND "COMPUTE IT OVER THE CYCLE" IS ONLY THE FIRST.**
+   (a) *The PIN must be cumulative* — a clean page 2 clears the pin a refusing page 1 set, and the cursor has
+   already moved past that event. (b) ***And the CLEAR must be earned.*** `None` is not silence; it is a positive
+   claim — *nothing is being withheld any more* — committed after EVERY page, including page 1 of a sweep that has
+   not yet reached the slot the floor guards. A clean page 1 cleared a floor at seq 900; one freeze or dropped link
+   later, that penned clinical event was never re-offered again, silently, with `skipped_unverifiable` at 0.
+   `committable_floor` withholds a clear the cycle cannot support. **Half (b) is the one the design doc missed
+   (its Erratum E1), and the one that loses an event — do not write "compute it over the cycle" down as the whole
+   rule.** The final review then found a THIRD way into the same clear: `reached` was taken off the wire, and a
+   page with no events but a fabricated `seqs` array passed every guard, because the parallel-array check was gated
+   on `!events.is_empty()`. **A seq that carried no event was never offered.** ⇒
    **`complete` DEFAULTS TO THE UNCERTAIN DIRECTION**: an omitted flag costs a round trip, never a silent early stop
    with the cursor checkpointed as though the log were drained (principle 4 on a protocol field). An empty page that
    declares no completeness is neither an end nor a continuation and is REFUSED, naming the likeliest cause (a peer
    predating paging) and its remedy.
-3. **⇒ SEVEN COMMENTS ACROSS THREE CRATES ASSERTED A DEFERRAL ONE SLICE RETIRED, AND THE FIRST GUESS WAS ONE.** The
+3. **⇒ SEVEN COMMENTS ACROSS FOUR CRATES ASSERTED A DEFERRAL ONE SLICE RETIRED, AND THE FIRST GUESS WAS ONE.** The
    load-bearing one, `FULL_SWEEP_EVERY`'s, said in plain words that the correctness floor *"stops floor-ing exactly on
    the largest-history nodes"*. **Grep, do not recall** — a deferral going stale unwatched is the mechanism by which
    #500 hid for weeks.
@@ -241,10 +251,34 @@ and custody handling included — against a file. **`do_pull` pages** (`DEFAULT_
    reviewer re-derived the claim instead of reading it. **The #530 pattern again.**
 5. **`elapsed_ms` now measures a whole CYCLE, not one request** — `poc/walking-skeleton/harness/bet_a.py` feeds it
    into the A4 latency percentiles: unchanged in steady state (one page), larger and more honest on catch-up; **the
-   harness's owner needs to meet this.** **Opened: #531** (`cairn-sync/src/main.rs` is 12.6k lines — decompose it, one
-   verbatim seam per PR; the older #329 names the same file at 5.3k) and **#532** (a multi-page pull that fails on a
-   later page reports `null` metrics and nothing about the pages that landed — #469's defect reintroduced by paging,
-   on three in-loop exits; the events are durable and the next cycle resumes).
+   harness's owner needs to meet this.** **Opened: #531** (decompose `cairn-sync/src/main.rs`, one verbatim seam per
+   PR; the older #329 names the same file at 5.3k — **a maintainer decision is wanted on which to keep**; no line
+   count recorded here, because `pull_page.rs`'s own doc retired that figure for going stale inside the slice that
+   wrote it) and **#532** (a multi-page pull that fails on a later page reports `null` metrics and nothing about the
+   pages that landed — #469's defect reintroduced by paging, on three in-loop exits; the events are durable and the
+   next cycle resumes; the final review added that a failed `cursor_commit` from an earlier page is also dropped
+   there, which is a lost *classification*, not merely a lost report).
+
+6. **⇒ THE UNCAPPED PAGE LOOP HAD A BOUND THAT DID NOT EXIST — and the wrong COMMENT was the defect.** It argued: a
+   flood is penned, the quota is finite, the pen refuses, the cursor freezes, the cycle ends. It misses the two
+   cheapest streams a peer can serve, neither of which pens anything — events this node ALREADY HOLDS (`Ok(false)`)
+   and bytes ALREADY PENNED (`quarantine_event` dedupes *before* the quota check). Either loops for ever, and
+   `cmd_run` is blocked with it: no pulls, no fingerprint, **and no periodic full sweep** — the exact consolation
+   `validate_page` offers against a peer lying high about its seqs. Now bounded by a per-cycle event budget that
+   **YIELDS** (operator line + `budget_exhausted` metric), never refuses (an honest catch-up is not a fault) and
+   never breaks silently.
+7. **⇒ A SEAM INVALIDATES EVERY PREMISE THAT NAMED WHAT WAS ON THE OTHER SIDE OF IT.** `chain_reaches_a_postgres_error`
+   justified its `source()` walk with *"`do_pull` reaches its peer over a raw `TcpStream`"*. `do_pull` now takes
+   `&dyn Transport`, one implementation opens no socket, and both error types box their source **specifically so a
+   future transport needs no change there**. The conclusion survives only by accident of which two transports exist.
+   Flagged in place as a standing caveat. **When you introduce an abstraction, grep for the comments that described
+   the concrete thing it replaced.**
+8. **The final review opened five more:** **#534** (a freeze now stops CONTENT convergence, not just the cursor —
+   pre-paging, apply ran past the freeze within the single unpaginated response; a design decision is wanted),
+   **#535** (paging removed the implicit ~20k-event bound on `applied_addresses`, which becomes one `ANY($1)`
+   parameter), **#536** (a DEK that fails to unwrap is counted nowhere — under `MediumTransport` a restore can exit 0
+   with every sealed body unreadable), **#537** (a failed pen release is permanent after printing exactly once) and
+   **#538** (the byte tier discards the `Exchange`/`Unsupported` split made for it).
 
 ### 2026-09-02 (earlier) — #527: a discriminator is not a salt, and a scanner reads NAMES (condensed)
 
@@ -445,8 +479,12 @@ workspace); `poc/` is frozen historical spikes.
 - **#511, then DR slice 2c — #500 continues.** 2a (the medium format, 08-31) and 2b (the transport seam +
   the paged pull, 09-02) have landed and closed nothing; **#511** (the custody newtypes) is sequenced next,
   then 2c writes clinical events onto the medium. See ⇒ NEXT. New from 2b: **#531** (decompose
-  `cairn-sync/src/main.rs`, 12.6k lines — the older **#329** names the same file) and **#532** (a
-  multi-page pull that fails late reports nothing about the pages that landed).
+  `cairn-sync/src/main.rs` — the older **#329** names the same file; a maintainer decision is wanted on
+  which to keep) and **#532** (a multi-page pull that fails late reports nothing about the pages that
+  landed). New from 2b's **final whole-branch review**: **#534** (a freeze stops content convergence, not
+  just the cursor — wants a design decision), **#535** (`applied_addresses` unbounded per cycle), **#536**
+  (an unopenable DEK is counted nowhere), **#537** (a failed pen release is permanent) and **#538** (the
+  byte tier discards the new error taxonomy).
 - **§5.9 parts C/D** (#232) — see ⇒ NEXT. Related: **#235** (shred authorization hooks), **#236** (FTS/RAG
   must build on `event_clear`).
 - **`clinical.medication` — slices 1–6b DONE** (ADR-0059). Next: **drugref term→anchor lookup** (⇒

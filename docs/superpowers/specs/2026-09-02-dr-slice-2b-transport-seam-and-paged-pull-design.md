@@ -328,6 +328,51 @@ comes from a refusal in a page the cycle already handled and only ever widens wh
 §5 as written above is incomplete on the clearing side; treat `committable_floor`'s doc comment and tests
 as the current word on this rule.
 
+### Erratum E2 — `reached` is a wire value, and the design never said what makes one trustworthy
+
+Found by the whole-branch final review, after E1 landed. E1 fixed the *rule*; this is a third route into
+the same clear, through the *input*.
+
+`committable_floor` licenses a mid-cycle clear by comparing the floor against `reached`, which §5 and the
+function's own doc both define as **"the highest seq this cycle has actually been offered."** The
+implementation took it from `resp.seqs.last()`, and `validate_page`'s parallel-array check was gated on
+`!resp.events.is_empty()` — so a page carrying **no events but a non-empty `seqs` array** passed every
+guard (nothing to compare lengths against, and a lone large seq is trivially ascending and positive).
+`{"events":[],"seqs":[5000]}` therefore cleared a floor at seq 900 and committed the clear, *before*
+`page_decision` refused the empty page. The cycle failed loudly with the wrong diagnosis, and the floor
+was already gone.
+
+**The rule the design should have stated:** a seq that carried no event was never *offered*, and nothing
+that writes durable state may take an untrusted array's word for what a page contained. The arrays are
+parallel in **both** directions; the check is now unconditional, and `reached` additionally falls back to
+the page cursor when a page carried no events — two independent guards, because this is the one value on
+the page path that licenses withdrawing a safety floor.
+
+### Erratum E3 — §5's "no cap on pages per cycle" rested on a bound that does not exist
+
+Also from the final review. §5 argued the paging loop needs no page cap because a hostile stream is
+self-limiting: anything that does not verify is penned, the per-peer quarantine quota is finite, the pen
+eventually refuses, that freezes the cursor, and `page_decision` ends the cycle.
+
+**The argument misses the two cheapest streams a peer can serve, neither of which pens anything:**
+
+* events this node **already holds** — `apply_signed` returns `Ok(false)`, no pen row, no quota consumed,
+  no freeze, and `max_seq` still advances because "handled" includes an idempotent no-op;
+* bytes **already penned** — `quarantine_event` dedupes *before* the quota-checked `INSERT` and returns,
+  so the pen never grows and never refuses.
+
+A peer re-serving a handful of genuine events at strictly ascending **fabricated** seqs, never setting
+`complete`, satisfies `validate_page` and the anti-loop invariant on every page for ever. `do_pull` never
+returns, and `cmd_run`'s cycle loop is blocked with it: no further pulls, no fingerprint, and **no
+periodic full sweep** — which is the consolation §5 itself offers against a peer lying high about its
+seqs.
+
+**The live rule.** `pull_page::MAX_EVENTS_PER_CYCLE` bounds a cycle at one million events (fifty times
+the ~20k a single 64 MiB frame held before paging). Exceeding it is a **yield**, not a refusal: an
+operator line plus a `budget_exhausted` metric, with every page's cursor and floor already committed, so
+the next cycle resumes. It is deliberately neither a refusal (an honest catch-up on a large log is not a
+fault) nor a silent `break` (which would checkpoint as though the log were drained).
+
 ---
 
 ## 6. What is still broken when 2b merges — read this before quoting it

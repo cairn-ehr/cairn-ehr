@@ -32,10 +32,7 @@ impl TcpTransport {
     /// backoff attempts on a source that is down.
     pub fn try_once(&self, req: &Request) -> Result<Vec<u8>, TransportError> {
         self.exchange(req)
-            .map_err(|source| TransportError::Exchange {
-                label: self.label.clone(),
-                source,
-            })
+            .map_err(|source| TransportError::exchange_boxed(self.label.clone(), source))
     }
 
     /// The raw exchange, with its cause UNBOXED into the error type by the callers above.
@@ -80,12 +77,12 @@ impl Transport for TcpTransport {
                 }
             }
         }
-        Err(TransportError::Exchange {
-            label: self.label.clone(),
+        Err(TransportError::exchange_boxed(
+            self.label.clone(),
             // Unwrap is unreachable: the loop runs four times and every arm that does not
             // return sets `last`.
-            source: last.expect("four attempts always record a failure"),
-        })
+            last.expect("four attempts always record a failure"),
+        ))
     }
 }
 

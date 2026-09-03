@@ -11,6 +11,25 @@
 //! slice 2c — and `cairn-node`'s `backup.rs` still exports `node_event` and nothing else, so
 //! a medium built today has an EMPTY clinical plane and this transport will truthfully say so.
 //! #500 is not closed by this module existing.
+//!
+//! # The three promises this module makes
+//!
+//! Stated here because the code cites them from three places, and a contract nothing writes
+//! down is one nobody can check (final review).
+//!
+//! 1. **Trust stops at `verified_through`.** Records beyond the last segment whose chain link
+//!    held are never served, and "nothing verified" yields an empty set, never "all"
+//!    (2a invariant 5).
+//! 2. **An unwrap cert is ignored with a named warning — never silently.** A medium holds no
+//!    secret and cannot re-wrap, so the cert is a no-op on the data path; being told that is
+//!    the difference between an operator who knows why a chart will not render and one who
+//!    does not. See [`ignored_cert_warning`].
+//! 3. **A medium that could not vouch for all of itself says so out loud, once, at
+//!    construction.** It cannot say it on the wire — see [`unsound_medium_warning`] for why
+//!    the protocol has no honest way to express "this is all I am willing to serve" and what
+//!    a restore must do instead.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cairn_medium::{assess, chain_report, MediumHealth, MediumImage, MediumRecord, Plane};
 
@@ -41,6 +60,77 @@ fn ignored_cert_warning(label: &str) -> String {
     )
 }
 
+/// The operator line a medium that cannot vouch for all of itself earns. **Pure**, and each
+/// clause is conditional on the state that makes it true — the same construction
+/// `cairn-sync`'s `loud_pull_message` uses, and for the same reason: an unconditional clause
+/// that names a fault the medium does not have sends an operator to audit the wrong thing.
+///
+/// # Why the warning exists rather than a wire signal
+///
+/// `request` computes `complete` over the records this medium is WILLING to serve — the prefix
+/// within `verified_through` — so the last page of an unsound medium says `complete: true`.
+/// That is the protocol's sentence "nothing exists above this page", and a puller acts on it:
+/// it ends the cycle, checkpoints the cursor, and (through `committable_floor`'s `complete`
+/// arm) clears its quarantine floor unconditionally. The pull returns `Ok` and every counter
+/// looks healthy.
+///
+/// The sharpest case needs no torn tail at all: an image whose FIRST segment fails
+/// verification gives `verified_through == None`, an empty servable set, and
+/// `{"events":[],"complete":true}` — byte-for-byte the answer
+/// `a_legacy_medium_is_refused_by_name_not_answered_empty` refuses by name for CAIRNB1/B2, on
+/// the stated grounds that "an operator would read a clean, complete restore of nothing". That
+/// refusal guards the FORMAT axis; this warning is the verification axis.
+///
+/// **`complete: false` would be worse, not better**, which is why this is prose and not a
+/// protocol change. It would make the puller ask for one more page, receive an empty one, and
+/// refuse it as "the peer returned an EMPTY page without declaring the stream complete" —
+/// naming a recoverable backup a buggy peer, mid-disaster, which is the exact outcome
+/// `BackupError`'s three-way split exists to prevent. The wire has no way to say *"this is all
+/// I am willing to vouch for"*, so the honest channel is out of band: this line, and
+/// [`MediumTransport::health`], which a restore must report as SCOPE rather than inferring
+/// recovery from an event count.
+///
+/// # Why it is keyed on `MediumHealth::sound()` and not on a segment count
+///
+/// The first draft compared the verified segment count against `m.segments.len()`, which
+/// **misses the commonest fault of all**: `parse_any` drops an incomplete trailing section
+/// before `chain_report` ever runs, so on a TORN medium the two counts agree and nothing
+/// fired — the very case `truncated_tail` exists to name. `sound()` is the conjunction that
+/// already means "every check this crate can make, passed": chain intact, every signature
+/// intact, and no torn tail.
+///
+/// Emitted ONCE, at construction, because it is a property of the image and not of a request —
+/// the alternative is one copy per page of every restore.
+fn unsound_medium_warning(
+    label: &str,
+    truncated_tail: bool,
+    chain_broken: bool,
+    bad_signatures: bool,
+    servable: usize,
+) -> String {
+    let mut why: Vec<&str> = Vec::new();
+    if truncated_tail {
+        // The MILD one, and it is named first because its remedy is the cheapest and the
+        // likeliest to apply: run the backup again.
+        why.push("its final section was cut short (an interrupted append — re-run the backup)");
+    }
+    if chain_broken {
+        why.push("a segment's chain link does not hold (a forked or tampered medium)");
+    }
+    if bad_signatures {
+        why.push("at least one record's signature does not verify");
+    }
+    format!(
+        "{label}: this medium is NOT sound — {}. It will serve only the {servable} clinical \
+         record(s) inside the part whose chain held, and its last page will still say \
+         `complete`, because that is the only thing the protocol can say and the alternative \
+         reads as a faulty peer. A restore driven from this medium MUST report scope from \
+         `MediumTransport::health()` and must NOT infer 'recovered everything' from a clean \
+         pull.",
+        why.join("; ")
+    )
+}
+
 #[derive(Debug)]
 pub struct MediumTransport {
     label: String,
@@ -49,20 +139,30 @@ pub struct MediumTransport {
     /// what makes `request` a pure lookup.
     servable: Vec<MediumRecord>,
     health: MediumHealth,
+    /// Has [`ignored_cert_warning`] already been printed for this medium? A LOGGING LATCH,
+    /// not state: nothing reads it but the `eprintln!` guard, and the served bytes are
+    /// identical either way.
+    ///
+    /// It exists because `cairn-sync`'s puller presents its unwrap cert on EVERY page of a
+    /// cycle, so a 40-page restore printed forty copies of a six-line warning whose remedy is
+    /// the same every time — which is how an operator learns to filter the one line this
+    /// module most needs them to read. Atomic rather than `&mut self` because `Transport`
+    /// takes `&self` (a network transport is shared across connection threads) and because a
+    /// missed race here would cost one duplicate line, not a wrong answer.
+    warned_cert: AtomicBool,
 }
 
 impl MediumTransport {
     pub fn new(label: impl Into<String>, image: MediumImage) -> Result<Self, TransportError> {
         let label = label.into();
         let MediumImage::V3(m) = image else {
-            return Err(TransportError::Unsupported {
+            return Err(TransportError::unsupported(
                 label,
-                reason: "this medium predates the two-plane format (CAIRNB1/CAIRNB2). Those \
-                         revisions carry the FEDERATION plane and no clinical event at all, so \
-                         there is nothing here to restore a patient record from — see issue \
-                         #500. Re-capture with a build that writes CAIRNB3."
-                    .into(),
-            });
+                "this medium predates the two-plane format (CAIRNB1/CAIRNB2). Those \
+                 revisions carry the FEDERATION plane and no clinical event at all, so \
+                 there is nothing here to restore a patient record from — see issue \
+                 #500. Re-capture with a build that writes CAIRNB3.",
+            ));
         };
         let chain = chain_report(&m);
         // TRUST STOPS AT `verified_through` (2a invariant 5). Serving past it would hand a
@@ -110,10 +210,29 @@ impl MediumTransport {
         // its body) and are left as a duplicate `source_seq`, so the refusal above fires and 2d
         // can name it.
         servable.dedup();
+        // …AND SAY SO IF THE MEDIUM CANNOT VOUCH FOR ALL OF ITSELF. Promise 3 in the module
+        // doc: the wire cannot express "this is all I am willing to serve" without reading as
+        // a faulty peer, so the only honest channel is this line plus `health()`. See
+        // `unsound_medium_warning` for the whole argument, including why the predicate is
+        // `sound()` and not a segment count.
+        let health = assess(&m);
+        if !health.sound() {
+            eprintln!(
+                "{}",
+                unsound_medium_warning(
+                    &label,
+                    health.truncated_tail,
+                    !health.chain.chain_intact(),
+                    !health.records.all_intact(),
+                    servable.len(),
+                )
+            );
+        }
         Ok(Self {
             label,
             servable,
-            health: assess(&m),
+            health,
+            warned_cert: AtomicBool::new(false),
         })
     }
 
@@ -147,34 +266,50 @@ impl Transport for MediumTransport {
                 unwrap_cert,
             } => (*after_seq, *limit, unwrap_cert.as_deref()),
             Request::EventsAfter { .. } => {
-                return Err(TransportError::Unsupported {
-                    label: self.label.clone(),
-                    reason: "records on a medium are keyed by the capturing node's source_seq; \
-                             there is no HLC index here. Use EventsAfterSeq."
-                        .into(),
-                })
+                return Err(TransportError::unsupported(
+                    self.label.clone(),
+                    "records on a medium are keyed by the capturing node's source_seq; \
+                     there is no HLC index here. Use EventsAfterSeq.",
+                ))
             }
             Request::BlobSlice { .. } => {
-                return Err(TransportError::Unsupported {
-                    label: self.label.clone(),
-                    reason: "a backup medium carries no byte tier — attachment bytes replicate \
-                             by election, on their own resource-isolated path (ADR-0013). This \
-                             is NOT 'blob absent': fetch it from a peer that holds it."
-                        .into(),
-                })
+                return Err(TransportError::unsupported(
+                    self.label.clone(),
+                    "a backup medium carries no byte tier — attachment bytes replicate \
+                     by election, on their own resource-isolated path (ADR-0013). This \
+                     is NOT 'blob absent': fetch it from a peer that holds it.",
+                ))
             }
         };
 
-        if unwrap_cert.is_some() {
-            // NEVER SILENTLY. The cert asks the server to re-wrap each DEK for the requester,
-            // and a medium holds no secret, so it cannot. Saying so is the difference between
-            // an operator who knows why a chart will not render and one who does not. The
-            // words live in `ignored_cert_warning` so a test can assert them; see there.
+        // NEVER SILENTLY (module-doc promise 2). The cert asks the server to re-wrap each DEK
+        // for the requester, and a medium holds no secret, so it cannot. Saying so is the
+        // difference between an operator who knows why a chart will not render and one who
+        // does not. The words live in `ignored_cert_warning` so a test can assert them.
+        //
+        // ONCE PER MEDIUM, not once per request: the puller presents the same cert on every
+        // page, and the warning is about the medium, not the page. See `warned_cert`.
+        if unwrap_cert.is_some() && !self.warned_cert.swap(true, Ordering::Relaxed) {
             eprintln!("{}", ignored_cert_warning(&self.label));
         }
 
         // `servable` is sorted ascending by `source_seq` (see `new`), which is what makes
         // `partition_point` a valid binary search for "strictly greater than `after_seq`".
+        // A page of ZERO is refused rather than served (final review). With records left to
+        // serve it would produce an empty page with `complete: false` — exactly the response
+        // `cairn_wire::page_decision` refuses as a wire-format fault, naming THIS medium as
+        // the buggy peer for a mistake its caller made. `cairn-sync`'s `parse_page_limit`
+        // refuses `--page 0` on the CLI path, but this is a public API of the crate and slice
+        // 2d's restore is a different caller. `Unsupported`, not `Exchange`: no retry of the
+        // same request can ever succeed.
+        if limit == Some(0) {
+            return Err(TransportError::unsupported(
+                self.label.clone(),
+                "a page limit of 0 asks for nothing: with records still to serve that is an \
+                 empty page a puller must refuse, and it would name this medium as the faulty \
+                 peer. Ask for at least one event per page.",
+            ));
+        }
         let start = self.servable.partition_point(|r| r.source_seq <= after_seq);
         let rest = &self.servable[start..];
         let (page, complete) = match limit {
@@ -211,10 +346,13 @@ impl Transport for MediumTransport {
             custody_withheld: None,
             complete,
         };
-        serde_json::to_vec(&resp).map_err(|e| TransportError::Exchange {
-            label: self.label.clone(),
-            source: Box::new(e),
-        })
+        // `Exchange` for a LOCAL encode failure is a slight abuse of the variant's "retrying
+        // may help" contract, and it is chosen knowingly: the alternative, `Unsupported`,
+        // would tell a caller this medium can never answer this request, which is false and
+        // would stop a restore that a retry might complete. Effectively unreachable —
+        // `EventsResponse` is plain `Vec<String>`/`Vec<Option<String>>`/`bool`, none of which
+        // `serde_json` can fail to encode — so no third variant is earned for it.
+        serde_json::to_vec(&resp).map_err(|e| TransportError::exchange(self.label.clone(), e))
     }
 }
 
@@ -309,6 +447,70 @@ mod tests {
             err.to_string().contains("#500"),
             "the refusal must name the issue: {err}"
         );
+    }
+
+    /// A page limit of 0 must be REFUSED, not served as an empty page. Served, it produces
+    /// `{"events":[],"complete":false}` — the exact response `page_decision` refuses as a
+    /// wire-format fault — so a caller's mistake would surface to an operator as "this medium
+    /// is a faulty peer", mid-disaster. `Unsupported`, because no retry can fix it.
+    #[test]
+    fn a_page_limit_of_zero_is_refused_rather_than_served_as_an_empty_page() {
+        let t = transport_over(&[(Plane::Clinical, vec![record(1, 1), record(2, 2)])]);
+        let err = t
+            .request(&Request::EventsAfterSeq {
+                after_seq: 0,
+                unwrap_cert: None,
+                limit: Some(0),
+            })
+            .expect_err("a page of nothing is not a page");
+        assert!(matches!(err, TransportError::Unsupported { .. }), "{err}");
+        assert!(
+            err.to_string().contains("at least one"),
+            "the refusal must name the remedy: {err}"
+        );
+        // …and a limit of ONE is the boundary, which must still work.
+        assert_eq!(events(&t, 0, Some(1)).seqs, vec![1]);
+    }
+
+    /// The unsound-medium warning's words (module-doc promise 3). Asserted on the pure
+    /// function for the same reason `ignored_cert_warning`'s are: capturing stderr would need
+    /// a child process this crate has no dependency for.
+    ///
+    /// A restore that reads only `complete: true` off the wire has been told the medium was
+    /// drained; this line is the only thing that says otherwise, so it must name the scope,
+    /// the trap, and where the real answer lives.
+    #[test]
+    fn the_unsound_warning_names_the_scope_and_sends_the_reader_to_health() {
+        let torn = unsound_medium_warning("medium /tmp/torn.b3", true, false, false, 7);
+        assert!(torn.contains("medium /tmp/torn.b3"), "{torn}");
+        assert!(torn.contains('7'), "how much it WILL serve: {torn}");
+        assert!(
+            torn.contains("re-run the backup"),
+            "a torn tail is the MILD fault and its remedy is the cheapest: {torn}"
+        );
+        assert!(
+            torn.contains("complete"),
+            "…and the trap: the last page still says complete: {torn}"
+        );
+        assert!(
+            torn.contains("health()"),
+            "…and where the honest answer actually lives: {torn}"
+        );
+
+        // EACH CLAUSE IS CONDITIONAL. An unconditional clause naming a fault the medium does
+        // not have sends an operator to audit the wrong thing — the defect `loud_pull_message`
+        // was rewritten to fix, and the reason this is composed rather than a fixed sentence.
+        assert!(
+            !torn.contains("chain link") && !torn.contains("signature"),
+            "a torn medium must not be accused of a broken chain or a bad signature: {torn}"
+        );
+        let forked = unsound_medium_warning("m", false, true, false, 0);
+        assert!(forked.contains("chain link") && !forked.contains("interrupted append"));
+        let bad_sig = unsound_medium_warning("m", false, false, true, 0);
+        assert!(bad_sig.contains("signature") && !bad_sig.contains("chain link"));
+        // …and all three at once read as one list, not three sentences fighting.
+        let all = unsound_medium_warning("m", true, true, true, 0);
+        assert_eq!(all.matches("; ").count(), 2, "{all}");
     }
 
     #[test]
@@ -407,6 +609,25 @@ mod tests {
             (Plane::Clinical, vec![record(2, 2)]), // in the torn tail
         ]);
         assert_eq!(events(&t, 0, None).seqs, vec![1]);
+
+        // AND THE WARNING'S TRIGGER, which is the half that was nearly missed. The page above
+        // says `complete: true` while a record has been dropped, so the only signal is
+        // `!health.sound()` — and a segment-count check would NOT have fired here, because
+        // `parse_any` drops the incomplete trailing section before `chain_report` runs, so the
+        // verified count and `m.segments.len()` agree on a torn medium. `truncated_tail` is
+        // what actually names it.
+        assert!(
+            t.health().truncated_tail,
+            "a torn tail must be reported as one"
+        );
+        assert!(
+            !t.health().sound(),
+            "…and must therefore trip the unsound-medium warning at construction"
+        );
+        assert!(
+            events(&t, 0, None).complete,
+            "the trap this warning exists for: the wire still says the log was drained"
+        );
     }
 
     #[test]
@@ -441,6 +662,16 @@ mod tests {
             events(&t, 0, None).seqs,
             vec![1],
             "segment 0 verifies and is served; segment 1 sits past the broken link and must not be"
+        );
+        // The OTHER trigger arm: a structural break, with no torn tail anywhere.
+        assert!(!t.health().chain.chain_intact(), "the fixture's premise");
+        assert!(
+            !t.health().truncated_tail,
+            "…and nothing here is torn, so the two arms are genuinely independent"
+        );
+        assert!(
+            !t.health().sound(),
+            "so the warning fires on this medium too"
         );
     }
 
