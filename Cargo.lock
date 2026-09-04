@@ -283,6 +283,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2",
+ "subtle",
  "thiserror",
  "uuid",
  "x25519-dalek",
