@@ -71,13 +71,41 @@ comes back.
 retroactively-filtered one. Data loss outranks erasure completeness (the maintainer's ranking:
 *"data loss is the most catastrophic event possible next to data falsification"*).
 
-**The cost, stated so it is declared rather than discovered.** The medium is append-only. A DEK written
-into last night's signed segment cannot be retracted when the body is crypto-shredded today. On the
-backup copy, erasure stops being a mechanism and becomes an operational act: rotate the medium
-(capture a fresh one, destroy the old). ADR-0005 already frames deletion as *best-effort and declared,
-never guaranteed* and principle 9 keeps Cairn's job to mechanism rather than policy — but **2e's ADR
-must say this in as many words**, and `verify-backup` must be able to tell an operator that a medium
-predates a shred. Nothing in this slice may describe the two paths as symmetric.
+**What follows is not a defect, and the first draft of this design mislabelled it as one.** The
+maintainer's framing, which governs (2026-09-05):
+
+> A backup is only a backup if it can restore the state of the system at the time the backup was taken.
+> Taking care of invalidated backups is a policy issue, not a core enforcement one. The core will only
+> guarantee availability and integrity of data.
+
+Read the append-only medium against that definition and the behaviour is exactly right, not
+best-effort:
+
+| the body was shredded… | in a medium captured before | in a medium captured after |
+|---|---|---|
+| …before that capture | n/a | unreadable — the capture-time filter reproduces the state as it stood |
+| …after that capture | **readable, correctly** — at the moment that medium was taken, it *was* readable | unreadable |
+
+So the medium's capture-time filter is **not** a weaker version of the export's retroactive one. It is
+the point-in-time semantic, and it is the export's whole-file rewrite that departs from it — the export
+carries *current* custody because its job is to carry the long-lived unwrap secret, not to be a
+point-in-time artifact. A restore therefore reads a body if **either** carrier still holds its key, and
+the medium half of that is a faithful snapshot rather than a leak.
+
+**The consequence a practice must be told, and the line where core ends.** Erasure does not propagate
+backwards into media already written. Destroying a key on the live node completes an erasure *there*;
+completing it across backups is **rotation** — capture a fresh medium, destroy the old — and the
+rotation interval **is** the maximum time an erasure takes to complete across all copies. That number
+is the clinic's policy call, not Cairn's: principle 9 (mechanism, never policy) and ADR-0005's
+*deletion is best-effort and declared, never guaranteed*. Cairn's obligations are to make the residue
+**legible** (`verify-backup` must be able to say a medium predates a shred) and to state it plainly —
+**2e's ADR owes that sentence in as many words.** What Cairn must never do is describe the two carriers
+as symmetric, or imply that a shred reached a medium it cannot reach.
+
+Two things this framing settles that would otherwise be re-litigated: the retraction behaviour is
+**not** on any defect list, and no future slice should "fix" it by filtering old segments — an
+append-only medium that rewrote its own history would forfeit the integrity guarantee that is the
+core's actual job.
 
 ### 2.2 The shred predicate gets ONE home, in the database
 
@@ -257,8 +285,11 @@ seq 91,338; custody export 6 days stale"*.
   clinical record; nothing restores it. `restore` still applies a federation-plane medium.
   `dr_clinical_guarantee_gap.rs` is rewritten, not deleted: the half that pins *"no clinical event
   travels"* inverts, and a new half pins *"and nothing yet reads one back"*.
-- **The append-only retraction gap** (§2.1) is real from the moment this merges. 2e's ADR declares it;
-  no code in this slice closes it.
+- **Erasure does not propagate backwards into media already written** (§2.1). This belongs on this list
+  as a fact an operator must know, **not as a defect**: it is the point-in-time semantic working, and a
+  future slice that "fixed" it by rewriting old segments would trade the integrity guarantee for a
+  policy job that is the clinic's. 2e's ADR declares it; completing an erasure across copies is
+  rotation.
 - **Restore cannot use the registry** this slice writes — 2d installs it.
 - **The node plane still rewrites whole** (§4).
 - Every deferral here names the slice that retires it, per 2a's rule: *a deferral is only honest while
@@ -278,9 +309,11 @@ What must be proven, beyond the obvious round trip:
    medium file `backup_to` actually writes, not on a fixture built by the test (a pin whose fixture is
    built by the test leaves the production site unpinned).
 2. **A shredded body's DEK does not enter a NEW segment** — capture after a shred, assert `None`.
-3. **A shredded body's DEK REMAINS in an old segment** — the declared limit, pinned as a *test*, so it
-   can never be quietly assumed fixed. This is the most important test in the slice: it is the one that
-   makes §2.1's cost falsifiable rather than a paragraph.
+3. **A shredded body's DEK REMAINS in a segment captured before the shred** — the point-in-time
+   semantic, pinned as a *test that must pass*, named so no reader mistakes it for a known bug awaiting
+   a fix (`a_medium_restores_the_state_at_capture_time`, not `…_leaks_a_shredded_dek`). It is the most
+   important test in the slice: it makes §2.1's declared behaviour falsifiable rather than a paragraph,
+   and it is the guard against a future session "tidying" old segments and forfeiting integrity.
 4. **A torn append costs exactly one increment** — truncate mid-segment, re-capture, assert the
    watermark did not advance past the last verified segment and that the lost records return.
 5. **An unchanged log appends nothing** — byte-identical medium across two runs.
