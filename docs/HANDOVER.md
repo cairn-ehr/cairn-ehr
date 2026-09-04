@@ -23,23 +23,25 @@
 >   it peered with and **zero patients**. Pinned by
 >   `dr_clinical_guarantee_gap.rs::medium_carries_the_federation_plane_and_no_clinical_event`; **slice 2d
 >   inverts it — nothing built so far does.**
-> - **○ SLICES 2a AND 2b HAVE BOTH LANDED AND BOTH CLOSE NOTHING.** **2a** (08-31, reshaped by its
->   review wave 09-01) is the FORMAT: `crates/cairn-medium` + **CAIRNB3**, each plane-tagged segment
->   carrying its own signed chained attestation; 19-of-19 surviving mutations became 18/18 killed,
->   `health::assess` is the one composed verdict (`intact()` → `chain_intact()`), `Plane::Unknown(tag)`
->   is first-class, `BackupError` splits three ways (**#522** loud, **#523**/**#524** open, **#525**
->   done). **2b** (09-02) is the SEAM and the PAGING: `crates/cairn-wire`, `Transport` with
->   `TcpTransport`/`MediumTransport`, and a `do_pull` that pages and checkpoints EVERY page — closing
->   **#101 item 1 only** (items 2 and 3 keep #101 open) and opening **#531**, **#532**. **Neither reads
->   a database: the medium still carries no clinical event until 2c writes one.** **⇒ Next build is
->   [#511](https://github.com/cairn-ehr/cairn-ehr/issues/511), then 2c.** Detail: ROADMAP's 2a/2b entries.
-> - **⇒ #527: THE ALERT LIST IS READABLE NOW, AND THE ASSUMPTION IN IT WAS WRONG (2026-09-02).**
->   `scripts/codeql-alerts.sh` reads it (read-only, script-shaped because `gh api` is deny-listed
->   repo-wide and must stay so). **30 open alerts; the critical 18 were a REAL defect, not the
->   #146/#520 false-positive class** — see the 2026-09-02 entry. **Two human acts still owed:**
->   dismiss the 12 `rust/cleartext-logging` alerts (per-alert verdicts are in #527's comment), then
->   **make the `CodeQL` gate a REQUIRED check** — but only in that order: a permanently-red required
->   check trains everyone to merge past it, which is how a genuine critical sat unread for a week.
+> - **○ THREE SLICES HAVE LANDED AND ALL THREE CLOSE NOTHING HERE.** **2a** (08-31, reshaped by its
+>   review wave 09-01) is the FORMAT: `crates/cairn-medium` + **CAIRNB3**, per-segment signed chained
+>   attestation; 19-of-19 surviving mutations became 18/18 killed, `health::assess` is the one composed
+>   verdict, `Plane::Unknown(tag)` is first-class, `BackupError` splits three ways (**#522** loud,
+>   **#523**/**#524** open, **#525** done). **2b** (09-02) is the SEAM and the PAGING:
+>   `crates/cairn-wire`, `Transport`/`MediumTransport`, and a `do_pull` that pages and checkpoints EVERY
+>   page — closing **#101 item 1 only** (items 2–3 keep #101 open); opened **#531**, **#532**,
+>   **#534**–**#538**. **#511** (09-04) is the TYPES: `Secret32`/`PublicKey32` across four crates and the
+>   `cairn_pgx` tree, so a PUBLIC half can no longer be installed as this node's SECRET custody key;
+>   opened **#541**. **None of the three reads clinical bytes onto a medium — 2c is what does.**
+>   **⇒ Next build is 2c.** Detail: ROADMAP's 2a/2b/#511 entries.
+> - **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it (read-only;
+>   `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a **REAL defect**, not the
+>   #146/#520 false-positive class, and they are now **gone from `main`**. Measured 2026-09-04: **11 open,
+>   all `rust/cleartext-logging`, all high, zero critical** — quote that only after re-running the script,
+>   since it is the number this file has already been wrong about. **Two human acts still owed, IN THIS
+>   ORDER:** dismiss the `cleartext-logging` alerts (per-alert verdicts in #527's comment), then make
+>   `CodeQL` a REQUIRED check — a permanently-red required check trains everyone to merge past it, which
+>   is how a genuine critical sat unread for a week.
 > - **⇒ THE LOOSE END NAMED SO IT CANNOT BE LOST.** Custody must apply the same `erasure_shred_log`
 >   exclusion on **both** the medium path and the `CAIRNL1` export path, or a shredded body comes back on
 >   restore. 2a only makes both expressible; **2c decides which is authoritative.**
@@ -55,20 +57,20 @@
 > `verify-backup` refuses a zero-event medium instead of printing an all-clear it had not established.
 >
 > **✓ FEDERATED SYNC WORKS AGAIN — [#503](https://github.com/cairn-ehr/cairn-ehr/issues/503) IS CLOSED**
-> (2026-08-30). `crates/cairn-keystore` carries the sealed key-file format both binaries need, and
-> `cairn-sync` **LOADS** the provisioned key at startup, resolved **once** instead of derived at six sites
-> — **one derived path survives by design**, trap 3.
+> (2026-08-30): `cairn-sync` LOADS the provisioned key at startup instead of deriving it at six sites —
+> **one derived path survives by design**, trap 3.
 >
-> **The reusable lesson, and the reason this hid for weeks:** *a deferral is only honest while its stated
-> precondition holds, and nothing in the repo watches for one expiring.* The `localstate.rs` module header
-> declared its seam truthfully — *"the federation-node tier has no clinical surface yet"* — and ADR-0052
-> made that false without reopening it, while ROADMAP kept recording slices A–D as ✓ done. **Before
-> trusting any ✓, check whether the sentence that justified it is still true.** **Slice 2b's grep found
-> SEVEN more of exactly this shape, in FOUR crates, where memory said one — and the write-up then said
-> "three", because that number was recalled rather than grepped, in the very bullet whose moral is grep.**
+> **The reusable lesson, and the reason #500 hid for weeks:** *a deferral is only honest while its stated
+> precondition holds, and nothing in the repo watches for one expiring.* `localstate.rs`'s header declared
+> its seam truthfully — *"the federation-node tier has no clinical surface yet"* — and ADR-0052 made that
+> false without reopening it, while ROADMAP kept recording slices A–D as ✓ done. **Before trusting any ✓,
+> check whether the sentence that justified it is still true.** Slice 2b's grep found SEVEN more of this
+> shape in FOUR crates where memory said one; **#511 then found two more inside `seal.rs` itself**, still
+> describing the identity↔custody coupling ADR-0066 had deleted eleven days earlier. **Grep, do not
+> recall.**
 
 > [!IMPORTANT]
-> **Five traps slice 1 minted. Each is a step a next session takes in good faith.**
+> **Six traps. Each is a step a next session takes in good faith.** (Five came from slice 1; trap 5 was minted by #511.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -96,21 +98,22 @@
 >    then refuses the real exported key permanently (`restore` warns explicitly; `submit_event`'s refusal
 >    names the command). Recover the export first; `apply_local_state`'s refusal explains the resulting
 >    state and that the way out is another restore into a fresh database.
-> 5. **`init` now refuses a database that already has custody registered.** The file check
+> 5. **⇒ `Secret32` DOES NOT SEPARATE ONE SECRET ROLE FROM ANOTHER (#511, 2026-09-04).** An unwrap
+>    secret, an Ed25519 signing seed and a DEK are all `Secret32`, so `Secret32::from_bytes(sk.to_bytes())`
+>    compiles — that conversion IS the #495 coupling wherever it is not deliberate. **Do not take the
+>    count from any comment: it is pinned in `crates/cairn-node/tests/secret32_conversions_are_named.rs`,
+>    per file and by count.** Six production `Secret32::from_bytes` sites exist; exactly **two** turn the
+>    signing seed into an unwrap secret — `keystore::adopt_derived_unwrap_secret` (the ADR-0066 migration)
+>    and `cairn-sync`'s pre-ADR-0066 fallback (trap 3) — and the rest mint fresh CSPRNG output, seal the
+>    seed AS the seed, or compare. A third of the first kind is the defect returning; the
+>    newtypes make the PUBLIC-for-secret mix-up a compile error and nothing more. `unwrap_secret_is_the_signing_seed`
+>    is still the only check for the secret-for-secret one, and `secret_opens_the_carried_custody` is
+>    still the only proof a restored key OPENS anything — neither is made redundant by the types.
+> 6. **`init` now refuses a database that already has custody registered.** The file check
 >    (`refuse_to_replace_existing_unwrap_key`) only fires when `<key>.unwrap` EXISTS, so a node that lost
 >    its keystore could still run `init`, overwrite its signing key and mint a doomed custody key before
 >    the registrar failed. `init` reads `node_unwrap_key` first now; the remedy it names is
 >    `establish-unwrap-key`, idempotent — see trap 4 before running it on a restored node.
-
-> [!WARNING]
-> **⇒ [#511](https://github.com/cairn-ehr/cairn-ehr/issues/511) IS THE NEXT BUILD — and it is
-> CLOSED-as-COMPLETED on GitHub with nothing implementing it** (re-opened and sequenced 2026-08-31).
-> `grep -rn 'Secret32\|PublicKey32' crates/` still returns **nothing**. Its subject — every key in the
-> custody plane is a bare `[u8; 32]`, so installing a *public* half as this node's secret compiles — is a
-> live type-design hole the DR programme works directly inside. It sits **after 2b and before 2c**
-> because 2a/2b hold almost no `[u8; 32]` (the newtypes would have cost each its "every call site
-> compiled untouched" proof, an 83-site migration across four crates) while **2c/2d are where key
-> material starts moving again**. **Do not read the closed GitHub state as evidence they exist.**
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
@@ -160,8 +163,8 @@ registration row until widened; (2) **the accessibility pass** — a live VoiceO
 checks, keyboard-only (`cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`), DOM
 assertions automated by **#332**; (3) **make CI jobs REQUIRED status checks** (**#444**, admin-only — "clippy + cargo
 test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per `CONTRIBUTING.md`'s dated table; (4)
-**#527's two Security-tab acts** — dismiss the 12 triaged `cleartext-logging` alerts, THEN make `CodeQL` a fourth
-required check, in that order (see ⇒ NEXT). **If a measurement falls outside its budget, that is the finding — file an
+**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (11 open as of 2026-09-04,
+zero critical), THEN make `CodeQL` a fourth required check, in that order (see ⇒ NEXT). **If a measurement falls outside its budget, that is the finding — file an
 issue, never adjust the budget.**
 
 **Other build candidates** (after #500; nothing blocks a choice): the **registration/search UI slice**
@@ -182,11 +185,14 @@ surface has never been through one — include it next.
 > `test_serial_guard` advisory lock (a stray loop once stretched a session's suites ~3 → ~90 min). **A live
 > IDE contends the same way** — rust-analyzer holds the shared `target/` lock, so a narrow `cargo test`
 > blocks before it compiles, then times out. Fix is a scratch `CARGO_TARGET_DIR=/tmp/…`, never killing the
-> IDE; keeping one warm is also what makes the full gate ~15 min.
+> IDE. **Do not read a warm target as a time estimate**: what the gate costs depends on what CHANGED (a
+> cross-crate edit relinks every test binary), and the figures in this file have been wrong in both
+> directions — #503 budgeted ~15 min and took six hours, #511 relinked the whole tree and finished in
+> well under one. Measure the run you are in.
 
 ---
 
-**Session date:** 2026-09-02 (**DR slice 2b — the transport seam and the paged pull**: new crate `crates/cairn-wire`, `Transport`/`MediumTransport`, and a `do_pull` that pages and checkpoints every page; closes nothing — #500 stays open and #101 loses only item 1; opened #531, #532; **next build is #511, then 2c**) · earlier the same day (**#527 — the CodeQL backlog**: the 18 critical alerts were a real defect, not the familiar false positive; renamed, guarded, house rule 6 corrected; opened #529, #530) · previous: 2026-09-01 (**slice 2a review wave**: mutation audit 19/19 surviving → 18/18 killed; `health::assess` composed verdict; `Plane::Unknown`; `BackupError` taxonomy; #525 done) · previous: 2026-08-31 (**DR slice 2a — the shared medium format**: new crate `crates/cairn-medium` + `CAIRNB3`; closes nothing, #500 stays open; next is 2b; opened #522–#525, re-opened #511) · 2026-08-30 (**#503 — the shared keystore crate**: `cairn-sync` loads the node's provisioned unwrap key; federated sync restored; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1** — the node unwrap key stops dying with the signing seed: #495 CLOSED, #500 still open; opened #503–#509, #511–#513; review wave also closed #502 item 2) · **Spec/ADRs:** v0.68 (ADR-0066; slices 2a and 2b add no ADR/spec bump) · **`SCHEMA_GENERATION`:** 50 (`db/050`; neither 2a nor 2b adds a migration — no DB change in either) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-04 (**#511 — the custody newtypes**: `Secret32`/`PublicKey32` across four crates plus the `cairn_pgx` tree; installing a PUBLIC half as this node's SECRET custody key is now a compile error; CAIRNL1 bytes unchanged and golden-pinned; closes #511, opens #541; **next build is 2c**) · previous: 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; closes nothing, #101 loses only item 1; opened #531, #532, #534–#538) and, earlier that day, **#527** (the CodeQL backlog: the 18 criticals were a real defect, not the familiar false positive; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave; opened #522–#525, re-opened #511) · 2026-08-30 (**#503**, the shared keystore crate; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1**: #495 CLOSED, #500 still open; opened #503–#509, #511–#513). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** v0.68 (ADR-0066; 2a, 2b and #511 add no ADR or spec bump) · **`SCHEMA_GENERATION`:** 50 (`db/050`; none of 2a, 2b or #511 adds a migration — no DB change in any of them) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -210,79 +216,109 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-02 (last) — DR slice 2b: the transport seam and the paged pull
+### 2026-09-04 (last) — #511: the custody newtypes
 
-**Closes nothing; #500 still open. Closes #101 ITEM 1 only, so #101 stays open. No ADR, spec bump or migration — no DB
-change at all. Opened #531, #532.** New crate **`crates/cairn-wire`** carries the clinical-plane wire types, the
-framing and its 64 MiB cap, and the transport seam, lifted out of `cairn-sync`'s binary-only `main.rs` so `cairn-node`
-can reach them in 2c/2d (the #503 pattern; the extraction itself changed no call site beyond the import line).
-**`Transport`** is the one seam — `TcpTransport` is today's behaviour verbatim; **`MediumTransport`** is a CAIRNB3
-medium answering as a peer, which is what lets 2d's restore drive `cairn-sync`'s OWN puller — cursor, quarantine pen
-and custody handling included — against a file. **`do_pull` pages** (`DEFAULT_PAGE_EVENTS = 500`, `--page N`) and
-**commits cursor + quarantine floor after EVERY page**; that per-page durability, not the smaller frame, is #101 item
-1's actual fix. ROADMAP's slice 2b entry carries the detail.
+**Closes #511. Does not touch #500 — no clinical event travels on any medium as a result. Opened #541,
+and #543–#545 in review. No ADR, spec bump, migration or DB change.** New
+`crates/cairn-event/src/keys.rs`: **`Secret32`** (Zeroizing inner, **redacting** `Debug`, constant-time
+`PartialEq`) and **`PublicKey32`** (`Copy`, printable — published by design), re-exported from `seal`.
+Migrated the whole custody plane across `cairn-event`, `cairn-keystore`, `cairn-node`, `cairn-sync`
+**and the `exclude`d `extensions/cairn_pgx` tree**; all three lockfiles refreshed. ROADMAP's #511 entry
+carries the detail. What a next session must not misread:
 
-1. **⇒ THE PAGE CURSOR IS NOT THE CHECKPOINT CURSOR.** The next page is fetched from the last seq *received*;
-   `max_seq` is the contiguous *handled* prefix and starts at the *committed* cursor. On a full sweep the two differ
-   by the whole history below the cursor, so conflating them makes page 2 skip exactly what a sweep exists to
-   reconcile.
-2. **⇒ THE QUARANTINE FLOOR RULE HAS TWO HALVES, AND "COMPUTE IT OVER THE CYCLE" IS ONLY THE FIRST.**
-   (a) *The PIN must be cumulative* — a clean page 2 clears the pin a refusing page 1 set, and the cursor has
-   already moved past that event. (b) ***And the CLEAR must be earned.*** `None` is not silence; it is a positive
-   claim — *nothing is being withheld any more* — committed after EVERY page, including page 1 of a sweep that has
-   not yet reached the slot the floor guards. A clean page 1 cleared a floor at seq 900; one freeze or dropped link
-   later, that penned clinical event was never re-offered again, silently, with `skipped_unverifiable` at 0.
-   `committable_floor` withholds a clear the cycle cannot support. **Half (b) is the one the design doc missed
-   (its Erratum E1), and the one that loses an event — do not write "compute it over the cycle" down as the whole
-   rule.** The final review then found a THIRD way into the same clear: `reached` was taken off the wire, and a
-   page with no events but a fabricated `seqs` array passed every guard, because the parallel-array check was gated
-   on `!events.is_empty()`. **A seq that carried no event was never offered.** ⇒
-   **`complete` DEFAULTS TO THE UNCERTAIN DIRECTION**: an omitted flag costs a round trip, never a silent early stop
-   with the cursor checkpointed as though the log were drained (principle 4 on a protocol field). An empty page that
-   declares no completeness is neither an end nor a continuation and is REFUSED, naming the likeliest cause (a peer
-   predating paging) and its remedy.
-3. **⇒ SEVEN COMMENTS ACROSS FOUR CRATES ASSERTED A DEFERRAL ONE SLICE RETIRED, AND THE FIRST GUESS WAS ONE.** The
-   load-bearing one, `FULL_SWEEP_EVERY`'s, said in plain words that the correctness floor *"stops floor-ing exactly on
-   the largest-history nodes"*. **Grep, do not recall** — a deferral going stale unwatched is the mechanism by which
-   #500 hid for weeks.
-4. **⇒ TWO COMMENTS WRITTEN INSIDE THIS SLICE ASSERTED PROPERTIES THEIR OWN CODE CONTRADICTED** — a runtime skew
-   message citing a review round no operator can look up, and a placement rationale resting on a hazard
-   `frozen`-stickiness makes impossible. Both in the *reasoning*, not the mechanism; both found only because a
-   reviewer re-derived the claim instead of reading it. **The #530 pattern again.**
-5. **`elapsed_ms` now measures a whole CYCLE, not one request** — `poc/walking-skeleton/harness/bet_a.py` feeds it
-   into the A4 latency percentiles: unchanged in steady state (one page), larger and more honest on catch-up; **the
-   harness's owner needs to meet this.** **Opened: #531** (decompose `cairn-sync/src/main.rs`, one verbatim seam per
-   PR; the older #329 names the same file at 5.3k — **a maintainer decision is wanted on which to keep**; no line
-   count recorded here, because `pull_page.rs`'s own doc retired that figure for going stale inside the slice that
-   wrote it) and **#532** (a multi-page pull that fails on a later page reports `null` metrics and nothing about the
-   pages that landed — #469's defect reintroduced by paging, on three in-loop exits; the events are durable and the
-   next cycle resumes; the final review added that a failed `cursor_commit` from an earlier page is also dropped
-   there, which is a lost *classification*, not merely a lost report).
+0. **⇒ THE REVIEW ROUND CAUGHT THIS SLICE COMMITTING THE DEFECT IT WAS FIXING — read this first.** The
+   slice's own headline finding was two `seal.rs` comments still asserting a coupling ADR-0066 deleted
+   (the #530 pattern). Five review passes then found the same shape three times in its own output: a
+   conversion count asserted in **six places that were silently counting three different populations**
+   (all production `Secret32::from_bytes` = six; those taking a signing seed = four; those installing one
+   as an unwrap secret = two), naming a guard that counted **none** of them;
+   `secret_opens_the_carried_custody`'s doc still opening with
+   *"every key in this plane is a bare `[u8; 32]`"* — the premise the slice had just retired, on the one
+   function the slice declares must never be deleted; and the producer guard blind to `Self { … }`. All
+   fixed. The durable lesson is mechanical, not moral: **an inventory that lives in prose is a stale
+   inventory waiting to happen.** The count now lives in
+   `crates/cairn-node/tests/secret32_conversions_are_named.rs`, per file and by count, and both its
+   matcher and its bite are mutation-tested. **Grep, do not recall** — 2b's moral, which binds the slice
+   that writes the grep too.
 
-6. **⇒ THE UNCAPPED PAGE LOOP HAD A BOUND THAT DID NOT EXIST — and the wrong COMMENT was the defect.** It argued: a
-   flood is penned, the quota is finite, the pen refuses, the cursor freezes, the cycle ends. It misses the two
-   cheapest streams a peer can serve, neither of which pens anything — events this node ALREADY HOLDS (`Ok(false)`)
-   and bytes ALREADY PENNED (`quarantine_event` dedupes *before* the quota check). Either loops for ever, and
-   `cmd_run` is blocked with it: no pulls, no fingerprint, **and no periodic full sweep** — the exact consolation
-   `validate_page` offers against a peer lying high about its seqs. Now bounded by a per-cycle event budget that
-   **YIELDS** (operator line + `budget_exhausted` metric), never refuses (an honest catch-up is not a fault) and
-   never breaks silently.
-7. **⇒ A SEAM INVALIDATES EVERY PREMISE THAT NAMED WHAT WAS ON THE OTHER SIDE OF IT.** `chain_reaches_a_postgres_error`
-   justified its `source()` walk with *"`do_pull` reaches its peer over a raw `TcpStream`"*. `do_pull` now takes
-   `&dyn Transport`, one implementation opens no socket, and both error types box their source **specifically so a
-   future transport needs no change there**. The conclusion survives only by accident of which two transports exist.
-   Flagged in place as a standing caveat. **When you introduce an abstraction, grep for the comments that described
-   the concrete thing it replaced.**
-8. **The final review opened five more:** **#534** (a freeze now stops CONTENT convergence, not just the cursor —
-   pre-paging, apply ran past the freeze within the single unpaginated response; a design decision is wanted),
-   **#535** (paging removed the implicit ~20k-event bound on `applied_addresses`, which becomes one `ANY($1)`
-   parameter), **#536** (a DEK that fails to unwrap is counted nowhere — under `MediumTransport` a restore can exit 0
-   with every sealed body unreadable), **#537** (a failed pen release is permanent after printing exactly once) and
-   **#538** (the byte tier discards the `Exchange`/`Unsupported` split made for it).
+1. **⇒ THE TYPES CLOSE ONE CONFUSION, NOT THREE — and the issue's own table invites the stronger reading.**
+   PUBLIC-for-secret is a compile error everywhere. **Secret-for-secret is not**: see trap 5 in ⇒ NEXT.
+   `secret_opens_the_carried_custody` and `unwrap_secret_is_the_signing_seed` are **not** made redundant
+   by this slice and must not be deleted as "now covered by the types".
+2. **⇒ A REFUSAL MOVED EARLIER, SO ITS OLD DOC BECAME A LIE ABOUT ITS OWN FUNCTION.** A wrong-length
+   secret is now unrepresentable in `LocalState`, so `recovered_unwrap_secret` no longer refuses one —
+   `Secret32`'s `Deserialize` does, at `from_cbor`, before anything is written. The function became
+   infallible and **its doc was rewritten rather than left arguing for a check it no longer performs**
+   (the #530 pattern). The two tests that built a truncated secret moved to raw CBOR, via a
+   `ForeignBundle` fixture — which is how a corrupt bundle actually arrives.
+3. **⇒ TWO COMMENTS IN `seal.rs` STILL DESCRIBED THE COUPLING ADR-0066 DELETED**, in the module that
+   defines the derivation: the DEK-wrap-plane header said the X25519 secret is HKDF-derived from the
+   signing seed *"so there is no new enrollment ceremony"*, and `UNWRAP_KEY_HKDF_INFO`'s doc said the
+   same. That is #495's exact premise, alive in prose eleven days after the code stopped doing it.
+   Both rewritten. **Grep the comments around any invariant you change.**
+4. **⇒ THE WIRE PIN WAS TAKEN BEFORE THE TYPE MOVED, AND THAT ORDER IS THE WHOLE METHOD.**
+   `LocalState::unwrap_secret` is a serialized `CAIRNL1` field. `localstate_wire_pins.rs` froze the exact
+   CBOR from the **pre-newtype** build and was mutation-checked before the migration began; it is still
+   green, which is the proof an existing off-site export still restores. Incidentally settled a design
+   question: ciborium writes `Vec<u8>` as a CBOR **array of uints**, not a byte string.
+5. **⇒ A GUARD FAILED CORRECTLY AND THE FIX WAS NOT THE NUMBER.** `dr_clinical_guarantee_gap`'s producer
+   count stayed at 2, but both literals moved into `localstate.rs` (`empty` + the new `from_custody`)
+   and `localstate_read` now CALLS one. The per-file half was rewritten to assert the new shape **plus**
+   that the reader really calls `from_custody` — without which deleting the call and returning
+   `empty()` would satisfy every other assertion while exporting no custody at all.
+6. **⇒ #541: NO CI JOB COMPILES `cairn_pgx`'s `pg_test` MODULE.** It was two `EventBody` fields behind
+   and had not built for some time. The pgx job's clippy step has **no `working-directory`**, so it lints
+   the ROOT workspace — which `exclude`s that tree. Fixed in passing; the gate gap is the issue, and it
+   is the #503 "a suite invisible to the gate that was supposed to cover it" shape again.
+
+### 2026-09-02 — DR slice 2b: the transport seam and the paged pull (condensed)
+
+**Closes nothing; #500 still open. Closes #101 ITEM 1 only (items 2–3 keep it open). No ADR, spec bump or
+migration. Opened #531, #532 and — from the final review — #534, #535, #536, #537, #538.** New crate
+`crates/cairn-wire` (clinical-plane wire types, framing + its 64 MiB cap, the transport seam) lifted out of
+`cairn-sync`'s binary-only `main.rs` so `cairn-node` can reach it in 2c/2d. **`Transport`** is the one seam:
+`TcpTransport` is today's behaviour verbatim, **`MediumTransport`** is a CAIRNB3 medium answering as a peer —
+which is what lets 2d's restore drive `cairn-sync`'s OWN puller (cursor, quarantine pen, custody) against a
+file. `do_pull` **pages** (`DEFAULT_PAGE_EVENTS = 500`, `--page N`) and commits cursor + quarantine floor
+after EVERY page; that per-page durability, not the smaller frame, is #101 item 1's actual fix. ROADMAP's
+2b entry carries the detail. The lessons that outlive it:
+
+1. **⇒ THE PAGE CURSOR IS NOT THE CHECKPOINT CURSOR.** The next page is fetched from the last seq
+   *received*; `max_seq` is the contiguous *handled* prefix and starts at the *committed* cursor. On a full
+   sweep the two differ by the whole history below the cursor, so conflating them makes page 2 skip exactly
+   what a sweep exists to reconcile.
+2. **⇒ THE QUARANTINE FLOOR RULE HAS TWO HALVES, AND "COMPUTE IT OVER THE CYCLE" IS ONLY THE FIRST.** The
+   PIN must be cumulative, **and the CLEAR must be earned**: `None` is a positive claim (*nothing is being
+   withheld any more*), committed after every page including page 1 of a sweep that has not reached the slot
+   the floor guards. A clean page 1 cleared a floor at seq 900 and that penned clinical event was never
+   re-offered, silently, with `skipped_unverifiable` at 0. A third route into the same clear — an empty page
+   with a fabricated `seqs` array — closed it: **`complete` DEFAULTS TO THE UNCERTAIN DIRECTION** (an omitted
+   flag costs a round trip, never a silent early stop with the cursor checkpointed as though the log were
+   drained — principle 4 on a protocol field).
+3. **⇒ SEVEN COMMENTS ACROSS FOUR CRATES ASSERTED A DEFERRAL ONE SLICE RETIRED**, the load-bearing one
+   saying the correctness floor *"stops floor-ing exactly on the largest-history nodes"*. **Grep, do not
+   recall** — and the write-up then said "three" because that number was recalled rather than grepped, in
+   the very bullet whose moral is grep.
+4. **⇒ TWO COMMENTS WRITTEN INSIDE THE SLICE ASSERTED PROPERTIES THEIR OWN CODE CONTRADICTED** — a skew
+   message citing a review no operator can look up, and a rationale resting on a hazard `frozen`-stickiness
+   makes impossible. Both found only because a reviewer re-derived the claim instead of reading it. **The
+   #530 pattern**, which #511 then hit twice more.
+5. **⇒ THE UNCAPPED PAGE LOOP HAD A BOUND THAT DID NOT EXIST — and the wrong COMMENT was the defect.** It
+   argued a flood is penned and the quota refuses, missing the two cheapest streams a peer can serve that
+   pen nothing: events this node already holds, and bytes already penned. Either loops for ever, taking
+   `cmd_run` with it — no pulls, no fingerprint, **no periodic full sweep**. Now bounded by a per-cycle
+   budget that YIELDS (`budget_exhausted`), never refuses.
+6. **⇒ A SEAM INVALIDATES EVERY PREMISE THAT NAMED WHAT WAS ON THE OTHER SIDE OF IT.**
+   `chain_reaches_a_postgres_error` justified its `source()` walk with *"`do_pull` reaches its peer over a
+   raw `TcpStream`"*; it now takes `&dyn Transport` and one implementation opens no socket. **When you
+   introduce an abstraction, grep for the comments that described the concrete thing it replaced.**
+7. **`elapsed_ms` now measures a whole CYCLE, not one request** — `poc/walking-skeleton/harness/bet_a.py`
+   feeds it into the A4 latency percentiles; **the harness's owner needs to meet this.**
+
 
 ### 2026-09-02 (earlier) — #527: a discriminator is not a salt, and a scanner reads NAMES (condensed)
 
-**Closes nothing; #500 untouched. Opened #529, #530.** `main` carried **30 open CodeQL alerts**, the `CodeQL` check
+**Closes nothing; #500 untouched. Opened #529, #530.** `main` carried **30 open CodeQL alerts** (11 as of 2026-09-04, none critical), the `CodeQL` check
 red for weeks and **non-required** — and a genuine critical was in there (#24, `format!("nonce-{}", "B")` under a
 comment asserting it was runtime-derived; fixed on the #526 branch). **⇒ CodeQL picks its sink by the NAME of the binding a value flows into**,
 which house rule 6's *compute it at runtime* does not touch: a derivation whose inputs are all literals is
@@ -320,80 +356,72 @@ remedies and one opaque variant could make an operator discard a good medium mid
 `docs/superpowers/{specs,plans}/2026-08-31-dr-slice-2a-shared-two-plane-medium*.md`.
 
 
-### 2026-08-30 — #503: the shared keystore crate, and federated sync comes back (condensed)
+### 2026-08-30 → 08-20 — the keystore crate, DR slice 1, the DR audit and the db-error sweep (condensed)
 
-**Closes #503; opens #514–#518, #520, #521. No ADR, spec bump or migration.** New crate `crates/cairn-keystore`
-(`CAIRNK1` sealed-bundle format + key-file loader + crash-safe atomic write, moved verbatim out of `cairn-node`, whose
-**221** call sites compile untouched — the extraction's whole proof), so `cairn-sync` can depend on the format without
-depending on a whole node application. It now resolves its custody key **once at startup** through a pure decision
-table, replacing six independent derivations. What generalises: **⇒ a guard that rejects a dead entry makes its own
-list a sequencing constraint** (when it fails, delete the entry it names; never add one) · **⇒
-`cargo test --bin X <filter>` compiles with `cfg(test)`, so new items look used** (use `--all-targets`) · **⇒ deleting
-a helper deletes its test's pin, and the pin may be the only one** · **⇒ a fail-open branch protected only by a
-comment is protected by nothing** · **the gate's real cost is macOS, not cargo** — a cross-cutting change relinks ~134
-test binaries, ~6 hours, and a warm `target/` does not help.
+**#503 (08-30) — the shared keystore crate.** New `crates/cairn-keystore` (`CAIRNK1` format + loader +
+crash-safe atomic write, moved verbatim out of `cairn-node`, whose **221** call sites compiled untouched — the
+extraction's whole proof), so `cairn-sync` resolves its custody key **once at startup** through a pure decision table
+instead of six independent derivations. Opened **#514**–**#518**, **#520**, **#521**. What generalises: **⇒ a guard
+that rejects a dead entry makes its own list a sequencing constraint** (when it fails, delete the entry it names;
+never add one) · **⇒ `cargo test --bin X <filter>` compiles with `cfg(test)`, so new items look used** (use
+`--all-targets`) · **⇒ deleting a helper deletes its test's pin, and the pin may be the only one** · **⇒ a fail-open
+branch protected only by a comment is protected by nothing**.
 
-### 2026-08-24 — DR slice 1: the unwrap key stops dying with the signing seed (condensed)
+**DR slice 1 (08-24) — the unwrap key stops dying with the signing seed.** Closed **#495** (ADR-0066, spec v0.68) and
+**#502** items 1–3; opened **#503**–**#509**, **#511**–**#513**. Shipped an independent X25519 unwrap keypair in its
+own `<key>.unwrap` file, a lossless adoption path for pre-ADR nodes, the secret and surviving custody rows riding the
+`CAIRNL1` export (a shredded event's DEK excluded by construction), and a `restore` that ADOPTS rather than mints.
+**#495's status, #500's and the six traps are in ⇒ NEXT — read that split before citing this anywhere.** Still open:
+**#504** (a decision) · **#505** · **#506** · **#507** · **#508** (a container-format decision; #511 narrowed it, did
+not close it) · **#509** · **#512** · **#513**. **#511 closed 2026-09-04.** What generalises: **⇒ the review wave
+found the slice's own failure shape inside the slice, twice** (**the window in which an ADR is editable prose closes
+at merge**) · **⇒ breakage hid from a gate three ways in one slice** (fail-fast masked 13 failures, `cargo test … |
+tail` masked the exit status, a cross-crate suite was invisible because `-p cairn-node` never builds it) · **⇒ four
+defects were in the task BRIEFS, not the implementations** · **⇒ where no test carries the value across the disk, the
+one link that matters is proven by nothing** (`#[serde(default)]` let a `skip_serializing` mutant deserialize to
+`None`: every DR test green, every restore keyless — mutation found it, the suite could not).
 
-**Closed #495 (ADR-0066, spec v0.68) and #502 items 1–3; opened #503–#509, #511–#513. No migration.** Shipped: an
-independent X25519 unwrap keypair in its own `<key>.unwrap` file; a lossless adoption path for pre-ADR nodes
-(`keystore::adopt_derived_unwrap_secret`, the one place a node re-derives its old secret); the secret and surviving
-custody rows riding the `CAIRNL1` export, a shredded event's DEK excluded by construction; `restore` INSTALLING the
-inherited key instead of minting one. **#495's status, #500's and the five traps are in ⇒ NEXT — read that split
-before citing this anywhere.** Still open: **#504** (a decision) · **#505** · **#506** · **#507** · **#508** (a
-container-format decision) · **#509** · **#512** · **#513**; **#511** is CLOSED-as-completed and absent from the tree
-(⇒ NEXT). What generalises: **⇒ the review wave found the slice's own failure shape inside the slice, twice** —
-`restore` told an operator *"the export itself is intact; the code is what failed"* when it was not, and ADR-0066
-decision 1 asserted what the branch's own code contradicted (**the window in which an ADR is editable prose closes at
-merge**) · **⇒ breakage hid from a gate three ways in one slice** (fail-fast masked 13 failures, `cargo test … | tail`
-masked the exit status, a cross-crate suite was invisible because `-p cairn-node` never builds it) · **⇒ four defects
-were in the task BRIEFS, not the implementations** — checked against what the code should do, never against the gates
-the project runs · **⇒ where no test carries the value across the disk, the one link that matters is proven by
-nothing** (`#[serde(default)]` let a `skip_serializing` mutant deserialize to `None`: every DR test green, every
-restore keyless — mutation found it, the suite could not).
+**08-23 → 08-20 — the DR audit, §5.9 part C, the misclassification cluster, the db-error sweep.** Pass 4 (the
+DR-guarantee audit) produced DR slice 1: confirmed #495, split **#500** out, opened **#502**, added
+`dr_clinical_guarantee_gap.rs`. Pass 3 — §5.9 parts C+D (ADR-0065, spec v0.66→v0.67). Passes 1–2 — the
+misclassification cluster. **Still open:** #494 · #496 · #498 · #499 · #490 item 3 · #483 · #484 · #487 · #488 · #491
+· #492 · #485 · #476. **The db-error sweep** closed #460, #465, #467, #469, #471, #473–#475 (`db/050`, SCHEMA 49→50);
+#370, #457, #449–#453, #386, #381/#382/#385/#439, #446/#442/#443; opened #458. **Still open:** #463 (a DECISION,
+overlay vs delete) · #464 · #458 · #470 · #447 · #327.
 
-### 2026-08-23 → 08-20 — the DR audit, §5.9 part C, the misclassification cluster, the db-error sweep
-
-**08-23, four passes.** Pass 4, the DR-guarantee audit, produced DR slice 1: confirmed #495, split #500 out, opened
-#502, added `dr_clinical_guarantee_gap.rs` (5 mutation-checked pins). Pass 3 — §5.9 parts C+D (ADR-0065, spec
-v0.66→v0.67). Passes 1–2 — the misclassification cluster. **Still open:** #494 · #496 · #498 · #499 · #490 item 3 ·
-#483 · #484 · #487 · #488 · #491 · #492 · #485 · #476. **08-22 → 08-20, the db-error sweep.** Closed #460, #465, #467,
-#469, #471, #473–#475 (`db/050`, SCHEMA 49→50); #370, #457, #449–#453, #386, #381/#382/#385/#439, #446/#442/#443;
-opened #458. **Still open:** #463 (a DECISION, overlay vs delete) · #464 · #458 · #470 · #447 · #327.
-
-What binds: **⇒ a ceremony succeeding can be the worst shape of a bug** (an empty backup sealed and reported success —
-every surface honest, the composite a precise untruth) · **⇒ two defects that look like one must be split when fixing
-either alone is useless** (#500 the bytes, #495 the key), and **where a guarantee is already false, pin the defect,
-not the promise** · **⇒ a class is an operator instruction** — the recogniser is a TYPE or `io::ErrorKind`, never
-message text · **⇒ a pin whose fixture is built by the test leaves the production site unpinned** · **⇒ a line cap is
-never a reason to drop a live issue** (a ROADMAP condensation once orphaned 22 in one edit) · **⇒
-`tokio_postgres::Error`'s `Display` IS the string `"db error"`**, so a bare kind match never chains to the source and
-`LocalDbFault` must not be "tidied" into an `anyhow!`, which silently reverts every local fault to `partition` · **⇒ a
-frozen cursor looked exactly like a healthy cycle** · **⇒ the category test:** a sensitivity assertion IS an event,
-while `safety`/`clock_grade`/a rendition reference are FIELDS ON one, and refusing those forks the event set (the
-**#342** trap) · **⇒ a flag can be born on a re-apply**, and a failed read reports `null`, never `0` · **⇒ probe the
-family before fixing the member** · **a DB-free `cargo test` fails unless `CAIRN_ALLOW_DB_SKIP=1`** (#450). Mechanics:
-force a write failure with a LOCK under a short `lock_timeout`; `Debug` must delegate to `Display`; a VIEW checks the
-INVOKING user too.
+What binds all three: **⇒ a ceremony succeeding can be the worst shape of a bug** (an empty backup sealed and reported
+success — every surface honest, the composite a precise untruth) · **⇒ two defects that look like one must be split
+when fixing either alone is useless** (#500 the bytes, #495 the key), and **where a guarantee is already false, pin
+the defect, not the promise** · **⇒ a class is an operator instruction** — the recogniser is a TYPE or
+`io::ErrorKind`, never message text · **⇒ a pin whose fixture is built by the test leaves the production site
+unpinned** · **⇒ a line cap is never a reason to drop a live issue** (a ROADMAP condensation once orphaned 22 in one
+edit) · **⇒ `tokio_postgres::Error`'s `Display` IS the string `"db error"`**, so a bare kind match never chains to the
+source and `LocalDbFault` must not be "tidied" into an `anyhow!`, which silently reverts every local fault to
+`partition` · **⇒ a frozen cursor looked exactly like a healthy cycle** · **⇒ the category test:** a sensitivity
+assertion IS an event, while `safety`/`clock_grade`/a rendition reference are FIELDS ON one, and refusing those forks
+the event set (the **#342** trap) · **⇒ a flag can be born on a re-apply**, and a failed read reports `null`, never
+`0` · **⇒ probe the family before fixing the member** · **a DB-free `cargo test` fails unless
+`CAIRN_ALLOW_DB_SKIP=1`** (#450). Mechanics: force a write failure with a LOCK under a short `lock_timeout`; `Debug`
+must delegate to `Display`; a VIEW checks the INVOKING user too.
 
 ### Older passes (Slices 61–69, 2026-08-02 → 08-20) — the lessons still worth holding
 
-ROADMAP carries every slice in full. These are the ones a next session can still break. **A guard defined over the
-list it guards is not a guard** (`assert_eq!(SubjectKind::ALL.len(), 3)` compared a constant to its own literal) — ask
-what INDEPENDENT source a guard checks against; **NAME, NEVER COUNT**, because a count cannot separate custody-blind
-from genuinely empty. **An optimisation removed a load-bearing redundancy and its comment asserted the opposite**
-(§11's bound is gated on the NEGATION of §10b's thread-free list) — a wrong safety argument is worse than none.
-**`TargetState::OnAnotherChart` must never collapse into `Held { still_standing: false }`** (ADR-0064 KNOWN GAP): a
-mis-charted withdrawal reports effective — a reassuring-direction untruth on a confidentiality surface (**#436**).
-**Two floor traps:** a pinned `search_path` must deny the temp schema the FIRST look, since a decoy `event_log` made
-both write doors return SUCCESS while the INSERT landed in a temp table (**#430**, **#431**); and a parameter name is
-not a security property, so both key arguments are now `VerifiedKid` (**#428**). **Slice 68** — the authority floor
-gates effect, never admission (the **#342** trap); computing the verdict at read cuts both ways (**#409**,
-**#408**/**#413**); PR #410 had **7 of 11 production mutations survive a green suite**; `EXCEPTION WHEN OTHERS` does
-not catch a statement timeout (57014); open #413–#420, #422. **Slices 66–67** — the seal boundary is the coarsening
-boundary (withhold the key, never the bytes); `safety_class_map` ships EMPTY; open **#406**, **#407**, #394–#402.
-**Slices 61–63** — an attestation NAMES the displayed candidates, never counts them (**#360**); a unit-tested safety
-control can still be defeated by its calling surface; a compensating control outside CI is not a control (**#444**).
+ROADMAP carries every slice in full. These are the ones a next session can still break.
+**A guard defined over the list it guards is not a guard** (`assert_eq!(SubjectKind::ALL.len(), 3)` compared a
+constant to its own literal) — ask what INDEPENDENT source a guard checks against; **NAME, NEVER COUNT**, because a
+count cannot separate custody-blind from genuinely empty. **An optimisation removed a load-bearing redundancy and its
+comment asserted the opposite** — a wrong safety argument is worse than none. **`TargetState::OnAnotherChart` must
+never collapse into `Held { still_standing: false }`** (ADR-0064 KNOWN GAP): a mis-charted withdrawal reports
+effective, a reassuring-direction untruth on a confidentiality surface (**#436**). **Two floor traps:** a pinned
+`search_path` must deny the temp schema the FIRST look — a decoy `event_log` made both write doors return SUCCESS
+while the INSERT landed in a temp table (**#430**, **#431**); and a parameter name is not a security property, so both
+key arguments are `VerifiedKid` (**#428**). **Slice 68** — the authority floor gates effect, never admission (the
+**#342** trap); computing the verdict at read cuts both ways (**#409**, **#408**/**#413**); PR #410 had **7 of 11
+production mutations survive a green suite**; `EXCEPTION WHEN OTHERS` does not catch a statement timeout (57014); open
+#413–#420, #422. **Slices 66–67** — the seal boundary is the coarsening boundary (withhold the key, never the bytes);
+`safety_class_map` ships EMPTY; open **#406**, **#407**, #394–#402. **Slices 61–63** — an attestation NAMES the
+displayed candidates, never counts them (**#360**); a unit-tested safety control can still be defeated by its calling
+surface; a compensating control outside CI is not a control (**#444**).
 
 > [!IMPORTANT]
 > **Two maintainer decisions to hold before any composite-clinical-object work.**
@@ -476,9 +504,10 @@ workspace); `poc/` is frozen historical spikes.
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **#511, then DR slice 2c — #500 continues.** 2a (the medium format, 08-31) and 2b (the transport seam +
-  the paged pull, 09-02) have landed and closed nothing; **#511** (the custody newtypes) is sequenced next,
-  then 2c writes clinical events onto the medium. See ⇒ NEXT. New from 2b: **#531** (decompose
+- **⇒ DR slice 2c — #500 continues, and is the next build.** 2a (the medium format, 08-31), 2b (the
+  transport seam + the paged pull, 09-02) and **#511** (the custody newtypes, 09-04) have all landed and
+  all closed nothing here; **2c writes clinical events onto the medium.** See ⇒ NEXT. New from #511:
+  **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module). From 2b: **#531** (decompose
   `cairn-sync/src/main.rs` — the older **#329** names the same file; a maintainer decision is wanted on
   which to keep) and **#532** (a multi-page pull that fails late reports nothing about the pages that
   landed). New from 2b's **final whole-branch review**: **#534** (a freeze stops content convergence, not
@@ -494,20 +523,20 @@ workspace); `poc/` is frozen historical spikes.
   `cairn-event::demographics`). B3-driven: gold set, locale packs, hub-tier duplicate sweep, proposal
   retraction. Identity: C5+ `reattribute` (waits on a clinical-note surface); §5.12 push-alert.
   Deferred **#168**, **#287**; rest in ROADMAP.
-- **⇒ Test env — `scripts/run-db-gated-tests.sh` is the ONE command for the local gate** — the only one
+- **⇒ Test env — `scripts/run-db-gated-tests.sh` is the ONE command for the local gate**, the only one
   catching all three demonstrated hiding modes (fail-fast · a piped exit status · a cross-crate suite
-  `-p <crate>` never builds): the `db/tests/*.sql` mirrors and the full workspace with
-  `CAIRN_TEST_PG`/`PG2`/`PG3` baked in (PG18 + cairn_pgx on `127.0.0.1:5532`, DBs `cairn_test`/`2`/`3`);
-  last full pass EXIT 0 over 139 binaries (2026-08-24; re-run 2026-08-30). **⇒ Cost depends on what
-  changed, not target-dir warmth** — a warm `target/` does NOT make it ~15 min (#503's 6-hour surprise):
-  a `Cargo.lock`/`cairn-node` change relinks ~134 binaries under macOS's one-time-per-binary Gatekeeper
-  assessment, budget HOURS; a slice confined to one crate reruns almost nothing (`cargo test -p <crate>`,
-  CI gates the rest — `-p cairn-sync` DOES build the cross-crate `clinical_pull.rs`). Without the three
-  env strings the DB-gated suites self-skip and cargo counts them as passed, so since #450 a bare run
-  FAILS unless `CAIRN_ALLOW_DB_SKIP=1` is declared. Mirrors are DESTRUCTIVE, refusing any DB lacking the
-  `cairn_scratch_database` marker (#169). Matcher: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline
-  pytest` (uv, never pip; gap **#314**, CI runs it). `clinical_pull` used to flake under a full-workspace
-  run — #457 fixed the diagnostic, not the cause (still unnamed); `--test-threads=2` is the workaround.
+  `-p <crate>` never builds): the `db/tests/*.sql` mirrors plus the full workspace with
+  `CAIRN_TEST_PG`/`PG2`/`PG3` baked in (PG18 + cairn_pgx on `127.0.0.1:5532`, DBs `cairn_test`/`2`/`3`).
+  **⇒ Cost depends on what changed, not target-dir warmth** (#503's 6-hour surprise): a cross-crate change
+  relinks every test binary under macOS's one-time-per-binary Gatekeeper assessment — but #511 relinked
+  the whole tree and still finished in well under an hour on a warm target, so **measure rather than
+  budget from either figure**. A slice confined to one crate reruns almost nothing (`-p cairn-sync` DOES
+  build the cross-crate `clinical_pull.rs`). Without the three env strings the DB-gated suites self-skip
+  and cargo counts them as passed, so since #450 a bare run FAILS unless `CAIRN_ALLOW_DB_SKIP=1` is
+  declared. Mirrors are DESTRUCTIVE, refusing any DB lacking the `cairn_scratch_database` marker (#169).
+  Matcher: `cd matcher && CAIRN_TEST_PG=… uv run --extra pipeline pytest` (uv, never pip; gap **#314**).
+  `clinical_pull` used to flake under a full-workspace run — #457 fixed the diagnostic, not the cause;
+  `--test-threads=2` is the workaround.
 - **Clinical case-mining** — historically the highest-signal generative mode; the primitives have absorbed
   every case so far without new architecture. Bring a real ED/hospital failure mode; record in
   [`docs/case-studies/`](case-studies/README.md). Open from Case 0001: **① re-affirmation-without-change

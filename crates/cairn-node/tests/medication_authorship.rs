@@ -3,6 +3,7 @@
 //! author is supplied, the content event is signed by the human and carries
 //! {human,"authored"} + {node,"recorded"}, while the node keeps custody (event_dek).
 use cairn_event::generate_key;
+use cairn_event::keys::Secret32;
 use cairn_node::db;
 use cairn_node::medication::{
     assert_medication, reconcile_medications, AssertMedicationInput, AttestParams, AuthorParams,
@@ -66,7 +67,9 @@ async fn setup(
     let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&unwrap)
+            .as_bytes()
+            .as_slice()],
     )
     .await
     .unwrap();
@@ -244,7 +247,7 @@ fn craft_forged_authorship_event(
     node_kid: &str,
     human_kid: &str,
     patient: Uuid,
-) -> (Vec<u8>, zeroize::Zeroizing<[u8; 32]>) {
+) -> (Vec<u8>, Secret32) {
     use cairn_event::seal::{seal_event_payload, seal_stub_twin};
     use cairn_event::{sign, EventBody, Hlc};
     let event_id = Uuid::now_v7();
@@ -301,7 +304,7 @@ async fn forged_authorship_refused_at_the_strict_door() {
     let err = c
         .execute(
             "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed, &dek.as_slice()],
+            &[&signed, &dek.as_bytes().as_slice()],
         )
         .await
         .expect_err("forged authorship must be refused");

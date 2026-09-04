@@ -33,6 +33,13 @@ pub use attachment::{Attachment, Rendition, SealRef};
 // `VerifiedEvent::signer` (#412).
 pub use contributor::VerifiedKid;
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
+// Re-exported at the crate root for the same reason `VerifiedKid` is: the unwrap-key cert API
+// (`sign_unwrap_key_cert` / `verify_unwrap_key_cert`) lives here, so its key type is part of this
+// module's shape, not only the seal plane's (#511). Note this makes THREE paths to one
+// definition — `keys::`, `seal::` and here — and only the first two have callers today; this one
+// exists so the cert API is usable without importing the seal plane. (Round-1 review found this
+// comment sitting above the dalek re-export on the line before, describing that instead.)
+pub use keys::{PublicKey32, Secret32};
 
 pub mod attachment;
 pub mod contributor;
@@ -42,6 +49,7 @@ pub mod framing;
 pub mod identity;
 pub mod identity_evidence;
 pub mod john_doe;
+pub mod keys;
 pub mod medication;
 pub mod registration;
 pub mod safety;
@@ -830,10 +838,13 @@ struct UnwrapKeyCertBody {
 /// to its Ed25519 identity, in its own ADR-0040 signing context so it can
 /// never be replayed as an event or attestation. CBOR payload:
 /// `{"kid": <hex ed25519 pub>, "x25519_pub": <hex 32 bytes>}`.
-pub fn sign_unwrap_key_cert(sk: &SigningKey, x25519_pub: &[u8; 32]) -> Result<Vec<u8>, EventError> {
+pub fn sign_unwrap_key_cert(
+    sk: &SigningKey,
+    x25519_pub: &PublicKey32,
+) -> Result<Vec<u8>, EventError> {
     let body = UnwrapKeyCertBody {
         kid: hex::encode(sk.verifying_key().to_bytes()),
-        x25519_pub: hex::encode(x25519_pub),
+        x25519_pub: hex::encode(x25519_pub.as_bytes()),
     };
     let mut payload = Vec::new();
     ciborium::into_writer(&body, &mut payload).map_err(|e| EventError::Cbor(e.to_string()))?;
@@ -859,7 +870,7 @@ pub fn sign_unwrap_key_cert(sk: &SigningKey, x25519_pub: &[u8; 32]) -> Result<Ve
 /// against non-identity low-order points runs where it is actually
 /// load-bearing: at wrap/unwrap time in `seal.rs`, on the live DH shared
 /// secret, regardless of what any cert claims.
-pub fn verify_unwrap_key_cert(bytes: &[u8]) -> Result<(String, [u8; 32]), EventError> {
+pub fn verify_unwrap_key_cert(bytes: &[u8]) -> Result<(String, PublicKey32), EventError> {
     let (key_bytes, payload) = cose_verify1_self_described(bytes, CTX_UNWRAP_KEY)?;
     let body: UnwrapKeyCertBody =
         ciborium::from_reader(&payload[..]).map_err(|e| EventError::Cbor(e.to_string()))?;
@@ -868,10 +879,9 @@ pub fn verify_unwrap_key_cert(bytes: &[u8]) -> Result<(String, [u8; 32]), EventE
     }
     let raw = hex::decode(&body.x25519_pub)
         .map_err(|_| EventError::Seal("malformed x25519_pub hex".into()))?;
-    let x25519_pub: [u8; 32] = raw
-        .try_into()
-        .map_err(|_| EventError::Seal("x25519_pub must be 32 bytes".into()))?;
-    if x25519_pub == [0u8; 32] {
+    let x25519_pub = PublicKey32::from_slice(&raw)
+        .ok_or_else(|| EventError::Seal("x25519_pub must be 32 bytes".into()))?;
+    if x25519_pub.as_bytes() == &[0u8; 32] {
         return Err(EventError::Seal(
             "x25519_pub is the identity point (non-contributory)".into(),
         ));
@@ -1842,7 +1852,7 @@ mod tests {
     #[test]
     fn unwrap_key_cert_round_trips_and_binds_signer() {
         let sk = generate_key().unwrap().0;
-        let xpub: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let xpub = PublicKey32::from_bytes(std::array::from_fn(|i| i as u8));
         let cert = sign_unwrap_key_cert(&sk, &xpub).unwrap();
         let (kid, got) = verify_unwrap_key_cert(&cert).unwrap();
         assert_eq!(kid, hex::encode(sk.verifying_key().to_bytes()));

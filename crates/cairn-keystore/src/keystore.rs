@@ -1,4 +1,5 @@
 use crate::seal;
+use cairn_event::keys::{PublicKey32, Secret32};
 use cairn_event::{generate_key, SigningKey};
 use std::path::{Path, PathBuf};
 
@@ -49,7 +50,11 @@ pub fn generate_sealed(
     recovery_code: &str,
 ) -> Result<(SigningKey, String), KeystoreError> {
     let (sk, kid) = generate_key().map_err(|e| KeystoreError::Key(e.to_string()))?;
-    let seed = zeroize::Zeroizing::new(sk.to_bytes());
+    // The Ed25519 SIGNING seed. `Secret32` does not distinguish it from an unwrap secret
+    // (#511 §2) — the distinction here is carried by the PATH this is written to, and by
+    // `unwrap_secret_is_the_signing_seed` below, which exists precisely because the two
+    // files are byte-format indistinguishable.
+    let seed = Secret32::from_bytes(sk.to_bytes());
     let sealed =
         seal::seal(&seed, op_pass, recovery_code).map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
@@ -71,12 +76,8 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
     if seal::from_cbor(&bytes).is_ok() {
         return Err(KeystoreError::Key("key is already sealed".into()));
     }
-    let seed: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
-        bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| KeystoreError::Key("not a 32-byte plaintext key".into()))?,
-    );
+    let seed = Secret32::from_slice(&bytes)
+        .ok_or_else(|| KeystoreError::Key("not a 32-byte plaintext key".into()))?;
     let sealed =
         seal::seal(&seed, op_pass, recovery_code).map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
@@ -101,9 +102,8 @@ pub fn seal_existing(path: &Path, op_pass: &str, recovery_code: &str) -> Result<
             "seal verification failed after write: recovery code did not unseal".into(),
         )
     })?;
-    // `seed_op`/`seed_rec` are `Zeroizing<[u8; 32]>` (issue #54); deref to compare bytes
-    // against the original plaintext seed.
-    if *seed_op != *seed || *seed_rec != *seed {
+    // `Secret32`'s `PartialEq` is constant-time (#511); the bytes never leave the wrapper.
+    if seed_op != seed || seed_rec != seed {
         return Err(KeystoreError::Key(
             "seal verification failed after write: recovered seed does not match original".into(),
         ));
@@ -126,13 +126,12 @@ pub fn load(path: &Path, secret: Option<&str>) -> Result<SigningKey, KeystoreErr
                 "cannot unseal key: wrong passphrase/recovery code or corrupt file".into(),
             )
         })?;
-        Ok(SigningKey::from_bytes(&seed))
+        Ok(SigningKey::from_bytes(seed.as_bytes()))
     } else {
-        let seed: zeroize::Zeroizing<[u8; 32]> =
-            zeroize::Zeroizing::new(bytes.as_slice().try_into().map_err(|_| {
-                KeystoreError::Key("not a sealed bundle and not a 32-byte seed".into())
-            })?);
-        Ok(SigningKey::from_bytes(&seed))
+        let seed = Secret32::from_slice(&bytes).ok_or_else(|| {
+            KeystoreError::Key("not a sealed bundle and not a 32-byte seed".into())
+        })?;
+        Ok(SigningKey::from_bytes(seed.as_bytes()))
     }
 }
 
@@ -172,7 +171,7 @@ pub fn generate_unwrap_sealed(
     path: &Path,
     op_pass: &str,
     recovery_code: &str,
-) -> Result<[u8; 32], KeystoreError> {
+) -> Result<PublicKey32, KeystoreError> {
     let secret = cairn_event::seal::generate_unwrap_secret()
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
     write_unwrap_sealed(path, &secret, op_pass, recovery_code)?;
@@ -193,7 +192,7 @@ pub fn generate_unwrap_sealed(
             "unwrap key verification failed after write: recovery code did not unseal".into(),
         )
     })?;
-    if *secret_op != *secret || *secret_rec != *secret {
+    if secret_op != secret || secret_rec != secret {
         return Err(KeystoreError::Key(
             "unwrap key verification failed after write: recovered secret does not match \
              the one generated"
@@ -209,13 +208,12 @@ pub fn generate_unwrap_sealed(
 /// the dead node's unwrap secret so the restored node inherits its custody.
 pub fn write_unwrap_sealed(
     path: &Path,
-    secret: &[u8; 32],
+    secret: &Secret32,
     op_pass: &str,
     recovery_code: &str,
 ) -> Result<(), KeystoreError> {
-    // `secret` is already the exact shape `seal::seal` wants (`&[u8; 32]`) and is owned
-    // by the caller (who is responsible for its `Zeroizing` lifetime) — no need to copy
-    // it into a fresh `Zeroizing` here.
+    // `secret` is already the exact shape `seal::seal` wants and owns its own wiping, so
+    // there is nothing to copy here.
     let sealed = seal::seal(secret, op_pass, recovery_code)
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
     crate::fsio::atomic_write(path, &seal::to_cbor(&sealed), Some(0o600))?;
@@ -235,8 +233,8 @@ pub fn write_unwrap_sealed(
 /// key. So the custody key follows the signing key's at-rest posture: sealed beside a
 /// sealed key, plaintext beside a plaintext one. Never use this for a real node — the
 /// escrow does not exist for a plaintext key (key loss = record loss).
-pub fn write_unwrap_plaintext(path: &Path, secret: &[u8; 32]) -> Result<(), KeystoreError> {
-    crate::fsio::atomic_write(path, secret, Some(0o600))?;
+pub fn write_unwrap_plaintext(path: &Path, secret: &Secret32) -> Result<(), KeystoreError> {
+    crate::fsio::atomic_write(path, secret.as_bytes(), Some(0o600))?;
     Ok(())
 }
 
@@ -249,13 +247,13 @@ pub fn write_unwrap_plaintext(path: &Path, secret: &[u8; 32]) -> Result<(), Keys
 /// reason: the returned public half is what every subsequent `event_dek` row gets wrapped
 /// to, so registering one this function has not proven readable back from disk would leave
 /// the node unable to open its own custody — the ADR-0066 failure shape one layer up.
-pub fn generate_unwrap_plaintext(path: &Path) -> Result<[u8; 32], KeystoreError> {
+pub fn generate_unwrap_plaintext(path: &Path) -> Result<PublicKey32, KeystoreError> {
     let secret = cairn_event::seal::generate_unwrap_secret()
         .map_err(|e| KeystoreError::Key(e.to_string()))?;
     write_unwrap_plaintext(path, &secret)?;
 
     let readback = load_unwrap_secret(path, None)?;
-    if *readback != *secret {
+    if readback != secret {
         return Err(KeystoreError::Key(
             "unwrap key verification failed after write: the bytes read back do not match \
              the secret generated"
@@ -271,10 +269,7 @@ pub fn generate_unwrap_plaintext(path: &Path) -> Result<[u8; 32], KeystoreError>
 /// does for the signing key — including the distinct [`KeystoreError::Sealed`] variant, so
 /// the CLI can prompt for the passphrase from ONE load attempt with no TOCTOU-prone
 /// pre-classification read.
-pub fn load_unwrap_secret(
-    path: &Path,
-    secret: Option<&str>,
-) -> Result<zeroize::Zeroizing<[u8; 32]>, KeystoreError> {
+pub fn load_unwrap_secret(path: &Path, secret: Option<&str>) -> Result<Secret32, KeystoreError> {
     let bytes = zeroize::Zeroizing::new(std::fs::read(path)?);
     if let Ok(sealed) = seal::from_cbor(&bytes) {
         let secret = secret.ok_or(KeystoreError::Sealed)?;
@@ -285,16 +280,17 @@ pub fn load_unwrap_secret(
             )
         })
     } else {
-        Ok(zeroize::Zeroizing::new(
-            bytes.as_slice().try_into().map_err(|_| {
-                KeystoreError::Key("not a sealed bundle and not a 32-byte unwrap secret".into())
-            })?,
-        ))
+        Secret32::from_slice(&bytes).ok_or_else(|| {
+            KeystoreError::Key("not a sealed bundle and not a 32-byte unwrap secret".into())
+        })
     }
 }
 
 /// ADR-0066 decision 5 — THE MIGRATION, and the only production caller of
-/// `derive_unwrap_secret`.
+/// `derive_unwrap_secret` outside `cairn-sync`'s pre-ADR-0066 startup fallback
+/// (`unwrap_key::resolve_at_startup`). Both are named, with their reasons, in
+/// `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`'s `ALLOWED` list — which is the
+/// authority here, not this sentence.
 ///
 /// A node provisioned before ADR-0066 wrapped every `event_dek` row to the public half of
 /// the secret HKDF-derived from its signing seed. Re-deriving it once and adopting it as
@@ -302,8 +298,23 @@ pub fn load_unwrap_secret(
 /// of custody rows, nothing to get wrong at 3am. It works only while the signing seed
 /// still reconstructs the old secret, which is why this migration is cheap now and never
 /// cheaper.
-pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 32]> {
-    let seed = zeroize::Zeroizing::new(sk.to_bytes());
+pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> Secret32 {
+    // ⚠️ ONE OF THE TWO PRODUCTION LINES that turn the Ed25519 signing seed into this node's
+    // UNWRAP SECRET — this one and `cairn-sync`'s `resolve_at_startup` fallback. (The tree holds
+    // other `Secret32::from_bytes` calls, including two in this very file, but they mint fresh
+    // CSPRNG output, seal the seed AS the seed, or compare; none of them installs a custody key.
+    // The full inventory, per file and by count, is pinned in
+    // `crates/cairn-node/tests/secret32_conversions_are_named.rs` — read it there, not from a
+    // number in a comment. An earlier version of this line said "THE ONE PRODUCTION LINE IN THE
+    // TREE" and was contradicted 40 lines below by its own file.)
+    //
+    // #511's newtypes make a PUBLIC-for-secret mix-up a compile error, but they deliberately do
+    // NOT separate one secret role from another — an unwrap secret, a signing seed and a DEK are
+    // all `Secret32`. So this conversion is exactly the shape that, written anywhere else, IS the
+    // #495 coupling. Two guards cover it: `unwrap_secret_is_not_derived.rs` pins which FILES may
+    // call `derive_unwrap_secret`, and `secret32_conversions_are_named.rs` pins the conversion
+    // count in each. Either one reddening is the guard working — do not edit the number to match.
+    let seed = Secret32::from_bytes(sk.to_bytes());
     cairn_event::seal::derive_unwrap_secret(&seed)
 }
 
@@ -341,8 +352,12 @@ pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> zeroize::Zeroizing<[u8; 3
 /// check belongs where both keys are genuinely this node's — `main.rs`'s
 /// `establish-unwrap-key`, via `load_unwrap_secret_or_refuse_swapped_file`, which refuses
 /// the command rather than registering a public half derived from the signing seed.
-pub fn unwrap_secret_is_the_signing_seed(unwrap: &[u8; 32], sk: &SigningKey) -> bool {
-    *unwrap == sk.to_bytes()
+pub fn unwrap_secret_is_the_signing_seed(unwrap: &Secret32, sk: &SigningKey) -> bool {
+    // Constant-time via `Secret32`'s `PartialEq`. This conversion is a COMPARISON, never an
+    // installation, which is why it is safe where `adopt_derived_unwrap_secret`'s is delicate:
+    // the `Secret32` built here is dropped (and wiped) before this function returns, and nothing
+    // it touches reaches a keystore file or the `node_unwrap_key` singleton.
+    *unwrap == Secret32::from_bytes(sk.to_bytes())
 }
 
 /// Inspect the at-rest posture without needing the secret (for `status`).
@@ -559,7 +574,7 @@ mod tests {
 
         let via_op = load_unwrap_secret(&p, Some(op.as_str())).unwrap();
         let via_rec = load_unwrap_secret(&p, Some(rec.as_str())).unwrap();
-        assert_eq!(*via_op, *via_rec, "both secrets recover the same key");
+        assert_eq!(via_op, via_rec, "both secrets recover the same key");
         assert_eq!(
             cairn_event::seal::unwrap_public(&via_op),
             public,
@@ -584,8 +599,11 @@ mod tests {
         let (sk, _kid) = cairn_event::generate_key().unwrap();
 
         // A DEK wrapped the OLD way, before adoption. House rule 6: derived at runtime.
-        let old_secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
-        let dek: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3));
+        let old_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
+        let dek = Secret32::from_bytes(std::array::from_fn(|i| {
+            (i as u8).wrapping_mul(7).wrapping_add(3)
+        }));
         let wrapped =
             cairn_event::seal::wrap_dek_for(&dek, &cairn_event::seal::unwrap_public(&old_secret))
                 .unwrap();
@@ -597,9 +615,8 @@ mod tests {
         let loaded = load_unwrap_secret(&p, Some(op.as_str())).unwrap();
         assert_eq!(
             cairn_event::seal::unwrap_dek(&wrapped, &loaded)
-                .expect("an adopted key must open a pre-adoption wrap")
-                .as_slice(),
-            &dek,
+                .expect("an adopted key must open a pre-adoption wrap"),
+            dek,
             "adoption is lossless: no event_dek row needs rewrapping"
         );
     }
@@ -650,7 +667,7 @@ mod tests {
         // The file-swap accident this predicate exists to catch: node.unwrap holding
         // the signing seed verbatim (e.g. `cp node.key node.key.unwrap`).
         assert!(
-            unwrap_secret_is_the_signing_seed(&sk.to_bytes(), &sk),
+            unwrap_secret_is_the_signing_seed(&Secret32::from_bytes(sk.to_bytes()), &sk),
             "the exact signing seed must be caught"
         );
 

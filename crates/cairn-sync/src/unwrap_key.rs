@@ -27,7 +27,7 @@
 //! [`resolve`] is PURE — no file system, no database — so the whole table is proved by
 //! unit tests. The IO that feeds it lives in [`load_file_outcome`].
 
-use zeroize::Zeroizing;
+use cairn_event::keys::{PublicKey32, Secret32};
 
 /// The short, human-comparable fingerprint of an X25519 unwrap **public** key.
 ///
@@ -44,11 +44,17 @@ use zeroize::Zeroizing;
 /// EVERY key prefix this module prints goes through here, deliberately. CodeQL's
 /// `rust/cleartext-logging` query flags these call sites: it cannot model
 /// `cairn_event::seal::unwrap_public` as the one-way derivation it is, so it treats the
-/// `Zeroizing` secret upstream as a taint source and follows it into the message. That is a
-/// false positive, but a recurring one — concentrating it at a single sink makes it one
-/// thing to assess instead of four, and puts the argument next to the code.
-fn public_key_prefix(public: &[u8; 32]) -> String {
-    hex::encode(&public[..8])
+/// wrapped secret upstream as a taint source and follows it into the message. That is a false
+/// positive, but a recurring one — concentrating it at a single sink makes it one thing to
+/// assess instead of four, and puts the argument next to the code. (#527 owns dismissing the
+/// alerts; do not delete the argument because they are dismissed.)
+///
+/// Since #511 the argument is also carried by the TYPE: the parameter is a [`PublicKey32`],
+/// which is public by construction, so a reviewer no longer has to trace the call sites to
+/// establish that no secret can reach this line. The scanner still cannot see that; a human
+/// can, immediately.
+fn public_key_prefix(public: &PublicKey32) -> String {
+    hex::encode(&public.as_bytes()[..8])
 }
 
 /// What reading the `<key>.unwrap` file yielded. Three outcomes, not two: "there is no
@@ -56,7 +62,7 @@ fn public_key_prefix(public: &[u8; 32]) -> String {
 /// collapsing them is the defect #502 item 3 recorded.
 pub enum FileOutcome {
     /// The file was read and unsealed; this is the secret it holds.
-    Loaded(Zeroizing<[u8; 32]>),
+    Loaded(Secret32),
     /// No file at the path — and the path was the unnamed `<key>.unwrap` sibling
     /// default, never asked for by name. A missing file at an EXPLICIT `--unwrap-key`
     /// path is `Unusable` instead, not `Absent` — see [`load_file_outcome`].
@@ -71,7 +77,7 @@ pub enum Resolution {
     /// Start, using `secret`. A `warning` is present only on the pre-ADR-0066 fallback,
     /// and must be printed on EVERY startup — see [`resolve`].
     Use {
-        secret: Zeroizing<[u8; 32]>,
+        secret: Secret32,
         warning: Option<String>,
     },
     /// Refuse to start, with this operator-facing message.
@@ -105,8 +111,8 @@ pub enum Resolution {
 /// correct. So: absent may fall back; unusable never may.
 pub fn resolve(
     file: FileOutcome,
-    derived: Zeroizing<[u8; 32]>,
-    registered: Option<&[u8; 32]>,
+    derived: Secret32,
+    registered: Option<&PublicKey32>,
     path_display: &str,
 ) -> Resolution {
     match file {
@@ -245,7 +251,7 @@ pub fn load_file_outcome(
 /// ADR-0066 removed. One struct makes the mismatch unrepresentable.
 pub struct NodeCustody {
     pub signing_key: cairn_event::SigningKey,
-    pub unwrap_secret: Zeroizing<[u8; 32]>,
+    pub unwrap_secret: Secret32,
 }
 
 /// Where this daemon's unwrap-key file lives, paired with whether the operator NAMED
@@ -292,10 +298,10 @@ pub fn unwrap_file_path(key_path: &str, override_path: Option<&str>) -> UnwrapFi
 ///
 /// Pure — no IO, no database handle — so this one small but safety-relevant branch is
 /// unit-testable on its own. [`resolve_at_startup`] is the only caller.
-fn registered_from_row(bytes: Option<Vec<u8>>) -> Result<Option<[u8; 32]>, String> {
+fn registered_from_row(bytes: Option<Vec<u8>>) -> Result<Option<PublicKey32>, String> {
     match bytes {
         None => Ok(None),
-        Some(bytes) => Ok(Some(bytes.as_slice().try_into().map_err(|_| {
+        Some(bytes) => Ok(Some(PublicKey32::from_slice(&bytes).ok_or_else(|| {
             format!(
                 "node_unwrap_key.unwrap_pub is {} bytes, not 32 — this database's custody \
                  plane is malformed and this daemon cannot tell whether its own unwrap key \
@@ -342,7 +348,18 @@ pub fn resolve_at_startup(
         passphrase.as_deref(),
         unwrap_path.overridden,
     );
-    let derived = cairn_event::seal::derive_unwrap_secret(&signing_key.to_bytes());
+    // The pre-ADR-0066 derivation, kept as a FALLBACK only — see [`resolve`]'s table. This is the
+    // second of the two production lines that turn this node's signing seed into an unwrap secret
+    // (#511 §2); the other, `keystore::adopt_derived_unwrap_secret`, is the adoption migration.
+    //
+    // Two guards cover them, and it is worth knowing which does what, because neither alone is
+    // enough: `unwrap_secret_is_not_derived.rs` pins which FILES may call `derive_unwrap_secret`
+    // (so a THIRD file doing it reddens, but a second call inside this one does not), and
+    // `secret32_conversions_are_named.rs` pins the `Secret32::from_bytes` count per file (so a
+    // second conversion added here reddens too). The full inventory lives in the latter; do not
+    // restate a count in a comment, which is how the round-1 numbers drifted apart.
+    let derived =
+        cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(signing_key.to_bytes()));
 
     match resolve(file, derived, registered.as_ref(), &display) {
         Resolution::Refuse(message) => Err(message.into()),
@@ -364,12 +381,11 @@ pub fn resolve_at_startup(
 mod tests {
     use super::*;
     use cairn_event::seal::unwrap_public;
-    use zeroize::Zeroizing;
 
     /// House rule 6: key material is DERIVED at runtime, never a literal, so CodeQL's
     /// hard-coded-cryptographic-value query stays live for production code.
-    fn secret_fixture(tag: u8) -> Zeroizing<[u8; 32]> {
-        Zeroizing::new(std::array::from_fn(|i| tag ^ (i as u8).wrapping_mul(7)))
+    fn secret_fixture(tag: u8) -> Secret32 {
+        Secret32::from_bytes(std::array::from_fn(|i| tag ^ (i as u8).wrapping_mul(7)))
     }
 
     /// House rule 6's STRING-valued sibling of `secret_fixture` above: an operational
@@ -399,7 +415,7 @@ mod tests {
         );
         match r {
             Resolution::Use { secret, warning } => {
-                assert_eq!(*secret, *provisioned, "the FILE's secret is the one used");
+                assert_eq!(secret, provisioned, "the FILE's secret is the one used");
                 assert!(
                     warning.is_none(),
                     "a loaded key is the normal case: no warning"
@@ -433,8 +449,8 @@ mod tests {
         // Pinned here because nothing else in the suite checks the message text, and a
         // later edit that shortened it to e.g. "unwrap key mismatch" would leave every
         // other test green.
-        let file_prefix = hex::encode(&unwrap_public(&loaded_secret)[..8]);
-        let registered_prefix = hex::encode(&registered[..8]);
+        let file_prefix = hex::encode(&unwrap_public(&loaded_secret).as_bytes()[..8]);
+        let registered_prefix = hex::encode(&registered.as_bytes()[..8]);
         assert!(
             m.contains(&file_prefix),
             "the refusal names the file's own key prefix ({file_prefix}): {m}"
@@ -464,7 +480,7 @@ mod tests {
         let Resolution::Use { secret, warning } = r else {
             panic!("nothing registered is not a refusal");
         };
-        assert_eq!(*secret, *provisioned);
+        assert_eq!(secret, provisioned);
         assert!(warning.is_none());
     }
 
@@ -484,7 +500,7 @@ mod tests {
         let Resolution::Use { secret, warning } = r else {
             panic!("a provable pre-ADR-0066 node must start");
         };
-        assert_eq!(*secret, *derived);
+        assert_eq!(secret, derived);
         let w = warning.expect("the fallback is LOUD — a silent one hides a deleted key file");
         assert!(
             w.contains("node.key.unwrap"),
@@ -515,8 +531,8 @@ mod tests {
         // Same pin as the loaded-divergence case above: both key prefixes, the ADR, and
         // the issue must all survive in this message, or an operator debugging a
         // restored node loses the one lead the refusal exists to give them.
-        let derived_prefix = hex::encode(&unwrap_public(&derived)[..8]);
-        let registered_prefix = hex::encode(&registered[..8]);
+        let derived_prefix = hex::encode(&unwrap_public(&derived).as_bytes()[..8]);
+        let registered_prefix = hex::encode(&registered.as_bytes()[..8]);
         assert!(
             m.contains(&derived_prefix),
             "the refusal names the derived key's prefix ({derived_prefix}): {m}"
@@ -566,7 +582,7 @@ mod tests {
         let Resolution::Use { secret, warning } = r else {
             panic!("an unprovisioned node must still start");
         };
-        assert_eq!(*secret, *derived);
+        assert_eq!(secret, derived);
         assert!(warning.is_none(), "no claim, no warning");
     }
 
@@ -649,7 +665,7 @@ mod tests {
         let FileOutcome::Loaded(loaded) = load_file_outcome(&path, None, false) else {
             panic!("a plaintext unwrap key must load");
         };
-        assert_eq!(*loaded, *secret, "the bytes cross the disk intact");
+        assert_eq!(loaded, secret, "the bytes cross the disk intact");
     }
 
     #[test]
@@ -766,7 +782,7 @@ mod tests {
         // 32-byte column value, so plain derived bytes (no `secret_fixture`/crypto
         // helper) are the right fixture here.
         let bytes: Vec<u8> = (0..32u8).collect();
-        let expected: [u8; 32] = bytes.clone().try_into().unwrap();
+        let expected = PublicKey32::from_slice(&bytes).expect("32 bytes is a public half");
         assert_eq!(
             registered_from_row(Some(bytes)),
             Ok(Some(expected)),

@@ -174,7 +174,12 @@ pub async fn attest_thread_in_tx(
     let attester_vk = params.human_sk.verifying_key().to_bytes().to_vec();
     tx.execute(
         "SELECT submit_event($1, $2, $3, $4)",
-        &[&signed_bytes, &token, &attester_vk, &dek.as_slice()],
+        &[
+            &signed_bytes,
+            &token,
+            &attester_vk,
+            &dek.as_bytes().as_slice(),
+        ],
     )
     .await?;
     Ok(event_id)

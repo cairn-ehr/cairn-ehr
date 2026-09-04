@@ -85,10 +85,14 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     // unwrap key regardless of who signs individual events; the human key never derives it
     // (that would collide with the device key on the node_unwrap_key singleton). This also
     // covers the orphan-attestation case, where no content event ever runs the verb path.
-    let secret = cairn_event::seal::derive_unwrap_secret(&sk_d.to_bytes());
+    let secret = cairn_event::seal::derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(
+        sk_d.to_bytes(),
+    ));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&secret)
+            .as_bytes()
+            .as_slice()],
     )
     .await
     .unwrap();
@@ -202,7 +206,12 @@ async fn sign_attest_submit(
     let vk_h = human_sk.verifying_key().to_bytes().to_vec();
     c.execute(
         "SELECT submit_event($1, $2, $3, $4)",
-        &[&signed.signed_bytes, &token, &vk_h, &dek.as_slice()],
+        &[
+            &signed.signed_bytes,
+            &token,
+            &vk_h,
+            &dek.as_bytes().as_slice(),
+        ],
     )
     .await
 }
@@ -479,7 +488,7 @@ async fn floor_rejects_attestation_without_responsibility_contributor() {
     let res = c
         .execute(
             "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed.signed_bytes, &dek.as_slice()],
+            &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
         )
         .await;
     let err = db_msg(&res.unwrap_err());
@@ -760,7 +769,12 @@ async fn submit_vouch_returning_ca(
     let vk_h = sk_h.verifying_key().to_bytes().to_vec();
     c.execute(
         "SELECT submit_event($1, $2, $3, $4)",
-        &[&signed.signed_bytes, &token, &vk_h, &dek.as_slice()],
+        &[
+            &signed.signed_bytes,
+            &token,
+            &vk_h,
+            &dek.as_bytes().as_slice(),
+        ],
     )
     .await
     .expect("an equal-HLC-but-distinct-event vouch is accepted (backdating is legal)");
@@ -1015,7 +1029,7 @@ async fn lower_hlc_late_arrival_flips_stale_true() {
     let res = c
         .execute(
             "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed.signed_bytes, &dek.as_slice()],
+            &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
         )
         .await;
     assert!(

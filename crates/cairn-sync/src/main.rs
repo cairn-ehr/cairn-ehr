@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use cairn_event::keys::{PublicKey32, Secret32};
 use cairn_event::{
     blob_address, materialise_generic_twin, resolve_twin, sign, sign_attestation,
     verify_self_described, AttestationBody, ClockGrade, EventBody, Hlc, SigningKey, CTX_EVENT,
@@ -2992,7 +2993,7 @@ fn do_pull(
     // page can end up with a different view of them than its predecessor.
     let ctx = PageContext {
         peer_name,
-        unwrap_secret: unwrap_secret.as_deref(),
+        unwrap_secret: unwrap_secret.as_ref(),
         floor_seq,
     };
     // The watermark is read HERE, and its failure is carried rather than raised: it feeds
@@ -3633,12 +3634,11 @@ fn commit_cursor(
 /// than growing `apply_page`'s argument list (slice 2b Task 6, #500).
 struct PageContext<'a> {
     peer_name: &'a str,
-    /// This node's unwrap secret (ADR-0052), if this cycle is pulling WITH custody.
-    /// `&[u8; 32]`, not a plain slice: `cairn_event::seal::unwrap_dek` takes
-    /// `&[u8; 32]`, and keeping the fixed size here means a wrong-length secret is
-    /// unrepresentable rather than a runtime `try_from` that could fail into the
+    /// This node's unwrap secret (ADR-0052), if this cycle is pulling WITH custody. The type
+    /// carries the fixed size AND the secret-vs-public distinction (#511), so a wrong-length
+    /// secret is unrepresentable rather than a runtime `try_from` that could fail into the
     /// "admit without custody" arm and misattribute a LOCAL fault to the peer.
-    unwrap_secret: Option<&'a [u8; 32]>,
+    unwrap_secret: Option<&'a Secret32>,
     /// The seq re-offer floor at the START of this cycle (db/036) — constant across
     /// every page of one cycle, unlike the running cursor `apply_page` also takes.
     floor_seq: Option<i64>,
@@ -3908,7 +3908,7 @@ fn apply_page(
                     &signed_bytes,
                     att.as_deref(),
                     akey.as_deref(),
-                    dek.as_ref().map(|d| &d[..]),
+                    dek.as_ref().map(|d| d.as_bytes().as_slice()),
                 ) {
                     Ok(new) => {
                         if new {
@@ -5212,7 +5212,7 @@ impl TrustLookup {
 enum CustodyAdmission {
     /// Re-wrap this node's DEKs for THIS key — the one carried in the verified cert
     /// whose `kid` the trust set just admitted.
-    Grant { requester_pub: [u8; 32] },
+    Grant { requester_pub: PublicKey32 },
     /// Serve the events WITHOUT custody, and print this line.
     Withhold {
         cause: TrustLookup,
@@ -5267,7 +5267,7 @@ enum CustodyAdmission {
 /// The one arm with no repair path is a SHRED: `db/020` step 9 refuses custody for a
 /// target in `erasure_shred_log` however often it is re-delivered. That is deliberate
 /// anti-resurrection, not a gap.
-fn decide_custody(kid: &str, requester_pub: [u8; 32], lookup: TrustLookup) -> CustodyAdmission {
+fn decide_custody(kid: &str, requester_pub: PublicKey32, lookup: TrustLookup) -> CustodyAdmission {
     // The recovery clause is shared, and emitted ONLY for the causes the puller can
     // actually act on (`puller_can_recover`) — a typed property, not a grep over this
     // prose. Keeping it out of the per-cause text leaves each line about its CAUSE and
@@ -5463,8 +5463,8 @@ fn look_up_peer_trust(client: &mut postgres::Client, kid: &str) -> TrustLookup {
 /// unwrap secret, every slot is None — the events still sync, custody just does not.
 fn rewrap_custody_for_peer(
     local_deks: &[Option<String>],
-    requester_pub: Option<&[u8; 32]>,
-    own_secret: Option<&[u8; 32]>,
+    requester_pub: Option<&PublicKey32>,
+    own_secret: Option<&Secret32>,
 ) -> Vec<Option<String>> {
     let (Some(requester_pub), Some(own_secret)) = (requester_pub, own_secret) else {
         return vec![None; local_deks.len()];
@@ -5701,7 +5701,7 @@ fn serve_conn(
                         }
                     });
             let wrapped_deks =
-                rewrap_custody_for_peer(&local_deks, requester_pub.as_ref(), own_secret.as_deref());
+                rewrap_custody_for_peer(&local_deks, requester_pub.as_ref(), own_secret.as_ref());
             serde_json::to_vec(&EventsResponse {
                 events,
                 attestations,
@@ -7462,7 +7462,7 @@ mod tests {
         // Ed25519 identity (the kid): the server re-wraps DEKs for `xpub`, trusting
         // that only the holder of the matching signing key controls it.
         let (sk, _kid) = cairn_event::generate_key().unwrap();
-        let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+        let secret = cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
         let xpub = cairn_event::seal::unwrap_public(&secret);
         let cert = cairn_event::sign_unwrap_key_cert(&sk, &xpub).unwrap();
         let (kid, got) = cairn_event::verify_unwrap_key_cert(&cert).unwrap();
@@ -7521,7 +7521,7 @@ mod tests {
         // The ONLY grant arm: the presented kid is in this node's trust set and
         // its latest op is not `revoke` (#231). The grant carries the key it admits,
         // so the caller cannot re-wrap for a DIFFERENT key than the one decided on.
-        let requester_pub = derived_bytes(0x11);
+        let requester_pub = PublicKey32::from_bytes(derived_bytes(0x11));
         assert_eq!(
             decide_custody(&fixture_kid(0x01), requester_pub, TrustLookup::ActivePeer),
             CustodyAdmission::Grant { requester_pub }
@@ -7537,7 +7537,11 @@ mod tests {
         for lookup in arms {
             assert!(
                 matches!(
-                    decide_custody(&fixture_kid(0x02), derived_bytes(0x12), lookup),
+                    decide_custody(
+                        &fixture_kid(0x02),
+                        PublicKey32::from_bytes(derived_bytes(0x12)),
+                        lookup
+                    ),
                     CustodyAdmission::Withhold { .. }
                 ),
                 "{lookup:?} must withhold custody"
@@ -7558,7 +7562,7 @@ mod tests {
             let CustodyAdmission::Withhold {
                 operator_line,
                 cause,
-            } = decide_custody(&kid, derived_bytes(0x13), lookup)
+            } = decide_custody(&kid, PublicKey32::from_bytes(derived_bytes(0x13)), lookup)
             else {
                 panic!("{lookup:?} must withhold");
             };
@@ -7600,7 +7604,7 @@ mod tests {
         let (mut recoverable, mut terminal) = (0, 0);
         for lookup in every_withhold_arm() {
             let CustodyAdmission::Withhold { operator_line, .. } =
-                decide_custody(&kid, derived_bytes(0x17), lookup)
+                decide_custody(&kid, PublicKey32::from_bytes(derived_bytes(0x17)), lookup)
             else {
                 panic!("{lookup:?} must withhold");
             };
@@ -7654,7 +7658,7 @@ mod tests {
         let kid = fixture_kid(0x08);
         for lookup in every_withhold_arm() {
             let CustodyAdmission::Withhold { operator_line, .. } =
-                decide_custody(&kid, derived_bytes(0x18), lookup)
+                decide_custody(&kid, PublicKey32::from_bytes(derived_bytes(0x18)), lookup)
             else {
                 panic!("{lookup:?} must withhold");
             };
@@ -7689,9 +7693,11 @@ mod tests {
             TrustLookup::NodePlaneUninitialised,
             TrustLookup::NodePlaneAbsent,
         ] {
-            let CustodyAdmission::Withhold { operator_line, .. } =
-                decide_custody(&fixture_kid(0x04), derived_bytes(0x14), lookup)
-            else {
+            let CustodyAdmission::Withhold { operator_line, .. } = decide_custody(
+                &fixture_kid(0x04),
+                PublicKey32::from_bytes(derived_bytes(0x14)),
+                lookup,
+            ) else {
                 panic!("{lookup:?} must withhold");
             };
             assert!(
@@ -7714,7 +7720,11 @@ mod tests {
         let CustodyAdmission::Withhold {
             operator_line: no_peers,
             ..
-        } = decide_custody(&kid, derived_bytes(0x16), TrustLookup::NoPeersAdmitted)
+        } = decide_custody(
+            &kid,
+            PublicKey32::from_bytes(derived_bytes(0x16)),
+            TrustLookup::NoPeersAdmitted,
+        )
         else {
             panic!("NoPeersAdmitted must withhold");
         };
@@ -7732,7 +7742,7 @@ mod tests {
             ..
         } = decide_custody(
             &kid,
-            derived_bytes(0x16),
+            PublicKey32::from_bytes(derived_bytes(0x16)),
             TrustLookup::NodePlaneUninitialised,
         )
         else {
@@ -7757,9 +7767,11 @@ mod tests {
         // DB-gated tests and the `a_revoked_peer_is_told_it_was_revoked…` wire test
         // are what hold the other half.
         let kid = fixture_kid(0x05);
-        let CustodyAdmission::Withhold { operator_line, .. } =
-            decide_custody(&kid, derived_bytes(0x15), TrustLookup::RevokedPeer)
-        else {
+        let CustodyAdmission::Withhold { operator_line, .. } = decide_custody(
+            &kid,
+            PublicKey32::from_bytes(derived_bytes(0x15)),
+            TrustLookup::RevokedPeer,
+        ) else {
             panic!("a revoked peer must withhold");
         };
         // Case-insensitive on purpose: the line emphasises REVOKED in caps, and a test
@@ -7791,24 +7803,26 @@ mod tests {
         // (a) A slot re-wrapped for the requester must open with the REQUESTER's
         //     secret and yield the ORIGINAL dek — the whole contract: custody
         //     travels to the peer, readable only by the peer.
-        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x11));
+        let own_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(derived_bytes(0x11)));
         let own_pub = cairn_event::seal::unwrap_public(&own_secret);
-        let peer_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x22));
+        let peer_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(derived_bytes(0x22)));
         let peer_pub = cairn_event::seal::unwrap_public(&peer_secret);
-        let dek = derived_bytes(0x33);
+        let dek = Secret32::from_bytes(derived_bytes(0x33));
 
         // This node stores the DEK wrapped for its OWN unwrap key (the serve SQL
         // hands rewrap_custody_for_peer exactly this hex string).
         let local_wrapped = cairn_event::seal::wrap_dek_for(&dek, &own_pub).unwrap();
         let local_deks = vec![Some(hex::encode(local_wrapped))];
 
-        let out = rewrap_custody_for_peer(&local_deks, Some(&peer_pub), Some(&*own_secret));
+        let out = rewrap_custody_for_peer(&local_deks, Some(&peer_pub), Some(&own_secret));
         assert_eq!(out.len(), 1);
         let rewrapped = hex::decode(out[0].as_ref().expect("slot was re-wrapped")).unwrap();
 
         // Opens with the PEER's secret and recovers the original DEK …
         let recovered = cairn_event::seal::unwrap_dek(&rewrapped, &peer_secret).unwrap();
-        assert_eq!(&*recovered, &dek, "requester recovers the original DEK");
+        assert_eq!(recovered, dek, "requester recovers the original DEK");
         // … and is NOT re-openable by the serving node (the wrap is bound to the peer).
         assert!(
             cairn_event::seal::unwrap_dek(&rewrapped, &own_secret).is_err(),
@@ -7820,12 +7834,13 @@ mod tests {
     fn rewrap_custody_leaves_a_none_slot_none() {
         // (b) A None local slot (unsealed event / no custody here / shredded) stays
         //     None — no DEK is fabricated for a slot that never carried one.
-        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x44));
+        let own_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(derived_bytes(0x44)));
         let peer_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
-            &derived_bytes(0x55),
+            &Secret32::from_bytes(derived_bytes(0x55)),
         ));
 
-        let out = rewrap_custody_for_peer(&[None], Some(&peer_pub), Some(&*own_secret));
+        let out = rewrap_custody_for_peer(&[None], Some(&peer_pub), Some(&own_secret));
         assert_eq!(out, vec![None], "a None local slot ships no custody");
     }
 
@@ -7834,13 +7849,15 @@ mod tests {
         // (c) No requester public key (absent / invalid cert → None) means EVERY slot
         //     is None: sealed events still sync, custody simply does not travel. Even a
         //     populated local slot must not leak when there is no recipient to bind to.
-        let own_secret = cairn_event::seal::derive_unwrap_secret(&derived_bytes(0x66));
+        let own_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(derived_bytes(0x66)));
         let own_pub = cairn_event::seal::unwrap_public(&own_secret);
         let local_wrapped =
-            cairn_event::seal::wrap_dek_for(&derived_bytes(0x77), &own_pub).unwrap();
+            cairn_event::seal::wrap_dek_for(&Secret32::from_bytes(derived_bytes(0x77)), &own_pub)
+                .unwrap();
         let local_deks = vec![Some(hex::encode(local_wrapped)), None];
 
-        let out = rewrap_custody_for_peer(&local_deks, None, Some(&*own_secret));
+        let out = rewrap_custody_for_peer(&local_deks, None, Some(&own_secret));
         assert_eq!(
             out,
             vec![None, None],
@@ -9052,7 +9069,7 @@ mod quarantine_tests {
         // literal, and the binding is not called `salt`/`nonce`/`iv` (house rule 6).
         let custody = unwrap_key::NodeCustody {
             signing_key: sk.clone(),
-            unwrap_secret: zeroize::Zeroizing::new(std::array::from_fn::<u8, 32, _>(|i| {
+            unwrap_secret: Secret32::from_bytes(std::array::from_fn(|i| {
                 (i as u8).wrapping_mul(7).wrapping_add(1)
             })),
         };
@@ -13360,7 +13377,7 @@ mod trust_lookup_db_tests {
         );
         assert!(
             matches!(
-                decide_custody(&kid, derived_bytes(0x24), verdict),
+                decide_custody(&kid, PublicKey32::from_bytes(derived_bytes(0x24)), verdict),
                 CustodyAdmission::Withhold { .. }
             ),
             "and an unknown admission must WITHHOLD: uncertainty can only ever \

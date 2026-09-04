@@ -26,6 +26,7 @@
 //! DB-gated on $CAIRN_TEST_PG, serialized cluster-wide via db::test_serial_guard
 //! (shared-DB + TRUNCATE pattern, like seal_submit.rs / medication_remote_apply.rs). Key
 //! material is derived at runtime (generate_key), never a literal (house rule 6).
+use cairn_event::keys::Secret32;
 use cairn_event::seal::{derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_public};
 use cairn_event::{
     event_address, generate_key, sign, sign_attestation, EventBody, Hlc, SigningKey,
@@ -33,7 +34,6 @@ use cairn_event::{
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 // Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
 // be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
@@ -97,10 +97,10 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
     // The node's unwrap key is derived from the DEVICE key (a node has exactly one,
     // regardless of who signs individual events). Registering it is what lets the door
     // wrap a sealed event's DEK into custody at apply.
-    let secret = derive_unwrap_secret(&sk_d.to_bytes());
+    let secret = derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(sk_d.to_bytes()));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&unwrap_public(&secret).as_slice()],
+        &[&unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .unwrap();
@@ -111,7 +111,7 @@ async fn setup(c: &Client) -> (SigningKey, String, SigningKey, String) {
 /// construction), then seal it: payload → container, twin → stub. Returns the sealed
 /// body (ready to sign) and the per-event DEK. Copied verbatim from seal_submit.rs —
 /// integration tests cannot share a helper module.
-fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Zeroizing<[u8; 32]>) {
+fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Secret32) {
     let event_id = Uuid::now_v7().to_string();
     let medication_id = Uuid::now_v7().to_string();
     let payload = serde_json::json!({
@@ -284,7 +284,7 @@ async fn sealed_apply_with_dek_projects_like_submit() {
     let signed = sign(&body, &sk_d).unwrap();
     c.execute(
         "SELECT apply_remote_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("a sealed event WITH its DEK applies through the sync door");
@@ -457,7 +457,7 @@ async fn custody_is_never_granted_to_a_shredded_event() {
     let signed = sign(&body, &sk_d).unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("the sealed assert is authored locally");
@@ -498,7 +498,7 @@ async fn custody_is_never_granted_to_a_shredded_event() {
     //    resurrect: the row is conflict-ignored and custody stays extinguished.
     c.execute(
         "SELECT apply_remote_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("re-delivery of a shredded event is admitted (set-union) but grants no custody");
@@ -546,7 +546,7 @@ async fn partial_custody_thread_reads_stale_not_fresh() {
         let event_id = body.event_id.clone();
         c.execute(
             "SELECT apply_remote_event($1, NULL, NULL, $2)",
-            &[&signed.signed_bytes, &dek.as_slice()],
+            &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
         )
         .await
         .expect("the content event applies with custody");
@@ -608,7 +608,7 @@ async fn partial_custody_thread_reads_stale_not_fresh() {
             &att_signed.signed_bytes,
             &token,
             &attester_key,
-            &att_dek.as_slice(),
+            &att_dek.as_bytes().as_slice(),
         ],
     )
     .await
@@ -658,7 +658,7 @@ async fn shred_after_event_scrubs_everything_but_the_log_row() {
     let signed = sign(&body, &sk_d).unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("the sealed assert is authored locally");
@@ -766,7 +766,7 @@ async fn shred_is_idempotent_under_replay() {
     let signed = sign(&body, &sk_d).unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("the sealed assert is authored locally");
@@ -833,7 +833,7 @@ async fn schema_reload_rebuilds_the_shred_log() {
     let signed = sign(&body, &sk_d).unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("the sealed assert is authored locally");
@@ -914,12 +914,12 @@ async fn sealed_apply_with_wrong_dek_admits_without_custody() {
     let event_id = body.event_id.clone();
     let signed = sign(&body, &sk_d).unwrap();
 
-    let mut wrong_dek: [u8; 32] = *dek;
-    wrong_dek[0] ^= 0xFF;
+    let mut wrong_dek = dek.clone();
+    wrong_dek.as_mut_bytes()[0] ^= 0xFF;
 
     c.execute(
         "SELECT apply_remote_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &wrong_dek.as_slice()],
+        &[&signed.signed_bytes, &wrong_dek.as_bytes().as_slice()],
     )
     .await
     .expect("a wrong DEK is a transport defect, never a refusal reason");
@@ -989,7 +989,7 @@ async fn custody_is_withheld_when_shred_arrives_before_its_target() {
     let signed = sign(&body, &sk_d).unwrap();
     c.execute(
         "SELECT apply_remote_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("the content event is admitted (set-union), even though it arrives shredded");
@@ -1033,11 +1033,7 @@ fn demographic_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> EventBody {
 
 /// The SAME clear demographic body, but wrongly SEALED — the never-lawful shape ADR-0052 §2
 /// forbids (only clinical.* is born-sealed). Returns the sealed body and its (unused) DEK.
-fn sealed_demographic_body(
-    node_kid: &str,
-    patient: Uuid,
-    hlc: Hlc,
-) -> (EventBody, Zeroizing<[u8; 32]>) {
+fn sealed_demographic_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Secret32) {
     let mut b = demographic_body(node_kid, patient, hlc);
     let payload = b.payload.clone();
     let twin = b.plaintext_twin.clone().unwrap();

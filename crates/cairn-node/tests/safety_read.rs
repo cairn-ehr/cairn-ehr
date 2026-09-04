@@ -478,10 +478,10 @@ async fn the_signal_survives_a_crypto_shred() {
     .expect("seals");
     // The node's unwrap key is what lets the apply door wrap this event's DEK into
     // custody. Derived at runtime from the signing key — never a literal (house rule 6).
-    let secret = derive_unwrap_secret(&sk.to_bytes());
+    let secret = derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(sk.to_bytes()));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&unwrap_public(&secret).as_slice()],
+        &[&unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .expect("unwrap key registered");
@@ -512,7 +512,7 @@ async fn the_signal_survives_a_crypto_shred() {
     let signed = cairn_event::sign(&body, &sk).expect("signs");
     c.execute(
         "SELECT apply_remote_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("the sealed body is admitted WITH custody");

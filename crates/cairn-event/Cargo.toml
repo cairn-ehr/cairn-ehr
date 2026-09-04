@@ -35,6 +35,11 @@ chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 hkdf = "0.13"
 zeroize = "1"
+# Constant-time equality for `keys::Secret32` (#511). License checked (house rule 1):
+# subtle is BSD-3-Clause — AGPL-3.0-compatible. Already in Cargo.lock as a transitive
+# dependency of the dalek crates, so this only promotes it to a direct one: no new
+# supply-chain surface, and cargo-deny already audits it.
+subtle = "2"
 
 [dev-dependencies]
 # First property-test harness (#212): floor twins take attacker-controlled input, so

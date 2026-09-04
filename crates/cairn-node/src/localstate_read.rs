@@ -22,6 +22,7 @@
 //! are in a different codebase layer (SQL) that this file cannot see change.
 
 use crate::localstate::{episode_dek_to_cbor, EpisodeDek, LocalState};
+use cairn_event::keys::Secret32;
 
 /// Read this node's exportable local state.
 ///
@@ -55,7 +56,7 @@ use crate::localstate::{episode_dek_to_cbor, EpisodeDek, LocalState};
 /// that has to change, and a reader should not have to rediscover that from a memory spike.
 pub async fn read_local_state(
     db: &tokio_postgres::Client,
-    unwrap_secret: Option<&[u8; 32]>,
+    unwrap_secret: Option<&Secret32>,
 ) -> anyhow::Result<LocalState> {
     use anyhow::Context;
 
@@ -88,12 +89,12 @@ pub async fn read_local_state(
         })
         .collect();
 
-    Ok(LocalState {
-        version: 1,
-        node_default_deks: Vec::new(), // no node-default keystore exists yet (#495 promise 2)
+    // `from_custody` rather than a struct literal: it is one of only TWO producers of a
+    // `LocalState` (the other is `empty()`), and keeping the set closed is what stops a third
+    // one appearing that skips the `erasure_shred_log` filter above — the failure this file's
+    // header calls out by name (#511 rides-along 1).
+    Ok(LocalState::from_custody(
         episode_deks,
-        config: None,       // no node config table exists yet
-        drafts: Vec::new(), // no draft store exists yet
-        unwrap_secret: unwrap_secret.map(|s| s.to_vec()),
-    })
+        unwrap_secret.cloned(),
+    ))
 }

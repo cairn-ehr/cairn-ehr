@@ -75,7 +75,7 @@ async fn the_check_admits_a_node_whose_unwrap_key_is_registered() {
     let public = cairn_event::seal::unwrap_public(&secret);
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&public.as_slice()],
+        &[&public.as_bytes().as_slice()],
     )
     .await
     .expect("registering a freshly minted unwrap key");
@@ -153,7 +153,7 @@ async fn the_in_db_floor_refuses_a_sealed_write_with_no_registered_unwrap_key() 
     let err = c
         .execute(
             "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed_bytes, &dek.as_slice()],
+            &[&signed_bytes, &dek.as_bytes().as_slice()],
         )
         .await
         .expect_err("THE POINT: the in-DB floor must refuse a sealed write with no custody key");
@@ -171,13 +171,13 @@ async fn the_in_db_floor_refuses_a_sealed_write_with_no_registered_unwrap_key() 
     let public = cairn_event::seal::unwrap_public(&secret);
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&public.as_slice()],
+        &[&public.as_bytes().as_slice()],
     )
     .await
     .unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed_bytes, &dek.as_slice()],
+        &[&signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("positive control: the identical write must be admitted once custody is provisioned");

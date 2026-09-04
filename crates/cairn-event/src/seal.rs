@@ -17,6 +17,12 @@ use zeroize::Zeroizing;
 
 use crate::EventError;
 
+/// Re-exported so `cairn_event::seal::Secret32` — the path issue #511 names, and the one every
+/// call site in the custody plane uses — resolves. The definitions live in [`crate::keys`]
+/// because this file is already past the project's 500-line guideline; see that module's header
+/// for what the two types do and, just as importantly, what they deliberately do not.
+pub use crate::keys::{PublicKey32, Secret32};
+
 /// The one sealed-body AEAD algorithm (crypto-agile: the container names it,
 /// additive evolution adds members, never reinterprets this one).
 pub const SEAL_ALG: &str = "xchacha20poly1305";
@@ -65,11 +71,13 @@ pub fn seal_event_payload(
     payload: &serde_json::Value,
     twin: &str,
     event_id: &str,
-) -> Result<(serde_json::Value, Zeroizing<[u8; 32]>), EventError> {
+) -> Result<(serde_json::Value, Secret32), EventError> {
     // Fresh DEK + nonce from the OS RNG (production key material is always
-    // random — house rule 6 applies to tests only).
-    let mut dek = Zeroizing::new([0u8; 32]);
-    getrandom::fill(dek.as_mut()).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
+    // random — house rule 6 applies to tests only). Filled IN PLACE inside the
+    // zeroizing buffer, so the DEK never exists as a bare array on the stack.
+    let mut dek = Secret32::zeroed();
+    getrandom::fill(dek.as_mut_bytes())
+        .map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
     let mut nonce = [0u8; 24];
     getrandom::fill(&mut nonce).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
 
@@ -84,7 +92,7 @@ pub fn seal_event_payload(
             .map_err(|e| EventError::Seal(format!("inner serialize: {e}")))?,
     );
 
-    let cipher = XChaCha20Poly1305::new(aead_key(&dek));
+    let cipher = XChaCha20Poly1305::new(aead_key(dek.as_bytes()));
     let ct = cipher
         .encrypt(
             aead_nonce(&nonce),
@@ -109,7 +117,7 @@ pub fn seal_event_payload(
 /// — every failure is a refusal, never a silent fallback.
 pub fn unseal_event_payload(
     container: &serde_json::Value,
-    dek: &[u8; 32],
+    dek: &Secret32,
     event_id: &str,
 ) -> Result<(serde_json::Value, String), EventError> {
     if !is_sealed_container(container) {
@@ -133,7 +141,7 @@ pub fn unseal_event_payload(
     let nonce: [u8; 24] = nonce
         .try_into()
         .map_err(|_| EventError::Seal("nonce must be 24 bytes".into()))?;
-    let cipher = XChaCha20Poly1305::new(aead_key(dek));
+    let cipher = XChaCha20Poly1305::new(aead_key(dek.as_bytes()));
     // Hardening minor 1: the decrypted plaintext is transient secret material
     // (it holds the clinical payload AND the twin) — Zeroizing wipes it on drop
     // instead of leaving it in freed heap memory for a later read to find.
@@ -172,16 +180,27 @@ struct Inner {
 // if something other than the DB holds the DEK's custody path — a DEK sitting in
 // the same database as its ciphertext gives the erasure ladder no teeth (a dump
 // of one table hands you both halves). The wrap plane gives every node a second,
-// INDEPENDENT keypair (X25519, for ECIES-style asymmetric wrap) derived from the
-// same master seed as its Ed25519 signing identity via domain-separated HKDF —
-// so there is no new enrollment ceremony, the existing ADR-0026 seal/recovery
-// escrow already covers this secret, and a plain DB backup (which only ever sees
-// the PUBLIC half via the unwrap-key cert) can never unwrap a DEK on its own.
+// INDEPENDENT keypair (X25519, for ECIES-style asymmetric wrap), so a plain DB
+// backup — which only ever sees the PUBLIC half, via the unwrap-key cert — can
+// never unwrap a DEK on its own.
+//
+// ⚠️ THIS PARAGRAPH USED TO SAY that X25519 secret was HKDF-derived from the same
+// master seed as the Ed25519 signing identity, "so there is no new enrollment
+// ceremony". ADR-0066 deleted that property and the sentence outlived it, in the
+// module that defines the derivation. Deriving custody from identity is what cost
+// a restored solo node its entire clinical record (#495): ADR-0026 deliberately
+// re-mints the signing seed on recovery, so the derived secret changed and every
+// inherited `event_dek` row went dark. The unwrap secret is minted independently
+// now, sealed in its own `<key>.unwrap` file, and carried across a restore in the
+// local-state export. `derive_unwrap_secret` below survives ONLY as the one-shot
+// adoption migration for nodes provisioned before ADR-0066.
 
-/// HKDF domain tag for deriving the node's X25519 unwrap secret from its
-/// Ed25519 seed. One master secret, two INDEPENDENT keys (signing vs unwrap)
-/// — so the existing ADR-0026 seal/recovery escrow covers DEK custody with
-/// no new ceremony, and a DB backup (public half only) can never unwrap.
+/// HKDF domain tag for the ADR-0066 ADOPTION derivation, and nothing else — see
+/// [`derive_unwrap_secret`]. It is what lets a node provisioned BEFORE ADR-0066
+/// reconstruct the secret its existing `event_dek` rows are already wrapped to,
+/// exactly once. A node provisioned after ADR-0066 never uses this tag: its
+/// unwrap secret comes from [`generate_unwrap_secret`] and has no relationship
+/// to its signing seed at all.
 const UNWRAP_KEY_HKDF_INFO: &[u8] = b"cairn-node-unwrap-x25519-v1";
 /// KEK-derivation + AEAD domain tag for the DEK wrap itself.
 const WRAP_AAD_CONTEXT: &[u8] = b"cairn-dek-wrap-v1";
@@ -198,9 +217,10 @@ const WRAP_AAD_CONTEXT: &[u8] = b"cairn-dek-wrap-v1";
 ///
 /// The raw 32 bytes need no clamping here — `x25519_dalek::StaticSecret` clamps on use,
 /// exactly as it did for the HKDF output this replaces.
-pub fn generate_unwrap_secret() -> Result<Zeroizing<[u8; 32]>, EventError> {
-    let mut out = Zeroizing::new([0u8; 32]);
-    getrandom::fill(out.as_mut()).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
+pub fn generate_unwrap_secret() -> Result<Secret32, EventError> {
+    let mut out = Secret32::zeroed();
+    getrandom::fill(out.as_mut_bytes())
+        .map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
     Ok(out)
 }
 
@@ -221,18 +241,19 @@ pub fn generate_unwrap_secret() -> Result<Zeroizing<[u8; 32]>, EventError> {
 /// Deterministic in the seed, and cryptographically independent of the seed's use as a
 /// signing key: the distinct HKDF info tag means recovering one teaches nothing about
 /// the other.
-pub fn derive_unwrap_secret(seed: &[u8; 32]) -> Zeroizing<[u8; 32]> {
-    let hk = Hkdf::<Sha256>::new(None, seed);
-    let mut out = Zeroizing::new([0u8; 32]);
-    hk.expand(UNWRAP_KEY_HKDF_INFO, out.as_mut())
+pub fn derive_unwrap_secret(seed: &Secret32) -> Secret32 {
+    let hk = Hkdf::<Sha256>::new(None, seed.as_bytes());
+    let mut out = Secret32::zeroed();
+    hk.expand(UNWRAP_KEY_HKDF_INFO, out.as_mut_bytes())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     out
 }
 
 /// The X25519 public half of an unwrap secret — safe to publish (in the
 /// unwrap-key cert) and to store in the DB, since it alone can never unwrap.
-pub fn unwrap_public(unwrap_secret: &[u8; 32]) -> [u8; 32] {
-    PublicKey::from(&StaticSecret::from(*unwrap_secret)).to_bytes()
+pub fn unwrap_public(unwrap_secret: &Secret32) -> PublicKey32 {
+    let secret = StaticSecret::from(*unwrap_secret.as_bytes());
+    PublicKey32::from_bytes(PublicKey::from(&secret).to_bytes())
 }
 
 /// Derive the AEAD key-encryption-key for one wrap from a DH shared secret.
@@ -240,13 +261,13 @@ pub fn unwrap_public(unwrap_secret: &[u8; 32]) -> [u8; 32] {
 /// to this (eph, recipient) pair even across many wraps to the same recipient;
 /// the info tag domain-separates the wrap KEK from every other HKDF use in
 /// this crate.
-fn wrap_kek(shared: &[u8], eph_pub: &[u8; 32], recipient_pub: &[u8; 32]) -> Zeroizing<[u8; 32]> {
+fn wrap_kek(shared: &[u8], eph_pub: &PublicKey32, recipient_pub: &PublicKey32) -> Secret32 {
     let mut salt = Vec::with_capacity(64);
-    salt.extend_from_slice(eph_pub);
-    salt.extend_from_slice(recipient_pub);
+    salt.extend_from_slice(eph_pub.as_bytes());
+    salt.extend_from_slice(recipient_pub.as_bytes());
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared);
-    let mut out = Zeroizing::new([0u8; 32]);
-    hk.expand(WRAP_AAD_CONTEXT, out.as_mut())
+    let mut out = Secret32::zeroed();
+    hk.expand(WRAP_AAD_CONTEXT, out.as_mut_bytes())
         .expect("32 bytes is a valid HKDF-SHA256 output length");
     out
 }
@@ -258,13 +279,13 @@ fn wrap_kek(shared: &[u8], eph_pub: &[u8; 32], recipient_pub: &[u8; 32]) -> Zero
 /// — a database holding only wrapped DEKs plus the public unwrap-key cert
 /// cannot recover any DEK on its own (the erasability property this whole
 /// plane exists to provide).
-pub fn wrap_dek_for(dek: &[u8; 32], recipient_pub: &[u8; 32]) -> Result<Vec<u8>, EventError> {
-    let mut eph_bytes = Zeroizing::new([0u8; 32]);
-    getrandom::fill(eph_bytes.as_mut())
+pub fn wrap_dek_for(dek: &Secret32, recipient_pub: &PublicKey32) -> Result<Vec<u8>, EventError> {
+    let mut eph_bytes = Secret32::zeroed();
+    getrandom::fill(eph_bytes.as_mut_bytes())
         .map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
-    let eph = StaticSecret::from(*eph_bytes);
-    let eph_pub = PublicKey::from(&eph).to_bytes();
-    let shared = eph.diffie_hellman(&PublicKey::from(*recipient_pub));
+    let eph = StaticSecret::from(*eph_bytes.as_bytes());
+    let eph_pub = PublicKey32::from_bytes(PublicKey::from(&eph).to_bytes());
+    let shared = eph.diffie_hellman(&PublicKey::from(*recipient_pub.as_bytes()));
     // Contributory-behaviour check (Thái "thaidn" Dương's attack): a
     // MITM who substitutes recipient_pub with the all-zero identity point (or
     // another low-order point) can force the shared secret to a small,
@@ -279,19 +300,19 @@ pub fn wrap_dek_for(dek: &[u8; 32], recipient_pub: &[u8; 32]) -> Result<Vec<u8>,
     let kek = wrap_kek(shared.as_bytes(), &eph_pub, recipient_pub);
     let mut nonce = [0u8; 24];
     getrandom::fill(&mut nonce).map_err(|e| EventError::Seal(format!("entropy failure: {e}")))?;
-    let cipher = XChaCha20Poly1305::new(aead_key(&kek));
+    let cipher = XChaCha20Poly1305::new(aead_key(kek.as_bytes()));
     let ct = cipher
         .encrypt(
             aead_nonce(&nonce),
             Payload {
-                msg: dek.as_slice(),
+                msg: dek.as_bytes().as_slice(),
                 aad: WRAP_AAD_CONTEXT,
             },
         )
         .map_err(|_| EventError::Seal("wrap encrypt failure".into()))?;
 
     let mut out = Vec::with_capacity(32 + 24 + ct.len());
-    out.extend_from_slice(&eph_pub);
+    out.extend_from_slice(eph_pub.as_bytes());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
     Ok(out)
@@ -308,20 +329,17 @@ pub const WRAPPED_DEK_LEN: usize = 32 + 24 + 32 + 16;
 
 /// malformed length, wrong recipient, or tampering — every failure is a
 /// refusal, never a silent fallback (mirrors `unseal_event_payload`'s posture).
-pub fn unwrap_dek(
-    wrapped: &[u8],
-    unwrap_secret: &[u8; 32],
-) -> Result<Zeroizing<[u8; 32]>, EventError> {
+pub fn unwrap_dek(wrapped: &[u8], unwrap_secret: &Secret32) -> Result<Secret32, EventError> {
     if wrapped.len() != WRAPPED_DEK_LEN {
         return Err(EventError::Seal("malformed wrapped DEK length".into()));
     }
-    let eph_pub: [u8; 32] = wrapped[..32].try_into().expect("sliced 32 bytes");
+    let eph_pub = PublicKey32::from_slice(&wrapped[..32]).expect("sliced exactly 32 bytes");
     let nonce: [u8; 24] = wrapped[32..56].try_into().expect("sliced 24 bytes");
     let ct = &wrapped[56..];
 
-    let me = StaticSecret::from(*unwrap_secret);
-    let my_pub = PublicKey::from(&me).to_bytes();
-    let shared = me.diffie_hellman(&PublicKey::from(eph_pub));
+    let me = StaticSecret::from(*unwrap_secret.as_bytes());
+    let my_pub = PublicKey32::from_bytes(PublicKey::from(&me).to_bytes());
+    let shared = me.diffie_hellman(&PublicKey::from(*eph_pub.as_bytes()));
     // Same contributory-behaviour check as `wrap_dek_for`'s DH — a wrapped
     // blob carrying a low-order `eph_pub` (forged or corrupted in transit)
     // must not be allowed to produce a small, guessable shared secret here
@@ -333,7 +351,7 @@ pub fn unwrap_dek(
     }
     let kek = wrap_kek(shared.as_bytes(), &eph_pub, &my_pub);
 
-    let cipher = XChaCha20Poly1305::new(aead_key(&kek));
+    let cipher = XChaCha20Poly1305::new(aead_key(kek.as_bytes()));
     // Hardening (mirrors `unseal_event_payload`'s convention): the decrypted
     // DEK bytes are transient secret material before they're copied into the
     // fixed-size Zeroizing output below — wrap the AEAD output itself so it is
@@ -351,8 +369,8 @@ pub fn unwrap_dek(
                 EventError::Seal("wrap open failed (wrong recipient or tampered)".into())
             })?,
     );
-    let mut dek = Zeroizing::new([0u8; 32]);
-    dek.copy_from_slice(&pt);
+    let mut dek = Secret32::zeroed();
+    dek.as_mut_bytes().copy_from_slice(&pt);
     Ok(dek)
 }
 
@@ -361,9 +379,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn dek_fixture() -> [u8; 32] {
+    fn dek_fixture() -> Secret32 {
         // House rule 6: derived, never a literal.
-        std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3))
+        Secret32::from_bytes(std::array::from_fn(|i| {
+            (i as u8).wrapping_mul(7).wrapping_add(3)
+        }))
     }
 
     /// A second, distinct 24-byte nonce fixture (house rule 6: derived, never a
@@ -415,7 +435,7 @@ mod tests {
         let (c1, d1) = seal_event_payload(&p, "t", "e").unwrap();
         let (c2, d2) = seal_event_payload(&p, "t", "e").unwrap();
         assert_ne!(c1["ct"], c2["ct"]);
-        assert_ne!(d1.as_slice(), d2.as_slice());
+        assert_ne!(d1, d2);
     }
 
     #[test]
@@ -510,7 +530,7 @@ mod tests {
         let nonce = nonce_fixture();
         let inner_missing_twin = json!({"payload": {}});
         let inner_bytes = serde_json::to_vec(&inner_missing_twin).unwrap();
-        let cipher = XChaCha20Poly1305::new(aead_key(&dek));
+        let cipher = XChaCha20Poly1305::new(aead_key(dek.as_bytes()));
         let ct = cipher
             .encrypt(
                 aead_nonce(&nonce),
@@ -536,8 +556,10 @@ mod tests {
 
     // ── ADR-0052 §4: the DEK wrap plane (X25519 + HKDF ECIES) ──────────────────
 
-    fn seed_fixture(tag: u8) -> [u8; 32] {
-        std::array::from_fn(|i| (i as u8).wrapping_mul(13).wrapping_add(tag))
+    fn seed_fixture(tag: u8) -> Secret32 {
+        Secret32::from_bytes(std::array::from_fn(|i| {
+            (i as u8).wrapping_mul(13).wrapping_add(tag)
+        }))
     }
 
     #[test]
@@ -549,7 +571,7 @@ mod tests {
         let wrapped = wrap_dek_for(&dek, &public).unwrap();
         assert_eq!(wrapped.len(), WRAPPED_DEK_LEN); // eph ‖ nonce ‖ ct+tag
         let opened = unwrap_dek(&wrapped, &secret).unwrap();
-        assert_eq!(opened.as_slice(), &dek);
+        assert_eq!(opened, dek);
     }
 
     #[test]
@@ -565,8 +587,8 @@ mod tests {
         let seed = seed_fixture(1);
         let a = derive_unwrap_secret(&seed);
         let b = derive_unwrap_secret(&seed);
-        assert_eq!(a.as_slice(), b.as_slice());
-        assert_ne!(a.as_slice(), &seed); // never the raw signing seed
+        assert_eq!(a, b);
+        assert_ne!(a, seed); // never the raw signing seed
     }
 
     /// A generated unwrap secret is a first-class wrap recipient, and is tied to no seed.
@@ -579,13 +601,13 @@ mod tests {
     fn a_generated_unwrap_secret_is_independent_and_wraps_like_a_derived_one() {
         let a = generate_unwrap_secret().unwrap();
         let b = generate_unwrap_secret().unwrap();
-        assert_ne!(*a, *b, "two generated unwrap secrets must differ");
+        assert_ne!(a, b, "two generated unwrap secrets must differ");
 
         let dek = dek_fixture();
         let wrapped = wrap_dek_for(&dek, &unwrap_public(&a)).unwrap();
         assert_eq!(
-            unwrap_dek(&wrapped, &a).unwrap().as_slice(),
-            &dek,
+            unwrap_dek(&wrapped, &a).unwrap(),
+            dek,
             "the generated keypair must open its own wrap"
         );
         assert!(
@@ -602,7 +624,7 @@ mod tests {
     // this BEFORE it ever derives a KEK from that all-zero shared secret.
     #[test]
     fn wrap_rejects_all_zero_recipient_pub_as_non_contributory() {
-        let recipient_pub = [0u8; 32];
+        let recipient_pub = PublicKey32::from_bytes([0u8; 32]);
         let err = wrap_dek_for(&dek_fixture(), &recipient_pub).unwrap_err();
         assert!(err.to_string().contains("non-contributory"));
     }
@@ -621,8 +643,8 @@ mod tests {
         assert_ne!(w1, w2);
         // Both still open to the same DEK, so the difference is fresh
         // randomness, not a correctness bug.
-        assert_eq!(unwrap_dek(&w1, &secret).unwrap().as_slice(), &dek);
-        assert_eq!(unwrap_dek(&w2, &secret).unwrap().as_slice(), &dek);
+        assert_eq!(unwrap_dek(&w1, &secret).unwrap(), dek);
+        assert_eq!(unwrap_dek(&w2, &secret).unwrap(), dek);
     }
 
     // Review fix (round 2, MINOR 4e): a single flipped bit anywhere in a
