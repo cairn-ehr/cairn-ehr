@@ -278,6 +278,29 @@ def build_report(sources: list[tuple[str, str]]) -> Report:
     """
     lines: list[str] = ["## Closing-keyword guard", ""]
 
+    # What was actually read, stated first. Without this an all-clear from broken
+    # plumbing (a shallow clone, a bad `git log` range) is indistinguishable from
+    # an all-clear from a clean PR — the shape that let an EMPTY backup medium
+    # seal, verify and report healthy (#500's review wave). A check that verified
+    # nothing must say so, and must not pass.
+    sizes = ", ".join(
+        f"{label} ({len(text)} characters)" if text else f"{label} (empty)"
+        for label, text in sources
+    )
+    lines.append(f"Scanned: {sizes or 'nothing at all'}")
+    lines.append("")
+
+    if not any(text.strip() for _, text in sources):
+        lines.append("### REFUSED — NOTHING WAS SCANNED")
+        lines.append("")
+        lines.append(
+            "Every source was empty, so this check established nothing. A pull request "
+            "always has at least one commit message: an empty scan means the plumbing "
+            "that feeds this script is broken (a shallow clone, or a base..head range "
+            "that resolved to nothing), not that the text is clean."
+        )
+        return Report(text="\n".join(lines) + "\n", exit_code=1)
+
     will_close: list[tuple[str, Reference]] = []
     contradicted: list[tuple[str, Reference, str]] = []
     for label, text in sources:

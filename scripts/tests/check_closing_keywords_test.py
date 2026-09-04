@@ -216,9 +216,28 @@ class ReportsForAHuman(unittest.TestCase):
         # the next author guess, and guessing is what produced the six.
         self.assertIn("does not address", report.text)
 
-    def test_empty_input_is_clean(self) -> None:
-        report = guard.build_report([("PR body", "")])
+    def test_a_scan_with_nothing_in_it_REFUSES_rather_than_reporting_all_clear(self) -> None:
+        """An empty scan is not a pass — it is a check that verified nothing.
+
+        The plumbing that feeds this script is a `git log` range and a PR body
+        written by a CI step. If either breaks (a shallow clone, a bad range), an
+        all-empty scan prints exactly the same all-clear as a clean PR. This
+        repository has been bitten by that shape before: an *empty backup medium*
+        that sealed, verified and reported healthy (#500's own review wave).
+        """
+        report = guard.build_report([("pr-body.txt", ""), ("commit-messages.txt", "")])
+        self.assertEqual(report.exit_code, 1)
+        self.assertIn("NOTHING WAS SCANNED", report.text)
+
+    def test_an_empty_pr_body_beside_real_commits_is_fine(self) -> None:
+        # A PR may legitimately have no body; it can never have no commits.
+        report = guard.build_report([("pr-body.txt", ""), ("commit-messages.txt", "a subject")])
         self.assertEqual(report.exit_code, 0)
+
+    def test_the_report_says_how_much_of_each_source_it_read(self) -> None:
+        report = guard.build_report([("pr-body.txt", "12345"), ("commit-messages.txt", "")])
+        self.assertIn("pr-body.txt (5 characters)", report.text)
+        self.assertIn("commit-messages.txt (empty)", report.text)
 
     def test_the_report_lists_what_the_merge_will_close(self) -> None:
         report = guard.build_report([("PR body", "Closes #511 and closes #541.")])
