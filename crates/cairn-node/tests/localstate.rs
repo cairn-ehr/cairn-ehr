@@ -217,7 +217,7 @@ fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
 // #511 rides-along: the producer set, and structural redaction
 // ---------------------------------------------------------------------------------------
 
-/// **The custody slot has exactly one filler.**
+/// **`from_custody` fills the custody slot, and the narrow mutators cannot.**
 ///
 /// `LocalState`'s own doc has always said that a third producer skipping the
 /// `erasure_shred_log` filter "is how an erased body's key would travel" — and until #511
@@ -225,7 +225,15 @@ fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
 /// `set_episode_deks`: that is the slot the filter guards, and the only way to fill it is
 /// [`LocalState::from_custody`], which `read_local_state` (the filtering producer) calls.
 ///
-/// The two narrow mutators that DO exist cover slots the filter has nothing to say about.
+/// ⚠️ **This test does NOT prove the "exactly one filler" part, and its name used to claim it
+/// did.** The body below is a positive round-trip: it would pass unchanged if a third producer
+/// appeared tomorrow. The exclusivity claim is enforced somewhere else entirely — by
+/// `dr_clinical_guarantee_gap.rs`'s `local_state_producers_are_the_two_named_constructors`,
+/// which sweeps every crate's `src/` and counts constructions. Named here so a future
+/// maintainer weakening or deleting that guard does not assume this test still covers it
+/// (round-1 review of #511; a test name is a claim).
+///
+/// The narrow mutators that DO exist cover slots the filter has nothing to say about.
 #[test]
 fn from_custody_is_the_only_way_to_fill_the_custody_slot() {
     let secret = cairn_event::keys::Secret32::from_bytes(std::array::from_fn(|i| {

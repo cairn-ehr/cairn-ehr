@@ -862,11 +862,9 @@ fn local_state_producers_are_the_two_named_constructors() {
                 .unwrap_or(f)
                 .to_string_lossy()
                 .replace('\\', "/");
-            sources::read_source(f)
-                .lines()
-                .enumerate()
-                .map(|(i, l)| (rel.clone(), i + 1, l.trim().to_string()))
-                .filter(|(_, _, l)| constructs_local_state(l))
+            producer_lines(&sources::read_source(f))
+                .into_iter()
+                .map(|(line, text)| (rel.clone(), line, text))
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -874,11 +872,12 @@ fn local_state_producers_are_the_two_named_constructors() {
     assert_eq!(
         producers.len(),
         2,
-        "`LocalState` is built by struct literal in exactly TWO places — \
-         `localstate::LocalState::empty()` (the legitimate zero value) and \
-         `localstate_read::read_local_state` (the DB reader, which MUST filter on \
-         erasure_shred_log). A third producer anywhere in any crate's src/ is a place an \
-         erased body's key could travel from, and it reddens this. Found: {producers:?}"
+        "`LocalState` is built by struct literal in exactly TWO places, BOTH in \
+         `localstate.rs` — `LocalState::empty()` (the legitimate zero value) and \
+         `LocalState::from_custody()` (the custody-bearing producer, which \
+         `localstate_read::read_local_state` calls AFTER filtering on erasure_shred_log). \
+         A third producer anywhere in any crate's src/ is a place an erased body's key could \
+         travel from, and it reddens this. Found: {producers:?}"
     );
 
     // WHERE the two live, because a count alone cannot notice a swap.
@@ -934,6 +933,91 @@ fn local_state_producers_are_the_two_named_constructors() {
     );
 }
 
+/// The matcher, on synthetic input, before it is trusted against the tree.
+///
+/// This guard shipped without one, and round-1 review of #511 found it blind to `Self { … }` —
+/// the very shape its sibling `unwrap_secret_is_not_derived.rs` has two synthetic-input tests to
+/// protect against for its own matcher. A guard whose matcher is untested is a number, not a net;
+/// this file's own doc already notes that an earlier bug here was "found by mutation-testing the
+/// widened guard, not by reasoning about it".
+#[test]
+fn the_producer_matcher_sees_both_construction_shapes_and_no_false_ones() {
+    // The two real shapes, one per impl form.
+    let both_shapes = concat!(
+        "impl LocalState {\n",
+        "    pub fn empty() -> Self {\n",
+        "        LocalState { version: 1 }\n",
+        "    }\n",
+        "    pub fn sneaky() -> Self {\n",
+        "        Self { version: 1 }\n",
+        "    }\n",
+        "}\n",
+    );
+    let found = producer_lines(both_shapes);
+    assert_eq!(
+        found.len(),
+        2,
+        "both `LocalState {{ … }}` and `Self {{ … }}` inside `impl LocalState` are producers; \
+         found: {found:?}"
+    );
+
+    // `-> Self {` opens a function BODY, not a literal. Without this rule every constructor
+    // signature in the impl would count and the guard would be permanently red for the wrong
+    // reason — which is how a maintainer learns to stop believing it.
+    let signatures_only = concat!(
+        "impl LocalState {\n",
+        "    pub fn empty() -> Self {\n",
+        "        Default::default()\n",
+        "    }\n",
+        "}\n",
+    );
+    assert!(
+        producer_lines(signatures_only).is_empty(),
+        "a `-> Self {{` signature is not a construction"
+    );
+
+    // `Self { … }` in a DIFFERENT type's impl builds that type, not this one.
+    let other_impl = concat!(
+        "impl SealedLocalState {\n",
+        "    pub fn new() -> Self {\n",
+        "        Self { payload_ct: Vec::new() }\n",
+        "    }\n",
+        "}\n",
+    );
+    assert!(
+        producer_lines(other_impl).is_empty(),
+        "`Self` in `impl SealedLocalState` is not a `LocalState`"
+    );
+
+    // A trait impl's `Self` cannot be a producer either — and `SealedLocalState { … }` must not
+    // be miscounted as `LocalState { … }` on the substring.
+    let trait_impl_and_substring = concat!(
+        "impl Drop for LocalState {\n",
+        "    fn drop(&mut self) {\n",
+        "        let _ = SealedLocalState { payload_ct: Vec::new() };\n",
+        "    }\n",
+        "}\n",
+    );
+    assert!(
+        producer_lines(trait_impl_and_substring).is_empty(),
+        "neither a trait impl's `Self` nor `SealedLocalState {{` is a `LocalState` producer"
+    );
+
+    // The impl block must CLOSE: a `Self { … }` after it belongs to whatever follows.
+    let after_the_block = concat!(
+        "impl LocalState {\n",
+        "    pub fn empty() -> Self { Default::default() }\n",
+        "}\n",
+        "impl Other {\n",
+        "    pub fn new() -> Self { Self { x: 1 } }\n",
+        "}\n",
+    );
+    assert!(
+        producer_lines(after_the_block).is_empty(),
+        "a column-0 `}}` closes the impl, so a later `Self {{` is a different type"
+    );
+}
+
 /// True iff `line` constructs a `LocalState` struct literal.
 ///
 /// Pure, and deliberately fussy about the word boundary: `SealedLocalState { … }` contains
@@ -955,14 +1039,69 @@ fn local_state_producers_are_the_two_named_constructors() {
 /// first hit is one rewrite away from silently under-counting, and under-counting is the
 /// direction that hides a producer.
 fn constructs_local_state(line: &str) -> bool {
+    constructs_literal_of(line, "LocalState {")
+}
+
+/// True iff `line` constructs `Self { … }`.
+///
+/// Only meaningful INSIDE an inherent `impl LocalState` block — [`producer_lines`] supplies that
+/// context, because a line alone cannot know what `Self` is. Round-1 review of #511 found the
+/// guard blind to this form: `Self { version: 1, … }` is how a future author would idiomatically
+/// write a third producer sitting directly beside the two that exist, and it left the count at 2.
+fn constructs_self(line: &str) -> bool {
+    constructs_literal_of(line, "Self {")
+}
+
+/// The shared body of the two matchers above: the same word-boundary and return-position rules
+/// apply to `LocalState {` and `Self {` alike, so they are written once
+/// ([`is_construction_at`] holds them) rather than duplicated and left to drift.
+fn constructs_literal_of(line: &str, needle: &str) -> bool {
     if line.starts_with("//") || line.starts_with("pub struct") || line.starts_with("struct") {
         return false;
     }
     if line.starts_with("impl") {
         return false;
     }
-    line.match_indices("LocalState {")
+    line.match_indices(needle)
         .any(|(i, _)| is_construction_at(line, i))
+}
+
+/// Every line of `text` that constructs a `LocalState`, as (1-based line number, trimmed text).
+///
+/// **Why this needs file context and not just a per-line predicate.** Two shapes construct one:
+/// `LocalState { … }` anywhere, and `Self { … }` inside an inherent `impl LocalState`. The second
+/// is invisible to any line-scoped matcher, and it is the shape a third producer would most
+/// naturally take — which is exactly the "third producer skipping the `erasure_shred_log` filter"
+/// this guard is named for. Found by round-1 review of #511, not by the guard itself.
+///
+/// The enclosing block is tracked by COLUMN-0 `impl` lines opening it and a COLUMN-0 `}` closing
+/// it, which is how rustfmt lays out every file in this tree. A nested or indented `impl` would
+/// not be seen. That fails in the QUIET direction, so it is stated here rather than left to be
+/// discovered — the same disclosure `cfg_test_tail_start`'s siblings make about mid-file test
+/// modules.
+fn producer_lines(text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut inside_local_state_impl = false;
+    for (i, line) in text.lines().enumerate() {
+        if let Some(rest) = line.strip_prefix("impl ") {
+            // `impl LocalState {` opens the block where `Self` means `LocalState`. A TRAIT impl
+            // (`impl Drop for LocalState {`) does not: its methods return `()`, so a `Self { … }`
+            // there could not be a producer. Comparing the whole remainder — rather than merely
+            // looking for the name — is what tells the two apart.
+            inside_local_state_impl = rest.trim_end().trim_end_matches('{').trim() == "LocalState";
+        }
+        let trimmed = line.trim();
+        if constructs_local_state(trimmed) || (inside_local_state_impl && constructs_self(trimmed))
+        {
+            out.push((i + 1, trimmed.to_string()));
+        }
+        // A column-0 `}` closes the impl block. Checked AFTER the line itself, so the closing
+        // brace of a construction that ends the block is still attributed to it.
+        if line.starts_with('}') {
+            inside_local_state_impl = false;
+        }
+    }
+    out
 }
 
 /// True iff the `LocalState {` occurrence starting at byte offset `i` in `line` is a struct

@@ -12,12 +12,16 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
-// `Zeroizing<T>` wipes its wrapped bytes on drop (issue #54). We use it for every
-// transient secret in this module — the KEKs, the DEK, and the recovered seed — so
-// key material never lingers in freed stack/heap memory, and so the type itself tells
-// a reviewer "this value is a live secret." Deref/DerefMut let it stand in for the
-// bare array at the AEAD/Argon2 call sites with no extra ceremony.
+// `Secret32` (#511) is the custody plane's secret type: a wiping, redacting, constant-time
+// 32-byte key. Deliberately NOT a `Deref` wrapper — every use reaches the raw array through an
+// explicit `.as_bytes()`, so a reviewer can see each place key material is handed to a
+// primitive.
 use cairn_event::keys::Secret32;
+// `Zeroizing<T>` wipes its wrapped bytes on drop (issue #54). Still used here for the secrets
+// `Secret32` does not cover — the Argon2 KEKs (`derive_kek`) and variable-length buffers — so
+// key material never lingers in freed stack/heap memory, and so the type itself tells a reviewer
+// "this value is a live secret." Deref/DerefMut let it stand in for the bare array at the
+// AEAD/Argon2 call sites with no extra ceremony.
 use zeroize::Zeroizing;
 
 /// Crockford base32 alphabet (excludes I, L, O, U to avoid transcription errors).
@@ -402,19 +406,29 @@ mod tests {
         assert_eq!(via_rec, test_seed());
     }
 
-    /// The local `key_into_zeroizing` helper this crate carried is now
-    /// `Secret32::from_slice` (#511), which has the same contract for the same #54 reason.
-    /// Its own unit coverage lives in `cairn-event/src/keys.rs`; this keeps the
-    /// keystore-side pin that a wrong-length plaintext can never yield a partial key.
+    /// The local `key_into_zeroizing` helper this crate carried is now `Secret32::from_slice`
+    /// (#511), which has the same contract for the same #54 reason.
+    ///
+    /// ⚠️ **What this does and does not cover, because the old name overstated it.** It was
+    /// called `a_wrong_length_plaintext_can_never_become_a_key`, which reads as a claim about
+    /// THIS crate's unseal path — but it executes no keystore code at all, so `try_unwrap` /
+    /// `unseal_op` / `unseal_rec` could be changed to pad or truncate and it would stay green.
+    /// What it actually pins is the CONSTRUCTOR CONTRACT those functions depend on, restated
+    /// keystore-side so that a change to `Secret32` in another crate reddens here too. The
+    /// constructor's own unit coverage lives in `cairn-event/src/keys.rs`; the unseal paths'
+    /// coverage is the round-trip tests above.
     #[test]
-    fn a_wrong_length_plaintext_can_never_become_a_key() {
-        let src = [9u8; 32];
+    fn the_key_constructor_this_crate_relies_on_refuses_every_length_but_32() {
+        // House rule 6(a): derived at runtime, never a byte-array literal in a crypto context —
+        // `from_bytes`/`from_slice` are the tree's canonical secret constructors, so a literal
+        // here is a literal in the sharpest possible sink.
+        let src: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(3));
         assert_eq!(
             Secret32::from_slice(&src).expect("32-byte slice must convert"),
             Secret32::from_bytes(src)
         );
-        assert!(Secret32::from_slice(&[9u8; 31]).is_none());
-        assert!(Secret32::from_slice(&[9u8; 33]).is_none());
+        assert!(Secret32::from_slice(&src[..31]).is_none());
+        assert!(Secret32::from_slice(&[src.as_slice(), &src[..1]].concat()).is_none());
         assert!(Secret32::from_slice(&[]).is_none());
     }
 

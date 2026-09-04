@@ -32,10 +32,13 @@ pub use attachment::{Attachment, Rendition, SealRef};
 // contributor-vocabulary detail: `verify_self_described_event` yields one through
 // `VerifiedEvent::signer` (#412).
 pub use contributor::VerifiedKid;
-// Re-exported at the crate root for the same reason `VerifiedKid` is: the unwrap-key cert API
-// (`sign_unwrap_key_cert` / `verify_unwrap_key_cert`) lives here, so its key type is part of
-// this module's shape, not only the seal plane's (#511).
 pub use ed25519_dalek::{SigningKey, VerifyingKey};
+// Re-exported at the crate root for the same reason `VerifiedKid` is: the unwrap-key cert API
+// (`sign_unwrap_key_cert` / `verify_unwrap_key_cert`) lives here, so its key type is part of this
+// module's shape, not only the seal plane's (#511). Note this makes THREE paths to one
+// definition — `keys::`, `seal::` and here — and only the first two have callers today; this one
+// exists so the cert API is usable without importing the seal plane. (Round-1 review found this
+// comment sitting above the dalek re-export on the line before, describing that instead.)
 pub use keys::{PublicKey32, Secret32};
 
 pub mod attachment;

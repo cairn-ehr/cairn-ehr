@@ -9,14 +9,39 @@
 //! `keystore::generate_unwrap_sealed` and `CustodyKeyDestination::install` prove the file holds
 //! *the bytes we wrote*, never *a key that opens anything*.
 //!
-//! WHAT THESE TWO TYPES DO — AND DO NOT DO. Secret-vs-public is now a COMPILE error everywhere.
-//! **Secret-vs-secret is not.** An unwrap secret, an Ed25519 signing seed and a DEK are all
-//! [`Secret32`], so `Secret32::from_bytes(sk.to_bytes())` still compiles. What changed is that
-//! it stopped being an implicit coercion a reviewer cannot see and became a **named, greppable
-//! line** — and in production there is exactly one:
-//! `cairn_keystore::keystore::adopt_derived_unwrap_secret`, the ADR-0066 adoption migration,
-//! pinned by `cairn-node/tests/unwrap_secret_is_not_derived.rs`.
-//! `keystore::unwrap_secret_is_the_signing_seed` remains the only defence against the
+//! WHAT THESE TWO TYPES DO — AND DO NOT DO. Secret-vs-public is now a COMPILE error everywhere a
+//! key crosses a Rust signature. Three boundaries stay raw byte slices on purpose, each argued at
+//! its own site: the two `node_unwrap_key.unwrap_pub` column reads in `cairn-node`'s `main.rs`
+//! (converting there would turn a corrupt-length registration into `None`, indistinguishable from
+//! "nothing registered" — the reassuring direction), and `cairn_pgx`'s `bytea` arguments, which
+//! are a SQL boundary no Rust type reaches across.
+//!
+//! **Secret-vs-secret is not separated at all.** An unwrap secret, an Ed25519 signing seed and a
+//! DEK are all [`Secret32`], so `Secret32::from_bytes(sk.to_bytes())` still compiles. What changed
+//! is that it stopped being an implicit coercion a reviewer cannot see and became a **named,
+//! greppable line**.
+//!
+//! THE INVENTORY IS NOT KEPT HERE. It is kept in code that fails:
+//! `cairn-node/tests/secret32_conversions_are_named.rs` pins every production
+//! `Secret32::from_bytes` call site, PER FILE AND BY COUNT, each with the reason it is
+//! legitimate. Read that table rather than a number in this paragraph.
+//!
+//! Round-1 review of #511 found why that matters. The count was asserted in SIX places — this
+//! header and `keystore::adopt_derived_unwrap_secret` said "one"; `unwrap_secret_is_the_signing_
+//! seed`, `cairn-sync`'s `resolve_at_startup`, `ROADMAP.md` and `HANDOVER.md` said "two" — and
+//! they were silently counting THREE DIFFERENT POPULATIONS: all production `Secret32::from_bytes`
+//! (six), those taking a signing seed (four), and those installing one as an unwrap secret (two).
+//! Every sentence was defensible about some population and wrong about the one a reader would
+//! assume. Worse, the guard this header named as its pin
+//! (`unwrap_secret_is_not_derived.rs`) counts none of them — it pins which FILES may call
+//! `derive_unwrap_secret`. **A prose count with no mechanical pin is a stale count waiting to
+//! happen**, and that is the #530 pattern this very slice was fixing one module over.
+//!
+//! Of those conversions, exactly TWO turn this node's signing seed into its unwrap secret —
+//! `cairn_keystore::keystore::adopt_derived_unwrap_secret` (the ADR-0066 adoption migration) and
+//! `cairn-sync`'s `resolve_at_startup` fallback — and both are additionally covered by
+//! `unwrap_secret_is_not_derived.rs`'s allow-list, which is the guard that genuinely does pin
+//! them. `keystore::unwrap_secret_is_the_signing_seed` remains the only defence against the
 //! signing-seed-as-unwrap-secret confusion, and it is wired only where both keys are genuinely
 //! this node's. This boundary — one wrapper, not one per role — is the same one
 //! [`crate::VerifiedKid`] draws in `contributor.rs`, and it was chosen deliberately over
@@ -61,7 +86,17 @@
 //!
 //! And the POSITIVE CONTROL, without which the three above guard nothing — a `compile_fail`
 //! block that fails for the wrong reason (a typo, a missing import, a moved path) passes
-//! silently:
+//! silently.
+//!
+//! ⚠️ **The control is the ONLY defence here; do not replace it with an error code.**
+//! Rustdoc accepts ```` ```compile_fail,E0308 ```` and it looks like it pins the failure to a type
+//! mismatch. It does not, on this toolchain: annotating one of the blocks above with a
+//! deliberately WRONG code (`E0433`, unresolved import) still passes. The annotation is inert on
+//! stable, so writing it would advertise a guarantee nothing enforces — the exact defect this
+//! slice exists to remove. Measured, not assumed, during round-1 review. What actually keeps the
+//! three blocks honest is that this control exercises every API path they depend on
+//! (`Secret32::from_bytes`, `seal::unwrap_public`, `seal::wrap_dek_for`, `seal::unwrap_dek`), so
+//! a rename or a moved path reddens HERE rather than silently satisfying them:
 //!
 //! ```
 //! use cairn_event::keys::Secret32;
@@ -74,7 +109,9 @@
 //! WHY A SEPARATE FILE. `seal.rs` is where these are USED, and it re-exports them so
 //! `cairn_event::seal::Secret32` — the path #511 names and every call site uses — resolves. But
 //! `seal.rs` is already past the project's 500-line guideline, so the definitions live here.
-//! One definition, two paths, the second an ordinary Rust re-export.
+//! One definition, three paths — `keys::`, `seal::` (the path #511 names and every call site
+//! uses) and the crate root (for the unwrap-key cert API, which lives in `lib.rs`) — all
+//! ordinary Rust re-exports.
 
 use serde::de::{Error as DeError, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -85,8 +122,13 @@ use zeroize::Zeroizing;
 /// refusal messages cannot drift apart from one another.
 const KEY_LEN: usize = 32;
 
-/// 32 bytes of SECRET key material: an X25519 unwrap secret, an Ed25519 signing seed, a
-/// per-event DEK, or a wrap KEK. Wiped on drop; `Debug` redacts; equality is constant-time.
+/// 32 bytes of SECRET key material: an X25519 unwrap secret, an Ed25519 signing seed, or a
+/// per-event DEK. Wiped on drop; `Debug` redacts; equality is constant-time.
+///
+/// NOT yet the Argon2 wrap KEK — `cairn_keystore::seal::derive_kek` still returns
+/// `Zeroizing<[u8; 32]>`, and it is the one un-newtyped secret left in the migrated modules.
+/// Named here rather than silently omitted so the next reader does not have to grep to find out
+/// whether "the custody plane" meant "every 32-byte secret in the repo". It did not.
 ///
 /// Deliberately **not** `Copy`: a `Copy` secret leaves unwiped duplicates by construction,
 /// which is the opposite of what the `Zeroizing` inner buys. `Clone` is fine — every clone is
@@ -105,12 +147,15 @@ impl Secret32 {
         Secret32(Zeroizing::new([0u8; KEY_LEN]))
     }
 
-    /// The ONE raw entry point, and deliberately a named function rather than a `From` impl.
+    /// The raw entry point for a STATICALLY-sized key, and deliberately a named function rather
+    /// than a `From` impl. ([`Self::from_slice`] is its checked counterpart, for the runtime-length
+    /// case; between them they are the only two doors, and both are greppable by name.)
     ///
     /// Every place a loose 32 bytes becomes a secret should be findable with one grep, because
     /// that is exactly where a signing seed can be misfiled as an unwrap secret (see the module
     /// header). A `From<[u8; 32]>` would make those conversions invisible at the call site,
-    /// which is the property this whole type exists to remove.
+    /// which is the property this whole type exists to remove. The grep is mechanised by
+    /// `cairn-node/tests/secret32_conversions_are_named.rs`.
     pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
         Secret32(Zeroizing::new(bytes))
     }
@@ -151,6 +196,16 @@ impl Secret32 {
 /// makes `#[derive(Debug)]` on a containing type safe, which is how `localstate::LocalState`
 /// stopped needing a hand-written `Debug` whose only job was redacting this one field. Deviates
 /// from #511's literal "never Debug" for that reason.
+///
+/// ⚠️ **`Serialize` is NOT redacted, and the argument above does not extend to it.** `{:?}` is
+/// safe on a `Secret32` anywhere; `serde_json::to_string` of a struct containing one writes the
+/// key material out in full, because the impl below exists to reproduce a WIRE format and a
+/// redacting serializer would silently corrupt every `CAIRNL1` export. So the containment a
+/// containing type inherits is `Debug`'s only: deriving `Serialize` on a new type that holds a
+/// `Secret32` is a decision to publish the key, and there is no compile error to stop it. Today
+/// `localstate::LocalState` is the only such type in the tree and its output is sealed before it
+/// leaves memory. Stated because the paragraph above invites the reader to believe containment is
+/// automatic in both directions. It is not.
 impl std::fmt::Debug for Secret32 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Secret32(<redacted>)")
@@ -183,8 +238,17 @@ impl Serialize for Secret32 {
     }
 }
 
-/// Decodes into a PRE-SIZED ZEROIZING buffer — never into a `Vec<u8>` that would leave an
-/// unwiped copy of the node's custody key in freed heap (#508's shape, narrowed here).
+/// Decodes a CBOR ARRAY into a PRE-SIZED ZEROIZING buffer — never into a `Vec<u8>` that would
+/// leave an unwiped copy of the node's custody key in freed heap (#508's shape, narrowed here).
+///
+/// **The narrowing covers the array encoding, which is the only one this crate produces.** It
+/// does not cover a CBOR BYTE STRING in the same slot: ciborium's `deserialize_seq` materialises
+/// a byte string into a plain `Vec<u8>` and only then calls `visit_seq`, so the pre-sized buffer
+/// below never sees those bytes first and an unwiped heap copy is left behind before any of this
+/// code runs. Reaching that requires a foreign or hand-built bundle — cairn's own writer always
+/// emits the array (pinned by `cairn-node/tests/localstate_wire_pins.rs`) — so it is residual
+/// #508, not a new class. Said plainly because the sentence above would otherwise read as "this
+/// class is closed here", and the next reader auditing key-material lifetimes would stop looking.
 ///
 /// Refuses any length but 32 **at the parse boundary**, in words an operator can act on. That
 /// is the refusal `localstate::recovered_unwrap_secret` used to make one layer later, moved to
@@ -246,10 +310,6 @@ impl PublicKey32 {
 
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
-    }
-
-    pub fn to_bytes(self) -> [u8; KEY_LEN] {
-        self.0
     }
 }
 
@@ -391,8 +451,12 @@ mod tests {
         );
     }
 
-    /// `PublicKey32` also lives in serialized shapes (`CustodyAdmission`, and any future slot),
-    /// so its encoding is pinned against the `[u8; 32]` it replaces for the same reason.
+    /// Pinned as INSURANCE, not against a live wire slot: no serde-deriving type in the tree
+    /// holds a `PublicKey32` today (`cairn-sync`'s `CustodyAdmission` derives only
+    /// `Debug, Clone, PartialEq, Eq`, and the unwrap-key cert carries hex, not this type). The
+    /// pin exists so the FIRST type that does serialize one inherits a proven encoding instead of
+    /// minting an unreviewed one. An earlier version of this comment named `CustodyAdmission` as
+    /// though it were already serialized; it never was.
     #[test]
     fn a_public_key_encodes_exactly_as_the_array_it_replaces() {
         let raw = bytes_fixture(10);

@@ -170,6 +170,29 @@ fn a_recovered_secret_that_is_not_32_bytes_is_refused() {
         "the refusal must say what it got and what it needed, or an operator cannot act on \
          it: {err}"
     );
+
+    // ANTI-VACUITY, and it belongs HERE rather than only in the DB-gated sibling below.
+    //
+    // Everything above rests on [`ForeignBundle`] being wire-identical to `LocalState`: because
+    // the real type carries `#[serde(deny_unknown_fields)]`, a single drifted field name would
+    // make `from_cbor` refuse for the WRONG reason ("unknown field") and this test would stay
+    // green while exercising no length check at all. The proof that it does not is that the
+    // SAME fixture with a WHOLE secret parses cleanly.
+    //
+    // That control used to live only in `a_malformed_recovered_secret_is_refused_before_
+    // anything_is_written`, a `#[tokio::test]` that self-skips without `CAIRN_TEST_PG` — so on
+    // the common DB-free local run, a drifted fixture left this test green and unguarded.
+    // Round-1 review of #511 found that; it needs no database, so it runs unconditionally now.
+    let whole = secret.as_bytes().to_vec();
+    let parsed = from_cbor(&ForeignBundle::with_unwrap_secret(whole).to_cbor()).expect(
+        "the identical fixture with a 32-byte secret must PARSE — if this fails, the \
+                 refusal above proves nothing about length, only that ForeignBundle drifted",
+    );
+    assert_eq!(
+        recovered_unwrap_secret(&parsed),
+        Some(&secret),
+        "and it must round-trip to the very secret it carried"
+    );
 }
 
 /// A `LocalState` in the shape a FOREIGN or CORRUPT writer can produce: the secret slot is a
@@ -447,11 +470,23 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
 /// `apply_local_state`. `LocalState::unwrap_secret` is a `Secret32` now, so a 31-byte secret
 /// is unrepresentable in the type and `apply_local_state` cannot be handed one: the only way
 /// such a bundle exists is on a DISK, and `from_cbor` refuses it there. This test therefore
-/// drives the bundle in as BYTES — which is how a corrupt export actually arrives — and
-/// asserts the ordering claim its name makes, which is now stronger than before: nothing is
-/// written, nothing is registered, and the bundle is not even decoded.
+/// drives the bundle in as BYTES — which is how a corrupt export actually arrives.
+///
+/// ⚠️ **What the two "nothing was written / nothing was registered" assertions below are now
+/// worth, stated because the old test NAME promised more than they can deliver.** This test no
+/// longer calls `apply_local_state` at all, so no code path exists that could violate them —
+/// they are a statement of the consequence, not a test of the ordering. That is why the name
+/// changed from `…_before_anything_is_written` to `…_at_the_parse_boundary`: a test name is a
+/// claim, and this one was outrunning its assertions (round-1 review of #511). The ordering
+/// property is still genuinely covered, one test down, by
+/// `a_secret_that_opens_no_carried_custody_is_refused_before_installing`, which DOES drive
+/// `apply_local_state` and where those same two assertions can and do fail.
+///
+/// What this test still earns its database for: the malformed bundle is truncated from a REAL
+/// export produced by `read_local_state`, not a synthetic fixture — so it also pins that a
+/// genuine export's secret is 32 bytes in the first place.
 #[tokio::test]
-async fn a_malformed_recovered_secret_is_refused_before_anything_is_written() {
+async fn a_malformed_recovered_secret_is_refused_at_the_parse_boundary() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -686,7 +721,7 @@ async fn a_secret_that_opens_no_carried_custody_is_refused_before_installing() {
     // `secret_opens_the_carried_custody` — a runtime trial-unwrap — is still load-bearing and
     // must not be removed as "now covered by the types".
     let public_half = cairn_event::seal::unwrap_public(&dead_secret);
-    bundle.set_unwrap_secret(Some(Secret32::from_bytes(public_half.to_bytes())));
+    bundle.set_unwrap_secret(Some(Secret32::from_bytes(*public_half.as_bytes())));
 
     c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
     let new_unwrap =

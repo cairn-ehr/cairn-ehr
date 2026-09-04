@@ -287,7 +287,10 @@ pub fn load_unwrap_secret(path: &Path, secret: Option<&str>) -> Result<Secret32,
 }
 
 /// ADR-0066 decision 5 — THE MIGRATION, and the only production caller of
-/// `derive_unwrap_secret`.
+/// `derive_unwrap_secret` outside `cairn-sync`'s pre-ADR-0066 startup fallback
+/// (`unwrap_key::resolve_at_startup`). Both are named, with their reasons, in
+/// `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`'s `ALLOWED` list — which is the
+/// authority here, not this sentence.
 ///
 /// A node provisioned before ADR-0066 wrapped every `event_dek` row to the public half of
 /// the secret HKDF-derived from its signing seed. Re-deriving it once and adopting it as
@@ -296,13 +299,21 @@ pub fn load_unwrap_secret(path: &Path, secret: Option<&str>) -> Result<Secret32,
 /// still reconstructs the old secret, which is why this migration is cheap now and never
 /// cheaper.
 pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> Secret32 {
-    // ⚠️ THE ONE PRODUCTION LINE IN THE TREE that turns the Ed25519 signing seed into a
-    // `Secret32`. #511's newtypes make a PUBLIC-for-secret mix-up a compile error, but they
-    // deliberately do NOT separate one secret role from another — an unwrap secret, a signing
-    // seed and a DEK are all `Secret32`. So this conversion is exactly the shape that, written
-    // anywhere else, IS the #495 coupling. It is named, commented, and pinned by
-    // `crates/cairn-node/tests/unwrap_secret_is_not_derived.rs`; the count failing is the
-    // guard working.
+    // ⚠️ ONE OF THE TWO PRODUCTION LINES that turn the Ed25519 signing seed into this node's
+    // UNWRAP SECRET — this one and `cairn-sync`'s `resolve_at_startup` fallback. (The tree holds
+    // other `Secret32::from_bytes` calls, including two in this very file, but they mint fresh
+    // CSPRNG output, seal the seed AS the seed, or compare; none of them installs a custody key.
+    // The full inventory, per file and by count, is pinned in
+    // `crates/cairn-node/tests/secret32_conversions_are_named.rs` — read it there, not from a
+    // number in a comment. An earlier version of this line said "THE ONE PRODUCTION LINE IN THE
+    // TREE" and was contradicted 40 lines below by its own file.)
+    //
+    // #511's newtypes make a PUBLIC-for-secret mix-up a compile error, but they deliberately do
+    // NOT separate one secret role from another — an unwrap secret, a signing seed and a DEK are
+    // all `Secret32`. So this conversion is exactly the shape that, written anywhere else, IS the
+    // #495 coupling. Two guards cover it: `unwrap_secret_is_not_derived.rs` pins which FILES may
+    // call `derive_unwrap_secret`, and `secret32_conversions_are_named.rs` pins the conversion
+    // count in each. Either one reddening is the guard working — do not edit the number to match.
     let seed = Secret32::from_bytes(sk.to_bytes());
     cairn_event::seal::derive_unwrap_secret(&seed)
 }
@@ -342,9 +353,10 @@ pub fn adopt_derived_unwrap_secret(sk: &SigningKey) -> Secret32 {
 /// `establish-unwrap-key`, via `load_unwrap_secret_or_refuse_swapped_file`, which refuses
 /// the command rather than registering a public half derived from the signing seed.
 pub fn unwrap_secret_is_the_signing_seed(unwrap: &Secret32, sk: &SigningKey) -> bool {
-    // Constant-time via `Secret32`'s `PartialEq`, and the second `Secret32::from_bytes` here is
-    // the other half of the pair `adopt_derived_unwrap_secret` documents: this one is a
-    // COMPARISON, never an installation, which is why it is safe where that one is delicate.
+    // Constant-time via `Secret32`'s `PartialEq`. This conversion is a COMPARISON, never an
+    // installation, which is why it is safe where `adopt_derived_unwrap_secret`'s is delicate:
+    // the `Secret32` built here is dropped (and wiped) before this function returns, and nothing
+    // it touches reaches a keystore file or the `node_unwrap_key` singleton.
     *unwrap == Secret32::from_bytes(sk.to_bytes())
 }
 

@@ -324,6 +324,8 @@ enum CustodyRegistration {
 /// the comparison actually made; without it, the honest answer is
 /// [`CustodyRegistration::Unverified`]. Impure only in that it reads one file, so the
 /// rendering in [`unwrap_key_status_line`] stays pure and exhaustively unit-testable.
+///
+/// **Why `registered` is a byte slice and not a `PublicKey32`.**
 /// `registered` stays a raw `&[u8]` rather than a `PublicKey32`, deliberately, and the reason
 /// is the same one #511 exists for. It is the `node_unwrap_key.unwrap_pub` COLUMN, whose length
 /// no Rust type guarantees. Converting it here with `PublicKey32::from_slice` would turn a

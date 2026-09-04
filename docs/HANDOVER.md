@@ -70,7 +70,7 @@
 > recall.**
 
 > [!IMPORTANT]
-> **Five traps slice 1 minted. Each is a step a next session takes in good faith.**
+> **Six traps. Each is a step a next session takes in good faith.** (Five came from slice 1; trap 5 was minted by #511.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -100,9 +100,12 @@
 >    state and that the way out is another restore into a fresh database.
 > 5. **⇒ `Secret32` DOES NOT SEPARATE ONE SECRET ROLE FROM ANOTHER (#511, 2026-09-04).** An unwrap
 >    secret, an Ed25519 signing seed and a DEK are all `Secret32`, so `Secret32::from_bytes(sk.to_bytes())`
->    compiles — that conversion IS the #495 coupling wherever it is not deliberate. Production has
->    exactly **two**, both commented as such: `keystore::adopt_derived_unwrap_secret` (the ADR-0066
->    migration) and `cairn-sync`'s pre-ADR-0066 fallback (trap 3). A third is the defect returning; the
+>    compiles — that conversion IS the #495 coupling wherever it is not deliberate. **Do not take the
+>    count from any comment: it is pinned in `crates/cairn-node/tests/secret32_conversions_are_named.rs`,
+>    per file and by count.** Six production `Secret32::from_bytes` sites exist; exactly **two** turn the
+>    signing seed into an unwrap secret — `keystore::adopt_derived_unwrap_secret` (the ADR-0066 migration)
+>    and `cairn-sync`'s pre-ADR-0066 fallback (trap 3) — and the rest mint fresh CSPRNG output, seal the
+>    seed AS the seed, or compare. A third of the first kind is the defect returning; the
 >    newtypes make the PUBLIC-for-secret mix-up a compile error and nothing more. `unwrap_secret_is_the_signing_seed`
 >    is still the only check for the secret-for-secret one, and `secret_opens_the_carried_custody` is
 >    still the only proof a restored key OPENS anything — neither is made redundant by the types.
@@ -215,12 +218,28 @@ that generalise past the slice that found them.
 
 ### 2026-09-04 (last) — #511: the custody newtypes
 
-**Closes #511. Does not touch #500 — no clinical event travels on any medium as a result. Opened #541.
-No ADR, spec bump, migration or DB change.** New `crates/cairn-event/src/keys.rs`: **`Secret32`** (Zeroizing
-inner, **redacting** `Debug`, constant-time `PartialEq`) and **`PublicKey32`** (`Copy`, printable —
-published by design), re-exported from `seal`. Migrated the whole custody plane across `cairn-event`,
-`cairn-keystore`, `cairn-node`, `cairn-sync` **and the `exclude`d `extensions/cairn_pgx` tree**; all three
-lockfiles refreshed. ROADMAP's #511 entry carries the detail. What a next session must not misread:
+**Closes #511. Does not touch #500 — no clinical event travels on any medium as a result. Opened #541,
+and #543–#545 in review. No ADR, spec bump, migration or DB change.** New
+`crates/cairn-event/src/keys.rs`: **`Secret32`** (Zeroizing inner, **redacting** `Debug`, constant-time
+`PartialEq`) and **`PublicKey32`** (`Copy`, printable — published by design), re-exported from `seal`.
+Migrated the whole custody plane across `cairn-event`, `cairn-keystore`, `cairn-node`, `cairn-sync`
+**and the `exclude`d `extensions/cairn_pgx` tree**; all three lockfiles refreshed. ROADMAP's #511 entry
+carries the detail. What a next session must not misread:
+
+0. **⇒ THE REVIEW ROUND CAUGHT THIS SLICE COMMITTING THE DEFECT IT WAS FIXING — read this first.** The
+   slice's own headline finding was two `seal.rs` comments still asserting a coupling ADR-0066 deleted
+   (the #530 pattern). Five review passes then found the same shape three times in its own output: a
+   conversion count asserted in **six places that were silently counting three different populations**
+   (all production `Secret32::from_bytes` = six; those taking a signing seed = four; those installing one
+   as an unwrap secret = two), naming a guard that counted **none** of them;
+   `secret_opens_the_carried_custody`'s doc still opening with
+   *"every key in this plane is a bare `[u8; 32]`"* — the premise the slice had just retired, on the one
+   function the slice declares must never be deleted; and the producer guard blind to `Self { … }`. All
+   fixed. The durable lesson is mechanical, not moral: **an inventory that lives in prose is a stale
+   inventory waiting to happen.** The count now lives in
+   `crates/cairn-node/tests/secret32_conversions_are_named.rs`, per file and by count, and both its
+   matcher and its bite are mutation-tested. **Grep, do not recall** — 2b's moral, which binds the slice
+   that writes the grep too.
 
 1. **⇒ THE TYPES CLOSE ONE CONFUSION, NOT THREE — and the issue's own table invites the stronger reading.**
    PUBLIC-for-secret is a compile error everywhere. **Secret-for-secret is not**: see trap 5 in ⇒ NEXT.

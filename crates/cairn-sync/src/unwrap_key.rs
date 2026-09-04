@@ -348,10 +348,16 @@ pub fn resolve_at_startup(
         passphrase.as_deref(),
         unwrap_path.overridden,
     );
-    // The pre-ADR-0066 derivation, kept as a FALLBACK only — see [`resolve`]'s table. This is
-    // the second of the tree's two `Secret32::from_bytes(<signing seed>)` conversions (#511 §2);
-    // the other, `keystore::adopt_derived_unwrap_secret`, is the adoption migration. Both are
-    // deliberate and pinned; a third would be the #495 coupling returning.
+    // The pre-ADR-0066 derivation, kept as a FALLBACK only — see [`resolve`]'s table. This is the
+    // second of the two production lines that turn this node's signing seed into an unwrap secret
+    // (#511 §2); the other, `keystore::adopt_derived_unwrap_secret`, is the adoption migration.
+    //
+    // Two guards cover them, and it is worth knowing which does what, because neither alone is
+    // enough: `unwrap_secret_is_not_derived.rs` pins which FILES may call `derive_unwrap_secret`
+    // (so a THIRD file doing it reddens, but a second call inside this one does not), and
+    // `secret32_conversions_are_named.rs` pins the `Secret32::from_bytes` count per file (so a
+    // second conversion added here reddens too). The full inventory lives in the latter; do not
+    // restate a count in a comment, which is how the round-1 numbers drifted apart.
     let derived =
         cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(signing_key.to_bytes()));
 

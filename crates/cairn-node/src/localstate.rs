@@ -71,9 +71,11 @@ use crate::seal::{
 use cairn_event::keys::Secret32;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-// `Zeroizing` wipes the freshly-minted LSK on drop (issue #54), matching the convention
-// in `seal.rs`. The LSK recovered inside `seal_local_state`/`unseal_local_state_*` is
-// already `Zeroizing` because `seal::try_unwrap` now returns it wrapped.
+// `Zeroizing` wipes its wrapped bytes on drop (issue #54), matching the convention in `seal.rs`.
+// Since #511 the fixed-size key material here is `Secret32`, which wipes itself — the LSK, minted
+// and recovered alike (`seal::try_unwrap` returns a `Secret32`). What is still `Zeroizing` is the
+// VARIABLE-length secret this crate handles and `Secret32` cannot cover: the decrypted bundle
+// CBOR, a `Zeroizing<Vec<u8>>` that must not linger in freed heap either.
 use zeroize::Zeroizing;
 
 /// Magic for the `.lsk` sidecar (the dual-wrapped LSK). 8 bytes, like CAIRNK1/CAIRNB1.
@@ -140,29 +142,29 @@ pub struct LocalState {
     /// Bundle format version (bump only on a NON-additive change, which we avoid).
     /// NOT `#[serde(default)]`: absence of a version is always a malformed bundle —
     /// we must refuse it rather than silently assume v1.
-    pub(crate) version: u8,
+    version: u8,
     /// Node-default data-at-rest keys. Empty — and no store exists to fill them from
     /// (#495: promise 2 has no subject; see `dr_clinical_guarantee_gap.rs`).
     #[serde(default)]
-    pub(crate) node_default_deks: Vec<Vec<u8>>,
+    node_default_deks: Vec<Vec<u8>>,
     /// Sealed-episode DEKs — one [`EpisodeDek`] per surviving `event_dek` row, CBOR-encoded
     /// into this slot's opaque leaf type, minus every event named in `erasure_shred_log`
     /// (ADR-0026 point 6 / ADR-0066 decision 7). Each DEK travels **wrapped**, exactly as it
     /// sits in the database; [`Self::unwrap_secret`] is what opens them.
     #[serde(default)]
-    pub(crate) episode_deks: Vec<Vec<u8>>,
+    episode_deks: Vec<Vec<u8>>,
     /// Node config blob. None today (no node config table exists yet).
     #[serde(default)]
-    pub(crate) config: Option<Vec<u8>>,
+    config: Option<Vec<u8>>,
     /// Draft / scratchpad store. Empty today (no draft store exists yet).
     #[serde(default)]
-    pub(crate) drafts: Vec<Vec<u8>>,
+    drafts: Vec<Vec<u8>>,
     /// ADR-0066: this node's INDEPENDENT X25519 unwrap secret, so a restored node inherits
     /// custody of every body it also inherits. The signing key is still deliberately absent
     /// (ADR-0026 point 4): a stolen, unsealed export must yield READ access, never a
     /// signing identity — and an unwrap secret is exactly read access.
     #[serde(default)]
-    pub(crate) unwrap_secret: Option<Secret32>,
+    unwrap_secret: Option<Secret32>,
 }
 
 impl LocalState {
@@ -189,13 +191,24 @@ impl LocalState {
     /// [`crate::localstate_read::read_local_state`] builds after filtering out every event
     /// named in `erasure_shred_log`.
     ///
-    /// **Why this exists rather than a struct literal.** The fields above are `pub(crate)`
-    /// and there are exactly TWO producers — this and [`Self::empty`] — because this struct's
-    /// own doc has always warned that a third producer skipping that filter "is how an erased
-    /// body's key would travel", and until #511 nothing prevented one. There is deliberately
-    /// **no `set_episode_deks`**: the custody slot is the one the filter guards, so the only
-    /// way to fill it is through the producer that does the filtering. The two mutators below
-    /// touch slots the filter has nothing to say about.
+    /// **Why this exists rather than a struct literal.** The fields above are PRIVATE and there
+    /// are exactly TWO producers — this and [`Self::empty`] — because this struct's own doc has
+    /// always warned that a third producer skipping that filter "is how an erased body's key
+    /// would travel", and until #511 nothing prevented one. There is deliberately **no
+    /// `set_episode_deks`**: the custody slot is the one the filter guards, so it can only be
+    /// filled by a producer, and the only producer that fills it non-empty is this one. The
+    /// mutators below touch slots the filter has nothing to say about.
+    ///
+    /// **What that does and does not promise, stated exactly.** This function does not itself
+    /// filter — it takes the rows its caller hands it. What the private fields buy is that the
+    /// *only in-tree filler* is [`crate::localstate_read::read_local_state`], which does filter,
+    /// and that no code outside this module can assemble a `LocalState` around unfiltered rows
+    /// without going through a producer a reviewer can see. It stays `pub` rather than
+    /// `pub(crate)` because the golden-bytes wire pin (`tests/localstate_wire_pins.rs`) is a
+    /// separate crate and must build a fully-populated bundle; that is a legitimate caller, and
+    /// narrowing the visibility would only push it back to a test-only constructor with the same
+    /// reach. An earlier version of this paragraph claimed the filter itself was the gate, which
+    /// claimed more than the code delivers.
     ///
     /// Pinned by `dr_clinical_guarantee_gap.rs`'s producer count — when it fails, ask whether
     /// the new producer filters, not whether the number should go up.
@@ -246,8 +259,9 @@ impl LocalState {
 
     /// Set (or clear) the custody secret.
     ///
-    /// One of only two mutators, and it is safe in a way `set_episode_deks` would not be: the
-    /// `erasure_shred_log` filter is about which DEKs travel, and the secret is not a DEK.
+    /// Safe in a way `set_episode_deks` would not be: the `erasure_shred_log` filter is about
+    /// which DEKs travel, and the secret is not a DEK. (For the full list of what may and may not
+    /// be mutated, see [`Self::set_config`] — it is stated once, there.)
     pub fn set_unwrap_secret(&mut self, secret: Option<Secret32>) {
         self.unwrap_secret = secret;
     }
@@ -268,13 +282,22 @@ impl LocalState {
 
     /// Replace the node-config slot. Same reasoning again.
     ///
-    /// **Where the line is, stated once for all three mutators.** There are setters for
-    /// `unwrap_secret`, `drafts` and `config`, and deliberately NONE for `episode_deks`,
+    /// **Where the line is, stated once for every mutator on this type.** There are setters for
+    /// `unwrap_secret`, `drafts` and `config`, plus [`Self::take_unwrap_secret`] (four mutating
+    /// methods in all), and deliberately NONE for `episode_deks`,
     /// `node_default_deks` or `version`. `episode_deks` is the slot the `erasure_shred_log`
-    /// filter guards, so it may only be filled by the producer that filters
-    /// ([`Self::from_custody`]); `node_default_deks` is reserved and wiped by this type's
+    /// filter guards, so it may be filled only through [`Self::from_custody`] — whose sole
+    /// in-tree caller, [`crate::localstate_read::read_local_state`], is the code that applies
+    /// that filter; `node_default_deks` is reserved and wiped by this type's
     /// `Drop`; `version` is a format fact, not content. A future setter for any of those three
     /// is the change to argue about, not to make.
+    ///
+    /// **These four mutators have no production callers today** — every call site is in
+    /// `crates/cairn-node/tests/`. They exist so the test crate can stage bundles that the now
+    /// private fields no longer let it assemble directly. Said out loud rather than left to be
+    /// inferred, because a `pub` mutator on the custody-bearing type reads like production API
+    /// and is surface the producer-count guard cannot see; if one of them ever loses its last
+    /// test caller, delete it rather than leaving an unreachable door into this struct.
     pub fn set_config(&mut self, config: Option<Vec<u8>>) {
         self.config = config;
     }
@@ -417,11 +440,11 @@ pub fn from_cbor(bytes: &[u8]) -> Result<LocalState, LocalStateError> {
 /// `SealedKey`) so a stray `{:?}` cannot dump wrapped key material.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LskWraps {
-    pub(crate) argon: ArgonParams,
-    pub(crate) salt_op: [u8; 16],
-    pub(crate) salt_rec: [u8; 16],
-    pub(crate) wrap_op: Wrap,
-    pub(crate) wrap_rec: Wrap,
+    argon: ArgonParams,
+    salt_op: [u8; 16],
+    salt_rec: [u8; 16],
+    wrap_op: Wrap,
+    wrap_rec: Wrap,
 }
 
 /// A sealed local-state export: the stable LSK wraps PLUS this export's freshly-encrypted
@@ -429,9 +452,9 @@ pub struct LskWraps {
 /// the LSK, which decrypts the payload). `Debug` deliberately not derived.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SealedLocalState {
-    pub(crate) wraps: LskWraps,
-    pub(crate) payload_nonce: [u8; 24],
-    pub(crate) payload_ct: Vec<u8>,
+    wraps: LskWraps,
+    payload_nonce: [u8; 24],
+    payload_ct: Vec<u8>,
 }
 
 impl SealedLocalState {
@@ -530,8 +553,9 @@ pub fn unseal_local_state_op(s: &SealedLocalState, op_pass: &str) -> Option<Zero
     // Zeroizing at the SOURCE, not at each call site. This buffer is the decrypted
     // bundle CBOR, which since ADR-0066 decision 3 holds the node's raw X25519 custody
     // secret in the clear. Returning a bare `Vec<u8>` made wiping a discipline every
-    // caller had to remember; the module header already records that `seal::try_unwrap`
-    // was changed to return `Zeroizing` for exactly this reason.
+    // caller had to remember. (`seal::try_unwrap` itself returns a `Secret32` since #511, which
+    // wipes itself; this wrapper is for the variable-length CBOR it decrypts, which cannot be
+    // a `Secret32` — see the module header.)
     aead_decrypt(lsk.as_bytes(), &s.payload_nonce, &s.payload_ct).map(Zeroizing::new)
 }
 
@@ -550,8 +574,9 @@ pub fn unseal_local_state_rec(
     // Zeroizing at the SOURCE, not at each call site. This buffer is the decrypted
     // bundle CBOR, which since ADR-0066 decision 3 holds the node's raw X25519 custody
     // secret in the clear. Returning a bare `Vec<u8>` made wiping a discipline every
-    // caller had to remember; the module header already records that `seal::try_unwrap`
-    // was changed to return `Zeroizing` for exactly this reason.
+    // caller had to remember. (`seal::try_unwrap` itself returns a `Secret32` since #511, which
+    // wipes itself; this wrapper is for the variable-length CBOR it decrypts, which cannot be
+    // a `Secret32` — see the module header.)
     aead_decrypt(lsk.as_bytes(), &s.payload_nonce, &s.payload_ct).map(Zeroizing::new)
 }
 
@@ -831,16 +856,32 @@ pub fn recovered_unwrap_secret(ls: &LocalState) -> Option<&Secret32> {
 /// the one check that distinguishes a *well-formed* 32 bytes from a *correct* 32 bytes
 /// (review finding I4).
 ///
-/// **Why a length check is not enough.** Every key in this plane is a bare `[u8; 32]`: the
-/// X25519 secret half, its public half, the node's Ed25519 signing seed, and a DEK are all
-/// the same type, so the compiler cannot tell them apart and neither can
-/// [`recovered_unwrap_secret`], which can only ask how many bytes there are. The
-/// read-after-write checks in [`CustodyKeyDestination::install`] do not close this either:
-/// they prove the file holds *the bytes we wrote*, never *a key that opens anything*. So a
-/// bundle carrying the PUBLIC half where the secret belongs — a plausible mistake, since the
-/// two are indistinguishable at every type in the path — would install cleanly, register
-/// cleanly, and be discovered only when someone tried to read a chart. By then
-/// `node_unwrap_key` is a singleton holding the wrong key, and the right one is refused
+/// ⚠️ **READ THIS BEFORE CONCLUDING #511's NEWTYPES MADE THIS FUNCTION REDUNDANT.** They did
+/// not, and the reason is worth having in front of you, because the argument that used to stand
+/// here — "every key in this plane is a bare `[u8; 32]`, so the compiler cannot tell them
+/// apart" — was made obsolete by that very slice and is exactly the kind of expired premise
+/// that gets a live check deleted.
+///
+/// What the types now close: the ACCIDENTAL public-for-secret substitution.
+/// `cairn_event::seal::unwrap_public` returns a `PublicKey32`, and no signature in the custody
+/// plane accepts one where a [`Secret32`] belongs, so `install(&unwrap_public(&secret))` is a
+/// compile error.
+///
+/// What they deliberately do NOT close, and why this trial-unwrap is still the only proof:
+/// - **Secret-for-secret.** An unwrap secret, an Ed25519 signing seed and a DEK are all
+///   `Secret32` (a stated design residual — see `cairn_event::keys`'s header). A bundle
+///   carrying this node's SIGNING SEED in the custody slot is well-formed at every type.
+/// - **Another node's key.** Perfectly valid 32 bytes, perfectly wrong for this record.
+/// - **The wire.** `from_cbor` decodes an untyped CBOR array into a `Secret32`; a foreign or
+///   hand-built bundle can put a public half in that slot and it deserializes without complaint,
+///   because `Secret32::from_bytes` accepts any 32 bytes. The compiler never sees that path.
+///
+/// And [`recovered_unwrap_secret`] cannot help: since #511 it performs no check at all — the
+/// length refusal moved into `Secret32`'s `Deserialize`, one layer earlier. The read-after-write
+/// checks in [`CustodyKeyDestination::install`] do not close it either: they prove the file holds
+/// *the bytes we wrote*, never *a key that opens anything*. So a wrong-but-well-formed key would
+/// install cleanly, register cleanly, and be discovered only when someone tried to read a chart.
+/// By then `node_unwrap_key` is a singleton holding the wrong key, and the right one is refused
 /// forever.
 ///
 /// The proof is cheap and total: unwrap one carried DEK. If the secret is the right one it
@@ -854,8 +895,11 @@ pub fn recovered_unwrap_secret(ls: &LocalState) -> Option<&Secret32> {
 /// caller reports the carried count either way, so the operator can see which case they are
 /// in.
 ///
-/// Pure, and called BEFORE the install, so a wrong key costs nothing — the same ordering
-/// rule, and for the same reason, as [`recovered_unwrap_secret`].
+/// Pure, and called BEFORE the install, so a wrong key costs nothing. That ordering is now the
+/// LAST one in this path that has to be got right by hand: the length refusal it used to share
+/// with [`recovered_unwrap_secret`] moved into `Secret32`'s `Deserialize`, where a malformed
+/// bundle simply does not parse. This check cannot move there — it needs a carried DEK to test
+/// against — so it stays here, and it stays before the write.
 pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &Secret32) -> anyhow::Result<()> {
     let Some(first) = ls.episode_deks.first() else {
         return Ok(());
@@ -946,10 +990,11 @@ pub async fn apply_local_state(
     }
 
     // Step 2 — validate before writing. See `recovered_unwrap_secret` for why the order is
-    // load-bearing rather than stylistic. Two checks, in increasing strength: the secret is
-    // 32 bytes, and (when the bundle carries custody to test against) it actually OPENS that
-    // custody. The second is what separates well-formed from correct — see
-    // `secret_opens_the_carried_custody`.
+    // load-bearing rather than stylistic. ONE check happens here now: that the secret (when the
+    // bundle carries custody to test against) actually OPENS that custody — what separates
+    // well-formed from correct, see `secret_opens_the_carried_custody`. The length check that
+    // used to be its weaker first half moved into `Secret32`'s `Deserialize` in #511, so a
+    // wrong-length secret never survives `from_cbor` to reach this point.
     let secret = recovered_unwrap_secret(ls);
     if let Some(secret) = secret {
         secret_opens_the_carried_custody(ls, secret)?;

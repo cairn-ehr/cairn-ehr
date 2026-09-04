@@ -181,10 +181,11 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             // ADR-0058 / ADR-0063 added these two fields to `EventBody` after this test
-            // module was last compiled by anything (no CI job builds the `pg_test` cfg —
-            // the pgx job's clippy step runs from the repo root, so it lints the root
-            // workspace, not this tree). Defaults are right here: these fixtures exercise
-            // parsing and actor-id stability, not the clock or safety planes.
+            // module was last compiled by anything: no CI job builds the `pg_test` cfg — the pgx
+            // job's clippy step runs from the repo root, so it lints the root workspace, which
+            // `exclude`s this tree. THAT GATE GAP IS ISSUE #541; this line only repairs the drift.
+            // These values are chosen, not defaulted (`ClockGrade::default()` is `Unknown`): the
+            // fixtures exercise parsing and actor-id stability, not the clock or safety planes.
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
             safety: None,
         };
@@ -243,10 +244,11 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             // ADR-0058 / ADR-0063 added these two fields to `EventBody` after this test
-            // module was last compiled by anything (no CI job builds the `pg_test` cfg —
-            // the pgx job's clippy step runs from the repo root, so it lints the root
-            // workspace, not this tree). Defaults are right here: these fixtures exercise
-            // parsing and actor-id stability, not the clock or safety planes.
+            // module was last compiled by anything: no CI job builds the `pg_test` cfg — the pgx
+            // job's clippy step runs from the repo root, so it lints the root workspace, which
+            // `exclude`s this tree. THAT GATE GAP IS ISSUE #541; this line only repairs the drift.
+            // These values are chosen, not defaulted (`ClockGrade::default()` is `Unknown`): the
+            // fixtures exercise parsing and actor-id stability, not the clock or safety planes.
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
             safety: None,
         };
@@ -393,10 +395,11 @@ mod tests {
             attachments: vec![],
             plaintext_twin: None,
             // ADR-0058 / ADR-0063 added these two fields to `EventBody` after this test
-            // module was last compiled by anything (no CI job builds the `pg_test` cfg —
-            // the pgx job's clippy step runs from the repo root, so it lints the root
-            // workspace, not this tree). Defaults are right here: these fixtures exercise
-            // parsing and actor-id stability, not the clock or safety planes.
+            // module was last compiled by anything: no CI job builds the `pg_test` cfg — the pgx
+            // job's clippy step runs from the repo root, so it lints the root workspace, which
+            // `exclude`s this tree. THAT GATE GAP IS ISSUE #541; this line only repairs the drift.
+            // These values are chosen, not defaulted (`ClockGrade::default()` is `Unknown`): the
+            // fixtures exercise parsing and actor-id stability, not the clock or safety planes.
             clock_grade: cairn_event::ClockGrade::SelfAsserted,
             safety: None,
         };

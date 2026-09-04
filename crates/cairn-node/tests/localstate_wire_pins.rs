@@ -98,6 +98,50 @@ const POPULATED_BUNDLE_CBOR_HEX: &str = concat!(
     "8a18911898189f18a618ad18b418bb18c218c918d018d718de",
 );
 
+/// The EMPTY bundle, whose `unwrap_secret` is `None`.
+///
+/// **Why a second constant, when the populated one already covers the interesting field.**
+/// `Option`'s encoding is decided by serde before `Secret32`'s `Serialize` is ever reached, so
+/// `None` cannot vary with the inner type and the risk here is genuinely small. But this file's
+/// whole thesis is that a round-trip proves nothing, and until round-1 review of #511 the `None`
+/// case was covered by round-trips alone (`localstate.rs`'s `empty_bundle_cbor_roundtrips`). What
+/// this pins is cheap and real: the field NAMES, their ORDER, the version byte, and that an
+/// absent secret is CBOR `null` (`f6`) rather than an empty array — which is what a reader of a
+/// hex dump needs to tell "no secret was exported" apart from "a zero-length one was".
+///
+/// Unlike [`POPULATED_BUNDLE_CBOR_HEX`] this was not frozen from a pre-newtype build, and it did
+/// not need to be: no byte of it passes through the type this slice changed.
+const EMPTY_BUNDLE_CBOR_HEX: &str = concat!(
+    // map(6)
+    "a6",
+    "6776657273696f6e01",                     // "version" -> 1
+    "716e6f64655f64656661756c745f64656b7380", // "node_default_deks" -> array(0)
+    "6c657069736f64655f64656b7380",           // "episode_deks" -> array(0)
+    "66636f6e666967f6",                       // "config" -> null
+    "6664726166747380",                       // "drafts" -> array(0)
+    "6d756e777261705f736563726574f6",         // "unwrap_secret" -> null  <-- the None case
+);
+
+#[test]
+fn the_empty_bundle_encodes_to_the_frozen_bytes() {
+    assert_eq!(
+        hex::encode(to_cbor(&LocalState::empty())),
+        EMPTY_BUNDLE_CBOR_HEX,
+        "the empty CAIRNL1 bundle encoding moved — see this file's header before re-freezing"
+    );
+}
+
+#[test]
+fn the_frozen_empty_bytes_decode_to_the_empty_bundle() {
+    let bytes = hex::decode(EMPTY_BUNDLE_CBOR_HEX).expect("the pin is valid hex");
+    let back = from_cbor(&bytes).expect("an empty bundle must still parse");
+    assert_eq!(back, LocalState::empty());
+    assert!(
+        back.unwrap_secret().is_none(),
+        "an absent secret must decode as absent, not as a zero-length or all-zero key"
+    );
+}
+
 /// The encode half. A change to `Secret32`'s `Serialize`, to a field's serde attributes, or to
 /// the field ORDER (CBOR maps here are written in declaration order) all fail here.
 #[test]
