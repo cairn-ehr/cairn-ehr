@@ -252,7 +252,20 @@ merged.
    died there: a qualifier belonging to the *next* sentence (`Closes #480. Partially addresses #490`)
    and a negation inside an em-dashed aside. **Both were found by running the guard over history, not by
    imagining inputs.**
-4. **Residual: the check is not required.** Promoting it is admin-only — recorded on **#444**, and it
+4. **⇒ THE REVIEW ROUND FOUND THE GUARD BLIND WHERE IT MATTERED MOST — and the same shape twice.**
+   Both defects were *the guard not looking at the text GitHub actually reads*: it could not see
+   `(closes #N)` at all (one stray `(` in the lookbehind, on the mistaken belief that it was what
+   protected `fix(#500):` — the real protection is `(` being absent from the separator), and it never
+   scanned the **PR title**, which GitHub's merge commit carries as its body. Those are the same hole:
+   `(closes #38)` in PR #42's *title* was the only closing adjacency in that PR, and **#38 closed one
+   second after the merge**. Nine merged PR titles here use that shape. Four more followed — a
+   parenthesised partial qualifier slipping the refusal, negations matched as bare substrings (*notes*,
+   *annotation*, *in particular* refused correct closes), concatenated commit messages letting one
+   commit's denial attach to the next commit's close, and a commit range keyed off `base.sha`, which
+   does not advance when `main` does. After all six: **the same 21 corpus flags, still zero false
+   positives, 236 closing references instead of 227.** The plumbing now lives in
+   `scripts/collect_pr_text.sh` with its own shell test — a checker fed the wrong text is not a control.
+5. **Residual: the check is not required.** Promoting it is admin-only — recorded on **#444**, and it
    inherits #527's ordering rule: only promote a check that is green on `main`.
 
 ### 2026-09-04 (earlier) — #511: the custody newtypes (condensed)

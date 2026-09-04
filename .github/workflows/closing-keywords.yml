@@ -3,6 +3,10 @@ name: Closing-keyword guard
 # Refuses a PR whose own text hands GitHub a closing reference the text says is
 # NOT a close — and, on every PR, prints which issues the merge will close.
 #
+# Three sources are scanned, because GitHub parses all three: the PR body, the
+# PR TITLE (it becomes the merge commit's body — `git log --format=%b` on any
+# merge here prints the title verbatim), and every commit message in the PR.
+#
 # Why this exists. GitHub closes an issue when a merged PR body or commit message
 # puts `close`/`fix`/`resolve` (any tense) immediately before a reference to it.
 # The parser reads adjacency, never meaning, so all three of these closed an issue
@@ -44,39 +48,48 @@ jobs:
     name: closing-keyword guard
     runs-on: ubuntu-24.04
     steps:
-      # fetch-depth: 0 so the base..head range below can be walked. A shallow
-      # clone would silently produce an empty commit list — the guard would pass
-      # while checking nothing, which is the shape of failure it exists to catch.
+      # fetch-depth: 0 so the commit range below can be walked at all. With the
+      # default shallow clone the range's endpoints are absent and `git log`
+      # aborts with `fatal: Invalid revision range`, which `set -e` turns into a
+      # failed step — loud, not silent. The SILENT shape this guard fears is a
+      # range that resolves to nothing, which `--require` below refuses.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      # The guard's OWN tests run first. A compensating control outside CI is not
-      # a control (#444): if the checker rots, this step is what says so, before
-      # its silence can be mistaken for an all-clear.
+      # The guard's OWN tests run first: if the checker rots, this step is what
+      # says so, before its silence can be mistaken for an all-clear. (#444's
+      # lesson is the narrower one that a check which does not block is not a
+      # gate — which still applies to this whole workflow until #444 promotes
+      # it into branch protection.)
       - name: The guard's own tests
-        run: python3 scripts/tests/check_closing_keywords_test.py
-
-      # The PR body arrives through the environment, never through `${{ }}`
-      # interpolation inside the script: a body is attacker-controlled text and
-      # interpolation would splice it into the shell.
-      - name: Collect the text GitHub will parse
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          printf '%s\n' "$PR_BODY" > pr-body.txt
-          # HEAD, not the PR's head SHA: on a `pull_request` event checkout puts us
-          # on the merge ref, so `BASE_SHA..HEAD` is exactly this PR's commits — and
-          # it works for a FORK, whose head SHA is not in this repository at all.
-          git log --format=%B "$BASE_SHA"..HEAD > commit-messages.txt
+          python3 scripts/tests/check_closing_keywords_test.py
+          bash scripts/tests/collect_pr_text_test.sh
+
+      # The title and body arrive through the environment, never through `${{ }}`
+      # interpolation inside the script: both are attacker-controlled text and
+      # interpolation would splice them into the shell.
+      - name: Collect the text GitHub will parse
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: scripts/collect_pr_text.sh
 
       # tee under `pipefail` so the report reaches the job summary AND the script's
       # exit status still decides the step. Without pipefail, tee's success would
       # mask a refusal.
-      - name: Check the PR body and its commit messages
+      - name: Check the PR title, body and commit messages
         run: |
           set -euo pipefail
-          python3 scripts/check_closing_keywords.py pr-body.txt commit-messages.txt \
+          # `--require commit-messages.txt`: a pull request always carries at
+          # least one commit, so an empty commit list is broken plumbing, not
+          # clean text — and without this the report would print a confident
+          # all-clear over a scan that read no commit message at all, because the
+          # body was present and clean. The title and body may each be empty.
+          python3 scripts/check_closing_keywords.py \
+            --require commit-messages.txt \
+            pr-title.txt pr-body.txt commit-messages.txt \
             | tee -a "$GITHUB_STEP_SUMMARY"
