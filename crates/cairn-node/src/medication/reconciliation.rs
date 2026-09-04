@@ -257,7 +257,7 @@ async fn submit_reconcile_like(
             let tx = client.transaction().await?;
             tx.execute(
                 "SELECT submit_event($1, NULL, NULL, $2)",
-                &[&signed_bytes, &dek.as_slice()],
+                &[&signed_bytes, &dek.as_bytes().as_slice()],
             )
             .await?;
             crate::medication::attest_thread_in_tx(&tx, params, patient, subject_a, hlc_a).await?;

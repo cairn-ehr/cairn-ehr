@@ -416,11 +416,13 @@ async fn revoke_peer(
 /// independently is a real divergence, and Task 5 of this slice exists to make it loud;
 /// papering over it here would hide the very thing that task must find.
 async fn register_unwrap_key(c: &Client, sk: &SigningKey) {
-    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    let secret = cairn_event::seal::derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(
+        sk.to_bytes(),
+    ));
     let public = cairn_event::seal::unwrap_public(&secret);
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&public.as_slice()],
+        &[&public.as_bytes().as_slice()],
     )
     .await
     .unwrap();
@@ -1656,7 +1658,9 @@ async fn sealed_medication_syncs_with_custody_then_shred_propagates() {
         .await
         .unwrap()
         .get(0);
-    let b_secret = cairn_event::seal::derive_unwrap_secret(&sk_b.to_bytes());
+    let b_secret = cairn_event::seal::derive_unwrap_secret(
+        &cairn_event::keys::Secret32::from_bytes(sk_b.to_bytes()),
+    );
     let b_dek = cairn_event::seal::unwrap_dek(&wrapped_for_b, &b_secret)
         .expect("B's own secret opens the DEK re-wrapped for B");
     let b_body_text: String = b

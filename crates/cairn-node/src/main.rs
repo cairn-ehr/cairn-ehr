@@ -324,6 +324,14 @@ enum CustodyRegistration {
 /// the comparison actually made; without it, the honest answer is
 /// [`CustodyRegistration::Unverified`]. Impure only in that it reads one file, so the
 /// rendering in [`unwrap_key_status_line`] stays pure and exhaustively unit-testable.
+/// `registered` stays a raw `&[u8]` rather than a `PublicKey32`, deliberately, and the reason
+/// is the same one #511 exists for. It is the `node_unwrap_key.unwrap_pub` COLUMN, whose length
+/// no Rust type guarantees. Converting it here with `PublicKey32::from_slice` would turn a
+/// corrupt-length registration into `None` — indistinguishable from "nothing is registered" —
+/// and this function would then answer `NotRegistered`, the reassuring direction, about a node
+/// whose custody registration is damaged. A byte comparison cannot make that mistake: a
+/// wrong-length value simply is not equal to the public half, so it reports `Mismatch`, which
+/// is the honest answer. Same reasoning applies to `resolve_or_adopt_unwrap_secret` below.
 fn classify_custody_registration(
     unwrap_path: &std::path::Path,
     registered: Option<&[u8]>,
@@ -337,7 +345,7 @@ fn classify_custody_registration(
     // `key_at_rest_state`, so nothing is lost by not restating it.
     match cairn_node::keystore::load_unwrap_secret(unwrap_path, passphrase) {
         Ok(secret) => {
-            if cairn_event::seal::unwrap_public(&secret).as_slice() == registered {
+            if cairn_event::seal::unwrap_public(&secret).as_bytes() == registered {
                 CustodyRegistration::ConfirmedMatch
             } else {
                 CustodyRegistration::Mismatch
@@ -619,7 +627,7 @@ fn resolve_or_adopt_unwrap_secret(
     op: Option<&str>,
     sk: &cairn_event::SigningKey,
     registered_public: Option<&[u8]>,
-) -> anyhow::Result<Zeroizing<[u8; 32]>> {
+) -> anyhow::Result<cairn_event::keys::Secret32> {
     if custody_file_exists(unwrap_path)? {
         return load_unwrap_secret_or_refuse_swapped_file(unwrap_path, key_path, op, sk);
     }
@@ -632,7 +640,7 @@ fn resolve_or_adopt_unwrap_secret(
     if let Some(registered) = registered_public {
         let adopted_public = cairn_event::seal::unwrap_public(&adopted);
         anyhow::ensure!(
-            registered == adopted_public.as_slice(),
+            registered == adopted_public.as_bytes(),
             "there is no unwrap key at {}, but this database ALREADY REGISTERED a different \
              one ({}) from the key this node would adopt ({}). That means the custody file \
              this node was provisioned with is MISSING — not absent-by-history — so adopting \
@@ -645,7 +653,7 @@ fn resolve_or_adopt_unwrap_secret(
              paper over it by registering a new key.",
             unwrap_path.display(),
             hex::encode(registered),
-            hex::encode(adopted_public)
+            hex::encode(adopted_public.as_bytes())
         );
     }
 
@@ -707,7 +715,7 @@ fn load_unwrap_secret_or_refuse_swapped_file(
     key_path: &std::path::Path,
     secret: Option<&str>,
     sk: &cairn_event::SigningKey,
-) -> anyhow::Result<Zeroizing<[u8; 32]>> {
+) -> anyhow::Result<cairn_event::keys::Secret32> {
     let unwrap = cairn_node::keystore::load_unwrap_secret(unwrap_path, secret)?;
     anyhow::ensure!(
         !cairn_node::keystore::unwrap_secret_is_the_signing_seed(&unwrap, sk),
@@ -1199,7 +1207,7 @@ async fn seal_and_write_local_state_export(
         }
     };
 
-    let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_deref()).await?;
+    let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_ref()).await?;
     let container = cairn_node::localstate::build_export_container(wraps, &op, &bundle)?;
     let export_path = cairn_node::localstate::localstate_path_for(medium);
     cairn_node::fsio::atomic_write(&export_path, &container, Some(0o600))?;
@@ -2050,7 +2058,7 @@ async fn main() -> anyhow::Result<()> {
             // that already holds another node's custody — which is the correct answer.
             db.execute(
                 "SELECT cairn_register_unwrap_key($1)",
-                &[&unwrap_pub.as_slice()],
+                &[&unwrap_pub.as_bytes().as_slice()],
             )
             .await?;
             eprintln!("unwrap key established at {}", unwrap_path.display());
@@ -2167,7 +2175,7 @@ async fn main() -> anyhow::Result<()> {
             let public = cairn_event::seal::unwrap_public(&secret);
             db.execute(
                 "SELECT cairn_register_unwrap_key($1)",
-                &[&public.as_slice()],
+                &[&public.as_bytes().as_slice()],
             )
             .await?;
             println!("unwrap key established at {}", unwrap_path.display());
@@ -4744,16 +4752,16 @@ mod tests {
 
         assert!(unwrap.exists(), "the adopted secret must be persisted");
         assert_eq!(
-            *secret,
-            *cairn_node::keystore::adopt_derived_unwrap_secret(&sk),
+            secret,
+            cairn_node::keystore::adopt_derived_unwrap_secret(&sk),
             "it must adopt the secret this node's existing event_dek rows are ALREADY \
              wrapped to — minting a fresh one here would orphan every sealed body it has"
         );
         // And it must be readable back under the operator's secret, or the node could not
         // open its own custody after a restart.
         assert_eq!(
-            *cairn_node::keystore::load_unwrap_secret(&unwrap, Some(OP_PASS)).unwrap(),
-            *secret
+            cairn_node::keystore::load_unwrap_secret(&unwrap, Some(OP_PASS)).unwrap(),
+            secret
         );
     }
 
@@ -4835,7 +4843,7 @@ mod tests {
         let loaded = load_unwrap_secret_or_refuse_swapped_file(&unwrap, &key, Some(OP_PASS), &sk)
             .expect("the adoption migration's own output must not read as a swapped file");
         assert_eq!(
-            *loaded, *adopted,
+            loaded, adopted,
             "the loader must hand back the adopted secret unchanged — a rewrap here would \
              orphan every existing event_dek row"
         );
@@ -5112,12 +5120,17 @@ mod tests {
             cairn_node::keystore::generate_unwrap_sealed(&scratch, OP_PASS, REC_CODE).unwrap();
         assert!(!unwrap.exists(), "precondition: the custody file is gone");
 
-        let err =
-            resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, Some(&registered))
-                .expect_err(
-                    "adopting the DERIVED secret here writes a key that opens none of this \
+        let err = resolve_or_adopt_unwrap_secret(
+            &unwrap,
+            &key,
+            Some(OP_PASS),
+            &sk,
+            Some(registered.as_bytes()),
+        )
+        .expect_err(
+            "adopting the DERIVED secret here writes a key that opens none of this \
                      node's event_dek rows, and the registrar refuses it only afterwards",
-                );
+        );
 
         assert!(
             !unwrap.exists(),
@@ -5134,7 +5147,7 @@ mod tests {
             "and what it is being measured against: {msg}"
         );
         assert!(
-            msg.contains(&hex::encode(registered)),
+            msg.contains(&hex::encode(registered.as_bytes())),
             "the registered key must be named, so the operator can recognise which custody \
              file they are hunting for: {msg}"
         );
@@ -5154,8 +5167,14 @@ mod tests {
             &cairn_node::keystore::adopt_derived_unwrap_secret(&sk),
         );
 
-        resolve_or_adopt_unwrap_secret(&unwrap, &key, Some(OP_PASS), &sk, Some(&derived_public))
-            .expect("a pre-ADR-0066 node must still be able to adopt its own derived key");
+        resolve_or_adopt_unwrap_secret(
+            &unwrap,
+            &key,
+            Some(OP_PASS),
+            &sk,
+            Some(derived_public.as_bytes()),
+        )
+        .expect("a pre-ADR-0066 node must still be able to adopt its own derived key");
         assert!(unwrap.exists(), "and the adopted secret must be persisted");
     }
 
@@ -5189,7 +5208,7 @@ mod tests {
         let unwrap = dir.path().join("node.key.unwrap");
         let public = cairn_node::keystore::generate_unwrap_plaintext(&unwrap).unwrap();
         assert_eq!(
-            classify_custody_registration(&unwrap, Some(&public), None),
+            classify_custody_registration(&unwrap, Some(public.as_bytes()), None),
             CustodyRegistration::ConfirmedMatch
         );
     }
@@ -5204,7 +5223,7 @@ mod tests {
         let other =
             cairn_node::keystore::generate_unwrap_plaintext(&dir.path().join("other")).unwrap();
         assert_eq!(
-            classify_custody_registration(&unwrap, Some(&other), None),
+            classify_custody_registration(&unwrap, Some(other.as_bytes()), None),
             CustodyRegistration::Mismatch
         );
     }
@@ -5216,13 +5235,13 @@ mod tests {
         let public =
             cairn_node::keystore::generate_unwrap_sealed(&unwrap, OP_PASS, REC_CODE).unwrap();
         assert_eq!(
-            classify_custody_registration(&unwrap, Some(&public), None),
+            classify_custody_registration(&unwrap, Some(public.as_bytes()), None),
             CustodyRegistration::Unverified,
             "`status` never prompts, so a sealed file it cannot open must say `unverified` \
              rather than claim a match it did not check"
         );
         assert_eq!(
-            classify_custody_registration(&unwrap, Some(&public), Some(OP_PASS)),
+            classify_custody_registration(&unwrap, Some(public.as_bytes()), Some(OP_PASS)),
             CustodyRegistration::ConfirmedMatch,
             "…and with the passphrase in hand it CAN check, so it must"
         );

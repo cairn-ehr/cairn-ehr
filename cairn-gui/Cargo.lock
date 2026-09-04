@@ -414,6 +414,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "thiserror 1.0.69",
  "uuid",
  "x25519-dalek",

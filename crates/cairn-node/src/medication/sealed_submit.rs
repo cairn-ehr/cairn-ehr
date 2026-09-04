@@ -114,7 +114,7 @@ pub async fn ensure_unwrap_key(client: &tokio_postgres::Client) -> anyhow::Resul
 pub fn seal_and_sign(
     mut body: EventBody,
     sk: &SigningKey,
-) -> anyhow::Result<(Vec<u8>, zeroize::Zeroizing<[u8; 32]>)> {
+) -> anyhow::Result<(Vec<u8>, cairn_event::seal::Secret32)> {
     // The clear twin travels INSIDE the sealed region under the same DEK as its body
     // (ADR-0052 / #92 (a)); the OUTER twin is the mechanical stub. Take() the clear twin
     // out of the body before we overwrite plaintext_twin with the stub.
@@ -330,7 +330,7 @@ pub async fn seal_sign_submit(
             client
                 .execute(
                     "SELECT submit_event($1, NULL, NULL, $2)",
-                    &[&signed_bytes, &dek.as_slice()],
+                    &[&signed_bytes, &dek.as_bytes().as_slice()],
                 )
                 .await?;
         }
@@ -340,7 +340,7 @@ pub async fn seal_sign_submit(
             let tx = client.transaction().await?;
             tx.execute(
                 "SELECT submit_event($1, NULL, NULL, $2)",
-                &[&signed_bytes, &dek.as_slice()],
+                &[&signed_bytes, &dek.as_bytes().as_slice()],
             )
             .await?;
             super::attest_thread_in_tx(&tx, params, patient, thread, attest_hlc).await?;

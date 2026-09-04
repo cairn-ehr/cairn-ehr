@@ -64,7 +64,9 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
     let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&unwrap)
+            .as_bytes()
+            .as_slice()],
     )
     .await
     .unwrap();
@@ -112,7 +114,9 @@ async fn setup_node_and_human(c: &Client) -> (SigningKey, String, SigningKey, St
     let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&unwrap)
+            .as_bytes()
+            .as_slice()],
     )
     .await
     .unwrap();

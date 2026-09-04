@@ -9,6 +9,7 @@
 //! - sealed without DEK: refused legibly at THIS door;
 //! - unsealed clinical.*: refused (born-sealed floor);
 //! - wrong DEK: refused (the container will not open).
+use cairn_event::keys::Secret32;
 use cairn_event::seal::{
     derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_dek, unwrap_public,
 };
@@ -16,7 +17,6 @@ use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 // Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
 // be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
@@ -68,7 +68,7 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
 /// Build a CLEAR medication-assert EventBody (mirror of medication/assert.rs's field
 /// construction), then seal it: payload → container, twin → stub. Returns the sealed
 /// body (ready to sign) and the DEK the strict door needs as its 4th arg.
-fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Zeroizing<[u8; 32]>) {
+fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Secret32) {
     let event_id = Uuid::now_v7().to_string();
     let medication_id = Uuid::now_v7().to_string();
     let payload = serde_json::json!({
@@ -136,10 +136,10 @@ async fn sealed_submit_with_dek_projects_and_stores_custody() {
     common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
     // Register this node's X25519 unwrap key so the door can wrap the DEK into custody.
-    let secret = derive_unwrap_secret(&sk.to_bytes());
+    let secret = derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(sk.to_bytes()));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&unwrap_public(&secret).as_slice()],
+        &[&unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .unwrap();
@@ -150,7 +150,7 @@ async fn sealed_submit_with_dek_projects_and_stores_custody() {
     let signed = sign(&body, &sk).unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("sealed body with its DEK is admitted");
@@ -211,11 +211,7 @@ async fn sealed_submit_with_dek_projects_and_stores_custody() {
         .get(0);
     assert_eq!(dek_wrapped.len(), 104, "wrapped DEK is eph‖nonce‖ct+tag");
     let opened = unwrap_dek(&dek_wrapped, &secret).unwrap();
-    assert_eq!(
-        opened.as_slice(),
-        dek.as_slice(),
-        "custody unwraps to the DEK"
-    );
+    assert_eq!(opened, dek, "custody unwraps to the DEK");
 
     // The projection fired THROUGH the shadow: the medication statement exists.
     let n: i64 = c
@@ -289,10 +285,10 @@ async fn wrong_dek_is_refused() {
     // #345: a chart must be registered before anything is recorded about it.
     common::submit_registration(&c, &sk, &kid, patient, 0).await;
 
-    let secret = derive_unwrap_secret(&sk.to_bytes());
+    let secret = derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(sk.to_bytes()));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&unwrap_public(&secret).as_slice()],
+        &[&unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .unwrap();
@@ -321,11 +317,7 @@ async fn wrong_dek_is_refused() {
 /// bodies are NON-clinical — plaintext BY NECESSITY (their projections/matchers bind on
 /// NEW.body directly), so a sealed one is the never-lawful shape ADR-0052 §2 forbids.
 /// Returns the sealed body (ready to sign) and its DEK.
-fn sealed_demographic_body(
-    node_kid: &str,
-    patient: Uuid,
-    hlc: Hlc,
-) -> (EventBody, Zeroizing<[u8; 32]>) {
+fn sealed_demographic_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Secret32) {
     let event_id = Uuid::now_v7().to_string();
     let payload = serde_json::json!({
         "field": "dob",
@@ -370,10 +362,10 @@ async fn sealed_non_clinical_body_is_refused_at_the_strict_door() {
     // Register the node unwrap key so that — WITHOUT the scope check — the door would run
     // the full sealed path all the way to the projection INSERT that detonates. The scope
     // refusal must fire FIRST, stopping the never-lawful shape at the boundary.
-    let secret = derive_unwrap_secret(&sk.to_bytes());
+    let secret = derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(sk.to_bytes()));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&unwrap_public(&secret).as_slice()],
+        &[&unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .unwrap();
@@ -384,7 +376,7 @@ async fn sealed_non_clinical_body_is_refused_at_the_strict_door() {
     let err = c
         .execute(
             "SELECT submit_event($1, NULL, NULL, $2)",
-            &[&signed.signed_bytes, &dek.as_slice()],
+            &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
         )
         .await
         .expect_err("a sealed NON-clinical body must be refused at the strict door");

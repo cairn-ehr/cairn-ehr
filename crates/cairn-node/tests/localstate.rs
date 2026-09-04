@@ -192,9 +192,17 @@ fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
     // The honest fix: mutate `sealed.payload_ct` (still a plain in-memory `Vec<u8>` at this
     // point) BEFORE calling `serialize_container`, so the frame is intact by construction —
     // never by an assumption about how ciborium happens to encode an untyped byte vector.
-    let mut sealed_damaged = sealed.clone();
-    let last = sealed_damaged.payload_ct.len() - 1;
-    sealed_damaged.payload_ct[last] ^= 0xFF;
+    let mut damaged_ct = sealed.payload_ct().to_vec();
+    let last = damaged_ct.len() - 1;
+    damaged_ct[last] ^= 0xFF;
+    // Rebuilt through `SealedLocalState::new` rather than by poking a field: since #511 the
+    // fields are `pub(crate)`, so assembling one is a deliberate act that names all three
+    // parts (rides-along 3). The damage is identical; only the way it is expressed moved.
+    let sealed_damaged = cairn_node::localstate::SealedLocalState::new(
+        sealed.wraps().clone(),
+        *sealed.payload_nonce(),
+        damaged_ct,
+    );
     let damaged = serialize_container(&sealed_damaged);
 
     let parsed = parse_container(&damaged)
@@ -203,4 +211,85 @@ fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
         unseal_local_state_rec(&parsed, code).is_none(),
         "damaged ciphertext must fail to unseal even under the CORRECT code"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// #511 rides-along: the producer set, and structural redaction
+// ---------------------------------------------------------------------------------------
+
+/// **The custody slot has exactly one filler.**
+///
+/// `LocalState`'s own doc has always said that a third producer skipping the
+/// `erasure_shred_log` filter "is how an erased body's key would travel" — and until #511
+/// nothing prevented one, because every field was `pub`. There is deliberately no
+/// `set_episode_deks`: that is the slot the filter guards, and the only way to fill it is
+/// [`LocalState::from_custody`], which `read_local_state` (the filtering producer) calls.
+///
+/// The two narrow mutators that DO exist cover slots the filter has nothing to say about.
+#[test]
+fn from_custody_is_the_only_way_to_fill_the_custody_slot() {
+    let secret = cairn_event::keys::Secret32::from_bytes(std::array::from_fn(|i| {
+        (i as u8).wrapping_mul(7).wrapping_add(1)
+    }));
+    let ls = LocalState::from_custody(vec![b"a wrapped row".to_vec()], Some(secret.clone()));
+    assert_eq!(ls.episode_deks().len(), 1);
+    assert_eq!(ls.unwrap_secret(), Some(&secret));
+    assert!(
+        !ls.is_empty(),
+        "a bundle carrying custody is not the zero value"
+    );
+
+    // And the zero value stays the zero value.
+    assert!(LocalState::empty().is_empty());
+    assert_eq!(LocalState::empty().episode_deks().len(), 0);
+    assert_eq!(LocalState::empty().unwrap_secret(), None);
+}
+
+/// **Redaction is structural now, not per-field.**
+///
+/// The hand-written `Debug` that existed only to redact `unwrap_secret` is gone: the field is
+/// a `Secret32`, whose own `Debug` prints `Secret32(<redacted>)`, so `#[derive(Debug)]` is
+/// safe again. The difference that matters is not the output — it is that the NEXT
+/// secret-bearing slot added to this struct inherits the redaction instead of having to
+/// re-earn it, which is the failure mode #511 named for the `Drop` impl beside it.
+#[test]
+fn debug_redacts_the_secret_without_a_hand_written_impl() {
+    let raw: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(3));
+    let mut ls = LocalState::empty();
+    ls.set_unwrap_secret(Some(cairn_event::keys::Secret32::from_bytes(raw)));
+
+    let shown = format!("{ls:?}");
+    assert!(
+        shown.contains("<redacted>"),
+        "the secret must be redacted: {shown}"
+    );
+    assert!(
+        !shown.contains(&hex::encode(raw)[..8]),
+        "the bundle's Debug leaked the node's custody key: {shown}"
+    );
+    assert!(
+        shown.contains("Some("),
+        "presence must still be visible — a reader has to tell 'absent' from 'hidden'"
+    );
+    assert!(
+        !format!("{:?}", LocalState::empty()).contains("<redacted>"),
+        "…and an absent secret must not look like a hidden one"
+    );
+}
+
+/// **`take_unwrap_secret` is a move, not a copy.**
+///
+/// It exists because `restore`-shaped tests need to lift the secret out of a bundle; the
+/// point pinned here is that the bundle is genuinely left without one afterwards, so a
+/// caller cannot accidentally leave a second live copy of the node's custody key behind.
+#[test]
+fn taking_the_secret_leaves_the_bundle_without_one() {
+    let secret = cairn_event::keys::Secret32::from_bytes(std::array::from_fn(|i| {
+        (i as u8).wrapping_mul(5).wrapping_add(2)
+    }));
+    let mut ls = LocalState::empty();
+    ls.set_unwrap_secret(Some(secret.clone()));
+    assert_eq!(ls.take_unwrap_secret(), Some(secret));
+    assert_eq!(ls.unwrap_secret(), None);
+    assert!(ls.is_empty(), "and the bundle is back to its zero value");
 }

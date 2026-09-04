@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 // key material never lingers in freed stack/heap memory, and so the type itself tells
 // a reviewer "this value is a live secret." Deref/DerefMut let it stand in for the
 // bare array at the AEAD/Argon2 call sites with no extra ceremony.
+use cairn_event::keys::Secret32;
 use zeroize::Zeroizing;
 
 /// Crockford base32 alphabet (excludes I, L, O, U to avoid transcription errors).
@@ -230,60 +231,41 @@ pub fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 24], ct: &[u8]) -> Option<Vec<u
     cipher.decrypt(nonce.into(), ct).ok()
 }
 
-/// Copy a 32-byte key out of a slice into a `Zeroizing` buffer **without** ever
-/// materializing a bare `[u8; 32]` on the stack (issue #54). `<[u8;32]>::try_from`
-/// would return a plain array by value, and moving that into `Zeroizing::new` leaves
-/// the moved-from stack slot un-wiped — a lingering plaintext copy of the very key we
-/// are trying to protect. Instead we allocate the zeroizing buffer first and
-/// `copy_from_slice` into it, so the only copy of the key lives inside the wrapper that
-/// wipes it (the same discipline `derive_kek` uses when it derives in-place). Returns
-/// `None` on a wrong-length slice, mirroring the old `try_into().ok()`.
-fn key_into_zeroizing(bytes: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
-    if bytes.len() != 32 {
-        return None;
-    }
-    let mut out = Zeroizing::new([0u8; 32]);
-    out.copy_from_slice(bytes);
-    Some(out)
-}
-
 /// Wrap one DEK copy under a secret. The recovery code is normalized first so any
 /// spacing/case the human re-types still derives the same KEK.
 // `pub` for the same cross-crate reason as `rand_bytes` above.
 pub fn wrap_dek(
-    dek: &[u8; 32],
+    dek: &Secret32,
     secret: &str,
     salt: &[u8; 16],
     p: &ArgonParams,
 ) -> Result<Wrap, SealError> {
     let kek = derive_kek(secret, salt, p)?;
     let nonce = rand_bytes::<24>()?;
-    let ct = aead_encrypt(&kek, &nonce, dek)?;
+    let ct = aead_encrypt(&kek, &nonce, dek.as_bytes())?;
     Ok(Wrap { nonce, ct })
 }
 
 // `pub` for the same cross-crate reason as `rand_bytes` above.
-pub fn try_unwrap(
-    w: &Wrap,
-    secret: &str,
-    salt: &[u8; 16],
-    p: &ArgonParams,
-) -> Option<Zeroizing<[u8; 32]>> {
+pub fn try_unwrap(w: &Wrap, secret: &str, salt: &[u8; 16], p: &ArgonParams) -> Option<Secret32> {
     let kek = derive_kek(secret, salt, p).ok()?;
     // Hold the decrypted bytes in `Zeroizing` so the plaintext DEK on the heap is wiped,
-    // then copy straight into a zeroizing fixed-size array (no bare `[u8;32]` intermediate).
+    // then copy straight into `Secret32`'s pre-zeroed buffer. `Secret32::from_slice` is what
+    // the local `key_into_zeroizing` helper used to be: it exists for exactly the #54 reason
+    // that helper's doc gave — `<[u8; 32]>::try_from` returns a plain array by value, and
+    // moving that into a wrapper leaves the moved-from stack slot un-wiped.
     let dek = Zeroizing::new(aead_decrypt(&kek, &w.nonce, &w.ct)?);
-    key_into_zeroizing(&dek)
+    Secret32::from_slice(&dek)
 }
 
 /// Seal a 32-byte signing seed under two independent secrets (dual-recipient).
-pub fn seal(seed: &[u8; 32], op_pass: &str, recovery_code: &str) -> Result<SealedKey, SealError> {
+pub fn seal(seed: &Secret32, op_pass: &str, recovery_code: &str) -> Result<SealedKey, SealError> {
     let argon = ArgonParams::default();
     // The DEK is transient: it encrypts the seed and is wrapped under each secret, then
-    // dropped. Hold it in `Zeroizing` so it is wiped from the stack once `seal` returns.
-    let dek = Zeroizing::new(rand_bytes::<32>()?);
+    // dropped. `Secret32` wipes it from the stack once `seal` returns.
+    let dek = Secret32::from_bytes(rand_bytes::<32>()?);
     let seed_nonce = rand_bytes::<24>()?;
-    let seed_ct = aead_encrypt(&dek, &seed_nonce, seed)?;
+    let seed_ct = aead_encrypt(dek.as_bytes(), &seed_nonce, seed.as_bytes())?;
     let salt_op = rand_bytes::<16>()?;
     let salt_rec = rand_bytes::<16>()?;
     let wrap_op = wrap_dek(&dek, op_pass, &salt_op, &argon)?;
@@ -310,26 +292,26 @@ pub fn seal(seed: &[u8; 32], op_pass: &str, recovery_code: &str) -> Result<Seale
 /// Argon2 derivation. The passphrase is used byte-exact. For callers that already
 /// know the recipient (e.g. the read-after-write check on a migration); `unseal` is
 /// the public, recipient-agnostic entry point.
-pub fn unseal_op(s: &SealedKey, op_pass: &str) -> Option<Zeroizing<[u8; 32]>> {
+pub fn unseal_op(s: &SealedKey, op_pass: &str) -> Option<Secret32> {
     let dek = try_unwrap(&s.wrap_op, op_pass, &s.salt_op, &s.argon)?;
-    // `Zeroizing` the decrypted seed wipes the heap plaintext; the returned array stays
-    // wrapped (via `key_into_zeroizing`, no bare intermediate) so the seed is never bare
+    // `Zeroizing` the decrypted seed wipes the heap plaintext; the returned key stays
+    // wrapped (via `Secret32::from_slice`, no bare intermediate) so the seed is never bare
     // in the caller's frame (e.g. `keystore::load`).
-    let seed = Zeroizing::new(aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?);
-    key_into_zeroizing(&seed)
+    let seed = Zeroizing::new(aead_decrypt(dek.as_bytes(), &s.seed_nonce, &s.seed_ct)?);
+    Secret32::from_slice(&seed)
 }
 
 /// Recover the seed via ONLY the recovery-code recipient: exactly one Argon2
 /// derivation. The code is normalized first so any spacing/case unseals.
-pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<Zeroizing<[u8; 32]>> {
+pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<Secret32> {
     let dek = try_unwrap(
         &s.wrap_rec,
         &normalize_recovery_code(recovery_code),
         &s.salt_rec,
         &s.argon,
     )?;
-    let seed = Zeroizing::new(aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct)?);
-    key_into_zeroizing(&seed)
+    let seed = Zeroizing::new(aead_decrypt(dek.as_bytes(), &s.seed_nonce, &s.seed_ct)?);
+    Secret32::from_slice(&seed)
 }
 
 /// Recover the seed from either recipient, secret unknown. Tries the operational
@@ -339,7 +321,7 @@ pub fn unseal_rec(s: &SealedKey, recovery_code: &str) -> Option<Zeroizing<[u8; 3
 /// decrypt failed. NOTE: a recovery-code unseal therefore pays the op-path Argon2
 /// derivation first — when the recipient IS known, call `unseal_op`/`unseal_rec`
 /// directly to do half the memory-hard work.
-pub fn unseal(s: &SealedKey, secret: &str) -> Option<Zeroizing<[u8; 32]>> {
+pub fn unseal(s: &SealedKey, secret: &str) -> Option<Secret32> {
     unseal_op(s, secret).or_else(|| unseal_rec(s, secret))
 }
 
@@ -373,8 +355,10 @@ mod tests {
     // hard-coded cryptographic value to the scanner. House rule: see CLAUDE.md.
 
     /// A deterministic 32-byte seed — the plaintext key material sealed/unsealed below.
-    fn test_seed() -> [u8; 32] {
-        std::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(1))
+    fn test_seed() -> Secret32 {
+        Secret32::from_bytes(std::array::from_fn(|i| {
+            (i as u8).wrapping_mul(7).wrapping_add(1)
+        }))
     }
 
     /// A deterministic 16-byte KDF salt for the `derive_kek` unit test.
@@ -397,48 +381,53 @@ mod tests {
             .collect()
     }
 
-    // --- Issue #54: recovered key material must come back wrapped in `Zeroizing` ---
+    // --- Issue #54 / #511: recovered key material must come back wrapped ---
     // so it is wiped from the caller's stack/heap on drop (defence-in-depth), and the
     // type itself signals "this is a secret" to a reviewer. These tests pin the return
     // TYPES via explicit annotations; they fail to compile if a function reverts to a
-    // bare array, which is exactly the regression we want to catch.
+    // bare array, which is exactly the regression we want to catch. Since #511 the
+    // wrapper is `Secret32` rather than a bare `Zeroizing<[u8; 32]>`, which pins one
+    // thing more: a PUBLIC half can no longer be returned from any of them.
 
     #[test]
-    fn unseal_helpers_yield_zeroizing_seed() {
+    fn unseal_helpers_yield_a_wrapped_secret() {
         let op = secret_fixture(1);
         let rec = secret_fixture(2);
         let s = seal(&test_seed(), &op, &rec).unwrap();
-        let any: Zeroizing<[u8; 32]> = unseal(&s, &op).expect("op-pass must unseal");
-        let via_op: Zeroizing<[u8; 32]> = unseal_op(&s, &op).expect("op helper unseals");
-        let via_rec: Zeroizing<[u8; 32]> = unseal_rec(&s, &rec).expect("rec helper unseals");
-        assert_eq!(*any, test_seed());
-        assert_eq!(*via_op, test_seed());
-        assert_eq!(*via_rec, test_seed());
+        let any: Secret32 = unseal(&s, &op).expect("op-pass must unseal");
+        let via_op: Secret32 = unseal_op(&s, &op).expect("op helper unseals");
+        let via_rec: Secret32 = unseal_rec(&s, &rec).expect("rec helper unseals");
+        assert_eq!(any, test_seed());
+        assert_eq!(via_op, test_seed());
+        assert_eq!(via_rec, test_seed());
     }
 
+    /// The local `key_into_zeroizing` helper this crate carried is now
+    /// `Secret32::from_slice` (#511), which has the same contract for the same #54 reason.
+    /// Its own unit coverage lives in `cairn-event/src/keys.rs`; this keeps the
+    /// keystore-side pin that a wrong-length plaintext can never yield a partial key.
     #[test]
-    fn key_into_zeroizing_copies_exact_len_and_rejects_others() {
-        // Exactly 32 bytes round-trips into the wrapped array...
+    fn a_wrong_length_plaintext_can_never_become_a_key() {
         let src = [9u8; 32];
-        let out = key_into_zeroizing(&src).expect("32-byte slice must convert");
-        assert_eq!(*out, src);
-        // ...and any other length is rejected (mirrors the old `try_into().ok()` guard),
-        // so a truncated/over-long plaintext can never silently yield a partial key.
-        assert!(key_into_zeroizing(&[9u8; 31]).is_none());
-        assert!(key_into_zeroizing(&[9u8; 33]).is_none());
-        assert!(key_into_zeroizing(&[]).is_none());
+        assert_eq!(
+            Secret32::from_slice(&src).expect("32-byte slice must convert"),
+            Secret32::from_bytes(src)
+        );
+        assert!(Secret32::from_slice(&[9u8; 31]).is_none());
+        assert!(Secret32::from_slice(&[9u8; 33]).is_none());
+        assert!(Secret32::from_slice(&[]).is_none());
     }
 
     #[test]
-    fn try_unwrap_yields_zeroizing_dek() {
+    fn try_unwrap_yields_a_wrapped_dek() {
         let op = secret_fixture(1);
         let s = seal(&test_seed(), &op, &secret_fixture(2)).unwrap();
-        let dek: Zeroizing<[u8; 32]> =
+        let dek: Secret32 =
             try_unwrap(&s.wrap_op, &op, &s.salt_op, &s.argon).expect("op wrap unwraps");
         // The unwrapped DEK is the real key: it decrypts the sealed seed.
         assert_eq!(
-            aead_decrypt(&dek, &s.seed_nonce, &s.seed_ct).as_deref(),
-            Some(test_seed().as_slice())
+            aead_decrypt(dek.as_bytes(), &s.seed_nonce, &s.seed_ct).as_deref(),
+            Some(test_seed().as_bytes().as_slice())
         );
     }
 
@@ -453,8 +442,7 @@ mod tests {
     fn unseals_with_operational_passphrase() {
         let op = secret_fixture(1);
         let s = seal(&test_seed(), &op, &secret_fixture(2)).unwrap();
-        // `.as_deref()` reads through the `Zeroizing` wrapper to compare the seed bytes.
-        assert_eq!(unseal(&s, &op).as_deref(), Some(&test_seed()));
+        assert_eq!(unseal(&s, &op), Some(test_seed()));
     }
 
     #[test]
@@ -467,7 +455,7 @@ mod tests {
         let s = seal(&test_seed(), &secret_fixture(1), &grouped).unwrap();
         // re-typed with different case/spacing still works
         let retyped = grouped.to_uppercase().replace('-', " ");
-        assert_eq!(unseal(&s, &retyped).as_deref(), Some(&test_seed()));
+        assert_eq!(unseal(&s, &retyped), Some(test_seed()));
     }
 
     #[test]
@@ -508,8 +496,8 @@ mod tests {
         let rec = secret_fixture(2);
         let s = seal(&test_seed(), &op, &rec).unwrap();
         // Each helper recovers the seed via its own recipient only.
-        assert_eq!(unseal_op(&s, &op).as_deref(), Some(&test_seed()));
-        assert_eq!(unseal_rec(&s, &rec).as_deref(), Some(&test_seed()));
+        assert_eq!(unseal_op(&s, &op), Some(test_seed()));
+        assert_eq!(unseal_rec(&s, &rec), Some(test_seed()));
         // ...and refuses the other recipient's secret (no cross-talk): the op helper
         // must not accept the recovery code, nor the recovery helper the passphrase.
         assert!(unseal_op(&s, &rec).is_none());
@@ -547,7 +535,7 @@ mod tests {
             "magic header must be present"
         );
         let back = from_cbor(&bytes).unwrap();
-        assert_eq!(unseal(&back, &op).as_deref(), Some(&test_seed()));
+        assert_eq!(unseal(&back, &op), Some(test_seed()));
         assert!(back.has_recovery_wrap());
     }
 

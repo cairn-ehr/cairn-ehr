@@ -115,9 +115,12 @@ fn cairn_blob_verify_error(addr: &[u8], content: &[u8]) -> Option<String> {
 /// refusal. IMMUTABLE: pure function of (container, dek, event_id).
 #[pg_extern(immutable, parallel_safe)]
 fn cairn_unseal_body(container: pgrx::JsonB, dek: &[u8], event_id: &str) -> Option<pgrx::JsonB> {
-    let dek: &[u8; 32] = dek.try_into().ok()?;
+    // `Secret32::from_slice` is the #511 door for a byte slice whose length no type
+    // guarantees — a `bytea` column here — and it refuses anything but 32 bytes rather than
+    // padding or truncating.
+    let dek = cairn_event::keys::Secret32::from_slice(dek)?;
     let (payload, twin) =
-        cairn_event::seal::unseal_event_payload(&container.0, dek, event_id).ok()?;
+        cairn_event::seal::unseal_event_payload(&container.0, &dek, event_id).ok()?;
     Some(pgrx::JsonB(
         serde_json::json!({ "payload": payload, "plaintext_twin": twin }),
     ))
@@ -128,13 +131,14 @@ fn cairn_unseal_body(container: pgrx::JsonB, dek: &[u8], event_id: &str) -> Opti
 /// half — a DB backup can never reconstruct custody.
 #[pg_extern(volatile, parallel_safe)]
 fn cairn_wrap_dek(dek: &[u8], unwrap_pub: &[u8]) -> Vec<u8> {
-    let dek: &[u8; 32] = dek
-        .try_into()
-        .unwrap_or_else(|_| pgrx::error!("cairn_wrap_dek: DEK must be 32 bytes"));
-    let unwrap_pub: &[u8; 32] = unwrap_pub
-        .try_into()
-        .unwrap_or_else(|_| pgrx::error!("cairn_wrap_dek: unwrap_pub must be 32 bytes"));
-    cairn_event::seal::wrap_dek_for(dek, unwrap_pub)
+    // The two `bytea` arguments become the two DISTINCT #511 key types here, at the SQL
+    // boundary — which is the one place in this extension where a secret and a public half
+    // could previously have been passed the wrong way round and still compiled.
+    let dek = cairn_event::keys::Secret32::from_slice(dek)
+        .unwrap_or_else(|| pgrx::error!("cairn_wrap_dek: DEK must be 32 bytes"));
+    let unwrap_pub = cairn_event::keys::PublicKey32::from_slice(unwrap_pub)
+        .unwrap_or_else(|| pgrx::error!("cairn_wrap_dek: unwrap_pub must be 32 bytes"));
+    cairn_event::seal::wrap_dek_for(&dek, &unwrap_pub)
         .unwrap_or_else(|e| pgrx::error!("cairn_wrap_dek: {e}"))
 }
 
@@ -176,6 +180,13 @@ mod tests {
             payload: serde_json::json!({"urgency": 3}),
             attachments: vec![],
             plaintext_twin: None,
+            // ADR-0058 / ADR-0063 added these two fields to `EventBody` after this test
+            // module was last compiled by anything (no CI job builds the `pg_test` cfg —
+            // the pgx job's clippy step runs from the repo root, so it lints the root
+            // workspace, not this tree). Defaults are right here: these fixtures exercise
+            // parsing and actor-id stability, not the clock or safety planes.
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         let signed = cairn_event::sign(&body, &sk).unwrap();
         let parsed = crate::cairn_body(&signed.signed_bytes).expect("verifies");
@@ -231,6 +242,13 @@ mod tests {
             payload: serde_json::json!({"k": "v"}),
             attachments: vec![],
             plaintext_twin: None,
+            // ADR-0058 / ADR-0063 added these two fields to `EventBody` after this test
+            // module was last compiled by anything (no CI job builds the `pg_test` cfg —
+            // the pgx job's clippy step runs from the repo root, so it lints the root
+            // workspace, not this tree). Defaults are right here: these fixtures exercise
+            // parsing and actor-id stability, not the clock or safety planes.
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         let signed = cairn_event::sign(&body, &sk).unwrap();
         assert!(crate::cairn_verify_error(&signed.signed_bytes).is_none());
@@ -298,7 +316,7 @@ mod tests {
             "SELECT cairn_unseal_body($1::jsonb, $2, $3)",
             &[
                 container.to_string().into(),
-                dek.as_slice().into(),
+                dek.as_bytes().as_slice().into(),
                 "evt-9".into(),
             ],
         )
@@ -332,18 +350,25 @@ mod tests {
     // daemon-held secret half it will never see.
     #[pg_test]
     fn wrap_dek_produces_openable_custody() {
-        let seed: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_add(9));
+        let seed = cairn_event::keys::Secret32::from_bytes(std::array::from_fn(|i| {
+            (i as u8).wrapping_add(9)
+        }));
         let secret = cairn_event::seal::derive_unwrap_secret(&seed);
         let public = cairn_event::seal::unwrap_public(&secret);
-        let dek: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(3));
+        let dek = cairn_event::keys::Secret32::from_bytes(std::array::from_fn(|i| {
+            (i as u8).wrapping_mul(3)
+        }));
         let wrapped = Spi::get_one_with_args::<Vec<u8>>(
             "SELECT cairn_wrap_dek($1, $2)",
-            &[dek.as_slice().into(), public.as_slice().into()],
+            &[
+                dek.as_bytes().as_slice().into(),
+                public.as_bytes().as_slice().into(),
+            ],
         )
         .unwrap()
         .unwrap();
         let opened = cairn_event::seal::unwrap_dek(&wrapped, &secret).unwrap();
-        assert_eq!(opened.as_slice(), &dek);
+        assert_eq!(opened, dek);
     }
 
     // A signed event verifies; one flipped byte does not — the Bet A2 invariant,
@@ -367,6 +392,13 @@ mod tests {
             payload: serde_json::json!({"k": "v"}),
             attachments: vec![],
             plaintext_twin: None,
+            // ADR-0058 / ADR-0063 added these two fields to `EventBody` after this test
+            // module was last compiled by anything (no CI job builds the `pg_test` cfg —
+            // the pgx job's clippy step runs from the repo root, so it lints the root
+            // workspace, not this tree). Defaults are right here: these fixtures exercise
+            // parsing and actor-id stability, not the clock or safety planes.
+            clock_grade: cairn_event::ClockGrade::SelfAsserted,
+            safety: None,
         };
         let signed = cairn_event::sign(&body, &sk).unwrap();
         assert!(crate::cairn_verify(&signed.signed_bytes));

@@ -55,7 +55,7 @@ async fn seal_and_submit(
     let signed = sign(&body, sk).expect("sign the sealed body");
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
 }
@@ -106,7 +106,9 @@ async fn setup_node(c: &Client) -> (SigningKey, String) {
     let unwrap = cairn_event::seal::generate_unwrap_secret().unwrap();
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&unwrap).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&unwrap)
+            .as_bytes()
+            .as_slice()],
     )
     .await
     .unwrap();

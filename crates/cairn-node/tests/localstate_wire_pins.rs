@@ -25,16 +25,17 @@
 //! `wire_pins.rs` does, so the constant stays reviewable and the one field that matters is the
 //! one pinned in full.
 
+use cairn_event::keys::Secret32;
 use cairn_node::localstate::{episode_dek_to_cbor, from_cbor, to_cbor, EpisodeDek, LocalState};
 
 /// A 32-byte secret, derived at runtime — house rule 6(a): never a byte-array literal in a
 /// crypto context, even in a fixture. `lineage` is a discriminator, deliberately NOT called
 /// `salt`: CodeQL picks its sink by the NAME a value flows into, and a discriminator wearing a
 /// KDF's name mints a critical alert per call site (#527).
-fn secret_fixture(lineage: u8) -> Vec<u8> {
-    (0u8..32)
-        .map(|i| i.wrapping_mul(7).wrapping_add(lineage))
-        .collect()
+fn secret_fixture(lineage: u8) -> Secret32 {
+    Secret32::from_bytes(std::array::from_fn(|i| {
+        (i as u8).wrapping_mul(7).wrapping_add(lineage)
+    }))
 }
 
 /// A SHORT placeholder for the wrapped-custody slot, following `cairn-medium`'s wire-pin
@@ -56,14 +57,15 @@ fn wrapped_dek_placeholder() -> Vec<u8> {
 /// and `unwrap_secret`'s encoding — the one field whose Rust type changes — would not appear in
 /// it at all.
 fn populated_bundle() -> LocalState {
-    let mut ls = LocalState::empty();
-    ls.episode_deks = vec![episode_dek_to_cbor(&EpisodeDek {
-        event_id: "00000000-0000-0000-0000-000000000001".to_string(),
-        dek_wrapped: wrapped_dek_placeholder(),
-    })];
-    ls.config = Some(b"config-blob".to_vec());
-    ls.drafts = vec![b"a draft".to_vec()];
-    ls.unwrap_secret = Some(secret_fixture(5));
+    let mut ls = LocalState::from_custody(
+        vec![episode_dek_to_cbor(&EpisodeDek {
+            event_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            dek_wrapped: wrapped_dek_placeholder(),
+        })],
+        Some(secret_fixture(5)),
+    );
+    ls.set_config(Some(b"config-blob".to_vec()));
+    ls.set_drafts(vec![b"a draft".to_vec()]);
     ls
 }
 

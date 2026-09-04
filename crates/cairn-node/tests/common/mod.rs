@@ -631,10 +631,14 @@ pub async fn medication_setup(c: &Client) -> (SigningKey, String, SigningKey, St
     //
     // So: derived HERE is a test-fixture convention, never a claim about production. If it
     // ever changes, all four sites change together.
-    let secret = cairn_event::seal::derive_unwrap_secret(&sk_d.to_bytes());
+    let secret = cairn_event::seal::derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(
+        sk_d.to_bytes(),
+    ));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&secret)
+            .as_bytes()
+            .as_slice()],
     )
     .await
     .unwrap();
@@ -691,10 +695,12 @@ pub async fn submit_medication_with_raw_safety(
     // exists only for parity with the real pipeline) surface as an indistinguishable
     // `Err`, misreporting an environment problem as a clinical-write cancellation in the
     // one suite whose entire purpose is attributing a failure to the right cause.
-    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    let secret = cairn_event::seal::derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(
+        sk.to_bytes(),
+    ));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .expect("submit_medication_with_raw_safety: registering the node's unwrap key failed — an environment/setup problem, not the door behaviour this helper exists to exercise");
@@ -753,7 +759,7 @@ pub async fn submit_medication_with_raw_safety(
     let ca = signed.content_address.clone();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await?;
     Ok(ca)
@@ -812,10 +818,12 @@ async fn build_raw_safety_medication(
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     // Same unwrap-key parity as the local-door helper, and `.expect` for the same reason:
     // a setup failure must never be mistaken for door behaviour.
-    let secret = cairn_event::seal::derive_unwrap_secret(&sk.to_bytes());
+    let secret = cairn_event::seal::derive_unwrap_secret(&cairn_event::keys::Secret32::from_bytes(
+        sk.to_bytes(),
+    ));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&cairn_event::seal::unwrap_public(&secret).as_slice()],
+        &[&cairn_event::seal::unwrap_public(&secret).as_bytes().as_slice()],
     )
     .await
     .expect("build_raw_safety_medication: registering the node's unwrap key failed — an environment/setup problem, not door behaviour");
@@ -862,10 +870,14 @@ async fn build_raw_safety_medication(
     body.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&body.event_type));
 
     let signed = sign(&body, sk_h).expect("sign the sealed medication body");
-    // `dek` is a `Zeroizing<[u8; 32]>`; copied out here because the caller binds it as a
-    // query parameter, which outlives the guard. Test-only — production never widens a DEK's
+    // `dek` is a `Secret32`; copied out here because the caller binds it as a query
+    // parameter, which outlives the guard. Test-only — production never widens a DEK's
     // lifetime this way.
-    (signed.signed_bytes, signed.content_address, dek.to_vec())
+    (
+        signed.signed_bytes,
+        signed.content_address,
+        dek.as_bytes().to_vec(),
+    )
 }
 
 /// How many attestation rows a medication thread carries.

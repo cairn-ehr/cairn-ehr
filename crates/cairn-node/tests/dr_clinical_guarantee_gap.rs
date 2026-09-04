@@ -88,9 +88,11 @@
 //! - [`medium_carries_the_federation_plane_and_no_clinical_event`] — **still a PIN** (#500,
 //!   the sibling issue). It names its own inversion and goes red on the commit that fixes
 //!   the medium. Do not read the rest of this file as evidence that it is fixed.
-//! - [`local_state_producers_are_the_empty_constructor_and_the_db_reader`] — a producer
-//!   COUNT guard over the source text of EVERY crate's `src/`; it moved from 1 to 2 when the
-//!   DB-reading producer landed, and reddens at 3 wherever a third appears.
+//! - [`local_state_producers_are_the_two_named_constructors`] — a producer COUNT guard over
+//!   the source text of EVERY crate's `src/`; it moved from 1 to 2 when the DB-reading
+//!   producer landed, and reddens at 3 wherever a third appears. #511 changed WHERE the two
+//!   live (both are named constructors in `localstate.rs` now; the DB reader CALLS one
+//!   instead of being one) without changing the count or the property.
 //! - [`a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body`] — **MECHANISM**,
 //!   not a pin, and it says so in its own doc: it describes what a fresh seed does to a
 //!   derived secret, which is unchanged and is now migration-only territory.
@@ -101,6 +103,7 @@
 //! `CAIRN_ALLOW_DB_SKIP` is set affirmatively (#450). Key material is derived at runtime,
 //! never a literal (house rule 6).
 
+use cairn_event::keys::Secret32;
 use cairn_event::seal::{
     derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_dek, unwrap_public,
 };
@@ -109,7 +112,6 @@ use cairn_node::localstate::{episode_dek_from_cbor, read_local_state, EpisodeDek
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 // Shared scaffolding, for `submit_registration` (since #345 the first event on a chart must
 // be its registration) and for `medication_setup`, which owns the truncation list this
@@ -157,7 +159,7 @@ async fn provisioned_clinic(c: &Client) -> (SigningKey, String) {
 /// Build a sealed `clinical.medication.asserted` body plus the DEK the strict door needs.
 /// Mirrors `seal_submit.rs`'s fixture — a real born-sealed body, not a hand-built row, so
 /// the `event_dek` custody these tests read is produced by the production door.
-fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Zeroizing<[u8; 32]>) {
+fn sealed_assert_body(node_kid: &str, patient: Uuid, hlc: Hlc) -> (EventBody, Secret32) {
     let event_id = Uuid::now_v7().to_string();
     let payload = serde_json::json!({
         "medication_id": Uuid::now_v7().to_string(),
@@ -204,7 +206,7 @@ async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) ->
     let signed = sign(&body, sk).unwrap();
     c.execute(
         "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_slice()],
+        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("a sealed body with its DEK is admitted");
@@ -360,28 +362,24 @@ async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
     // fixture models. So the secret a real operator would load from `<key>.unwrap` is, for
     // this node, exactly the derived one; deriving it here is how the test gets hold of the
     // same secret the production door wrapped every DEK to.
-    let node_secret = derive_unwrap_secret(&sk.to_bytes());
-    // `&*` derefs the `Zeroizing` wrapper explicitly, so the argument reads as the
-    // `&[u8; 32]` the signature asks for rather than leaning on a coercion the reader has to
-    // work out. (An earlier comment here claimed coercion could not reach inside `Some` at
-    // all; that is wrong — `main.rs` relies on exactly such a coercion two `Deref` steps
-    // deep. Clarity is the reason, not necessity.)
-    let exported = read_local_state(&c, Some(&*node_secret))
+    let node_secret = derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
+    // Passed as `&Secret32` directly since #511. (Two earlier comments here argued about how
+    // to spell a `Zeroizing<[u8; 32]>` deref so it read as the `&[u8; 32]` the signature
+    // wanted; there is no wrapper to reach through any more, and no coercion to explain.)
+    let exported = read_local_state(&c, Some(&node_secret))
         .await
         .expect("export must succeed");
 
     let carried = exported
-        .unwrap_secret
-        .as_ref()
+        .unwrap_secret()
         .expect("ADR-0066: the export must carry the node's unwrap secret");
     assert_eq!(
-        carried.as_slice(),
-        node_secret.as_slice(),
+        carried, &node_secret,
         "the carried secret must be this node's, byte for byte"
     );
 
     let deks: Vec<EpisodeDek> = exported
-        .episode_deks
+        .episode_deks()
         .iter()
         .map(|b| episode_dek_from_cbor(b).unwrap())
         .collect();
@@ -392,8 +390,7 @@ async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
 
     // The whole point: the carried secret opens the carried DEK. Anything less proves
     // transport, not recovery.
-    let recovered: [u8; 32] = carried.as_slice().try_into().unwrap();
-    unwrap_dek(&mine.dek_wrapped, &recovered)
+    unwrap_dek(&mine.dek_wrapped, carried)
         .expect("the exported secret must open the exported custody row");
 
     // Promise 2 is UNPINNABLE from the export side, and the reason IS the finding: there
@@ -487,8 +484,8 @@ async fn export_carries_the_survivors_dek_and_never_the_shredded_ones() {
         "the shred was provenance-precise: the unshredded event keeps its custody"
     );
 
-    let node_secret = derive_unwrap_secret(&sk.to_bytes());
-    let exported = read_local_state(&c, Some(&*node_secret))
+    let node_secret = derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
+    let exported = read_local_state(&c, Some(&node_secret))
         .await
         .expect("export must succeed");
 
@@ -496,7 +493,7 @@ async fn export_carries_the_survivors_dek_and_never_the_shredded_ones() {
     // travels. Decoded and matched by event id rather than merely counted, so "non-empty"
     // cannot stand in for "carries THIS event".
     let decoded: Vec<EpisodeDek> = exported
-        .episode_deks
+        .episode_deks()
         .iter()
         .map(|b| episode_dek_from_cbor(b).expect("every export element is a valid EpisodeDek"))
         .collect();
@@ -533,7 +530,7 @@ async fn export_carries_the_survivors_dek_and_never_the_shredded_ones() {
     let shredded_marker = shredded_uuid_bytes(&shredded_id);
     assert!(
         !exported
-            .episode_deks
+            .episode_deks()
             .iter()
             .any(|d| d.windows(16).any(|w| w == shredded_marker.as_slice())),
         "PINS #495 / ADR-0026 point 6: no trace of the SHREDDED event's custody may ever \
@@ -547,10 +544,10 @@ async fn export_carries_the_survivors_dek_and_never_the_shredded_ones() {
     // secret slot would be the same defect wearing a different hat. It carries a bare
     // 32-byte X25519 secret, so this is a cheap standing check that it stays that.
     assert!(
-        !exported
-            .unwrap_secret
-            .as_ref()
-            .is_some_and(|s| s.windows(16).any(|w| w == shredded_marker.as_slice())),
+        !exported.unwrap_secret().as_ref().is_some_and(|s| s
+            .as_bytes()
+            .windows(16)
+            .any(|w| w == shredded_marker.as_slice())),
         "the secret slot carries a 32-byte X25519 secret and nothing else — certainly no \
          reference to an erased event"
     );
@@ -643,12 +640,12 @@ async fn the_export_filter_drops_a_custody_row_the_shred_log_forbids() {
          the shred log names. Without this the assertions below prove nothing."
     );
 
-    let node_secret = derive_unwrap_secret(&sk.to_bytes());
-    let exported = read_local_state(&c, Some(&*node_secret))
+    let node_secret = derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
+    let exported = read_local_state(&c, Some(&node_secret))
         .await
         .expect("export must succeed");
     let decoded: Vec<EpisodeDek> = exported
-        .episode_deks
+        .episode_deks()
         .iter()
         .map(|b| episode_dek_from_cbor(b).expect("every export element is a valid EpisodeDek"))
         .collect();
@@ -771,22 +768,23 @@ fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
         "the two seeds must genuinely differ, or the refusal below proves nothing"
     );
 
-    let dead_secret = derive_unwrap_secret(&dead_seed);
-    let restored_secret = derive_unwrap_secret(&restored_seed);
+    let dead_secret = derive_unwrap_secret(&Secret32::from_bytes(dead_seed));
+    let restored_secret = derive_unwrap_secret(&Secret32::from_bytes(restored_seed));
     assert_ne!(
-        dead_secret.as_slice(),
-        restored_secret.as_slice(),
+        dead_secret, restored_secret,
         "a fresh signing seed derives a fresh unwrap secret (ADR-0052 decision 4)"
     );
 
     // A per-event DEK, as the seal path mints one, wrapped to the DEAD node's public half.
-    let dek: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(3).wrapping_add(5));
+    let dek = Secret32::from_bytes(std::array::from_fn(|i| {
+        (i as u8).wrapping_mul(3).wrapping_add(5)
+    }));
     let wrapped = cairn_event::seal::wrap_dek_for(&dek, &unwrap_public(&dead_secret)).unwrap();
 
     // The node that authored it can open it — so the refusal below is about the KEY, not
     // about a broken wrap.
     let opened = unwrap_dek(&wrapped, &dead_secret).expect("the authoring node opens its own DEK");
-    assert_eq!(opened.as_slice(), dek.as_slice());
+    assert_eq!(opened, dek);
 
     // The restored node cannot. Its inherited custody is noise.
     assert!(
@@ -836,7 +834,7 @@ fn a_restored_nodes_fresh_seed_cannot_open_a_pre_restore_sealed_body() {
 /// own name — it could not observe the property this test is named for, which is exactly
 /// the failure mode this file exists to avoid.
 #[test]
-fn local_state_producers_are_the_empty_constructor_and_the_db_reader() {
+fn local_state_producers_are_the_two_named_constructors() {
     let root = sources::repo_root();
     // EVERY crate's shipped `src/` tree, not the two files we happen to know about. A new
     // file is the likeliest home for a third producer, and it is the one place a
@@ -883,24 +881,52 @@ fn local_state_producers_are_the_empty_constructor_and_the_db_reader() {
          erased body's key could travel from, and it reddens this. Found: {producers:?}"
     );
 
-    // Naming the files closes the swap the count alone cannot see: two constructors in
-    // `localstate.rs` and none in the reader would also total 2.
-    for expected in [
-        "crates/cairn-node/src/localstate.rs",
-        "crates/cairn-node/src/localstate_read.rs",
-    ] {
-        assert_eq!(
-            producers
-                .iter()
-                .filter(|(rel, _, _)| rel == expected)
-                .count(),
-            1,
-            "{expected} must hold exactly one of the two producers. Found: {producers:?}"
-        );
-    }
+    // WHERE the two live, because a count alone cannot notice a swap.
+    //
+    // ⚠️ THIS HALF CHANGED IN #511, AND THE CHANGE IS THE POINT — read it before "restoring"
+    // the old expectation. It used to require one producer in `localstate.rs` and one in
+    // `localstate_read.rs`, because the DB reader WAS a struct literal. It no longer is: the
+    // fields are `pub(crate)` and the reader calls `LocalState::from_custody`, so both
+    // literals are named constructors in `localstate.rs` and the reader holds ZERO.
+    //
+    // That is strictly stronger, not a weakening. Before, ANY file could construct a
+    // `LocalState` and only the count would object; now the type system forbids it outside
+    // this crate entirely, and inside it the two constructors are the only doors. The
+    // property this guard exists for — that nothing builds a bundle while skipping the
+    // `erasure_shred_log` filter — is unchanged, and its behavioural half is
+    // `the_export_filter_drops_a_custody_row_the_shred_log_forbids` below.
+    assert_eq!(
+        producers
+            .iter()
+            .filter(|(rel, _, _)| rel == "crates/cairn-node/src/localstate.rs")
+            .count(),
+        2,
+        "both producers are named constructors in localstate.rs (`empty` and `from_custody`). \
+         Found: {producers:?}"
+    );
+    assert_eq!(
+        producers
+            .iter()
+            .filter(|(rel, _, _)| rel == "crates/cairn-node/src/localstate_read.rs")
+            .count(),
+        0,
+        "the DB reader must CALL `from_custody`, never build a literal of its own — that is \
+         what keeps the filtering producer the only way to fill the custody slot. \
+         Found: {producers:?}"
+    );
 
-    // Also confirm `empty()` really is the zero-value producer, not some other site that
-    // happens to sit alone in that file — a count cannot notice a swap.
+    // …and it really does call it. Without this, deleting the call and returning
+    // `LocalState::empty()` would satisfy every assertion above while exporting no custody at
+    // all — a silent, total loss of the thing this file is named for.
+    let reader = sources::read_source(&root.join("crates/cairn-node/src/localstate_read.rs"));
+    assert!(
+        reader.contains("LocalState::from_custody("),
+        "localstate_read.rs must call `LocalState::from_custody` — with no literal of its own \
+         and no call, the export would silently carry nothing"
+    );
+
+    // Also confirm `empty()` really is the ZERO-value producer and `from_custody` really is
+    // the CUSTODY-bearing one — a count cannot notice the two being swapped.
     let ls = LocalState::empty();
     assert!(
         ls.is_empty(),

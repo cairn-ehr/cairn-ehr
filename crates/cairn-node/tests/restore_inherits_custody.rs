@@ -31,6 +31,7 @@
 //!
 //! DB-gated tests need `CAIRN_TEST_PG`; the offline ones always run.
 
+use cairn_event::keys::Secret32;
 use cairn_node::db;
 use cairn_node::localstate::{
     apply_local_state, build_export_container, establish_lsk, from_cbor, parse_container,
@@ -72,7 +73,9 @@ fn a_restored_node_opens_a_pre_restore_sealed_body() {
     let dead_pub =
         cairn_node::keystore::generate_unwrap_sealed(&dead_key, DEAD_OP, DEAD_REC).unwrap();
     // Runtime-derived, never a literal (house rule 6 / CodeQL rust/hard-coded-cryptographic-value).
-    let dek: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(5));
+    let dek = Secret32::from_bytes(std::array::from_fn(|i| {
+        (i as u8).wrapping_mul(11).wrapping_add(5)
+    }));
     let wrapped = cairn_event::seal::wrap_dek_for(&dek, &dead_pub).unwrap();
     let dead_secret = cairn_node::keystore::load_unwrap_secret(&dead_key, Some(DEAD_OP)).unwrap();
 
@@ -97,9 +100,8 @@ fn a_restored_node_opens_a_pre_restore_sealed_body() {
 
     assert_eq!(
         cairn_event::seal::unwrap_dek(&wrapped, &restored_secret)
-            .expect("ADR-0066: a restored node must open custody it inherited")
-            .as_slice(),
-        &dek,
+            .expect("ADR-0066: a restored node must open custody it inherited"),
+        dek,
         "identity died with the disk; custody did not"
     );
 }
@@ -118,23 +120,21 @@ fn a_well_formed_recovered_secret_is_returned_verbatim() {
     let secret = cairn_node::keystore::load_unwrap_secret(&key, Some(DEAD_OP)).unwrap();
 
     // Field-by-field rather than `..LocalState::empty()`: the struct implements `Drop` (it
-    // wipes the secret), and Rust forbids functional-update syntax on such a type.
+    // wipes the reserved node_default_deks slot), and Rust forbids functional-update syntax
+    // on such a type.
     let mut bundle = LocalState::empty();
-    bundle.unwrap_secret = Some(secret.to_vec());
-    let recovered = recovered_unwrap_secret(&bundle)
-        .expect("a 32-byte secret is exactly what the slot is for")
-        .expect("…and it must come back, not be silently dropped");
+    bundle.set_unwrap_secret(Some(secret.clone()));
+    let recovered =
+        recovered_unwrap_secret(&bundle).expect("it must come back, not be silently dropped");
     assert_eq!(
-        *recovered, *secret,
+        *recovered, secret,
         "the recovered secret must be the dead node's, byte for byte — a re-derivation or a \
          truncation here opens nothing"
     );
 
     // And absence is a legitimate answer, distinct from malformed: a pre-ADR-0066 export.
     assert!(
-        recovered_unwrap_secret(&LocalState::empty())
-            .expect("an absent secret is not an error")
-            .is_none(),
+        recovered_unwrap_secret(&LocalState::empty()).is_none(),
         "an export written before ADR-0066 carries no secret; that is a warning, not a refusal"
     );
 }
@@ -142,6 +142,14 @@ fn a_well_formed_recovered_secret_is_returned_verbatim() {
 /// A slot that is not 32 bytes must be REFUSED, never installed. Installing it would write a
 /// keystore file that opens nothing and register a public half derived from garbage — and
 /// `node_unwrap_key`'s registrar would then refuse the real key forever after.
+///
+/// **This test moved a layer down in #511, and the move is the finding.** It used to build a
+/// 31-byte secret by mutating `LocalState` and assert `recovered_unwrap_secret` refused it.
+/// That mutation no longer compiles: the slot is a [`Secret32`], so a wrong-length secret is
+/// UNREPRESENTABLE in the real type. The refusal therefore has to be tested where a malformed
+/// bundle actually arrives — coming off a disk, through `from_cbor` — which is also where it
+/// now fires, one step EARLIER than before (nothing is written or read out of the bundle
+/// first). [`ForeignBundle`] is how a foreign or corrupt writer can still produce one.
 #[test]
 fn a_recovered_secret_that_is_not_32_bytes_is_refused() {
     let dir = tempdir().unwrap();
@@ -151,12 +159,10 @@ fn a_recovered_secret_that_is_not_32_bytes_is_refused() {
 
     // Derived from real material by truncation rather than written out, so no byte literal
     // ever appears in a cryptographic position (house rule 6).
-    let mut truncated = secret.to_vec();
+    let mut truncated = secret.as_bytes().to_vec();
     truncated.pop();
-    let mut bundle = LocalState::empty();
-    bundle.unwrap_secret = Some(truncated);
 
-    let err = recovered_unwrap_secret(&bundle)
+    let err = from_cbor(&ForeignBundle::with_unwrap_secret(truncated).to_cbor())
         .expect_err("31 bytes cannot be an X25519 secret — refuse it")
         .to_string();
     assert!(
@@ -164,6 +170,43 @@ fn a_recovered_secret_that_is_not_32_bytes_is_refused() {
         "the refusal must say what it got and what it needed, or an operator cannot act on \
          it: {err}"
     );
+}
+
+/// A `LocalState` in the shape a FOREIGN or CORRUPT writer can produce: the secret slot is a
+/// raw `Vec<u8>` of any length.
+///
+/// This is what a truncated export looks like on disk, and since #511 it is the ONLY way to
+/// build one — `LocalState::unwrap_secret` is a [`Secret32`], so the real type cannot hold a
+/// wrong-length key at all. Field names and order match `LocalState` exactly, because
+/// `#[serde(deny_unknown_fields)]` means a drifted name would be refused for the WRONG reason
+/// and this test would pass without ever exercising the length check.
+#[derive(serde::Serialize)]
+struct ForeignBundle {
+    version: u8,
+    node_default_deks: Vec<Vec<u8>>,
+    episode_deks: Vec<Vec<u8>>,
+    config: Option<Vec<u8>>,
+    drafts: Vec<Vec<u8>>,
+    unwrap_secret: Option<Vec<u8>>,
+}
+
+impl ForeignBundle {
+    fn with_unwrap_secret(secret: Vec<u8>) -> Self {
+        ForeignBundle {
+            version: 1,
+            node_default_deks: Vec::new(),
+            episode_deks: Vec::new(),
+            config: None,
+            drafts: Vec::new(),
+            unwrap_secret: Some(secret),
+        }
+    }
+
+    fn to_cbor(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        ciborium::into_writer(self, &mut out).expect("the foreign fixture must serialize");
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -190,13 +233,13 @@ fn the_custody_destination_writes_at_the_restored_nodes_own_posture() {
     .install(&secret)
     .expect("installing under the restored node's own secrets must succeed");
     assert_eq!(
-        *cairn_node::keystore::load_unwrap_secret(&sealed_at, Some(NEW_OP)).unwrap(),
-        *secret,
+        cairn_node::keystore::load_unwrap_secret(&sealed_at, Some(NEW_OP)).unwrap(),
+        secret,
         "the operator passphrase of the RESTORED node must open the inherited key"
     );
     assert_eq!(
-        *cairn_node::keystore::load_unwrap_secret(&sealed_at, Some(NEW_REC)).unwrap(),
-        *secret,
+        cairn_node::keystore::load_unwrap_secret(&sealed_at, Some(NEW_REC)).unwrap(),
+        secret,
         "so must its recovery code — a restored node with only one live recipient has half \
          an escrow and does not know it"
     );
@@ -212,8 +255,8 @@ fn the_custody_destination_writes_at_the_restored_nodes_own_posture() {
         .install(&secret)
         .expect("a plaintext-provisioned node must still inherit custody");
     assert_eq!(
-        *cairn_node::keystore::load_unwrap_secret(&plain_at, None).unwrap(),
-        *secret,
+        cairn_node::keystore::load_unwrap_secret(&plain_at, None).unwrap(),
+        secret,
         "an unsealed inherited key must read back with no secret at all"
     );
 }
@@ -238,7 +281,7 @@ fn the_custody_destination_writes_at_the_restored_nodes_own_posture() {
 async fn dead_node_with_one_custody_row(
     c: &tokio_postgres::Client,
     dir: &std::path::Path,
-) -> (std::path::PathBuf, zeroize::Zeroizing<[u8; 32]>) {
+) -> (std::path::PathBuf, Secret32) {
     c.batch_execute("TRUNCATE node_unwrap_key, event_dek, erasure_shred_log CASCADE")
         .await
         .expect("start from a node holding no custody at all");
@@ -248,7 +291,7 @@ async fn dead_node_with_one_custody_row(
         .expect("the dead node provisions its independent custody key");
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&dead_pub.as_slice()],
+        &[&dead_pub.as_bytes().as_slice()],
     )
     .await
     .expect("…and registers its public half, as `init` does");
@@ -263,7 +306,7 @@ async fn dead_node_with_one_custody_row(
     c.execute(
         "INSERT INTO event_dek (event_id, dek_wrapped) \
          VALUES ($1::text::uuid, cairn_wrap_dek($2, (SELECT unwrap_pub FROM node_unwrap_key)))",
-        &[&event_id, &dek.as_slice()],
+        &[&event_id, &dek.as_bytes().as_slice()],
     )
     .await
     .expect("one real wrapped custody row, wrapped by the same function the door uses");
@@ -297,7 +340,7 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
          nothing' would pass for 'restore worked'"
     );
     assert_eq!(
-        bundle.episode_deks.len(),
+        bundle.episode_deks().len(),
         1,
         "exactly the one custody row staged above"
     );
@@ -320,13 +363,13 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
     );
     let bundle = from_cbor(&plaintext).expect("the travelled bundle must decode");
     assert_eq!(
-        bundle.unwrap_secret.as_deref(),
-        Some(dead_secret.as_slice()),
+        bundle.unwrap_secret(),
+        Some(&dead_secret),
         "the secret must survive seal -> bytes -> parse -> unseal -> decode intact; if this \
          reddens, the export carries no key and no restore anywhere can inherit custody"
     );
     assert_eq!(
-        bundle.episode_deks.len(),
+        bundle.episode_deks().len(),
         1,
         "and so must the custody row it opens"
     );
@@ -368,7 +411,7 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
     let installed = cairn_node::keystore::load_unwrap_secret(&new_unwrap, Some(NEW_OP))
         .expect("the restored node must be able to read its own custody key");
     assert_eq!(
-        *installed, *dead_secret,
+        installed, dead_secret,
         "it must be the DEAD node's secret — minting a fresh one here is the whole defect \
          ADR-0066 exists to close"
     );
@@ -381,13 +424,15 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
         .get(0);
     assert_eq!(
         registered,
-        cairn_event::seal::unwrap_public(&installed).to_vec(),
+        cairn_event::seal::unwrap_public(&installed)
+            .as_bytes()
+            .to_vec(),
         "the registered public half must match the installed secret, or the node writes \
          events it can never open"
     );
 
     // And the point of all of it: the inherited key opens the inherited custody.
-    let carried = cairn_node::localstate::episode_dek_from_cbor(&bundle.episode_deks[0]).unwrap();
+    let carried = cairn_node::localstate::episode_dek_from_cbor(&bundle.episode_deks()[0]).unwrap();
     cairn_event::seal::unwrap_dek(&carried.dek_wrapped, &installed)
         .expect("the restored node must open the custody row it inherited");
 }
@@ -396,6 +441,15 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
 /// whole point: a keystore file written first and refused second is unrecoverable, because
 /// the registrar is only consulted afterwards (`main.rs` records the same reasoning for
 /// `establish-unwrap-key`).
+///
+/// **#511 moved WHERE this fires, and the test moved with it — read this before "restoring"
+/// the old shape.** The refusal used to live in `recovered_unwrap_secret`, one step inside
+/// `apply_local_state`. `LocalState::unwrap_secret` is a `Secret32` now, so a 31-byte secret
+/// is unrepresentable in the type and `apply_local_state` cannot be handed one: the only way
+/// such a bundle exists is on a DISK, and `from_cbor` refuses it there. This test therefore
+/// drives the bundle in as BYTES — which is how a corrupt export actually arrives — and
+/// asserts the ordering claim its name makes, which is now stronger than before: nothing is
+/// written, nothing is registered, and the bundle is not even decoded.
 #[tokio::test]
 async fn a_malformed_recovered_secret_is_refused_before_anything_is_written() {
     let Some(base) = cs() else {
@@ -407,27 +461,23 @@ async fn a_malformed_recovered_secret_is_refused_before_anything_is_written() {
     let dir = tempdir().unwrap();
     let (_dead_key, dead_secret) = dead_node_with_one_custody_row(&c, dir.path()).await;
 
-    let mut bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
-    let mut truncated = bundle.unwrap_secret.take().expect("the export carries one");
-    truncated.pop(); // 31 bytes: derived, never a literal
-    bundle.unwrap_secret = Some(truncated);
+    // Truncated from REAL exported material, so no byte literal sits in a crypto position
+    // (house rule 6) and the fixture is the shape a genuine torn write would leave.
+    let bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
+    let mut truncated = bundle
+        .unwrap_secret()
+        .expect("the export carries one")
+        .as_bytes()
+        .to_vec();
+    truncated.pop(); // 31 bytes
 
     c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
     let new_unwrap =
         cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
 
-    let err = apply_local_state(
-        &c,
-        &bundle,
-        &CustodyKeyDestination::Sealed {
-            path: &new_unwrap,
-            op_pass: NEW_OP,
-            recovery_code: NEW_REC,
-        },
-    )
-    .await
-    .expect_err("a secret that is not 32 bytes must not be installed silently")
-    .to_string();
+    let err = from_cbor(&ForeignBundle::with_unwrap_secret(truncated).to_cbor())
+        .expect_err("a secret that is not 32 bytes must not decode into a bundle")
+        .to_string();
 
     assert!(
         err.contains("31") && err.contains("32"),
@@ -445,8 +495,24 @@ async fn a_malformed_recovered_secret_is_refused_before_anything_is_written() {
         .get(0);
     assert_eq!(
         registered, 0,
-        "and nothing may be registered either: the singleton registrar would then refuse \
-         the real key forever"
+        "and nothing may be registered either: the singleton registrar would then refuse the \
+         node's real custody key permanently"
+    );
+
+    // ANTI-VACUITY. The two assertions above are satisfied by a test that does nothing at all,
+    // so prove the SAME bundle restores once its secret is whole — otherwise this would pass
+    // just as happily if `from_cbor` refused every bundle ever written.
+    let whole = ForeignBundle::with_unwrap_secret(
+        bundle
+            .unwrap_secret()
+            .expect("the export carries one")
+            .as_bytes()
+            .to_vec(),
+    );
+    assert!(
+        from_cbor(&whole.to_cbor()).is_ok(),
+        "the identical bundle with a 32-byte secret must decode — otherwise the refusal above \
+         proves nothing about the LENGTH"
     );
 }
 
@@ -467,7 +533,9 @@ async fn apply_local_state_still_refuses_a_slot_this_build_cannot_apply() {
         cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
 
     let mut bundle = LocalState::empty();
-    bundle.drafts = vec![b"an unsent note from a node this build is older than".to_vec()];
+    bundle.set_drafts(vec![
+        b"an unsent note from a node this build is older than".to_vec()
+    ]);
     let err = apply_local_state(
         &c,
         &bundle,
@@ -526,7 +594,7 @@ async fn a_differing_registration_refuses_the_restore_legibly_and_keeps_the_file
     let interloper_pub = cairn_event::seal::unwrap_public(&interloper);
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
-        &[&interloper_pub.as_slice()],
+        &[&interloper_pub.as_bytes().as_slice()],
     )
     .await
     .expect("stage the key an ill-timed `establish-unwrap-key` would have registered");
@@ -569,7 +637,7 @@ async fn a_differing_registration_refuses_the_restore_legibly_and_keeps_the_file
     let recovered = cairn_node::keystore::load_unwrap_secret(&new_unwrap, Some(NEW_OP))
         .expect("and must still open under the restore ceremony's own passphrase");
     assert_eq!(
-        *recovered, *dead_secret,
+        recovered, dead_secret,
         "and must be the DEAD node's secret — the half the operator has to keep"
     );
 }
@@ -600,7 +668,7 @@ async fn a_secret_that_opens_no_carried_custody_is_refused_before_installing() {
 
     let mut bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
     assert_eq!(
-        bundle.episode_deks.len(),
+        bundle.episode_deks().len(),
         1,
         "precondition: there must be custody to test the key against, or the check below \
          legitimately does nothing and this test would prove nothing"
@@ -608,8 +676,17 @@ async fn a_secret_that_opens_no_carried_custody_is_refused_before_installing() {
 
     // THE SUBSTITUTION: the PUBLIC half where the secret belongs. Exactly 32 bytes, derived
     // at runtime from real material (house rule 6), and completely useless as a key.
+    //
+    // ⚠️ READ THIS BEFORE CONCLUDING #511 MADE THIS TEST REDUNDANT. The newtypes make the
+    // ACCIDENTAL form of this mistake a compile error — `unwrap_public` returns a
+    // `PublicKey32`, and no signature in the custody plane accepts one where a secret belongs.
+    // They do NOT make the DELIBERATE form impossible: `Secret32::from_bytes` accepts any 32
+    // bytes, which is exactly what the explicit conversion below performs. That is the stated
+    // residual of #511's chosen design, and it is why
+    // `secret_opens_the_carried_custody` — a runtime trial-unwrap — is still load-bearing and
+    // must not be removed as "now covered by the types".
     let public_half = cairn_event::seal::unwrap_public(&dead_secret);
-    bundle.unwrap_secret = Some(public_half.to_vec());
+    bundle.set_unwrap_secret(Some(Secret32::from_bytes(public_half.to_bytes())));
 
     c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
     let new_unwrap =
@@ -673,7 +750,7 @@ async fn a_bundle_with_no_custody_rows_still_restores() {
     // A node provisioned but never used clinically: a key, and no custody at all.
     let bundle = read_local_state(&c, Some(&dead_secret)).await.unwrap();
     assert!(
-        bundle.episode_deks.is_empty(),
+        bundle.episode_deks().is_empty(),
         "precondition: this bundle must carry no custody"
     );
 

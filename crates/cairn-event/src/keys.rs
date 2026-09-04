@@ -22,6 +22,55 @@
 //! [`crate::VerifiedKid`] draws in `contributor.rs`, and it was chosen deliberately over
 //! role-typed newtypes (`UnwrapSecret`/`SigningSeed`/`Dek`).
 //!
+//! ## The three lines #511 reported, recorded as compile-fail doctests
+//!
+//! Rust has no `#[should_not_compile]`, and this tree carries no `trybuild` dependency, so the
+//! defect is pinned as doctests instead — they FAIL the suite if the code inside them ever
+//! starts compiling again. Key material in them is DERIVED, not a literal, for the same house
+//! rule 6 reason it is everywhere else: a byte-array literal in a crypto position is what trips
+//! CodeQL's `rust/hard-coded-cryptographic-value`, and a rule that is followed everywhere
+//! except in the documentation is a rule a reader will reasonably conclude is optional.
+//!
+//! 1. The PUBLIC half installed as this node's SECRET custody key:
+//!
+//! ```compile_fail
+//! use cairn_event::keys::Secret32;
+//! fn install(_: &Secret32) {}
+//! let secret = Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_mul(7)));
+//! let public = cairn_event::seal::unwrap_public(&secret);
+//! install(&public);
+//! ```
+//!
+//! 2. The PUBLIC half exported where the secret belongs:
+//!
+//! ```compile_fail
+//! use cairn_event::keys::Secret32;
+//! let secret = Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_mul(7)));
+//! let public = cairn_event::seal::unwrap_public(&secret);
+//! let _wrapped = cairn_event::seal::unwrap_dek(&vec![0u8; 104], &public);
+//! ```
+//!
+//! 3. A DEK wrapped TO a secret rather than to a public half:
+//!
+//! ```compile_fail
+//! use cairn_event::keys::Secret32;
+//! let dek = Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_mul(3)));
+//! let recipient = Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_mul(5)));
+//! let _ = cairn_event::seal::wrap_dek_for(&dek, &recipient);
+//! ```
+//!
+//! And the POSITIVE CONTROL, without which the three above guard nothing — a `compile_fail`
+//! block that fails for the wrong reason (a typo, a missing import, a moved path) passes
+//! silently:
+//!
+//! ```
+//! use cairn_event::keys::Secret32;
+//! let secret = Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_mul(7)));
+//! let public = cairn_event::seal::unwrap_public(&secret);
+//! let wrapped = cairn_event::seal::wrap_dek_for(&secret, &public).unwrap();
+//! assert_eq!(cairn_event::seal::unwrap_dek(&wrapped, &secret).unwrap(), secret);
+//! ```
+//!
 //! WHY A SEPARATE FILE. `seal.rs` is where these are USED, and it re-exports them so
 //! `cairn_event::seal::Secret32` — the path #511 names and every call site uses — resolves. But
 //! `seal.rs` is already past the project's 500-line guideline, so the definitions live here.
