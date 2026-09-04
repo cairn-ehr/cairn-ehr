@@ -1,0 +1,82 @@
+name: Closing-keyword guard
+
+# Refuses a PR whose own text hands GitHub a closing reference the text says is
+# NOT a close — and, on every PR, prints which issues the merge will close.
+#
+# Why this exists. GitHub closes an issue when a merged PR body or commit message
+# puts `close`/`fix`/`resolve` (any tense) immediately before a reference to it.
+# The parser reads adjacency, never meaning, so all three of these closed an issue
+# while saying the opposite, in this repository:
+#
+#     "It does not fix #500"           -> #500 closed  (PR #526)
+#     "It does close #101 item 1"      -> #101 closed  (PR #533)
+#     "Filed rather than fixed: #534"  -> #534 closed  (PR #539)
+#
+# Seven issues were lost that way — #101, #115, #434, #441, #468, #500, #534 —
+# including the tracking issue for the disaster-recovery work under construction
+# at the time, and one that stayed wrongly closed for eight weeks. Nothing
+# reported any of it: the issues simply stopped existing as far as any triage,
+# ROADMAP cross-check or `/techdebt-loop` run could tell. House rule 5 says a
+# known defect must never pass silently, so the check is mechanical rather than a
+# convention in CONTRIBUTING.md — a convention is exactly what failed seven times.
+#
+# The commit convention `fix(#500):` is SAFE and is deliberately not flagged: the
+# parenthesis breaks the adjacency GitHub requires (proof: `fix(#288)` and
+# `fix(#530)` sit on `main` with both issues open). A guard that fired on the
+# house commit style would be switched off inside a week.
+#
+# `edited` is in the trigger list because the body is editable after opening, and
+# an edit is the most likely moment for this defect to arrive.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: closing-keywords-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: closing-keyword guard
+    runs-on: ubuntu-24.04
+    steps:
+      # fetch-depth: 0 so the base..head range below can be walked. A shallow
+      # clone would silently produce an empty commit list — the guard would pass
+      # while checking nothing, which is the shape of failure it exists to catch.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # The guard's OWN tests run first. A compensating control outside CI is not
+      # a control (#444): if the checker rots, this step is what says so, before
+      # its silence can be mistaken for an all-clear.
+      - name: The guard's own tests
+        run: python3 scripts/tests/check_closing_keywords_test.py
+
+      # The PR body arrives through the environment, never through `${{ }}`
+      # interpolation inside the script: a body is attacker-controlled text and
+      # interpolation would splice it into the shell.
+      - name: Collect the text GitHub will parse
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PR_BODY" > pr-body.txt
+          # HEAD, not the PR's head SHA: on a `pull_request` event checkout puts us
+          # on the merge ref, so `BASE_SHA..HEAD` is exactly this PR's commits — and
+          # it works for a FORK, whose head SHA is not in this repository at all.
+          git log --format=%B "$BASE_SHA"..HEAD > commit-messages.txt
+
+      # tee under `pipefail` so the report reaches the job summary AND the script's
+      # exit status still decides the step. Without pipefail, tee's success would
+      # mask a refusal.
+      - name: Check the PR body and its commit messages
+        run: |
+          set -euo pipefail
+          python3 scripts/check_closing_keywords.py pr-body.txt commit-messages.txt \
+            | tee -a "$GITHUB_STEP_SUMMARY"

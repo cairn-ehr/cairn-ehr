@@ -99,6 +99,7 @@ GitHub, not in this repo, so no gate can keep it honest. Verify with
 
 | Check | Workflow · job | What it gates |
 |---|---|---|
+| `closing-keyword guard` | `closing-keywords.yml` · `guard` | That the PR body and its commit messages do not hand GitHub a closing reference the text says is **not** a close — see the section below. Also prints, on every PR, the list of issues the merge will actually close. |
 | `clippy + cargo test (cairn-gui)` | `rust.yml` · `gui` | The reference UI's separate cargo workspace — which `cargo test --workspace` does not cover — including the JS/Rust drift guard that is the only compensating control for a webview with no type checking. Also carries the cairn-gui half of the `cargo doc` gate. |
 | `cargo doc (API surface)` | `rust.yml` · `doc` | The root workspace's docs build, as a **fast advisory duplicate** of the copy inside `test`. Nothing is gated only here — promoting it buys speed of signal, not coverage. |
 
@@ -122,6 +123,37 @@ Three things that have bitten us, so they are worth stating outright:
 See [GOVERNANCE.md](docs/principles/GOVERNANCE.md) for the rest — how decisions are made, the
 defect-blast-radius rule for code, stewardship of the name, the code of conduct, and responsible
 disclosure.
+
+## Writing a PR body: never let a closing keyword touch an issue reference by accident
+
+GitHub closes an issue when a merged PR body **or commit message** puts `close`/`closes`/`closed`,
+`fix`/`fixes`/`fixed` or `resolve`/`resolves`/`resolved` immediately before a reference to it. The
+parser reads **adjacency, never meaning**, so each of these closed an issue while stating the opposite:
+
+| Written | What GitHub did |
+|---|---|
+| `It does not fix #500` | closed #500 |
+| `It does close #101 item 1` | closed #101 — items 2–3 with it |
+| `Filed rather than fixed: #534` | closed #534 |
+
+Seven issues were lost this way before anyone noticed — #101, #115, #434, #441, #468, #500, #534 —
+including the tracking issue for the disaster-recovery slice then under construction, and one that
+stayed wrongly closed for eight weeks. Nothing surfaced it: a wrongly closed issue simply stops
+existing as far as triage, a ROADMAP cross-check or a `/techdebt-loop` run can tell.
+
+**The rule: put a word between the keyword and the reference, or use a verb GitHub does not parse.**
+
+- ✗ `does not fix #500` → ✓ `does not address #500`, or `#500 is not fixed by this slice`
+- ✗ `Filed rather than fixed: #534` → ✓ `Filed rather than repaired: #534`
+- ✗ `closes #101 item 1` → ✓ `closes item 1 of #101 only`
+
+The conventional-commit scope `fix(#500):` is **safe** — the parenthesis breaks the adjacency, proven
+by `fix(#288)` and `fix(#530)` sitting on `main` with both issues open. Keep using it.
+
+`scripts/check_closing_keywords.py` enforces this (its own tests are
+`scripts/tests/check_closing_keywords_test.py`; run either directly with `python3`). It also prints
+what the merge *will* close, so an unintended close is visible before the merge button, not a month
+after it.
 
 ## Paper-parity benchmark — a required slice-plan section
 
