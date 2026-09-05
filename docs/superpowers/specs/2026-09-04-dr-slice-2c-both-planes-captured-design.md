@@ -210,10 +210,59 @@ appears in **exactly one** SQL definition across `db/`, so a fourth spelling can
 A nightly capture over an unchanged log appends nothing and writes no segment — the property that makes
 a nightly backup of a growing log affordable, and the reason CAIRNB3 exists.
 
-**The node plane keeps its current whole-set write for now.** It is small, it is what
-`read_event_set` already produces, and changing both planes' write strategy in one slice would cost
-this slice its ability to attribute a regression. Named as a deferral, with 2d as the slice that
-revisits it if restore needs it.
+**~~The node plane keeps its current whole-set write for now.~~ — see Erratum E1.**
+
+### Erratum E1 — there is no "whole-set write" inside CAIRNB3, so the loop is plane-generic
+
+Written while planning, before any code. The draft above deferred the node plane to keep this slice's
+blast radius small. That deferral cannot be honoured: a medium is CAIRNB1/B2 **or** CAIRNB3, and CAIRNB3
+has no whole-set form. Writing the node plane "whole" into a B3 container means appending a segment
+carrying the entire `node_event` set on **every** run, so the medium grows without bound by
+re-recording events it already holds — set-union makes that harmless to *correctness* and ruinous to
+the property the revision exists for.
+
+So both planes append from **their own watermark**, through one plane-generic loop. This is smaller
+than the deferral it replaces, not larger: one code path, parameterised by plane, rather than two write
+strategies in one file. `node_event` already carries the `seq` that `MediumRecord.source_seq` wants.
+
+### Erratum E2 — writing CAIRNB3 breaks `restore` and `verify-backup` unless this slice moves them
+
+The reason this is not optional scope: **both commands still parse through the legacy reader.**
+
+| command | today's call | on a CAIRNB3 medium |
+|---|---|---|
+| `verify-backup` | `verify_medium_bytes` → `parse_medium` → `parse_container` | refuses the medium it just wrote |
+| `restore` | `parse_container` directly (`main.rs`) | refuses the operator's only backup |
+
+2a added `parse_any`/`MediumImage` and left every existing call site on the legacy path deliberately,
+so that slice could not regress anything. The moment 2c's writer switches revision, that safety
+becomes the defect: an operator who upgrades gets a nightly backup that verifies red and a `restore`
+that will not read it — the working half of the DR path, broken by the slice that was fixing the broken
+half.
+
+**2c therefore moves both read sites onto `parse_any`**, extracting the **node plane** so `restore`
+behaves exactly as it does today. Restoring the *clinical* plane stays 2d's job; this is a
+compatibility obligation, not a feature. A CAIRNB1/B2 medium keeps taking its untouched legacy path
+through `parse_any`'s dispatch, so media already in the field are unaffected.
+
+### Erratum E3 — the segment attestation must bind custody, which closes #524
+
+[#524](https://github.com/cairn-ehr/cairn-ehr/issues/524) was left open by 2a with the explicit note
+that *"which path owns custody is slice 2c's decision"*. §2.1 has now decided it: custody rides the
+medium. That makes the gap live — `segment_commitment` binds `(event_address(signed_bytes),
+source_seq)` per record, plus plane, index, count and predecessor, but **not `dek_wrapped`** — so
+deleting a wrapped DEK out of a verified segment leaves the medium reporting fully intact, and the
+restored body is silently unopenable while every surface says the backup is sound.
+
+**The commitment gains the DEK, and this slice is the only moment it is free.** `backup_to` still
+writes CAIRNB2 (`serialize_and_verify_container`), and outside `cairn-medium`'s own tests nothing
+writes CAIRNB3 at all: **no CAIRNB3 medium exists in the field**, so changing what the attestation
+commits to costs no compatibility. After 2c it would be a format break. The golden pins in
+`wire_pins.rs` are therefore re-frozen deliberately, with that reason recorded at the pin.
+
+Binding the *absence* of a DEK matters as much as its presence: `None` and `Some(bytes)` must commit
+differently, or stripping custody to `None` is undetectable — which is exactly #524's failure, one
+level down.
 
 ---
 
@@ -291,7 +340,9 @@ seq 91,338; custody export 6 days stale"*.
   policy job that is the clinic's. 2e's ADR declares it; completing an erasure across copies is
   rotation.
 - **Restore cannot use the registry** this slice writes — 2d installs it.
-- **The node plane still rewrites whole** (§4).
+- **The node plane is captured incrementally too**, not written whole — §4 Erratum E1. Restoring
+  the CLINICAL plane is still 2d's; 2c only keeps `restore`/`verify-backup` working on the node
+  plane of a CAIRNB3 medium (Erratum E2), which is a compatibility obligation, not a feature.
 - Every deferral here names the slice that retires it, per 2a's rule: *a deferral is only honest while
   its stated precondition holds, and nothing in the repo watches for one expiring.*
 
