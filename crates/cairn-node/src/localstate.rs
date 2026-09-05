@@ -43,15 +43,16 @@
 //!
 //! Read that narrowly, because the ADR's title — "identity dies with the disk; custody must
 //! not" — is still not fully this system's behaviour. What survives a restore today is the
-//! KEY. The custody ROWS ride along and are counted, but nothing inserts them, because the
-//! backup medium carries no clinical event for them to be custody of (#500, below). Neither
+//! KEY. The custody ROWS ride along and are counted, but nothing inserts them — because
+//! nothing yet RESTORES a clinical event for them to be custody of (#500, below). Neither
 //! half is useful without the other; do not read this section as more than it says.
 //!
 //! **STILL OPEN, do not read this module as closing them:**
 //!
-//! - **The backup medium carries no clinical event (#500).** It exports the federation
-//!   plane only. Until that lands, a restored node gets a working key and nothing to open
-//!   with it — neither half is useful alone. This is the next slice.
+//! - **Nothing restores a clinical event (#500).** Since DR slice 2c the backup medium DOES
+//!   carry the clinical plane, with each record's wrapped DEK — but `restore` and
+//!   `verify-backup` read the federation plane alone (`backup::node_plane_events`), so a
+//!   restored node still gets a working key and nothing to open with it. Slice 2d.
 //! - **The restore side lands the KEY, not yet the rows.** [`apply_local_state`] now installs
 //!   the recovered unwrap secret and registers its public half (ADR-0066 decision 4), so a
 //!   restored node's custody IS the dead node's custody — that is #495's restore half, and it
@@ -386,8 +387,9 @@ pub fn episode_dek_to_cbor(d: &EpisodeDek) -> Vec<u8> {
 /// `dek_wrapped` that is not exactly [`cairn_event::seal::WRAPPED_DEK_LEN`] bytes can never
 /// be opened — `unwrap_dek` refuses it — so a truncated or padded row is a custody row that
 /// looks present and is permanently dead. Today that is inert: `apply_local_state` COUNTS
-/// these rows without inserting them, because the medium carries no clinical event yet
-/// (#500). **#500 is the slice that inserts them**, and after that a bad row is a chart entry
+/// these rows without inserting them, because nothing yet restores a clinical event for them
+/// to belong to (#500 — the medium carries them since slice 2c; the restore door does not
+/// read them). **#500's restore half is what inserts them**, and after that a bad row is a chart entry
 /// nobody can read or crypto-shred, discovered only when someone tries. Catching it at the
 /// decode boundary costs one comparison and is the same reasoning
 /// [`recovered_unwrap_secret`] applies one struct over — which is exactly where this check
@@ -958,11 +960,12 @@ pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &Secret32) -> a
 /// command PRINTS it: an operator is told what came across and what is still owed, rather
 /// than finding out on the next disaster.
 ///
-/// The ordering note for whoever lands #500: custody must be registered BEFORE clinical
-/// events apply, because the door wraps each event's DEK to the registered public half. This
-/// function already does its half in that order; the *caller* currently runs it after
-/// `finalize_identity`, which is fine only while no clinical event is applied. That call site
-/// has to move up when the medium starts carrying them.
+/// The ordering note for whoever lands #500's restore half: custody must be registered BEFORE
+/// clinical events apply, because the door wraps each event's DEK to the registered public
+/// half. This function already does its half in that order; the *caller* currently runs it
+/// after `finalize_identity`, which is fine only while no clinical event is APPLIED. The
+/// medium has carried them since slice 2c, so the trigger for moving this call site up is the
+/// slice that starts applying them, not the one that started capturing them.
 pub async fn apply_local_state(
     db: &tokio_postgres::Client,
     ls: &LocalState,

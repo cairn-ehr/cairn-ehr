@@ -343,8 +343,9 @@ async fn medium_carries_both_planes() {
 /// ADR-0066 decision 3 owns. Decision 4 (a restored node ADOPTS the exported unwrap key) has
 /// since landed too, and is pinned in `restore_inherits_custody.rs` — so the KEY now survives
 /// a restore end-to-end. The wrapped `event_dek` ROWS still do not: they are carried across
-/// and counted, but not inserted, because the medium carries no clinical event for them to be
-/// custody of (**#500**, the next slice). Writing "promise 3 is now TRUE" here would be a
+/// and counted, but not inserted, because nothing yet RESTORES a clinical event for them to be
+/// custody of (**#500** — the medium carries them since slice 2c; the restore door does not
+/// read them, which is slice 2d). Writing "promise 3 is now TRUE" here would be a
 /// freshly-minted version of the expired-precondition claim this whole suite exists to catch.
 ///
 /// The sealed local-state export (ADR-0026 slice D) is the only artifact that can carry key

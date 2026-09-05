@@ -40,7 +40,10 @@
 use cairn_event::keys::Secret32;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
-use cairn_medium::{parse_any, serialize_container, MediumImage, MediumRecord, Plane, SelfMarker};
+use cairn_medium::{
+    append_segment, parse_any, serialize_container, MediumImage, MediumRecord, Plane, Segment,
+    SelfMarker,
+};
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -426,5 +429,86 @@ async fn a_legacy_medium_is_succeeded_by_a_cairnb3_medium_holding_at_least_as_mu
     assert!(
         !records_on(&image, Plane::Clinical).is_empty(),
         "and the successor carries the clinical plane the legacy medium never could"
+    );
+}
+
+/// **A torn tail is REPAIRED, and the operator is told** (#500 slice 2c review, Minor 5).
+///
+/// `capture_plane` must cut a torn medium back to its last complete section before appending
+/// — otherwise the torn remnant becomes the next section's length prefix and every later
+/// backup is silently orphaned. It does that whether or not it then appends anything, so a
+/// nightly run over an unchanged log can print `+0 / +0 appended` beside a file that just
+/// changed size. Unexplained, that reads as corruption.
+///
+/// The test drives the real `backup_to` over a genuinely torn medium and asserts three
+/// things: the run succeeds, it SAYS it repaired, and nothing verified was lost — every
+/// record the intact medium held is still there afterwards.
+#[tokio::test]
+async fn a_torn_medium_is_repaired_and_the_repair_is_reported() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    let key = Some((&cl.sk, cl.kid.as_str()));
+    let first = backup::backup_to(&cl.db, &cl.medium(), &cl.health(), 1_000, key)
+        .await
+        .unwrap();
+    assert!(
+        !first.repaired_torn_tail,
+        "anti-vacuity: a medium this run created cannot already be torn: {first:?}"
+    );
+    let intact = std::fs::read(cl.medium()).unwrap();
+
+    // Tear it the way an interrupted append actually tears: begin a REAL further section and
+    // cut it off partway through, so the section's length prefix is honest and the bytes
+    // behind it run out. (Appending zeroes instead would be the #523 artifact — a length
+    // prefix that is itself corrupt — which `parse_any` reports as `Damaged`, not as a tear,
+    // and whose remedy is the opposite one.)
+    let mut torn = intact.clone();
+    append_segment(
+        &mut torn,
+        &Segment {
+            plane: Plane::Node,
+            index: 99,
+            prev_commitment: String::new(),
+            self_node_id_hex: String::new(),
+            attestation: None,
+            records: vec![MediumRecord {
+                signed_bytes: vec![7u8; 64],
+                attestation: None,
+                attester_key: None,
+                dek_wrapped: None,
+                source_seq: 99,
+            }],
+        },
+    )
+    .expect("the fixture segment fits the section cap");
+    torn.truncate(intact.len() + 12); // partway into that section: a torn tail
+    std::fs::write(cl.medium(), &torn).unwrap();
+    match parse_any(&std::fs::read(cl.medium()).unwrap()).unwrap() {
+        MediumImage::V3(m) => assert!(
+            m.truncated_tail,
+            "anti-vacuity: the fixture must genuinely produce a torn medium"
+        ),
+        MediumImage::Legacy(_) => panic!("the fixture must stay CAIRNB3"),
+    }
+
+    let second = backup::backup_to(&cl.db, &cl.medium(), &cl.health(), 2_000, key)
+        .await
+        .expect(
+            "a torn medium must be repaired, never refused — refusing would stop a \
+                 clinic backing up over damage a single truncate fixes",
+        );
+    assert!(
+        second.repaired_torn_tail,
+        "the operator must be told the file changed size for a reason: {second:?}"
+    );
+    assert_eq!(
+        std::fs::read(cl.medium()).unwrap(),
+        intact,
+        "the repair cuts back to exactly the last complete section — nothing verified is \
+         lost, and nothing new was appended because the log did not change"
     );
 }

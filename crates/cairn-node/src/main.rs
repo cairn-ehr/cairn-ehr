@@ -1177,9 +1177,10 @@ async fn apply_local_state_export(
 /// medium (the load-bearing copy) is already written. An operator who is not told here would
 /// find out during a restore instead.
 ///
-/// ⚠️ Still NOT true end-to-end: the backup medium carries no clinical event (#500). The
-/// restore side now DOES install what this writes (ADR-0066 decision 4 —
-/// `localstate::apply_local_state`), but it lands the unwrap key only; the carried custody
+/// ⚠️ Still NOT true end-to-end: nothing RESTORES a clinical event (#500). The medium has
+/// carried the clinical plane since DR slice 2c, and the restore side does install what this
+/// writes (ADR-0066 decision 4 — `localstate::apply_local_state`) — but it lands the unwrap
+/// key only, and `restore` still applies the federation plane alone, so the carried custody
 /// rows wait for the events they belong to. A reader arriving at "why did my restore have no
 /// clinical records" should read #500 before concluding this function is at fault.
 async fn seal_and_write_local_state_export(
@@ -2392,6 +2393,32 @@ async fn main() -> anyhow::Result<()> {
                 report.medium_bytes,
                 to.display()
             );
+            // A REPAIR changes the file's size without appending anything, so a nightly run
+            // can legitimately print `+0 / +0` beside a medium that shrank. Unexplained, that
+            // reads as corruption; explained, it is the interrupted-append recovery working.
+            if report.repaired_torn_tail {
+                println!(
+                    "NOTE: the medium's last section was TORN (a previous backup was \
+                     interrupted mid-append). It has been cut back to the last complete, \
+                     verified section before this run appended — which is why the file size \
+                     may have changed even if nothing was appended above. Nothing verified \
+                     was lost: the watermark never advanced past the torn section, so its \
+                     records were re-captured by this run if they are still in the database."
+                );
+            }
+            // A medium that would restore nothing is not an error (a genuinely new node must
+            // be able to write its first one — #502 item 2), but reporting plain success over
+            // it is a green light on an empty file whose only other refusal comes at the
+            // disaster. `verify-backup` already bails on this; `backup` must at least say it.
+            if report.carries_nothing {
+                eprintln!(
+                    "WARNING: this medium carries NO records in any plane — it is internally \
+                     consistent and it would restore NOTHING. If this node really is new, \
+                     there is nothing to back up yet and this is expected; otherwise the \
+                     database this backup read is not the one holding your records. \
+                     `verify-backup` will refuse this medium (#502 item 2)."
+                );
+            }
             // How well does this medium identify its own node? A SIGNED capture is UNFORGEABLE
             // (the private key never leaves the node) and each segment is bound to its
             // contents, plane, position and predecessor; on a sole-enroll medium that is fully
@@ -2402,25 +2429,23 @@ async fn main() -> anyhow::Result<()> {
                 cairn_node::backup::WrittenMarker::Signed => {
                     println!("self-marker  SIGNED (unforgeable; identity confirmed on restore)")
                 }
-                // NOT merely "less tamper-evident". On a CAIRNB3 medium an unsigned capture
-                // leaves NOTHING for `restore` to identify the node from: `self_marker_for`
-                // derives a marker from the ATTESTED id only, and the plaintext
-                // `Segment::self_node_id_hex` is untrusted and deliberately not used. So
-                // restore falls back to sole-enroll inference or an UNCHECKED
-                // `--superseded-node`, which is issue #53's footgun. The wording says so
-                // plainly rather than repeating CAIRNB2's milder "operator-error-safe".
+                // Operator-error-safe but not tamper-evident — the same standing this
+                // wording has always described, and it holds on CAIRNB3 only because
+                // `self_marker_source` falls back to the untrusted plaintext segment id when
+                // no attestation can supply one (#550). Without that fallback this line would
+                // be an over-claim: restore would have had nothing at all to check against.
                 cairn_node::backup::WrittenMarker::Unsigned => eprintln!(
                     "WARNING: this capture was UNSIGNED — no segment on this medium carries an \
-                     attestation, so it is neither tamper-evident NOR able to tell `restore` \
-                     which node it belongs to (restore will fall back to inference or to an \
-                     unchecked --superseded-node). The backup itself is complete and every \
-                     event still verifies individually. Set CAIRN_KEY_PASSPHRASE / \
-                     --passphrase (or use a plaintext key): the next capture that has \
-                     something to append will sign its segment, and one signed segment is \
-                     enough to identify the medium. Note that a capture over an unchanged log \
-                     appends nothing at all (by design), so a re-run alone will not sign this \
-                     medium — start a NEW medium with a key available if you need one now. \
-                     Store and handle this medium with extra care."
+                     attestation, so the medium names this node only in untrusted plaintext: \
+                     operator-error-safe (restore still refuses a --superseded-node naming a \
+                     different node here) but NOT tamper-evident. The backup itself is \
+                     complete and every event still verifies individually. Set \
+                     CAIRN_KEY_PASSPHRASE / --passphrase (or use a plaintext key): the next \
+                     capture that has something to append will sign its segment, and one \
+                     signed segment is enough to identify the medium unforgeably. Note that a \
+                     capture over an unchanged log appends nothing at all (by design), so a \
+                     re-run alone will not sign this medium. Store and handle this medium with \
+                     extra care."
                 ),
                 cairn_node::backup::WrittenMarker::None => {
                     println!("self-marker  none (node not yet enrolled — nothing to attest)")
@@ -2698,12 +2723,18 @@ async fn main() -> anyhow::Result<()> {
             // shape (a self-marker plus an event list). A CAIRNB3 medium has no
             // container-level marker at all (that concept is CAIRNB2-only and frozen; see
             // `cairn_medium`'s crate docs) — its analogue is the per-SEGMENT attestation.
-            // `backup::self_marker_for` derives the equivalent marker for either revision
-            // (see its doc for the full #53 cross-check reasoning); pinned end-to-end by
-            // `v3_medium_self_marker_still_rejects_a_named_peer` in `tests/restore.rs`,
-            // which calls this SAME function rather than replicating its logic.
+            // `backup::self_marker_source` derives the equivalent marker for either revision
+            // AND how it was derived (see its doc for the full #53 cross-check reasoning);
+            // pinned end-to-end by `v3_medium_self_marker_still_rejects_a_named_peer` in
+            // `tests/restore.rs`, which calls this SAME function rather than replicating its
+            // logic. The SOURCE is needed one screen down: on a CAIRNB3 medium both an
+            // unforgeable attested id and an untrusted plaintext one arrive in the same
+            // `SelfMarker::Unsigned` variant, so `Provenance` alone cannot tell an operator
+            // which of the two they have.
+            let derived = cairn_node::backup::self_marker_source(&image);
+            let marker_source = derived.as_ref().map(|(_, source)| *source);
             let container = cairn_node::medium::Container {
-                self_marker: cairn_node::backup::self_marker_for(&image),
+                self_marker: derived.map(|(marker, _)| marker),
                 events,
             };
             let report = cairn_node::backup::verify_events(&container.events);
@@ -2736,9 +2767,47 @@ async fn main() -> anyhow::Result<()> {
                      event set, so a peer's genuine marker could be spliced here — the signature \
                      alone cannot rule that out. Confirm the restored node's name/address printed \
                      below match THIS node before relying on it."),
+                // SPLIT BY DERIVATION, not by variant. `self_marker_for` wraps a CAIRNB3
+                // medium's ATTESTED id in `SelfMarker::Unsigned` for a wire-shape reason
+                // (see its doc), so `resolve_dead_node` reports `Provenance::Unsigned` for a
+                // fully tamper-evident medium. Printing the unsigned warning there is a false
+                // statement to a human at the exact moment they decide whether to trust a
+                // restore — under-claiming, but still false.
+                Provenance::Unsigned
+                    if marker_source == Some(cairn_node::backup::MarkerSource::V3Attested) =>
+                {
+                    println!(
+                        "self-identity confirmed by a signed SEGMENT ATTESTATION \
+                         (tamper-evident): the node id came from a verified attestation bound \
+                         to a genesis on this same medium and signed by the same key, which \
+                         no one without this node's private key could produce."
+                    );
+                    // The CAIRNB2 `SignedFederated` caveat, stated unconditionally rather
+                    // than gated on an enroll count this arm does not have — and honestly
+                    // scoped: `cairn-medium`'s crate docs record that the converged-peer
+                    // splice is NARROWER on CAIRNB3 (segment commitments bind per-record
+                    // `source_seq`, which converged peers do not share) but is not proven
+                    // impossible.
+                    eprintln!(
+                        "NOTE: if this medium carries more than one node's genesis, confirm \
+                         the name/address printed below match THIS node. A converged peer's \
+                         medium is a narrower risk on CAIRNB3 than on CAIRNB2, not a ruled-out \
+                         one."
+                    );
+                }
                 Provenance::Unsigned => eprintln!(
-                    "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident). Confirm \
-                     the restored node's name/address printed below match THIS node before relying on it."),
+                    "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident) — {}. \
+                     It still pins self and still refuses a --superseded-node naming a \
+                     different node on this medium, but anyone who could write the file could \
+                     have written the id. Confirm the restored node's name/address printed \
+                     below match THIS node before relying on it.",
+                    match marker_source {
+                        Some(cairn_node::backup::MarkerSource::V3Plaintext) =>
+                            "this medium's capture was unsigned, so the id is the untrusted \
+                             plaintext one each segment names itself with",
+                        _ => "a CAIRNB1/CAIRNB2 medium written without the node's signing key",
+                    }
+                ),
                 Provenance::NoMarker => eprintln!(
                     "WARNING: this medium carries NO usable self-marker. Either a \
                      legacy/pre-enrollment CAIRNB2 backup (no marker was ever written), \

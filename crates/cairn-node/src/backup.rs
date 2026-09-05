@@ -203,7 +203,34 @@ pub fn torn_tail_notice(image: &MediumImage, path: &std::path::Path) -> Option<S
     }
 }
 
-/// Derive the self-marker `resolve_dead_node` should use, for either medium revision.
+/// How a medium's self-marker was derived. The marker's WIRE SHAPE cannot say this on a
+/// CAIRNB3 medium — both derivations below produce a `SelfMarker::Unsigned` — so the trust
+/// level travels beside it rather than being guessed from the variant.
+///
+/// WHY IT HAS TO (#500 slice 2c review): without it, a fully tamper-evident sole-enroll V3
+/// medium was described to the operator as "UNSIGNED (not tamper-evident)". Under-claiming is
+/// the safe direction, but it is still a false statement to a human at the moment they are
+/// deciding whether to trust a restore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerSource {
+    /// A CAIRNB1/CAIRNB2 container's own head marker, passed through unchanged. Its own
+    /// `SelfMarker` variant already says whether it was signed.
+    LegacyContainer,
+    /// CAIRNB3: the ATTESTED node id from `chain::self_id_from_chain` — a verified segment
+    /// attestation, bound to a genesis on THIS medium signed by the SAME key. **Unforgeable**
+    /// (the private key never leaves the node), and therefore the CAIRNB3 equivalent of a
+    /// CAIRNB2 *signed* head marker despite being carried in the `Unsigned` variant.
+    V3Attested,
+    /// CAIRNB3: the untrusted plaintext `Segment::self_node_id_hex`, used only because no
+    /// attestation on this medium could supply an id. **Exactly the trust level a CAIRNB2
+    /// unsigned head marker had** — forgeable by anyone who can write the file, still
+    /// cross-checked by `resolve_dead_node`'s `Unsigned` arm against the medium's own enrolls.
+    V3Plaintext,
+}
+
+/// Derive the self-marker `resolve_dead_node` should use, for either medium revision, AND how
+/// it was derived. ONE derivation, so the marker and the trust statement made about it to an
+/// operator can never disagree.
 ///
 /// WHY A SHARED FUNCTION, NOT INLINE MATCH LOGIC (#500 slice 2c review round 2). This is
 /// the exact construction `main.rs`'s restore arm needs — extracted so main.rs and its
@@ -214,27 +241,78 @@ pub fn torn_tail_notice(image: &MediumImage, path: &std::path::Path) -> Option<S
 /// calling the real function can.
 ///
 /// - **Legacy:** the container's own marker, unchanged.
-/// - **CAIRNB3:** derived from `chain::self_id_from_chain` — the ATTESTED id (two binds
+/// - **CAIRNB3, first choice:** `chain::self_id_from_chain` — the ATTESTED id (two binds
 ///   already checked there: the segment attestation verifies, and the named node has a
-///   genesis on THIS medium signed by the same key), never the untrusted plaintext
-///   `Segment::self_node_id_hex`. Wrapped as `SelfMarker::Unsigned`, not `Signed`:
-///   `SelfMarker::Signed`'s verifier (`verify_self_attestation`) expects a CAIRNB2
-///   whole-set-committing `node.self_attested` blob, a different wire shape from a
-///   segment attestation, and would wrongly raise `InvalidSelfMarker` on a perfectly good
-///   V3 medium. Wrapping it at all is what preserves `resolve_dead_node`'s
-///   `confirm_explicit` cross-check — with a bare `None`, `resolve_without_marker` accepts
-///   ANY `--superseded-node` present on the medium, silently reopening issue #53. `None`
-///   only when no segment attestation on the medium binds to a genesis also on it (e.g. an
-///   entirely unsigned capture); `resolve_dead_node`'s existing marker-less fallback then
-///   applies (sole enroll, or an explicit, unchecked `--superseded-node`).
-pub fn self_marker_for(image: &MediumImage) -> Option<SelfMarker> {
+///   genesis on THIS medium signed by the same key). Wrapped as `SelfMarker::Unsigned`, not
+///   `Signed`: `SelfMarker::Signed`'s verifier (`verify_self_attestation`) expects a CAIRNB2
+///   whole-set-committing `node.self_attested` blob, a different wire shape from a segment
+///   attestation, and would wrongly raise `InvalidSelfMarker` on a perfectly good V3 medium.
+///   `MarkerSource::V3Attested` is what carries the real trust level out.
+/// - **CAIRNB3, fallback:** the plaintext `Segment::self_node_id_hex` of the last segment
+///   that carries a non-empty one.
+///
+/// # Why the plaintext fallback exists, and why it invents no trust (#550)
+///
+/// An unattended cron backup has no passphrase, therefore no key, therefore writes UNSIGNED
+/// segments — and §1.2 requires that never to block a backup. Without this fallback such a
+/// medium yields `None`, and `resolve_dead_node` then takes its marker-less path. That was a
+/// REGRESSION against the CAIRNB2 medium it replaced, in two directions at once:
+///
+///   1. `confirm_explicit` never runs, so ANY `--superseded-node` naming an enroll on the
+///      medium is accepted UNCHECKED — issue #53's original footgun, where an operator typo
+///      becomes an immutable supersede edge against the wrong node;
+///   2. with NO `--superseded-node`, a multi-enroll medium becomes `RestoreError::Ambiguous`
+///      — so a restore that worked on CAIRNB2 now REFUSES, for exactly the passphrase-less
+///      case that cannot avoid it.
+///
+/// The fallback restores parity and nothing more. `Segment::self_node_id_hex` is untrusted
+/// plaintext — its own doc says so — and so was a CAIRNB2 unsigned marker: both are forgeable
+/// by anyone who can write the file, and `resolve_dead_node`'s `Unsigned` arm re-checks either
+/// one against the enrolls actually present on the medium before honouring it, yielding
+/// `InvalidSelfMarker` for an off-medium id and `NotSelf` for a named peer. The caller is told
+/// which derivation it got via [`MarkerSource`] and must say so; **never present a
+/// `V3Plaintext` marker as tamper-evident.**
+///
+/// `None` now only when a V3 medium carries no attestation AND no non-empty plaintext id
+/// anywhere — a capture by a node that was not yet enrolled. `resolve_dead_node`'s marker-less
+/// fallback then applies, which is correct: there is genuinely no identity claim to check.
+pub fn self_marker_source(image: &MediumImage) -> Option<(SelfMarker, MarkerSource)> {
     match image {
-        MediumImage::Legacy(container) => container.self_marker.clone(),
+        MediumImage::Legacy(container) => container
+            .self_marker
+            .clone()
+            .map(|m| (m, MarkerSource::LegacyContainer)),
         MediumImage::V3(medium) => {
             let report = crate::medium::chain_report(medium);
-            crate::medium::self_id_from_chain(medium, &report).map(SelfMarker::Unsigned)
+            if let Some(attested) = crate::medium::self_id_from_chain(medium, &report) {
+                return Some((SelfMarker::Unsigned(attested), MarkerSource::V3Attested));
+            }
+            // The LAST segment that names itself, mirroring the attested path's "last
+            // verified signed segment": the most recent writer is the one whose backup this
+            // is. Empty ids are skipped — `Segment::self_node_id_hex` uses the empty string
+            // for "captured before enrolment", which is an absence, not a claim.
+            medium
+                .segments
+                .iter()
+                .rev()
+                .map(|s| s.self_node_id_hex.as_str())
+                .find(|id| !id.is_empty())
+                .map(|id| {
+                    (
+                        SelfMarker::Unsigned(id.to_string()),
+                        MarkerSource::V3Plaintext,
+                    )
+                })
         }
     }
+}
+
+/// The marker alone, for callers that do not surface a trust statement.
+///
+/// A thin wrapper over [`self_marker_source`] rather than a second derivation — the #522
+/// lesson: two places deriving one answer is how they come to disagree.
+pub fn self_marker_for(image: &MediumImage) -> Option<SelfMarker> {
+    self_marker_source(image).map(|(marker, _)| marker)
 }
 
 // ---------------------------------------------------------------------------
@@ -420,15 +498,14 @@ pub enum WrittenMarker {
     /// The medium names this node only in the UNTRUSTED plaintext `Segment::self_node_id_hex`
     /// (the signing key was not available at capture, so no segment carries an attestation).
     ///
-    /// ⚠️ **Weaker on CAIRNB3 than the CAIRNB2 unsigned head marker it replaces**, and the
-    /// difference is real rather than cosmetic: [`self_marker_for`] derives a marker from the
-    /// ATTESTED id only, so an entirely-unsigned CAIRNB3 medium yields `None` and
-    /// `restore`'s `confirm_explicit` cross-check (issue #53's footgun) does not run on it.
-    /// A CAIRNB2 unsigned marker, equally forgeable, still ran that check. Filed as
-    /// [#550](https://github.com/cairn-ehr/cairn-ehr/issues/550) rather than fixed here: what
-    /// a V3 medium's untrusted plaintext `Segment::self_node_id_hex` may be used for is a
-    /// decision about `self_marker_for` and `restore`, not about the writer that started
-    /// producing the revision.
+    /// **Operator-error-safe, not tamper-evident** — exactly what a CAIRNB2 unsigned head
+    /// marker was, and deliberately so: [`self_marker_source`] falls back to that plaintext id
+    /// when no attestation can supply one, so `restore`'s `confirm_explicit` cross-check
+    /// (issue #53's footgun) still runs and a multi-enroll medium still resolves self rather
+    /// than going `Ambiguous`. Without that fallback this variant would have been strictly
+    /// weaker than the format it replaced ([#550](https://github.com/cairn-ehr/cairn-ehr/issues/550));
+    /// parity is restored, and it is parity, not an upgrade — anyone who can write the file
+    /// can write the id.
     Unsigned,
     /// The medium carries an ATTESTED identity: at least one signed segment whose attestation
     /// verifies AND whose claimed node has a genesis on this same medium signed by the same
@@ -489,6 +566,22 @@ pub struct BackupReport {
     pub medium_bytes: usize,
     pub marker: WrittenMarker,
     pub origin: MediumOrigin,
+    /// The medium found at the path had a TORN tail, which this run repaired by cutting back
+    /// to `MediumV3::complete_bytes` before appending.
+    ///
+    /// Surfaced because the repair is otherwise INVISIBLE and looks alarming: `capture_plane`
+    /// truncates whether or not it then appends anything, so a nightly run over an unchanged
+    /// log can print `+0 / +0 appended` while the file on disk silently changes size. An
+    /// operator watching byte counts would have no way to tell that from corruption.
+    pub repaired_torn_tail: bool,
+    /// The medium this run wrote would restore NOTHING — no record in any plane
+    /// (`MediumHealth::carries_nothing`).
+    ///
+    /// Not an error: a genuinely new node must be able to write its first medium, and that
+    /// rule is recorded in `verify-backup` (#502 item 2). But reporting plain success over an
+    /// artifact that restores nothing is a green light on an empty file whose only other
+    /// refusal comes at the disaster, so the caller is handed the fact and must say it.
+    pub carries_nothing: bool,
 }
 
 /// Read this node's signed `node_event` set — the whole FEDERATION plane, in local `seq`
@@ -562,7 +655,7 @@ const CAPTURE_PAGE_EVENTS: i64 = 500;
 /// The three outcomes are deliberately not collapsed (`MediumOrigin`'s doc has the operator
 /// consequence). The fourth possible state of the target path — a file that exists and is
 /// NOT a readable Cairn medium — is a REFUSAL rather than a fourth variant; see below.
-fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin)> {
+fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin, bool)> {
     use anyhow::Context;
 
     let bytes = match std::fs::read(path) {
@@ -570,7 +663,11 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin)> 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // A first backup. `serialize_v3(&[])` is an 8-byte magic header and nothing
             // else; the capture below appends every segment.
-            return Ok((crate::medium::serialize_v3(&[])?, MediumOrigin::FirstEver));
+            return Ok((
+                crate::medium::serialize_v3(&[])?,
+                MediumOrigin::FirstEver,
+                false,
+            ));
         }
         // Present but UNREADABLE (permissions, an I/O error, a mount that went away). We
         // must not overwrite what we could not read: a good medium behind a transient read
@@ -594,7 +691,14 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin)> 
         // `MediumV3::complete_bytes` before it appends, which is the only place that
         // recovery may happen (see its doc; appending after a torn remnant orphans every
         // later backup forever).
-        Ok(MediumImage::V3(_)) => Ok((bytes, MediumOrigin::Continued)),
+        Ok(MediumImage::V3(ref m)) => {
+            // Reported, not acted on, here: the actual repair is `capture_plane`'s (it must
+            // truncate to `complete_bytes` immediately before it appends, or a torn remnant
+            // becomes the next section's length prefix and orphans every later backup). This
+            // only remembers that it is about to happen, so the caller can say so.
+            let torn = m.truncated_tail;
+            Ok((bytes, MediumOrigin::Continued, torn))
+        }
 
         // A CAIRNB1/CAIRNB2 medium. A CAIRNB3 segment has nowhere to attach in a legacy
         // container — there is no chain — so the only options are "refuse forever" or "start
@@ -606,6 +710,7 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin)> 
         Ok(MediumImage::Legacy(_)) => Ok((
             crate::medium::serialize_v3(&[])?,
             MediumOrigin::SucceededLegacy,
+            false,
         )),
 
         // Present, readable, and NOT a medium this build can parse. Refused, never replaced,
@@ -797,7 +902,7 @@ pub async fn backup_to(
     let enrolled = self_id.is_some();
     let self_id_hex = self_id.unwrap_or_default();
 
-    let (mut buffer, origin) = open_or_start_medium(medium_path)?;
+    let (mut buffer, origin, repaired_torn_tail) = open_or_start_medium(medium_path)?;
 
     // STEP 1 + 2. Node, then Clinical, into the one buffer. Each `?` DISCARDS `buffer`
     // unwritten — see the doc's step 2; that absence of a write is the safety property, and
@@ -843,17 +948,46 @@ pub async fn backup_to(
     const STAGED: &str = "the image this capture just built";
     let staged_image = crate::medium::parse_any(&buffer)
         .context("re-parsing the image this capture just built, to assess it before writing")?;
+    let staged_health = crate::medium::assess(v3_of(&staged_image, STAGED)?);
+    // The UNKNOWN-PLANE case gets its own refusal, ahead of the general one, because its
+    // REMEDY is the opposite of every other unsound medium's. A plane tag this build does not
+    // recognise was written by a NEWER Cairn; `MediumHealth::needs_a_newer_build`'s own doc
+    // says it plainly — *"the remedy is upgrade this node, never fetch another copy, and
+    // never run the backup again: appending to it would write against an incomplete picture."*
+    // The generic message below would send an operator to `--to` a new path, abandoning a
+    // perfectly good medium over a plane that is only unreadable HERE.
+    if staged_health.needs_a_newer_build() {
+        anyhow::bail!(
+            "refusing to append to {}: it carries {} record(s) in a plane this build does not \
+             recognise, so it was written by a NEWER Cairn and this build cannot see all of \
+             it. Appending here would write against an incomplete picture. NOTHING was \
+             written and the medium is untouched. The remedy is to UPGRADE THIS NODE — not to \
+             start a new medium, and not to fetch another copy: the medium is fine, this \
+             build is behind it.",
+            medium_path.display(),
+            staged_health.records_in_unknown_planes
+        );
+    }
     refuse_unsound(
-        &crate::medium::assess(v3_of(&staged_image, STAGED)?),
+        &staged_health,
         STAGED,
         "NOTHING was written and the previous medium is untouched. Point --to at a NEW path: \
          the first capture of a fresh medium sweeps both planes from the beginning, so the \
          successor holds everything this one did.",
     )?;
+    // PEAK MEMORY. `parse_any` copies every record's `signed_bytes` into an owned `Vec`, so a
+    // parsed image costs roughly what the file costs. Nothing below reads `staged_image`, and
+    // holding it across the write and the read-back would put four medium-sized allocations
+    // (`buffer`, `staged_image`, `readback`, `written_image`) alive at once — on a Pi-class
+    // node (8 GB, the Bet B target) a 2 GB medium then OOM-kills the nightly backup. The
+    // previous medium survives that, but the clinic silently stops backing up and only
+    // `describe_health`'s staleness ever says so. Two explicit drops keep the peak at two.
+    drop(staged_image);
 
     // STEP 4.
     crate::fsio::atomic_write(medium_path, &buffer, Some(0o600))
         .with_context(|| format!("writing backup medium to {}", medium_path.display()))?;
+    drop(buffer); // see the peak-memory note above: nothing below reads it.
 
     // STEP 5. Read-after-write.
     let readback = std::fs::read(medium_path)
@@ -928,6 +1062,10 @@ pub async fn backup_to(
         medium_bytes: readback.len(),
         marker: written,
         origin,
+        repaired_torn_tail,
+        // From the DURABLE medium, like every other number here — never from "we appended
+        // nothing", which would also be true of a perfectly good unchanged medium.
+        carries_nothing: durable_health.carries_nothing(),
     })
 }
 

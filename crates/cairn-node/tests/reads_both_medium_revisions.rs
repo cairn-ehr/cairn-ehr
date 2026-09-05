@@ -274,11 +274,11 @@ fn torn_tail_notice_names_a_torn_v3_medium() {
 }
 
 // ---------------------------------------------------------------------------
-// `backup::self_marker_for` — the legacy pass-through and the "cannot derive one" case.
-// The positive CAIRNB3 case (a genuinely attested id) is pinned end-to-end against
-// `resolve_dead_node` by `v3_medium_self_marker_still_rejects_a_named_peer` in
-// `tests/restore.rs`, which needs a live signing key this DB-free file deliberately
-// avoids — see the module doc.
+// `backup::self_marker_for` / `self_marker_source` — the legacy pass-through, the
+// plaintext fallback (#550), and the "names nobody" case. The positive CAIRNB3 case (a
+// genuinely ATTESTED id) is pinned end-to-end against `resolve_dead_node` by
+// `v3_medium_self_marker_still_rejects_a_named_peer` in `tests/restore.rs`, which needs a
+// live signing key this DB-free file deliberately avoids — see the module doc.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -290,15 +290,53 @@ fn self_marker_for_a_legacy_medium_returns_the_containers_own_marker() {
     assert_eq!(backup::self_marker_for(&image), Some(marker));
 }
 
+/// **#550.** An entirely-unsigned V3 medium falls back to the segment's own PLAINTEXT id, and
+/// says that is what it did.
+///
+/// The old version of this test asserted `None` here and was **vacuous**: the shared
+/// `segment` helper leaves `self_node_id_hex` empty, so it would have stayed green even after
+/// the fallback landed. It claimed more than its fixture could show — the exact defect this
+/// suite exists to avoid — so it now sets the field and pins both the id and its SOURCE.
+/// The end-to-end consequence (a multi-enroll unsigned medium resolving self instead of
+/// refusing as `Ambiguous`, and still rejecting a named peer) needs real signed genesis
+/// events and is pinned in
+/// `tests/restore.rs::an_unsigned_v3_medium_resolves_self_and_still_rejects_a_named_peer`.
 #[test]
-fn self_marker_for_an_entirely_unsigned_v3_medium_is_none() {
+fn self_marker_for_an_unsigned_v3_medium_falls_back_to_the_plaintext_id() {
+    let mut seg = segment(Plane::Node, 0, "", vec![record(vec![1], 0)]);
+    seg.self_node_id_hex = "deadbeef".into();
+    let bytes = serialize_v3(&[seg]).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB3 medium parses via parse_any");
+    assert_eq!(
+        backup::self_marker_source(&image),
+        Some((
+            SelfMarker::Unsigned("deadbeef".into()),
+            backup::MarkerSource::V3Plaintext
+        )),
+        "#550: with no attestation to supply an attested id, the untrusted plaintext id is \
+         used — exactly what a CAIRNB2 unsigned head marker was, so `resolve_dead_node`'s \
+         confirm_explicit cross-check still runs"
+    );
+}
+
+/// The boundary the fallback must NOT cross: a medium whose segments name nobody.
+///
+/// `Segment::self_node_id_hex` is the empty string for a capture taken before enrolment —
+/// an absence, not a claim. Deriving a marker from it would hand `resolve_dead_node` an id
+/// that cross-checks against nothing.
+#[test]
+fn self_marker_for_a_v3_medium_that_names_nobody_is_none() {
     let seg = segment(Plane::Node, 0, "", vec![record(vec![1], 0)]);
+    assert!(
+        seg.self_node_id_hex.is_empty(),
+        "anti-vacuity: this fixture must genuinely name nobody"
+    );
     let bytes = serialize_v3(&[seg]).expect("fixture fits the cap");
     let image = parse_any(&bytes).expect("a CAIRNB3 medium parses via parse_any");
     assert_eq!(
         backup::self_marker_for(&image),
         None,
-        "no attestation anywhere on the medium means no attested id to derive a marker \
-         from — resolve_dead_node's marker-less fallback applies instead"
+        "no attestation and no plaintext id means no marker at all — resolve_dead_node's \
+         marker-less fallback applies instead, which is correct: there is no claim to check"
     );
 }
