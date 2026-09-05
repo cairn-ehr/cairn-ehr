@@ -68,6 +68,13 @@ use crate::medium::{MediumImage, Plane};
 /// segment-level chain tampering that leaves every individual record signature intact (a
 /// spliced or reordered segment) — that is `cairn_medium::health::assess`'s job, and it is
 /// not wired into either call site in this slice.
+///
+/// Returns `Result` for symmetry with this crate's other readers (`parse_medium`,
+/// `verify_medium_bytes`) and so a future revision that CAN fail need not change this
+/// function's callers. Given an already-parsed `MediumImage`, today it cannot: both match
+/// arms only rearrange bytes already validated by `parse_any`. Review finding: harmless,
+/// noted rather than "fixed" — narrowing the signature would break the interface this
+/// task was specified against for no behavioural gain (#500 slice 2c review).
 pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupError> {
     Ok(match image {
         MediumImage::Legacy(container) => container.events.clone(),
@@ -78,6 +85,85 @@ pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupErro
             .flat_map(|segment| segment.records.iter().map(|r| r.signed_bytes.clone()))
             .collect(),
     })
+}
+
+/// How many records a medium carries in each plane — the shared arithmetic behind every
+/// operator-facing scope message in `verify-backup`/`restore` (#500 slice 2c review,
+/// Important 3 & 4). One function so the three call sites (the empty-medium check, the
+/// unknown-plane warning, and the "clinical events were not restored" note) can never
+/// silently disagree about how many records a medium actually holds.
+///
+/// A legacy medium predates the plane split entirely: every event on it IS the federation
+/// plane, so it reports as all-`node`, zero `clinical`, zero `unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlaneCounts {
+    pub node: usize,
+    pub clinical: usize,
+    /// Records under a plane tag this build does not recognise — written by a NEWER
+    /// Cairn. Deliberately NOT folded into `clinical`/`node`, and deliberately not
+    /// silently dropped: a caller that ignores this can report a medium "OK" while an
+    /// entire plane it cannot read sits unmentioned — precisely the
+    /// `BackupError::UnsupportedByThisBuild` case the error taxonomy exists to name, one
+    /// layer up (`MediumV3::segments` keeps an unknown-plane segment in the list for
+    /// exactly this reason — see its doc).
+    pub unknown: usize,
+}
+
+/// Count every record on `image`, grouped by plane. Pure; no verification performed (an
+/// unsigned or tampered segment's records are counted exactly like any other — this
+/// answers "how much is here", not "how much can be trusted").
+pub fn plane_counts(image: &MediumImage) -> PlaneCounts {
+    match image {
+        MediumImage::Legacy(container) => PlaneCounts {
+            node: container.events.len(),
+            clinical: 0,
+            unknown: 0,
+        },
+        MediumImage::V3(medium) => {
+            let mut counts = PlaneCounts::default();
+            for segment in &medium.segments {
+                let n = segment.records.len();
+                match segment.plane {
+                    Plane::Node => counts.node += n,
+                    Plane::Clinical => counts.clinical += n,
+                    Plane::Unknown(_) => counts.unknown += n,
+                }
+            }
+            counts
+        }
+    }
+}
+
+/// If `image` is a TORN CAIRNB3 medium (an interrupted append), the human-readable
+/// explanation of what happened and how to recover — `None` when the medium is complete.
+///
+/// WHY THIS EXISTS (#500 slice 2c review, Important 1). `parse_any` reports a torn tail
+/// via `MediumV3::truncated_tail` rather than an `Err`, because everything before the tear
+/// is genuinely intact and a torn medium is not damage (see that field's doc). But that
+/// means a caller that only checks the returned `Result` — which is exactly what both
+/// `verify-backup` and `restore` did — sees `Ok` and reports the medium sound, missing its
+/// last increment with no warning at all. A legacy medium can never reach this state
+/// silently: `parse_container` already fails a truncated frame with `Damaged`, AT PARSE
+/// TIME, before returning at all — so leaving CAIRNB3's torn tail unchecked was strictly
+/// WEAKER than the parity this whole task exists to hold.
+///
+/// A legacy medium therefore always returns `None` here (its own parse already refused a
+/// torn frame, so a `Container` this function sees is never torn), and a complete CAIRNB3
+/// medium returns `None` too.
+pub fn torn_tail_refusal(image: &MediumImage, path: &std::path::Path) -> Option<String> {
+    match image {
+        MediumImage::Legacy(_) => None,
+        MediumImage::V3(medium) if medium.truncated_tail => Some(format!(
+            "{} was cut short after {} byte(s) — an interrupted append. Everything before \
+             that point is intact, but the medium is INCOMPLETE: run `backup` again on the \
+             source node to re-capture the lost increment (the watermark never advanced \
+             past an unverifiable tail, so nothing is silently skipped), or use a different, \
+             complete copy of this medium if one exists.",
+            path.display(),
+            medium.complete_bytes
+        )),
+        MediumImage::V3(_) => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

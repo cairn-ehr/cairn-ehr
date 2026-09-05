@@ -467,6 +467,107 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
     );
 }
 
+/// #500 slice 2c review, Important 2: a CAIRNB3 medium has no container-level self-marker
+/// (that concept is CAIRNB2-only), so `main.rs`'s restore arm derives an equivalent one
+/// from `chain::self_id_from_chain` — the ATTESTED self id, never the untrusted plaintext
+/// `Segment::self_node_id_hex` — wrapped as `SelfMarker::Unsigned`. This test drives that
+/// EXACT construction against `resolve_dead_node`, with no CLI process and no database, to
+/// prove the cross-check a legacy medium's marker gives for free — rejecting an explicit
+/// `--superseded-node` that names a PEER (issue #53's footgun) — survives on a V3 medium
+/// too. Without it, `self_marker: None` would fall to `resolve_without_marker`, which
+/// accepts ANY id present on the medium: a restored node could silently adopt a peer's
+/// name and address and record an immutable wrong supersede edge.
+#[test]
+fn v3_medium_self_marker_still_rejects_a_named_peer() {
+    use cairn_node::medium::{
+        build_segment_attestation, chain_report, parse_any, self_id_from_chain, serialize_v3,
+        MediumImage, MediumRecord, Plane, Segment, SelfMarker,
+    };
+
+    let sk_self = cairn_event::generate_key().unwrap().0;
+    let sk_peer = cairn_event::generate_key().unwrap().0;
+    let kid_self = hex::encode(sk_self.verifying_key().to_bytes());
+
+    // Two real, validly-signed genesis events on one Node-plane segment — mirrors a
+    // converged/federated medium, where the events alone cannot say which is "self"
+    // (set-union convergence; issue #53).
+    let enroll_self = synth_enroll(&sk_self, "Self");
+    let enroll_peer = synth_enroll(&sk_peer, "Peer");
+    let self_id = hex::encode(cairn_event::event_address(&enroll_self));
+    let peer_id = hex::encode(cairn_event::event_address(&enroll_peer));
+
+    let records = vec![
+        MediumRecord {
+            signed_bytes: enroll_self,
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 0,
+        },
+        MediumRecord {
+            signed_bytes: enroll_peer,
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 1,
+        },
+    ];
+    let attestation = build_segment_attestation(
+        &sk_self,
+        &kid_self,
+        &self_id,
+        Plane::Node,
+        0,
+        "",
+        &records,
+    );
+    let segment = Segment {
+        plane: Plane::Node,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: self_id.clone(),
+        attestation: Some(attestation),
+        records,
+    };
+
+    let bytes = serialize_v3(&[segment]).unwrap();
+    let image = parse_any(&bytes).unwrap();
+    let m = match &image {
+        MediumImage::V3(m) => m,
+        MediumImage::Legacy(_) => panic!("CAIRNB3 magic must not parse as legacy"),
+    };
+    let report = chain_report(m);
+    let resolved_self_id = self_id_from_chain(m, &report);
+    assert_eq!(
+        resolved_self_id,
+        Some(self_id.clone()),
+        "the fixture's attestation must bind to its own genesis, or this test proves \
+         nothing about the cross-check it exists to pin"
+    );
+
+    // Exactly the construction `main.rs`'s restore arm performs for a V3 image.
+    let events = cairn_node::backup::node_plane_events(&image).unwrap();
+    let container = cairn_node::medium::Container {
+        self_marker: resolved_self_id.map(SelfMarker::Unsigned),
+        events,
+    };
+
+    let dead = cairn_node::restore::resolve_dead_node(&container, None).unwrap();
+    assert_eq!(
+        dead.node_id_hex, self_id,
+        "resolves to the medium's own genesis, derived from the chain, not the plaintext"
+    );
+    assert_eq!(dead.provenance, cairn_node::restore::Provenance::Unsigned);
+
+    // The cross-check: naming the PEER's real node-id must still fail closed, exactly as
+    // it would for a legacy medium's marker.
+    let err = cairn_node::restore::resolve_dead_node(&container, Some(&peer_id)).unwrap_err();
+    assert!(
+        matches!(err, cairn_node::restore::RestoreError::NotSelf { .. }),
+        "a V3-derived marker must still reject a named peer, got: {err:?}"
+    );
+}
+
 /// After a restore, `status` reports the supersede lineage (this node supersedes the dead one).
 #[tokio::test]
 async fn status_reports_supersede_lineage() {
