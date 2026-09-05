@@ -54,8 +54,22 @@
 //! test then looks at which recognized command starts EARLIEST in that chunk (not which
 //! one sits closest to the mention — `GRANT SELECT ON …, erasure_shred_log, …` has the
 //! word "SELECT" sitting right next to the table, but `GRANT` governs the statement and
-//! must win), and, only for a `SELECT`-led statement, counts how many `FROM`/`JOIN`
-//! table-introductions it contains.
+//! must win), and, for a `SELECT`, `DELETE FROM`, or `INSERT INTO` statement, counts how
+//! many `FROM`/`JOIN` table-introductions it contains.
+//!
+//! ## A gap in this very design, caught by review before it shipped
+//!
+//! The first version of this cut gave EVERY non-`SELECT` command the unconditional
+//! bookkeeping pass — including `DELETE FROM` and `INSERT INTO`. That is right for
+//! `INSERT INTO erasure_shred_log … SELECT … FROM event_log …` (db/037's rebuild) and for
+//! `GRANT`/`REVOKE` (privilege lists), but it is WRONG for `DELETE FROM event_dek WHERE
+//! event_id IN (SELECT target_event_id FROM erasure_shred_log)` — purging custody rows
+//! keyed on shred-log membership is a real decision about whether a key survives, arguably
+//! more direct than the `SELECT`-filter shape this guard was built for, and the leading
+//! `DELETE FROM` would have hidden it wholesale. So `DELETE FROM` and `INSERT INTO` get
+//! the SAME `FROM`/`JOIN`-count test as `SELECT`; only `TRUNCATE`, `GRANT`, `REVOKE`,
+//! `CREATE …`, and `COMMENT ON` keep the unconditional shortcut, because none of those can
+//! carry a subquery that reads the shred log to decide about another row.
 //!
 //! NAME, NEVER COUNT (the house rule a count cannot satisfy: it cannot separate "one site
 //! moved" from "one site added and one deleted"). The allow-list below is the inventory of
@@ -187,13 +201,14 @@ fn mentions_a_candidate_definition(text: &str) -> bool {
         .any(|stmt| stmt.contains("erasure_shred_log") && !is_bookkeeping(stmt))
 }
 
-/// The closed, small set of commands that touch `erasure_shred_log` WITHOUT deciding
-/// anything about any other row. Checked by which of these starts EARLIEST in the
-/// statement — not by proximity to the `erasure_shred_log` mention, which is what would
-/// let `GRANT SELECT ON …, erasure_shred_log, …` fool a nearest-keyword check into
-/// reading the privilege name "SELECT" as a query verb. `SELECT` is included here too:
-/// a `SELECT`-led statement is bookkeeping ONLY when it names no other table (see
-/// [`is_bookkeeping`]'s second half) — it is not itself exempt.
+/// The commands to look for, checked by which of these starts EARLIEST in the statement
+/// — not by proximity to the `erasure_shred_log` mention, which is what would let `GRANT
+/// SELECT ON …, erasure_shred_log, …` fool a nearest-keyword check into reading the
+/// privilege name "SELECT" as a query verb. Not all of these are unconditionally
+/// bookkeeping: `SELECT`, `DELETE FROM`, and `INSERT INTO` are bookkeeping ONLY when the
+/// statement names no other table (see [`is_bookkeeping`]) — a `DELETE`/`INSERT` can
+/// carry a subquery that reads the shred log to decide about a DIFFERENT row, exactly
+/// like a `SELECT` can, so the leading verb alone cannot clear them.
 const RECOGNIZED_COMMANDS: &[&str] = &[
     "TRUNCATE",
     "INSERT INTO",
@@ -213,23 +228,31 @@ const RECOGNIZED_COMMANDS: &[&str] = &[
 /// Two steps:
 /// 1. Find which [`RECOGNIZED_COMMANDS`] entry starts EARLIEST in the statement. That is
 ///    the statement's real command, even when a later, unrelated occurrence of one of
-///    the other keywords sits closer to the `erasure_shred_log` mention — an
-///    `INSERT INTO erasure_shred_log … SELECT … FROM event_log …` rebuild (db/037) has
-///    `INSERT INTO` first and stays bookkeeping despite the embedded `SELECT … FROM`;
+///    the other keywords sits closer to the `erasure_shred_log` mention —
 ///    `GRANT SELECT ON event_dek, erasure_shred_log, …` has `GRANT` first and stays
 ///    bookkeeping despite `SELECT` sitting immediately before the table name. Finding no
 ///    recognized command at all (a plain-English assertion message that happens to name
 ///    the table, say) is NOT bookkeeping — an unrecognized shape fails CLOSED.
-/// 2. If that earliest command is anything other than `SELECT`, it is bookkeeping,
-///    unconditionally — `TRUNCATE …, erasure_shred_log, …` and `REVOKE ALL ON …,
-///    erasure_shred_log, … FROM cairn_agent` each name several tables and are still pure
-///    bookkeeping; the command itself, not the table count, is what makes them harmless.
-///    If it IS `SELECT`, bookkeeping means erasure_shred_log is the ONLY table read: at
-///    most one `FROM`/`JOIN` table-introduction in the whole statement. Two or more means
-///    the statement combines `erasure_shred_log` with something else — the definition of
-///    "decides something about another row" — regardless of which relational operator
-///    wires them together (`NOT EXISTS`, `EXISTS`, `IN`, `NOT IN`, any `JOIN` flavour, or
-///    an idiom nobody has written yet).
+/// 2. `TRUNCATE`, `GRANT`, `REVOKE`, `CREATE …`, and `COMMENT ON` are bookkeeping
+///    UNCONDITIONALLY once they win step 1 — `TRUNCATE …, erasure_shred_log, …` and
+///    `REVOKE ALL ON …, erasure_shred_log, … FROM cairn_agent` each name several tables
+///    and are still pure bookkeeping; none of these five can carry a subquery that reads
+///    the shred log to decide about a different row, so the command alone is enough.
+///
+///    `SELECT`, `DELETE FROM`, and `INSERT INTO` get NO such free pass — a review caught
+///    the first version of this guard giving `DELETE FROM`/`INSERT INTO` the
+///    unconditional pass too, which hid `DELETE FROM event_dek WHERE event_id IN (SELECT
+///    target_event_id FROM erasure_shred_log)` (purging custody keyed on shred-log
+///    membership — a real decision) behind the leading `DELETE FROM`. All three of these
+///    commands are bookkeeping ONLY when `erasure_shred_log` is the sole table the
+///    statement touches: at most one `FROM`/`JOIN` table-introduction in the whole
+///    statement (db/037's `INSERT INTO erasure_shred_log … SELECT … FROM event_log …`
+///    rebuild stays bookkeeping under this same test — its one `FROM` names `event_log`,
+///    not a second read of `erasure_shred_log`). Two or more means the statement combines
+///    `erasure_shred_log` with something else — the definition of "decides something
+///    about another row" — regardless of which relational operator wires them together
+///    (`NOT EXISTS`, `EXISTS`, `IN`, `NOT IN`, any `JOIN` flavour, or an idiom nobody has
+///    written yet).
 fn is_bookkeeping(stmt: &str) -> bool {
     let command = RECOGNIZED_COMMANDS
         .iter()
@@ -238,8 +261,13 @@ fn is_bookkeeping(stmt: &str) -> bool {
         .map(|(_, kw)| kw);
     match command {
         None => false, // fail closed: no recognized SQL shape at all
-        Some("SELECT") => table_introduction_count(stmt) <= 1,
-        Some(_) => true, // TRUNCATE / INSERT INTO / DELETE FROM / GRANT / REVOKE / CREATE … / COMMENT ON
+        // These three can carry a subquery reading erasure_shred_log to decide about a
+        // DIFFERENT row, exactly like a SELECT can — the leading verb alone cannot clear
+        // them; only "touches no other table" does.
+        Some("SELECT") | Some("DELETE FROM") | Some("INSERT INTO") => {
+            table_introduction_count(stmt) <= 1
+        }
+        Some(_) => true, // TRUNCATE / GRANT / REVOKE / CREATE … / COMMENT ON
     }
 }
 
