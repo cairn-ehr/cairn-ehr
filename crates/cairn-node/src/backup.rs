@@ -410,6 +410,90 @@ pub fn export_coverage_after(previous: Option<i64>, outcome: ExportOutcome) -> O
     }
 }
 
+/// The medium's own newest CLINICAL seq, read straight off `image` — no key, no database,
+/// no sidecar. `verify-backup`'s kit-staleness check ([`kit_verdict`]) uses this rather than
+/// a figure carried in `backup-status.json`, because a number derived from the bytes
+/// `--from` actually names can never describe a DIFFERENT backup run than the one being
+/// checked — the same "every number describes the artifact on disk" rule `backup_to`
+/// already follows for this same field (see `clinical_watermark`'s doc on [`BackupHealth`]).
+///
+/// `None` for a legacy (CAIRNB1/CAIRNB2) medium — the clinical plane did not exist when that
+/// format was frozen, so there is nothing to have a watermark over — and for a CAIRNB3
+/// medium with no verified clinical segment at all (a fresh node, or one backed up before
+/// #500 slice 2c started capturing this plane). Both are the honest absence, never a
+/// guessed `Some(0)` (principle 4).
+pub fn clinical_watermark_of(image: &MediumImage) -> Option<i64> {
+    match image {
+        MediumImage::Legacy(_) => None,
+        MediumImage::V3(m) => {
+            let health = crate::medium::assess(m);
+            crate::medium::watermark(m, &health.chain, Plane::Clinical)
+        }
+    }
+}
+
+/// What `verify-backup` concluded about the DR kit as a WHOLE — the medium plus the sealed
+/// local-state export sitting beside it — rather than about the medium alone (review
+/// finding I5's shape, carried forward: the federation-plane events being intact is not the
+/// same claim as the kit being restorable). See [`kit_verdict`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum KitVerdict {
+    /// Medium and export agree: everything on the medium has custody coverage.
+    Restorable,
+    /// The medium holds clinical events written after the export last covered anything.
+    /// Those bodies restore as ciphertext unless their medium-borne DEKs open them.
+    ExportStale {
+        medium_seq: i64,
+        export_seq: Option<i64>,
+    },
+    /// No export beside the medium ever recorded coverage. Carries the operator-facing
+    /// remedy directly, because unlike `ExportStale` there are no two numbers left for a
+    /// caller to compose a message from — `export_seq` here is always `None`.
+    ExportMissing(String),
+}
+
+/// PURE. Decide whether a DR kit is actually restorable, from nothing but the two seq
+/// numbers this module already tracks: `medium_seq` (the medium's own newest clinical seq —
+/// [`clinical_watermark_of`] offline, or `BackupHealth::clinical_watermark` from the
+/// sidecar) and `export_seq` (`BackupHealth::export_covers_seq`, the seq the export last
+/// actually achieved, per [`export_coverage_after`]'s ratchet).
+///
+/// Pure and total, so the exit-code policy it drives is testable with no database, no
+/// medium and no CLI — see `tests/verify_backup_scope.rs`.
+///
+/// - `medium_seq` is `None` exactly when the medium holds no clinical events at all (a
+///   fresh node that has never written one). Nothing is uncovered, so this is
+///   `Restorable` — never `ExportStale`, never `ExportMissing`. Calling a genuinely-empty
+///   medium "stale" would train an operator to ignore the one signal this function exists
+///   to raise.
+/// - Otherwise `export_seq` decides it: `None` means no export has EVER recorded coverage
+///   for this node (`ExportMissing` — the #502 lesson: a different remedy from a
+///   merely-behind export, never conflated with it, because "run `backup` again" and
+///   "the escrow needs recovering" are not the same instruction); `Some(x)` behind
+///   `medium_seq` means the export is out of date (`ExportStale`); anything else — equal,
+///   or AHEAD because this run's export landed after this run's medium capture — is
+///   `Restorable`.
+pub fn kit_verdict(medium_seq: Option<i64>, export_seq: Option<i64>) -> KitVerdict {
+    let Some(medium_seq) = medium_seq else {
+        return KitVerdict::Restorable;
+    };
+    match export_seq {
+        None => KitVerdict::ExportMissing(format!(
+            "the medium holds clinical events up to seq {medium_seq}, but no local-state \
+             export has EVER recorded coverage for them — a restore would open none of \
+             their sealed bodies as anything but ciphertext (ADR-0066). Remedy: recover \
+             the export — confirm a local-state escrow exists (run \
+             `cairn-node establish-local-state-key` if it does not) and then run `backup` \
+             again with CAIRN_KEY_PASSPHRASE set (or --passphrase)."
+        )),
+        Some(export_seq) if export_seq < medium_seq => KitVerdict::ExportStale {
+            medium_seq,
+            export_seq: Some(export_seq),
+        },
+        Some(_) => KitVerdict::Restorable,
+    }
+}
+
 /// The sidecar path for backup health: a sibling of the key file named
 /// `backup-status.json`. Node-local, discoverable from what `status` already has (the
 /// key path). Pure.
