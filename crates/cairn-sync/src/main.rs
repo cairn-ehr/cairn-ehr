@@ -5580,12 +5580,16 @@ fn serve_conn(
             // and `complete: false` until the log is drained (slice 2b, #101 item 1);
             // see the FULL_SWEEP_EVERY note for what a sweep costs now.
             // The 5th column is THIS node's own wrapped DEK for the event, hex-encoded
-            // — but ONLY when the event has NOT been shredded here (ADR-0052). The
-            // LEFT JOIN to erasure_shred_log + `CASE WHEN s.target_event_id IS NULL`
-            // is the WIRE-LEVEL half of the shred guarantee: a shredded event NEVER
-            // ships its DEK, so custody can never be reconstituted from a peer's serve
-            // after a local crypto-shred. A non-sealed event (or one this node holds
-            // no custody for) has no event_dek row, so dek_hex is NULL there too.
+            // — but ONLY when the event has NOT been shredded here (ADR-0052). That
+            // WIRE-LEVEL half of the shred guarantee — a shredded event NEVER ships
+            // its DEK, so custody can never be reconstituted from a peer's serve
+            // after a local crypto-shred — used to be a `LEFT JOIN erasure_shred_log`
+            // + `CASE WHEN s.target_event_id IS NULL` written out right here. Slice 2c's
+            // db/051 gave it its one home instead: `event_custody_surviving` (the same
+            // NOT EXISTS, now a security-invoker view) and `cairn_clinical_page`, which
+            // joins that view to `event_log` so this arm is a CALLER, not a second
+            // definition. A non-sealed event (or one this node holds no custody for)
+            // has no event_dek row, so dek_wrapped is NULL there too.
             //
             // Fetch ONE MORE than asked for, then serve `limit` (slice 2b, #101 item
             // 1). `rows.len() == limit` cannot distinguish "the log ends exactly here"
@@ -5594,21 +5598,17 @@ fn serve_conn(
             // event above it, forever, with the cursor checkpointed past them. The
             // extra row answers the question instead of inferring it. `LIMIT NULL` is
             // Postgres for "no limit", so the unpaginated path stays the SAME
-            // statement with a NULL parameter rather than a second query.
+            // statement with a NULL parameter rather than a second query. This probe
+            // arithmetic stays at the CALL SITE, deliberately (db/051's own header):
+            // the function cannot see who is asking, so it cannot own this claim.
             let probe: Option<i64> = limit.map(|n| i64::from(n) + 1);
             let mut rows = client.query(
-                "SELECT e.seq,
-                        encode(e.signed_bytes,'hex'),
-                        encode(e.attestation,'hex'),
-                        encode(e.attester_key,'hex'),
-                        CASE WHEN s.target_event_id IS NULL
-                             THEN encode(d.dek_wrapped,'hex') END AS dek_hex
-                 FROM event_log e
-                 LEFT JOIN event_dek d          ON d.event_id = e.event_id
-                 LEFT JOIN erasure_shred_log s  ON s.target_event_id = e.event_id
-                 WHERE e.seq > $1
-                 ORDER BY e.seq
-                 LIMIT $2",
+                "SELECT seq,
+                        encode(signed_bytes,'hex'),
+                        encode(attestation,'hex'),
+                        encode(attester_key,'hex'),
+                        encode(dek_wrapped,'hex')
+                   FROM cairn_clinical_page($1, $2)",
                 &[&after_seq, &probe],
             )?;
             // Did that fetch drain the log? `None` (unpaginated) always does, by

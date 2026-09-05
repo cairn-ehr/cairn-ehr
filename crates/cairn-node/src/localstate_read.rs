@@ -16,10 +16,17 @@
 //! Be honest about how much of that the filter below carries. It is a LAST LINE, not the
 //! only one: `cairn_execute_shred` (db/037) already DELETES the custody row when a shred
 //! executes, and `apply_remote_event` (db/020) already refuses to create one for a target
-//! already in `erasure_shred_log`. So on a healthy node the `NOT EXISTS` clause selects
-//! nothing extra. It is kept because the failure it prevents — an erased body's key
-//! resurrected on a restored node — is irreversible, and because the two upstream defences
-//! are in a different codebase layer (SQL) that this file cannot see change.
+//! already in `erasure_shred_log`. So on a healthy node the filter selects nothing extra.
+//!
+//! The filter itself used to be a `NOT EXISTS` clause written out here — one of two
+//! hand-written spellings of "a shredded body's key must not travel" (the other lived in
+//! cairn-sync's serve door). Slice 2c's db/051 gave the predicate its one home:
+//! `event_custody_surviving`, a `security_invoker` view every caller now selects from
+//! instead of re-deriving. This file is a CALLER, not the definition — but the reason a
+//! last-line defence still belongs here, in Rust, is unchanged: the failure it prevents
+//! (an erased body's key resurrected on a restored node) is irreversible, and the two
+//! upstream defences above are in a different codebase layer (SQL) that this file cannot
+//! see change out from under it.
 
 use crate::localstate::{episode_dek_to_cbor, EpisodeDek, LocalState};
 use cairn_event::keys::Secret32;
@@ -64,16 +71,15 @@ pub async fn read_local_state(
     // so a UUID column cannot be decoded directly — cast in SQL and carry it as a String,
     // which is the repo-wide read idiom and is also what `EpisodeDek` stores.
     //
-    // ORDER BY makes the export DETERMINISTIC: two runs over the same custody produce
-    // byte-identical `episode_deks`, which keeps a diff of two export bundles meaningful.
+    // `event_custody_surviving` (db/051) is the ONE definition of "not shredded" — this
+    // query no longer re-derives it. ORDER BY makes the export DETERMINISTIC: two runs over
+    // the same custody produce byte-identical `episode_deks`, which keeps a diff of two
+    // export bundles meaningful.
     let rows = db
         .query(
-            "SELECT d.event_id::text AS event_id, d.dek_wrapped \
-             FROM event_dek d \
-             WHERE NOT EXISTS ( \
-                 SELECT 1 FROM erasure_shred_log s WHERE s.target_event_id = d.event_id \
-             ) \
-             ORDER BY d.event_id",
+            "SELECT c.event_id::text AS event_id, c.dek_wrapped \
+             FROM event_custody_surviving c \
+             ORDER BY c.event_id",
             &[],
         )
         .await
