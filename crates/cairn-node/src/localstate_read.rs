@@ -108,18 +108,27 @@ pub async fn read_local_state(
     // — the one part of a restore that is not verify-on-apply. 2e's ADR owes that caveat;
     // do not let this comment be the only place it is written down.
     //
-    // `actor_event_id::text` and `pinned::text`: same idiom as `event_id::text` above, and
-    // for the same underlying reason — `pinned` is JSONB, and this crate does not enable
-    // tokio-postgres's `with-serde_json-1` feature, so a bare `jsonb` column has no `FromSql`
-    // impl to land in (see `matcher_actor.rs`'s note on the identical idiom for writes).
-    // Casting to `text` on the database side and carrying it as a `String` sidesteps that
-    // entirely. ORDER BY seq, never recorded_at: two rows from one enrollment ceremony can
-    // share a `clock_timestamp()` (issue #99), and seq is the monotonic tiebreak db/004 adds
-    // for exactly this reason.
+    // `actor_event_id::text`, `pinned::text` and `recorded_at::text`: same idiom as
+    // `event_id::text` above, and for the same underlying reason — `pinned` is JSONB and
+    // `recorded_at` is TIMESTAMPTZ, and this crate does not enable tokio-postgres's
+    // `with-serde_json-1` or chrono features, so neither type has a `FromSql` impl to land
+    // in (see `matcher_actor.rs`'s note on the identical idiom for `pinned` on the write
+    // side). Casting to `text` on the database side and carrying it as a `String` sidesteps
+    // that entirely, and doubles as this row's own legibility twin for the timestamp.
+    //
+    // ORDER BY seq, never recorded_at: two rows from one enrollment ceremony can share a
+    // `clock_timestamp()` (issue #99), and seq is the monotonic tiebreak db/004 adds for
+    // exactly this reason. `recorded_at` still travels in the SELECT list, and it must —
+    // fix round on Task 11 (review finding Minor 4): `actor_current` orders by
+    // `(recorded_at, seq)` with `recorded_at` PRIMARY, so a restore that re-stamped
+    // `clock_timestamp()` instead of carrying the original would permanently lose the real
+    // enrollment/revocation time. Ordering by `seq` here is about resolving ties in THIS
+    // query's own output order, which is orthogonal to what value each row carries.
     let registry_rows = db
         .query(
             "SELECT actor_event_id::text AS actor_event_id, actor_id, op, kind, \
-                    pinned::text AS pinned, signing_key_id, superseded_by, seq \
+                    pinned::text AS pinned, signing_key_id, superseded_by, seq, \
+                    recorded_at::text AS recorded_at \
              FROM actor_event ORDER BY seq",
             &[],
         )
@@ -138,6 +147,7 @@ pub async fn read_local_state(
                 signing_key_id: r.get::<_, Option<String>>("signing_key_id"),
                 superseded_by: r.get::<_, Option<Vec<u8>>>("superseded_by"),
                 seq: r.get::<_, i64>("seq"),
+                recorded_at: r.get::<_, String>("recorded_at"),
             })
         })
         .collect();

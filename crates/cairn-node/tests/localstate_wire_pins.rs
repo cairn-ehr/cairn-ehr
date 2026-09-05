@@ -204,25 +204,29 @@ const PRE_REGISTRY_BUNDLE_HEX: &str = concat!(
 );
 
 /// **What this test asserted BEFORE Task 11 added `actor_registry`, and why its body had to
-/// change to keep meaning that.** Originally this called `LocalState::from_custody(dek_cbor(1),
-/// dek_cbor(2), secret_fixture(9))` and compared the live encoding to [`PRE_REGISTRY_BUNDLE_HEX`]
-/// for equality — that comparison was run, was green, and THAT green run is what got frozen into
-/// the constant (see the commit `test(#500): freeze the CAIRNL1 bytes...`). Once
-/// `actor_registry` exists, no live encode can equal those bytes again: the field is never
-/// skipped (see [`the_empty_registry_encoding_is_pinned`]'s doc), so it always adds one key to
-/// the map. Asserting equality here would therefore either be permanently false (if the field
-/// really always appears, as intended) or falsely true (only if a future change silently skips
-/// it when empty — the exact mutant this whole file exists to catch).
+/// change to keep meaning that.** Originally this called
+/// `LocalState::from_custody(vec![dek_cbor(1), dek_cbor(2)], Some(secret_fixture(9)))` and
+/// compared the live encoding to [`PRE_REGISTRY_BUNDLE_HEX`] for equality — that comparison
+/// was run, was green, and THAT green run is what got frozen into the constant (see the
+/// commit `test(#500): freeze the CAIRNL1 bytes...`). Once `actor_registry` exists, no live
+/// encode can equal those bytes again: the field is never skipped (see
+/// [`the_empty_registry_encoding_is_pinned`]'s doc), so it always adds one key to the map.
+/// Asserting equality here would therefore either be permanently false (if the field really
+/// always appears, as intended) or falsely true (only if a future change silently skips it
+/// when empty — the exact mutant this whole file exists to catch).
 ///
-/// So the assertion below is the INVERSE, and it is not weaker for it: an old export, run
-/// through today's `from_cbor` then `to_cbor`, must produce something OTHER than the old
-/// shape. If it ever again produced exactly [`PRE_REGISTRY_BUNDLE_HEX`], that would mean
-/// `actor_registry` had stopped travelling on the wire — silently, for a node with genuinely
-/// no actors, indistinguishable from one whose registry never made it across. The decode half
-/// proper — that the OLD bytes restore in the first place, with full custody intact — is
+/// So the assertion below is the INVERSE, and the test's OWN NAME says so — a fix-round
+/// finding (Minor 6): a test still named `..._bytes_are_unchanged` while asserting
+/// `assert_ne!` is exactly the stale-claim failure this file's own header warns readers to
+/// watch for in comments, one level down in a test name instead. An old export, run through
+/// today's `from_cbor` then `to_cbor`, must produce something OTHER than the old shape. If it
+/// ever again produced exactly [`PRE_REGISTRY_BUNDLE_HEX`], that would mean `actor_registry`
+/// had stopped travelling on the wire — silently, for a node with genuinely no actors,
+/// indistinguishable from one whose registry never made it across. The decode half proper —
+/// that the OLD bytes restore in the first place, with full custody intact — is
 /// [`an_old_bundle_still_parses_with_the_registry_absent`], immediately below.
 #[test]
-fn the_pre_registry_bundle_bytes_are_unchanged() {
+fn re_encoding_a_pre_registry_bundle_never_reproduces_the_old_shape() {
     let old = hex::decode(PRE_REGISTRY_BUNDLE_HEX).expect("the pin is valid hex");
     let ls = from_cbor(&old).expect("a pre-registry export must still restore under today's code");
     let rewritten = hex::encode(to_cbor(&ls));
@@ -248,8 +252,15 @@ fn an_old_bundle_still_parses_with_the_registry_absent() {
     );
     // Anti-vacuity beyond the registry itself: the REST of a pre-registry export must land
     // intact too, or "still restores" would be true only for the one field this test names.
-    assert_eq!(ls.episode_deks().len(), 2, "the two custody rows must still be there");
-    assert!(ls.unwrap_secret().is_some(), "the custody secret must still be there");
+    assert_eq!(
+        ls.episode_deks().len(),
+        2,
+        "the two custody rows must still be there"
+    );
+    assert!(
+        ls.unwrap_secret().is_some(),
+        "the custody secret must still be there"
+    );
 }
 
 /// One actor-registry row's placeholder bytes, varying with `n` so two calls in the same
@@ -257,7 +268,9 @@ fn an_old_bundle_still_parses_with_the_registry_absent() {
 /// [`wrapped_dek_placeholder`]): the shape of a `Vec<u8>` element is what a wire pin needs to
 /// exercise, not a realistic `ActorRegistryRow` payload.
 fn actor_row_cbor(n: u8) -> Vec<u8> {
-    (0u8..6).map(|i| i.wrapping_mul(5).wrapping_add(n)).collect()
+    (0u8..6)
+        .map(|i| i.wrapping_mul(5).wrapping_add(n))
+        .collect()
 }
 
 /// The EMPTY registry's own encoding — #511's lesson, applied to this slot. A round-trip

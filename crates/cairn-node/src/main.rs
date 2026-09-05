@@ -2961,6 +2961,21 @@ async fn main() -> anyhow::Result<()> {
                                 report.episode_deks_carried()
                             );
                         }
+                        // Same declaration for the actor registry (Task 11 / #500 fix round,
+                        // review finding I2): it rides the export now, but `actor_event` has
+                        // no INSERT door here yet either — that is slice 2d, alongside the
+                        // clinical-event apply above it must precede. Without this line an
+                        // operator would see "custody inherited" and nothing about the
+                        // registry, then discover only during a real clinical restore that
+                        // every apply door refuses this node's own history.
+                        if report.actor_registry_carried() > 0 {
+                            println!(
+                                "note: those {} actor-registry row(s) are carried but not yet \
+                                 applied — until they are, this node cannot apply ANY clinical \
+                                 event, even once the medium starts carrying them (#500)",
+                                report.actor_registry_carried()
+                            );
+                        }
                     }
                     // An honest degradation the helper already reported to the operator.
                     Ok(None) => {}

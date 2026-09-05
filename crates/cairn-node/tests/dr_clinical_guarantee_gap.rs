@@ -118,7 +118,10 @@ use cairn_event::seal::{
     derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_dek, unwrap_public,
 };
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
-use cairn_node::localstate::{episode_dek_from_cbor, read_local_state, EpisodeDek, LocalState};
+use cairn_node::localstate::{
+    actor_registry_row_from_cbor, episode_dek_from_cbor, read_local_state, ActorRegistryRow,
+    EpisodeDek, LocalState,
+};
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -435,6 +438,70 @@ async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
          no node-default keystore exists to be exported. When one is built, this assertion \
          must be INVERTED and `exported.node_default_deks` pinned the way episode_deks is \
          above."
+    );
+}
+
+/// **The actor registry's own behavioural guard — the one `episode_deks` already had
+/// (`the_export_filter_drops_a_custody_row_the_shred_log_forbids`) and the registry, until
+/// this fix round, did not (Task 11 / #500 review finding I1).**
+///
+/// Before this test, NOTHING with real DB behaviour touched `LocalState::actor_registry`:
+/// `localstate_wire_pins.rs` never opens a connection, and this file's own producer-count
+/// guard only counts constructions and greps for a call NAME — it would stay green if
+/// `localstate_read.rs` built the query and then threw the result away. Replacing
+/// `registry_rows` with `Vec::new()` at the read site passed every test this crate had
+/// until now; that is the gap this test closes.
+///
+/// `medication_setup` (via `common::mod.rs`) TRUNCATEs `actor_event` itself before enrolling
+/// exactly two actors — a device and a human — so this test needs no extra reset and can
+/// assert the WHOLE registry rather than merely "at least one row showed up".
+#[tokio::test]
+async fn the_export_carries_the_enrolled_actor_registry() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_device, kid_device, _sk_human, kid_human) = common::medication_setup(&c).await;
+
+    let exported = read_local_state(&c, None)
+        .await
+        .expect("export must succeed");
+    let rows: Vec<ActorRegistryRow> = exported
+        .actor_registry()
+        .iter()
+        .map(|b| {
+            actor_registry_row_from_cbor(b)
+                .expect("every export element is a valid ActorRegistryRow")
+        })
+        .collect();
+
+    // Anti-vacuity: the count is exact, not "at least", so a filter that accidentally
+    // multiplies or drops a row cannot pass by chance.
+    assert_eq!(
+        rows.len(),
+        2,
+        "medication_setup enrolls exactly two actors (device, human); the export must carry \
+         both and nothing else. Carried: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.op == "enroll"
+            && r.kind.as_deref() == Some("device")
+            && r.signing_key_id.as_deref() == Some(kid_device.as_str())),
+        "the device actor's enrollment must be in the export, content intact. Carried: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.op == "enroll"
+            && r.kind.as_deref() == Some("human")
+            && r.signing_key_id.as_deref() == Some(kid_human.as_str())),
+        "the human actor's enrollment must be in the export, content intact. Carried: {rows:?}"
+    );
+    // The audit fact Minor 4's fix carries: a real `recorded_at`, not an empty default —
+    // proof the column actually crossed the wire rather than merely existing on the type.
+    assert!(
+        rows.iter().all(|r| !r.recorded_at.is_empty()),
+        "every row must carry its real enrollment timestamp. Carried: {rows:?}"
     );
 }
 

@@ -54,7 +54,11 @@ async fn read_local_state_returns_the_empty_bundle() {
     // `read_local_state` now also reads the actor registry, so "genuinely holds nothing"
     // depends on it too. Unlike the custody plane, a REAL provisioned node always has at
     // least one enrolled actor — this fixture's whole point is the idealized empty case, so
-    // it has to clear the table a real node never would.
+    // it has to clear the table a real node never would. This DOES leave any leftover
+    // `event_log` rows in the shared serialized DB orphaned of the actor that signed them —
+    // harmless HERE only because this test never reads `event_log`, and every sibling test
+    // that DOES care about signer identity truncates both tables together itself (see the
+    // repo-wide `TRUNCATE event_log, actor_event, ...` idiom other integration files use).
     conn.batch_execute("TRUNCATE event_dek, erasure_shred_log, actor_event CASCADE")
         .await
         .expect("clearing the custody plane so this node genuinely holds nothing");
