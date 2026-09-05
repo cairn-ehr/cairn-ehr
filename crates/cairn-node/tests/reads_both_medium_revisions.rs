@@ -258,8 +258,21 @@ fn torn_tail_notice_names_a_torn_v3_medium() {
         "names the intact byte offset a writer resumes from: {msg}"
     );
     assert!(
-        msg.contains("interrupted append"),
-        "names WHAT happened, not just a number: {msg}"
+        msg.contains("interrupted backup append"),
+        "names one honest possibility (a capture-loop tear): {msg}"
+    );
+    // #500 slice 2c review round 3 (principle 4): the message must give a BRACKET, never
+    // a point claim — a short tail is indistinguishable, at this layer, from a truncated
+    // COPY where far more than one increment could be missing. Asserting "at most one" is
+    // exactly the overclaim round 3 retracted; a regression back to it must fail here.
+    assert!(
+        msg.to_lowercase().contains("copy"),
+        "must ALSO name the other honest possibility (a partial/truncated copy), not just \
+         the capture-loop tear: {msg}"
+    );
+    assert!(
+        msg.contains("backup-status.json"),
+        "must say what the operator can actually check to tell the two apart: {msg}"
     );
 }
 

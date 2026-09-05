@@ -2459,12 +2459,14 @@ async fn main() -> anyhow::Result<()> {
             // nightly backup killed mid-append must never read back as sound.
             if let Some(why) = cairn_node::backup::torn_tail_notice(&image, &from) {
                 anyhow::bail!(
-                    "backup TORN: {why} Run `backup` again to capture the missing \
-                     increment, or locate a different, complete copy of this medium. \
-                     (`restore`, unlike this cron health check, does NOT refuse a torn \
-                     medium — it recovers the complete prefix loudly rather than turning \
-                     a one-increment loss into total loss; this command's job is \
-                     different: saying plainly that this is not yet a complete backup.)"
+                    "backup TORN: {why} Run `backup` again to close the gap (if this was an \
+                     interrupted append, that recaptures exactly what is missing — see \
+                     above for how to tell), or locate a different, complete copy of this \
+                     medium. (`restore`, unlike this cron health check, does NOT refuse a \
+                     torn medium — it recovers the intact prefix loudly rather than \
+                     refusing outright, since restoring what verifies is never worse than \
+                     refusing all of it; this command's job is different: saying plainly \
+                     that this is not yet a complete backup.)"
                 );
             }
             let events = cairn_node::backup::node_plane_events(&image)?;
@@ -2613,25 +2615,32 @@ async fn main() -> anyhow::Result<()> {
             // as `verify-backup`'s: a torn tail must not refuse `restore`. `parse_any`'s V3
             // arm already discards the torn remnant from `MediumV3::segments` (only
             // COMPLETE sections are kept — see `truncated_tail`'s doc), so `events` above
-            // already IS the safely-restorable prefix, and a torn append costs AT MOST ONE
-            // increment by construction (the capture loop's watermark never advances past
-            // it). Refusing outright would turn a recoverable one-increment loss into
-            // TOTAL loss at exactly the moment — a disaster — when "run backup again on
-            // the dead source node" is usually impossible, and "use a different complete
-            // copy" may not exist either: this project ranks data loss as the most
-            // catastrophic outcome after falsification, so the DEFAULT here recovers the
-            // prefix. No confirmation dialog (principle 3 rejects those as a safety
-            // mechanism) — a loud warning with honest counts instead. `verify-backup`, the
-            // cron health check whose job IS to say "this is not a complete backup", keeps
-            // refusing.
-            if let Some(why) = cairn_node::backup::torn_tail_notice(&image, &from) {
+            // already IS the intact, fully-verified prefix. Refusing outright would turn a
+            // recoverable partial loss into TOTAL loss at exactly the moment — a disaster —
+            // when "run backup again on the dead source node" is usually impossible, and
+            // "use a different complete copy" may not exist either: this project ranks
+            // data loss as the most catastrophic outcome after falsification, so the
+            // DEFAULT here recovers the prefix. No confirmation dialog (principle 3
+            // rejects those as a safety mechanism) — a loud warning with honest counts
+            // instead. `verify-backup`, the cron health check whose job IS to say "this is
+            // not a complete backup", keeps refusing.
+            //
+            // Round 3 correction, principle 4: proceeding does NOT rest on "at most one
+            // increment is missing" — `torn_tail_notice`'s doc explains why that claim is
+            // an overclaim (a torn tail is equally consistent with a truncated COPY, where
+            // far more could be missing). The real justification needs no such certainty:
+            // a torn tail can only ever cost what comes AFTER the intact prefix, never
+            // what is IN it, so restoring the prefix is strictly better than refusing
+            // outright regardless of how much is actually missing. Kept in ONE variable so
+            // the end-of-run summary can repeat it (below) rather than only the WARNING an
+            // operator reading just the tail of a long restore might miss.
+            let torn_notice = cairn_node::backup::torn_tail_notice(&image, &from);
+            if let Some(why) = &torn_notice {
                 eprintln!(
-                    "WARNING: this medium was TORN. {why} By construction a torn append \
-                     costs AT MOST ONE increment, so this restore proceeds with the {} \
-                     complete, verified federation event(s) below rather than refusing \
-                     outright — turning a one-increment loss into total loss would be \
-                     strictly worse. If a fresher, complete copy of this medium exists, \
-                     prefer it instead.",
+                    "WARNING: this medium was TORN. {why}\n\
+                     Restoring the {} complete, verified federation event(s) below anyway: \
+                     whatever the true extent of the loss, restoring the intact prefix is \
+                     never worse than refusing it outright, which would cost all of it.",
                     events.len()
                 );
             }
@@ -2848,6 +2857,18 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!("restored {applied} event(s) from {}", from.display());
+            // #500 slice 2c review round 3: repeat the tear here, not only in the early
+            // WARNING above — an operator reading just the tail of a long restore's output
+            // must still see that this medium was incomplete, not a clean summary that
+            // reads as if nothing was wrong.
+            if torn_notice.is_some() {
+                println!(
+                    "NOTE: this medium was TORN (see the WARNING above) — only the \
+                     {applied} intact, verified event(s) counted above were restored. If \
+                     the source node is still reachable, compare its \
+                     `backup-status.json` before assuming nothing more is missing."
+                );
+            }
             // Honesty about scope (#500 slice 2c): a CAIRNB3 medium can carry clinical
             // records — and, from a newer Cairn, records under a plane this build cannot
             // even name — that `restore` deliberately did not touch (`node_plane_events`'s

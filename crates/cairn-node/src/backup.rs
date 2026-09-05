@@ -134,32 +134,45 @@ pub fn plane_counts(image: &MediumImage) -> PlaneCounts {
     }
 }
 
-/// If `image` is a TORN CAIRNB3 medium (an interrupted append), a human-readable
-/// description of what happened — `None` when the medium is complete.
+/// If `image` is a TORN CAIRNB3 medium (its last section is short), a human-readable
+/// description of what that does and does not tell us — `None` when the medium is
+/// complete.
 ///
 /// WHY THIS EXISTS (#500 slice 2c review). `parse_any` reports a torn tail via
 /// `MediumV3::truncated_tail` rather than an `Err`, because everything before the tear is
 /// genuinely intact and a torn medium is not damage (see that field's doc). A caller that
 /// only checks the returned `Result` — which is exactly what both `verify-backup` and
 /// `restore` did before this existed — sees `Ok` and reports the medium sound, missing its
-/// last increment with no warning at all. A legacy medium can never reach this state
-/// silently: `parse_container` already fails a truncated frame with `Damaged`, AT PARSE
-/// TIME, before returning at all.
+/// tail with no warning at all. A legacy medium can never reach this state silently:
+/// `parse_container` already fails a truncated frame with `Damaged`, AT PARSE TIME, before
+/// returning at all.
+///
+/// **Principle 4, read carefully (#500 slice 2c review round 3): `truncated_tail` is an
+/// OBSERVATION, not a diagnosis, and the text below is a BRACKET, never a point claim.**
+/// A short last section is consistent with an interrupted capture-loop append — in which
+/// case exactly ONE increment is missing, because the watermark never advances past an
+/// unverifiable tail — but it is INDISTINGUISHABLE, at this layer, from a partial or
+/// truncated COPY of an otherwise-complete medium (a failed `cp`/`dd`, a dying USB drive,
+/// a cut-off network transfer), where arbitrarily many increments — up to the entire tail
+/// — could be missing. An earlier version of this text asserted "at most one increment"
+/// unconditionally; that was true of the first cause and false, possibly badly so, of the
+/// second, and round 2 made this text load-bearing for a DEFAULT that proceeds without
+/// refusing (see `restore`'s caller, below) — an imprecise near-truth stated as a bracket
+/// beats a precise-sounding untruth stated as a point (principle 4). The one thing this
+/// layer CAN say without guessing: comparing this medium's size/event counts against the
+/// SOURCE node's `backup-status.json`, if it is still reachable, tells the two apart.
 ///
 /// **Named a "notice", not a "refusal" — read this before wiring in a third caller.** The
 /// two existing callers use this fact for OPPOSITE purposes (#500 slice 2c review round
-/// 2), which is exactly why the shared text below states only the fact, not a
-/// prescription: `verify-backup` is the cron health check — its job is to say "this is
-/// not a complete backup", so it turns this into a hard bail with its own remedy text
-/// ("run `backup` again", which IS actionable there — verify-backup typically runs beside
-/// the node that took the backup). `restore` must NOT refuse: a torn append costs AT MOST
-/// ONE increment by construction (the capture loop's watermark never advances past an
-/// unverifiable tail), and the complete prefix — which is all `parse_any` even keeps in
-/// `MediumV3::segments`, the torn remnant is discarded before this function ever sees it —
-/// is fully verifiable. Refusing it would turn a recoverable one-increment loss into TOTAL
-/// loss at the exact moment (a disaster) when "run backup again on the dead source node"
-/// is usually impossible — the opposite of this project's data-loss ranking. So `restore`
-/// turns this into a loud warning naming the honest counts and proceeds with the prefix.
+/// 2): `verify-backup` is the cron health check — its job is to say "this is not a
+/// complete backup", so it turns this into a hard bail with its own remedy text ("run
+/// `backup` again", which IS actionable there). `restore` must NOT refuse: whatever the
+/// true extent of the loss, a torn tail can only ever cost what comes AFTER the intact
+/// prefix — which is all `parse_any` even keeps in `MediumV3::segments`, the torn remnant
+/// is discarded before this function ever sees it — never what is IN it, so restoring the
+/// prefix is strictly better than refusing outright (which would cost the whole thing).
+/// That reasoning holds regardless of how much is missing, which is exactly why it does
+/// not need the retracted "at most one" certainty to justify proceeding by default.
 ///
 /// A legacy medium therefore always returns `None` here (its own parse already refused a
 /// torn frame, so a `Container` this function sees is never torn), and a complete CAIRNB3
@@ -168,10 +181,16 @@ pub fn torn_tail_notice(image: &MediumImage, path: &std::path::Path) -> Option<S
     match image {
         MediumImage::Legacy(_) => None,
         MediumImage::V3(medium) if medium.truncated_tail => Some(format!(
-            "{} was cut short after {} byte(s) — an interrupted append. Everything before \
-             that point is intact; only the last increment is missing (the watermark never \
-             advances past an unverifiable tail, so a future capture re-writes exactly what \
-             is missing here and nothing more).",
+            "{} was cut short after {} byte(s). Everything before that point is intact and \
+             fully verified. What is missing after it is NOT determinable from the bytes \
+             alone: this is consistent with an interrupted backup append (in which case \
+             exactly ONE increment is missing — a capture never advances past an \
+             unverifiable tail) but is indistinguishable, at this layer, from a \
+             partial/truncated COPY of a complete medium (a failed `cp`/`dd`, a dying USB \
+             drive, a cut-off network transfer) — where arbitrarily many increments, up to \
+             the whole tail, could be missing. If the source node is still reachable, \
+             compare this medium's size and event counts against its `backup-status.json` \
+             to tell the two apart before assuming only one increment is gone.",
             path.display(),
             medium.complete_bytes
         )),
