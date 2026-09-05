@@ -1,6 +1,7 @@
 pub mod apply_proposal;
 pub mod auto_apply;
 pub mod backup;
+pub mod capture;
 pub mod db;
 pub mod db_diagnosis;
 pub mod enroll;
