@@ -336,10 +336,12 @@ mod tests {
     /// The commitment is order-independent: frame reordering is harmless under set-union,
     /// so it must not invalidate an attestation.
     ///
-    /// `a` and `b` MUST genuinely differ in `signed_bytes` and/or `source_seq` — the only
-    /// fields `segment_commitment` covers (see its doc comment above). `testkit::record(flags)`
-    /// varies only the sidecar fields (`attestation`, `attester_key`, `dek_wrapped`), which the
-    /// commitment deliberately excludes, so two `record(_)` fixtures are byte-identical on the
+    /// `a` and `b` MUST genuinely differ in `signed_bytes`, `source_seq` and/or `dek_wrapped` —
+    /// the fields `segment_commitment` covers (see its doc comment above). **`dek_wrapped` joined
+    /// that list in slice 2c (#524); this doc said the commitment "deliberately excludes" it,
+    /// which stopped being true the moment custody started riding the medium.**
+    /// `testkit::record(flags)` still varies only `attestation` and `attester_key`, which the
+    /// commitment does not cover, so two `record(_)` fixtures remain byte-identical on the
     /// covered axis — swapping two identical items proves nothing, and this test would still
     /// pass even if a refactor made the commitment order-DEPENDENT. Use
     /// `distinct_record(lineage, n)` (which varies both covered fields by `(lineage, n)`) or
