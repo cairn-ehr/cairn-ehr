@@ -169,3 +169,60 @@ fn the_frozen_bytes_decode_to_the_populated_bundle() {
          off-site export would restore the wrong custody, or none"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// Task 11 (#500): the export gains the actor registry — freeze FIRST, change SECOND
+// ---------------------------------------------------------------------------------------
+//
+// The method is the same one #511 used above, applied to a genuinely new slot rather than a
+// type change: freeze what the CURRENT (pre-registry) build produces, commit that pin on its
+// own, and only THEN add `LocalState::actor_registry`. A pin taken after the field exists
+// would prove nothing about whether the addition stayed additive.
+
+/// A second custody row, distinct from [`wrapped_dek_placeholder`]'s so a fixture asking for
+/// TWO rows (this file's pre-registry freeze does) cannot pass by accident if the code
+/// collapsed them into one.
+fn dek_cbor(n: u8) -> Vec<u8> {
+    episode_dek_to_cbor(&EpisodeDek {
+        event_id: format!("00000000-0000-0000-0000-00000000000{n}"),
+        dek_wrapped: (0u8..8).map(|i| i.wrapping_mul(3).wrapping_add(n)).collect(),
+    })
+}
+
+/// The exact CAIRNL1 CBOR a PRE-registry build produces, frozen 2026-09-06. This is a
+/// DIFFERENT fixture from [`populated_bundle`] (two custody rows, a fresh secret lineage)
+/// deliberately — it exists solely to pin the shape Task 11 must not disturb, so it should
+/// not be entangled with the #511 pin's own reason for being.
+///
+/// Once `actor_registry` exists, no live call can reproduce these bytes any more — the new
+/// field always appears in the encoding (see `the_empty_registry_encoding_is_pinned`'s doc for
+/// why it must, rather than being skipped when empty). So after Task 11 lands, this constant's
+/// job is exactly [`an_old_bundle_still_parses_with_the_registry_absent`]: proving an export an
+/// OLD build wrote still restores under TODAY's code, registry defaulted to empty rather than
+/// refused.
+const PRE_REGISTRY_BUNDLE_HEX: &str = concat!(
+    "a66776657273696f6e01716e6f64655f64656661756c745f64656b73806c6570",
+    "69736f64655f64656b7382984518a21868186518761865186e1874185f186918",
+    "641878182418301830183018301830183018301830182d183018301830183018",
+    "2d1830183018301830182d1830183018301830182d1830183018301830183018",
+    "30183018301830183018301831186b18641865186b185f187718721861187018",
+    "701865186418880104070a0d101316984518a21868186518761865186e187418",
+    "5f186918641878182418301830183018301830183018301830182d1830183018",
+    "301830182d1830183018301830182d1830183018301830182d18301830183018",
+    "3018301830183018301830183018301832186b18641865186b185f1877187218",
+    "61187018701865186418880205080b0e11141766636f6e666967f66664726166",
+    "7473806d756e777261705f7365637265749820091017181e1825182c1833183a",
+    "18411848184f1856185d1864186b1872187918801887188e1895189c18a318aa",
+    "18b118b818bf18c618cd18d418db18e2",
+);
+
+#[test]
+fn the_pre_registry_bundle_bytes_are_unchanged() {
+    let ls = LocalState::from_custody(vec![dek_cbor(1), dek_cbor(2)], Some(secret_fixture(9)));
+    assert_eq!(
+        hex::encode(to_cbor(&ls)),
+        PRE_REGISTRY_BUNDLE_HEX,
+        "the PRE-registry CAIRNL1 shape moved before Task 11 even touched it — capture the \
+         printed actual value and re-run; do not hand-edit this constant"
+    );
+}
