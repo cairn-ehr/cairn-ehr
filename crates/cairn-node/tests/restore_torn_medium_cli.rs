@@ -64,8 +64,7 @@ fn torn_v3_medium() -> Vec<u8> {
         dek_wrapped: None,
         source_seq: 0,
     }];
-    let attestation =
-        build_segment_attestation(&sk, &kid, &self_id, Plane::Node, 0, "", &records);
+    let attestation = build_segment_attestation(&sk, &kid, &self_id, Plane::Node, 0, "", &records);
     let complete = Segment {
         plane: Plane::Node,
         index: 0,

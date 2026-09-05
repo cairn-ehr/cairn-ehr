@@ -515,15 +515,8 @@ fn v3_medium_self_marker_still_rejects_a_named_peer() {
             source_seq: 1,
         },
     ];
-    let attestation = build_segment_attestation(
-        &sk_self,
-        &kid_self,
-        &self_id,
-        Plane::Node,
-        0,
-        "",
-        &records,
-    );
+    let attestation =
+        build_segment_attestation(&sk_self, &kid_self, &self_id, Plane::Node, 0, "", &records);
     let segment = Segment {
         plane: Plane::Node,
         index: 0,

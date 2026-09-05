@@ -2320,8 +2320,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Backup { to, passphrase } => {
-            // Reads node_event (any role with SELECT works) and writes a self-verifying
-            // medium. Health is recorded only after the medium re-reads and verifies (see
+            // Captures BOTH event planes (#500 slice 2c) — `node_event` and, since Task 9,
+            // `event_log` with its per-record custody — onto one append-only CAIRNB3 medium.
+            // Any role with the ordinary runtime grants works: `SELECT ON node_event` plus
+            // `EXECUTE ON cairn_clinical_page` (db/051), no signing key and no validated door.
+            // Health is recorded only after the medium re-reads and re-assesses (see
             // backup_to), so it never over-claims.
             let db = cairn_node::db::connect(&cli.conn).await?;
             let now_unix = std::time::SystemTime::now()
@@ -2331,10 +2334,12 @@ async fn main() -> anyhow::Result<()> {
             let health_path = cairn_node::backup::health_path_for(&cli.key);
 
             // Load the signing key NON-INTERACTIVELY (flag/env passphrase, or a plaintext key)
-            // so the medium's self-marker can be SIGNED (tamper-evident on restore). We never
+            // so this capture's segments can carry a signed attestation (tamper-evident, and
+            // the only thing that lets the medium identify its own node on restore). We never
             // PROMPT here: an unattended/cron backup must not block on a tty, and an unsigned
-            // marker is a safe degradation (operator-error-safe, just not tamper-evident) —
-            // never a reason to fail the backup. A wrong/absent secret simply yields no key.
+            // capture is a declared limitation of the format — never a reason to fail the
+            // backup (§1.2: the operator's one nightly act must stay one). A wrong/absent
+            // secret simply yields no key.
             let key_secret: Option<Zeroizing<String>> = passphrase
                 .clone()
                 .filter(|s| !s.is_empty())
@@ -2352,25 +2357,70 @@ async fn main() -> anyhow::Result<()> {
 
             let report =
                 cairn_node::backup::backup_to(&db, &to, &health_path, now_unix, marker_key).await?;
+            // WHICH FILE IS CURRENT. Said BEFORE the counts, because when it fires it is the
+            // most important line on the screen: a CAIRNB3 segment cannot be appended to a
+            // CAIRNB1/CAIRNB2 container, so the first backup after this build starts a NEW
+            // medium in place of the legacy one. It is safe (the first capture of a fresh
+            // medium sweeps both planes from the beginning, so the successor is a superset),
+            // but an operator with rotated copies has to know which artifact is which.
+            if let cairn_node::backup::MediumOrigin::SucceededLegacy = report.origin {
+                println!(
+                    "NOTE: {} held an older-revision (CAIRNB1/CAIRNB2) medium and has been \
+                     REPLACED by a new append-only CAIRNB3 medium (a CAIRNB3 segment cannot \
+                     be appended to a legacy container). If that file was a backup of THIS \
+                     node, nothing was lost: this first capture swept both planes from the \
+                     beginning, so the new file holds everything the old one did AND the \
+                     clinical record it could never carry. If it was some OTHER node's medium \
+                     — a peer's, or this node's own from before a restore gave it a new \
+                     identity — those events were not in this database to re-capture, and \
+                     that file is gone: restore it from an archived copy before reusing this \
+                     volume again. Archived copies stay usable either way; `restore` and \
+                     `verify-backup` read both revisions.",
+                    to.display()
+                );
+            }
+            // PER PLANE, never as one total. A single scope-free count is exactly how #500
+            // stayed invisible for months while every surface reported it truly, so the line
+            // that an operator reads every night names what it is counting.
             println!(
-                "backed up {} event(s) ({} bytes) to {}",
-                report.event_count,
+                "backed up {} node event(s) + {} clinical event(s) on the medium \
+                 (+{} / +{} appended this run, {} bytes) to {}",
+                report.node_events,
+                report.clinical_events,
+                report.node_appended,
+                report.clinical_appended,
                 report.medium_bytes,
                 to.display()
             );
-            // How trustworthy is this medium's identity marker? An unsigned medium travels
-            // flagged for extra care. A signed marker is UNFORGEABLE (no off-medium private key)
-            // and bound to its event set; on a sole-enroll medium it is fully tamper-evident, on a
-            // federated medium restore will ask for confirmation (a converged peer's medium could
-            // be spliced — see crate::medium / restore::Provenance). Store any medium with care.
+            // How well does this medium identify its own node? A SIGNED capture is UNFORGEABLE
+            // (the private key never leaves the node) and each segment is bound to its
+            // contents, plane, position and predecessor; on a sole-enroll medium that is fully
+            // tamper-evident, and on a federated medium restore asks for confirmation (a
+            // converged peer's medium could be spliced — see crate::medium /
+            // restore::Provenance). Store any medium with care.
             match report.marker {
                 cairn_node::backup::WrittenMarker::Signed => {
                     println!("self-marker  SIGNED (unforgeable; identity confirmed on restore)")
                 }
+                // NOT merely "less tamper-evident". On a CAIRNB3 medium an unsigned capture
+                // leaves NOTHING for `restore` to identify the node from: `self_marker_for`
+                // derives a marker from the ATTESTED id only, and the plaintext
+                // `Segment::self_node_id_hex` is untrusted and deliberately not used. So
+                // restore falls back to sole-enroll inference or an UNCHECKED
+                // `--superseded-node`, which is issue #53's footgun. The wording says so
+                // plainly rather than repeating CAIRNB2's milder "operator-error-safe".
                 cairn_node::backup::WrittenMarker::Unsigned => eprintln!(
-                    "WARNING: self-marker UNSIGNED — this medium is operator-error-safe but NOT \
-                     tamper-evident; set CAIRN_KEY_PASSPHRASE / --passphrase (or use a plaintext \
-                     key) to sign it. Store and handle this medium with extra care."
+                    "WARNING: this capture was UNSIGNED — no segment on this medium carries an \
+                     attestation, so it is neither tamper-evident NOR able to tell `restore` \
+                     which node it belongs to (restore will fall back to inference or to an \
+                     unchecked --superseded-node). The backup itself is complete and every \
+                     event still verifies individually. Set CAIRN_KEY_PASSPHRASE / \
+                     --passphrase (or use a plaintext key): the next capture that has \
+                     something to append will sign its segment, and one signed segment is \
+                     enough to identify the medium. Note that a capture over an unchanged log \
+                     appends nothing at all (by design), so a re-run alone will not sign this \
+                     medium — start a NEW medium with a key available if you need one now. \
+                     Store and handle this medium with extra care."
                 ),
                 cairn_node::backup::WrittenMarker::None => {
                     println!("self-marker  none (node not yet enrolled — nothing to attest)")

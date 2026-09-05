@@ -1,11 +1,11 @@
 //! Task 8 of #500 slice 2c (Erratum E2) — `backup::node_plane_events`, the ONE place that
 //! answers "which events does the restore path apply?" for either medium revision.
 //!
-//! WHY THIS FILE EXISTS AND LANDS BEFORE THE WRITER SWITCHES. `restore` and `verify-backup`
-//! both still read a medium through the LEGACY parser, which refuses CAIRNB3 outright. The
-//! very next task in this slice makes `backup_to` write CAIRNB3, so without this file's
-//! subject landing FIRST, that commit would leave the tree writing a medium neither command
-//! can read back — a nightly backup that verifies red, and a restore that refuses an
+//! WHY THIS FILE EXISTS AND LANDED BEFORE THE WRITER SWITCHED. `restore` and `verify-backup`
+//! both used to read a medium through the LEGACY parser, which refuses CAIRNB3 outright.
+//! `backup_to` now writes CAIRNB3 (the next task in this slice), so without this file's
+//! subject landing FIRST, that commit would have left the tree writing a medium neither
+//! command can read back — a nightly backup that verifies red, and a restore that refuses an
 //! operator's only copy. These tests pin the fix at the pure-function level, with no
 //! database and no signing key: `node_plane_events` never verifies anything (that stays
 //! `verify_events`'s job, run separately by both callers), it only decides WHICH bytes come
@@ -13,8 +13,8 @@
 //! and using one keeps this suite fast and DB-free.
 
 use cairn_medium::{
-    append_segment, chain_report, parse_any, segment_commitment, serialize_container,
-    serialize_v3, MediumImage, MediumRecord, Plane, Segment, SelfMarker,
+    append_segment, chain_report, parse_any, segment_commitment, serialize_container, serialize_v3,
+    MediumImage, MediumRecord, Plane, Segment, SelfMarker,
 };
 use cairn_node::backup;
 
@@ -121,8 +121,7 @@ fn a_node_plane_segment_after_a_broken_chain_link_is_still_returned() {
     // one segment earlier, it sits PAST `verified_through` too.
     let after_break = segment(Plane::Node, 2, &broken_commitment, vec![record(vec![3], 0)]);
 
-    let bytes =
-        serialize_v3(&[first, broken, after_break]).expect("fixture fits the cap");
+    let bytes = serialize_v3(&[first, broken, after_break]).expect("fixture fits the cap");
     let image = parse_any(&bytes).expect("a CAIRNB3 medium parses even with a broken chain");
 
     // Anti-vacuity: confirm the fixture really does break the chain before position 2, or
@@ -188,8 +187,7 @@ fn plane_counts_tallies_each_plane_on_a_v3_medium() {
         vec![record(vec![4], 0), record(vec![5], 1), record(vec![6], 2)],
     );
 
-    let bytes =
-        serialize_v3(&[node_seg, clinical_seg, unknown_seg]).expect("fixture fits the cap");
+    let bytes = serialize_v3(&[node_seg, clinical_seg, unknown_seg]).expect("fixture fits the cap");
     let image = parse_any(&bytes).expect("a CAIRNB3 medium parses via parse_any");
 
     assert_eq!(
@@ -248,8 +246,7 @@ fn torn_tail_notice_names_a_torn_v3_medium() {
     append_segment(&mut image_bytes, &b).expect("fixture fits the cap");
     image_bytes.truncate(intact + 12); // a crash partway through the second section — torn
 
-    let image =
-        parse_any(&image_bytes).expect("a torn medium still parses its complete prefix");
+    let image = parse_any(&image_bytes).expect("a torn medium still parses its complete prefix");
     let path = std::path::Path::new("/tmp/example-medium");
     let msg = backup::torn_tail_notice(&image, path)
         .expect("a torn medium must produce a notice, not a silent None");

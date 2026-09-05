@@ -12,8 +12,10 @@
 //! larger than a byte slice.
 //!
 //! SCOPE TODAY: this crate carries the format. It does NOT read a database and does not
-//! decide what goes on a medium — `cairn-node`'s `backup.rs` still reads `node_event`
-//! and nothing else, which is issue #500 and is NOT fixed by this crate existing.
+//! decide what goes on a medium — that is `cairn-node`'s `backup.rs` and `capture`, which
+//! since #500 slice 2c capture BOTH planes onto a CAIRNB3 medium. **#500 is still open and
+//! this crate does not close it**: the medium now HOLDS the clinical record and nothing
+//! restores it (slice 2d), and no property of this crate ever promised otherwise.
 //!
 //! WHY A SELF-MARKER: a backup medium is a node's `node_event` set. By set-union sync that
 //! set CONVERGES with every peer's — two fully-synced mutual peers hold byte-identical event

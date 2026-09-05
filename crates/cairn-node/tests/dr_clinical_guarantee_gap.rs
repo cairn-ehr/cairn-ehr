@@ -2,11 +2,14 @@
 //! CLINICAL tier. This file holds each promise against what is actually built, so a gap is
 //! loud instead of invisible.
 //!
-//! **When this file was written all three were FALSE.** ADR-0066 has since closed the
-//! CUSTODY one (#495) — the node's unwrap key is an independent keypair that now rides the
-//! sealed export — so this is no longer "four pins plus a mechanism". It is a MIX: some
-//! tests assert the promise and stay green, others still pin today's defect. Every test
-//! below says in its own doc which of the two it is; read that before changing one.
+//! **When this file was written all three were FALSE.** Two have since moved: ADR-0066
+//! closed the CUSTODY one (#495 — the node's unwrap key is an independent keypair that now
+//! rides the sealed export), and #500 slice 2c closed the CAPTURE half of the clinical-log
+//! one (the medium now carries `event_log` with its custody; nothing restores it yet). So
+//! this is no longer "four pins plus a mechanism". It is a MIX, and several tests are
+//! GUARANTEES SCOPED TO ONE HALF rather than to a whole promise. Every test below says in
+//! its own doc which it is, and — where it is a half — which half. Read that before
+//! changing one, and before quoting one as evidence a promise holds.
 //!
 //! # The three promises
 //!
@@ -30,12 +33,13 @@
 //!
 //! # What is actually built
 //!
-//! - **STILL BROKEN (#500).** `backup::read_event_set` reads `SELECT signed_bytes FROM
-//!   node_event` — the **federation plane only** — and `backup::backup_to` writes exactly
-//!   that set to the medium. No `event_log`, no `event_clear`, no `event_dek`. Because
-//!   `event_log` also carries the demographic, identity, registration and erasure streams,
-//!   a restored solo node has **no patients and no charts at all**, not merely no clinical
-//!   content.
+//! - **HALF FIXED (#500 slice 2c).** `backup::backup_to` no longer writes `SELECT
+//!   signed_bytes FROM node_event` and nothing else: it captures BOTH planes onto an
+//!   append-only CAIRNB3 medium, the clinical one with per-record custody. So the record now
+//!   REACHES the medium. **#500 stays open**, because nothing reads it back — `restore` and
+//!   `verify-backup` both go through `backup::node_plane_events`, which deliberately returns
+//!   the federation plane alone until slice 2d. A restored solo node therefore still has no
+//!   patients and no charts; what changed is that the bytes to give it now exist off-machine.
 //! - Restore still mints a **fresh signing key** (ADR-0026 decision 4, "the private signing
 //!   key is never backed up"): `restore.rs` orchestrates the apply and the supersede,
 //!   `main.rs` owns the minting. What ADR-0066 CHANGED is the consequence. The X25519
@@ -85,9 +89,11 @@
 //!   and the only test that can fire the producer's `erasure_shred_log` filter at all. It
 //!   stages a state the production doors cannot produce, and its own doc explains why that
 //!   deliberate exception to this suite's rules is the point rather than a shortcut.
-//! - [`medium_carries_the_federation_plane_and_no_clinical_event`] — **still a PIN** (#500,
-//!   the sibling issue). It names its own inversion and goes red on the commit that fixes
-//!   the medium. Do not read the rest of this file as evidence that it is fixed.
+//! - [`medium_carries_both_planes`] — **GUARANTEE, CAPTURE HALF ONLY** (#500 slice 2c). It
+//!   replaced the pin that asserted the medium carried no clinical event at all, on the
+//!   commit that made that false. It says nothing about the RESTORE half, which is slice 2d
+//!   and is not built; read its own doc before quoting it as "#500 is fixed". The sibling
+//!   half — *"and nothing yet restores one"* — is owed by the task that closes this slice.
 //! - [`local_state_producers_are_the_two_named_constructors`] — a producer COUNT guard over
 //!   the source text of EVERY crate's `src/`; it moved from 1 to 2 when the DB-reading
 //!   producer landed, and reddens at 3 wherever a third appears. #511 changed WHERE the two
@@ -128,7 +134,7 @@ fn cs() -> Option<String> {
 
 /// Bring the database to the state a real solo clinic node is in the moment before its
 /// disk dies: a provisioned node identity (so `node_event` is NON-EMPTY — see the
-/// anti-vacuity note in [`medium_carries_the_federation_plane_and_no_clinical_event`]),
+/// anti-vacuity note in [`medium_carries_both_planes`]),
 /// an enrolled actor, and a registered unwrap key.
 ///
 /// The truncation is delegated to `common::medication_setup` rather than copied: it is the
@@ -230,30 +236,34 @@ async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) ->
     (event_id, signed.signed_bytes)
 }
 
-/// **Promise 1 — "the clinical event log survives" — is FALSE (#500).**
+/// **Promise 1's CAPTURE HALF — "the clinical event log survives" — is now TRUE (#500 slice
+/// 2c Task 9).** This is the INVERSION of the pin that used to stand here, which asserted
+/// that the medium carried the federation plane and no clinical event at all.
 ///
-/// The medium a solo clinic's whole durability story rests on carries the federation
-/// plane and nothing else. After a dead disk, restore rehydrates who this node peered
-/// with and recovers zero clinical records — and, since `event_log` is also the home of
-/// the demographic, identity and registration streams, zero patients.
+/// ⚠️ **Read the scope before quoting this as "#500 is fixed", because the unscoped sentence
+/// is still false.** What this proves is that the record REACHES the medium — the writer's
+/// half, which is all slice 2c claims. Nothing yet reads a clinical event BACK: `restore`
+/// and `verify-backup` both go through `backup::node_plane_events`, which returns the
+/// federation plane only, on purpose (slice 2d owns the other half). Its sibling half —
+/// *"and nothing yet restores one"* — is Task 13's to add beside this one; until it lands,
+/// this file does NOT pin that limit, and this doc comment is the only thing saying so.
 ///
-/// Anti-vacuity, on both sides: the node is provisioned first, so the medium is genuinely
-/// NON-EMPTY (otherwise "the medium holds no clinical event" would also pass over an empty
-/// export); and `author_sealed_clinical_event` reads its event back out of `event_log`, so
-/// there is genuinely something for the medium to be missing. Together they close the
-/// 2026-08-23 lesson — a guard that cannot observe the property it names.
+/// ANTI-VACUITY, on both sides, inherited from the pin this replaced:
+/// `author_sealed_clinical_event` reads its event back out of `event_log` before returning,
+/// so the bytes looked for below genuinely exist; and the FEDERATION plane is asserted to be
+/// complete too, so "the clinical event is on the medium" cannot be satisfied by a writer
+/// that captured the clinical plane and dropped the federation one — which would have
+/// destroyed the half of disaster recovery that already worked.
 ///
-/// The pin is taken at BOTH seams on purpose. `read_event_set` is where the wrong table is
-/// named, but a plausible fix — add a clinical reader and compose both inside `backup_to` —
-/// would leave a `read_event_set`-only assertion green while closing the defect. So the
-/// medium FILE that `backup_to` actually writes is checked too.
-///
-/// **When #500 is fixed:** invert the three PINS — the clinical event's signed bytes must
-/// appear in the event set and in the medium file, and the set's count must exceed the
-/// node-plane count. The fourth assertion, `!medium.is_empty()`, is the anti-vacuity guard
-/// and stays exactly as it is.
+/// The assertion is taken on the medium FILE `backup_to` actually writes, never on
+/// `read_event_set`'s return value. That distinction mattered in BOTH directions: the pin
+/// this replaced checked both seams because a fix might have touched only one, and now
+/// `read_event_set` is no longer on the write path at all (see its doc), so an assertion
+/// about it would say nothing whatever about the backup. It survives below only as the
+/// reference spelling of *"the federation event set, according to the database"* — the thing
+/// the medium's node plane is compared against.
 #[tokio::test]
-async fn medium_carries_the_federation_plane_and_no_clinical_event() {
+async fn medium_carries_both_planes() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -263,58 +273,64 @@ async fn medium_carries_the_federation_plane_and_no_clinical_event() {
     let (sk, kid) = provisioned_clinic(&c).await;
     let (_event_id, clinical_bytes) = author_sealed_clinical_event(&c, &sk, &kid).await;
 
-    let medium = backup::read_event_set(&c).await.unwrap();
-
-    // Anti-vacuity: the export is real and non-empty, so the absence below is a real
-    // absence rather than "there was nothing to look at".
+    // The federation event set as the DATABASE holds it — the reference the medium's node
+    // plane is checked against below. Non-empty because the node was provisioned first.
+    let federation = backup::read_event_set(&c).await.unwrap();
     assert!(
-        !medium.is_empty(),
-        "the node was provisioned, so the medium must carry at least the genesis event — \
-         an empty medium would make the assertions below vacuous"
+        !federation.is_empty(),
+        "the node was provisioned, so there must be at least a genesis event — an empty \
+         federation set would make the comparison below vacuous"
     );
 
-    // Promise 1, as built: the clinical event is simply not there.
-    assert!(
-        !medium.contains(&clinical_bytes),
-        "PINS #500: the backup medium carries no clinical event. ADR-0026 decision 1 says \
-         the clinical event log survives a restore and decision 2 says clinical events back \
-         up as a cold peer; backup::read_event_set reads only `node_event`. When #500 is \
-         fixed this assertion must be INVERTED."
-    );
-
-    // The set is `node_event` verbatim. This equality is structurally guaranteed today
-    // (`read_event_set` is an unfiltered SELECT over that table), so it proves nothing
-    // about the present — it is here purely as a TRIPWIRE: any fix that widens the medium
-    // reddens it, including one that adds clinical events without touching the assertion
-    // above.
-    let node_events: i64 = c
-        .query_one("SELECT count(*) FROM node_event", &[])
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(
-        medium.len() as i64,
-        node_events,
-        "PINS #500: the medium is the `node_event` set exactly — nothing clinical has been \
-         added to it"
-    );
-
-    // And the same absence in the artifact an operator actually carries off-site: the
-    // seam a fix is most likely to touch is `backup_to`, not `read_event_set`.
     let tmp = tempfile::tempdir().unwrap();
     let medium_path = tmp.path().join("cairn.medium");
     let health_path = tmp.path().join("backup-status.json");
     backup::backup_to(&c, &medium_path, &health_path, 0, Some((&sk, &kid)))
         .await
-        .expect("the backup ceremony succeeds — which is the point");
-    let on_disk = std::fs::read(&medium_path).unwrap();
+        .expect("the backup ceremony succeeds");
+
+    let image = cairn_node::medium::parse_any(&std::fs::read(&medium_path).unwrap())
+        .expect("the medium `backup_to` wrote must parse");
+
+    // PROMISE 1, CAPTURE HALF. The clinical event is on the medium — and so is the key that
+    // opens it. ADR-0052 makes every clinical body born-sealed, so ciphertext without its
+    // custody would restore as noise while every surface reported success: the same
+    // composite untruth #500 is about, one level down.
+    let clinical: Vec<&cairn_medium::MediumRecord> = match &image {
+        cairn_node::medium::MediumImage::V3(m) => m
+            .segments
+            .iter()
+            .filter(|s| s.plane == cairn_node::medium::Plane::Clinical)
+            .flat_map(|s| s.records.iter())
+            .collect(),
+        cairn_node::medium::MediumImage::Legacy(_) => {
+            panic!("a capture must leave a CAIRNB3 medium, never a legacy container")
+        }
+    };
+    let found = clinical
+        .iter()
+        .find(|r| r.signed_bytes == clinical_bytes)
+        .expect(
+            "#500 slice 2c: the medium FILE `backup_to` writes — the artifact the operator \
+             carries off-site — must carry the clinical event. ADR-0026 decision 1 says the \
+             clinical event log survives a restore and decision 2 says clinical events back \
+             up as a cold peer.",
+        );
     assert!(
-        !on_disk
-            .windows(clinical_bytes.len())
-            .any(|w| w == clinical_bytes),
-        "PINS #500: the medium FILE `backup_to` writes — the artifact the operator carries \
-         off-site, and the one `verify-backup` reports OK over — does not contain the \
-         clinical event's bytes anywhere. When #500 is fixed this assertion must be INVERTED."
+        found.dek_wrapped.is_some(),
+        "and its custody must travel with it, or a restored solo clinic inherits ciphertext \
+         it can never open (ADR-0066)"
+    );
+
+    // ANTI-VACUITY / TRIPWIRE, the inverse of the equality that used to stand here: the
+    // medium's NODE plane must still be the `node_event` set exactly. Widening the medium
+    // was the point of this slice; NARROWING it — losing the federation plane while gaining
+    // the clinical one — would be a silent regression of the working half of DR, and nothing
+    // else in this file would notice.
+    assert_eq!(
+        backup::node_plane_events(&image).unwrap(),
+        federation,
+        "the medium's federation plane must still be the `node_event` set exactly, in order"
     );
 }
 
