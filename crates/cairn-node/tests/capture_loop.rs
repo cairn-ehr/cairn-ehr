@@ -191,13 +191,21 @@ async fn event_log_rows(c: &Client) -> i64 {
 /// prevents that — it is a bad READ on the way to the medium, and the only way to stage it
 /// is to put the bad bytes where the reader will find them.
 ///
-/// The disable/update/enable runs inside ONE transaction so the trigger can never be left
-/// off for the suites that share this database: DDL is transactional in PostgreSQL, so the
-/// three statements commit together or roll back together, and a panic mid-way restores the
-/// floor rather than dropping it. `content_address` is recomputed in the same statement
-/// because db/001's `event_content_addressed` CHECK binds the two — updating one without the
-/// other would be refused by the constraint, not by the code under test.
-async fn corrupt_one_logged_event(c: &Client, signed: &[u8]) -> Vec<u8> {
+/// **LEAVES A TRANSACTION OPEN, and the caller must `ROLLBACK`.** That is the cleanup
+/// mechanism, not an oversight. This database is shared and serialized across suites, so a
+/// COMMITTED corrupt row would outlive this test and be visible to any later suite that reads
+/// `event_log` without truncating first. Inside an uncommitted transaction it is visible to
+/// this session alone, and it survives a panic: an unwound test drops the `Clinic` (and with
+/// it the client), the connection closes, and the server aborts the transaction — so the
+/// corruption and the trigger change are both undone whether the test passes, fails, or
+/// panics. Cleanup that only runs on the happy path is not cleanup.
+///
+/// The `ENABLE TRIGGER` is still issued rather than left to the rollback, so that even an
+/// unexpected commit could not leave the append-only floor down. `content_address` is
+/// recomputed in the same statement because db/001's `event_content_addressed` CHECK binds
+/// the two — updating one without the other would be refused by the constraint, not by the
+/// code under test.
+async fn corrupt_one_logged_event_in_an_open_transaction(c: &Client, signed: &[u8]) -> Vec<u8> {
     let mut corrupt = signed.to_vec();
     let mid = corrupt.len() / 2;
     corrupt[mid] ^= 0xff;
@@ -219,7 +227,6 @@ async fn corrupt_one_logged_event(c: &Client, signed: &[u8]) -> Vec<u8> {
     c.batch_execute("ALTER TABLE event_log ENABLE TRIGGER event_log_no_update")
         .await
         .unwrap();
-    c.batch_execute("COMMIT").await.unwrap();
     assert_eq!(
         updated, 1,
         "anti-vacuity: the fixture must genuinely corrupt the row it names"
@@ -620,6 +627,189 @@ async fn both_planes_share_one_chain_and_keep_separate_watermarks() {
     assert_eq!(clinical_again.watermark, clinical.watermark);
 }
 
+/// **The gap hazard, and the reason this slice exists in miniature.**
+///
+/// `event_log.seq` is `GENERATED ALWAYS AS IDENTITY`: the value is issued at INSERT and
+/// commits can land out of order, so a capture reading between two overlapping
+/// `submit_event` transactions can see seq 6 and not seq 5. Resuming from the watermark
+/// alone, **seq 5 would be skipped by every future run for the life of the medium** while
+/// the medium reported itself complete through 6 — a clinical event silently absent from a
+/// backup that says it is whole.
+///
+/// The state is BUILT directly rather than raced: a medium that holds the lowest and highest
+/// seqs and nothing in between, over a database that holds them all. That is the same state
+/// the interleaved commit produces, and it is deterministic.
+#[tokio::test]
+async fn a_capture_backfills_a_hole_below_its_own_watermark() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    for _ in 0..3 {
+        author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    }
+    let rows = capture::read_clinical_page(&cl.db, 0, 500).await.unwrap();
+    assert!(
+        rows.len() >= 3,
+        "anti-vacuity: there must be rows to leave a hole between, got {}",
+        rows.len()
+    );
+    let lowest = &rows[0];
+    let highest = rows.last().unwrap();
+
+    // A medium holding only the two ENDS of the run: exactly what a capture that read past
+    // an uncommitted middle would have written. Unsigned, because the hazard has nothing to
+    // do with signing and an unsigned segment still advances the watermark.
+    let hole = Segment {
+        plane: Plane::Clinical,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: cl.id.clone(),
+        attestation: None,
+        records: vec![
+            capture::to_medium_record(lowest),
+            capture::to_medium_record(highest),
+        ],
+    };
+    let mut medium = serialize_v3(&[hole]).unwrap();
+
+    // Anti-vacuity, both halves: the medium really is missing the middle, and it really does
+    // claim a watermark above it.
+    let missing: Vec<i64> = rows
+        .iter()
+        .map(|r| r.seq)
+        .filter(|s| *s > lowest.seq && *s < highest.seq)
+        .collect();
+    assert!(
+        !missing.is_empty(),
+        "the fixture must genuinely leave a hole"
+    );
+    {
+        let image = parse_any(&medium).unwrap();
+        let held: Vec<i64> = clinical_records(&image)
+            .iter()
+            .map(|r| r.source_seq)
+            .collect();
+        assert_eq!(held, vec![lowest.seq, highest.seq]);
+    }
+
+    let done = capture::capture_plane(
+        &cl.db,
+        &mut medium,
+        Plane::Clinical,
+        Some((&cl.sk, &cl.kid)),
+        &cl.id,
+        500,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        done.records_appended,
+        missing.len(),
+        "every seq inside the hole must be captured — the watermark is a high-water MARK, \
+         not a completeness claim"
+    );
+    assert!(
+        done.unfilled_gaps.is_empty(),
+        "and the medium must report no remaining hole: {:?}",
+        done.unfilled_gaps
+    );
+
+    let image = parse_any(&medium).unwrap();
+    let held: Vec<i64> = clinical_records(&image)
+        .iter()
+        .map(|r| r.source_seq)
+        .collect();
+    for seq in &rows {
+        assert_eq!(
+            held.iter().filter(|s| **s == seq.seq).count(),
+            1,
+            "seq {} must be on the medium exactly once",
+            seq.seq
+        );
+    }
+    let report = chain_report(as_v3(&image));
+    assert!(
+        report.chain_intact(),
+        "a backfilled segment carries source_seqs BELOW ones already present, which the \
+         chain (by FILE order) must not care about: {:?}",
+        report.faults
+    );
+}
+
+/// **The other half of the gap policy: a hole the database can never supply must cost
+/// nothing.** A seq burned by a rolled-back transaction is never re-issued, so that hole is
+/// permanent. The capture must not loop on it, must not append an empty segment chasing it
+/// (property 2 survives), and must not swallow it either — an unfillable hole is a standing
+/// defect in the backup, and the caller has to be told.
+#[tokio::test]
+async fn an_unfillable_hole_appends_nothing_and_is_reported_not_retried() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    let rows = capture::read_clinical_page(&cl.db, 0, 500).await.unwrap();
+    let highest = rows.last().unwrap();
+
+    // A hole entirely ABOVE everything the database holds: seqs the log will never issue.
+    let phantom_seq = highest.seq + 10;
+    let mut phantom = capture::to_medium_record(highest);
+    phantom.source_seq = phantom_seq;
+    let seg = Segment {
+        plane: Plane::Clinical,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: cl.id.clone(),
+        attestation: None,
+        records: vec![capture::to_medium_record(highest), phantom],
+    };
+    let mut medium = serialize_v3(&[seg]).unwrap();
+    let before = medium.clone();
+
+    let done = capture::capture_plane(
+        &cl.db,
+        &mut medium,
+        Plane::Clinical,
+        Some((&cl.sk, &cl.kid)),
+        &cl.id,
+        500,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        done.records_appended, 0,
+        "the database cannot supply the hole, so nothing is appended"
+    );
+    assert_eq!(
+        medium, before,
+        "and property 2 holds even while a hole is outstanding — not one byte"
+    );
+    assert_eq!(
+        done.unfilled_gaps,
+        vec![(highest.seq, phantom_seq)],
+        "but the hole is REPORTED, so a `watermark` of Some(N) can never be read as \
+         completeness"
+    );
+
+    // Running it again changes nothing: the fill is a query, not a retry.
+    let again = capture::capture_plane(
+        &cl.db,
+        &mut medium,
+        Plane::Clinical,
+        Some((&cl.sk, &cl.kid)),
+        &cl.id,
+        500,
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.records_appended, 0);
+    assert_eq!(medium, before);
+    assert_eq!(again.unfilled_gaps, done.unfilled_gaps);
+}
+
 /// **Property 5 — verify BEFORE the bytes can touch the medium.** A segment attestation is
 /// computed over the content address of whatever bytes it is handed, so a capture that
 /// signed a corrupt read would produce a genuinely VALID attestation over corruption: the
@@ -633,7 +823,7 @@ async fn a_corrupt_read_is_refused_before_it_can_be_signed_onto_the_medium() {
         return;
     };
     let bytes = author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
-    let corrupt = corrupt_one_logged_event(&cl.db, &bytes).await;
+    let corrupt = corrupt_one_logged_event_in_an_open_transaction(&cl.db, &bytes).await;
 
     let mut medium = serialize_v3(&[]).unwrap();
     let before = medium.clone();
@@ -662,6 +852,24 @@ async fn a_corrupt_read_is_refused_before_it_can_be_signed_onto_the_medium() {
     assert!(
         !medium.windows(corrupt.len()).any(|w| w == corrupt),
         "and not one corrupt byte reached the medium"
+    );
+
+    // Undo the corruption for the suites that share this database. A panic above reaches the
+    // same end by dropping the connection — see the fixture's doc.
+    cl.db.batch_execute("ROLLBACK").await.unwrap();
+    let still_corrupt: i64 = cl
+        .db
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE signed_bytes = $1",
+            &[&corrupt.as_slice()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        still_corrupt, 0,
+        "the corrupt row must not outlive this test — the next suite to read event_log \
+         without truncating would see it"
     );
 }
 
