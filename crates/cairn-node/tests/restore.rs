@@ -470,7 +470,12 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
 /// #500 slice 2c review, Important 2 (round 2: calls the REAL function, not a
 /// replica). A CAIRNB3 medium has no container-level self-marker (that concept is
 /// CAIRNB2-only), so `main.rs`'s restore arm derives an equivalent one via
-/// `backup::self_marker_for` — never the untrusted plaintext `Segment::self_node_id_hex`.
+/// `backup::self_marker_source`. **This test covers the ATTESTED derivation**, which is
+/// preferred whenever the medium carries one and is the only unforgeable answer; the
+/// untrusted plaintext `Segment::self_node_id_hex` is a documented FALLBACK for a medium
+/// with no attestation at all (#550), pinned separately in
+/// `an_unsigned_v3_medium_resolves_self_and_still_rejects_a_named_peer`. The assertion on
+/// `MarkerSource::V3Attested` below is what keeps the two apart.
 /// A prior version of this test replicated that construction inline
 /// (`chain_report`+`self_id_from_chain`+`.map(...)`), which could not have caught a
 /// regression of `self_marker_for` (or of `main.rs` calling something else) back to

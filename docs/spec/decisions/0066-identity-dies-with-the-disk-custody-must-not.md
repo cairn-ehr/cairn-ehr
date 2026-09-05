@@ -2,6 +2,12 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
+- **Errata:** **E1** and **E2** (both 2026-09-06) — factual, the decision is unchanged. Since DR slice
+  2c the backup medium DOES carry clinical events with their custody, so the two passages stating
+  *"the medium still carries no clinical event"* are superseded on that premise **only**: nothing
+  restores the clinical plane yet, so [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) stays
+  open and every conclusion this ADR draws from it still holds. E1 marks the *"What this ADR does not
+  make true"* warning; E2 marks the first **Known limitation**.
 - **Derives from:** [ADR-0026](0026-node-durability-and-disaster-recovery.md) decision 4 (*"New identity
   on recovery, `supersede`-linked — **the private signing key is never backed up**"*) and
   [ADR-0052](0052-born-sealed-clinical-bodies.md) decision 4 (*"**The node unwrap key is X25519**,
@@ -220,6 +226,25 @@ load-bearing property of the export's tests.
 >   slice, and **this ADR does not fix it.** Until it lands, this decision hands a restored node a working
 >   key and nothing to open with it. Neither half is useful alone: the key without the bytes opens
 >   nothing, the bytes without the key are noise.
+>
+> > **Erratum E1 (2026-09-06) — factual; the decision is unchanged.** *"The backup medium still carries
+> > no clinical event … It exports the **federation plane** only"* ceased to be true on the commit that
+> > made `backup` write a two-plane CAIRNB3 medium (DR slice 2c). **The medium now DOES carry clinical
+> > events** — clinical, demographic, identity, registration and erasure — with each record's wrapped
+> > DEK beside it, so the key and the bytes finally leave the machine in the same artifact.
+> >
+> > **Everything else in the bullet stands, including its conclusion.** Nothing yet RESTORES a clinical
+> > event: `restore` and `verify-backup` read the federation plane alone
+> > (`backup::node_plane_events`), deliberately, until DR slice 2d. So *"a restored node recovers who it
+> > peered with and zero patients"* is still exactly right, *"this ADR does not fix it"* is still right,
+> > and [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) **is still open**. What changed is the
+> > REASON: the record now exists off-machine to be given back, where before a dead disk was total loss
+> > and no later slice could have recovered it.
+> >
+> > Recorded because this WARNING block is quoted as current state, and a reader arriving at *"the
+> > medium carries no clinical event"* would reach the right conclusion from a false premise — the
+> > failure mode the block itself exists to prevent. Current state lives in
+> > [security.md](../security.md) and `docs/HANDOVER.md`, never here.
 > - **"Node-default data-at-rest keys survive" has no subject.** There is no node-default data-at-rest key
 >   tier in the built system — only per-event DEKs. The export slot exists and nothing produces it. The
 >   clause is neither honoured nor violated; it names a tier that would have to exist first, and it must
@@ -336,6 +361,13 @@ the export, **never** returning custody to the seed.
   and an empty clinical log. The guarantee is discharged only when both slices land, and the acceptance
   test is one test: **author a born-sealed clinical event, back up, destroy the database, restore, read
   the body back.** Anything less tests a component, not the promise.
+
+  > **Erratum E2 (2026-09-06) — factual; the decision is unchanged.** *"With the medium still carrying no
+  > clinical event"* is superseded by E1: since DR slice 2c the medium DOES carry clinical events with
+  > their custody. The bullet's conclusion is untouched — a restored node still holds a working unwrap
+  > key and an empty clinical log, because nothing restores the clinical plane yet — and the acceptance
+  > test it names (**author a born-sealed clinical event, back up, destroy the database, restore, read
+  > the body back**) is still the right one and still unmet.
 - **A node already restored under the old coupling is not rescued.** Its inherited DEKs were wrapped to a
   secret derived from a seed that no longer exists. Decision 5's adoption path needs the original seed;
   where it is gone, the loss is real and unrecoverable. Stated, because a reader could otherwise take this

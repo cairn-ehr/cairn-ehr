@@ -58,9 +58,22 @@ pub enum RestoreError {
     /// The medium's self-marker did not verify: a SIGNED marker failed its signature/bind check
     /// (tampered, corrupt, signed by a key that is not the named genesis's, or committing to a
     /// different event set), or an UNSIGNED marker names an enroll absent from the medium. A
-    /// failed marker WITHHOLDS self-detection (fail closed → name the node explicitly); it cannot
-    /// be turned into a wrong-but-valid identity (that would need a forged signature).
-    #[error("medium self-marker did not verify (tampered or mismatched); pass --superseded-node to override")]
+    /// failed marker WITHHOLDS self-detection (fail closed); it cannot be turned into a
+    /// wrong-but-valid identity (that would need a forged signature).
+    ///
+    /// **There is no override, and the message must not offer one.** It used to end *"pass
+    /// --superseded-node to override"*, which is false in both arms: `confirm_explicit` runs
+    /// AFTER this check, so an explicit id cannot reach it. The path became reachable for
+    /// CAIRNB3 media when `self_marker_source` gained its plaintext fallback (#550), so the
+    /// wrong remedy stopped being merely wrong and started being wrong in front of an
+    /// operator mid-recovery.
+    #[error(
+        "medium self-marker did not verify: it is tampered, or it names a node with no \
+         genesis on this medium. Restore refuses rather than guess — and --superseded-node \
+         does NOT override this, because the explicit id is checked against the marker, not \
+         instead of it. Check you have the right medium for this node; if the marker itself \
+         is damaged, restore from another copy"
+    )]
     InvalidSelfMarker,
 }
 
@@ -76,16 +89,49 @@ pub enum Provenance {
     /// and the commitment cannot distinguish them (see [`crate::medium`]). Not a silent misdirect
     /// — surfaced so the CLI asks the operator to confirm the echoed name/address.
     SignedFederated,
-    /// An UNSIGNED self-marker — operator-error-safe, not tamper-evident. Warn the operator to
-    /// confirm the restored identity's name/address.
+    /// A `SelfMarker::Unsigned`. **Two materially different mediums reach this, and this enum
+    /// cannot tell them apart — the caller must** (#500 slice 2c fix round 1):
+    ///
+    ///   - a CAIRNB1/CAIRNB2 **unsigned head marker**, or a CAIRNB3 medium's untrusted
+    ///     plaintext `Segment::self_node_id_hex` (`backup::MarkerSource::V3Plaintext`):
+    ///     operator-error-safe, **not** tamper-evident — anyone who could write the file
+    ///     could have written the id;
+    ///   - a CAIRNB3 **attested** id (`backup::MarkerSource::V3Attested`), which IS
+    ///     tamper-evident: it came from a verified segment attestation bound to a genesis on
+    ///     the same medium, signed by the same key, so it is unforgeable without this node's
+    ///     private key. It arrives in the `Unsigned` variant only because
+    ///     `SelfMarker::Signed`'s verifier expects a CAIRNB2 whole-set blob, a different wire
+    ///     shape — see `backup::self_marker_source`.
+    ///
+    /// **So this variant alone does NOT mean "not tamper-evident", and a caller that prints
+    /// that over the second case is lying to an operator at the moment they decide whether to
+    /// trust a restore.** `main.rs`'s restore arm splits on
+    /// [`backup::MarkerSource`](crate::backup::MarkerSource) for exactly that reason. Widening
+    /// this enum instead was considered and not taken: the distinction is a property of how
+    /// the marker was DERIVED, which `resolve_dead_node` does not observe — it is handed a
+    /// `Container`, and both cases are byte-identical inside one.
+    ///
+    /// In every case the id is still cross-checked against the enrolls actually on the medium
+    /// before it is honoured, so a marker naming nobody fails closed either way.
     Unsigned,
-    /// No marker on the medium: a legacy CAIRNB1 medium, a pre-enrollment CAIRNB2 backup,
-    /// or a CAIRNB3 medium whose chain could not attest an id (#500 slice 2c — `main.rs`'s
-    /// restore arm DOES consult the per-segment attestation via `backup::self_marker_for`
-    /// → `chain::self_id_from_chain`; this is what a V3 medium reaches when that lookup
-    /// itself returns `None`, e.g. an entirely unsigned capture with no genesis to bind
-    /// to). Self came from an explicit `--superseded-node` or a sole-enroll medium, with
-    /// NO cross-check against either. Warn the operator to confirm.
+    /// No marker on the medium at all. Self came from an explicit `--superseded-node` or a
+    /// sole-enroll medium, with **NO cross-check against either**. Warn the operator to confirm.
+    ///
+    /// What actually reaches this, since the #500 slice 2c fix round:
+    ///
+    ///   - a legacy CAIRNB1 medium, or a pre-enrolment CAIRNB2 backup — no head marker was
+    ///     ever written;
+    ///   - a CAIRNB3 medium that names NOBODY: no segment attestation binds an id, **and**
+    ///     every segment's plaintext `self_node_id_hex` is empty, which
+    ///     `cairn_medium::Segment` documents as "captured before enrolment".
+    ///
+    /// **An entirely UNSIGNED capture no longer lands here**, and the correction matters
+    /// because that is the common case (an unattended cron backup has no passphrase, so no
+    /// key, so no attestation). It used to, which was a regression against the CAIRNB2 medium
+    /// it replaced — both too permissive (an unchecked `--superseded-node`) and too strict (a
+    /// multi-enroll medium going `Ambiguous` where CAIRNB2 resolved self). `self_marker_source`
+    /// now falls back to the plaintext id for it, so such a medium reaches
+    /// [`Provenance::Unsigned`] instead (#550, closed).
     NoMarker,
 }
 
