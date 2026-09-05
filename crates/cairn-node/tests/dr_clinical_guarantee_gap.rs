@@ -54,7 +54,11 @@
 //!   every target named in `erasure_shred_log` — ADR-0066 decision 7) and carries the
 //!   unwrap secret itself in a third slot. `node_default_deks` stays empty, and
 //!   LEGITIMATELY so: promise 2 has **no subject** — no node-default data-at-rest keystore
-//!   exists anywhere in the built system for it to export.
+//!   exists anywhere in the built system for it to export. Task 11 (#500) added a FOURTH
+//!   filled slot, `actor_registry`, so the export finally carries what `actor_current` needs
+//!   to let a restored node apply the custody it just inherited — but nothing installs it yet
+//!   (see `localstate.rs`'s own header); that half is slice 2d, same shape as the
+//!   `episode_deks` capture/apply split before it.
 //!
 //! # Why the (former) custody gap was honest history rather than an oversight
 //!
@@ -891,7 +895,8 @@ fn local_state_producers_are_the_two_named_constructors() {
         2,
         "`LocalState` is built by struct literal in exactly TWO places, BOTH in \
          `localstate.rs` — `LocalState::empty()` (the legitimate zero value) and \
-         `LocalState::from_custody()` (the custody-bearing producer, which \
+         `LocalState::from_custody_and_registry()` (the custody-bearing producer, renamed from \
+         `from_custody` in Task 11/#500 when it gained the actor-registry parameter, which \
          `localstate_read::read_local_state` calls AFTER filtering on erasure_shred_log). \
          A third producer anywhere in any crate's src/ is a place an erased body's key could \
          travel from, and it reddens this. Found: {producers:?}"
@@ -902,8 +907,9 @@ fn local_state_producers_are_the_two_named_constructors() {
     // ⚠️ THIS HALF CHANGED IN #511, AND THE CHANGE IS THE POINT — read it before "restoring"
     // the old expectation. It used to require one producer in `localstate.rs` and one in
     // `localstate_read.rs`, because the DB reader WAS a struct literal. It no longer is: the
-    // fields are `pub(crate)` and the reader calls `LocalState::from_custody`, so both
-    // literals are named constructors in `localstate.rs` and the reader holds ZERO.
+    // fields are `pub(crate)` and the reader calls `LocalState::from_custody_and_registry`
+    // (named `from_custody` before Task 11/#500 widened it), so both literals are named
+    // constructors in `localstate.rs` and the reader holds ZERO.
     //
     // That is strictly stronger, not a weakening. Before, ANY file could construct a
     // `LocalState` and only the count would object; now the type system forbids it outside
@@ -917,8 +923,8 @@ fn local_state_producers_are_the_two_named_constructors() {
             .filter(|(rel, _, _)| rel == "crates/cairn-node/src/localstate.rs")
             .count(),
         2,
-        "both producers are named constructors in localstate.rs (`empty` and `from_custody`). \
-         Found: {producers:?}"
+        "both producers are named constructors in localstate.rs (`empty` and \
+         `from_custody_and_registry`). Found: {producers:?}"
     );
     assert_eq!(
         producers
@@ -926,9 +932,9 @@ fn local_state_producers_are_the_two_named_constructors() {
             .filter(|(rel, _, _)| rel == "crates/cairn-node/src/localstate_read.rs")
             .count(),
         0,
-        "the DB reader must CALL `from_custody`, never build a literal of its own — that is \
-         what keeps the filtering producer the only way to fill the custody slot. \
-         Found: {producers:?}"
+        "the DB reader must CALL `from_custody_and_registry`, never build a literal of its \
+         own — that is what keeps the filtering producer the only way to fill the custody \
+         slot. Found: {producers:?}"
     );
 
     // …and it really does call it. Without this, deleting the call and returning
@@ -936,13 +942,13 @@ fn local_state_producers_are_the_two_named_constructors() {
     // all — a silent, total loss of the thing this file is named for.
     let reader = sources::read_source(&root.join("crates/cairn-node/src/localstate_read.rs"));
     assert!(
-        reader.contains("LocalState::from_custody("),
-        "localstate_read.rs must call `LocalState::from_custody` — with no literal of its own \
-         and no call, the export would silently carry nothing"
+        reader.contains("LocalState::from_custody_and_registry("),
+        "localstate_read.rs must call `LocalState::from_custody_and_registry` — with no \
+         literal of its own and no call, the export would silently carry nothing"
     );
 
-    // Also confirm `empty()` really is the ZERO-value producer and `from_custody` really is
-    // the CUSTODY-bearing one — a count cannot notice the two being swapped.
+    // Also confirm `empty()` really is the ZERO-value producer and `from_custody_and_registry`
+    // really is the CUSTODY-bearing one — a count cannot notice the two being swapped.
     let ls = LocalState::empty();
     assert!(
         ls.is_empty(),
