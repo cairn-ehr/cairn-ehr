@@ -835,6 +835,48 @@ fn signed_counts_distinguish_verified_from_merely_present() {
     );
 }
 
+/// An empty medium has never been written to, so the next segment is index 0 with NO
+/// predecessor. `Segment::prev_commitment`'s own doc says index 0 carries none — the honest
+/// value here is an empty string, never a placeholder that would masquerade as a real
+/// commitment.
+#[test]
+fn chain_tail_of_an_empty_medium_starts_the_chain() {
+    let m = crate::testkit::medium_v3(vec![]);
+    let report = chain_report(&m);
+    let tail = chain_tail(&m, &report);
+    assert_eq!(tail.next_index, 0, "the first segment is index 0");
+    assert_eq!(
+        tail.prev_commitment, "",
+        "index 0 has no predecessor — an empty string, never a placeholder"
+    );
+}
+
+/// Two good segments, then one whose attestation does not verify (the identical tamper
+/// `the_watermark_ignores_everything_after_the_last_verified_segment` above uses). Appending
+/// after the bad segment would chain onto a commitment no reader trusts, so the tail must
+/// follow the last VERIFIED position — the same rule [`watermark`] already follows, for the
+/// same reason: a torn/tampered append must not become the predecessor of the next capture.
+#[test]
+fn chain_tail_follows_the_last_verified_segment_not_the_file_tail() {
+    let (mut m, _) = crate::testkit::chain_of(3, 1);
+    m.segments[2].records[0].signed_bytes[0] ^= 0xff; // breaks segment 2's attestation
+    let report = chain_report(&m);
+    assert_eq!(
+        report.verified_through,
+        Some(1),
+        "sanity check on the fixture: the tampered segment must not verify"
+    );
+    let expected_prev_commitment = segment_commitment(&m.segments[1].records);
+
+    let tail = chain_tail(&m, &report);
+
+    assert_eq!(
+        tail.next_index, 2,
+        "the broken segment must not advance the tail"
+    );
+    assert_eq!(tail.prev_commitment, expected_prev_commitment);
+}
+
 /// A segment carrying no records is a located fault.
 ///
 /// `put_segment` refuses to write one, so finding one means the medium came from somewhere

@@ -186,8 +186,8 @@ pub use attest::{
     build_segment_attestation, segment_commitment, verify_segment_attestation, SEGMENT_ATTEST_TYPE,
 };
 pub use chain::{
-    chain_report, locate_record, self_id_from_chain, seq_gaps, verify_records, watermark,
-    ChainReport, SegmentFault,
+    chain_report, chain_tail, locate_record, self_id_from_chain, seq_gaps, verify_records,
+    watermark, ChainReport, ChainTail, SegmentFault,
 };
 pub use container::{
     append_segment, parse_any, parse_container, parse_medium, serialize_container, serialize_v3,
