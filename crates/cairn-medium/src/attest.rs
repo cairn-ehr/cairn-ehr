@@ -64,12 +64,18 @@ pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 /// Slice 2c has now decided it — custody rides the medium — which makes a wrapped DEK
 /// exactly the kind of fact this attestation exists to protect, the same way `source_seq`
 /// is. A ONE-BYTE TAG (`0` = no DEK travelled, `1` = a DEK travelled, followed by its
-/// digest) is what makes stripping custody to `None` as detectable as swapping it for a
-/// different DEK — without the tag, an absent DEK and an empty one would hash identically
-/// and the strip would be invisible again, one level down. Before this fix, deleting
-/// `dek_wrapped` out of an already-verified segment left that segment's attestation intact
-/// and the medium reporting fully healthy end to end, while a later restore found a sealed
-/// body it could never open — see `deleting_a_wrapped_dek_breaks_the_commitment` below.
+/// digest) marks the presence/absence distinction explicitly rather than leaving it to fall
+/// out of how the DEK happens to be folded in: `event_address` always emits a fixed-length
+/// digest, so `None` (nothing appended) already differs in length from `Some(vec![])` (a
+/// digest of zero bytes, still 34 bytes) even without the tag — but that is an incidental
+/// property of hashing the DEK rather than appending it raw, not something to lean on. The
+/// tag would be load-bearing on its own for any future variant that appended the DEK's raw
+/// bytes instead of its digest, where `None` and `Some(vec![])` WOULD otherwise collide at
+/// zero appended bytes; it costs one byte to make the distinction true unconditionally
+/// rather than true today. Before this fix, deleting `dek_wrapped` out of an
+/// already-verified segment left that segment's attestation intact and the medium reporting
+/// fully healthy end to end, while a later restore found a sealed body it could never open —
+/// see `deleting_a_wrapped_dek_breaks_the_commitment` below.
 ///
 /// `attestation` and `attester_key` — the record's HUMAN-authorship sidecars, as distinct
 /// from `dek_wrapped`'s custody — stay OUT of the commitment. Unlike a silently-stripped
@@ -80,18 +86,26 @@ pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 /// them here would be redundant defense for a gap that is not, in fact, silent — unlike the
 /// DEK gap this function now closes. If that downstream catch is ever removed or found to
 /// have its own hole, this exclusion needs revisiting; it is not committed to here today.
+///
+/// ⚠️ THIS RECIPE IS A WIRE FORMAT, not an internal implementation detail, the moment any
+/// CAIRNB3 medium exists in the field (see the re-freeze note on
+/// `segment_commitment_recipe_is_pinned_independently` in this module's tests for exactly
+/// when that stopped being hypothetical). Changing what bytes go into `per_record` — field
+/// order, the tag values, hashing vs. raw-appending the DEK — is a FORMAT BREAK needing a new
+/// container revision, never a routine edit: two builds computing different values for
+/// identical records split a fleet's chain verification silently (principle 11).
 pub fn segment_commitment(records: &[MediumRecord]) -> String {
     let per_record: Vec<Vec<u8>> = records
         .iter()
         .map(|r| {
             let mut item = event_address(&r.signed_bytes);
             item.extend_from_slice(&r.source_seq.to_be_bytes());
-            // #524 — custody is committed to, ABSENCE INCLUDED. A one-byte tag separates
-            // "no DEK travelled" from "a DEK travelled", so stripping custody to None is
-            // as detectable as swapping it. Without the tag, an empty DEK and no DEK would
-            // hash identically and the strip would be invisible again, one level down.
+            // #524 — custody is committed to, ABSENCE INCLUDED. The one-byte tag makes the
+            // None/Some distinction explicit rather than incidental (see the doc comment
+            // above for why it is belt-and-braces here but would be load-bearing for a
+            // variant that appended raw DEK bytes instead of a digest).
             match &r.dek_wrapped {
-                None => item.push(0u8),
+                None => item.push(9u8),
                 Some(dek) => {
                     item.push(1u8);
                     item.extend_from_slice(&event_address(dek));
@@ -585,7 +599,7 @@ mod tests {
                     let mut v = cairn_event::event_address(&r.signed_bytes);
                     v.extend_from_slice(&r.source_seq.to_be_bytes());
                     match &r.dek_wrapped {
-                        None => v.push(0u8),
+                        None => v.push(9u8),
                         Some(dek) => {
                             v.push(1u8);
                             v.extend_from_slice(&cairn_event::event_address(dek));
@@ -603,6 +617,16 @@ mod tests {
             segment_commitment(&one),
             by_hand(&one),
             "N=1 recipe drifted"
+        );
+        // A LITERAL golden value, not merely a match against `by_hand`: a mirrored edit to
+        // both `segment_commitment` and `by_hand` in the same commit (e.g. moving the tag
+        // after the digest, or flipping which of 0/1 means "present") would keep the
+        // assertion above green while silently changing the wire value every other build
+        // verifies against. Only a hard-coded expectation catches that class of change.
+        assert_eq!(
+            segment_commitment(&one),
+            "12207f7083a5a9cfa69b67fbab46e17e66c02238d065180bd9552a299753ac0cb691",
+            "N=1 golden commitment changed — this is a FORMAT BREAK, see segment_commitment's docstring"
         );
 
         let two = vec![
@@ -646,6 +670,15 @@ mod tests {
             segment_commitment(&no_dek),
             "the DEK-presence tag must change the commitment, or absence is invisible again"
         );
+        // The no-DEK branch gets its own golden literal too, for the same reason as `one`'s
+        // above: a mirrored 0/1 flip changes BOTH `one` and `no_dek` in a way that could
+        // still satisfy every relative `assert_ne!`/`assert_eq!` above, but cannot satisfy
+        // two independently-pinned literals at once.
+        assert_eq!(
+            segment_commitment(&no_dek),
+            "1220ef08ea1ea159b8b07b77ffee93f547d0814bd5f6bb1b06b63a761e6285a21df2",
+            "N=1 no-DEK golden commitment changed — this is a FORMAT BREAK, see segment_commitment's docstring"
+        );
     }
 
     /// A runtime-derived stand-in for a wrapped DEK, distinguished only by `seed`. NEVER a
@@ -657,9 +690,11 @@ mod tests {
         std::array::from_fn(|i| seed ^ i as u8)
     }
 
-    /// A `MediumRecord` fixture that holds every field but `dek_wrapped` fixed at `n` — so
-    /// any commitment difference between two calls of this function is attributable to the
-    /// DEK alone, which is exactly what the two `#524` tests below need to isolate.
+    /// A `MediumRecord` fixture for isolating the DEK's effect on the commitment.
+    /// `signed_bytes` is always the SAME fixed bytes (`bytes(1, 40)`) regardless of `n` —
+    /// unlike `distinct_record`, which varies it — and only `source_seq` tracks `n`. Call it
+    /// with the SAME `n` and different `dek`s, as both `#524` tests below do, and any
+    /// commitment difference is attributable to `dek_wrapped` alone.
     fn record_with_dek(n: u8, dek: Option<[u8; 32]>) -> MediumRecord {
         MediumRecord {
             signed_bytes: bytes(1, 40),
@@ -691,6 +726,50 @@ mod tests {
         let a = vec![record_with_dek(1, Some(dek_bytes(7)))];
         let b = vec![record_with_dek(1, Some(dek_bytes(8)))];
         assert_ne!(segment_commitment(&a), segment_commitment(&b));
+    }
+
+    /// #524 review: `MediumRecord::dek_wrapped`'s doc says `None` (no DEK travelled) and
+    /// `Some(vec![])` (an empty DEK travelled) are DIFFERENT facts — the exact distinction
+    /// the presence tag names in its own rationale but which no test exercised. Unlike
+    /// `attestation`, where that None/Some(vec![]) distinction matters because a downstream
+    /// door treats them differently, nothing downstream distinguishes an empty DEK from no
+    /// DEK — but the commitment must still tell them apart, or a future variant that folds
+    /// the DEK in differently (see the docstring on `segment_commitment`) could silently
+    /// reintroduce the collision this tag exists to rule out.
+    #[test]
+    fn an_empty_dek_differs_from_no_dek() {
+        let none = vec![record_with_dek(1, None)];
+        let mut empty = record_with_dek(1, None);
+        empty.dek_wrapped = Some(vec![]);
+        assert_ne!(
+            segment_commitment(&none),
+            segment_commitment(&[empty]),
+            "an empty wrapped DEK must not commit identically to no DEK travelling at all"
+        );
+    }
+
+    /// #524, end-to-end: stripping a wrapped DEK out of an already-SIGNED segment must break
+    /// its attestation, not merely change the bare `segment_commitment` value in isolation —
+    /// this is the actual restore-time path #524 is about (`verify_segment_attestation` is
+    /// what `chain_report`/restore call). Same shape as
+    /// `altering_source_seq_breaks_the_attestation` above: sign a segment honestly, mutate
+    /// one record afterwards the way an attacker or corruption would, and confirm the
+    /// signature that used to verify no longer does.
+    #[test]
+    fn deleting_a_wrapped_dek_breaks_a_signed_segments_attestation() {
+        let sk = sk();
+        let mut seg = signed_segment(&sk, "abcd", Plane::Clinical, 0, "", 2);
+        assert!(
+            seg.records[0].dek_wrapped.is_some(),
+            "fixture bug: nothing to strip"
+        );
+        seg.records[0].dek_wrapped = None;
+        assert_eq!(
+            verify_segment_attestation(&seg),
+            None,
+            "stripping a wrapped DEK out of a verified segment must break its attestation, or \
+             a restored body silently becomes unopenable while the medium reports healthy (#524)"
+        );
     }
 
     /// A validly-signed event of the WRONG TYPE is not a segment attestation.
