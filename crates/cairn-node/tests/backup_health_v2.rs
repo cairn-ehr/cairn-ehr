@@ -29,6 +29,15 @@ fn a_v1_sidecar_still_reads_with_the_new_fields_absent() {
 
     let health = read_health(&path).expect("a v1 sidecar must still parse");
     assert_eq!(health.last_backup_unix, 1_700_000_000);
+    // `node_events` is ALSO new in v2 (v1's field was the differently-named `event_count`,
+    // left un-migrated on purpose — see the struct doc), so it defaults exactly like the
+    // other three new fields. Asserted explicitly: a literal-JSON test that checks three of
+    // four new-field defaults and assumes the fourth is fine on faith is not actually a test
+    // of the fourth.
+    assert_eq!(
+        health.node_events, 0,
+        "absent means zero known, never a parse failure"
+    );
     assert_eq!(
         health.clinical_events, 0,
         "absent means zero known, never a parse failure"

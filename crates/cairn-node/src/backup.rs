@@ -551,6 +551,24 @@ pub async fn backup_to(
         );
     }
 
+    // Per-plane counts recorded into health come from `plane_counts` over this SAME
+    // verified, already-re-read medium image — never re-derived by hand from `events` — so
+    // this call site can never silently disagree with `verify-backup`/`restore` about how
+    // many records a medium holds (Task 8's whole reason for `plane_counts` existing as one
+    // function). This is also what makes Task 9 structurally safe rather than merely
+    // commented: once the clinical capture pass starts appending `Plane::Clinical` segments,
+    // this line needs no edit — it already asks the medium, not a vector that only ever held
+    // one plane. Today `backup_to` still writes legacy CAIRNB2 (all-node by construction,
+    // `plane_counts` reports it that way), so `counts.clinical` is honestly `0` because
+    // nothing else is on the medium, not because the count was assumed.
+    let image = crate::medium::parse_any(&readback).with_context(|| {
+        format!(
+            "parsing the verified medium {} to count its planes",
+            medium_path.display()
+        )
+    })?;
+    let counts = plane_counts(&image);
+
     // `export_covers_seq` belongs to a DIFFERENT artifact than anything this function
     // touches — the CAIRNL1 local-state export, sealed and written later in the `backup`
     // command (see `main.rs`'s `Cmd::Backup` arm), never here. Resetting it to `None` on
@@ -567,12 +585,11 @@ pub async fn backup_to(
         last_backup_unix: now_unix,
         medium_path: medium_path.display().to_string(),
         medium_bytes: medium.len() as u64,
-        // #500 slice 2c Task 9 (not yet landed at this line's authorship): this function
-        // still reads ONLY `node_event`, so every event backed up today is federation-plane
-        // by construction. `clinical_events`/`clinical_watermark` stay at the honest
-        // "nothing captured yet" until the clinical capture pass lands — never a guess.
-        node_events: events.len() as u64,
-        clinical_events: 0,
+        node_events: counts.node as u64,
+        clinical_events: counts.clinical as u64,
+        // #500 slice 2c Task 9 (not yet landed at this line's authorship): no clinical
+        // segment has ever been written, so no verified clinical watermark exists yet —
+        // `None`, the honest absence, never a guessed `Some(0)`.
         clinical_watermark: None,
         export_covers_seq: export_coverage_after(
             previous_export_covers_seq,
