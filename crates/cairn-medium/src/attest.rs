@@ -105,7 +105,7 @@ pub fn segment_commitment(records: &[MediumRecord]) -> String {
             // above for why it is belt-and-braces here but would be load-bearing for a
             // variant that appended raw DEK bytes instead of a digest).
             match &r.dek_wrapped {
-                None => item.push(9u8),
+                None => item.push(0u8),
                 Some(dek) => {
                     item.push(1u8);
                     item.extend_from_slice(&event_address(dek));
@@ -599,7 +599,7 @@ mod tests {
                     let mut v = cairn_event::event_address(&r.signed_bytes);
                     v.extend_from_slice(&r.source_seq.to_be_bytes());
                     match &r.dek_wrapped {
-                        None => v.push(9u8),
+                        None => v.push(0u8),
                         Some(dek) => {
                             v.push(1u8);
                             v.extend_from_slice(&cairn_event::event_address(dek));
