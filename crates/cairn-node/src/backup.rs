@@ -450,6 +450,15 @@ pub enum KitVerdict {
     /// remedy directly, because unlike `ExportStale` there are no two numbers left for a
     /// caller to compose a message from — `export_seq` here is always `None`.
     ExportMissing(String),
+    /// The health sidecar's coverage figure describes a DIFFERENT medium than the one under
+    /// test (#500 slice 2c Task 12 fix round 1, Important 1) — a two-drive rotation, or any
+    /// cron pointed at a fresh path, while `backup-status.json` stays one file per signing
+    /// key. Never constructed by [`kit_verdict`] itself (which knows only two seq numbers,
+    /// not paths); the caller builds this variant directly, BEFORE calling `kit_verdict` at
+    /// all, once it has established the mismatch — see the `verify-backup` arm in
+    /// `main.rs`. Kept as a `KitVerdict` variant rather than a separate early return so every
+    /// non-`Restorable` outcome is handled by ONE match, with ONE exit-code policy.
+    CoverageUnknown(String),
 }
 
 /// PURE. Decide whether a DR kit is actually restorable, from nothing but the two seq
@@ -550,6 +559,35 @@ pub fn describe_health(now_unix: i64, health: &Option<BackupHealth>) -> String {
 pub fn read_health(path: &Path) -> Option<BackupHealth> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// Does the `medium_path` a health sidecar recorded actually name `from` — the medium
+/// `verify-backup` was asked about? (#500 slice 2c Task 12 fix round 1, Important 1.)
+///
+/// **Why this has to be checked at all.** `backup-status.json` lives beside the SIGNING
+/// KEY (`health_path_for`), one file per node; `export_covers_seq` is a claim about ONE
+/// specific export, written for whichever medium the most recent successful export
+/// targeted. A node backing up to more than one medium/drive under the same key — the
+/// ordinary two-drive rotation, or a cron job pointed at a fresh path — can have a sidecar
+/// whose coverage figure describes a DIFFERENT artifact than the one named by `--from`. A
+/// mismatch here is not "unknown" the way an absent sidecar is: it is a coverage figure
+/// that positively describes something else, and reading it against the wrong medium would
+/// let an easily-reachable rotation manufacture a false green on a kit that cannot actually
+/// open its bodies — the exact failure this whole task exists to catch, reintroduced one
+/// layer up. So the caller must refuse to reach `Restorable` on a mismatch, never merely
+/// warn (see the `verify-backup` arm in `main.rs`).
+///
+/// Canonicalizes both sides where the named file exists — a relative `--from` and an
+/// absolute recorded path can legitimately name the same medium — and falls back to a
+/// literal path comparison when canonicalization fails on either side (e.g. the recorded
+/// medium has since been moved or deleted): an honest "cannot confirm sameness by resolving
+/// the filesystem", never a panic and never a silent pass.
+pub fn health_describes_medium(recorded_medium_path: &str, from: &Path) -> bool {
+    let recorded = Path::new(recorded_medium_path);
+    match (std::fs::canonicalize(recorded), std::fs::canonicalize(from)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => recorded == from,
+    }
 }
 
 /// Atomically write the backup-health sidecar (owner-only). Atomic so a torn write can

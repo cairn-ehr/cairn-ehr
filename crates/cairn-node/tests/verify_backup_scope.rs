@@ -87,6 +87,160 @@ fn a_medium_with_clinical_events_and_no_export_is_missing_not_stale() {
 }
 
 // ---------------------------------------------------------------------------
+// Fix round 1, Minor 3: `clinical_watermark_of` supplies HALF of every `kit_verdict` call
+// and had no test of its own — the DB-gated end-to-end tests exercised it only implicitly.
+// The two `None` cases are pure (no database, no CLI); the `Some` case needs a real signed
+// CAIRNB3 medium and lives with the other DB-gated tests further down this file.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clinical_watermark_of_a_legacy_medium_is_none() {
+    // CAIRNB1/CAIRNB2 predate the clinical plane entirely — there is nothing to have a
+    // watermark over, so this must be the honest `None`, never a guessed `Some(0)`.
+    let legacy = MediumImage::Legacy(cairn_medium::Container {
+        self_marker: None,
+        events: vec![],
+    });
+    assert_eq!(backup::clinical_watermark_of(&legacy), None);
+}
+
+#[test]
+fn clinical_watermark_of_a_v3_medium_with_no_segments_is_none() {
+    let empty_v3 = MediumImage::V3(MediumV3 {
+        segments: vec![],
+        truncated_tail: false,
+        complete_bytes: 0,
+    });
+    assert_eq!(backup::clinical_watermark_of(&empty_v3), None);
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1, Important 1: a health sidecar's `medium_path` must actually name the medium
+// under test, or its coverage figure describes a DIFFERENT artifact — the two-drive
+// rotation false green the reviewer traced through by hand. These are the pure path-compare
+// tests; the CLI-level rotation scenario lives with the other DB-gated tests below.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn health_describes_medium_is_true_for_the_identical_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let medium = dir.path().join("cairn.medium");
+    std::fs::write(&medium, b"stand-in bytes").unwrap();
+    assert!(backup::health_describes_medium(
+        &medium.display().to_string(),
+        &medium
+    ));
+}
+
+#[test]
+fn health_describes_medium_canonicalizes_a_relative_path_against_an_absolute_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let medium = dir.path().join("cairn.medium");
+    std::fs::write(&medium, b"stand-in bytes").unwrap();
+    // A REAL subdirectory, so walking into it and back out via `..` is something
+    // `std::fs::canonicalize` (an actual filesystem walk) can resolve — a fictional
+    // intermediate segment would make canonicalization fail on both sides and fall back to
+    // the literal compare, proving nothing about the canonicalizing branch at all.
+    // `PathBuf`'s own `Eq` does NOT resolve `..` (that needs the filesystem), so the two
+    // paths below are genuinely different as plain values — canonicalization is the only
+    // thing that can see they name the same file.
+    let sibling_dir = dir.path().join("sibling");
+    std::fs::create_dir(&sibling_dir).unwrap();
+    let via_parent = sibling_dir.join("..").join("cairn.medium");
+    assert_ne!(
+        medium, via_parent,
+        "the two paths must differ as PLAIN values, or this test proves nothing beyond Eq"
+    );
+    assert!(backup::health_describes_medium(
+        &medium.display().to_string(),
+        &via_parent
+    ));
+}
+
+#[test]
+fn health_describes_medium_is_false_for_a_genuinely_different_medium() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("drive-a.medium");
+    let b = dir.path().join("drive-b.medium");
+    std::fs::write(&a, b"a").unwrap();
+    std::fs::write(&b, b"b").unwrap();
+    // The two-drive rotation, distilled: a sidecar recorded coverage for `a`; `--from` names
+    // `b`. Neither canonicalizes to the other, so this must be `false`.
+    assert!(!backup::health_describes_medium(
+        &a.display().to_string(),
+        &b
+    ));
+}
+
+#[test]
+fn health_describes_medium_falls_back_to_a_literal_compare_when_the_recorded_medium_is_gone() {
+    // The recorded medium no longer exists at that path (moved, deleted, or simply never
+    // existed on THIS machine) — canonicalization fails, so this can only fall back to a
+    // literal string compare. Still correctly says "different" for two distinct paths.
+    let from = std::path::Path::new("/tmp/does-not-exist/cairn.medium");
+    assert!(!backup::health_describes_medium(
+        "/tmp/also-does-not-exist/other.medium",
+        from
+    ));
+    assert!(backup::health_describes_medium(
+        "/tmp/does-not-exist/cairn.medium",
+        from
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1, Minor 2: `confirm_export_readback` (in `cairn_node::localstate`) is the
+// read-after-write's actual check. Both failure branches get a test — before this fix
+// round, NEITHER had one.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn confirm_export_readback_accepts_a_genuinely_sound_readback() {
+    let wraps = cairn_node::localstate::establish_lsk("op-pass", "REC-CODE").unwrap();
+    let bytes = cairn_node::localstate::build_export_container(
+        &wraps,
+        "op-pass",
+        &cairn_node::localstate::LocalState::empty(),
+    )
+    .unwrap();
+    assert!(cairn_node::localstate::confirm_export_readback(&bytes, &bytes, "op-pass").is_ok());
+}
+
+#[test]
+fn confirm_export_readback_refuses_a_readback_that_differs_from_what_was_written() {
+    let wraps = cairn_node::localstate::establish_lsk("op-pass", "REC-CODE").unwrap();
+    let written = cairn_node::localstate::build_export_container(
+        &wraps,
+        "op-pass",
+        &cairn_node::localstate::LocalState::empty(),
+    )
+    .unwrap();
+    let mut readback = written.clone();
+    let last = readback.len() - 1;
+    readback[last] ^= 0xFF; // a single flipped bit — a torn write or a corrupting disk
+    assert!(
+        cairn_node::localstate::confirm_export_readback(&written, &readback, "op-pass").is_err()
+    );
+}
+
+#[test]
+fn confirm_export_readback_refuses_a_container_that_does_not_unseal_under_the_given_op_pass() {
+    // Byte-identical to itself — the cheap check alone would miss this — but sealed under a
+    // DIFFERENT op-pass than the one this call is handed, so the "does it actually unseal"
+    // half must be the one that catches it (Minor 2's "stronger still" half).
+    let wraps = cairn_node::localstate::establish_lsk("op-pass", "REC-CODE").unwrap();
+    let bytes = cairn_node::localstate::build_export_container(
+        &wraps,
+        "op-pass",
+        &cairn_node::localstate::LocalState::empty(),
+    )
+    .unwrap();
+    assert!(
+        cairn_node::localstate::confirm_export_readback(&bytes, &bytes, "some-other-pass").is_err()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Fixtures for the DB-gated tests below. Deliberately the same SHAPE as
 // `backup_carries_both_planes.rs`'s `clinic()` rather than shared with it (integration-test
 // binaries in this crate cannot `use` another test binary's private helpers) — but this one
@@ -297,6 +451,13 @@ fn clinical_records(image: &MediumImage) -> Vec<&MediumRecord> {
 /// capture depend on a passphrase an unattended cron run cannot supply, which is `M > N`
 /// (house rule 7, an architecture defect). `verify-backup` is the cron HEALTH CHECK, and it
 /// is the one that refuses (see the two tests at the bottom of this file).
+///
+/// Fix round 1, Minor 1: this used to call `backup::backup_to` directly, which never had
+/// anything to do with the export ceremony at all — that lives entirely in the `Cmd::Backup`
+/// CLI arm, one layer up. A test with this name calling the lower layer would stay green
+/// even if a FUTURE change made only the arm start bailing on a skipped export (`backup_to`
+/// itself would be untouched). Pinned at the CLI now, via the real binary, so the property
+/// this test's name promises is the property it actually exercises.
 #[tokio::test]
 async fn backup_still_exits_zero_when_the_export_is_skipped() {
     let Some(cl) = establish_clinic().await else {
@@ -305,12 +466,23 @@ async fn backup_still_exits_zero_when_the_export_is_skipped() {
     };
     author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
 
-    std::env::remove_var("CAIRN_KEY_PASSPHRASE");
-    let health_path = backup::health_path_for(&cl.key());
-    let report = backup::backup_to(&cl.db, &cl.medium(), &health_path, 1_700_000_000, None).await;
+    // No `.lsk` escrow ever established — no `--passphrase` needed to reach it, and
+    // `resolve_passphrase` is never called on this path (`EscrowRead::Absent` short-circuits
+    // before any passphrase resolution), so nothing here depends on env state at all (fix
+    // round 1 Nit: the old version's `std::env::remove_var("CAIRN_KEY_PASSPHRASE")` mutated
+    // process-global state for no reason — `backup_to` never reads that variable — and could
+    // race a sibling test in the same binary).
+    let out = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(cl.medium())
+        .output()
+        .unwrap();
     assert!(
-        report.is_ok(),
-        "a passphrase-less capture must still write the medium"
+        out.status.success(),
+        "the medium capture must still succeed even with no local-state escrow at all; \
+         stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let image = parse_any(&std::fs::read(cl.medium()).unwrap()).unwrap();
     assert!(
@@ -414,6 +586,119 @@ async fn verify_backup_is_restorable_then_refuses_once_the_export_falls_behind()
     assert!(
         stderr2.contains("STALE"),
         "the refusal must name the STALE case, not merely fail: {stderr2}"
+    );
+}
+
+/// The `Some` case the two pure `clinical_watermark_of_*` tests above cannot reach: a real,
+/// signed CAIRNB3 medium carrying a genuine clinical segment. Cross-checked against the
+/// database's own `MAX(seq)` — never against a hardcoded number — so this cannot pass by
+/// silently agreeing with itself for the wrong reason.
+#[tokio::test]
+async fn clinical_watermark_of_a_real_medium_matches_the_true_max_seq() {
+    let Some(cl) = establish_clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    let health_path = backup::health_path_for(&cl.key());
+    backup::backup_to(
+        &cl.db,
+        &cl.medium(),
+        &health_path,
+        1_700_000_000,
+        Some((&cl.sk, &cl.kid)),
+    )
+    .await
+    .expect("the backup ceremony succeeds");
+
+    let true_max: i64 = cl
+        .db
+        .query_one("SELECT MAX(seq) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let image = parse_any(&std::fs::read(cl.medium()).unwrap()).unwrap();
+    assert_eq!(backup::clinical_watermark_of(&image), Some(true_max));
+}
+
+/// Fix round 1, Important 1, end to end: the reviewer's two-drive rotation. One signing key,
+/// two media. Drive B's own export attempt fails (wrong passphrase, the unattended-cron
+/// shape) while it holds a real clinical event with genuinely NO coverage at all. Drive A is
+/// then backed up successfully, which — because `backup-status.json` is ONE file per key —
+/// overwrites the shared sidecar's `medium_path` to A and its `export_covers_seq` to a
+/// number that has NOTHING to do with B.
+///
+/// WITHOUT the Important-1 guard, `verify-backup --from B` would compare B's true watermark
+/// (seq 1, one event) against A's coverage figure (also seq 1, coincidentally "enough") and
+/// print `Restorable` — on a medium whose own export was never written at all. That is
+/// exactly "the exact kit that cannot open its bodies" reading GREEN.
+#[tokio::test]
+async fn verify_backup_refuses_when_the_sidecar_describes_a_different_medium() {
+    let Some(cl) = establish_clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    write_existing_escrow(&cl.key(), "op-pass", "REC-CODE");
+
+    let drive_a = cl.dir.path().join("drive-a.medium");
+    let drive_b = cl.dir.path().join("drive-b.medium");
+
+    // Drive B: a WRONG passphrase, so the medium capture succeeds but the export never
+    // lands — B's real, standing coverage is `ExportMissing`, not merely stale.
+    let out_b = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(&drive_b)
+        .args(["--passphrase", "wrong-op"])
+        .output()
+        .unwrap();
+    assert!(
+        out_b.status.success(),
+        "the medium capture must still succeed; stderr:\n{}",
+        String::from_utf8_lossy(&out_b.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out_b.stderr).contains("local-state export skipped"),
+        "drive B's export must have failed to seal: stderr:\n{}",
+        String::from_utf8_lossy(&out_b.stderr)
+    );
+
+    // Drive A: the RIGHT passphrase. This is a completely SEPARATE, fresh medium — its own
+    // first capture sweeps the same one clinical event from the beginning — and its
+    // successful export overwrites the ONE shared sidecar's `medium_path` to A.
+    let out_a = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(&drive_a)
+        .args(["--passphrase", "op-pass"])
+        .output()
+        .unwrap();
+    assert!(
+        out_a.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out_a.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out_a.stdout).contains("local-state exported"));
+
+    // The sidecar now names A, not B. `verify-backup --from B` must refuse outright rather
+    // than read A's coverage figure as if it said anything about B.
+    let v = cl
+        .cli()
+        .args(["verify-backup", "--from"])
+        .arg(&drive_b)
+        .output()
+        .unwrap();
+    assert!(
+        !v.status.success(),
+        "a medium whose sidecar describes a DIFFERENT artifact must refuse, not read as \
+         restorable"
+    );
+    let stderr = String::from_utf8_lossy(&v.stderr);
+    assert!(
+        stderr.contains("COVERAGE-UNKNOWN"),
+        "the refusal must name the mismatch, distinct from STALE/INCOMPLETE: {stderr}"
     );
 }
 

@@ -1210,6 +1210,27 @@ async fn seal_and_write_local_state_export(
         }
     };
 
+    // Snapshot the CURRENT clinical high-water mark BEFORE `read_local_state` runs, never
+    // after (#500 slice 2c Task 12 fix round 1, Important 2). `read_local_state` below reads
+    // `event_dek`/`actor_event`/etc — NOT `event_log` itself — to build the bundle this
+    // export seals, so it has no seq of its own to report; the seq recorded here is a claim
+    // made ABOUT that read, and the claim must never outrun it. If a clinical event committed
+    // in the window between the two queries, querying seq AFTER would fold that event's seq
+    // into `covers_seq` even though its `event_dek` row landed too late for THIS export to
+    // carry — an OVER-claim, and the direction that manufactures a false green. Querying
+    // FIRST can only UNDER-claim (a seq that lands moments later is simply not counted yet),
+    // and an under-claim can only ever produce a false STALE next time, never a false green —
+    // the direction this whole project errs in on purpose (principle 4). Do not "tidy" this
+    // back to after the seal: that reopens the false-green window. `COALESCE(…, 0)` on a
+    // clinical-event-free node records harmless coverage of "nothing yet" — `kit_verdict`
+    // never even inspects `export_seq` when the medium itself reports no clinical events
+    // (see its doc), so this can never manufacture a false claim there either.
+    let row = db
+        .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
+        .await
+        .context("querying the current clinical watermark for export coverage")?;
+    let covers_seq: i64 = row.get(0);
+
     let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_ref()).await?;
     let container = cairn_node::localstate::build_export_container(wraps, &op, &bundle)?;
     let export_path = cairn_node::localstate::localstate_path_for(medium);
@@ -1221,39 +1242,26 @@ async fn seal_and_write_local_state_export(
     // that lied about `atomic_write`'s rename, or a disk that silently corrupts on read-back
     // would otherwise sail through as "exported" and only be discovered at the disaster, when
     // `restore` tries to parse this exact file. This is the ONE artifact carrying this node's
-    // custody key off the machine, so it gets the same treatment the medium already has.
+    // custody key off the machine, so it gets the same treatment the medium already has —
+    // and stronger: `confirm_export_readback` (fix round 1, Minor 2) does not stop at
+    // "parses" (a bit flipped inside `payload_ct` still parses as valid CBOR and would have
+    // sailed through the original check) — it also insists the readback is byte-identical to
+    // what was written AND actually unseals under this SAME op-pass, which framing alone
+    // cannot prove.
     let readback = std::fs::read(&export_path).with_context(|| {
         format!(
             "reading back the just-written export {} to verify it",
             export_path.display()
         )
     })?;
-    let sealed = cairn_node::localstate::parse_container(&readback).with_context(|| {
-        format!(
-            "the export just written to {} does not parse back as a CAIRNL1 container",
-            export_path.display()
-        )
-    })?;
-    anyhow::ensure!(
-        !sealed.payload_ct().is_empty(),
-        "the export just written to {} parses but carries an EMPTY sealed payload — \
-         refusing to count it as a real export",
-        export_path.display()
-    );
-
-    // `export_covers_seq` may only advance NOW — after the write is confirmed durable and
-    // readable — never optimistically at the moment `atomic_write` returned (the whole point
-    // of the check above). The figure is the CURRENT `max(event_log.seq)`, queried live:
-    // this function never reads the clinical plane itself (`backup_to` does, for the
-    // medium), so "how far does this export's custody material reach" has no other honest
-    // source. `COALESCE(…, 0)` on a clinical-event-free node records harmless coverage of
-    // "nothing yet" — `kit_verdict` never even inspects `export_seq` when the medium itself
-    // reports no clinical events (see its doc), so this can never manufacture a false claim.
-    let row = db
-        .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
-        .await
-        .context("querying the current clinical watermark for export coverage")?;
-    let covers_seq: i64 = row.get(0);
+    cairn_node::localstate::confirm_export_readback(&container, &readback, &op).with_context(
+        || {
+            format!(
+                "the export just written to {} failed its read-after-write check",
+                export_path.display()
+            )
+        },
+    )?;
 
     // `backup_to` already wrote a fresh `BackupHealth` for THIS run (with `export_covers_seq`
     // preserved via `ExportOutcome::Skipped`, since from its own point of view no export ran
@@ -2719,11 +2727,69 @@ async fn main() -> anyhow::Result<()> {
             // signing key. That is the one place this command reads `cli.key` — only its
             // PATH, as a naming anchor, never any cryptographic material — so the doc above
             // ("no key") still holds in the security sense it was making.
+            let health_path = cairn_node::backup::health_path_for(&cli.key);
+            let health = cairn_node::backup::read_health(&health_path);
+            // #500 slice 2c Task 12: framing alone never said whether a present, readable
+            // export actually COVERS what is on the medium TODAY. A well-framed export
+            // sealed weeks ago beside a medium backed up every night since prints "sealed
+            // export present" forever under the check above — that is the realistic
+            // disaster this task exists to make visible (tonight's medium beside a
+            // weeks-old export), so it is now checked explicitly, in addition to framing,
+            // never instead of it.
+            //
+            // `medium_seq` is read straight off the bytes `--from` already named above (the
+            // medium's own newest clinical seq) — never off a sidecar that could describe a
+            // DIFFERENT backup run than the file actually under test. `export_seq` has no
+            // other honest source: the export is SEALED, so what it covers can only be read
+            // from the plaintext `backup-status.json` `backup` itself writes beside the
+            // signing key. That is the one place this command reads `cli.key` — only its
+            // PATH, as a naming anchor, never any cryptographic material — so the doc above
+            // ("no key") still holds in the security sense it was making.
+            //
+            // ONE verdict, ONE match, below — every non-`Restorable` outcome (including the
+            // path-mismatch case fix round 1 adds next) shares the same exit-code policy,
+            // rather than an early `bail!` for one case and a `match` for the rest.
             let medium_seq = cairn_node::backup::clinical_watermark_of(&image);
-            let export_seq =
-                cairn_node::backup::read_health(&cairn_node::backup::health_path_for(&cli.key))
-                    .and_then(|h| h.export_covers_seq);
-            match cairn_node::backup::kit_verdict(medium_seq, export_seq) {
+            let verdict = match &health {
+                // #500 slice 2c Task 12 fix round 1, Important 1. `backup-status.json` is
+                // NODE-GLOBAL (one file beside the signing key), but `export_covers_seq` is
+                // a claim about ONE specific export — the most recent successful one, for
+                // whichever medium THAT run targeted. A two-drive rotation (or any cron
+                // pointed at a fresh path) can leave a sidecar whose coverage figure
+                // describes a DIFFERENT medium than the one `--from` names. That is not
+                // "unknown" the way an absent sidecar is — it POSITIVELY describes something
+                // else — so `kit_verdict` (which knows only two seq numbers, never paths)
+                // must not even be consulted here: the caller builds `CoverageUnknown`
+                // directly, before comparing anything.
+                Some(h) if !cairn_node::backup::health_describes_medium(&h.medium_path, &from) => {
+                    cairn_node::backup::KitVerdict::CoverageUnknown(format!(
+                        "the backup health at {} describes a DIFFERENT medium ({}) than the \
+                         one named by --from ({}) — this can happen on a rotation between \
+                         multiple media/drives sharing one signing key. This command cannot \
+                         establish whether THIS kit's export is current, so it refuses \
+                         rather than risk reading a coverage figure that belongs to a \
+                         different artifact. Remedy: verify this kit on the node right after \
+                         IT most recently wrote `backup --to` this exact medium, or run \
+                         `backup --to` this medium with a passphrase now so a matching, \
+                         current export is sealed beside it.",
+                        health_path.display(),
+                        h.medium_path,
+                        from.display()
+                    ))
+                }
+                _ => cairn_node::backup::kit_verdict(
+                    medium_seq,
+                    health.and_then(|h| h.export_covers_seq),
+                ),
+            };
+            // RESIDUAL, filed as #551 rather than fixed here: even with matching paths, the
+            // coverage figure still lives in a NODE-global file rather than in the kit
+            // itself, so a medium copied to a different machine carries no self-describing
+            // coverage at all (this command then falls back to `ExportMissing`/`Restorable`
+            // on `export_seq = None`, which is honest but uninformative). Giving the kit a
+            // self-describing coverage figure — a plaintext field in the `CAIRNL1` framing,
+            // or a plaintext sibling — is a format decision for slice 2e, not this task.
+            match verdict {
                 cairn_node::backup::KitVerdict::Restorable => {}
                 // Behind, not absent: an export exists and has worked before — the fix is
                 // simply to run it again. Deliberately a DIFFERENT remedy from
@@ -2733,10 +2799,17 @@ async fn main() -> anyhow::Result<()> {
                     medium_seq,
                     export_seq,
                 } => {
+                    // Fix round 1, Minor 3: unwrapped, not `{export_seq:?}` — the debug
+                    // form printed the literal text "Some(2)" to an operator, and
+                    // `kit_verdict`'s own contract guarantees `ExportStale` never carries
+                    // `None` here (see its doc), so this is display polish, not a new case.
+                    let last_covered = export_seq
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "none (unexpected)".to_string());
                     anyhow::bail!(
                         "backup STALE: the medium holds clinical events up to seq \
                          {medium_seq}, but the local-state export beside it last covered \
-                         seq {export_seq:?} — any sealed body written since restores as \
+                         seq {last_covered} — any sealed body written since restores as \
                          ciphertext unless its medium-borne DEK opens it (ADR-0066). The \
                          escrow already works and does NOT need re-establishing. Remedy: \
                          run `backup` again with CAIRN_KEY_PASSPHRASE set (or --passphrase) \
@@ -2745,6 +2818,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 cairn_node::backup::KitVerdict::ExportMissing(why) => {
                     anyhow::bail!("backup INCOMPLETE: {why}");
+                }
+                cairn_node::backup::KitVerdict::CoverageUnknown(why) => {
+                    anyhow::bail!("backup COVERAGE-UNKNOWN: {why}");
                 }
             }
         }

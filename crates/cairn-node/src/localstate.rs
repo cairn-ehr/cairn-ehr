@@ -753,6 +753,47 @@ pub fn parse_container(bytes: &[u8]) -> Result<SealedLocalState, LocalStateError
     ciborium::from_reader(body).map_err(|e| LocalStateError::Decode(e.to_string()))
 }
 
+/// Confirm a just-written `CAIRNL1` export reads back SOUND, not merely well-framed (#500
+/// slice 2c Task 12 fix round 1, Minor 2). `written` is the buffer the caller just handed
+/// `fsio::atomic_write`; `readback` is what a fresh `std::fs::read` of that same path
+/// returned a moment later; `op_pass` is the SAME operator passphrase that just sealed it.
+///
+/// Two checks, cheapest first:
+/// 1. **Byte-identical.** A torn write, a filesystem that lied about `atomic_write`'s
+///    rename, or a disk that corrupts on read-back all show up here for free — no crypto
+///    needed, and this alone catches every corruption a `diff` would catch.
+/// 2. **Actually unseals.** `parse_container` succeeding only proves the bytes are
+///    well-formed CBOR; a single bit flipped inside `payload_ct` still decodes as a valid
+///    (if numerically different) `SealedLocalState` and would sail through a framing-only
+///    check, failing only much later, at restore, when the operator can least afford it.
+///    Unsealing under the op-pass that sealed it moments ago is a real exercise of the
+///    exact operation `restore`/`status` will perform, so it catches the class check 1
+///    cannot: a container whose `written` and `readback` bytes DO match, but whose
+///    ciphertext was never actually recoverable in the first place (e.g. a caller error
+///    upstream that sealed under the wrong secret).
+///
+/// Returns the parsed container on success so the caller need not re-parse.
+pub fn confirm_export_readback(
+    written: &[u8],
+    readback: &[u8],
+    op_pass: &str,
+) -> Result<SealedLocalState, LocalStateError> {
+    if readback != written {
+        return Err(LocalStateError::Decode(
+            "the export read back from disk is not byte-identical to what was written".into(),
+        ));
+    }
+    let sealed = parse_container(readback)?;
+    if unseal_local_state_op(&sealed, op_pass).is_none() {
+        return Err(LocalStateError::Seal(
+            "the export parses but does not unseal under the SAME op-pass that just sealed \
+             it — its ciphertext is corrupt or was sealed under the wrong secret"
+                .into(),
+        ));
+    }
+    Ok(sealed)
+}
+
 /// Seal a bundle for export AND frame it as the on-disk `CAIRNL1` container, in one fallible
 /// step. Combining the seal and the framing lets the `backup` caller treat the whole optional
 /// export as a SINGLE degrade-on-error operation (warn + skip on failure, never abort backup).
