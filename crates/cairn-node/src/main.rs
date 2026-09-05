@@ -2442,13 +2442,24 @@ async fn main() -> anyhow::Result<()> {
         Cmd::VerifyBackup { from } => {
             // Offline, no DB, no key: read the medium and check every signature. A
             // tampered/bit-rotted event fails the SAME check that catches a hostile peer.
+            //
+            // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
+            // `backup` starts writing CAIRNB3, this command must keep reading it rather than
+            // refuse a perfectly good medium as "not a backup medium" — the exact regression
+            // this task exists to prevent. Verification stays scoped to the NODE (federation)
+            // plane, deliberately: that is exactly what `restore` applies today, so this
+            // command's "OK" can never claim more than a restore could actually recover.
+            // Verifying the clinical plane is slice 2d's job; see `node_plane_events`'s doc.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
-            let report = cairn_node::backup::verify_medium_bytes(&bytes)?;
+            let image = cairn_node::medium::parse_any(&bytes)?;
+            let events = cairn_node::backup::node_plane_events(&image)?;
+            let report = cairn_node::backup::verify_events(&events);
             if !report.all_intact() {
                 // Non-zero exit (bail) so a cron/health check detects a bad backup.
                 anyhow::bail!(
-                    "backup FAILED self-verification: {}/{} event(s) intact, first bad at index {:?}",
+                    "backup FAILED self-verification: {}/{} federation-plane event(s) \
+                     intact, first bad at index {:?}",
                     report.intact,
                     report.total,
                     report.first_bad
@@ -2467,24 +2478,31 @@ async fn main() -> anyhow::Result<()> {
             // questions, and only the second belongs to the health check.
             if report.total == 0 {
                 anyhow::bail!(
-                    "backup EMPTY: {} carries zero events. It is internally consistent — which \
-                     is why the integrity check passes — and it would restore nothing at all. \
-                     A medium written from a database with no events is not a backup (#502 \
-                     item 2); if this node really is new, there is nothing to back up yet.",
+                    "backup EMPTY: {} carries zero federation-plane events. It is internally \
+                     consistent — which is why the integrity check passes — and it would \
+                     restore nothing at all. A medium written from a database with no \
+                     federation events is not a backup (#502 item 2); if this node really is \
+                     new, there is nothing to back up yet.",
                     from.display()
                 );
             }
             // "events verified" is now stated as exactly that, not as "backup OK" — because
             // the events are only half of what a restore needs since ADR-0066, and the older
             // wording was an affirmative all-clear over a medium whose custody key may never
-            // have left the machine (review finding I5).
-            println!("events OK: {}/{} verified", report.intact, report.total);
+            // have left the machine (review finding I5). "federation-plane" is named
+            // explicitly (#500 slice 2c): on a CAIRNB3 medium this count no longer describes
+            // everything the file holds, and an unqualified "events OK" would be exactly the
+            // kind of honest-surface-over-a-dishonest-composite this programme keeps finding.
+            println!(
+                "federation-plane events OK: {}/{} verified",
+                report.intact, report.total
+            );
             let (line, fatal) = export_verdict_line(&classify_export_beside_medium(&from), &from);
             println!("{line}");
             if fatal {
                 anyhow::bail!(
-                    "backup INCOMPLETE: the events verified, but the local-state export beside \
-                     this medium is unusable — see the line above"
+                    "backup INCOMPLETE: the federation-plane events verified, but the \
+                     local-state export beside this medium is unusable — see the line above"
                 );
             }
         }
@@ -2523,9 +2541,34 @@ async fn main() -> anyhow::Result<()> {
             };
 
             // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
+            //
+            // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
+            // `backup` starts writing CAIRNB3, a `restore` still on the legacy parser would
+            // refuse an operator's only copy at the exact moment they need it. Only the
+            // NODE (federation) plane is carried forward — restoring the clinical plane is
+            // slice 2d's job (`node_plane_events`'s doc has the full reasoning).
+            //
+            // `resolve_dead_node`/`apply_medium` below both take a `Container` — CAIRNB2's
+            // shape (a self-marker plus an event list). A CAIRNB3 medium has no
+            // container-level marker at all (that concept is CAIRNB2-only and frozen; see
+            // `cairn_medium`'s crate docs) — its analogue is the per-SEGMENT attestation
+            // (`chain::self_id_from_chain`), which restore does not consult in this slice.
+            // So a CAIRNB3 medium is handed to `resolve_dead_node` exactly as a marker-less
+            // LEGACY medium already is: self comes from an explicit `--superseded-node`, or
+            // a sole enroll (see `Provenance::NoMarker`, below). A CAIRNB2/CAIRNB1 medium's
+            // marker and events are carried over completely unchanged.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
-            let container = cairn_node::medium::parse_container(&bytes)?;
+            let image = cairn_node::medium::parse_any(&bytes)?;
+            let events = cairn_node::backup::node_plane_events(&image)?;
+            let self_marker = match &image {
+                cairn_node::medium::MediumImage::Legacy(c) => c.self_marker.clone(),
+                cairn_node::medium::MediumImage::V3(_) => None,
+            };
+            let container = cairn_node::medium::Container {
+                self_marker,
+                events,
+            };
             let report = cairn_node::backup::verify_events(&container.events);
             if !report.all_intact() {
                 anyhow::bail!(
@@ -2560,9 +2603,11 @@ async fn main() -> anyhow::Result<()> {
                     "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident). Confirm \
                      the restored node's name/address printed below match THIS node before relying on it."),
                 Provenance::NoMarker => eprintln!(
-                    "WARNING: this medium carries NO self-marker (legacy/pre-enrollment backup). \
-                     Self identity was taken from --superseded-node / a sole enroll; confirm the \
-                     name/address below match THIS node."),
+                    "WARNING: this medium carries NO self-marker: either a legacy/pre-enrollment \
+                     CAIRNB2 backup, or a CAIRNB3 medium (which has no container-level marker at \
+                     all — restore does not yet consult its per-segment self-identification, \
+                     #500). Self identity was taken from --superseded-node / a sole enroll; \
+                     confirm the name/address below match THIS node."),
             }
             let (name, address) =
                 cairn_node::restore::old_genesis_meta(&container.events, &dead.node_id_hex)
@@ -2721,6 +2766,26 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!("restored {applied} event(s) from {}", from.display());
+            // Honesty about scope (#500 slice 2c): a CAIRNB3 medium can carry clinical
+            // records that `restore` deliberately did not touch (`node_plane_events`'s
+            // doc). Without this, "restored N event(s)" reads as "everything the medium
+            // held", which is exactly the kind of true-but-incomplete line this whole
+            // programme keeps finding — say what was left behind, not just what was moved.
+            if let cairn_node::medium::MediumImage::V3(m) = &image {
+                let clinical_records: usize = m
+                    .segments
+                    .iter()
+                    .filter(|s| s.plane == cairn_node::medium::Plane::Clinical)
+                    .map(|s| s.records.len())
+                    .sum();
+                if clinical_records > 0 {
+                    println!(
+                        "note: this CAIRNB3 medium also carries {clinical_records} clinical \
+                         event(s) that were NOT restored — restoring the clinical plane is \
+                         not implemented yet (#500)"
+                    );
+                }
+            }
             // Always echo the adopted identity (name/address) so any self-mis-identification is
             // visible to the operator, whatever the marker provenance — paper-parity.
             println!("restored identity '{name}' ({address})");

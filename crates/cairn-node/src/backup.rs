@@ -23,6 +23,63 @@ pub use crate::medium::{
     VerifyReport,
 };
 
+use crate::medium::{MediumImage, Plane};
+
+// ---------------------------------------------------------------------------
+// Reading a medium of EITHER revision (Erratum E2, #500 slice 2c design doc §4).
+//
+// WHY THIS EXISTS. `restore` and `verify-backup` both still read a medium through the
+// LEGACY parser (`parse_container`, which refuses CAIRNB3 outright). The moment `backup_to`
+// starts writing CAIRNB3 (the very next task in this slice), that refusal stops being a
+// safety net and becomes the defect: an operator's nightly backup would verify RED and
+// their only restore path would refuse to read it — the working half of disaster recovery,
+// broken by the slice that is fixing the broken half. This section lands FIRST so no commit
+// in this branch's history is ever unable to read a medium it can write.
+// ---------------------------------------------------------------------------
+
+/// Which events the RESTORE path actually applies, for either medium revision — the ONE
+/// place that answers that question, so `restore` and `verify-backup` (both callers) can
+/// never silently drift onto two different answers.
+///
+/// - **Legacy (CAIRNB1/CAIRNB2):** every event in the container, unchanged. A legacy medium
+///   predates the plane split entirely — every event on it IS the federation plane — so this
+///   is exactly what `parse_container` always handed back. Media already in the field are
+///   unaffected, forever.
+/// - **CAIRNB3:** only the records carried by `Plane::Node` segments, in file order. A
+///   CAIRNB3 medium carries the CLINICAL plane too (from the next task onward), but
+///   restoring it is slice 2d's job — returning it here would silently let 2c be read as
+///   having closed #500's restore half, which it has deliberately not (design doc §8).
+///
+/// **Design choice, made explicit because the alternative is tempting and wrong: every
+/// Node-plane segment is returned, never only the prefix `chain::chain_report` could
+/// verify.** A legacy medium has no chain concept at all — `parse_container` hands back
+/// every event it holds, gated only by the FLAT per-event signature check both callers run
+/// immediately after this function returns (`verify_events`, unchanged). Filtering a CAIRNB3
+/// medium down to `ChainReport::verified_through` would make a federation event's fate
+/// depend on whether some OTHER, unrelated segment earlier in the medium's single global
+/// chain happens to verify — including a CLINICAL segment, a plane this call site does not
+/// even restore. That would silently drop a federation record an operator can see plainly
+/// in the file, over a fault in content nobody here is trying to recover: the opposite
+/// failure from the one "verification is the boundary of trust" guards against elsewhere in
+/// this slice (which is a WRITER deciding what it may safely call "already captured", not a
+/// reader deciding what to surface from bytes already on disk). The per-record signature
+/// check downstream still refuses the whole restore/verify if any returned record's own
+/// signature fails, so this choice costs nothing on that front. What it does NOT catch:
+/// segment-level chain tampering that leaves every individual record signature intact (a
+/// spliced or reordered segment) — that is `cairn_medium::health::assess`'s job, and it is
+/// not wired into either call site in this slice.
+pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupError> {
+    Ok(match image {
+        MediumImage::Legacy(container) => container.events.clone(),
+        MediumImage::V3(medium) => medium
+            .segments
+            .iter()
+            .filter(|segment| segment.plane == Plane::Node)
+            .flat_map(|segment| segment.records.iter().map(|r| r.signed_bytes.clone()))
+            .collect(),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Backup health (node-local operational state — NOT a clinical event, never signed,
 // never replicated). Lives in a local sidecar JSON, not the DB: see the slice-B design
