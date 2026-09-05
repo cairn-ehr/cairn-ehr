@@ -59,7 +59,11 @@ async fn custody_view_does_not_widen_access() {
 
     // `SET ROLE`, not `SET LOCAL ROLE` — see this file's header. Proven to have actually
     // switched (rather than warned and no-opped) before anything is asserted on top of it.
-    c.execute("SET ROLE cairn_agent", &[]).await.unwrap();
+    // `batch_execute`, not `execute`, matching every sibling suite's SET ROLE idiom
+    // (`claim_authority.rs`, `floor_execute_grants.rs`, `safety_read_grants.rs`, …) — `SET`
+    // is a command with no result set, and `execute` exists for statements that report an
+    // affected-row count, which `SET` never has.
+    c.batch_execute("SET ROLE cairn_agent").await.unwrap();
     let current: String = c
         .query_one("SELECT current_user", &[])
         .await
@@ -92,7 +96,7 @@ async fn custody_view_does_not_widen_access() {
     // Leave the connection as we found it: this pool connection is dropped at the end of
     // the test either way, but a future edit that reuses `c` for something after this
     // point should not inherit a de-privileged session role silently.
-    c.execute("RESET ROLE", &[]).await.unwrap();
+    c.batch_execute("RESET ROLE").await.unwrap();
 }
 
 /// **The load-bearing test.** Stages the ONE scenario in which `security_invoker = true`
@@ -114,10 +118,13 @@ async fn custody_view_does_not_widen_access() {
 /// `cairn_agent` has no ACL on the view there either, so it is refused at the view's own
 /// door before `security_invoker` ever gets a say.
 ///
-/// The GRANT is made and revoked entirely within this test (never touching migration
-/// state), and reverted with `RESET`/`REVOKE` even on an assertion failure by running the
-/// revoke unconditionally after every assertion that could panic has already run to
-/// completion — see the trailing cleanup.
+/// The GRANT is made and undone entirely within this test (never touching migration
+/// state), and the undo is UNCONDITIONAL — it survives a panic partway through, not only
+/// the happy path. See the `Transaction` comment below for the mechanism and why a plain
+/// `if`/cleanup-at-the-end (this test's first cut, caught in review) does not have that
+/// property: two of the assertions below can panic while sitting BEFORE such a manual
+/// cleanup line, which would then never run, leaving the staged grant permanently in the
+/// shared serialized test database for every later run to inherit.
 #[tokio::test]
 async fn security_invoker_stops_a_widened_grant_from_leaking_custody() {
     let Some(base) = cs() else {
@@ -125,19 +132,41 @@ async fn security_invoker_stops_a_widened_grant_from_leaking_custody() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let c = db::connect_and_load_schema(&base).await.unwrap();
+    // `mut`: only `Client::transaction()` needs it, for the borrow the returned
+    // `Transaction<'_>` holds.
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // WHY A TRANSACTION, AND WHY THAT MAKES CLEANUP UNCONDITIONAL. Everything staged below
+    // (the widened GRANT, the `SET ROLE`) happens inside one open transaction, and a
+    // `tokio_postgres::Transaction` rolls itself back on `Drop` if it was never explicitly
+    // committed or rolled back — that `Drop` impl sends `ROLLBACK` synchronously (no
+    // `.await`), so it still runs while a PANIC is unwinding this function, not only when
+    // control reaches the end of it normally. That is the exact gap a manual
+    // `REVOKE`/`RESET ROLE` pair at the bottom of the function has: an `assert_eq!` above
+    // it that panics skips every line after it, manual cleanup included, but it cannot
+    // skip a value's destructor. And a plain `SET ROLE` issued INSIDE a transaction is
+    // itself transactional — confirmed by hand in psql while writing this fix
+    // (`BEGIN; SET ROLE cairn_agent; ROLLBACK;` restores the original session role) — so
+    // one rollback undoes BOTH the staged grant and the role switch, with no separate
+    // statements for either.
+    let txn = c.transaction().await.expect(
+        "begin the transaction that stages, and will unconditionally undo, the widened grant",
+    );
 
     // THE STAGED MISTAKE: grant cairn_agent SELECT on the VIEW only — never on the base
     // `event_dek` table, which stays exactly as db/037 left it (revoked). This is the
     // "future reviewer widens the convenience view's grant" scenario the db/051 header
     // warns about, reproduced deliberately so the guard against it can be observed.
-    c.execute("GRANT SELECT ON event_custody_surviving TO cairn_agent", &[])
+    txn.batch_execute("GRANT SELECT ON event_custody_surviving TO cairn_agent")
         .await
         .expect("staging the widened grant");
 
     // Anti-vacuity: the staged grant really landed, so a refusal below is `security_invoker`
-    // doing its job, not an ACL that was never actually widened.
-    let granted: i64 = c
+    // doing its job, not an ACL that was never actually widened. This assertion CAN panic —
+    // it is exactly the kind the review finding named — and it sits before any cleanup
+    // line, which is why the cleanup cannot be a line of code at all; it has to be a
+    // destructor, per the comment above.
+    let granted: i64 = txn
         .query_one(
             "SELECT count(*) FROM information_schema.role_table_grants \
              WHERE table_name = 'event_custody_surviving' AND grantee = 'cairn_agent' \
@@ -152,8 +181,8 @@ async fn security_invoker_stops_a_widened_grant_from_leaking_custody() {
         "the staged widening must really be in place, or the refusal below proves nothing"
     );
 
-    c.execute("SET ROLE cairn_agent", &[]).await.unwrap();
-    let current: String = c
+    txn.batch_execute("SET ROLE cairn_agent").await.unwrap();
+    let current: String = txn
         .query_one("SELECT current_user", &[])
         .await
         .unwrap()
@@ -166,21 +195,20 @@ async fn security_invoker_stops_a_widened_grant_from_leaking_custody() {
     // cairn_agent now DOES have SELECT on the view itself — so if it can still read a row,
     // that is `security_invoker` succeeding at re-checking `event_dek`'s own (revoked)
     // grant, not a second door slamming shut for an unrelated reason.
-    let denied = c
+    let denied = txn
         .query("SELECT count(*) FROM event_custody_surviving", &[])
         .await;
 
-    // Clean up BEFORE asserting: revoke the staged grant and drop back to the connecting
-    // role regardless of whether the assertion below is about to panic, so a failing run
-    // never leaves the widened grant sitting in the shared test database for the next
-    // suite to inherit.
-    c.execute("RESET ROLE", &[]).await.unwrap();
-    c.execute(
-        "REVOKE SELECT ON event_custody_surviving FROM cairn_agent",
-        &[],
-    )
-    .await
-    .expect("cleaning up the staged grant");
+    // The happy-path cleanup: an EXPLICIT, AWAITED rollback, so a failure to clean up is
+    // itself loud (via `.expect`) rather than silently leaving the staged grant behind.
+    // This line is NOT what makes cleanup unconditional — every assertion above it could
+    // already have panicked and skipped straight past it. It exists only to confirm the
+    // rollback succeeds on the ordinary path; the `Transaction`'s `Drop` impl (documented
+    // above, at the `.transaction()` call) is what covers every path that never reaches
+    // this line at all.
+    txn.rollback()
+        .await
+        .expect("rolling back the staged grant and role switch");
 
     assert!(
         denied.is_err(),
