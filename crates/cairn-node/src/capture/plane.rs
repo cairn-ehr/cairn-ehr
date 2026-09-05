@@ -21,7 +21,8 @@ use tokio_postgres::Client;
 use cairn_event::SigningKey;
 use cairn_medium::{
     build_segment_attestation, chain_report, chain_tail, parse_any, segment_commitment, seq_gaps,
-    verify_and_append_segment, watermark, MediumImage, MediumRecord, MediumV3, Plane, Segment,
+    verify_and_append_segment, watermark, ChainReport, MediumImage, MediumRecord, MediumV3, Plane,
+    Segment,
 };
 
 use super::{read_clinical_page, read_node_page, to_medium_record, ClinicalRow};
@@ -48,19 +49,68 @@ pub struct PlaneCapture {
     pub watermark: Option<i64>,
     /// Holes BELOW the watermark that this capture could not fill, as `(after, before)`
     /// exclusive pairs — `(3, 7)` meaning seqs 4, 5 and 6 are absent between the 3 and the
-    /// 7 the medium holds. Normally empty.
+    /// 7 the medium holds.
     ///
-    /// WHY THIS IS REPORTED AND NOT SWALLOWED. A gap is either transient (a seq committed
-    /// after the capture read past it — see [`capture_plane`]'s backfill) or permanent (an
-    /// identity value burned by a rolled-back transaction, which is never issued again).
-    /// The backfill closes every transient one on the next run, so a gap that PERSISTS is a
-    /// standing hole in the backup. Leaving that invisible while `watermark` says
-    /// `Some(N)` would rebuild, one layer up, exactly the composite untruth #500 is about:
-    /// every surface honest, the assembled picture false. The caller decides what to do
-    /// with it (Cairn ships mechanism, not policy — principle 9); this type's job is to
-    /// make it impossible to read the watermark without also being handed this.
+    /// **NOT normally empty, and DO NOT BUILD AN ALARM ON IT AS IT STANDS (#549).** On a
+    /// federating node it is routinely non-empty and grows for the life of the medium, and
+    /// **most entries are not lost events**. Both `event_log` INSERT doors (`db/005`'s
+    /// `submit_event`, `db/020`'s `apply_remote_event`) end in `ON CONFLICT (event_id) DO
+    /// NOTHING`, and PostgreSQL consumes the IDENTITY value BEFORE conflict arbitration — so
+    /// every duplicate that set-union sync re-delivers burns a seq, and each contiguous burn
+    /// run becomes a permanent hole here. An alarm on this list would fire forever on every
+    /// federating node and mask the one entry that is a genuinely missing clinical event.
+    ///
+    /// WHY IT IS REPORTED AND NOT SWALLOWED ANYWAY. A hole that is NOT a burned value is a
+    /// clinical event absent from the backup, and leaving that invisible while `watermark`
+    /// says `Some(N)` would rebuild, one layer up, exactly the composite untruth #500 is
+    /// about: every surface honest, the assembled picture false. Cairn ships mechanism, not
+    /// policy (principle 9) — so the honest raw fact is reported, and telling the two kinds
+    /// apart is [`PlaneCapture::probed_empty`]'s job plus the persistence #549 asks for.
     pub unfilled_gaps: Vec<(i64, i64)>,
+    /// Ranges this capture ASKED the database for and the database could not supply, as the
+    /// same `(after, before)` exclusive pairs. **Permanently absent, not merely absent now.**
+    ///
+    /// That is the whole point, and it rests on one property: a PostgreSQL IDENTITY value is
+    /// never re-issued. So a range probed once and found empty can never be filled by any
+    /// future capture — unlike an unprobed gap, which may simply be a seq that had not
+    /// committed yet when the last capture read past it.
+    ///
+    /// This is the durable evidence #549 needs: persisted by the caller (the backup-health
+    /// sidecar is the natural home) and subtracted from the probe set on the next run, it
+    /// converts the burned-seq population from a cost every capture pays into a fact
+    /// remembered once — and it is the difference between "N ranges are missing" and
+    /// "N clinical events are missing", which is the only one of those a human should see.
+    ///
+    /// **Task 7 does NOT persist it.** Producing it is this function's job; remembering it is
+    /// the caller's.
+    pub probed_empty: Vec<(i64, i64)>,
 }
+
+/// How many INTERIOR gaps one capture will probe, at most.
+///
+/// A bound is necessary, not decorative: the burned-seq population (see
+/// [`PlaneCapture::unfilled_gaps`] and #549) grows monotonically for the life of a
+/// federating node, so an unbounded gap scan would make every capture slower than the last —
+/// a backup that degrades with age is a backup that eventually stops being run.
+///
+/// **Why 64.** The number of genuinely TRANSIENT gaps one capture can observe is bounded by
+/// the write transactions in flight at the instant it reads the log — single digits on a
+/// clinic node, and each closes on the next run. 64 leaves roughly an order of magnitude of
+/// headroom over that while capping the burned-seq tax at 64 local queries, which is small
+/// beside the `total_rows / page_events` queries the tail pass already costs.
+///
+/// **Why NEWEST-first, not oldest.** A transient gap is always at the tail (it is a seq that
+/// had not committed yet), so newest-first probes it on the very next capture. And a gap only
+/// ages out of the newest-64 window once 64 NEWER gaps appear — by which time it has been
+/// probed at least once, and a probed-and-empty gap is permanently empty (see
+/// [`PlaneCapture::probed_empty`]). So nothing that could still be filled ages out unprobed
+/// unless more than 64 new gaps appear between two captures. Removing even that residual is
+/// exactly what #549's persistence does: with known-burned gaps remembered, the budget is
+/// spent only on gaps whose status is genuinely unknown.
+///
+/// Gaps the budget could not reach are still REPORTED in `unfilled_gaps` — bounded work,
+/// never bounded honesty.
+pub const MAX_GAP_PROBES_PER_CAPTURE: usize = 64;
 
 /// Capture everything `plane` holds above the medium's watermark, as one or more appended
 /// segments. **This is the safety-critical heart of #500 slice 2c.**
@@ -99,10 +149,19 @@ pub struct PlaneCapture {
 /// half of `append_segment`'s contract: **write the buffer and `sync_all()` it BEFORE any
 /// health record advances**, so a backup-health sidecar can never claim a medium the disk
 /// does not hold. Today's caller (`backup::backup_to`) writes the whole image atomically
-/// once, which is strictly stronger — the rename either lands whole or not at all — so no
-/// torn tail can arise from our own writer. The torn-tail resumption in property 1 defends
-/// against everything else: a different writer, a removable medium yanked mid-write, a
-/// filesystem that reordered a non-atomic append.
+/// once (`fsio::atomic_write` — `sync_all` on the temp file, then rename, then a parent-dir
+/// fsync on unix).
+///
+/// That trade is stronger in one direction and WEAKER in the other, and both halves matter:
+/// stronger against TEARS — the rename lands whole or not at all, so our own writer can
+/// never leave a torn tail — but weaker on PROGRESS, because an interrupted capture discards
+/// the whole run, where a per-page `sync_all` would have kept everything up to the last
+/// synced page. That is the wrong direction precisely for the FIRST full capture of a large
+/// log, which is the run long enough to be interrupted.
+///
+/// The torn-tail resumption in property 1 defends against everything else: a different
+/// writer, a removable medium yanked mid-write, a filesystem that reordered a non-atomic
+/// append.
 ///
 /// # Gaps below the watermark — the policy this slice owes
 ///
@@ -115,24 +174,44 @@ pub struct PlaneCapture {
 /// is #500 in miniature. `cairn_medium::watermark`'s own doc names this scenario and hands
 /// the decision to "the slice that owns capture". This is that slice.
 ///
-/// **The policy: fill from the medium's own reported holes, before extending the tail.**
-/// `cairn_medium::seq_gaps` reports every hole in the verified prefix; each is re-queried
-/// against the database and whatever the database still holds is appended. `cairn-sync`
-/// solves the same hazard with a periodic full sweep from seq 0, which is not available
-/// here — a nightly sweep would re-append the whole log and destroy property 2 — so the
-/// medium telling us precisely what it is missing is the bounded equivalent.
+/// **The policy: probe the medium's own holes and refill them, before extending the tail.**
+/// Each hole is re-queried against the database and whatever the database still holds is
+/// appended. `cairn-sync` solves the same hazard with a periodic full sweep from seq 0,
+/// which is not available here — a nightly sweep would re-append the whole log and destroy
+/// property 2 — so the medium telling us precisely what it is missing is the bounded
+/// equivalent.
 ///
-/// **Transient vs. permanent gaps are deliberately NOT distinguished**, because the fill is
-/// a QUERY, not a retry: we ask for the hole's contents and append whatever comes back. A
-/// transient gap (the late commit) yields its rows and closes. A permanent gap — an
-/// identity value burned by a rolled-back transaction, which PostgreSQL never re-issues —
-/// yields an empty page, which appends nothing (property 2 is preserved) and leaves the
-/// hole reported in [`PlaneCapture::unfilled_gaps`] rather than retried forever. There is
-/// no retry counter to get wrong and no loop to run away: each gap costs one bounded query
-/// per capture whether or not it can ever be filled, and termination comes from the cursor
-/// strictly advancing or the page being empty. Telling the two apart would require asking
-/// the database a question it cannot answer ("was this seq ever issued?"), and guessing
-/// would risk abandoning a hole that a slow transaction was about to fill.
+/// **`seq_gaps` does not see the hole at the FLOOR, so this function probes it separately.**
+/// `cairn_medium::seq_gaps` reports holes BETWEEN records the medium holds, and says so in
+/// its own doc ("says nothing about seqs BELOW the medium's lowest"); `watermark` is a `max`.
+/// So the boundary case survived: on the first capture of a fresh medium, if seq 1 is
+/// uncommitted while seq 2 is visible, the medium's floor becomes 2, **no gap is ever
+/// enumerated, and seq 1 is skipped forever** — the original failure mode, at the edge.
+/// Both planes' `seq` is `GENERATED ALWAYS AS IDENTITY` and therefore starts at 1, so
+/// `(0, floor)` is a knowable range, and it is probed on every capture whose medium has a
+/// floor above seq 1. The probe is SELF-CORRECTING and needs no assumption about where the
+/// log starts: it asks the database, and the database is the authority. If the range comes
+/// back empty the medium's floor IS the log's floor — a floor, not a hole — so it is
+/// recorded in `probed_empty` and NOT reported as an unfilled gap. On a node whose log
+/// genuinely starts at seq 1 the probe costs nothing at all, because `floor > 1` is false
+/// once that seq is captured.
+///
+/// **Transient vs. permanent gaps are not distinguished BY THE FILL**, because the fill is a
+/// QUERY, not a retry: we ask for the hole's contents and append whatever comes back. A
+/// transient gap (the late commit) yields its rows and closes; a permanent one yields an
+/// empty page, which appends nothing (property 2 is preserved) and cannot loop. There is no
+/// retry counter to get wrong: termination comes from the cursor strictly advancing or the
+/// page being empty.
+///
+/// **The distinction IS made afterwards, and it is cheap.** A PostgreSQL IDENTITY value is
+/// never re-issued, so a range probed once and found empty is PERMANENTLY absent. Those
+/// ranges are returned in [`PlaneCapture::probed_empty`] so a caller can persist them and
+/// stop re-probing (#549). That matters because permanent holes are not exceptional: every
+/// duplicate a set-union sync re-delivers burns a seq at the `ON CONFLICT … DO NOTHING`
+/// doors, so on a federating node they accumulate for the life of the medium. Hence the
+/// [`MAX_GAP_PROBES_PER_CAPTURE`] budget — the work per capture is bounded and knowable
+/// rather than growing with the medium's age, while every gap the budget could not reach is
+/// still reported.
 ///
 /// A backfilled segment carries `source_seq` values BELOW ones already on the medium. That
 /// is fine and needs no reordering: the chain is by FILE order, the watermark is a `max`,
@@ -261,37 +340,59 @@ pub async fn capture_plane(
     //    it before the tail keeps this pass reading the report we already computed, so the
     //    whole capture still parses the image exactly once on the way in.
     let entry_gaps = seq_gaps(&m, &report, plane);
-    for &(gap_after, gap_before) in &entry_gaps {
-        let mut at = gap_after;
-        loop {
-            // No lookahead here: a gap is bounded on BOTH sides, so the filter below is what
-            // ends the walk, not a "was there another page" probe.
-            let rows = read_plane_page(db, plane, at, page_events).await?;
-            // Everything the database still holds strictly inside the hole. Filtered rather
-            // than `take_while`d so the bound does not depend on the query's row order.
-            let page: Vec<ClinicalRow> = rows.into_iter().filter(|r| r.seq < gap_before).collect();
-            if page.is_empty() {
-                // Either the hole is closed or the database can never supply it. Both end the
-                // walk here, appending nothing — see the doc above for why this loop does not
-                // try to tell them apart.
-                break;
-            }
-            let highest = page
-                .iter()
-                .map(|r| r.seq)
-                .max()
-                .expect("a non-empty page has a maximum seq");
-            records_appended +=
-                append_as_segment(medium, plane, signer, self_id_hex, &mut cursor, &page)?;
-            if highest <= at {
-                anyhow::bail!(
-                    "the {plane:?} page reader returned rows at or below the backfill cursor \
-                     ({highest} <= {at}); refusing to loop"
-                );
-            }
-            at = highest;
+    let mut probed_empty: Vec<(i64, i64)> = Vec::new();
+
+    // 3a. THE FLOOR, which `seq_gaps` by construction cannot see (it reports holes BETWEEN
+    //     records present). Unbudgeted — it is one query, it is the boundary case where a
+    //     lost seq 1 would otherwise be invisible forever, and it converges: once the range
+    //     is filled or proven empty, `floor > 1` either becomes false or stays a single
+    //     constant-cost probe. See the doc's "hole at the FLOOR" paragraph.
+    if let Some(floor) = verified_floor(&m, &report, plane) {
+        if floor > 1 {
+            let (appended, residual) = fill_range(
+                db,
+                medium,
+                plane,
+                signer,
+                self_id_hex,
+                &mut cursor,
+                0,
+                floor,
+                page_events,
+            )
+            .await?;
+            records_appended += appended;
+            // A floor probe that comes back empty found a FLOOR, not a hole: the medium
+            // starts where the log starts. It is recorded as permanently-absent evidence
+            // (so #549's persistence can skip it) but must NOT be reported as an unfilled
+            // gap, or every node whose log does not begin at seq 1 would carry a permanent
+            // phantom fault.
+            probed_empty.extend(residual);
         }
     }
+
+    // 3b. The interior holes, NEWEST FIRST and BUDGETED — see `MAX_GAP_PROBES_PER_CAPTURE`
+    //     for why both. Gaps the budget does not reach are still reported below; the budget
+    //     bounds the WORK, never the honesty.
+    for &(gap_after, gap_before) in entry_gaps.iter().rev().take(MAX_GAP_PROBES_PER_CAPTURE) {
+        let (appended, residual) = fill_range(
+            db,
+            medium,
+            plane,
+            signer,
+            self_id_hex,
+            &mut cursor,
+            gap_after,
+            gap_before,
+            page_events,
+        )
+        .await?;
+        records_appended += appended;
+        probed_empty.extend(residual);
+    }
+    // Ascending, so a caller persisting or displaying these reads them in log order rather
+    // than in the newest-first order the budget happened to walk them in.
+    probed_empty.sort_unstable();
 
     // 4. Extend the tail. `unwrap_or(0)` is the same "full sweep" convention the slice-2b
     //    pull uses: both `event_log.seq` and `node_event.seq` are `GENERATED ALWAYS AS
@@ -375,7 +476,89 @@ pub async fn capture_plane(
         records_appended,
         watermark: final_watermark,
         unfilled_gaps,
+        probed_empty,
     })
+}
+
+/// The LOWEST `source_seq` this medium can be trusted to hold for `plane` — the exact mirror
+/// of `cairn_medium::watermark`'s `max`, including its `.get(..=through)?` guard against a
+/// `report` computed from a different medium.
+///
+/// WHY IT LIVES HERE. `cairn-medium` exposes the max (`watermark`) and the interior holes
+/// (`seq_gaps`) but no floor, and the floor is what the hole-at-seq-1 case needs. This is a
+/// deliberate second derivation of a `min` over the same verified prefix, kept to five lines
+/// so it is checkable at a glance. **If a `floor` lands in `cairn-medium`, this must become a
+/// caller of it** — the #522 lesson: two places deriving one invariant is how they come to
+/// disagree.
+fn verified_floor(m: &MediumV3, report: &ChainReport, plane: Plane) -> Option<i64> {
+    let through = report.verified_through?;
+    m.segments
+        .get(..=through)?
+        .iter()
+        .filter(|s| s.plane == plane)
+        .flat_map(|s| s.records.iter().map(|r| r.source_seq))
+        .min()
+}
+
+/// Capture everything the database still holds strictly inside `(after, before)`, paging.
+/// Returns how many records were appended and — when anything is still missing afterwards —
+/// the residual range, which is PERMANENTLY absent.
+///
+/// The residual claim is the load-bearing part and rests on one property: the walk only ends
+/// when a page comes back empty, so by then the database has been ASKED for everything
+/// between the cursor and `before` and has supplied nothing more. A PostgreSQL IDENTITY value
+/// is never re-issued, so what the database cannot supply now it can never supply. That is
+/// what makes [`PlaneCapture::probed_empty`] worth persisting (#549) rather than re-deriving
+/// every night.
+///
+/// Shared by the floor probe and the interior-gap pass so the two cannot drift into two
+/// different ideas of what "probed" means.
+#[allow(clippy::too_many_arguments)]
+async fn fill_range(
+    db: &Client,
+    medium: &mut Vec<u8>,
+    plane: Plane,
+    signer: Option<(&SigningKey, &str)>,
+    self_id_hex: &str,
+    cursor: &mut ChainCursor,
+    after: i64,
+    before: i64,
+    page_events: i64,
+) -> anyhow::Result<(usize, Option<(i64, i64)>)> {
+    let mut at = after;
+    let mut appended = 0usize;
+    loop {
+        // No lookahead here: the range is bounded on BOTH sides, so the filter below is what
+        // ends the walk, not a "was there another page" probe.
+        let rows = read_plane_page(db, plane, at, page_events).await?;
+        // Everything the database still holds strictly inside the range. Filtered rather than
+        // `take_while`d so the bound does not depend on the query's row order.
+        let page: Vec<ClinicalRow> = rows.into_iter().filter(|r| r.seq < before).collect();
+        if page.is_empty() {
+            // Either the range is closed or the database can never supply the rest. Both end
+            // the walk here, appending nothing — property 2 holds even mid-backfill.
+            break;
+        }
+        let highest = page
+            .iter()
+            .map(|r| r.seq)
+            .max()
+            .expect("a non-empty page has a maximum seq");
+        appended += append_as_segment(medium, plane, signer, self_id_hex, cursor, &page)?;
+        // Belt and braces: the page reader selects `seq > at`, so this cannot fire today. It
+        // is here because the failure it prevents — an unattended backup looping forever —
+        // is far worse than the refusal.
+        if highest <= at {
+            anyhow::bail!(
+                "the {plane:?} page reader returned rows at or below the backfill cursor \
+                 ({highest} <= {at}); refusing to loop"
+            );
+        }
+        at = highest;
+    }
+    // `before - at > 1` means at least one seq between them is still absent. Exactly `1`
+    // means the range closed with nothing left in it.
+    Ok((appended, (before - at > 1).then_some((at, before))))
 }
 
 /// Where the next appended segment goes, while a capture is mid-flight.

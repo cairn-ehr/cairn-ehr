@@ -30,8 +30,8 @@ use cairn_event::keys::Secret32;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use cairn_medium::{
-    chain_report, parse_any, serialize_container, serialize_v3, MediumImage, MediumRecord,
-    MediumV3, Plane, Segment,
+    chain_report, parse_any, seq_gaps, serialize_container, serialize_v3, MediumImage,
+    MediumRecord, MediumV3, Plane, Segment,
 };
 use cairn_node::capture;
 use cairn_node::{db, identity};
@@ -754,16 +754,20 @@ async fn an_unfillable_hole_appends_nothing_and_is_reported_not_retried() {
     let highest = rows.last().unwrap();
 
     // A hole entirely ABOVE everything the database holds: seqs the log will never issue.
+    // EVERY real row goes on the medium as well, so the floor probe has nothing to find and
+    // this test measures the interior hole alone.
     let phantom_seq = highest.seq + 10;
     let mut phantom = capture::to_medium_record(highest);
     phantom.source_seq = phantom_seq;
+    let mut records: Vec<MediumRecord> = rows.iter().map(capture::to_medium_record).collect();
+    records.push(phantom);
     let seg = Segment {
         plane: Plane::Clinical,
         index: 0,
         prev_commitment: String::new(),
         self_node_id_hex: cl.id.clone(),
         attestation: None,
-        records: vec![capture::to_medium_record(highest), phantom],
+        records,
     };
     let mut medium = serialize_v3(&[seg]).unwrap();
     let before = medium.clone();
@@ -793,6 +797,13 @@ async fn an_unfillable_hole_appends_nothing_and_is_reported_not_retried() {
         "but the hole is REPORTED, so a `watermark` of Some(N) can never be read as \
          completeness"
     );
+    assert!(
+        done.probed_empty.contains(&(highest.seq, phantom_seq)),
+        "and it is reported as PROBED-and-empty, which is the stronger claim: an IDENTITY \
+         value is never re-issued, so this range is permanently absent and #549's \
+         persistence can stop re-asking. Got {:?}",
+        done.probed_empty
+    );
 
     // Running it again changes nothing: the fill is a query, not a retry.
     let again = capture::capture_plane(
@@ -808,6 +819,169 @@ async fn an_unfillable_hole_appends_nothing_and_is_reported_not_retried() {
     assert_eq!(again.records_appended, 0);
     assert_eq!(medium, before);
     assert_eq!(again.unfilled_gaps, done.unfilled_gaps);
+}
+
+/// **The same hazard AT THE FLOOR, which the first fix did not reach.**
+///
+/// `seq_gaps` reports holes BETWEEN records the medium holds, and says so in its own doc
+/// ("says nothing about seqs BELOW the medium's lowest"); `watermark` is a `max`. So on the
+/// first capture of a fresh medium, if seq 1 is uncommitted while seq 2 is visible, the
+/// medium's floor becomes 2, **no gap is ever enumerated, seq 1 is skipped forever, and it
+/// does not even appear in `unfilled_gaps`** — the original failure mode, surviving at the
+/// boundary.
+///
+/// The medium here holds every row EXCEPT the lowest, and the first assertion is the whole
+/// point: `seq_gaps` genuinely reports nothing, so a capture that trusted it alone would
+/// silently lose that event.
+#[tokio::test]
+async fn a_capture_backfills_the_hole_at_the_floor() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    for _ in 0..2 {
+        author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    }
+    let rows = capture::read_clinical_page(&cl.db, 0, 500).await.unwrap();
+    assert!(
+        rows.len() >= 3,
+        "anti-vacuity: need a run to cut the floor off"
+    );
+    let lowest = &rows[0];
+
+    let seg = Segment {
+        plane: Plane::Clinical,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: cl.id.clone(),
+        attestation: None,
+        records: rows[1..].iter().map(capture::to_medium_record).collect(),
+    };
+    let mut medium = serialize_v3(&[seg]).unwrap();
+
+    // ANTI-VACUITY, and the reason this test exists: the hole is invisible to `seq_gaps`.
+    {
+        let image = parse_any(&medium).unwrap();
+        let v3 = as_v3(&image);
+        assert!(
+            seq_gaps(v3, &chain_report(v3), Plane::Clinical).is_empty(),
+            "the hole is at the FLOOR, which seq_gaps by construction cannot see — that is \
+             exactly why the floor needs its own probe"
+        );
+        assert!(
+            !clinical_records(&image)
+                .iter()
+                .any(|r| r.source_seq == lowest.seq),
+            "and the lowest row really is missing from the medium"
+        );
+    }
+
+    let done = capture::capture_plane(
+        &cl.db,
+        &mut medium,
+        Plane::Clinical,
+        Some((&cl.sk, &cl.kid)),
+        &cl.id,
+        500,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        done.records_appended, 1,
+        "the one row below the medium's floor must be captured"
+    );
+    let image = parse_any(&medium).unwrap();
+    assert!(
+        clinical_records(&image)
+            .iter()
+            .any(|r| r.signed_bytes == lowest.signed_bytes),
+        "and it is the right row, byte for byte"
+    );
+    assert!(
+        done.unfilled_gaps.is_empty(),
+        "nothing is missing afterwards: {:?}",
+        done.unfilled_gaps
+    );
+    let report = chain_report(as_v3(&image));
+    assert!(report.chain_intact(), "{:?}", report.faults);
+}
+
+/// **The probe budget is bounded, so a capture cannot slow down with the medium's age.**
+///
+/// This is not a hypothetical cost. Both `event_log` INSERT doors end in `ON CONFLICT
+/// (event_id) DO NOTHING` and PostgreSQL consumes the IDENTITY value BEFORE conflict
+/// arbitration, so every duplicate that set-union sync re-delivers burns a seq and leaves a
+/// permanent hole. On a federating node those accumulate for the life of the medium (#549).
+/// Without a cap, every capture would re-probe all of them and each night's backup would be
+/// slower than the last.
+///
+/// The budget bounds the WORK, never the honesty: every gap it could not reach is still
+/// reported in `unfilled_gaps`.
+#[tokio::test]
+async fn the_gap_probe_budget_is_bounded_so_a_capture_cannot_slow_with_age() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    let rows = capture::read_clinical_page(&cl.db, 0, 500).await.unwrap();
+    let base = rows.last().unwrap().seq;
+
+    // Every real row (so the floor probe finds nothing and this test measures the interior
+    // budget alone), then more phantom records than the budget, each two seqs apart so each
+    // adjacent pair leaves exactly one absent seq the database can never supply.
+    let over_budget = capture::MAX_GAP_PROBES_PER_CAPTURE + 8;
+    let mut records: Vec<MediumRecord> = rows.iter().map(capture::to_medium_record).collect();
+    for i in 1..=over_budget {
+        let mut phantom = capture::to_medium_record(rows.last().unwrap());
+        phantom.source_seq = base + 2 * i as i64;
+        records.push(phantom);
+    }
+    let seg = Segment {
+        plane: Plane::Clinical,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: cl.id.clone(),
+        attestation: None,
+        records,
+    };
+    let mut medium = serialize_v3(&[seg]).unwrap();
+    let before = medium.clone();
+
+    let done = capture::capture_plane(
+        &cl.db,
+        &mut medium,
+        Plane::Clinical,
+        Some((&cl.sk, &cl.kid)),
+        &cl.id,
+        500,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(done.records_appended, 0, "none of the holes is fillable");
+    assert_eq!(medium, before, "so not a byte is appended");
+
+    // Counted over the PHANTOM region only, so the assertion does not depend on where this
+    // database's IDENTITY sequence happens to start.
+    let interior_probed = done
+        .probed_empty
+        .iter()
+        .filter(|(after, _)| *after >= base)
+        .count();
+    assert_eq!(
+        interior_probed,
+        capture::MAX_GAP_PROBES_PER_CAPTURE,
+        "exactly the budget is spent — never more, however old the medium gets"
+    );
+    assert!(
+        done.unfilled_gaps.len() > capture::MAX_GAP_PROBES_PER_CAPTURE,
+        "and every gap the budget could NOT reach is still reported, never hidden: {} \
+         reported vs a budget of {}",
+        done.unfilled_gaps.len(),
+        capture::MAX_GAP_PROBES_PER_CAPTURE
+    );
 }
 
 /// **Property 5 — verify BEFORE the bytes can touch the medium.** A segment attestation is

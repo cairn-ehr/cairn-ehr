@@ -30,7 +30,7 @@ use tokio_postgres::Client;
 use cairn_medium::MediumRecord;
 
 mod plane;
-pub use plane::{capture_plane, PlaneCapture};
+pub use plane::{capture_plane, PlaneCapture, MAX_GAP_PROBES_PER_CAPTURE};
 
 /// One row exactly as db/051's `cairn_clinical_page` hands it over — or, for the
 /// federation plane, as `read_node_page`'s NULL-padded mirror of the same shape.
