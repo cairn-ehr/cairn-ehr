@@ -467,12 +467,16 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
     );
 }
 
-/// #500 slice 2c review, Important 2: a CAIRNB3 medium has no container-level self-marker
-/// (that concept is CAIRNB2-only), so `main.rs`'s restore arm derives an equivalent one
-/// from `chain::self_id_from_chain` — the ATTESTED self id, never the untrusted plaintext
-/// `Segment::self_node_id_hex` — wrapped as `SelfMarker::Unsigned`. This test drives that
-/// EXACT construction against `resolve_dead_node`, with no CLI process and no database, to
-/// prove the cross-check a legacy medium's marker gives for free — rejecting an explicit
+/// #500 slice 2c review, Important 2 (round 2: calls the REAL function, not a
+/// replica). A CAIRNB3 medium has no container-level self-marker (that concept is
+/// CAIRNB2-only), so `main.rs`'s restore arm derives an equivalent one via
+/// `backup::self_marker_for` — never the untrusted plaintext `Segment::self_node_id_hex`.
+/// A prior version of this test replicated that construction inline
+/// (`chain_report`+`self_id_from_chain`+`.map(...)`), which could not have caught a
+/// regression of `self_marker_for` (or of `main.rs` calling something else) back to
+/// `self_marker: None` — exactly the defect this test exists to prevent. It now calls
+/// `backup::self_marker_for` directly, with no database and no CLI process, to prove the
+/// cross-check a legacy medium's marker gives for free — rejecting an explicit
 /// `--superseded-node` that names a PEER (issue #53's footgun) — survives on a V3 medium
 /// too. Without it, `self_marker: None` would fall to `resolve_without_marker`, which
 /// accepts ANY id present on the medium: a restored node could silently adopt a peer's
@@ -480,8 +484,7 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
 #[test]
 fn v3_medium_self_marker_still_rejects_a_named_peer() {
     use cairn_node::medium::{
-        build_segment_attestation, chain_report, parse_any, self_id_from_chain, serialize_v3,
-        MediumImage, MediumRecord, Plane, Segment, SelfMarker,
+        build_segment_attestation, parse_any, serialize_v3, MediumRecord, Plane, Segment,
     };
 
     let sk_self = cairn_event::generate_key().unwrap().0;
@@ -532,23 +535,19 @@ fn v3_medium_self_marker_still_rejects_a_named_peer() {
 
     let bytes = serialize_v3(&[segment]).unwrap();
     let image = parse_any(&bytes).unwrap();
-    let m = match &image {
-        MediumImage::V3(m) => m,
-        MediumImage::Legacy(_) => panic!("CAIRNB3 magic must not parse as legacy"),
-    };
-    let report = chain_report(m);
-    let resolved_self_id = self_id_from_chain(m, &report);
+
+    // The REAL function `main.rs`'s restore arm calls — not a replica of its logic.
+    let self_marker = cairn_node::backup::self_marker_for(&image);
     assert_eq!(
-        resolved_self_id,
-        Some(self_id.clone()),
+        self_marker,
+        Some(cairn_node::medium::SelfMarker::Unsigned(self_id.clone())),
         "the fixture's attestation must bind to its own genesis, or this test proves \
          nothing about the cross-check it exists to pin"
     );
 
-    // Exactly the construction `main.rs`'s restore arm performs for a V3 image.
     let events = cairn_node::backup::node_plane_events(&image).unwrap();
     let container = cairn_node::medium::Container {
-        self_marker: resolved_self_id.map(SelfMarker::Unsigned),
+        self_marker,
         events,
     };
 

@@ -2457,8 +2457,15 @@ async fn main() -> anyhow::Result<()> {
             // exactly as a truncated CAIRNB1/B2 frame already does (`parse_container` bails
             // with `Damaged` at parse time). Checked BEFORE any "OK" can be printed — a
             // nightly backup killed mid-append must never read back as sound.
-            if let Some(why) = cairn_node::backup::torn_tail_refusal(&image, &from) {
-                anyhow::bail!("backup TORN: {why}");
+            if let Some(why) = cairn_node::backup::torn_tail_notice(&image, &from) {
+                anyhow::bail!(
+                    "backup TORN: {why} Run `backup` again to capture the missing \
+                     increment, or locate a different, complete copy of this medium. \
+                     (`restore`, unlike this cron health check, does NOT refuse a torn \
+                     medium — it recovers the complete prefix loudly rather than turning \
+                     a one-increment loss into total loss; this command's job is \
+                     different: saying plainly that this is not yet a complete backup.)"
+                );
             }
             let events = cairn_node::backup::node_plane_events(&image)?;
             let counts = cairn_node::backup::plane_counts(&image);
@@ -2485,25 +2492,38 @@ async fn main() -> anyhow::Result<()> {
             // internally consistent" and "is this medium worth anything" are different
             // questions, and only the second belongs to the health check.
             if report.total == 0 {
-                // #500 slice 2c review, Important 3: a CAIRNB3 medium can hold zero
-                // federation events and STILL carry clinical ones — "there is nothing to
-                // back up yet" would be false for that medium, so the two cases must not
-                // share one message.
+                // #500 slice 2c review, Important 3 (and its Important 4 residual, round
+                // 2): a CAIRNB3 medium can hold zero federation events and STILL carry
+                // clinical or unknown-plane content — "there is nothing to back up yet"
+                // would be false for either, so neither shares the truly-empty message.
+                // Built as one combined message (not two sequential bails) so a medium
+                // holding BOTH is not misreported as if it held only the first checked.
+                let mut other_content = Vec::new();
                 if counts.clinical > 0 {
+                    other_content.push(format!("{} clinical event(s)", counts.clinical));
+                }
+                if counts.unknown > 0 {
+                    other_content.push(format!(
+                        "{} record(s) in a plane this build does not recognise (written \
+                         by a newer Cairn — upgrade this node)",
+                        counts.unknown
+                    ));
+                }
+                if !other_content.is_empty() {
                     anyhow::bail!(
                         "backup INCOMPLETE: {} carries zero federation-plane events but \
-                         {} clinical event(s). This is NOT the '#502 item 2: nothing to \
-                         back up yet' case — the medium holds content, but restore cannot \
-                         establish a federation identity from it (no genesis to resolve \
-                         self against), so it is unusable as a backup as it stands.",
+                         {}. This is NOT the '#502 item 2: nothing to back up yet' case — \
+                         the medium holds content, but restore cannot establish a \
+                         federation identity from it (no genesis to resolve self \
+                         against), so it is unusable as a backup as it stands.",
                         from.display(),
-                        counts.clinical
+                        other_content.join(" and ")
                     );
                 }
                 anyhow::bail!(
-                    "backup EMPTY: {} carries zero federation-plane events and no clinical \
-                     events either. It is internally consistent — which is why the \
-                     integrity check passes — and it would restore nothing at all. A \
+                    "backup EMPTY: {} carries zero federation-plane events and nothing in \
+                     any other plane either. It is internally consistent — which is why \
+                     the integrity check passes — and it would restore nothing at all. A \
                      medium written from a database with no federation events is not a \
                      backup (#502 item 2); if this node really is new, there is nothing to \
                      back up yet.",
@@ -2588,47 +2608,43 @@ async fn main() -> anyhow::Result<()> {
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let image = cairn_node::medium::parse_any(&bytes)?;
-            // #500 slice 2c review, Important 1: a torn CAIRNB3 tail must refuse restore
-            // exactly as a truncated CAIRNB1/B2 frame already does (`parse_container`
-            // bails with `Damaged` at parse time) — applying an incomplete history is
-            // strictly worse than applying none, because the door closes behind it.
-            if let Some(why) = cairn_node::backup::torn_tail_refusal(&image, &from) {
-                anyhow::bail!("refusing to restore a torn medium: {why}");
-            }
             let events = cairn_node::backup::node_plane_events(&image)?;
+            // #500 slice 2c review round 2 — CONTROLLER RULING, deliberately NOT the same
+            // as `verify-backup`'s: a torn tail must not refuse `restore`. `parse_any`'s V3
+            // arm already discards the torn remnant from `MediumV3::segments` (only
+            // COMPLETE sections are kept — see `truncated_tail`'s doc), so `events` above
+            // already IS the safely-restorable prefix, and a torn append costs AT MOST ONE
+            // increment by construction (the capture loop's watermark never advances past
+            // it). Refusing outright would turn a recoverable one-increment loss into
+            // TOTAL loss at exactly the moment — a disaster — when "run backup again on
+            // the dead source node" is usually impossible, and "use a different complete
+            // copy" may not exist either: this project ranks data loss as the most
+            // catastrophic outcome after falsification, so the DEFAULT here recovers the
+            // prefix. No confirmation dialog (principle 3 rejects those as a safety
+            // mechanism) — a loud warning with honest counts instead. `verify-backup`, the
+            // cron health check whose job IS to say "this is not a complete backup", keeps
+            // refusing.
+            if let Some(why) = cairn_node::backup::torn_tail_notice(&image, &from) {
+                eprintln!(
+                    "WARNING: this medium was TORN. {why} By construction a torn append \
+                     costs AT MOST ONE increment, so this restore proceeds with the {} \
+                     complete, verified federation event(s) below rather than refusing \
+                     outright — turning a one-increment loss into total loss would be \
+                     strictly worse. If a fresher, complete copy of this medium exists, \
+                     prefer it instead.",
+                    events.len()
+                );
+            }
             // `resolve_dead_node`/`apply_medium` below both take a `Container` — CAIRNB2's
             // shape (a self-marker plus an event list). A CAIRNB3 medium has no
             // container-level marker at all (that concept is CAIRNB2-only and frozen; see
             // `cairn_medium`'s crate docs) — its analogue is the per-SEGMENT attestation.
-            //
-            // #500 slice 2c review, Important 2: dropping the marker to `None` outright
-            // would lose `resolve_dead_node`'s cross-check — with no marker,
-            // `resolve_without_marker` accepts ANY `--superseded-node` present on the
-            // medium, so an operator restoring a federated CAIRNB3 medium who pastes a
-            // PEER's node-id would have it silently accepted (issue #53's exact footgun,
-            // reopened). `chain::self_id_from_chain` returns the ATTESTED id — two binds
-            // already checked (the segment attestation verifies, and the named node has a
-            // genesis on THIS medium signed by the same key) — never the untrusted
-            // plaintext `Segment::self_node_id_hex`. Wrapped as `SelfMarker::Unsigned`
-            // (not `Signed`: `SelfMarker::Signed`'s verifier expects a CAIRNB2
-            // whole-set-committing `node.self_attested` blob, a different wire shape from
-            // a segment attestation, and would wrongly raise `InvalidSelfMarker` on a
-            // perfectly good V3 medium), this restores `confirm_explicit`'s `NotSelf`
-            // refusal for a V3 medium exactly as for a legacy one — pinned by
-            // `v3_medium_self_marker_still_rejects_a_named_peer` in `tests/restore.rs`.
-            // `None` only when no segment attestation on the medium binds to a genesis
-            // also on it (e.g. an entirely unsigned capture); the existing `NoMarker`
-            // fallback then applies, with its own warning.
-            let self_marker = match &image {
-                cairn_node::medium::MediumImage::Legacy(c) => c.self_marker.clone(),
-                cairn_node::medium::MediumImage::V3(m) => {
-                    let cr = cairn_node::medium::chain_report(m);
-                    cairn_node::medium::self_id_from_chain(m, &cr)
-                        .map(cairn_node::medium::SelfMarker::Unsigned)
-                }
-            };
+            // `backup::self_marker_for` derives the equivalent marker for either revision
+            // (see its doc for the full #53 cross-check reasoning); pinned end-to-end by
+            // `v3_medium_self_marker_still_rejects_a_named_peer` in `tests/restore.rs`,
+            // which calls this SAME function rather than replicating its logic.
             let container = cairn_node::medium::Container {
-                self_marker,
+                self_marker: cairn_node::backup::self_marker_for(&image),
                 events,
             };
             let report = cairn_node::backup::verify_events(&container.events);
@@ -2665,11 +2681,15 @@ async fn main() -> anyhow::Result<()> {
                     "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident). Confirm \
                      the restored node's name/address printed below match THIS node before relying on it."),
                 Provenance::NoMarker => eprintln!(
-                    "WARNING: this medium carries NO self-marker: either a legacy/pre-enrollment \
-                     CAIRNB2 backup, or a CAIRNB3 medium (which has no container-level marker at \
-                     all — restore does not yet consult its per-segment self-identification, \
-                     #500). Self identity was taken from --superseded-node / a sole enroll; \
-                     confirm the name/address below match THIS node."),
+                    "WARNING: this medium carries NO usable self-marker. Either a \
+                     legacy/pre-enrollment CAIRNB2 backup (no marker was ever written), \
+                     or a CAIRNB3 medium whose chain could not attest an id (no signed \
+                     segment binds to a genesis also on the medium — e.g. an entirely \
+                     unsigned capture); restore DOES consult per-segment \
+                     self-identification for CAIRNB3 (#500), this is what it found when \
+                     that came up empty. Self identity was taken from --superseded-node / \
+                     a sole enroll — UNCHECKED against any cross-reference — so confirm \
+                     the name/address below match THIS node."),
             }
             let (name, address) =
                 cairn_node::restore::old_genesis_meta(&container.events, &dead.node_id_hex)

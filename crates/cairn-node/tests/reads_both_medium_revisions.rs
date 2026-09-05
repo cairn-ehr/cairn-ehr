@@ -13,8 +13,8 @@
 //! and using one keeps this suite fast and DB-free.
 
 use cairn_medium::{
-    chain_report, parse_any, segment_commitment, serialize_container, serialize_v3, MediumImage,
-    MediumRecord, Plane, Segment, SelfMarker,
+    append_segment, chain_report, parse_any, segment_commitment, serialize_container,
+    serialize_v3, MediumImage, MediumRecord, Plane, Segment, SelfMarker,
 };
 use cairn_node::backup;
 
@@ -144,5 +144,151 @@ fn a_node_plane_segment_after_a_broken_chain_link_is_still_returned() {
         got,
         vec![vec![1_u8], vec![3_u8]],
         "both node-plane segments come back, including the one past the break"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `backup::plane_counts` — #500 slice 2c review round 2 (testing gap): this function had
+// zero tests despite feeding three operator-facing messages in `main.rs`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn plane_counts_treats_a_legacy_medium_as_all_node() {
+    let events = vec![vec![1_u8], vec![2_u8], vec![3_u8]];
+    let bytes = serialize_container(None, &events).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB2 medium parses via parse_any");
+    assert_eq!(
+        backup::plane_counts(&image),
+        backup::PlaneCounts {
+            node: 3,
+            clinical: 0,
+            unknown: 0
+        },
+        "a legacy medium predates the plane split — every event on it IS the federation plane"
+    );
+}
+
+#[test]
+fn plane_counts_tallies_each_plane_on_a_v3_medium() {
+    let node_seg = segment(
+        Plane::Node,
+        0,
+        "",
+        vec![record(vec![1], 0), record(vec![2], 1)],
+    );
+    let prev1 = segment_commitment(&node_seg.records);
+    let clinical_seg = segment(Plane::Clinical, 1, &prev1, vec![record(vec![3], 0)]);
+    let prev2 = segment_commitment(&clinical_seg.records);
+    // A tag this build does not recognise — written by a NEWER Cairn. Must be counted, not
+    // folded into `node`/`clinical` and not dropped (see `PlaneCounts::unknown`'s doc).
+    let unknown_seg = segment(
+        Plane::Unknown(200),
+        2,
+        &prev2,
+        vec![record(vec![4], 0), record(vec![5], 1), record(vec![6], 2)],
+    );
+
+    let bytes =
+        serialize_v3(&[node_seg, clinical_seg, unknown_seg]).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB3 medium parses via parse_any");
+
+    assert_eq!(
+        backup::plane_counts(&image),
+        backup::PlaneCounts {
+            node: 2,
+            clinical: 1,
+            unknown: 3
+        },
+        "each plane's records are tallied independently, unknown included"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `backup::torn_tail_notice` — #500 slice 2c review round 2 (testing gap): zero tests
+// despite gating a hard `bail!` in `verify-backup` and a warning in `restore`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn torn_tail_notice_is_none_for_a_legacy_medium() {
+    let events = vec![vec![1_u8]];
+    let bytes = serialize_container(None, &events).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB2 medium parses via parse_any");
+    assert_eq!(
+        backup::torn_tail_notice(&image, std::path::Path::new("medium")),
+        None,
+        "a legacy medium's own parse already refuses a truncated frame (Damaged) — it can \
+         never reach this function torn"
+    );
+}
+
+#[test]
+fn torn_tail_notice_is_none_for_a_complete_v3_medium() {
+    let seg = segment(Plane::Node, 0, "", vec![record(vec![1], 0)]);
+    let bytes = serialize_v3(&[seg]).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB3 medium parses via parse_any");
+    assert_eq!(
+        backup::torn_tail_notice(&image, std::path::Path::new("medium")),
+        None,
+        "a clean, untorn CAIRNB3 medium has nothing to notice"
+    );
+}
+
+#[test]
+fn torn_tail_notice_names_a_torn_v3_medium() {
+    let a = segment(Plane::Node, 0, "", vec![record(vec![1], 0)]);
+    let prev = segment_commitment(&a.records);
+    let b = segment(
+        Plane::Clinical,
+        1,
+        &prev,
+        vec![record(vec![2], 0), record(vec![3], 1), record(vec![4], 2)],
+    );
+    let mut image_bytes = serialize_v3(&[a]).expect("fixture fits the cap");
+    let intact = image_bytes.len();
+    append_segment(&mut image_bytes, &b).expect("fixture fits the cap");
+    image_bytes.truncate(intact + 12); // a crash partway through the second section — torn
+
+    let image =
+        parse_any(&image_bytes).expect("a torn medium still parses its complete prefix");
+    let path = std::path::Path::new("/tmp/example-medium");
+    let msg = backup::torn_tail_notice(&image, path)
+        .expect("a torn medium must produce a notice, not a silent None");
+    assert!(
+        msg.contains(&intact.to_string()),
+        "names the intact byte offset a writer resumes from: {msg}"
+    );
+    assert!(
+        msg.contains("interrupted append"),
+        "names WHAT happened, not just a number: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `backup::self_marker_for` — the legacy pass-through and the "cannot derive one" case.
+// The positive CAIRNB3 case (a genuinely attested id) is pinned end-to-end against
+// `resolve_dead_node` by `v3_medium_self_marker_still_rejects_a_named_peer` in
+// `tests/restore.rs`, which needs a live signing key this DB-free file deliberately
+// avoids — see the module doc.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn self_marker_for_a_legacy_medium_returns_the_containers_own_marker() {
+    let marker = SelfMarker::Unsigned("deadbeef".into());
+    let events = vec![vec![1_u8]];
+    let bytes = serialize_container(Some(&marker), &events).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB2 medium parses via parse_any");
+    assert_eq!(backup::self_marker_for(&image), Some(marker));
+}
+
+#[test]
+fn self_marker_for_an_entirely_unsigned_v3_medium_is_none() {
+    let seg = segment(Plane::Node, 0, "", vec![record(vec![1], 0)]);
+    let bytes = serialize_v3(&[seg]).expect("fixture fits the cap");
+    let image = parse_any(&bytes).expect("a CAIRNB3 medium parses via parse_any");
+    assert_eq!(
+        backup::self_marker_for(&image),
+        None,
+        "no attestation anywhere on the medium means no attested id to derive a marker \
+         from — resolve_dead_node's marker-less fallback applies instead"
     );
 }

@@ -134,35 +134,82 @@ pub fn plane_counts(image: &MediumImage) -> PlaneCounts {
     }
 }
 
-/// If `image` is a TORN CAIRNB3 medium (an interrupted append), the human-readable
-/// explanation of what happened and how to recover — `None` when the medium is complete.
+/// If `image` is a TORN CAIRNB3 medium (an interrupted append), a human-readable
+/// description of what happened — `None` when the medium is complete.
 ///
-/// WHY THIS EXISTS (#500 slice 2c review, Important 1). `parse_any` reports a torn tail
-/// via `MediumV3::truncated_tail` rather than an `Err`, because everything before the tear
-/// is genuinely intact and a torn medium is not damage (see that field's doc). But that
-/// means a caller that only checks the returned `Result` — which is exactly what both
-/// `verify-backup` and `restore` did — sees `Ok` and reports the medium sound, missing its
+/// WHY THIS EXISTS (#500 slice 2c review). `parse_any` reports a torn tail via
+/// `MediumV3::truncated_tail` rather than an `Err`, because everything before the tear is
+/// genuinely intact and a torn medium is not damage (see that field's doc). A caller that
+/// only checks the returned `Result` — which is exactly what both `verify-backup` and
+/// `restore` did before this existed — sees `Ok` and reports the medium sound, missing its
 /// last increment with no warning at all. A legacy medium can never reach this state
 /// silently: `parse_container` already fails a truncated frame with `Damaged`, AT PARSE
-/// TIME, before returning at all — so leaving CAIRNB3's torn tail unchecked was strictly
-/// WEAKER than the parity this whole task exists to hold.
+/// TIME, before returning at all.
+///
+/// **Named a "notice", not a "refusal" — read this before wiring in a third caller.** The
+/// two existing callers use this fact for OPPOSITE purposes (#500 slice 2c review round
+/// 2), which is exactly why the shared text below states only the fact, not a
+/// prescription: `verify-backup` is the cron health check — its job is to say "this is
+/// not a complete backup", so it turns this into a hard bail with its own remedy text
+/// ("run `backup` again", which IS actionable there — verify-backup typically runs beside
+/// the node that took the backup). `restore` must NOT refuse: a torn append costs AT MOST
+/// ONE increment by construction (the capture loop's watermark never advances past an
+/// unverifiable tail), and the complete prefix — which is all `parse_any` even keeps in
+/// `MediumV3::segments`, the torn remnant is discarded before this function ever sees it —
+/// is fully verifiable. Refusing it would turn a recoverable one-increment loss into TOTAL
+/// loss at the exact moment (a disaster) when "run backup again on the dead source node"
+/// is usually impossible — the opposite of this project's data-loss ranking. So `restore`
+/// turns this into a loud warning naming the honest counts and proceeds with the prefix.
 ///
 /// A legacy medium therefore always returns `None` here (its own parse already refused a
 /// torn frame, so a `Container` this function sees is never torn), and a complete CAIRNB3
 /// medium returns `None` too.
-pub fn torn_tail_refusal(image: &MediumImage, path: &std::path::Path) -> Option<String> {
+pub fn torn_tail_notice(image: &MediumImage, path: &std::path::Path) -> Option<String> {
     match image {
         MediumImage::Legacy(_) => None,
         MediumImage::V3(medium) if medium.truncated_tail => Some(format!(
             "{} was cut short after {} byte(s) — an interrupted append. Everything before \
-             that point is intact, but the medium is INCOMPLETE: run `backup` again on the \
-             source node to re-capture the lost increment (the watermark never advanced \
-             past an unverifiable tail, so nothing is silently skipped), or use a different, \
-             complete copy of this medium if one exists.",
+             that point is intact; only the last increment is missing (the watermark never \
+             advances past an unverifiable tail, so a future capture re-writes exactly what \
+             is missing here and nothing more).",
             path.display(),
             medium.complete_bytes
         )),
         MediumImage::V3(_) => None,
+    }
+}
+
+/// Derive the self-marker `resolve_dead_node` should use, for either medium revision.
+///
+/// WHY A SHARED FUNCTION, NOT INLINE MATCH LOGIC (#500 slice 2c review round 2). This is
+/// the exact construction `main.rs`'s restore arm needs — extracted so main.rs and its
+/// tests call the SAME code, rather than a test replicating the logic beside it. A prior
+/// version of this fix inlined the match directly in `main.rs` and tested a hand-copied
+/// re-implementation in `tests/restore.rs`; that test could not have caught a regression
+/// of `main.rs` itself back to `self_marker: None` (issue #53's exact footgun) — only
+/// calling the real function can.
+///
+/// - **Legacy:** the container's own marker, unchanged.
+/// - **CAIRNB3:** derived from `chain::self_id_from_chain` — the ATTESTED id (two binds
+///   already checked there: the segment attestation verifies, and the named node has a
+///   genesis on THIS medium signed by the same key), never the untrusted plaintext
+///   `Segment::self_node_id_hex`. Wrapped as `SelfMarker::Unsigned`, not `Signed`:
+///   `SelfMarker::Signed`'s verifier (`verify_self_attestation`) expects a CAIRNB2
+///   whole-set-committing `node.self_attested` blob, a different wire shape from a
+///   segment attestation, and would wrongly raise `InvalidSelfMarker` on a perfectly good
+///   V3 medium. Wrapping it at all is what preserves `resolve_dead_node`'s
+///   `confirm_explicit` cross-check — with a bare `None`, `resolve_without_marker` accepts
+///   ANY `--superseded-node` present on the medium, silently reopening issue #53. `None`
+///   only when no segment attestation on the medium binds to a genesis also on it (e.g. an
+///   entirely unsigned capture); `resolve_dead_node`'s existing marker-less fallback then
+///   applies (sole enroll, or an explicit, unchecked `--superseded-node`).
+pub fn self_marker_for(image: &MediumImage) -> Option<SelfMarker> {
+    match image {
+        MediumImage::Legacy(container) => container.self_marker.clone(),
+        MediumImage::V3(medium) => {
+            let report = crate::medium::chain_report(medium);
+            crate::medium::self_id_from_chain(medium, &report).map(SelfMarker::Unsigned)
+        }
     }
 }
 

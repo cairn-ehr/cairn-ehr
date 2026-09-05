@@ -79,11 +79,13 @@ pub enum Provenance {
     /// An UNSIGNED self-marker — operator-error-safe, not tamper-evident. Warn the operator to
     /// confirm the restored identity's name/address.
     Unsigned,
-    /// No marker on the medium: a legacy CAIRNB1 medium, a pre-enrollment CAIRNB2 backup, or
-    /// ANY CAIRNB3 medium (#500 slice 2c) — CAIRNB3 carries no container-level marker at
-    /// all; its analogue is the per-segment attestation (`chain::self_id_from_chain`), which
-    /// `main.rs`'s restore arm does not yet consult. Self came from an explicit
-    /// `--superseded-node` or a sole-enroll medium. Warn the operator to confirm.
+    /// No marker on the medium: a legacy CAIRNB1 medium, a pre-enrollment CAIRNB2 backup,
+    /// or a CAIRNB3 medium whose chain could not attest an id (#500 slice 2c — `main.rs`'s
+    /// restore arm DOES consult the per-segment attestation via `backup::self_marker_for`
+    /// → `chain::self_id_from_chain`; this is what a V3 medium reaches when that lookup
+    /// itself returns `None`, e.g. an entirely unsigned capture with no genesis to bind
+    /// to). Self came from an explicit `--superseded-node` or a sole-enroll medium, with
+    /// NO cross-check against either. Warn the operator to confirm.
     NoMarker,
 }
 
