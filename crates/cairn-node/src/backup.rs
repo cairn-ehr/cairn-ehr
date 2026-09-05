@@ -241,6 +241,27 @@ pub fn self_marker_for(image: &MediumImage) -> Option<SelfMarker> {
 
 /// A record of the last successful backup. Written only AFTER the medium is durable and
 /// self-verified, so it can never over-claim a backup the node does not actually hold.
+///
+/// **v2 (#500 slice 2c Task 10) replaces the single `event_count` with per-plane SCOPE.**
+/// v1 recorded one true count of what the medium held, with nothing to say that what it
+/// held was the federation plane alone and no clinical record at all — a count without a
+/// scope is the honest-surface half of a dishonest composite, and it is exactly how #500
+/// stayed invisible for months even though `status`/`describe_health` never lied about the
+/// number itself.
+///
+/// `#[serde(default)]` on every field new in v2: a v1 sidecar on disk (written by
+/// yesterday's binary) must still READ after an upgrade, with the missing fields becoming
+/// `None`/0 rather than a parse failure. A parse failure here reads as "no backup ever
+/// ran" — the reassuring-direction lie this project keeps hunting — so the fail-safe
+/// direction is to under-claim scope, never to refuse the whole record over one absent field.
+///
+/// **What is deliberately NOT here yet.** `capture_plane`'s `PlaneCapture::unfilled_gaps`
+/// and `probed_empty` (Task 7) have no operator surface in this struct. That is not an
+/// oversight: `unfilled_gaps` is NOT normally empty on a federating node — routine
+/// `ON CONFLICT` IDENTITY burns look identical to lost events — so a naive count surfaced
+/// here would cry wolf on every healthy node. The durable record and the honest surface for
+/// those two fields are [#549](https://github.com/cairn-ehr/cairn-ehr/issues/549), not this
+/// task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupHealth {
     pub version: u8,
@@ -248,10 +269,62 @@ pub struct BackupHealth {
     pub last_backup_unix: i64,
     /// Where the medium was written (for the operator to locate it).
     pub medium_path: String,
-    /// How many signed events the medium holds.
-    pub event_count: u64,
     /// Size of the medium image in bytes.
     pub medium_bytes: u64,
+    /// How many federation-plane (`node_event`) records the medium holds. Renamed from v1's
+    /// `event_count` — kept alone, a count says nothing about SCOPE (see the struct doc).
+    #[serde(default)]
+    pub node_events: u64,
+    /// How many clinical-plane (`event_log`) records the medium holds. `0` on a v1 sidecar
+    /// or a build that has not yet started capturing the clinical plane — the honest "zero
+    /// known", never a parse failure standing in for it.
+    #[serde(default)]
+    pub clinical_events: u64,
+    /// The medium's newest clinical `seq` (`cairn_medium::watermark` over `Plane::Clinical`,
+    /// derived from verified segments only — see `PlaneCapture::watermark`). `None` means no
+    /// verified clinical segment exists yet, which is NOT the same claim as `Some(0)` would
+    /// be (principle 4: absence is the honest answer, zero is a claim).
+    #[serde(default)]
+    pub clinical_watermark: Option<i64>,
+    /// `max(event_log.seq)` at the moment the local-state export (`CAIRNL1`, the artifact
+    /// carrying this node's custody key off the machine) was last WRITTEN — deliberately NOT
+    /// at the moment this sidecar itself was written, and deliberately NOT advanced by a
+    /// skipped export (see [`export_coverage_after`]). `None` means no export has ever
+    /// succeeded here. A coverage figure no export actually achieved would be worse than
+    /// none: it would make `verify-backup`'s staleness check pass over a kit that cannot
+    /// restore.
+    #[serde(default)]
+    pub export_covers_seq: Option<i64>,
+}
+
+/// What the export attempt this backup run did — the only input `export_coverage_after`
+/// needs, because that is the only distinction that changes whether coverage may advance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportOutcome {
+    /// Not attempted, or attempted and not durably written (no passphrase, an unusable
+    /// escrow, a load failure — every one of `backup`'s deliberate warn-and-continue paths,
+    /// see `backup_to`'s doc). Coverage must not move: nothing new actually landed.
+    Skipped,
+    /// The export was written AND verified (read-after-write, Task 12). Carries
+    /// `max(event_log.seq)` as it stood at that moment.
+    Written(i64),
+}
+
+/// PURE. Which `export_covers_seq` the next sidecar carries, given the value the sidecar
+/// already had and what this run's export attempt did.
+///
+/// This is a one-line `match`, split out as its own function anyway because it is the ENTIRE
+/// safety property that makes `export_covers_seq` trustworthy, and a property this narrow
+/// is worth being able to test without a database, a medium, or even `backup_to` — see
+/// `a_skipped_export_leaves_the_previous_coverage_untouched` in `tests/backup_health_v2.rs`.
+/// Advancing on a `Skipped` outcome would let `verify-backup` compare the medium against a
+/// coverage figure no export ever achieved — worse than no figure at all, because it would
+/// make a stale, unrestorable kit report GREEN.
+pub fn export_coverage_after(previous: Option<i64>, outcome: ExportOutcome) -> Option<i64> {
+    match outcome {
+        ExportOutcome::Skipped => previous,
+        ExportOutcome::Written(seq) => Some(seq),
+    }
 }
 
 /// The sidecar path for backup health: a sibling of the key file named
@@ -281,14 +354,21 @@ pub fn humanize_ago(secs: i64) -> String {
 }
 
 /// The `status` backup-health line. Pure (time injected). Absent health → the honest
-/// "running without a net" warning; present → freshness + size + location.
+/// "running without a net" warning; present → freshness + per-plane SCOPE + size + location.
+///
+/// v1 printed one bare "N events" — precisely the composite #500 hid behind (see
+/// `BackupHealth`'s doc). Naming the plane in the text itself, not just in a struct field
+/// nobody reads directly, is the point: an operator staring at `cairn-node status` must see
+/// "0 clinical events" as a fact about their backup, not have to already know to go looking
+/// for it.
 pub fn describe_health(now_unix: i64, health: &Option<BackupHealth>) -> String {
     match health {
         None => "never — running without a net".to_string(),
         Some(h) => format!(
-            "{} ago ({} events, {} bytes -> {})",
+            "{} ago ({} node event(s), {} clinical event(s), {} bytes -> {})",
             humanize_ago(now_unix - h.last_backup_unix),
-            h.event_count,
+            h.node_events,
+            h.clinical_events,
             h.medium_bytes,
             h.medium_path,
         ),
@@ -471,12 +551,33 @@ pub async fn backup_to(
         );
     }
 
+    // `export_covers_seq` belongs to a DIFFERENT artifact than anything this function
+    // touches — the CAIRNL1 local-state export, sealed and written later in the `backup`
+    // command (see `main.rs`'s `Cmd::Backup` arm), never here. Resetting it to `None` on
+    // every call would silently forget a coverage figure a PRIOR run actually earned, the
+    // moment tonight's export is (deliberately, safely) skipped — exactly backwards for a
+    // value `verify-backup`'s staleness check depends on. So, from THIS function's own point
+    // of view, no export ran at all this call: `ExportOutcome::Skipped` over whatever the
+    // existing sidecar already recorded, via the same pure rule Task 12's export site will
+    // use when it actually writes one.
+    let previous_export_covers_seq = read_health(health_path).and_then(|h| h.export_covers_seq);
+
     let health = BackupHealth {
-        version: 1,
+        version: 2,
         last_backup_unix: now_unix,
         medium_path: medium_path.display().to_string(),
-        event_count: events.len() as u64,
         medium_bytes: medium.len() as u64,
+        // #500 slice 2c Task 9 (not yet landed at this line's authorship): this function
+        // still reads ONLY `node_event`, so every event backed up today is federation-plane
+        // by construction. `clinical_events`/`clinical_watermark` stay at the honest
+        // "nothing captured yet" until the clinical capture pass lands — never a guess.
+        node_events: events.len() as u64,
+        clinical_events: 0,
+        clinical_watermark: None,
+        export_covers_seq: export_coverage_after(
+            previous_export_covers_seq,
+            ExportOutcome::Skipped,
+        ),
     };
     write_health(health_path, &health).context("writing backup-health sidecar")?;
 
@@ -513,15 +614,25 @@ mod tests {
             "never — running without a net"
         );
         let h = BackupHealth {
-            version: 1,
+            version: 2,
             last_backup_unix: 1000,
             medium_path: "/mnt/backup/cairn.medium".into(),
-            event_count: 7,
             medium_bytes: 2048,
+            node_events: 7,
+            clinical_events: 3,
+            clinical_watermark: Some(41),
+            export_covers_seq: None,
         };
         let line = describe_health(1000 + 3600, &Some(h));
         assert!(line.starts_with("1h ago"), "freshness first: got {line:?}");
-        assert!(line.contains("7 events"));
+        assert!(
+            line.contains("7 node event(s)"),
+            "must name the node plane: {line:?}"
+        );
+        assert!(
+            line.contains("3 clinical event(s)"),
+            "must name the clinical plane, not fold it into one count: {line:?}"
+        );
         assert!(line.contains("/mnt/backup/cairn.medium"));
     }
 
@@ -535,11 +646,14 @@ mod tests {
             "a missing sidecar reads as None (fail-safe)"
         );
         let h = BackupHealth {
-            version: 1,
+            version: 2,
             last_backup_unix: 12_345,
             medium_path: "/mnt/x".into(),
-            event_count: 3,
             medium_bytes: 999,
+            node_events: 3,
+            clinical_events: 0,
+            clinical_watermark: None,
+            export_covers_seq: None,
         };
         write_health(&p, &h).unwrap();
         assert_eq!(

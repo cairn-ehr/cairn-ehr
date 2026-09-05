@@ -91,8 +91,12 @@ async fn backup_exports_a_self_verifying_medium_and_records_health() {
     );
 
     // Health was recorded (proves backup_to's read-after-write verify passed) and is honest.
+    // #500 slice 2c Task 10: v2 reports per-plane scope. `read_event_set` still reads ONLY
+    // `node_event` (Task 9 adds the clinical pass), so both events counted here are
+    // federation-plane and `clinical_events` must be the honest "none captured yet".
     let health = backup::read_health(&health_path).expect("health sidecar must exist after backup");
-    assert_eq!(health.event_count, 2);
+    assert_eq!(health.node_events, 2);
+    assert_eq!(health.clinical_events, 0);
     assert_eq!(health.last_backup_unix, 1_000);
     assert!(
         backup::describe_health(1_000, &Some(health)).starts_with("just now"),
