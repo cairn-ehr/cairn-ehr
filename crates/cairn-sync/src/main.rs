@@ -200,6 +200,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "050_attachment_reference_flag",
         include_str!("../../../db/050_attachment_reference_flag.sql"),
     ),
+    // db/051 (#500 slice 2c): event_custody_surviving + cairn_clinical_page — the ONE
+    // definition of the shred predicate. In BOTH lists: cairn-sync's serve door SELECTs
+    // from the function, so a node whose loader lags would serve from a function that
+    // does not exist.
+    (
+        "051_clinical_capture_source",
+        include_str!("../../../db/051_clinical_capture_source.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS
