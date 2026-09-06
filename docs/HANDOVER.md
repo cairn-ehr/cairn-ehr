@@ -4,8 +4,11 @@
 
 > [!WARNING]
 > **⇒ THE DISASTER-RECOVERY HOLE IS HALF-CLOSED, AND *WHICH HALF* IS THE WHOLE POINT.
-> [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495) IS CLOSED.
-> [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) IS NOT.** *"The DR hole is fixed"* is exactly
+> [#495](https://github.com/cairn-ehr/cairn-ehr/issues/495) IS CLOSED. [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500)
+> IS CLOSED BY SLICE 2c AND **SUPERSEDED BY [#554](https://github.com/cairn-ehr/cairn-ehr/issues/554)**,
+> WHICH IS NOT.** #500 was titled *"the backup medium carries no clinical event"* and that sentence is now
+> false, so closing it is correct — but the half a dying disk actually depends on, **restore reading the
+> clinical plane back, is #554 and is still open.** *"The DR hole is fixed"* is exactly
 > the true-in-part sentence that gets quoted as complete six months later — the failure mode this slice
 > exists to correct. **Under-claiming is safe here; over-claiming is the defect.**
 >
@@ -16,8 +19,8 @@
 >   local-state export beside surviving `event_dek` rows (a **shredded** event's DEK excluded by
 >   construction), and `restore` **adopts** it instead of minting one. **A restored solo node can now
 >   inherit its custody KEY** — its own custody *records* are a different question, see #500 below.
-> - **◐ #500 — THE BYTES. THE WRITE HALF IS BUILT (DR slice 2c, 2026-09-06); THE READ HALF IS NOT, AND
->   #500 STAYS OPEN.** The medium is now a CAIRNB3 image carrying **both planes** — every `event_log` row
+> - **◐ THE BYTES. THE WRITE HALF IS BUILT (DR slice 2c, 2026-09-06); THE READ HALF IS NOT, AND IT IS
+>   NOW [#554](https://github.com/cairn-ehr/cairn-ehr/issues/554).** The medium is now a CAIRNB3 image carrying **both planes** — every `event_log` row
 >   (clinical, demographic, identity, registration, erasure) with its **wrapped DEK** beside it — so the
 >   record and the key that opens it finally leave the machine in one artifact. **Nothing yet RESTORES
 >   one.** `restore` and `verify-backup` both read through `backup::node_plane_events`, which returns the
@@ -231,7 +234,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-06 (**DR slice 2c** — the backup medium finally carries the clinical record, and nothing yet restores one; closed #522 and #524, fixed #550 in-branch, opened #549, #551 and #552; **#500 stays open for 2d**) · previous: 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed — #101, #115, #434, #441, #468, #500, #534 — reopened, and a CI guard so the next negated sentence cannot do it again) and, earlier that day, **#511** (**the custody newtypes**: `Secret32`/`PublicKey32` across four crates plus the `cairn_pgx` tree; installing a PUBLIC half as this node's SECRET custody key is now a compile error; CAIRNL1 bytes unchanged and golden-pinned; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; #101 loses only item 1; opened #531, #532, #534–#538) and, earlier that day, **#527** (the CodeQL backlog: the 18 criticals were a real defect, not the familiar false positive; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave; opened #522–#525, re-opened #511) · 2026-08-30 (**#503**, the shared keystore crate; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1**: #495 CLOSED, #500 still open; opened #503–#509, #511–#513). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** v0.68 (2c adds no ADR and no spec bump, but ADR-0066 gains dated errata **E1/E2** and the canonical `docs/spec/security.md` is corrected where 2c made it false) · **`SCHEMA_GENERATION`:** **51** (`db/051`, 2c's one migration — 2a, 2b and #511 added none) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-06 (**DR slice 2c** — the backup medium finally carries the clinical record, and nothing yet restores one; closed #522 and #524, fixed #550 in-branch, opened #549, #551 and #552; **#500 closes as titled and #554 carries the read half for 2d**) · previous: 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed — #101, #115, #434, #441, #468, #500, #534 — reopened, and a CI guard so the next negated sentence cannot do it again) and, earlier that day, **#511** (**the custody newtypes**: `Secret32`/`PublicKey32` across four crates plus the `cairn_pgx` tree; installing a PUBLIC half as this node's SECRET custody key is now a compile error; CAIRNL1 bytes unchanged and golden-pinned; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; #101 loses only item 1; opened #531, #532, #534–#538) and, earlier that day, **#527** (the CodeQL backlog: the 18 criticals were a real defect, not the familiar false positive; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave; opened #522–#525, re-opened #511) · 2026-08-30 (**#503**, the shared keystore crate; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1**: #495 CLOSED, #500 still open; opened #503–#509, #511–#513). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** v0.68 (2c adds no ADR and no spec bump, but ADR-0066 gains dated errata **E1/E2** and the canonical `docs/spec/security.md` is corrected where 2c made it false) · **`SCHEMA_GENERATION`:** **51** (`db/051`, 2c's one migration — 2a, 2b and #511 added none) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -257,7 +260,7 @@ that generalise past the slice that found them.
 
 ### 2026-09-06 (last) — DR slice 2c: the medium finally carries the clinical record
 
-**Closes #522 and #524; #550 opened and closed in-branch; opened #549, #551, #552, #553. #500 STAYS OPEN — 2c
+**Closes #522, #524 and — as titled — #500; #550 opened and closed in-branch; opened #549, #551, #552, #553 and #554 (the read half). 2c
 is the WRITE half.** One migration (`db/051`, `SCHEMA_GENERATION` 50 → 51), no ADR and no spec bump, but
 `docs/spec/security.md` corrected and ADR-0066 given dated errata E1/E2 where this slice made their
 premise false. `cairn-node backup` now writes a CAIRNB3 medium carrying **both planes** — every
