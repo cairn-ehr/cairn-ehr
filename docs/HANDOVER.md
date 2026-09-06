@@ -257,7 +257,7 @@ that generalise past the slice that found them.
 
 ### 2026-09-06 (last) — DR slice 2c: the medium finally carries the clinical record
 
-**Closes #522 and #524; #550 opened and closed in-branch; opened #549, #551, #552. #500 STAYS OPEN — 2c
+**Closes #522 and #524; #550 opened and closed in-branch; opened #549, #551, #552, #553. #500 STAYS OPEN — 2c
 is the WRITE half.** One migration (`db/051`, `SCHEMA_GENERATION` 50 → 51), no ADR and no spec bump, but
 `docs/spec/security.md` corrected and ADR-0066 given dated errata E1/E2 where this slice made their
 premise false. `cairn-node backup` now writes a CAIRNB3 medium carrying **both planes** — every
@@ -299,6 +299,33 @@ clinical event back** — that is 2d. Full narrative in ROADMAP's 2c entry; what
   (budget < 2 s). Both pass, no budget adjusted. The finding is **#552**: that time is linear in the
   WHOLE medium, so the 2 s budget is crossed at ~23 000 events — CAIRNB3's O(new-records) append property
   **stops at the `atomic_write` seam**, not "the rewrite grew".
+
+**⇒ THE FINAL WHOLE-BRANCH REVIEW FOUND A CRITICAL THE TASK-SCOPED REVIEWS COULD NOT SEE, AND IT IS THE
+SHARPEST LESSON OF THE SLICE.** Legacy succession — replacing a CAIRNB1/B2 medium with a CAIRNB3 one — is
+the only destructive act in the backup ceremony, and nothing checked *whose* medium it was or whether the
+successor held *as much*. The reachable disaster: a clinic's disk dies, the operator re-`init`s a node and
+runs `backup --to` the USB holding their only medium **before** restoring. `read_self_node_id` returns
+`None` on a not-yet-enrolled database, both captures read zero rows, and `assess()` on an EMPTY CAIRNB3
+image is **vacuously sound** — chain intact, 0-of-0 records verified, no torn tail — so every guard passed
+and `atomic_write` destroyed the medium, exit 0. Every component behaved correctly; the composite ate the
+backup. That is #500's own shape, one layer up, inside the slice built to end it. Now refused by
+`refuse_unsafe_legacy_succession` on either arm — a marker naming another node, or a successor holding
+fewer `node_event` records — before the write, with the old medium left byte-identical. **Residual filed as
+[#553](https://github.com/cairn-ehr/cairn-ehr/issues/553):** a CAIRNB1 medium has no marker at all, so a
+*foreign* unmarked medium holding fewer events than this node still falls to the count arm alone. Also
+note the count arm's premise — `node_event` is append-only — is enforced against DML only; **`TRUNCATE`
+bypasses row triggers** and `db::reset_node_federation_tables` does exactly that in-tree.
+
+**Three operator-visible behaviour changes 2c introduces, all deliberate, all able to fail a cron run that
+previously always succeeded.** `backup` refuses an unsafe legacy succession and refuses to overwrite a file
+at `--to` that is not a readable medium; `verify-backup` refuses a torn medium, a stale or mismatched DR
+kit, an unsound medium (its own composed verdict now, not the federation plane alone) and a medium carrying
+a plane this build cannot read; `restore`, by contrast, **recovers the complete verified prefix of a torn
+medium rather than refusing it** — refusing there would convert a one-increment loss into total loss of an
+operator's last copy. The asymmetry is the rule: *"we could not write a good medium"* and *"this kit cannot
+restore"* page an operator; *"we wrote a good medium and something else was odd"* warns and exits 0. One
+consequence worth knowing before it surprises someone: after a restore mints a new identity, a clinic's
+pre-existing legacy medium can never again be succeeded **in place** — point `--to` at a new path.
 
 ### 2026-09-04 — seven issues GitHub closed that nobody closed (condensed)
 
