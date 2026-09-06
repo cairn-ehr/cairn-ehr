@@ -28,6 +28,22 @@ use crate::record::{put_record, take_record, MediumRecord};
 /// separates "damaged medium" from "interrupted backup" (see `take_section`).
 const MAX_SECTION_BYTES: usize = 256 * 1024 * 1024;
 
+/// The four bytes that open every CAIRNB3 section.
+///
+/// It answers exactly one question — *"am I standing at a section boundary?"* — and it is
+/// NOT a security control: anyone can write four bytes. Its value is to the WRITER, which
+/// from slice 2c-ii appends in place and must confirm that [`crate::MediumV3::complete_bytes`]
+/// really is a boundary rather than trusting the parse that produced it.
+///
+/// It does NOT catch #523 on its own, and the distinction matters because a later reader will
+/// be tempted to drop one guard or the other: a length corrupted UPWARD puts the next marker
+/// past the end of the file, where there is nothing to look at. `len_check` is what catches
+/// that. The two are complementary and neither is redundant.
+pub(crate) const SECTION_MAGIC: [u8; 4] = *b"CB3S";
+
+/// Bytes of section header before the body: [`SECTION_MAGIC`] + the length + its check field.
+pub(crate) const SECTION_HEADER_BYTES: usize = 12;
+
 /// Which plane a segment's records belong to. The two known planes share ONE record shape
 /// and ONE codec; the tag is how a reader knows which door the records are destined for.
 ///
@@ -202,7 +218,20 @@ pub(crate) fn put_segment(out: &mut Vec<u8>, seg: &Segment) -> Result<(), Backup
             body.len()
         )));
     }
-    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    // The header is written as three fixed-width fields so a reader can decide, BEFORE
+    // trusting `len` at all, whether it is standing at a boundary and whether the length
+    // agrees with itself. `len_check` is STORED as the bitwise complement (`!len` — every bit
+    // flipped) and VERIFIED with an XOR in `take_section`; the two read as one operation and
+    // are not.
+    //
+    // WHAT IT IS: a corruption detector — bit rot, a torn write landing inside the length
+    // field, one flipped bit. WHAT IT IS NOT: authentication. An attacker who rewrites `len`
+    // rewrites `len_check` in the same edit. Tamper-evidence on this medium lives entirely in
+    // the per-segment signed attestation chain (invariant 3) and nothing here adds to it.
+    let len = body.len() as u32;
+    out.extend_from_slice(&SECTION_MAGIC);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&(!len).to_be_bytes());
     out.extend_from_slice(&body);
     Ok(())
 }
@@ -224,20 +253,48 @@ pub(crate) fn put_segment(out: &mut Vec<u8>, seg: &Segment) -> Result<(), Backup
 /// global chain traverse it; dropping it (as this function once did) silently broke the chain
 /// for every segment after it.
 pub(crate) fn take_section(rest: &[u8]) -> Result<Option<(Segment, &[u8])>, BackupError> {
-    if rest.len() < 4 {
-        return Ok(None); // not even a complete length prefix — torn
+    // FIVE STEPS, AND THE ORDER IS THE WHOLE POINT (#523). Every corruption test runs BEFORE
+    // the only step that can conclude "torn", so the torn verdict is EARNED rather than
+    // reached by falling through. Slice 2c-ii's append recovery TRUNCATES the file on that
+    // verdict; before this ordering existed, one flipped bit in a length field could make it
+    // truncate every complete segment after the damage and append over them.
+    if rest.len() < SECTION_HEADER_BYTES {
+        return Ok(None); // not even a complete header — torn
     }
-    let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+    if rest[..4] != SECTION_MAGIC {
+        return Err(BackupError::Damaged(format!(
+            "medium section does not begin at a section boundary (found {:02x?}, expected \
+             {:02x?}) — the medium is DAMAGED. Do not re-run a backup over it and do not \
+             append to it: an interrupted backup leaves a short tail, never this",
+            &rest[..4],
+            SECTION_MAGIC
+        )));
+    }
+    let claimed = u32::from_be_bytes([rest[4], rest[5], rest[6], rest[7]]);
+    let len_check = u32::from_be_bytes([rest[8], rest[9], rest[10], rest[11]]);
+    if claimed ^ len_check != u32::MAX {
+        return Err(BackupError::Damaged(format!(
+            "medium section length {claimed} disagrees with its own check field — the length \
+             is CORRUPT, not merely short (#523). An interrupted backup leaves a length that \
+             still checks out against its complement; this one does not, so the medium is \
+             damaged and the remedy is the opposite of re-running the backup"
+        )));
+    }
+    let len = claimed as usize;
     if len > MAX_SECTION_BYTES {
         return Err(BackupError::Damaged(format!(
             "medium section length {len} exceeds the {MAX_SECTION_BYTES}-byte cap — the \
              medium is damaged (an INTERRUPTED backup reads as a short tail, not as this)"
         )));
     }
-    if rest.len() < 4 + len {
-        return Ok(None); // the section is complete on no copy of this file — torn
+    if rest.len() < SECTION_HEADER_BYTES + len {
+        // Torn — and now PROVEN, not assumed: the header vouched for itself above.
+        return Ok(None);
     }
-    let (body, tail) = (&rest[4..4 + len], &rest[4 + len..]);
+    let (body, tail) = (
+        &rest[SECTION_HEADER_BYTES..SECTION_HEADER_BYTES + len],
+        &rest[SECTION_HEADER_BYTES + len..],
+    );
     let (&plane_tag, b) = body
         .split_first()
         .ok_or_else(|| BackupError::Damaged("empty medium section: no plane tag".into()))?;
@@ -309,6 +366,15 @@ mod tests {
     use super::*;
     use crate::testkit::segment;
 
+    /// Where the section length and its check field sit, DERIVED from the header layout
+    /// rather than written as bare numbers. A hand-written `out[5]` silently addresses a
+    /// different field the moment the header changes shape — which is exactly what happened
+    /// while this guard was being written: the same literal hit the segment index before the
+    /// header grew, so a test "proving" a corrupt length was corrupting something else and
+    /// passing for the wrong reason.
+    const LEN_AT: usize = SECTION_MAGIC.len();
+    const CHECK_AT: usize = LEN_AT + 4;
+
     #[test]
     fn a_segment_roundtrips_through_its_section_framing() {
         for plane in [Plane::Node, Plane::Clinical] {
@@ -352,7 +418,7 @@ mod tests {
         let seg = segment(Plane::Clinical, 5, 12);
         let mut out = Vec::new();
         put_segment(&mut out, &seg).unwrap();
-        out[4] = 99; // the plane tag is the first byte of the body, after the u32 length
+        out[SECTION_HEADER_BYTES] = 99; // the plane tag is the first byte of the body
         let (back, rest) = take_section(&out).unwrap().unwrap();
         assert!(
             rest.is_empty(),
@@ -383,12 +449,84 @@ mod tests {
     /// A torn append yields `Ok(None)` — "nothing complete here" — not an error. This is
     /// the property that makes an append-only medium safe to write in place: a crash mid
     /// append costs the last increment and nothing else.
+    /// #523, the filed defect. A length prefix corrupted UPWARD — but still under the cap —
+    /// used to read as a torn tail, because `rest.len() < 4 + len` is exactly what an
+    /// interrupted append looks like. The operator was told "your last backup was
+    /// interrupted, run it again" about a medium that is DAMAGED, and slice 2c-ii's recovery
+    /// would then truncate every complete segment after the damage and append over them.
+    ///
+    /// The fixture flips ONE BIT in the length field of a real, well-formed section, which is
+    /// what bit rot on a real medium does.
+    #[test]
+    fn a_length_corrupted_upward_is_damage_not_a_torn_tail() {
+        let mut out = Vec::new();
+        put_segment(&mut out, &segment(Plane::Node, 0, 1)).unwrap();
+        // Anti-vacuity: it parses cleanly BEFORE the flip, so the failure below is caused by
+        // the flip and not by a fixture that was never valid.
+        assert!(
+            take_section(&out).unwrap().is_some(),
+            "the fixture must be a valid section before it is corrupted"
+        );
+        out[LEN_AT + 1] ^= 0x40; // one bit inside the u32 length, far under the 256 MiB cap
+        let err = take_section(&out).expect_err("a corrupt length must NOT read as a torn tail");
+        assert!(
+            matches!(err, BackupError::Damaged(ref m) if m.contains("check")),
+            "the length must fail its own check field, and the message must say so: {err:?}"
+        );
+    }
+
+    /// The other direction. A length corrupted DOWNWARD leaves enough bytes, so the old
+    /// parser walked into the middle of the body and reported whatever malformation it
+    /// happened to hit — a true verdict reached by luck. The check field decides it directly.
+    #[test]
+    fn a_length_corrupted_downward_is_damage_named_at_the_header() {
+        let mut out = Vec::new();
+        put_segment(&mut out, &segment(Plane::Node, 0, 4)).unwrap();
+        out[LEN_AT + 3] ^= 0x01; // one bit, low end of the length
+        let err = take_section(&out).expect_err("a corrupt length must be refused");
+        assert!(
+            matches!(err, BackupError::Damaged(ref m) if m.contains("check")),
+            "must be named at the header, not stumbled over in the body: {err:?}"
+        );
+    }
+
+    /// A bit flip in the CHECK field alone is also damage. It is not "the length is fine so
+    /// carry on": the two fields disagree, and nothing on the medium says which one rotted.
+    /// Refusing is the fail-closed direction — the alternative is trusting a length whose
+    /// only corroboration just failed.
+    #[test]
+    fn a_corrupt_check_field_alone_is_damage() {
+        let mut out = Vec::new();
+        put_segment(&mut out, &segment(Plane::Clinical, 2, 2)).unwrap();
+        out[CHECK_AT + 1] ^= 0x80; // inside len_check, leaving len itself intact
+        let err = take_section(&out).expect_err("a disagreeing check field must be refused");
+        assert!(matches!(err, BackupError::Damaged(_)), "got {err:?}");
+    }
+
+    /// A wrong `SECTION_MAGIC` means the reader is not at a section boundary at all — a wrong
+    /// offset, or wholesale damage. Its message must say boundary, because the remedy is
+    /// "this medium is damaged", never "run the backup again".
+    #[test]
+    fn a_wrong_section_marker_is_damage_and_says_boundary() {
+        let mut out = Vec::new();
+        put_segment(&mut out, &segment(Plane::Node, 0, 1)).unwrap();
+        out[0] ^= 0xff;
+        let err = take_section(&out).expect_err("a wrong section marker must be refused");
+        assert!(
+            matches!(err, BackupError::Damaged(ref m) if m.contains("boundary")),
+            "must name the boundary, not the backup: {err:?}"
+        );
+    }
+
     #[test]
     fn a_torn_tail_reports_incomplete_rather_than_corrupt() {
         let seg = segment(Plane::Clinical, 1, 3);
         let mut out = Vec::new();
         put_segment(&mut out, &seg).unwrap();
-        for cut in [0usize, 1, 3, 4, 10, out.len() - 1] {
+        // 11/12/13 straddle the header boundary itself — the offsets where "not even a
+        // whole header" turns into "a header that checks out over a body that is short".
+        // Nothing tested that seam before the header had one.
+        for cut in [0usize, 1, 3, 4, 10, 11, 12, 13, out.len() - 1] {
             assert!(
                 take_section(&out[..cut])
                     .expect("a short tail is not an error")
@@ -401,11 +539,16 @@ mod tests {
     /// A length prefix larger than the cap is CORRUPTION, not a torn tail. The two send an
     /// operator to different places — "your last backup was interrupted, run it again"
     /// versus "this medium is damaged" — so they must never collapse into one verdict.
+    ///
+    /// BOTH header fields are rewritten so the length stays internally CONSISTENT. Corrupting
+    /// only the length would make `len_check` refuse it one step earlier, and this test would
+    /// then prove nothing whatever about the cap it is named for.
     #[test]
     fn an_absurd_section_length_is_corruption_not_a_torn_tail() {
         let mut out = Vec::new();
         put_segment(&mut out, &segment(Plane::Node, 0, 1)).unwrap();
-        out[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        out[LEN_AT..LEN_AT + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        out[CHECK_AT..CHECK_AT + 4].copy_from_slice(&(!u32::MAX).to_be_bytes());
         let err = take_section(&out).expect_err("must be an error, not Ok(None)");
         assert!(
             matches!(err, BackupError::Damaged(_)),
@@ -447,9 +590,7 @@ mod tests {
             ("no record count", no_count),
             ("non-UTF-8 prev_commitment", bad_utf8),
         ] {
-            let mut out = Vec::new();
-            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-            out.extend_from_slice(&body);
+            let out = crate::testkit::frame_section(&body);
             match take_section(&out) {
                 Err(BackupError::Damaged(_)) => {}
                 other => panic!(
@@ -480,8 +621,8 @@ mod tests {
         put_segment(&mut out, &seg).unwrap();
         // Rewrite the record count from 3 to 2, leaving the third record's bytes in place as
         // an unaccounted-for tail inside an otherwise well-formed section.
-        //   outer len 4 | tag 1 | index 4 | chunk("") 4 | chunk("abcd") 8 | chunk("") 4
-        let count_at = 4 + 1 + 4 + 4 + (4 + "abcd".len()) + 4;
+        //   header 12 | tag 1 | index 4 | chunk("") 4 | chunk("abcd") 8 | chunk("") 4
+        let count_at = SECTION_HEADER_BYTES + 1 + 4 + 4 + (4 + "abcd".len()) + 4;
         out[count_at..count_at + 4].copy_from_slice(&2u32.to_be_bytes());
         let err = take_section(&out).expect_err("a short record count must be refused");
         assert!(
@@ -510,9 +651,7 @@ mod tests {
         put_chunk(&mut body, b"").unwrap(); // attestation: none
         body.extend_from_slice(&u32::MAX.to_be_bytes()); // record_count: absurd
 
-        let mut out = Vec::new();
-        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-        out.extend_from_slice(&body);
+        let out = crate::testkit::frame_section(&body);
 
         let err = take_section(&out)
             .expect_err("an absurd record_count over a short body must Err, never abort");

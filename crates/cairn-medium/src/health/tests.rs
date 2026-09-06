@@ -63,12 +63,8 @@ fn a_medium_missing_a_whole_plane_is_not_sound() {
     let mut bytes = serialize_v3(&m.segments).expect("fits the cap");
     // Relabel the LAST segment's plane tag to one this build does not know, the way a newer
     // Cairn writing a third plane would look from here.
-    let mut offset = crate::container::MEDIUM_MAGIC_V3.len();
-    for _ in 0..2 {
-        let len = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4 + len;
-    }
-    bytes[offset + 4] = 3;
+    let last = testkit::section_body_at(&bytes, 2);
+    bytes[last] = 3;
 
     let MediumImage::V3(m2) = parse_any(&bytes).unwrap() else {
         panic!("not legacy")
@@ -158,7 +154,8 @@ fn an_unknown_plane_mid_chain_does_not_break_the_chain_for_what_follows() {
 fn relabelling_a_signed_segments_plane_breaks_its_attestation() {
     let (m, _) = testkit::verifiable_chain_of(2);
     let mut bytes = serialize_v3(&m.segments).expect("fits the cap");
-    bytes[crate::container::MEDIUM_MAGIC_V3.len() + 4] = 3; // first section's plane tag
+    let tag_at = testkit::section_body_at(&bytes, 0); // first section's plane tag
+    bytes[tag_at] = 3;
     let MediumImage::V3(m2) = parse_any(&bytes).unwrap() else {
         panic!("not legacy")
     };

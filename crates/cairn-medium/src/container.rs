@@ -510,8 +510,9 @@ mod tests {
             2,
         );
         let mut image = serialize_v3(&[a.clone(), b.clone()]).unwrap();
-        // Corrupt the FIRST section's plane tag: 8 magic bytes + 4 length bytes.
-        image[MEDIUM_MAGIC_V3.len() + 4] = 77;
+        // Corrupt the FIRST section's plane tag, located rather than counted by hand.
+        let tag_at = crate::testkit::section_body_at(&image, 0);
+        image[tag_at] = 77;
         match parse_any(&image).unwrap() {
             MediumImage::V3(m) => {
                 assert_eq!(

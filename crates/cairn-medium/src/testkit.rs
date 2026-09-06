@@ -8,7 +8,7 @@
 use crate::attest::{segment_commitment, tests_support};
 use crate::container::{serialize_v3, MediumV3};
 use crate::record::MediumRecord;
-use crate::segment::{Plane, Segment};
+use crate::segment::{Plane, Segment, SECTION_HEADER_BYTES, SECTION_MAGIC};
 use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
 
 /// Build a "clean" `MediumV3` fixture (no unknown segments, no torn tail) out of a
@@ -229,4 +229,45 @@ pub(crate) fn unsigned_chain_of(n: usize) -> MediumV3 {
         segments.push(seg);
     }
     medium_v3(segments)
+}
+
+/// Wrap a hand-built section BODY in a well-formed CAIRNB3 section header.
+///
+/// Tests that build a deliberately MALFORMED body still need an HONEST header, or they stop
+/// at the header checks and never reach the body parser they mean to exercise — the fault
+/// they assert would then be true for the wrong reason.
+///
+/// This helper reuses the production constants on purpose, so it is NOT a guard against a
+/// mirrored change to the framing. That job belongs to `wire_pins`, whose bytes are
+/// hand-written. Keeping the two roles apart is deliberate: behaviour tests here, byte pins
+/// there.
+pub(crate) fn frame_section(body: &[u8]) -> Vec<u8> {
+    let len = body.len() as u32;
+    let mut out = Vec::from(SECTION_MAGIC);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&(!len).to_be_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+/// Byte offset of section `n`'s BODY (its plane tag) within a serialized CAIRNB3 image,
+/// counting from 0.
+///
+/// Tests that poke a plane tag need to know where one is, and three of them used to walk the
+/// framing by hand with a literal `+ 4` for the length prefix. That arithmetic silently
+/// addresses the wrong field the moment the header changes shape, which is precisely what
+/// happened when the #523 guard widened it — and a test that pokes the wrong byte still
+/// asserts something, so it fails for a reason that has nothing to do with its name.
+///
+/// Panics rather than returning an error: a fixture that cannot find its own section is a
+/// broken test, not a runtime condition.
+pub(crate) fn section_body_at(image: &[u8], n: usize) -> usize {
+    let mut offset = crate::container::MEDIUM_MAGIC_V3.len();
+    for _ in 0..n {
+        let len_at = offset + SECTION_MAGIC.len();
+        let len =
+            u32::from_be_bytes(image[len_at..len_at + 4].try_into().expect("4 bytes")) as usize;
+        offset += SECTION_HEADER_BYTES + len;
+    }
+    offset + SECTION_HEADER_BYTES
 }
