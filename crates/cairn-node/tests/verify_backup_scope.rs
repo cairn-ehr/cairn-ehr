@@ -702,6 +702,75 @@ async fn verify_backup_refuses_when_the_sidecar_describes_a_different_medium() {
     );
 }
 
+/// Fix round 2's new Important finding: the Important-1 guard above must NOT fire on a
+/// medium that carries no clinical events at all, purely because the node-global sidecar
+/// happens to name a different path. Two media, neither ever holding a single clinical
+/// event (only the federation genesis every `establish_clinic` node has) — the sidecar ends
+/// up naming drive A after drive B's own backup already succeeded, so `verify-backup --from
+/// B` sees a "mismatched" path exactly like the rotation test above. The difference is that
+/// B has NOTHING for an export to cover, so this must verify CLEAN — `kit_verdict`'s own
+/// policy (a genuinely-empty medium is `Restorable`, never flagged) must not be overridden
+/// by a guard that fires on path disagreement alone.
+#[tokio::test]
+async fn verify_backup_is_clean_on_an_empty_clinical_medium_even_with_a_mismatched_sidecar() {
+    let Some(cl) = establish_clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    // Deliberately NO `author_sealed_clinical_event` call. `establish_clinic` already gives
+    // this node a federation genesis (via `identity::provision`), so the medium is not
+    // EMPTY in the `#502 item 2` sense (federation events exist) — it simply carries no
+    // CLINICAL events, which is the `clinical_watermark_of(&image) == None` case this test
+    // is actually about.
+
+    let drive_a = cl.dir.path().join("drive-a.medium");
+    let drive_b = cl.dir.path().join("drive-b.medium");
+
+    // Back up to B first — no passphrase/escrow needed, since neither medium ever carries a
+    // clinical event or an export in this test.
+    let out_b = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(&drive_b)
+        .output()
+        .unwrap();
+    assert!(
+        out_b.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out_b.stderr)
+    );
+
+    // Then to A — which, because `backup-status.json` is ONE file per signing key, rewrites
+    // the shared sidecar's `medium_path` to A. The sidecar now describes a DIFFERENT medium
+    // than B, exactly the shape the Important-1 guard watches for.
+    let out_a = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(&drive_a)
+        .output()
+        .unwrap();
+    assert!(
+        out_a.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out_a.stderr)
+    );
+
+    // B is genuinely empty of clinical events, so the path mismatch above must NOT refuse
+    // it — the guard requires `medium_seq.is_some()` precisely so this stays green.
+    let v = cl
+        .cli()
+        .args(["verify-backup", "--from"])
+        .arg(&drive_b)
+        .output()
+        .unwrap();
+    assert!(
+        v.status.success(),
+        "an empty-clinical medium must verify clean regardless of a mismatched sidecar; \
+         stderr:\n{}",
+        String::from_utf8_lossy(&v.stderr)
+    );
+}
+
 /// The OTHER failure mode `kit_verdict` distinguishes: clinical events exist and NO export
 /// has EVER covered them (no escrow was ever established — `EscrowRead::Absent`, which used
 /// to be non-fatal because this command "could not tell" a legitimate absence from a lost

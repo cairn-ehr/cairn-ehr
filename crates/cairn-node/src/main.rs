@@ -2727,41 +2727,42 @@ async fn main() -> anyhow::Result<()> {
             // signing key. That is the one place this command reads `cli.key` — only its
             // PATH, as a naming anchor, never any cryptographic material — so the doc above
             // ("no key") still holds in the security sense it was making.
-            let health_path = cairn_node::backup::health_path_for(&cli.key);
-            let health = cairn_node::backup::read_health(&health_path);
-            // #500 slice 2c Task 12: framing alone never said whether a present, readable
-            // export actually COVERS what is on the medium TODAY. A well-framed export
-            // sealed weeks ago beside a medium backed up every night since prints "sealed
-            // export present" forever under the check above — that is the realistic
-            // disaster this task exists to make visible (tonight's medium beside a
-            // weeks-old export), so it is now checked explicitly, in addition to framing,
-            // never instead of it.
-            //
-            // `medium_seq` is read straight off the bytes `--from` already named above (the
-            // medium's own newest clinical seq) — never off a sidecar that could describe a
-            // DIFFERENT backup run than the file actually under test. `export_seq` has no
-            // other honest source: the export is SEALED, so what it covers can only be read
-            // from the plaintext `backup-status.json` `backup` itself writes beside the
-            // signing key. That is the one place this command reads `cli.key` — only its
-            // PATH, as a naming anchor, never any cryptographic material — so the doc above
-            // ("no key") still holds in the security sense it was making.
             //
             // ONE verdict, ONE match, below — every non-`Restorable` outcome (including the
             // path-mismatch case fix round 1 adds next) shares the same exit-code policy,
             // rather than an early `bail!` for one case and a `match` for the rest.
+            let health_path = cairn_node::backup::health_path_for(&cli.key);
+            let health = cairn_node::backup::read_health(&health_path);
             let medium_seq = cairn_node::backup::clinical_watermark_of(&image);
             let verdict = match &health {
-                // #500 slice 2c Task 12 fix round 1, Important 1. `backup-status.json` is
-                // NODE-GLOBAL (one file beside the signing key), but `export_covers_seq` is
-                // a claim about ONE specific export — the most recent successful one, for
-                // whichever medium THAT run targeted. A two-drive rotation (or any cron
-                // pointed at a fresh path) can leave a sidecar whose coverage figure
-                // describes a DIFFERENT medium than the one `--from` names. That is not
-                // "unknown" the way an absent sidecar is — it POSITIVELY describes something
-                // else — so `kit_verdict` (which knows only two seq numbers, never paths)
-                // must not even be consulted here: the caller builds `CoverageUnknown`
-                // directly, before comparing anything.
-                Some(h) if !cairn_node::backup::health_describes_medium(&h.medium_path, &from) => {
+                // #500 slice 2c Task 12 fix round 1, Important 1 — REFINED in fix round 2
+                // (new Important finding). `backup-status.json` is NODE-GLOBAL (one file
+                // beside the signing key), but `export_covers_seq` is a claim about ONE
+                // specific export — the most recent successful one, for whichever medium
+                // THAT run targeted. A two-drive rotation (or any cron pointed at a fresh
+                // path) can leave a sidecar whose coverage figure describes a DIFFERENT
+                // medium than the one `--from` names. That is not "unknown" the way an
+                // absent sidecar is — it POSITIVELY describes something else — so
+                // `kit_verdict` (which knows only two seq numbers, never paths) must not
+                // even be consulted here: the caller builds `CoverageUnknown` directly,
+                // before comparing anything.
+                //
+                // `medium_seq.is_some()` is ADDITIONALLY required, and the ordering here
+                // looks arbitrary without this note: without it, a medium with a federation
+                // genesis but NO clinical events yet (reachable — the earlier `report.total
+                // == 0` bail is scoped to the FEDERATION plane only) would fail as
+                // `CoverageUnknown` merely because the node-global sidecar happens to name
+                // another path, even though this medium has NOTHING for an export to cover.
+                // That directly contradicts `kit_verdict`'s own policy (a genuinely-empty
+                // medium is `Restorable`, never flagged — see its doc) and is pure alarm
+                // fatigue on an early/rotating deployment. The guard can never introduce a
+                // false GREEN by requiring `medium_seq.is_some()`: a medium with nothing
+                // clinical on it has nothing an export could fail to cover, whichever
+                // sidecar happens to be sitting beside the signing key.
+                Some(h)
+                    if medium_seq.is_some()
+                        && !cairn_node::backup::health_describes_medium(&h.medium_path, &from) =>
+                {
                     cairn_node::backup::KitVerdict::CoverageUnknown(format!(
                         "the backup health at {} describes a DIFFERENT medium ({}) than the \
                          one named by --from ({}) — this can happen on a rotation between \
