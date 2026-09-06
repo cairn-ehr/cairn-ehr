@@ -2438,15 +2438,13 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "NOTE: {} held an older-revision (CAIRNB1/CAIRNB2) medium and has been \
                      REPLACED by a new append-only CAIRNB3 medium (a CAIRNB3 segment cannot \
-                     be appended to a legacy container). If that file was a backup of THIS \
-                     node, nothing was lost: this first capture swept both planes from the \
-                     beginning, so the new file holds everything the old one did AND the \
-                     clinical record it could never carry. If it was some OTHER node's medium \
-                     — a peer's, or this node's own from before a restore gave it a new \
-                     identity — those events were not in this database to re-capture, and \
-                     that file is gone: restore it from an archived copy before reusing this \
-                     volume again. Archived copies stay usable either way; `restore` and \
-                     `verify-backup` read both revisions.",
+                     be appended to a legacy container). Nothing was lost: this first capture \
+                     swept both planes from the beginning, so the new file holds everything \
+                     the old one did AND the clinical record it could never carry. That is \
+                     checked, not assumed — a legacy medium naming another node, or one \
+                     holding more federation events than this capture found, is REFUSED with \
+                     the old file left untouched rather than replaced. Archived copies stay \
+                     usable either way; `restore` and `verify-backup` read both revisions.",
                     to.display()
                 );
             }
@@ -2614,6 +2612,32 @@ async fn main() -> anyhow::Result<()> {
                      that this is not yet a complete backup.)"
                 );
             }
+            // THE COMPOSED VERDICT (#500 slice 2c final review, Important 2). Everything
+            // below this point is a NARROWER predicate: `verify_events` checks the federation
+            // plane's signatures and nothing else — not the chain, not the clinical plane's
+            // records, not a spliced or reordered segment. This command was computing
+            // `assess()` anyway (inside `clinical_watermark_of`, further down) and throwing
+            // the verdict away, so a medium `backup` REFUSED to append to could still print
+            // `federation-plane events OK` here and exit 0. `cairn-medium`'s `health` module
+            // exists to make exactly that impossible: it is the entry point precisely so that
+            // nobody concludes a whole-medium all-clear from a fragment.
+            //
+            // WHY HERE, between the torn-tail notice and everything else. The torn-tail check
+            // stays first because a tear is not un-soundness — it has its own, milder remedy
+            // ("run `backup` again"), and `sound()` folds a torn tail in with tampering, so
+            // running this first would answer a mild, actionable situation with the wrong
+            // advice. Everything AFTER this line either prints an all-clear or reasons about
+            // coverage, and neither is meaningful over a medium that is not sound — so this
+            // is the last point at which a refusal is still cheap and unambiguous. The
+            // export/coverage checks keep their existing position below, unchanged.
+            cairn_node::backup::refuse_unsound_medium(
+                &image,
+                &format!("backup UNSOUND: the medium {}", from.display()),
+                "Nothing on this medium can be trusted as a complete backup, whatever the \
+                 per-plane counts below would have said. Locate another copy; if this node \
+                 still holds the events, run `backup --to` a NEW path to write a complete \
+                 medium. Keep this file for diagnosis.",
+            )?;
             let events = cairn_node::backup::node_plane_events(&image)?;
             let counts = cairn_node::backup::plane_counts(&image);
             let report = cairn_node::backup::verify_events(&events);
@@ -2639,22 +2663,20 @@ async fn main() -> anyhow::Result<()> {
             // internally consistent" and "is this medium worth anything" are different
             // questions, and only the second belongs to the health check.
             if report.total == 0 {
-                // #500 slice 2c review, Important 3 (and its Important 4 residual, round
-                // 2): a CAIRNB3 medium can hold zero federation events and STILL carry
-                // clinical or unknown-plane content — "there is nothing to back up yet"
-                // would be false for either, so neither shares the truly-empty message.
-                // Built as one combined message (not two sequential bails) so a medium
-                // holding BOTH is not misreported as if it held only the first checked.
+                // #500 slice 2c review, Important 3: a CAIRNB3 medium can hold zero
+                // federation events and STILL carry clinical content — "there is nothing to
+                // back up yet" would be false for it, so it does not share the truly-empty
+                // message. Kept as a composed list rather than a bare `if` so a second kind
+                // of content, should one ever be added, joins the same sentence instead of
+                // being misreported as if it held only the first checked.
+                //
+                // The unknown-plane half of this message is gone, not forgotten: since the
+                // composed-verdict check above, a medium carrying an unrecognised plane has
+                // already been refused with the "upgrade this node" remedy, so a branch here
+                // could only ever be dead code claiming to handle a case it never sees.
                 let mut other_content = Vec::new();
                 if counts.clinical > 0 {
                     other_content.push(format!("{} clinical event(s)", counts.clinical));
-                }
-                if counts.unknown > 0 {
-                    other_content.push(format!(
-                        "{} record(s) in a plane this build does not recognise (written \
-                         by a newer Cairn — upgrade this node)",
-                        counts.unknown
-                    ));
                 }
                 if !other_content.is_empty() {
                     anyhow::bail!(
@@ -2688,20 +2710,15 @@ async fn main() -> anyhow::Result<()> {
                 "federation-plane events OK: {}/{} verified",
                 report.intact, report.total
             );
-            // #500 slice 2c review, Important 4: a plane tag this build does not recognise
-            // (written by a NEWER Cairn) must not sit invisibly inside an "OK" medium — the
-            // remedy is "upgrade this node", never "damaged"/"fetch another copy", so this
-            // is a loud warning rather than a bail (`BackupError::UnsupportedByThisBuild`'s
-            // own taxonomy: the checked federation plane really is fine).
-            if counts.unknown > 0 {
-                eprintln!(
-                    "WARNING: this medium also carries {} record(s) in a plane this build \
-                     does not recognise (written by a newer Cairn) — upgrade this node. \
-                     Those records are NOT checked above and are not counted in either \
-                     total.",
-                    counts.unknown
-                );
-            }
+            // A WARNING about unrecognised planes used to sit here (#500 slice 2c review,
+            // Important 4). It has moved UP, into `refuse_unsound_medium`'s first arm, and
+            // became a refusal — because it is now unreachable from here: an unknown plane
+            // is a chain fault, so `assess()` cannot call such a medium sound and the check
+            // above returns first. The remedy it carried is unchanged and travels with it
+            // ("upgrade this node", never "damaged"/"fetch another copy"); what changed is
+            // the exit code, and deliberately: a cron health check that exits 0 over a
+            // medium it cannot fully read is the same composite untruth this programme keeps
+            // finding, one surface over.
             let (line, fatal) = export_verdict_line(&classify_export_beside_medium(&from), &from);
             println!("{line}");
             if fatal {
@@ -3135,13 +3152,14 @@ async fn main() -> anyhow::Result<()> {
                         }
                         // Declared at the operator surface rather than buried in a comment:
                         // the carried custody rows land with the clinical events, which the
-                        // medium does not yet carry (#500, slice 2). A carried-but-not-applied
-                        // count nobody sees is the exact failure this slice corrects.
+                        // medium DOES carry since slice 2c — what is still owed is the door
+                        // that reads them back (slice 2d). A carried-but-not-applied count
+                        // nobody sees is the exact failure this slice corrects.
                         if report.episode_deks_carried() > 0 {
                             println!(
                                 "note: those {} custody row(s) are carried but not yet applied \
                                  — they land with the clinical events, which this backup \
-                                 medium does not yet carry (#500)",
+                                 medium DOES carry, and which nothing restores yet (#500)",
                                 report.episode_deks_carried()
                             );
                         }
@@ -3156,7 +3174,7 @@ async fn main() -> anyhow::Result<()> {
                             println!(
                                 "note: those {} actor-registry row(s) are carried but not yet \
                                  applied — until they are, this node cannot apply ANY clinical \
-                                 event, even once the medium starts carrying them (#500)",
+                                 event, though the medium already carries them (#500)",
                                 report.actor_registry_carried()
                             );
                         }

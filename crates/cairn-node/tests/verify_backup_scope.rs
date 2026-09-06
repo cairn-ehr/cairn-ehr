@@ -822,3 +822,120 @@ async fn verify_backup_refuses_when_clinical_events_have_no_export_at_all() {
         "the refusal must be reachable and distinct from the STALE case: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Final review, Important 2: `verify-backup` and `backup` must reach the SAME verdict on
+// the same bytes. Before this, `verify-backup` computed `assess()` (inside
+// `clinical_watermark_of`) and threw the composed verdict away, resting its "OK" on
+// `verify_events` over the FEDERATION plane alone — so a corrupt CLINICAL record printed
+// `federation-plane events OK: N/N verified` and exited 0 on a medium `backup` refused to
+// touch. Two commands, opposite verdicts, one file.
+// ---------------------------------------------------------------------------
+
+/// Flip one bit inside `needle` where it sits in `haystack`, in place.
+///
+/// A SURGICAL corruption, and the shape matters: it targets the middle of a known record's
+/// signed bytes, so every length prefix and every frame boundary in the container stays
+/// exactly as written. The medium therefore still PARSES cleanly — this is a broken
+/// signature, not a `Damaged` container — which is precisely the case a narrow
+/// federation-plane check cannot see and the composed verdict can.
+fn flip_a_bit_inside(haystack: &mut [u8], needle: &[u8]) -> usize {
+    let at = haystack
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .expect("the record must be findable on the medium, or this test corrupts nothing");
+    let target = at + needle.len() / 2;
+    haystack[target] ^= 0x01;
+    target
+}
+
+/// A corrupt CLINICAL record must fail `verify-backup`, exactly as it fails `backup`.
+#[tokio::test]
+async fn verify_backup_refuses_a_medium_whose_clinical_plane_is_corrupt() {
+    let Some(cl) = establish_clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let signed = author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    // A full kit — escrow + passphrase, so the sealed export lands beside the medium and the
+    // coverage check further down `verify-backup` is satisfied. Without it the honest medium
+    // would already refuse for a DIFFERENT reason (`ExportMissing`), and this test would have
+    // nothing to say about soundness.
+    write_existing_escrow(&cl.key(), "op-pass", "REC-CODE");
+
+    let out = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(cl.medium())
+        .args(["--passphrase", "op-pass"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the honest capture must succeed first; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // ANTI-VACUITY: the UNCORRUPTED medium must verify clean, or "it refuses after the
+    // bit-flip" would be a statement about something else entirely.
+    let before = cl
+        .cli()
+        .args(["verify-backup", "--from"])
+        .arg(cl.medium())
+        .output()
+        .unwrap();
+    assert!(
+        before.status.success(),
+        "an honest medium must still verify clean; stderr:\n{}",
+        String::from_utf8_lossy(&before.stderr)
+    );
+
+    let mut bytes = std::fs::read(cl.medium()).unwrap();
+    flip_a_bit_inside(&mut bytes, &signed);
+    std::fs::write(cl.medium(), &bytes).unwrap();
+    // The corruption must not have broken the FRAMING — the whole point is a medium that
+    // parses, whose federation plane is untouched, and which is nonetheless unsound.
+    assert!(
+        matches!(parse_any(&bytes), Ok(MediumImage::V3(_))),
+        "the fixture must stay a parseable CAIRNB3 medium: a `Damaged` container would be \
+         caught by the old, narrower check too and would prove nothing"
+    );
+
+    let after = cl
+        .cli()
+        .args(["verify-backup", "--from"])
+        .arg(cl.medium())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&after.stderr);
+    let stdout = String::from_utf8_lossy(&after.stdout);
+    assert!(
+        !after.status.success(),
+        "a corrupt clinical record must fail the cron health check — the federation plane \
+         being intact is not the same claim as the medium being sound.\nstdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("UNSOUND"),
+        "the refusal must name what it found, not merely exit non-zero: {stderr}"
+    );
+    assert!(
+        !stdout.contains("events OK"),
+        "and it must refuse BEFORE printing any all-clear — an operator who sees `OK` scroll \
+         past has already been told the wrong thing: {stdout}"
+    );
+
+    // THE POINT OF THE WHOLE FINDING: `backup` over these same bytes refuses too, so the
+    // two commands can no longer disagree about one file.
+    let re_backup = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(cl.medium())
+        .output()
+        .unwrap();
+    assert!(
+        !re_backup.status.success(),
+        "`backup` already refused this medium — that disagreement is the defect: stderr:\n{}",
+        String::from_utf8_lossy(&re_backup.stderr)
+    );
+}

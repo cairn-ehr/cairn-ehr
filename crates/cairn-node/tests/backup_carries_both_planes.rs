@@ -27,6 +27,13 @@
 //! 4. **A legacy CAIRNB1/CAIRNB2 medium is succeeded by a NEW CAIRNB3 medium that holds at
 //!    least as much** — the migration step, and the one where an operator could lose
 //!    records if the first CAIRNB3 capture were anything less than a full sweep.
+//! 5. **…and it is REFUSED when the successor would not hold at least as much** — the two
+//!    arms of that same precondition, which nothing enforced until the final review of this
+//!    slice (Critical 1). Succeeding a legacy medium is the only path here that DESTROYS an
+//!    artifact, and an empty successor is perfectly *sound*, so no downstream check would
+//!    have stopped it: a peer's medium on a shared volume, and the disk-died / re-`init` /
+//!    `backup`-before-`restore` sequence, each end with the clinic's only copy overwritten
+//!    and a success reported.
 //!
 //! COUNTS ARE DERIVED, NEVER HARDCODED (`capture_loop.rs`'s rule, for the same reason): one
 //! `author_sealed_clinical_event` writes MORE than one `event_log` row — since #345 a
@@ -39,10 +46,10 @@
 
 use cairn_event::keys::Secret32;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
-use cairn_event::{sign, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_medium::{
-    append_segment, parse_any, serialize_container, MediumImage, MediumRecord, Plane, Segment,
-    SelfMarker,
+    append_segment, build_self_attestation, parse_any, serialize_container,
+    verify_self_attestation, MediumImage, MediumRecord, Plane, Segment, SelfMarker,
 };
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
@@ -191,6 +198,15 @@ fn read_v3(path: &std::path::Path) -> MediumImage {
         "a capture must leave a CAIRNB3 medium, never a legacy container: {path:?}"
     );
     image
+}
+
+/// This node's own genesis node-id (hex), read from `local_node` — the same answer
+/// `backup_to` reads for the self-marker it writes onto every segment.
+async fn self_node_id_hex(c: &Client) -> String {
+    identity::load_local(c)
+        .await
+        .expect("the clinic fixture provisions a node")
+        .node_id_hex
 }
 
 /// Every record the medium carries on `plane`, in file order.
@@ -384,13 +400,19 @@ async fn a_legacy_medium_is_succeeded_by_a_cairnb3_medium_holding_at_least_as_mu
 
     // Stage the world as it is for an upgrading clinic: a real CAIRNB2 medium, written the
     // way the pre-2c writer wrote one — the federation plane and a self-marker, nothing else.
+    //
+    // The marker names THIS node, and that is not cosmetic (#500 slice 2c final review,
+    // Critical 1): succeeding a legacy medium is now refused when the old medium belongs to
+    // someone else, so a fixture naming an arbitrary id would be testing the refusal path
+    // while claiming to test the upgrade. It also could not occur — a real marker is a
+    // node's 32-byte content-address, not a short word.
     let legacy_events = backup::read_event_set(&cl.db).await.unwrap();
     assert!(
         !legacy_events.is_empty(),
         "anti-vacuity: the legacy medium must carry something for the successor to preserve"
     );
     let legacy = serialize_container(
-        Some(&SelfMarker::Unsigned("deadbeef".into())),
+        Some(&SelfMarker::Unsigned(self_node_id_hex(&cl.db).await)),
         &legacy_events,
     )
     .expect("the fixture fits the frame cap");
@@ -510,5 +532,186 @@ async fn a_torn_medium_is_repaired_and_the_repair_is_reported() {
         intact,
         "the repair cuts back to exactly the last complete section — nothing verified is \
          lost, and nothing new was appended because the log did not change"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Succeeding a legacy medium DESTROYS it. Its safety argument has a precondition, and
+// these two tests are that precondition made checkable (#500 slice 2c final review,
+// Critical 1). Both drive the real `backup_to`; neither asserts on a fixture image.
+// ---------------------------------------------------------------------------
+
+/// A DIFFERENT node's genuine pre-2c backup medium — its own signed genesis plus the signed
+/// self-attestation `backup` wrote beside it — and that node's id.
+///
+/// Built from the production primitives (`sign`, `event_address`, `build_self_attestation`)
+/// rather than hand-assembled, so it is what a peer running the pre-2c writer would actually
+/// have left on a shared backup volume: the case
+/// [`backup::MediumOrigin::SucceededLegacy`]'s doc names. Nothing here touches this node's
+/// database, and that is the whole point — the peer's events are precisely what a capture
+/// HERE cannot sweep back onto a successor.
+fn a_peers_legacy_medium() -> (Vec<u8>, String) {
+    let (peer_sk, peer_kid) = generate_key().expect("entropy for the peer's signing key");
+    let genesis = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: identity::NIL_PATIENT.into(),
+        event_type: "node.enrolled".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "peer-clinic".into(),
+        },
+        t_effective: None,
+        signer_key_id: peer_kid.clone(),
+        contributors: serde_json::json!([{"actor_id": peer_kid, "role": "recorded"}]),
+        payload: serde_json::json!({"display_name": "peer-clinic", "address": "127.0.0.1:7999"}),
+        attachments: vec![],
+        plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
+    };
+    let events = vec![
+        sign(&genesis, &peer_sk)
+            .expect("the peer signs its own genesis")
+            .signed_bytes,
+    ];
+    // A node-id IS the content-address of its genesis, so this is the peer's real id — 32
+    // bytes of hex, the shape a marker actually carries, never a short word.
+    let peer_node_id = hex::encode(event_address(&events[0]));
+    let attestation = build_self_attestation(&peer_sk, &peer_kid, &peer_node_id, &events);
+    // ANTI-VACUITY: the marker must genuinely VERIFY against these events. An unreadable
+    // marker degrades to "no claim", so without this the refusal under test could fire for
+    // the count reason while the test claimed to be exercising the identity reason.
+    assert_eq!(
+        verify_self_attestation(&attestation, &events),
+        Some(peer_node_id.clone()),
+        "the fixture must be a real signed marker, not a blob that merely looks like one"
+    );
+    let bytes = serialize_container(Some(&SelfMarker::Signed(attestation)), &events)
+        .expect("the fixture fits the frame cap");
+    (bytes, peer_node_id)
+}
+
+/// **ARM 1 — a peer's medium on a shared backup volume is refused, never replaced.**
+///
+/// Two clinics rotating one USB stick, or one clinic whose stick still holds a medium from
+/// before a restore gave the node a new identity. Succeeding a legacy medium REPLACES the
+/// file, and the successor can only ever carry events that are in THIS database — so the
+/// peer's record would be destroyed with no copy anywhere and no error at all: the successor
+/// is internally sound, so every downstream check passes it.
+#[tokio::test]
+async fn a_legacy_medium_belonging_to_another_node_is_refused_not_replaced() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    let (peer_medium, peer_node_id) = a_peers_legacy_medium();
+    std::fs::write(cl.medium(), &peer_medium).unwrap();
+    assert_ne!(
+        peer_node_id,
+        self_node_id_hex(&cl.db).await,
+        "anti-vacuity: the fixture must genuinely belong to a DIFFERENT node"
+    );
+
+    let err = backup::backup_to(
+        &cl.db,
+        &cl.medium(),
+        &cl.health(),
+        1_700_000_000,
+        Some((&cl.sk, &cl.kid)),
+    )
+    .await
+    .expect_err("replacing another node's only medium must be refused, not reported as a backup");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(&peer_node_id),
+        "the refusal must NAME whose medium this is — an operator holding two sticks has to \
+         know which one they are looking at: {msg}"
+    );
+    assert!(
+        msg.contains("--to at a NEW path"),
+        "and it must name a remedy they can act on tonight, not merely say no: {msg}"
+    );
+
+    assert_eq!(
+        std::fs::read(cl.medium()).unwrap(),
+        peer_medium,
+        "the peer's medium must be BYTE-IDENTICAL afterwards — a refusal that still wrote \
+         would be the defect with an error message attached"
+    );
+    assert!(
+        backup::read_health(&cl.health()).is_none(),
+        "and health must not advance over a backup that did not happen"
+    );
+}
+
+/// **ARM 2 — the successor may never hold LESS than the medium it replaces.**
+///
+/// The disaster the whole guard exists for, staged exactly as it happens: the clinic's disk
+/// dies, the operator re-`init`s a node, and — *before* running `restore` — runs `backup --to`
+/// at the USB stick holding their only medium. `local_node` is empty, so the medium claims no
+/// node this run can be compared against and arm 1 cannot help; the capture reads zero
+/// federation rows; and the staged image is genuinely SOUND (an intact chain over no node
+/// segments, 0 of 0 signatures vacuously intact, no torn tail), so `refuse_unsound` passes it
+/// happily. Only the count comparison stands between the operator and an empty file where
+/// their record used to be.
+///
+/// The clinical rows are deliberately LEFT in the database, which makes the successor
+/// non-empty and therefore not even `carries_nothing` — so the test cannot pass by accident
+/// on the emptiness warning that fires after the write is already done.
+#[tokio::test]
+async fn a_legacy_medium_is_refused_when_the_successor_would_hold_less() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    // The stick: a marker-less legacy medium (a CAIRNB1-era backup, or one taken before
+    // enrolment). No identity claim at all, so ONLY the count arm can refuse this — the test
+    // isolates the arm it is named for.
+    let legacy_events = backup::read_event_set(&cl.db).await.unwrap();
+    assert!(
+        !legacy_events.is_empty(),
+        "anti-vacuity: there must be something on the medium for the successor to fall short of"
+    );
+    let legacy = serialize_container(None, &legacy_events).expect("the fixture fits the frame cap");
+    std::fs::write(cl.medium(), &legacy).unwrap();
+
+    // The dead disk, replaced: an initialised database that names no node. `local_node` is
+    // exactly what `read_self_node_id` reads, and it answers `None` here WITHOUT an error —
+    // which is what let this path reach the write in the first place.
+    db::reset_node_federation_tables(&cl.db).await.unwrap();
+
+    let err = backup::backup_to(&cl.db, &cl.medium(), &cl.health(), 1_700_000_000, None)
+        .await
+        .expect_err(
+            "a backup that would replace the clinic's only medium with a smaller one must \
+             refuse — this is the disk-died, re-init, backup-before-restore sequence",
+        );
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(&format!("{} federation event(s)", legacy_events.len())),
+        "the refusal must quote what the old medium holds, so the operator can see the \
+         shortfall rather than take it on trust: {msg}"
+    );
+    assert!(
+        msg.contains("--to at a NEW path"),
+        "and name the remedy: {msg}"
+    );
+
+    assert_eq!(
+        std::fs::read(cl.medium()).unwrap(),
+        legacy,
+        "the only copy of the clinic's record must be BYTE-IDENTICAL afterwards"
+    );
+    assert!(
+        backup::read_health(&cl.health()).is_none(),
+        "and health must not advance over a backup that did not happen"
     );
 }

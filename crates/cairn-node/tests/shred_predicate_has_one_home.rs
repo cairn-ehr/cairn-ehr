@@ -108,10 +108,12 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "crates/cairn-node/tests/shred_predicate_has_one_home.rs",
-        "this guard's own source: the allow-list reasons and the panic message are DATA \
-         (not comments) that name `SELECT`/`FROM`/`JOIN`/`erasure_shred_log` together, \
-         and the matching code itself contains those same keywords as string literals — \
-         describing the idiom is not deciding anything about a row",
+        "this guard's own source: the allow-list reasons, the panic message and the \
+         RIVAL_SPELLINGS/GENUINE_BOOKKEEPING injection set are DATA (not comments) that \
+         name `SELECT`/`FROM`/`JOIN`/`USING`/`erasure_shred_log` together, and the \
+         matching code itself contains those same keywords as string literals — \
+         describing an idiom, and feeding it to the matcher, is not deciding anything \
+         about a row",
     ),
     (
         "db/005_submit.sql",
@@ -271,10 +273,106 @@ fn is_bookkeeping(stmt: &str) -> bool {
     }
 }
 
-/// How many `FROM`/`JOIN` table-introductions appear in a statement. Every SQL join
-/// flavour (`LEFT JOIN`, `INNER JOIN`, a bare `JOIN`, …) puts the table name directly
+/// How many `FROM`/`JOIN`/`USING` table-introductions appear in a statement. Every SQL
+/// join flavour (`LEFT JOIN`, `INNER JOIN`, a bare `JOIN`, …) puts the table name directly
 /// after the word `JOIN`, so counting the bare keyword is sufficient without also having
 /// to enumerate join flavours.
+///
+/// `USING` earns its place for one specific reason (#500 slice 2c final review, Minor 6):
+/// Postgres' `DELETE … USING` is a THIRD way to introduce a table, and it is the natural
+/// spelling of the very statement this guard exists to catch —
+/// `DELETE FROM event_dek USING erasure_shred_log s WHERE d.event_id = s.target_event_id`
+/// purges custody keyed on shred-log membership, a real decision about whether a key
+/// survives. Without `USING` counted, that statement offers exactly ONE `FROM`
+/// (`DELETE FROM`), clears the `<= 1` bookkeeping test, and passes as harmless ledger
+/// maintenance — the same under-flagging the module doc calls the worse failure direction.
+/// The `JOIN … USING (col)` form also matches, which merely double-counts a join that was
+/// already caught; over-counting can only ever move a statement INTO the human-reviewed
+/// allow-list, never out of it.
 fn table_introduction_count(stmt: &str) -> usize {
-    stmt.matches("FROM").count() + stmt.matches("JOIN").count()
+    stmt.matches("FROM").count() + stmt.matches("JOIN").count() + stmt.matches("USING").count()
+}
+
+/// Rival spellings of the travel filter, each of which MUST be seen as a candidate
+/// definition rather than as bookkeeping.
+///
+/// WHY AN INJECTION SET AT ALL. The scan test above is a whole-repo inventory: it passes
+/// when `found == ALLOWED`, which is exactly as true of a guard that detects everything as
+/// of one that detects nothing new. Narrowing `is_bookkeeping` by accident — the failure
+/// that killed cuts 1 and 2 of this guard (see the module doc) — would leave that test
+/// green and silent. So the shapes the guard claims to catch are written down and fed
+/// through it directly. They are synthetic strings, never SQL this repo runs.
+const RIVAL_SPELLINGS: &[(&str, &str)] = &[
+    (
+        "DELETE FROM event_dek d USING erasure_shred_log s WHERE d.event_id = s.target_event_id",
+        "Postgres' DELETE … USING join — the spelling Minor 6 found slipping through on a \
+         single FROM",
+    ),
+    (
+        "DELETE FROM event_dek WHERE event_id IN (SELECT target_event_id FROM erasure_shred_log)",
+        "the anti-join purge the module doc's 'gap caught by review' section names",
+    ),
+    (
+        "SELECT d.dek_wrapped FROM event_dek d WHERE NOT EXISTS (SELECT 1 FROM \
+         erasure_shred_log s WHERE s.target_event_id = d.event_id)",
+        "db/051's own NOT EXISTS shape — the definition, restated elsewhere",
+    ),
+    (
+        "SELECT d.dek_wrapped FROM event_dek d LEFT JOIN erasure_shred_log s ON \
+         s.target_event_id = d.event_id WHERE s.target_event_id IS NULL",
+        "cairn-sync's historical LEFT JOIN shape",
+    ),
+    (
+        "SELECT dek_wrapped FROM event_dek WHERE event_id NOT IN (SELECT target_event_id \
+         FROM erasure_shred_log)",
+        "NOT IN — as common an anti-join idiom as NOT EXISTS, and cut 2 missed it",
+    ),
+    (
+        "SELECT dek_wrapped FROM event_dek d WHERE EXISTS (SELECT 1 FROM erasure_shred_log \
+         s WHERE s.target_event_id = d.event_id)",
+        "a bare EXISTS driving an inverted branch — the same decision without a leading NOT",
+    ),
+];
+
+/// Statements that touch the ledger and decide NOTHING about another row. Kept beside the
+/// rivals so a future tightening cannot quietly make the guard flag everything and call
+/// that safety: a guard that fails on `TRUNCATE` teaches maintainers to edit the
+/// allow-list reflexively, which is how a real rival gets waved through.
+const GENUINE_BOOKKEEPING: &[(&str, &str)] = &[
+    (
+        "TRUNCATE event_log, erasure_shred_log, event_dek CASCADE",
+        "fixture cleanup naming several tables",
+    ),
+    (
+        "REVOKE ALL ON event_dek, erasure_shred_log FROM cairn_agent",
+        "a privilege list; GRANT/REVOKE wins over the word SELECT sitting nearby",
+    ),
+    (
+        "INSERT INTO erasure_shred_log (target_event_id) SELECT event_id FROM event_log \
+         WHERE payload IS NULL",
+        "db/037's rebuild: its one FROM names event_log, not a second read of the ledger",
+    ),
+    (
+        "SELECT count(*) FROM erasure_shred_log",
+        "a plain row-count read of the ledger itself",
+    ),
+];
+
+#[test]
+fn the_guard_actually_catches_every_rival_spelling_it_claims_to() {
+    for (sql, why) in RIVAL_SPELLINGS {
+        assert!(
+            mentions_a_candidate_definition(sql),
+            "this guard must see `{sql}` as a candidate definition ({why}) — it decides \
+             whether a shredded body's key travels, and a spelling the guard cannot see is \
+             a silent second home for the predicate"
+        );
+    }
+    for (sql, why) in GENUINE_BOOKKEEPING {
+        assert!(
+            !mentions_a_candidate_definition(sql),
+            "this guard must NOT flag `{sql}` ({why}) — over-flagging pure bookkeeping is \
+             how the allow-list becomes a rubber stamp, which is how a real rival gets in"
+        );
+    }
 }

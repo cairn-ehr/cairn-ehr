@@ -660,14 +660,16 @@ pub enum MediumOrigin {
     /// never carry. Pinned by
     /// `tests/backup_carries_both_planes.rs::a_legacy_medium_is_succeeded_by_a_cairnb3_medium_holding_at_least_as_much`.
     ///
-    /// ⚠️ **The precondition is real: a legacy medium belonging to a DIFFERENT node — a peer's,
-    /// or this node's own from before a restore minted it a new identity — is replaced, not
-    /// merged, and its events are not in this database to be re-swept.** That hazard is not
-    /// introduced here (today's whole-set writer already overwrote whatever was at `--to`, and
-    /// a CAIRNB3 medium is now APPENDED to rather than replaced, so this path is the only one
-    /// left that destroys), but it is not closed here either: nothing checks whose medium this
-    /// was. An operator reusing a backup volume across nodes must copy the old file aside
-    /// first, and the CLI note says so.
+    /// ⚠️ **The precondition is real, and it is now ENFORCED** (#500 slice 2c final review,
+    /// Critical 1). A legacy medium belonging to a DIFFERENT node — a peer's on a shared
+    /// backup volume, or this node's own from before a restore minted it a new identity —
+    /// would be replaced, not merged, and its events are not in this database to be re-swept.
+    /// The same shape swallowed a clinic's only medium after a disk failure: re-`init`, then
+    /// `backup --to` before `restore`, and an empty-but-SOUND successor overwrote it.
+    /// [`refuse_unsafe_legacy_succession`] now refuses the write when the legacy medium names
+    /// another node or when the successor would carry fewer federation events than it did,
+    /// leaving the old file untouched; pinned by the two `…_refuses_…` tests in
+    /// `tests/backup_carries_both_planes.rs`.
     SucceededLegacy,
 }
 
@@ -772,12 +774,54 @@ async fn read_self_node_id(db: &tokio_postgres::Client) -> anyhow::Result<Option
 /// definition is not worth a crate dependency here.
 const CAPTURE_PAGE_EVENTS: i64 = 500;
 
+/// What the LEGACY medium at the target path was carrying, remembered ONLY for as long as
+/// it takes [`backup_to`] to decide whether succeeding it is safe.
+///
+/// WHY IT HAS TO TRAVEL (#500 slice 2c final review, Critical 1). Succeeding a CAIRNB1/B2
+/// medium REPLACES the file: the successor is safe only under the precondition
+/// [`MediumOrigin::SucceededLegacy`] names — that it is a medium of *this* node's own event
+/// set, which the fresh capture then re-sweeps in full. Nothing checked that precondition,
+/// and `read_self_node_id` returns `None` (not an error) on an initialised-but-not-enrolled
+/// database, so an operator whose disk had just died could re-`init`, point `backup --to` at
+/// their only medium, and have it replaced by an 8-byte empty one — sound, internally
+/// consistent, and carrying nothing. Checking needs two facts the legacy image holds and
+/// nothing downstream would otherwise see, so they are carried forward rather than re-read.
+struct SupersededLegacy {
+    /// The node the legacy medium claims for itself, lowercased — `None` when it makes no
+    /// claim at all.
+    ///
+    /// `None` covers three honest cases and one deliberate degradation: a CAIRNB1 medium
+    /// (predates the marker entirely), a CAIRNB2 medium captured before enrolment, and a
+    /// SIGNED marker whose attestation does not verify against the events beside it. That
+    /// last one is treated as "no claim" rather than as "a claim we distrust", because the
+    /// only way to read an id out of an unverified attestation is to skip the signature
+    /// check — which this codebase does nowhere — and because the count check below still
+    /// covers the case. It can only ever WITHHOLD a refusal, never invent one.
+    claimed_node_hex: Option<String>,
+    /// How many events it carried. A legacy container has no planes: every event on it is a
+    /// federation-plane event, which is why the successor's NODE count is what it compares to.
+    node_events: usize,
+}
+
 /// The bytes this backup will append to, plus WHY they are those bytes.
 ///
 /// The three outcomes are deliberately not collapsed (`MediumOrigin`'s doc has the operator
 /// consequence). The fourth possible state of the target path — a file that exists and is
 /// NOT a readable Cairn medium — is a REFUSAL rather than a fourth variant; see below.
-fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin, bool)> {
+struct OpenedMedium {
+    /// The bytes the capture appends to. Empty-but-framed for the two "start fresh" outcomes.
+    buffer: Vec<u8>,
+    origin: MediumOrigin,
+    /// The medium found on disk had a torn tail. Reported, not acted on here — the repair is
+    /// `capture_plane`'s.
+    torn_tail_repaired: bool,
+    /// `Some` exactly when `origin == MediumOrigin::SucceededLegacy`: what the medium about
+    /// to be REPLACED was carrying, for [`refuse_unsafe_legacy_succession`].
+    superseded: Option<SupersededLegacy>,
+}
+
+/// Read the target path and classify it. See [`OpenedMedium`].
+fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
     use anyhow::Context;
 
     let bytes = match std::fs::read(path) {
@@ -785,11 +829,12 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin, b
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // A first backup. `serialize_v3(&[])` is an 8-byte magic header and nothing
             // else; the capture below appends every segment.
-            return Ok((
-                crate::medium::serialize_v3(&[])?,
-                MediumOrigin::FirstEver,
-                false,
-            ));
+            return Ok(OpenedMedium {
+                buffer: crate::medium::serialize_v3(&[])?,
+                origin: MediumOrigin::FirstEver,
+                torn_tail_repaired: false,
+                superseded: None,
+            });
         }
         // Present but UNREADABLE (permissions, an I/O error, a mount that went away). We
         // must not overwrite what we could not read: a good medium behind a transient read
@@ -819,7 +864,12 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin, b
             // becomes the next section's length prefix and orphans every later backup). This
             // only remembers that it is about to happen, so the caller can say so.
             let torn = m.truncated_tail;
-            Ok((bytes, MediumOrigin::Continued, torn))
+            Ok(OpenedMedium {
+                buffer: bytes,
+                origin: MediumOrigin::Continued,
+                torn_tail_repaired: torn,
+                superseded: None,
+            })
         }
 
         // A CAIRNB1/CAIRNB2 medium. A CAIRNB3 segment has nowhere to attach in a legacy
@@ -829,11 +879,24 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin, b
         // planes: the successor is a strict superset of what the legacy medium carried.
         // The operator is TOLD (`MediumOrigin::SucceededLegacy` → the CLI line), because the
         // file at this path is no longer the artifact they backed up to yesterday.
-        Ok(MediumImage::Legacy(_)) => Ok((
-            crate::medium::serialize_v3(&[])?,
-            MediumOrigin::SucceededLegacy,
-            false,
-        )),
+        //
+        // THAT SAFETY ARGUMENT HAS A PRECONDITION, AND THIS IS WHERE ITS INPUTS ARE TAKEN
+        // (#500 slice 2c final review, Critical 1). "The successor is a strict superset" holds
+        // only if the legacy medium is of THIS node's own event set. It is not enforceable
+        // here — `open_or_start_medium` is pure of the database, and the successor's contents
+        // do not exist yet — so the two facts needed to enforce it are carried out to
+        // `backup_to`, which checks them against the staged image immediately before the
+        // write (`refuse_unsafe_legacy_succession`). Reading the marker costs one signature
+        // scan of the legacy medium, once, on the single run that supersedes it.
+        Ok(MediumImage::Legacy(container)) => Ok(OpenedMedium {
+            buffer: crate::medium::serialize_v3(&[])?,
+            origin: MediumOrigin::SucceededLegacy,
+            torn_tail_repaired: false,
+            superseded: Some(SupersededLegacy {
+                claimed_node_hex: legacy_claimed_node(&container),
+                node_events: container.events.len(),
+            }),
+        }),
 
         // Present, readable, and NOT a medium this build can parse. Refused, never replaced,
         // and this is the one place `backup` can now fail where it previously always
@@ -850,17 +913,168 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<(Vec<u8>, MediumOrigin, b
         //
         // It fails LOUDLY (non-zero exit) rather than warning, because ADR-0026 decision 7 is
         // that a node which cannot currently back up must say so.
+        //
+        // THE THREE VARIANTS ARE SPLIT, NOT FOLDED (#500 slice 2c final review, Important 3).
+        // `error.rs`'s header is explicit that these situations have OPPOSITE remedies, and a
+        // single catch-all arm here reintroduced the exact defect that taxonomy was created to
+        // end: it told an operator holding a perfectly good medium written by a NEWER Cairn
+        // that it "is not a backup medium this build can read" and to abandon it for a new
+        // path — while `UnsupportedByThisBuild`'s own doc says *"Never treat this as damage.
+        // Do not re-run a backup over this medium… Upgrade the node."* One message for three
+        // diagnoses is how a good medium gets discarded mid-disaster.
+        Err(e @ crate::medium::BackupError::NotAMedium(_)) => anyhow::bail!(
+            "{} is not a Cairn backup medium at all ({e}). Nothing is damaged and nothing \
+             was written — this looks like the wrong path. If `--to` is a typo, this may be \
+             a file you still need, so it is left exactly as it was: check the path, or \
+             point --to at a NEW one to write a complete medium (the first capture sweeps \
+             both planes from the beginning, so nothing is lost).",
+            path.display()
+        ),
+        Err(e @ crate::medium::BackupError::UnsupportedByThisBuild(_)) => anyhow::bail!(
+            "{} is a VALID backup medium that THIS BUILD cannot fully read ({e}) — it was \
+             written by a NEWER Cairn. The medium is fine; this node is behind it. The \
+             remedy is to UPGRADE THIS NODE. Do NOT re-run a backup over this medium and do \
+             not append to it: this build cannot see everything already on it, so an append \
+             would write against an incomplete picture. Nothing was written and the medium \
+             is untouched. If a backup must be taken before the upgrade, point --to at a \
+             DIFFERENT path and leave this file alone.",
+            path.display()
+        ),
+        Err(e @ crate::medium::BackupError::Damaged(_)) => anyhow::bail!(
+            "{} is a DAMAGED backup medium ({e}). Refusing to overwrite it: replacing it \
+             destroys the only copy a future, repaired parser could read, and a corrupt \
+             section length is indistinguishable from an interrupted append (#523) — the two \
+             remedies are opposite. Keep this file for diagnosis, look for another copy, and \
+             point --to at a NEW path to write a complete medium (the first capture sweeps \
+             both planes from the beginning, so nothing is lost).",
+            path.display()
+        ),
+        // `Io` and `Encode` cannot come out of `parse_any` (it reads a slice and writes
+        // nothing), so this arm exists to keep the match total rather than to describe a
+        // reachable state — and it says so, instead of guessing a remedy for a situation
+        // nobody has diagnosed.
         Err(e) => anyhow::bail!(
-            "{} exists but is not a backup medium this build can read ({e}). Refusing to \
-             overwrite it: if this path is a typo it may be a file you need, and if it is a \
-             DAMAGED medium then replacing it destroys the only copy — a corrupt section \
-             length is indistinguishable from an interrupted append (#523) and the two \
-             remedies are opposite. Point --to at a NEW path to write a complete medium (the \
-             first capture sweeps both planes from the beginning, so nothing is lost), and \
-             keep this file for diagnosis.",
+            "reading the backup medium {} failed in a way this build does not expect from a \
+             parse ({e}). Nothing was written and the medium is untouched. Please report \
+             this with the message above; meanwhile, point --to at a NEW path to take \
+             tonight's backup.",
             path.display()
         ),
     }
+}
+
+/// Which node a LEGACY (CAIRNB1/CAIRNB2) medium claims for itself, lowercased — or `None`
+/// when it makes no claim this function is willing to read. PURE.
+///
+/// See [`SupersededLegacy::claimed_node_hex`] for what each `None` means and why an
+/// unverifiable signed marker is folded into it. Split out as its own function so the
+/// "what does the old medium say it is?" question has one spelling and can be reasoned
+/// about without the surrounding I/O.
+fn legacy_claimed_node(container: &crate::medium::Container) -> Option<String> {
+    match container.self_marker.as_ref()? {
+        // The untrusted plaintext id. Operator-error-safe, not tamper-evident — exactly the
+        // trust level this check needs, because the failure it guards against is an operator
+        // pointing `--to` at the wrong volume, not an attacker.
+        SelfMarker::Unsigned(id) => Some(id.to_ascii_lowercase()),
+        // The signed marker: verified against the events it sits beside, so a genuine peer's
+        // medium names the peer unforgeably. `verify_self_attestation` already lowercases.
+        SelfMarker::Signed(attestation) => {
+            crate::medium::verify_self_attestation(attestation, &container.events)
+        }
+    }
+}
+
+/// Refuse to REPLACE a legacy medium whose successor would not hold everything it held.
+/// PURE — no database, no filesystem — so both refusal arms are exercisable directly.
+///
+/// # The disaster this exists to prevent (#500 slice 2c final review, Critical 1)
+///
+/// [`MediumOrigin::SucceededLegacy`] destroys the file at `--to` and puts a fresh CAIRNB3
+/// medium in its place. That is safe under ONE precondition — the legacy medium is of this
+/// node's own event set, so the fresh capture's full sweep re-records everything it held —
+/// and until this function nothing checked it. Two realistic ways the precondition fails:
+///
+///  1. **The medium belongs to another node.** A peer's medium on a shared backup volume, or
+///     this node's own from before a restore minted it a new identity. Those events are not
+///     in this database, so no sweep can recover them.
+///  2. **The database no longer holds what the medium does.** The disk died, the operator
+///     re-`init`ed a node, and — *before* running `restore` — ran `backup --to` at their only
+///     medium. `read_self_node_id` answers `None` (not an error) on an un-enrolled database,
+///     the capture reads zero rows, and the staged image is genuinely SOUND: `chain_intact`
+///     holds, `all_intact()` is vacuously true at 0 of 0, and there is no torn tail. So
+///     `refuse_unsound` passes it, the write lands, and the clinic's only backup becomes an
+///     8-byte header — with `carries_nothing` warned to stderr *after* the file is gone.
+///
+/// Arm 2 is what makes this a hard refusal rather than a warning: by the time anything else
+/// could notice, the artifact it would have warned about no longer exists.
+///
+/// # Why COUNTS, and why that is enough here
+///
+/// A count cannot prove set inclusion, and this codebase's own rule is *name, never count*.
+/// It does not need to prove it: the two planes are compared for the only property that can
+/// be violated by a full sweep of an append-only table, namely that the sweep found FEWER
+/// events than the medium already held. `node_event` is append-only, so for this node's own
+/// medium the successor's count is monotone — a shortfall is therefore proof of a different
+/// event set, never a false alarm about ordering or content. (The strict superset itself is
+/// pinned event-by-event by
+/// `tests/backup_carries_both_planes.rs::a_legacy_medium_is_succeeded_by_a_cairnb3_medium_holding_at_least_as_much`.)
+fn refuse_unsafe_legacy_succession(
+    legacy: &SupersededLegacy,
+    staged_node_records: usize,
+    self_id_hex: &str,
+    path: &Path,
+) -> anyhow::Result<()> {
+    // The remedy is the same for both arms and is the whole point of refusing: the operator
+    // still gets tonight's backup, and the artifact they cannot rebuild stays on disk.
+    const REMEDY: &str = "NOTHING was written — the medium at this path is exactly as it \
+                          was. Point --to at a NEW path: that writes a complete medium of \
+                          THIS node (the first capture sweeps both planes from the \
+                          beginning), and leaves the old one intact to be read, copied \
+                          aside, or restored from.";
+
+    // ARM 1 — it is somebody else's medium. Only checked when the medium actually names a
+    // node: a CAIRNB1 medium or a pre-enrolment capture claims nothing, and silence is not a
+    // mismatch (principle 4 — no data is never disagreement).
+    if let Some(claimed) = &legacy.claimed_node_hex {
+        if !claimed.eq_ignore_ascii_case(self_id_hex) {
+            let whose = if self_id_hex.is_empty() {
+                "this database is NOT ENROLLED, so it has no events of that node — or of any \
+                 node — to sweep back onto a successor. If the old node's disk died, run \
+                 `restore` FROM this medium first; running `backup` first replaces the only \
+                 copy"
+                    .to_string()
+            } else {
+                format!(
+                    "this node is {self_id_hex}, so that node's events are not in this \
+                     database and no capture here can put them back"
+                )
+            };
+            anyhow::bail!(
+                "refusing to replace the backup medium {}: it is a CAIRNB1/CAIRNB2 medium \
+                 belonging to node {claimed}, and {whose}. Succeeding a legacy medium \
+                 REPLACES the file, and that is only safe for a medium of this node's own \
+                 event set. {REMEDY}",
+                path.display()
+            );
+        }
+    }
+
+    // ARM 2 — it is (or may be) our medium, but the successor would hold LESS. This is the
+    // arm that catches the un-enrolled/empty database even when the old medium named nobody.
+    if staged_node_records < legacy.node_events {
+        anyhow::bail!(
+            "refusing to replace the backup medium {}: it carries {} federation event(s) and \
+             the medium that would replace it carries only {}. Succeeding a legacy medium \
+             REPLACES the file, and is only safe when the fresh capture sweeps back at least \
+             everything the old medium held. It did not, so this database is not the one that \
+             wrote that medium (a restore that has not run yet, a re-`init`ed node, or \
+             another node's volume). {REMEDY}",
+            path.display(),
+            legacy.node_events,
+            staged_node_records
+        );
+    }
+    Ok(())
 }
 
 /// How strongly the medium on disk identifies its node. PURE — the classification alone, so
@@ -937,6 +1151,51 @@ fn refuse_unsound(
         health.truncated_tail,
         health.chain.faults
     )
+}
+
+/// Put a medium IMAGE through the composed [`crate::medium::assess`] verdict and refuse it if
+/// it does not hold — the whole-medium check, for callers that hold an image rather than a
+/// `MediumHealth`.
+///
+/// # Why this is public, and what went wrong without it (#500 slice 2c final review, Important 2)
+///
+/// `backup_to` has run this verdict since Task 9, and `verify-backup` had not: it computed
+/// `assess()` (inside [`clinical_watermark_of`]), threw the verdict away, and rested its "OK"
+/// on `verify_events` over the FEDERATION plane alone. So one spliced or reordered segment, or
+/// one corrupt clinical record, printed `federation-plane events OK: N/N verified` and exited
+/// 0 while `backup` over the very same bytes refused. Two commands, opposite verdicts, one
+/// file — and `cairn-medium`'s own `health` module says `assess` exists precisely so that no
+/// caller concludes anything from a narrower predicate. Sharing ONE function is what keeps the
+/// cron health check and the writer from drifting into different ideas of "good enough".
+///
+/// The UNKNOWN-PLANE case is checked FIRST and separately, exactly as in `backup_to`, because
+/// its remedy is the opposite of every other unsound medium's: *upgrade this node*, never
+/// *fetch another copy* and never *start a new medium* ([`crate::medium::MediumHealth::needs_a_newer_build`]).
+/// An unknown plane also makes `chain_intact()` false, so without this arm a perfectly good
+/// medium written by a newer Cairn would fall through to the generic refusal and be given
+/// precisely the advice `BackupError::UnsupportedByThisBuild` forbids. The WORDING differs
+/// from `backup_to`'s deliberately, and only the wording: that one is about to APPEND, so its
+/// refusal says why appending in particular is wrong; this one only ever reads.
+///
+/// A CAIRNB1/CAIRNB2 image returns `Ok` and nothing is skipped: a legacy container has no
+/// segments and no chain, so `assess` — a verdict about a CAIRNB3 chain — has nothing to say
+/// about one, and on such a medium `node_plane_events` already IS every event the file holds,
+/// so the caller's own flat signature pass covers the whole artifact.
+pub fn refuse_unsound_medium(image: &MediumImage, what: &str, remedy: &str) -> anyhow::Result<()> {
+    let MediumImage::V3(m) = image else {
+        return Ok(());
+    };
+    let health = crate::medium::assess(m);
+    if health.needs_a_newer_build() {
+        anyhow::bail!(
+            "{what} carries {} record(s) in a plane this build does not recognise, so it was \
+             written by a NEWER Cairn and this build cannot see all of it. The medium is \
+             fine; this node is behind it. The remedy is to UPGRADE THIS NODE — not to fetch \
+             another copy, and not to start a new medium.",
+            health.records_in_unknown_planes
+        );
+    }
+    refuse_unsound(&health, what, remedy)
 }
 
 /// Back up BOTH event planes to `medium_path`, then record health at `health_path`.
@@ -1024,7 +1283,12 @@ pub async fn backup_to(
     let enrolled = self_id.is_some();
     let self_id_hex = self_id.unwrap_or_default();
 
-    let (mut buffer, origin, repaired_torn_tail) = open_or_start_medium(medium_path)?;
+    let OpenedMedium {
+        mut buffer,
+        origin,
+        torn_tail_repaired: repaired_torn_tail,
+        superseded,
+    } = open_or_start_medium(medium_path)?;
 
     // STEP 1 + 2. Node, then Clinical, into the one buffer. Each `?` DISCARDS `buffer`
     // unwritten — see the doc's step 2; that absence of a write is the safety property, and
@@ -1097,6 +1361,24 @@ pub async fn backup_to(
          the first capture of a fresh medium sweeps both planes from the beginning, so the \
          successor holds everything this one did.",
     )?;
+    // THE LEGACY-SUCCESSION GUARD, and why it sits HERE rather than in
+    // `open_or_start_medium` (#500 slice 2c final review, Critical 1). Succeeding a legacy
+    // medium is the one path in this function that DESTROYS an artifact, and its safety
+    // argument — "the successor is a strict superset" — is a claim about the staged image,
+    // which does not exist until the two captures above have run. So the check cannot live
+    // where the decision to supersede is made; it lives at the last moment before the write,
+    // with both inputs in hand. Note that soundness above does NOT subsume it: an empty
+    // successor is perfectly sound (0 of 0 signatures intact, an intact chain over no
+    // segments, no torn tail), which is exactly how this could destroy a clinic's only medium
+    // and report success.
+    if let Some(legacy) = &superseded {
+        refuse_unsafe_legacy_succession(
+            legacy,
+            plane_counts(&staged_image).node,
+            &self_id_hex,
+            medium_path,
+        )?;
+    }
     // PEAK MEMORY. `parse_any` copies every record's `signed_bytes` into an owned `Vec`, so a
     // parsed image costs roughly what the file costs. Nothing below reads `staged_image`, and
     // holding it across the write and the read-back would put four medium-sized allocations
@@ -1315,6 +1597,146 @@ mod tests {
             "an enrolled node whose capture ran without a key HAS an identity; it just did \
              not get signed onto the medium. Reporting `None` here would send an operator \
              to `provision` instead of to their passphrase."
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The legacy-succession guard (#500 slice 2c final review, Critical 1). PURE, so these
+    // run with no Postgres at all — the end-to-end pins in
+    // `tests/backup_carries_both_planes.rs` self-skip without a database, and the one path
+    // in this file that DESTROYS an artifact should not be unguarded on a developer machine
+    // that has not started one.
+    // -----------------------------------------------------------------------
+
+    /// A node-id-shaped value, derived rather than written out — the real thing is the
+    /// 32-byte content-address of a genesis, and a short word could never occur.
+    fn node_id_hex(lineage: u8) -> String {
+        hex::encode(std::array::from_fn::<u8, 32, _>(|i| {
+            lineage.wrapping_add(i as u8)
+        }))
+    }
+
+    #[test]
+    fn succeeding_our_own_legacy_medium_is_allowed_when_the_successor_holds_at_least_as_much() {
+        let us = node_id_hex(1);
+        let legacy = SupersededLegacy {
+            claimed_node_hex: Some(us.clone()),
+            node_events: 7,
+        };
+        // Equal is fine (an unchanged log), and more is fine (the log grew since).
+        for staged in [7, 9] {
+            refuse_unsafe_legacy_succession(&legacy, staged, &us, Path::new("/mnt/usb/m"))
+                .unwrap_or_else(|e| {
+                    panic!("the normal upgrade path must not be refused (staged={staged}): {e:#}")
+                });
+        }
+    }
+
+    #[test]
+    fn a_legacy_medium_naming_another_node_is_refused_with_a_remedy() {
+        let err = refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: Some(node_id_hex(2)),
+                node_events: 3,
+            },
+            // Deliberately NOT short: the count arm must not be what refuses this.
+            99,
+            &node_id_hex(1),
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("another node's medium must never be replaced");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&node_id_hex(2)),
+            "the refusal must name whose medium it is: {msg}"
+        );
+        assert!(
+            msg.contains("--to at a NEW path"),
+            "and a remedy the operator can act on tonight: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_unenrolled_database_is_told_to_restore_before_it_backs_up() {
+        // The disaster shape: `read_self_node_id` answers `None`, so `self_id_hex` is empty.
+        // Getting this wrong destroys the only copy, so the advice has to be specific.
+        let err = refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: Some(node_id_hex(3)),
+                node_events: 3,
+            },
+            0,
+            "",
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("an un-enrolled node must not replace a medium it cannot re-sweep");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("NOT ENROLLED") && msg.contains("`restore`"),
+            "an operator mid-disaster must be told to restore FIRST, not merely that this \
+             failed: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_successor_holding_fewer_events_is_refused_even_when_nobody_is_named() {
+        // A CAIRNB1 medium claims no node at all, so arm 1 cannot fire — this is the only
+        // thing standing between an emptied database and the clinic's last copy.
+        let err = refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: None,
+                node_events: 12,
+            },
+            0,
+            "",
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("a successor holding less must never replace its predecessor");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("12 federation event(s)") && msg.contains("only 0"),
+            "the refusal must quote both counts so the shortfall is visible: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_marker_naming_us_in_a_different_case_is_not_a_mismatch() {
+        // `local_node` renders hex lowercase and a marker carries whatever was written into
+        // it. Refusing over letter case alone would block a legitimate upgrade at the worst
+        // possible moment, so the compare is case-insensitive.
+        let us = node_id_hex(4);
+        refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: Some(us.to_ascii_uppercase()),
+                node_events: 1,
+            },
+            1,
+            &us,
+            Path::new("/mnt/usb/m"),
+        )
+        .expect("case is not identity");
+    }
+
+    #[test]
+    fn legacy_claimed_node_reads_an_unsigned_marker_and_stays_silent_without_one() {
+        let id = node_id_hex(5);
+        let named = crate::medium::Container {
+            self_marker: Some(SelfMarker::Unsigned(id.to_ascii_uppercase())),
+            events: vec![],
+        };
+        assert_eq!(
+            legacy_claimed_node(&named),
+            Some(id),
+            "an unsigned marker is the claim, normalised to lowercase"
+        );
+        let anonymous = crate::medium::Container {
+            self_marker: None,
+            events: vec![],
+        };
+        assert_eq!(
+            legacy_claimed_node(&anonymous),
+            None,
+            "a CAIRNB1 medium claims nothing, and silence is not a mismatch (principle 4)"
         );
     }
 }

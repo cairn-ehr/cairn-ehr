@@ -1171,12 +1171,14 @@ pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &Secret32) -> a
 /// # What is CARRIED but not APPLIED, and why that is honest rather than lossy
 ///
 /// [`LocalState::episode_deks`] is counted and reported, not inserted. The rows belong to
-/// clinical events, and the backup medium does not yet carry a single clinical event
-/// (**#500**, the next slice) — so there is nothing for them to be custody OF, and building a
-/// second custody door here that #500 would immediately supersede would be waste. The count
-/// travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the restore
-/// command PRINTS it: an operator is told what came across and what is still owed, rather
-/// than finding out on the next disaster.
+/// clinical events, and while the backup medium HAS carried those since DR slice 2c, nothing
+/// on this side reads them back yet: `restore` applies the federation plane only, so there is
+/// still no restored clinical event here for these rows to be custody OF. The door that
+/// changes that is slice 2d's (**#500** stays open until it lands), and it is the same door
+/// that must insert this custody — building a second one here, ahead of it, would be waste.
+/// The count travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the
+/// restore command PRINTS it: an operator is told what came across and what is still owed,
+/// rather than finding out on the next disaster.
 ///
 /// [`LocalState::actor_registry`] gets the SAME treatment, for the SAME reason (Task 11's own
 /// fix round, review finding I2): counted in [`AppliedLocalState::actor_registry_carried`] and
