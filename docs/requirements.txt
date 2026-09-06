@@ -23,6 +23,6 @@
 # reviewed change after verifying the release's dependency tree, licence,
 # and provenance (house rule 1).
 mkdocs==1.6.1
-mkdocs-material==9.7.6
+mkdocs-material==9.7.7
 mkdocs-callouts==1.16.1
 mkdocs-redirects==1.2.1
