@@ -62,6 +62,63 @@ with `sync_all()`; the `CAIRNL1` export gains the actor registry and read-after-
   of 10 000 fresh clinical events completes in **< 60 s**. If a measurement falls outside its budget,
   **that is the finding — file an issue, never adjust the budget.**
 
+### The measurement (Task 13, 2026-09-06) — both budgets PASS
+
+**Machine and conditions.** MacBook (Apple silicon, darwin 25.6.0); PostgreSQL 18 on
+`127.0.0.1:5532`, local NVMe; warm database; **`--release` profile**, which is the profile
+`cairn-node backup` actually ships as. One born-sealed `clinical.medication.asserted` body per
+event, custody wrapped by the strict door. Timings are wall-clock around `backup::backup_to`
+alone, taken by a throwaway harness (not committed — a 60 s benchmark has no place in a gate this
+crate runs on every change, and this crate has no `#[ignore]`).
+
+| `event_log` rows | medium bytes | first capture (fresh medium) | nightly capture, **unchanged** log (3 runs) |
+|---|---|---|---|
+| **10 000** | 13.7 MB | **1.27 s** (budget < 60 s) | **0.86 / 0.87 / 1.10 s** (budget < 2 s) |
+| 20 000 | 27.4 MB | 2.52 s | 1.83 / 1.81 / 1.65 s |
+| 40 000 | 54.9 MB | 4.99 s | 3.10 / 3.07 / 3.25 s |
+
+Every unchanged-log run **appended 0 bytes and left the medium byte-identical** — the append
+property CAIRNB3 exists for holds exactly as designed, and is separately pinned as a test by
+`backup_carries_both_planes.rs`.
+
+For reference, the same harness on the **debug** profile (the developer gate's profile) reads
+11.39 s / 7.85–7.91 s at 10 000 events. Debug is ~8× slower on the signature sweeps; it is
+recorded here only so a future measurement on the wrong profile is not mistaken for a regression.
+
+**No budget was adjusted.** Both stated budgets are met at the stated size, with ~47× margin on
+the first-capture one.
+
+**The finding the measurement produced anyway — [#552](https://github.com/cairn-ehr/cairn-ehr/issues/552).**
+The unchanged-log time is linear in the size of the WHOLE medium, not in the number of new
+records: ~0.08 s/MB, ~0.85 s per 10 000 events already on the medium. Interpolating between the
+20 000 and 40 000 rows, **the 2 s budget is crossed at roughly 23 000 events / ~32 MB**, and it
+keeps growing linearly from there. A single-clinician practice passes 23 000 clinical events
+within months, so this is forward-dated rather than theoretical.
+
+The honest framing is **not** "the rewrite grew". CAIRNB3's O(new-records) append property is real
+and intact — **it stops at the `atomic_write` seam.** Everything the ceremony does *around* the
+append is O(whole medium) on every run regardless of how little was appended: `open_or_start_medium`
+parses the existing medium, `capture_plane` × 2 needs the chain tail, `parse_any` + `medium::assess`
+sweep the whole staged image before the write, `fsio::atomic_write` writes the **entire** buffer
+rather than the appended suffix, and the read-after-write re-reads, re-parses and re-`assess`es the
+whole file. (This slice's own review counted up to **7 full parses and 2 whole-medium signature
+sweeps per nightly run** across the `backup` command as a whole.) None of that is wrong — the
+verify-before-write and read-after-write are precisely what stop #500's composite untruth. The
+point is only that the medium's cheap-append design does not survive contact with them.
+
+Two consequences, recorded in #552: the nightly ritual's STEP count is unaffected (M = N = 1, so
+this is a time budget and not a step-count defect), but a nightly backup whose duration grows
+without bound is a ritual that eventually stops being run — a paper-parity failure by a slower
+route; and these numbers are from NVMe, while the Bet B target is an 8 GB Pi, where a whole-file
+rewrite plus two signature sweeps will land considerably worse (`backup.rs` already carries a
+peak-memory note for the same reason).
+
+**The step-count half of the benchmark, for completeness:** M = N = K = 1, as designed. The two
+ways this slice could have broken it were both tested rather than hoped for — Task 7 pins that a
+capture with no signing key at all still captures the clinical plane, and Task 12's
+`backup_still_exits_zero_when_the_export_is_skipped` pins that an unattended cron run with no
+passphrase is not failed over the optional export.
+
 ## File Structure
 
 | file | responsibility |
