@@ -729,7 +729,12 @@ workspace); `poc/` is frozen historical spikes.
 - **⇒ Test env — `scripts/run-db-gated-tests.sh` is the ONE command for the local gate**, the only one
   catching all three demonstrated hiding modes (fail-fast · a piped exit status · a cross-crate suite
   `-p <crate>` never builds): the `db/tests/*.sql` mirrors plus the full workspace with
-  `CAIRN_TEST_PG`/`PG2`/`PG3` baked in (PG18 + cairn_pgx on `127.0.0.1:5532`, DBs `cairn_test`/`2`/`3`).
+  `CAIRN_TEST_PG`/`PG2`/`PG3` baked in (DBs `cairn_test`/`2`/`3`). **The CLUSTER is discovered, not
+  assumed** — `scripts/pg-target.sh` finds a running PostgreSQL meeting the `db/001_envelope.sql` floor
+  (>= 18), refuses one below it by NAME AND VERSION, and refuses to guess when two qualify; set `PGPORT`
+  to name one. It used to default to `127.0.0.1:5532`, true of one machine in the world, and a bare
+  `run-db-sql-tests.sh` reached whatever the libpq socket did — on this Mac a PG16 instance, which
+  failed 22 migrations deep on `max(bytea)` and cost a wrong diagnosis (2026-09-07).
   **⇒ Cost depends on what changed, not target-dir warmth** (#503's 6-hour surprise): a cross-crate change
   relinks every test binary under macOS's one-time-per-binary Gatekeeper assessment — but #511 relinked
   the whole tree and still finished in well under an hour on a warm target, so **measure rather than
