@@ -270,7 +270,14 @@ precedes the only one that can conclude "torn". `len_check` is a **corruption de
 authentication** (an attacker rewrites both halves in one edit); `SECTION_MAGIC` is not a control
 either. Tamper-evidence stays entirely with the attestation chain.
 
-1. **⇒ A ⇒ NEXT IS ONLY TRUE OF `main`, AND NOTHING SAYS SO.** The session opened by verifying
+1. **⇒ THE ROOT CAUSE, AND THE RULE IT PRODUCED (maintainer, 2026-09-07): EVERY SESSION ENDS IN AT
+   LEAST A DRAFT PR.** 2c was finished on 09-06 and left un-PR'd when the editor restarted and took
+   the session with it — VS Code does not reopen a finished session after an update. The PR list is
+   the maintainer's first check before starting a session, so a branch that never reached it is
+   invisible no matter how well its own HANDOVER reads. Now **CLAUDE.md house rule 8** and
+   `/nextsession` rules 10–11: push and open a **draft** PR even for incomplete, blocked or
+   mid-review work, and check `gh pr list --state all` before acting on a ⇒ NEXT.
+2. **⇒ A ⇒ NEXT IS ONLY TRUE OF `main`, AND NOTHING SAYS SO.** The session opened by verifying
    HANDOVER and ROADMAP were current, compared them against `git log`, and found them consistent —
    then spent hours designing and part-building a slice that **already existed, finished, on an
    unmerged local branch with no PR**. The documents were accurate about `main` and silent about 40
@@ -279,22 +286,22 @@ either. Tamper-evidence stays entirely with the attestation chain.
    said done. **Before starting anything a ⇒ NEXT names, run `git branch -a` and
    `git log --all --oneline --since=<the last session date>`.** Checking the working tree and `main`
    is not checking the repository.
-2. **⇒ "IT DESTROYS NOTHING" IS THE WRONG TEST FOR A RECONCILIATION.** The 2c branch had diverged —
+3. **⇒ "IT DESTROYS NOTHING" IS THE WRONG TEST FOR A RECONCILIATION.** The 2c branch had diverged —
    the design commits on the remote, the implementation only local. Preserving both with a
    `-s ours` merge looked strictly safer than a force-push and was **provably lossless**, and it was
    still wrong: origin's commits were the *superseded originals*, rebased away precisely because one
    of them put a closing keyword next to `#500` inside a sentence that denied it. Re-merging them
    resurrected a fixed defect and turned the closing-keyword guard red. **Ask what the remote commits
    ARE, not merely whether their content survives.**
-3. **⇒ THE GUARD CAUGHT THE PR BODY DESCRIBING THE DEFECT COMMITTING IT.** Writing "the original said
+4. **⇒ THE GUARD CAUGHT THE PR BODY DESCRIBING THE DEFECT COMMITTING IT.** Writing "the original said
    *does not close #NNN*" in the PR body trips `check_closing_keywords.py`, correctly — the quoted
    example is itself a live closing adjacency. Describe the shape, never quote it verbatim near a
    reference.
-4. **A TDD lapse, recorded rather than hidden**: the `cairn-medium` framing tests were written
+5. **A TDD lapse, recorded rather than hidden**: the `cairn-medium` framing tests were written
    alongside their implementation in one file, so the red step never ran and green proved nothing.
    Recovered by mutation (`!len -> len`, `CB3S -> CB3X`), which is the evidence the missing red would
    have given — but it is a recovery, not a substitute.
-5. **The plan said six tests addressed the framing by hand; it was nine.** The three extra lived in
+6. **The plan said six tests addressed the framing by hand; it was nine.** The three extra lived in
    `container.rs` and `health/tests.rs` and were found by RUNNING the suite. Offsets are now derived
    from the header constants or located by `testkit::section_body_at`, because a literal `out[9]`
    silently re-aims at a different field when the header changes — the first draft of one test passed
