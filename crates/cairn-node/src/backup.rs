@@ -666,7 +666,7 @@ pub enum MediumOrigin {
     /// would be replaced, not merged, and its events are not in this database to be re-swept.
     /// The same shape swallowed a clinic's only medium after a disk failure: re-`init`, then
     /// `backup --to` before `restore`, and an empty-but-SOUND successor overwrote it.
-    /// [`refuse_unsafe_legacy_succession`] now refuses the write when the legacy medium names
+    /// `refuse_unsafe_legacy_succession` now refuses the write when the legacy medium names
     /// another node or when the successor would carry fewer federation events than it did,
     /// leaving the old file untouched; pinned by the two `…_refuses_…` tests in
     /// `tests/backup_carries_both_planes.rs`.
