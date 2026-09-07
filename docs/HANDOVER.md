@@ -44,7 +44,7 @@
 >   review wave 09-01) is the FORMAT: `crates/cairn-medium` + **CAIRNB3**, per-segment signed chained
 >   attestation; 19-of-19 surviving mutations became 18/18 killed, `health::assess` is the one composed
 >   verdict, `Plane::Unknown(tag)` is first-class, `BackupError` splits three ways (**#522** loud,
->   **#523**/**#524** open, **#525** done). **2b** (09-02) is the SEAM and the PAGING:
+>   **#525** done; **#522**, **#523** and **#524** all closed since, the last two by this branch). **2b** (09-02) is the SEAM and the PAGING:
 >   `crates/cairn-wire`, `Transport`/`MediumTransport`, and a `do_pull` that pages and checkpoints EVERY
 >   page — closing **#101 item 1 only** (items 2–3 keep #101 open); opened **#531**, **#532**,
 >   **#534**–**#538**. **#511** (09-04) is the TYPES: `Secret32`/`PublicKey32` across four crates and the
@@ -234,7 +234,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-06 (**DR slice 2c** — the backup medium finally carries the clinical record, and nothing yet restores one; closed #522 and #524, fixed #550 in-branch, opened #549, #551 and #552; **#500 closes as titled and #554 carries the read half for 2d**) · previous: 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed — #101, #115, #434, #441, #468, #500, #534 — reopened, and a CI guard so the next negated sentence cannot do it again) and, earlier that day, **#511** (**the custody newtypes**: `Secret32`/`PublicKey32` across four crates plus the `cairn_pgx` tree; installing a PUBLIC half as this node's SECRET custody key is now a compile error; CAIRNL1 bytes unchanged and golden-pinned; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; #101 loses only item 1; opened #531, #532, #534–#538) and, earlier that day, **#527** (the CodeQL backlog: the 18 criticals were a real defect, not the familiar false positive; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave; opened #522–#525, re-opened #511) · 2026-08-30 (**#503**, the shared keystore crate; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1**: #495 CLOSED, #500 still open; opened #503–#509, #511–#513). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** v0.68 (2c adds no ADR and no spec bump, but ADR-0066 gains dated errata **E1/E2** and the canonical `docs/spec/security.md` is corrected where 2c made it false) · **`SCHEMA_GENERATION`:** **51** (`db/051`, 2c's one migration — 2a, 2b and #511 added none) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — the section header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch because it is a pre-field format change and 2c is the writer that starts producing media, i.e. the last moment it is free. **The same session found 2c itself sitting unmerged and un-PR'd**, its remote holding four superseded design commits that a rebase had already reworded — reconciled, gate re-run, one PR) · 2026-09-06 (**DR slice 2c** — the backup medium finally carries the clinical record, and nothing yet restores one; closed #522 and #524, fixed #550 in-branch, opened #549, #551 and #552; **#500 closes as titled and #554 carries the read half for 2d**) · previous: 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed — #101, #115, #434, #441, #468, #500, #534 — reopened, and a CI guard so the next negated sentence cannot do it again) and, earlier that day, **#511** (**the custody newtypes**: `Secret32`/`PublicKey32` across four crates plus the `cairn_pgx` tree; installing a PUBLIC half as this node's SECRET custody key is now a compile error; CAIRNL1 bytes unchanged and golden-pinned; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; #101 loses only item 1; opened #531, #532, #534–#538) and, earlier that day, **#527** (the CodeQL backlog: the 18 criticals were a real defect, not the familiar false positive; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave; opened #522–#525, re-opened #511) · 2026-08-30 (**#503**, the shared keystore crate; opened #514–#518, #520, #521) · 2026-08-24 (**DR slice 1**: #495 CLOSED, #500 still open; opened #503–#509, #511–#513). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** v0.68 (2c adds no ADR and no spec bump, but ADR-0066 gains dated errata **E1/E2** and the canonical `docs/spec/security.md` is corrected where 2c made it false) · **`SCHEMA_GENERATION`:** **51** (`db/051`, 2c's one migration — 2a, 2b and #511 added none) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -258,7 +258,49 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-06 (last) — DR slice 2c: the medium finally carries the clinical record
+### 2026-09-07 (last) — the section-framing guard, and a finished slice nobody could see
+
+**Closes #523. Rides the 2c branch rather than its own, because it is a pre-field CAIRNB3 format
+change and 2c is the writer that starts producing media — the last moment it is free.**
+`take_section`'s three verdicts had only one airtight direction: a truncation could never read as
+corruption, but any corrupt length under the 256 MiB cap reached `rest.len() < 4 + len` and read as a
+torn tail. The header is now `[SECTION_MAGIC 4][len 4][len_check 4]` — `len_check` **stored** as the
+complement, **verified** with an XOR — and the five read steps are ordered so every corruption test
+precedes the only one that can conclude "torn". `len_check` is a **corruption detector, never
+authentication** (an attacker rewrites both halves in one edit); `SECTION_MAGIC` is not a control
+either. Tamper-evidence stays entirely with the attestation chain.
+
+1. **⇒ A ⇒ NEXT IS ONLY TRUE OF `main`, AND NOTHING SAYS SO.** The session opened by verifying
+   HANDOVER and ROADMAP were current, compared them against `git log`, and found them consistent —
+   then spent hours designing and part-building a slice that **already existed, finished, on an
+   unmerged local branch with no PR**. The documents were accurate about `main` and silent about 40
+   commits that were not on it. This is the seven-wrongly-closed-issues shape with the polarity
+   reversed: there, GitHub said done and the prose said open; here the prose said to-do and the disk
+   said done. **Before starting anything a ⇒ NEXT names, run `git branch -a` and
+   `git log --all --oneline --since=<the last session date>`.** Checking the working tree and `main`
+   is not checking the repository.
+2. **⇒ "IT DESTROYS NOTHING" IS THE WRONG TEST FOR A RECONCILIATION.** The 2c branch had diverged —
+   the design commits on the remote, the implementation only local. Preserving both with a
+   `-s ours` merge looked strictly safer than a force-push and was **provably lossless**, and it was
+   still wrong: origin's commits were the *superseded originals*, rebased away precisely because one
+   of them put a closing keyword next to `#500` inside a sentence that denied it. Re-merging them
+   resurrected a fixed defect and turned the closing-keyword guard red. **Ask what the remote commits
+   ARE, not merely whether their content survives.**
+3. **⇒ THE GUARD CAUGHT THE PR BODY DESCRIBING THE DEFECT COMMITTING IT.** Writing "the original said
+   *does not close #NNN*" in the PR body trips `check_closing_keywords.py`, correctly — the quoted
+   example is itself a live closing adjacency. Describe the shape, never quote it verbatim near a
+   reference.
+4. **A TDD lapse, recorded rather than hidden**: the `cairn-medium` framing tests were written
+   alongside their implementation in one file, so the red step never ran and green proved nothing.
+   Recovered by mutation (`!len -> len`, `CB3S -> CB3X`), which is the evidence the missing red would
+   have given — but it is a recovery, not a substitute.
+5. **The plan said six tests addressed the framing by hand; it was nine.** The three extra lived in
+   `container.rs` and `health/tests.rs` and were found by RUNNING the suite. Offsets are now derived
+   from the header constants or located by `testkit::section_body_at`, because a literal `out[9]`
+   silently re-aims at a different field when the header changes — the first draft of one test passed
+   against the unfixed code for exactly that reason.
+
+### 2026-09-06 — DR slice 2c: the medium finally carries the clinical record
 
 **Closes #522, #524 and — as titled — #500; #550 opened and closed in-branch; opened #549, #551, #552, #553 and #554 (the read half). 2c
 is the WRITE half.** One migration (`db/051`, `SCHEMA_GENERATION` 50 → 51), no ADR and no spec bump, but
@@ -340,29 +382,20 @@ on GitHub since 2026-09-01**, one second after PR #526 merged. Full narrative in
 1. **⇒ THE SENTENCE WRITTEN TO PREVENT THE OVER-CLAIM IS WHAT PERFORMED IT.** GitHub matches a closing
    keyword **adjacent** to a reference and never reads the sentence: *"It does **not** fix #500"*, *"It
    does close #101 **item 1**"*, *"**Filed rather than fixed:** #534"* each closed what it disclaimed.
-   The #530/#511 stale-prose pattern with a twist — the prose was accurate; the *machine* read three
-   words of it.
+   The prose was accurate; the *machine* read three words of it. (Still biting: the 09-07 session's own
+   PR body tripped the guard while DESCRIBING this defect — quote the shape, never the example.)
 2. **⇒ A WRONGLY CLOSED ISSUE IS INVISIBLE, NOT WRONG-LOOKING.** Nothing surfaced any of the seven — not
    triage, not `/techdebt-loop`, not the ROADMAP prose still describing #441, #468 and #115's part 2 as
    open. **#115 sat closed for eight weeks.** The tell is timestamps: each closure is 1–3 s after a merge.
 3. **⇒ THE GUARD HAD TO MIRROR GITHUB, NOT IMPROVE ON IT.** `fix(#500):` is **safe** — the parenthesis
-   breaks the adjacency (proof: `fix(#288)`/`fix(#530)` on `main`, both open) — and a guard firing on
-   nearly every commit here would be switched off within a week. `scripts/check_closing_keywords.py`
-   reproduces GitHub's parser, then flags only a reference whose own clause denies it, tuned against 216
-   merged PR bodies and 1650 commit messages. **Its false-positive shapes were found by running it over
-   history, not by imagining inputs** (a qualifier belonging to the *next* sentence — `Closes #480.
-   Partially addresses #490` — and a negation inside an em-dashed aside).
-4. **⇒ THE REVIEW FOUND IT BLIND WHERE IT MATTERED, AND THE SAME SHAPE TWICE:** *the guard not looking at
-   the text GitHub actually reads.* It could not see `(closes #N)` at all (one stray `(` in the
-   lookbehind, added believing it protected `fix(#500):` — the real protection is `(` being absent from
-   the separator), and it never scanned the **PR title**, which GitHub's merge commit carries as its
-   body: `(closes #38)` in PR #42's *title* was that PR's only closing adjacency, and **#38 closed one
-   second after the merge**. Four more followed (a parenthesised partial qualifier, negations matched as
-   bare substrings, concatenated commit messages, and a range keyed off `base.sha`, which does not
-   advance when `main` does). After all six: **the same 21 corpus flags, zero false positives, 236
-   closing references instead of 227.** Its plumbing is `scripts/collect_pr_text.sh` with its own shell
-   test — a checker fed the wrong text is not a control.
-5. **Residual: the check is not required.** Promoting it is admin-only — **#444**, under #527's ordering
+   breaks the adjacency (proof: `fix(#288)`/`fix(#530)` sit on `main` with both issues open) — and a guard firing on nearly every commit here would be switched off within a
+   week. `scripts/check_closing_keywords.py` reproduces GitHub's parser, then flags only a reference whose
+   own clause denies it; it reads the PR **title** too (GitHub's merge commit carries it as its body —
+   `(closes #38)` in PR #42's title closed #38 one second after merge). **Every false-positive shape it
+   knows was found by running it over history — 216 PR bodies, 1650 commit messages — not by imagining
+   inputs.** Plumbing: `scripts/collect_pr_text.sh`, with its own shell test, because a checker fed the
+   wrong text is not a control.
+4. **Residual: the check is not required.** Promoting it is admin-only — **#444**, under #527's ordering
    rule: only promote a check that is green on `main`.
 
 ### 2026-09-04 (earlier) — #511: the custody newtypes (condensed)
@@ -631,9 +664,8 @@ workspace); `poc/` is frozen historical spikes.
   from 2c: **#549** (a burned IDENTITY `seq` is indistinguishable from a lost clinical event; the
   probed-empty set wants a durable home and an operator surface), **#551** (the kit-restorability figure
   lives in a node-global file, not the kit — the same-path rotation case is still open) and **#552** (the
-  nightly capture is O(whole medium), so the < 2 s budget is crossed at ~23 000 events). Still 2a's:
-  **#523** (a corrupt section length under the cap is indistinguishable from a torn tail — named at its
-  site in 2c, still `cairn-medium`'s to fix) and **#525**. New from #511:
+  nightly capture is O(whole medium), so the < 2 s budget is crossed at ~23 000 events). Still 2a's: **#525**
+  (**#523** was 2a's too and is CLOSED by this branch — see the framing-guard entry below). New from #511:
   **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module). From 2b: **#531** (decompose
   `cairn-sync/src/main.rs` — the older **#329** names the same file; a maintainer decision is wanted on
   which to keep) and **#532** (a multi-page pull that fails late reports nothing about the pages that
