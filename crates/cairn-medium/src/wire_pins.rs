@@ -288,7 +288,10 @@ fn record_flag_bits_and_field_order_are_pinned() {
         .concat();
         assert_eq!(
             hex_of(&image),
-            format!("434149524e42330a{}{body}", section_header_hex(body.len() / 2)),
+            format!(
+                "434149524e42330a{}{body}",
+                section_header_hex(body.len() / 2)
+            ),
             "the flags byte for a lone `{which}` must be 0x{expect_flag}: a swapped bit \
              assignment makes a field medium's authorship token decode as a wrapped DEK"
         );
@@ -338,7 +341,10 @@ fn record_flag_bits_and_field_order_are_pinned() {
     .concat();
     assert_eq!(
         hex_of(&image),
-        format!("434149524e42330a{}{body}", section_header_hex(body.len() / 2)),
+        format!(
+            "434149524e42330a{}{body}",
+            section_header_hex(body.len() / 2)
+        ),
         "the hand-derived CAIRNB3 section layout drifted"
     );
 }
@@ -375,7 +381,10 @@ fn cairnb3_section_layout_is_exactly_these_bytes() {
     );
     assert_eq!(
         hex_of(&image),
-        format!("434149524e42330a{}{body}", section_header_hex(body.len() / 2)),
+        format!(
+            "434149524e42330a{}{body}",
+            section_header_hex(body.len() / 2)
+        ),
         "the hand-derived CAIRNB3 section layout drifted"
     );
 
