@@ -23,10 +23,13 @@
 # just has to be declared, with CAIRN_ALLOW_DB_SKIP=1. This script never sets
 # that: it exists precisely to run the tier the opt-out waives.
 #
-# Defaults target the standard local rig (PG18 + cairn_pgx on 127.0.0.1:5532,
-# role = current user, databases cairn_test/2/3 — docs/HANDOVER.md "Test env").
-# Override individual pieces via PGHOST/PGPORT/PGUSER, or set the full
-# CAIRN_TEST_PG* strings yourself and they are honored untouched.
+# The CLUSTER is resolved by scripts/pg-target.sh rather than assumed. This script used to
+# default to `PGPORT:-5532`, which is true of exactly one machine in the world and silently
+# wrong everywhere else; the resolver discovers a running cluster meeting the schema's
+# PostgreSQL floor, refuses one below it, and refuses to guess when several qualify. Name a
+# cluster with PGPORT to skip discovery, or set the full CAIRN_TEST_PG* strings yourself and
+# they are honored untouched (role defaults to the current user; databases cairn_test/2/3 —
+# docs/HANDOVER.md "Test env").
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root, same convention as the sibling scripts
@@ -38,12 +41,24 @@ if [ "$#" -ne 0 ]; then
     exit 2
 fi
 
+# Only resolve when the caller has not already supplied the full connection strings: if all
+# three are set there is nothing left to discover, and probing would refuse a rig the caller
+# has legitimately pointed somewhere this script cannot see (a remote cluster, a tunnel).
+if [ -z "${CAIRN_TEST_PG:-}" ] || [ -z "${CAIRN_TEST_PG2:-}" ] || [ -z "${CAIRN_TEST_PG3:-}" ]; then
+    PG_TARGET="$(scripts/pg-target.sh)" || exit 1
+    read -r PGHOST PGPORT <<<"$PG_TARGET"
+fi
 export PGHOST="${PGHOST:-127.0.0.1}"
-export PGPORT="${PGPORT:-5532}"
+export PGPORT="${PGPORT:-5432}"
 PG_ROLE="${PGUSER:-${USER:-$(id -un)}}"
 export CAIRN_TEST_PG="${CAIRN_TEST_PG:-host=$PGHOST port=$PGPORT user=$PG_ROLE dbname=cairn_test}"
 export CAIRN_TEST_PG2="${CAIRN_TEST_PG2:-host=$PGHOST port=$PGPORT user=$PG_ROLE dbname=cairn_test2}"
 export CAIRN_TEST_PG3="${CAIRN_TEST_PG3:-host=$PGHOST port=$PGPORT user=$PG_ROLE dbname=cairn_test3}"
 
+# Exporting PGHOST/PGPORT above means the child takes the explicit-wins branch and probes
+# only the cluster already chosen here, rather than repeating discovery — and it prints the
+# target itself, so this script does not echo the same line twice.
 scripts/run-db-sql-tests.sh
+
+echo "== cargo test --workspace against ${CAIRN_TEST_PG}"
 cargo test --workspace

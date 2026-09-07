@@ -14,12 +14,21 @@
 #     spike-only migration the product loaders deliberately skip (issue #67) — it
 #     may exist here precisely because this database is disposable.
 #
-# Connection: standard libpq environment (PGHOST/PGPORT/PGUSER/…), so CI and local
-# rigs differ only in env. The role must be allowed to CREATE DATABASE and CREATE
-# EXTENSION cairn_pgx (CI uses the cluster superuser; so does a local rig).
+# Connection: resolved by scripts/pg-target.sh, which discovers a running cluster meeting
+# the schema's PostgreSQL floor and REFUSES one below it. Setting PGPORT names a cluster
+# explicitly and it is used (still floor-checked); leaving it unset lets the resolver find
+# one, and refuse rather than guess if several qualify. The role must be allowed to CREATE
+# DATABASE and CREATE EXTENSION cairn_pgx (CI uses the cluster superuser; so does a local
+# rig).
+#
+# ⚠️ WHY THE RESOLVER EXISTS, IN ONE SENTENCE: this script used to connect through the plain
+# libpq defaults, which on a multi-cluster machine is whichever server the default socket
+# happens to reach — on 2026-09-07 that was a PostgreSQL 16 instance, and the run failed 22
+# migrations deep on a missing `max(bytea)` instead of saying "that server is too old".
 #
 # Usage:
-#   PGHOST=127.0.0.1 PGPORT=5532 scripts/run-db-sql-tests.sh [dbname]
+#   scripts/run-db-sql-tests.sh [dbname]            # resolver picks the cluster
+#   PGPORT=5532 scripts/run-db-sql-tests.sh [dbname] # or name one
 #   dbname defaults to cairn_sqltest.
 
 set -euo pipefail
@@ -39,6 +48,15 @@ case "$DBNAME" in
         exit 2
         ;;
 esac
+
+# Resolve and floor-check the target BEFORE anything is created. A too-old or ambiguous
+# cluster must be refused here, not discovered from a confusing failure once a database
+# exists on it — and `pg-target.sh` prints the diagnosis, so this only has to relay the
+# exit status.
+PG_TARGET="$(scripts/pg-target.sh)" || exit 1
+read -r PGHOST PGPORT <<<"$PG_TARGET"
+export PGHOST PGPORT
+echo "== using PostgreSQL at ${PGHOST}:${PGPORT}"
 
 echo "== recreating throwaway database ${DBNAME}"
 dropdb --if-exists "$DBNAME"
