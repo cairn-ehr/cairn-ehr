@@ -5,8 +5,10 @@
 - **Errata:** **E1** and **E2** (both 2026-09-06) — factual, the decision is unchanged. Since DR slice
   2c the backup medium DOES carry clinical events with their custody, so the two passages stating
   *"the medium still carries no clinical event"* are superseded on that premise **only**: nothing
-  restores the clinical plane yet, so [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) stays
-  open and every conclusion this ADR draws from it still holds. E1 marks the *"What this ADR does not
+  restores the clinical plane yet, so every conclusion this ADR draws from it still holds. The
+  tracking issue moved with the fact — [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) was the
+  write half and closed with slice 2c; the read half is [#554](https://github.com/cairn-ehr/cairn-ehr/issues/554),
+  and it is open. E1 marks the *"What this ADR does not
   make true"* warning; E2 marks the first **Known limitation**.
 - **Derives from:** [ADR-0026](0026-node-durability-and-disaster-recovery.md) decision 4 (*"New identity
   on recovery, `supersede`-linked — **the private signing key is never backed up**"*) and
@@ -237,7 +239,9 @@ load-bearing property of the export's tests.
 > > event: `restore` and `verify-backup` read the federation plane alone
 > > (`backup::node_plane_events`), deliberately, until DR slice 2d. So *"a restored node recovers who it
 > > peered with and zero patients"* is still exactly right, *"this ADR does not fix it"* is still right,
-> > and [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) **is still open**. What changed is the
+> > and the read half **is still open** — as [#554](https://github.com/cairn-ehr/cairn-ehr/issues/554), the
+> > successor to [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500), which closed with slice 2c on its
+> > own title ("the backup medium carries no clinical event") having become false. What changed is the
 > > REASON: the record now exists off-machine to be given back, where before a dead disk was total loss
 > > and no later slice could have recovered it.
 > >

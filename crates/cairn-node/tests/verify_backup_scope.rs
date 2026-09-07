@@ -55,7 +55,7 @@ fn an_export_older_than_the_medium_is_stale() {
         kit_verdict(Some(900), Some(500)),
         KitVerdict::ExportStale {
             medium_seq: 900,
-            export_seq: Some(500)
+            export_seq: 500
         }
     );
 }
@@ -320,10 +320,12 @@ async fn establish_clinic() -> Option<Clinic> {
     // ADR-0066 device-key-derived unwrap secret — the same test-fixture convention
     // `common::medication_setup` documents (a fixture has no `establish-unwrap-key`
     // ceremony to run, so it registers a deterministic secret reproducible from a key it
-    // already holds). Only the PUBLIC half lands in the database here; no `.unwrap` FILE is
-    // ever written to `dir`, so the export step under test degrades exactly the way an
-    // operator who has not run `establish-unwrap-key` sees it (a warning, never a failure —
-    // this suite is testing kit STALENESS, not custody completeness).
+    // already holds). Only the PUBLIC half lands in the database HERE; the matching `.unwrap`
+    // FILE is written by `write_existing_escrow`, which the tests that need a genuinely
+    // restorable kit call. A test that does NOT call it gets a node with a registered public
+    // half and no private one — which is a real state (an operator who never ran
+    // `establish-unwrap-key`) and, since the Critical 2 fix, one whose export correctly
+    // withholds coverage rather than reporting a green kit that opens nothing.
     let secret = cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
     c.execute(
         "SELECT cairn_register_unwrap_key($1)",
@@ -344,16 +346,42 @@ async fn establish_clinic() -> Option<Clinic> {
     })
 }
 
-/// Establish a local-state escrow beside `key` — the on-disk effect of
-/// `cairn-node establish-local-state-key`, built directly rather than by running that
-/// command, so each test controls its own op-pass/recovery-code pair.
-fn write_existing_escrow(key: &std::path::Path, op: &str, code: &str) {
+/// Establish a FULL disaster-recovery kit beside `key` — the on-disk effect of
+/// `cairn-node establish-local-state-key` AND `establish-unwrap-key`, built directly rather
+/// than by running those commands, so each test controls its own op-pass/recovery-code pair.
+///
+/// **Why the `.unwrap` file is written here and was not before (final review, Critical 2).**
+/// This fixture used to write the `.lsk` sidecar alone, on the stated reasoning that a
+/// missing unwrap key "degrades exactly the way an operator who has not run
+/// `establish-unwrap-key` sees it (a warning, never a failure)" and that this suite tests kit
+/// STALENESS rather than custody completeness. That separation does not exist: an export
+/// carrying custody rows and no key to open them is not a kit whose staleness is worth
+/// asking about — ADR-0066's whole point is that the key and the bytes are useless apart —
+/// and `export_covers_seq` is the figure that says whether a restore would work.
+///
+/// While `backup` recorded coverage unconditionally, the difference was invisible and these
+/// tests passed over a keyless export. `export_outcome_for_write` now withholds coverage for
+/// exactly that artifact, so a fixture that means "a full kit" has to build one.
+///
+/// The secret written MUST be the one `establish_clinic` registered in `node_unwrap_key` —
+/// `derive_unwrap_secret(sk)` — not a fresh random one: the registrar is a singleton that
+/// refuses a differing key, so a mismatched file would fail for an unrelated reason.
+fn write_existing_escrow(key: &std::path::Path, sk: &SigningKey, op: &str, code: &str) {
     let wraps = cairn_node::localstate::establish_lsk(op, code).unwrap();
     let bytes = cairn_node::localstate::serialize_sidecar(&wraps);
     cairn_node::fsio::atomic_write(
         &cairn_node::localstate::lsk_sidecar_path_for(key),
         &bytes,
         Some(0o600),
+    )
+    .unwrap();
+
+    let secret = cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()));
+    cairn_node::keystore::write_unwrap_sealed(
+        &cairn_node::keystore::unwrap_key_path_for(key),
+        &secret,
+        op,
+        code,
     )
     .unwrap();
 }
@@ -491,6 +519,86 @@ async fn backup_still_exits_zero_when_the_export_is_skipped() {
     );
 }
 
+/// **An export written WITHOUT a custody key must not report a restorable kit**
+/// (#500 slice 2c final review, Critical 2).
+///
+/// The escrow exists and the passphrase is right, so the export seals, writes and passes its
+/// read-after-write check — but `<key>.unwrap` is absent, which is the ordinary state of a
+/// node provisioned before ADR-0066 decision 5 (and equally what a bit-rotted or
+/// differently-sealed unwrap file produces). `backup` warns to stderr and exits 0, correctly:
+/// the medium is the load-bearing copy and an optional export must never abort it.
+///
+/// What must NOT happen is coverage advancing for that artifact. It did:
+/// `ExportOutcome::Written(covers_seq)` was recorded unconditionally, so `kit_verdict` saw
+/// `(Some(N), Some(N))`, returned `Restorable`, and `verify-backup` exited 0 over a kit whose
+/// every sealed body restores as ciphertext, permanently — while `status`, reading the same
+/// node, shouted about the missing key.
+///
+/// This test could not have existed before the fix landed, because `write_existing_escrow`
+/// wrote no `.unwrap` file either: THREE tests in this file were passing over exactly this
+/// kit. That is why the fixture now builds a full one and this test opts out of it explicitly.
+#[tokio::test]
+async fn an_export_with_no_custody_key_does_not_report_a_restorable_kit() {
+    let Some(cl) = establish_clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    // The `.lsk` escrow ONLY — deliberately not `write_existing_escrow`, which would also
+    // write the `.unwrap` file this test exists to be missing.
+    let wraps = cairn_node::localstate::establish_lsk("op-pass", "REC-CODE").unwrap();
+    cairn_node::fsio::atomic_write(
+        &cairn_node::localstate::lsk_sidecar_path_for(&cl.key()),
+        &cairn_node::localstate::serialize_sidecar(&wraps),
+        Some(0o600),
+    )
+    .unwrap();
+    assert!(
+        !cairn_node::keystore::unwrap_key_path_for(&cl.key()).exists(),
+        "anti-vacuity: the whole point is that this file is absent"
+    );
+
+    let out = cl
+        .cli()
+        .args(["backup", "--to"])
+        .arg(cl.medium())
+        .args(["--passphrase", "op-pass"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "backup must still succeed — the medium is the load-bearing copy; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("unwrap key"),
+        "and it must WARN that the export carries no key: {stderr}"
+    );
+
+    // THE PROPERTY. `verify-backup` must refuse rather than call this kit restorable.
+    let check = cl
+        .cli()
+        .args(["verify-backup", "--from"])
+        .arg(cl.medium())
+        .output()
+        .unwrap();
+    let check_err = String::from_utf8_lossy(&check.stderr).to_string();
+    assert!(
+        !check.status.success(),
+        "a kit whose export carries no custody key is NOT restorable, and exiting 0 here is \
+         the false green the coverage ratchet exists to prevent; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        check_err
+    );
+    assert!(
+        check_err.contains("ADR-0066"),
+        "and the refusal must point at the custody decision, so the operator knows the \
+         bodies are the problem rather than the events: {check_err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Steps 2 & 4, end to end via the real binary: `verify-backup`'s new refusal, and the
 // export read-after-write that makes `export_covers_seq` trustworthy enough to drive it
@@ -509,7 +617,7 @@ async fn verify_backup_is_restorable_then_refuses_once_the_export_falls_behind()
         return;
     };
     author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
-    write_existing_escrow(&cl.key(), "op-pass", "REC-CODE");
+    write_existing_escrow(&cl.key(), &cl.sk, "op-pass", "REC-CODE");
 
     // First backup, WITH a passphrase: medium and export are written in the SAME run, so
     // the export covers exactly what the medium holds.
@@ -640,7 +748,7 @@ async fn verify_backup_refuses_when_the_sidecar_describes_a_different_medium() {
         return;
     };
     author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
-    write_existing_escrow(&cl.key(), "op-pass", "REC-CODE");
+    write_existing_escrow(&cl.key(), &cl.sk, "op-pass", "REC-CODE");
 
     let drive_a = cl.dir.path().join("drive-a.medium");
     let drive_b = cl.dir.path().join("drive-b.medium");
@@ -861,7 +969,7 @@ async fn verify_backup_refuses_a_medium_whose_clinical_plane_is_corrupt() {
     // coverage check further down `verify-backup` is satisfied. Without it the honest medium
     // would already refuse for a DIFFERENT reason (`ExportMissing`), and this test would have
     // nothing to say about soundness.
-    write_existing_escrow(&cl.key(), "op-pass", "REC-CODE");
+    write_existing_escrow(&cl.key(), &cl.sk, "op-pass", "REC-CODE");
 
     let out = cl
         .cli()

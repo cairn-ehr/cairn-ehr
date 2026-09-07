@@ -315,6 +315,31 @@ pub fn self_marker_for(image: &MediumImage) -> Option<SelfMarker> {
     self_marker_source(image).map(|(marker, _)| marker)
 }
 
+/// The node id an already-written **CAIRNB3** medium names, with the provenance of that id —
+/// the input to [`refuse_foreign_continuation`]'s identity guard.
+///
+/// Built on [`self_marker_source`] rather than re-deriving it (#522): the nightly identity
+/// guard and the restore surface must never come to disagree about whose medium this is.
+///
+/// A V3 medium's marker is always [`SelfMarker::Unsigned`] — the ATTESTED id is carried in
+/// that variant too, with `MarkerSource::V3Attested` beside it to say so, see
+/// `self_marker_source` — so the `Signed` arm is unreachable here and answers `None` rather
+/// than being guessed at.
+///
+/// Legacy containers answer `None` deliberately. They are guarded on the other arm, by
+/// `refuse_unsafe_legacy_succession` via `OpenedMedium::superseded`, and their marker already
+/// has its own reader in `legacy_claimed_node`; answering here would put two derivations on
+/// one question, which is the defect #522 was filed about.
+fn v3_claimed_node(image: &MediumImage) -> Option<(String, MarkerSource)> {
+    if matches!(image, MediumImage::Legacy(_)) {
+        return None;
+    }
+    match self_marker_source(image)? {
+        (SelfMarker::Unsigned(id), source) => Some((id, source)),
+        (SelfMarker::Signed(_), _) => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Backup health (node-local operational state — NOT a clinical event, never signed,
 // never replicated). Lives in a local sidecar JSON, not the DB: see the slice-B design
@@ -345,8 +370,20 @@ pub fn self_marker_for(image: &MediumImage) -> Option<SelfMarker> {
 /// here would cry wolf on every healthy node. The durable record and the honest surface for
 /// those two fields are [#549](https://github.com/cairn-ehr/cairn-ehr/issues/549), not this
 /// task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The sidecar shape this build WRITES, and the floor at which it trusts the per-plane
+/// counts. A sidecar below this records no plane scope at all (v1 had a single
+/// `event_count`), and `describe_health` must say so rather than render the serde defaults
+/// as facts — see [`describe_health`].
+pub const SUPPORTED_HEALTH_VERSION: u8 = 2;
+
+// `Eq` is deliberately absent: `extra` holds `serde_json::Value`, which is `PartialEq` but
+// not `Eq` (floats). Nothing needs a total equality here, and preserving a newer build's
+// fields is worth more than the marker trait.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupHealth {
+    /// Which sidecar shape wrote this. READ, not decorative: `describe_health` refuses to
+    /// present v1's absent per-plane counts as zeros. Compare against
+    /// [`SUPPORTED_HEALTH_VERSION`].
     pub version: u8,
     /// Unix seconds at which the backup completed (operational wall-clock, not the HLC).
     pub last_backup_unix: i64,
@@ -378,6 +415,22 @@ pub struct BackupHealth {
     /// restore.
     #[serde(default)]
     pub export_covers_seq: Option<i64>,
+    /// Every field this build does not know, carried through a read-modify-write untouched
+    /// (final review, I14).
+    ///
+    /// `main.rs`'s export ceremony reads this sidecar, advances `export_covers_seq`, and
+    /// writes it back. Plain serde DROPS what it does not recognise, so an older binary run
+    /// once against a newer sidecar — a rollback, a rescue USB, a second node sharing the key
+    /// directory — silently erased whatever the newer build had recorded. Principle 11
+    /// (additive evolution across a mixed-version fleet) applied to the one file
+    /// `verify-backup` reads to decide whether a kit is restorable.
+    ///
+    /// `deny_unknown_fields` is deliberately NOT used here, unlike [`crate::localstate`]'s
+    /// `LocalState` one layer over: v1's `event_count` is an unknown field to this build, so
+    /// refusing would break the v1 sidecar this struct still reads on purpose. Preserving is
+    /// backward AND forward compatible; refusing is only forward.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What the export attempt this backup run did — the only input `export_coverage_after`
@@ -407,6 +460,38 @@ pub fn export_coverage_after(previous: Option<i64>, outcome: ExportOutcome) -> O
     match outcome {
         ExportOutcome::Skipped => previous,
         ExportOutcome::Written(seq) => Some(seq),
+    }
+}
+
+/// PURE. What a completed export write actually ACHIEVED — which is not the same question as
+/// whether the file landed (#500 slice 2c final review, Critical 2).
+///
+/// `backup` can seal, write and read-back-verify an export that carries the custody rows and
+/// **no unwrap key**. It reaches that state deliberately: `<key>.unwrap` may be absent (a node
+/// provisioned before [ADR-0066] decision 5), bit-rotted, or sealed under the other operator
+/// secret, and `seal_and_write_local_state_export` warns and carries on rather than aborting,
+/// because the medium is the load-bearing copy and the export is optional. The artifact that
+/// results is durable, readable, well-formed — and opens nothing, because ADR-0066's whole
+/// point is that the key and the bytes are useless apart.
+///
+/// So the FILE landing must not be mistaken for the export achieving something.
+/// [`ExportOutcome::Skipped`]'s doc already names "a load failure" as one of `backup`'s
+/// warn-and-continue paths; this function is what makes the call site honour it. Recording
+/// `Written` there was the exact false green [`export_coverage_after`] exists to prevent:
+/// `kit_verdict(Some(N), Some(N))` returns `Restorable`, `verify-backup` exits 0, and every
+/// sealed body on the kit restores as ciphertext, permanently — while `status`, reading the
+/// same node, shouts about the missing key.
+///
+/// Split out as its own pure function for the same reason `export_coverage_after` is: it is
+/// a whole safety property, and it should be testable without a database, a keystore or a
+/// medium — see `tests/backup_health_v2.rs`.
+///
+/// [ADR-0066]: https://github.com/cairn-ehr/cairn-ehr/blob/main/docs/spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md
+pub fn export_outcome_for_write(custody_key_carried: bool, covers_seq: i64) -> ExportOutcome {
+    if custody_key_carried {
+        ExportOutcome::Written(covers_seq)
+    } else {
+        ExportOutcome::Skipped
     }
 }
 
@@ -444,11 +529,16 @@ pub enum KitVerdict {
     /// Those bodies restore as ciphertext unless their medium-borne DEKs open them.
     ExportStale {
         medium_seq: i64,
-        export_seq: Option<i64>,
+        /// The seq the export last actually achieved. NOT an `Option`: `kit_verdict` reaches
+        /// this variant only through `Some(export_seq) if export_seq < medium_seq`, so a
+        /// `None` here was a state the constructor could not produce — and the caller paid
+        /// for it with a dead branch that printed the literal words "none (unexpected)" to an
+        /// operator mid-disaster. `ExportMissing` is where an absent figure lives.
+        export_seq: i64,
     },
     /// No export beside the medium ever recorded coverage. Carries the operator-facing
     /// remedy directly, because unlike `ExportStale` there are no two numbers left for a
-    /// caller to compose a message from — `export_seq` here is always `None`.
+    /// caller to compose a message from — there is no coverage figure at all.
     ExportMissing(String),
     /// The health sidecar's coverage figure describes a DIFFERENT medium than the one under
     /// test (#500 slice 2c Task 12 fix round 1, Important 1) — a two-drive rotation, or any
@@ -497,7 +587,7 @@ pub fn kit_verdict(medium_seq: Option<i64>, export_seq: Option<i64>) -> KitVerdi
         )),
         Some(export_seq) if export_seq < medium_seq => KitVerdict::ExportStale {
             medium_seq,
-            export_seq: Some(export_seq),
+            export_seq,
         },
         Some(_) => KitVerdict::Restorable,
     }
@@ -540,6 +630,19 @@ pub fn humanize_ago(secs: i64) -> String {
 pub fn describe_health(now_unix: i64, health: &Option<BackupHealth>) -> String {
     match health {
         None => "never — running without a net".to_string(),
+        // A sidecar older than v2 carries NO per-plane scope: `node_events`/`clinical_events`
+        // are `#[serde(default)]` and read as zero, which is a serde artefact, not a fact the
+        // sidecar ever stated. Rendering it unqualified told an operator that a
+        // multi-megabyte medium holds nothing — and it appeared exactly in the window between
+        // upgrading the binary and the first successful new `backup`, i.e. the window where
+        // `backup` is most likely to be failing and the line most likely to be read.
+        Some(h) if h.version < SUPPORTED_HEALTH_VERSION => format!(
+            "{} ago (per-plane counts not recorded by the `backup` that wrote this sidecar — \
+             run `backup` to refresh, {} bytes -> {})",
+            humanize_ago(now_unix - h.last_backup_unix),
+            h.medium_bytes,
+            h.medium_path,
+        ),
         Some(h) => format!(
             "{} ago ({} node event(s), {} clinical event(s), {} bytes -> {})",
             humanize_ago(now_unix - h.last_backup_unix),
@@ -818,6 +921,15 @@ struct OpenedMedium {
     /// `Some` exactly when `origin == MediumOrigin::SucceededLegacy`: what the medium about
     /// to be REPLACED was carrying, for [`refuse_unsafe_legacy_succession`].
     superseded: Option<SupersededLegacy>,
+    /// Whose CAIRNB3 medium this ALREADY is, when it says so — `(node id, how the id was
+    /// derived)`, from the one derivation in [`self_marker_source`]. `Some` only on the
+    /// `Continued` arm; `None` for a fresh medium, a legacy succession (guarded by
+    /// `superseded` instead), and for a medium that names nobody.
+    ///
+    /// One field carrying both values rather than two Options that must agree: the id is
+    /// meaningless without the provenance, because the message an operator reads has to say
+    /// whether the id is attested or forgeable. See [`refuse_foreign_continuation`].
+    continued_claim: Option<(String, MarkerSource)>,
 }
 
 /// Read the target path and classify it. See [`OpenedMedium`].
@@ -834,6 +946,8 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
                 origin: MediumOrigin::FirstEver,
                 torn_tail_repaired: false,
                 superseded: None,
+                // Nothing to be foreign to: this path CREATES the medium.
+                continued_claim: None,
             });
         }
         // Present but UNREADABLE (permissions, an I/O error, a mount that went away). We
@@ -852,23 +966,34 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
         }
     };
 
-    match crate::medium::parse_any(&bytes) {
+    let parsed = crate::medium::parse_any(&bytes);
+    // ONE derivation of "whose medium is this", taken BEFORE the match: the `Continued` arm's
+    // pattern destructures the `MediumImage` away, and `self_marker_source` needs the whole
+    // thing. Answering here also means the identity guard reads the medium exactly as it was
+    // found, before a single record is captured onto it.
+    let claim = parsed.as_ref().ok().and_then(v3_claimed_node);
+
+    match parsed {
         // The normal case from the second backup onward: append to what is already there.
         // A TORN tail is not handled here on purpose — `capture_plane` truncates to
         // `MediumV3::complete_bytes` before it appends, which is the only place that
-        // recovery may happen (see its doc; appending after a torn remnant orphans every
-        // later backup forever).
+        // recovery may happen (see its doc; appending after a torn remnant leaves every
+        // later backup unreachable behind it — loudly since #523, but still unreachable).
         Ok(MediumImage::V3(ref m)) => {
             // Reported, not acted on, here: the actual repair is `capture_plane`'s (it must
             // truncate to `complete_bytes` immediately before it appends, or a torn remnant
-            // becomes the next section's length prefix and orphans every later backup). This
-            // only remembers that it is about to happen, so the caller can say so.
+            // sits where the next section header belongs and strands every later backup
+            // behind it). This only remembers that it is about to happen, so the caller can
+            // say so.
             let torn = m.truncated_tail;
             Ok(OpenedMedium {
                 buffer: bytes,
                 origin: MediumOrigin::Continued,
                 torn_tail_repaired: torn,
                 superseded: None,
+                // Read from the medium we are about to append to, BEFORE anything is
+                // captured — `backup_to` refuses on a mismatch (Critical 1).
+                continued_claim: claim,
             })
         }
 
@@ -896,6 +1021,9 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
                 claimed_node_hex: legacy_claimed_node(&container),
                 node_events: container.events.len(),
             }),
+            // The legacy arm carries its identity in `superseded` and is guarded by
+            // `refuse_unsafe_legacy_succession`; two homes for one fact is the #522 defect.
+            continued_claim: None,
         }),
 
         // Present, readable, and NOT a medium this build can parse. Refused, never replaced,
@@ -905,9 +1033,11 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
         //  1. It may not be a medium at all — an operator typo pointing `--to` at a keystore,
         //     an export, or a patient file. Silently overwriting it (today's behaviour) is a
         //     data-destroying operator-error footgun with no undo.
-        //  2. If it IS a damaged medium, #523 says a corrupt section length UNDER the cap is
-        //     indistinguishable from a torn tail and the two remedies are OPPOSITE. Replacing
-        //     it destroys the only copy a future, repaired parser could read.
+        //  2. If it IS a damaged medium, replacing it destroys the only copy a future,
+        //     repaired parser could read. (#523 has since made the DIAGNOSIS reliable — a
+        //     corrupt length is now named as damage rather than mistaken for a torn tail —
+        //     but that changes what we can TELL the operator, not whether their bytes are
+        //     worth keeping.)
         //  3. Nothing is lost by refusing: the events are still in the database, and the
         //     remedy is one flag (`--to` a new path), which then writes a complete medium.
         //
@@ -941,12 +1071,14 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
             path.display()
         ),
         Err(e @ crate::medium::BackupError::Damaged(_)) => anyhow::bail!(
-            "{} is a DAMAGED backup medium ({e}). Refusing to overwrite it: replacing it \
-             destroys the only copy a future, repaired parser could read, and a corrupt \
-             section length is indistinguishable from an interrupted append (#523) — the two \
-             remedies are opposite. Keep this file for diagnosis, look for another copy, and \
-             point --to at a NEW path to write a complete medium (the first capture sweeps \
-             both planes from the beginning, so nothing is lost).",
+            "{} is a DAMAGED backup medium ({e}). This is damage, NOT an interrupted \
+             append — those are told apart at the section header since #523, and an \
+             interrupted append would have left a short tail that `backup` repairs and \
+             reports. \
+             Refusing to overwrite it: replacing it destroys the only copy a future, \
+             repaired parser could read. Keep this file for diagnosis, look for another \
+             copy, and point --to at a NEW path to write a complete medium (the first \
+             capture sweeps both planes from the beginning, so nothing is lost).",
             path.display()
         ),
         // `Io` and `Encode` cannot come out of `parse_any` (it reads a slice and writes
@@ -982,6 +1114,108 @@ fn legacy_claimed_node(container: &crate::medium::Container) -> Option<String> {
             crate::medium::verify_self_attestation(attestation, &container.events)
         }
     }
+}
+
+/// Refuse to CONTINUE a CAIRNB3 medium that belongs to another node
+/// (#500 slice 2c final review, Critical 1).
+///
+/// # The disaster this exists to prevent, and why it is worse than the legacy one
+///
+/// [`refuse_unsafe_legacy_succession`] below guards the arm that DESTROYS a file, and that
+/// arm is loud: the operator is told the medium was superseded. This guards the arm that runs
+/// every night, and it fails **silently**.
+///
+/// `capture_plane` resumes from `cairn_medium::watermark`, which filters segments by PLANE and
+/// takes the `max` of `source_seq` — and `source_seq` is a node-local `GENERATED ALWAYS AS
+/// IDENTITY` value. It never looks at `Segment::self_node_id_hex`. So the seq space of a
+/// FOREIGN medium is read as if it were ours, and the arithmetic works out to silent loss:
+///
+/// > A peer's medium holds clinical seqs 1..100. This node holds 1..300. The capture resumes
+/// > at `seq > 100` and writes our 101..300. **Our events 1..100 are never captured** — the
+/// > medium already "has" those seq numbers, they are simply the peer's. `seq_gaps` reports
+/// > no hole, because the seq space looks complete. `plane_counts` records 300 clinical
+/// > events. `export_covers_seq` is 300. `kit_verdict(Some(300), Some(300))` returns
+/// > `Restorable`, and `verify-backup` exits 0.
+///
+/// A medium missing a hundred of this clinic's earliest patient events, holding another
+/// clinic's in their place, reported fully restorable — every surface honest, the composite
+/// false. That is #500's own shape, reproduced on the path #500's fix runs down. Two
+/// realistic ways to arrive there: a shared backup volume rotated between two clinics, and
+/// this node's own pre-restore medium re-used after `restore` re-sequenced `event_log`.
+///
+/// # Why it refuses on an UNVERIFIED claim too
+///
+/// `claimed` carries [`MarkerSource`] so the message can be honest about provenance, but both
+/// derivations refuse. Refusing on a forgeable plaintext id is the fail-safe direction: the
+/// worst a forged foreign id achieves is costing tonight's backup, loudly, with a remedy the
+/// operator can act on — whereas TRUSTING one is precisely how a foreign medium gets appended
+/// to. The asymmetry is the whole reason the check is worth having on an untrusted field.
+///
+/// # What it does NOT catch, stated so nobody reads it as more than it is
+///
+/// A medium that names NOBODY claims nothing and is allowed through — silence is not
+/// disagreement (principle 4), and refusing it would block the legitimate first backup of a
+/// node enrolled after its first capture. Since #550 an enrolled node always names itself in
+/// plaintext even with no key, so this is narrow: a genuinely pre-enrolment capture. It is
+/// the same residual shape as the unmarked-legacy medium of
+/// [#553](https://github.com/cairn-ehr/cairn-ehr/issues/553), on the other arm.
+///
+/// It also cannot un-mix a medium two nodes have ALREADY both written to: `self_marker_source`
+/// answers with the most recent writer, so if we wrote last, we look like the owner. What this
+/// closes is the FIRST contact, which is the event that creates the mix.
+fn refuse_foreign_continuation(
+    claimed: Option<&(String, MarkerSource)>,
+    self_id_hex: &str,
+    path: &Path,
+) -> anyhow::Result<()> {
+    // Silence is not a mismatch. See the doc's "What it does NOT catch".
+    let Some((claimed_hex, source)) = claimed else {
+        return Ok(());
+    };
+    if claimed_hex.eq_ignore_ascii_case(self_id_hex) {
+        return Ok(());
+    }
+
+    // The provenance sentence, so an operator is never told a forgeable id is proof. This is
+    // the same honesty `MarkerSource` was introduced for on the restore surface.
+    let provenance = match source {
+        MarkerSource::V3Attested => {
+            "That id is ATTESTED — it comes from a verified segment \
+             attestation bound to a genesis enroll on this same medium, so it is not a guess"
+        }
+        MarkerSource::V3Plaintext => {
+            "That id is UNVERIFIED plaintext (no attestation on this \
+             medium could supply one), so treat it as a strong hint rather than proof — but \
+             the refusal stands either way, because appending to a medium that might be \
+             another node's is the one direction that loses data silently"
+        }
+        // A legacy container never reaches this function: `open_or_start_medium` routes it to
+        // `MediumOrigin::SucceededLegacy`, which `refuse_unsafe_legacy_succession` guards.
+        MarkerSource::LegacyContainer => "That id came from a legacy container head marker",
+    };
+
+    let whose = if self_id_hex.is_empty() {
+        "this database is NOT ENROLLED, so none of that node's events are here to append — \
+         and none of any node's. If the old node's disk died, run `restore` FROM this medium \
+         first: backing up onto it instead leaves everything it already holds permanently \
+         uncaptured while the file grows and reports success"
+            .to_string()
+    } else {
+        format!(
+            "this node is {self_id_hex}, so that node's events are not in this database. \
+             Appending here would resume from ITS sequence numbers and silently skip every \
+             event of ours below them"
+        )
+    };
+
+    anyhow::bail!(
+        "refusing to continue the backup medium {}: it is a CAIRNB3 medium belonging to node \
+         {claimed_hex}, and {whose}. {provenance}. NOTHING was written — the medium at this \
+         path is exactly as it was. Point --to at a NEW path: that writes a complete medium \
+         of THIS node (the first capture sweeps both planes from the beginning), and leaves \
+         this one intact to be read, copied aside, or restored from.",
+        path.display()
+    );
 }
 
 /// Refuse to REPLACE a legacy medium whose successor would not hold everything it held.
@@ -1288,7 +1522,19 @@ pub async fn backup_to(
         origin,
         torn_tail_repaired: repaired_torn_tail,
         superseded,
+        continued_claim,
     } = open_or_start_medium(medium_path)?;
+
+    // THE CONTINUATION IDENTITY GUARD (#500 slice 2c final review, Critical 1), and why it
+    // sits BEFORE the captures rather than beside `refuse_unsafe_legacy_succession` below.
+    //
+    // The legacy guard has to run late: its safety argument is about the STAGED IMAGE, which
+    // does not exist until the captures have run. This one is the opposite. Its input is the
+    // medium exactly as it was found, and continuing a foreign medium is wrong before a
+    // single row is read — the capture would resume from ANOTHER node's sequence numbers and
+    // silently skip every event of ours below them. Refusing first also means the refusal
+    // costs no database work and can say, truthfully, that nothing was even read.
+    refuse_foreign_continuation(continued_claim.as_ref(), &self_id_hex, medium_path)?;
 
     // STEP 1 + 2. Node, then Clinical, into the one buffer. Each `?` DISCARDS `buffer`
     // unwritten — see the doc's step 2; that absence of a write is the safety property, and
@@ -1441,10 +1687,17 @@ pub async fn backup_to(
     // of view, no export ran at all this call: `ExportOutcome::Skipped` over whatever the
     // existing sidecar already recorded, via the same pure rule Task 12's export site will
     // use when it actually writes one.
-    let previous_export_covers_seq = read_health(health_path).and_then(|h| h.export_covers_seq);
+    //
+    // The SAME read also carries forward `extra` — any field a NEWER build recorded here.
+    // `backup_to` rewrites the sidecar whole, so without this an older binary run once would
+    // erase a newer build's field even though the export ceremony downstream preserves it.
+    // One read, both facts, so the two can never come to disagree (#522's lesson).
+    let previous = read_health(health_path);
+    let previous_export_covers_seq = previous.as_ref().and_then(|h| h.export_covers_seq);
+    let carried_extra = previous.map(|h| h.extra).unwrap_or_default();
 
     let health = BackupHealth {
-        version: 2,
+        version: SUPPORTED_HEALTH_VERSION,
         last_backup_unix: now_unix,
         medium_path: medium_path.display().to_string(),
         medium_bytes: readback.len() as u64,
@@ -1455,6 +1708,7 @@ pub async fn backup_to(
             previous_export_covers_seq,
             ExportOutcome::Skipped,
         ),
+        extra: carried_extra,
     };
     write_health(health_path, &health).context("writing backup-health sidecar")?;
 
@@ -1507,6 +1761,7 @@ mod tests {
             clinical_events: 3,
             clinical_watermark: Some(41),
             export_covers_seq: None,
+            extra: Default::default(),
         };
         let line = describe_health(1000 + 3600, &Some(h));
         assert!(line.starts_with("1h ago"), "freshness first: got {line:?}");
@@ -1539,6 +1794,7 @@ mod tests {
             clinical_events: 0,
             clinical_watermark: None,
             export_covers_seq: None,
+            extra: Default::default(),
         };
         write_health(&p, &h).unwrap();
         assert_eq!(
@@ -1614,6 +1870,117 @@ mod tests {
         hex::encode(std::array::from_fn::<u8, 32, _>(|i| {
             lineage.wrapping_add(i as u8)
         }))
+    }
+
+    // ---------------------------------------------------------------------------
+    // The CAIRNB3 CONTINUATION guard (#500 slice 2c final review, Critical 1). The legacy
+    // arm above has had an identity check since round 1; the arm that runs EVERY NIGHT had
+    // none, and it is the more dangerous of the two because it fails SILENTLY rather than
+    // destructively — see `refuse_foreign_continuation`'s doc for the worked seq arithmetic.
+
+    /// The normal case, and the anti-vacuity guard for every refusal below: our own medium,
+    /// by either derivation, is continued without complaint.
+    #[test]
+    fn continuing_our_own_cairnb3_medium_is_allowed() {
+        let us = node_id_hex(1);
+        for source in [MarkerSource::V3Attested, MarkerSource::V3Plaintext] {
+            refuse_foreign_continuation(Some(&(us.clone(), source)), &us, Path::new("/mnt/usb/m"))
+                .unwrap_or_else(|e| {
+                    panic!("the nightly path must not be refused ({source:?}): {e:#}")
+                });
+        }
+    }
+
+    /// A medium naming ANOTHER node is refused before a single record is captured — because
+    /// continuing it silently omits exactly the events whose seq numbers the other node
+    /// already spent, and every downstream surface then agrees the backup is complete.
+    #[test]
+    fn a_cairnb3_medium_naming_another_node_is_refused_with_a_remedy() {
+        let err = refuse_foreign_continuation(
+            Some(&(node_id_hex(2), MarkerSource::V3Attested)),
+            &node_id_hex(1),
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("another node's medium must never be appended to");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&node_id_hex(2)),
+            "the refusal must name whose medium it is: {msg}"
+        );
+        assert!(
+            msg.contains("--to at a NEW path"),
+            "and a remedy the operator can act on tonight: {msg}"
+        );
+        assert!(
+            msg.contains("NOTHING was written"),
+            "and it must say the medium is untouched — an operator who thinks a partial \
+             backup landed will reach for the wrong recovery: {msg}"
+        );
+    }
+
+    /// A FORGEABLE claim still refuses. Refusing on an untrusted id is the fail-safe
+    /// direction: the worst a forged foreign id can do is cost tonight's backup, loudly and
+    /// with a remedy, whereas TRUSTING one is how a foreign medium gets appended to. The
+    /// message must not describe a plaintext id as proof, though — that is the `V3Plaintext`
+    /// half of the trust statement `MarkerSource` exists to carry.
+    #[test]
+    fn a_forgeable_plaintext_claim_still_refuses_but_says_it_is_unverified() {
+        let err = refuse_foreign_continuation(
+            Some(&(node_id_hex(2), MarkerSource::V3Plaintext)),
+            &node_id_hex(1),
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("a mismatch must refuse whatever its provenance");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("unverified") || msg.contains("UNVERIFIED"),
+            "a plaintext id must never be presented as proof: {msg}"
+        );
+    }
+
+    /// Silence is not a mismatch (principle 4). A medium that names nobody — a capture taken
+    /// before this node was enrolled — claims nothing, and refusing on an absent claim would
+    /// block the legitimate first backup of a node that enrolled after its first capture.
+    #[test]
+    fn a_medium_that_names_nobody_is_not_refused() {
+        refuse_foreign_continuation(None, &node_id_hex(1), Path::new("/mnt/usb/m"))
+            .expect("an absent claim is not a foreign claim");
+    }
+
+    /// An UNENROLLED database continuing a medium that names a node gets the specific advice,
+    /// not the generic mismatch text: the shape here is a died disk, a re-`init`, and
+    /// `backup` run before `restore`. Appending would leave the medium's own events
+    /// permanently uncaptured while the file grew and reported success.
+    #[test]
+    fn an_unenrolled_database_is_told_to_restore_before_it_continues() {
+        let err = refuse_foreign_continuation(
+            Some(&(node_id_hex(3), MarkerSource::V3Attested)),
+            "",
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("an unenrolled node must not append to an identified medium");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("NOT ENROLLED"),
+            "the unenrolled case needs its own diagnosis: {msg}"
+        );
+        assert!(
+            msg.contains("restore"),
+            "and the remedy is to restore FROM this medium, not to back up onto it: {msg}"
+        );
+    }
+
+    /// Case-insensitivity, matching the legacy arm: hex ids differing only in case name the
+    /// SAME node, and refusing them would break the nightly path on a cosmetic difference.
+    #[test]
+    fn a_claim_differing_only_in_hex_case_is_us() {
+        let us = node_id_hex(1);
+        refuse_foreign_continuation(
+            Some(&(us.to_uppercase(), MarkerSource::V3Attested)),
+            &us,
+            Path::new("/mnt/usb/m"),
+        )
+        .expect("hex case must not decide identity");
     }
 
     #[test]

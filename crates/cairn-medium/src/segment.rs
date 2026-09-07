@@ -243,8 +243,10 @@ pub(crate) fn put_segment(out: &mut Vec<u8>, seg: &Segment) -> Result<(), Backup
 ///   - `Ok(None)` — a TORN TAIL: fewer bytes remain than the section claims, which is what
 ///     an interrupted append looks like. The caller keeps everything before it and flags
 ///     the tail. Remedy: run the backup again.
-///   - `Err(..)` — CORRUPTION: a length prefix beyond the cap, or a malformed body. The
-///     remedy is different ("this medium is damaged"), so the verdicts never collapse.
+///   - `Err(..)` — CORRUPTION: a wrong `SECTION_MAGIC` (not standing at a boundary at all),
+///     a length that disagrees with its own `len_check` complement — the two classes #523
+///     added — a length prefix beyond the cap, or a malformed body. The remedy is different
+///     ("this medium is damaged"), so the verdicts never collapse.
 ///
 /// An unrecognised plane tag is NOT one of the failure cases: it decodes into a normal
 /// [`Segment`] carrying [`Plane::Unknown`]. The record codec is plane-independent — one
@@ -446,9 +448,6 @@ mod tests {
         assert_eq!(back.plane.tag(), 99);
     }
 
-    /// A torn append yields `Ok(None)` — "nothing complete here" — not an error. This is
-    /// the property that makes an append-only medium safe to write in place: a crash mid
-    /// append costs the last increment and nothing else.
     /// #523, the filed defect. A length prefix corrupted UPWARD — but still under the cap —
     /// used to read as a torn tail, because `rest.len() < 4 + len` is exactly what an
     /// interrupted append looks like. The operator was told "your last backup was
@@ -518,6 +517,9 @@ mod tests {
         );
     }
 
+    /// A torn append yields `Ok(None)` — "nothing complete here" — not an error. This is
+    /// the property that makes an append-only medium safe to write in place: a crash mid
+    /// append costs the last increment and nothing else.
     #[test]
     fn a_torn_tail_reports_incomplete_rather_than_corrupt() {
         let seg = segment(Plane::Clinical, 1, 3);

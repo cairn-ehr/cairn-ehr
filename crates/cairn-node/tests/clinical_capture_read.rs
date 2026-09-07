@@ -3,11 +3,19 @@
 //!
 //! This suite proves the two things a backup medium's clinical plane needs before Task 7's
 //! paging loop can be built on top of it: a page genuinely carries an authored event's
-//! attestation and custody (not just its bytes), and the page function's own paging
+//! CUSTODY (not just its bytes), and the page function's own paging
 //! contract — `page_limit` and the exclusive `after_seq` cursor — is honoured by the Rust
 //! side exactly as `db/tests/051_clinical_capture_source_test.sql` proves it at the SQL
 //! layer. A third test covers the federation plane's `read_node_page`, whose three `NULL`
 //! columns are the point: they must decode as `None`, not as some other falsy value.
+//!
+//! ⚠️ **The AUTHORSHIP token is NOT covered here, despite what a test name below suggests.**
+//! Every fixture in this branch authors through `submit_event($1, NULL, NULL, $2)`, so
+//! `attestation`/`attester_key` are NULL and there is nothing to assert. Dropping those two
+//! columns from `db/051`'s `cairn_clinical_page`, or the two clones in `to_medium_record`,
+//! leaves this suite green. Tracked as
+//! [#556](https://github.com/cairn-ehr/cairn-ehr/issues/556), together with the question of
+//! whether `segment_commitment` should bind them at all.
 //!
 //! Fixtures are copied from `dr_clinical_guarantee_gap.rs` rather than shared, because
 //! integration-test binaries in this crate cannot `use` another test binary's private
@@ -125,7 +133,7 @@ async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) ->
 /// born-sealed body must have a wrapped DEK on the row, and `to_medium_record` must copy
 /// both across verbatim (never re-serializing the bytes, never re-wrapping the key).
 #[tokio::test]
-async fn a_clinical_page_carries_the_event_its_token_and_its_custody() {
+async fn a_clinical_page_carries_the_event_and_its_custody() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

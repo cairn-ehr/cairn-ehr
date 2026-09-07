@@ -13,20 +13,24 @@
 //! never crosses cannot be resurrected by a restore, which is stronger than replaying the
 //! shred log afterwards and does not depend on replay ordering.
 //!
-//! Be honest about how much of that the filter below carries. It is a LAST LINE, not the
-//! only one: `cairn_execute_shred` (db/037) already DELETES the custody row when a shred
-//! executes, and `apply_remote_event` (db/020) already refuses to create one for a target
-//! already in `erasure_shred_log`. So on a healthy node the filter selects nothing extra.
+//! Be honest about WHERE that is enforced, because it is no longer here. There are three
+//! defences and ALL THREE ARE NOW IN SQL: `cairn_execute_shred` (db/037) DELETES the custody
+//! row when a shred executes, `apply_remote_event` (db/020) refuses to create one for a
+//! target already in `erasure_shred_log`, and the filter itself is db/051's
+//! `event_custody_surviving` view.
 //!
-//! The filter itself used to be a `NOT EXISTS` clause written out here — one of two
-//! hand-written spellings of "a shredded body's key must not travel" (the other lived in
-//! cairn-sync's serve door). Slice 2c's db/051 gave the predicate its one home:
-//! `event_custody_surviving`, a `security_invoker` view every caller now selects from
-//! instead of re-deriving. This file is a CALLER, not the definition — but the reason a
-//! last-line defence still belongs here, in Rust, is unchanged: the failure it prevents
-//! (an erased body's key resurrected on a restored node) is irreversible, and the two
-//! upstream defences above are in a different codebase layer (SQL) that this file cannot
-//! see change out from under it.
+//! That filter used to be a `NOT EXISTS` clause written out in this file — one of two
+//! hand-written spellings of "a shredded body's key must not travel", the other living in
+//! cairn-sync's serve door. Slice 2c gave the predicate ONE home, which is ADR-0001's rule
+//! (fat Postgres, thin daemon) and closes the mirror-list defect class (#182, #404, #441)
+//! on a safety predicate. **This file is a CALLER, not the definition, and it carries no
+//! defence of its own** — an earlier version of this note argued a Rust last line still
+//! belonged here because the upstream defences were "in a layer this file cannot see change
+//! out from under it", which stopped being an argument the moment the filter joined them
+//! there. Do not read defence-in-depth into this module. What protects the irreversible
+//! failure (an erased body's key resurrected on a restored node) is the view, and the guard
+//! that keeps the view honest is `db/tests/051_clinical_capture_source_test.sql` plus
+//! `tests/shred_predicate_has_one_home.rs`.
 
 use crate::localstate::{
     actor_registry_row_to_cbor, episode_dek_to_cbor, ActorRegistryRow, EpisodeDek, LocalState,

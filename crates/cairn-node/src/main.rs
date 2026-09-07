@@ -1218,13 +1218,27 @@ async fn seal_and_write_local_state_export(
     // in the window between the two queries, querying seq AFTER would fold that event's seq
     // into `covers_seq` even though its `event_dek` row landed too late for THIS export to
     // carry — an OVER-claim, and the direction that manufactures a false green. Querying
-    // FIRST can only UNDER-claim (a seq that lands moments later is simply not counted yet),
-    // and an under-claim can only ever produce a false STALE next time, never a false green —
-    // the direction this whole project errs in on purpose (principle 4). Do not "tidy" this
-    // back to after the seal: that reopens the false-green window. `COALESCE(…, 0)` on a
-    // clinical-event-free node records harmless coverage of "nothing yet" — `kit_verdict`
-    // never even inspects `export_seq` when the medium itself reports no clinical events
-    // (see its doc), so this can never manufacture a false claim there either.
+    // FIRST is the strictly safer of the two orderings and is why it is done this way. Do
+    // not "tidy" it back to after the seal: that widens the false-green window.
+    //
+    // ⚠️ IT DOES NOT ELIMINATE THAT WINDOW, and an earlier version of this comment claimed it
+    // did ("can only UNDER-claim ... never a false green"). That claim assumed seq order is
+    // commit order, which `capture::plane`'s own header establishes is false: `event_log.seq`
+    // is `GENERATED ALWAYS AS IDENTITY`, handed out at INSERT, and commits land OUT OF ORDER.
+    // Two overlapping `submit_event` transactions take seqs 10 and 11; 11 commits; this query
+    // returns 11; `read_local_state` below reads `event_custody_surviving` and does not see
+    // 10's row; 10 then commits. Coverage now claims 11 over an export that lacks seq 10's
+    // DEK, and `kit_verdict(11, Some(11))` says `Restorable`.
+    //
+    // The residual is narrow (it needs a write in flight across these two statements) and it
+    // is NOT closed here, because closing it properly means reading both under ONE snapshot
+    // — a repeatable-read transaction spanning the seq query and the bundle read — which is
+    // a change to how the export is read, not a reordering. Tracked as #560 rather than
+    // papered over.
+    //
+    // `COALESCE(…, 0)` on a clinical-event-free node records harmless coverage of "nothing
+    // yet" — `kit_verdict` never even inspects `export_seq` when the medium itself reports no
+    // clinical events (see its doc), so this can never manufacture a false claim there.
     let row = db
         .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
         .await
@@ -1277,9 +1291,16 @@ async fn seal_and_write_local_state_export(
             health_path.display()
         )
     })?;
+    // WHETHER THIS RUN MAY MOVE THE FIGURE AT ALL (#500 slice 2c final review, Critical 2).
+    // `Written` used to be recorded unconditionally, so the warn-and-continue path 80 lines
+    // above — `<key>.unwrap` unloadable, export goes out with custody rows and NO key —
+    // advanced coverage for an artifact that opens nothing. `verify-backup` then returned
+    // `Restorable` at exit 0 over a kit whose every sealed body restores as ciphertext.
+    // `export_outcome_for_write` is the predicate that was missing; `ExportOutcome::Skipped`
+    // already named this case in its own doc.
     health.export_covers_seq = cairn_node::backup::export_coverage_after(
         health.export_covers_seq,
-        cairn_node::backup::ExportOutcome::Written(covers_seq),
+        cairn_node::backup::export_outcome_for_write(unwrap.is_some(), covers_seq),
     );
     cairn_node::backup::write_health(&health_path, &health)
         .context("recording export coverage in backup health")?;
@@ -2589,10 +2610,17 @@ async fn main() -> anyhow::Result<()> {
             // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
             // `backup` starts writing CAIRNB3, this command must keep reading it rather than
             // refuse a perfectly good medium as "not a backup medium" — the exact regression
-            // this task exists to prevent. Verification stays scoped to the NODE (federation)
-            // plane, deliberately: that is exactly what `restore` applies today, so this
-            // command's "OK" can never claim more than a restore could actually recover.
-            // Verifying the clinical plane is slice 2d's job; see `node_plane_events`'s doc.
+            // this task exists to prevent. The COUNT printed at the end stays scoped to the
+            // NODE (federation) plane, deliberately: that is exactly what `restore` applies
+            // today, so this command's "OK" can never claim more than a restore could
+            // actually recover. Reporting the clinical plane's restorability is slice 2d's
+            // job; see `node_plane_events`'s doc.
+            //
+            // INTEGRITY is a different question and is NOT so scoped — `refuse_unsound_medium`
+            // below runs `medium::assess`, which verifies every record on the medium, clinical
+            // included, and a corrupt clinical record bails this command. That is deliberate
+            // (final review, Important 2) and it is the stricter direction: what is narrow is
+            // what this command CLAIMS, not what it checks.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let image = cairn_node::medium::parse_any(&bytes)?;
@@ -2817,13 +2845,11 @@ async fn main() -> anyhow::Result<()> {
                     medium_seq,
                     export_seq,
                 } => {
-                    // Fix round 1, Minor 3: unwrapped, not `{export_seq:?}` — the debug
-                    // form printed the literal text "Some(2)" to an operator, and
-                    // `kit_verdict`'s own contract guarantees `ExportStale` never carries
-                    // `None` here (see its doc), so this is display polish, not a new case.
-                    let last_covered = export_seq
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| "none (unexpected)".to_string());
+                    // `export_seq` is a plain `i64` (final review, I14): it used to be an
+                    // `Option` that `kit_verdict` could never set to `None`, and the dead
+                    // arm here printed the literal words "none (unexpected)" to an operator.
+                    // The type now says what the constructor always guaranteed.
+                    let last_covered = export_seq;
                     anyhow::bail!(
                         "backup STALE: the medium holds clinical events up to seq \
                          {medium_seq}, but the local-state export beside it last covered \

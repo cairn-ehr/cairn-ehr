@@ -255,8 +255,11 @@ async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) ->
 /// half, which is all slice 2c claims. Nothing yet reads a clinical event BACK: `restore`
 /// and `verify-backup` both go through `backup::node_plane_events`, which returns the
 /// federation plane only, on purpose (slice 2d owns the other half). Its sibling half —
-/// *"and nothing yet restores one"* — is Task 13's to add beside this one; until it lands,
-/// this file does NOT pin that limit, and this doc comment is the only thing saying so.
+/// *"and nothing yet restores one"* — is pinned in this same file by
+/// `nothing_yet_restores_a_clinical_event_from_a_medium`, which Task 13 added; the limit is
+/// enforced by a test, not merely asserted by this comment. (An earlier version of this
+/// paragraph said the opposite, and was left standing after the pin landed — the shape that
+/// invites a later session to rebuild work that already exists.)
 ///
 /// ANTI-VACUITY, on both sides, inherited from the pin this replaced:
 /// `author_sealed_clinical_event` reads its event back out of `event_log` before returning,

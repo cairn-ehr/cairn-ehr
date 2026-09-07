@@ -48,8 +48,9 @@ use cairn_event::keys::Secret32;
 use cairn_event::seal::{seal_event_payload, seal_stub_twin};
 use cairn_event::{event_address, generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_medium::{
-    append_segment, build_self_attestation, parse_any, serialize_container,
-    verify_self_attestation, MediumImage, MediumRecord, Plane, Segment, SelfMarker,
+    append_segment, build_segment_attestation, build_self_attestation, parse_any,
+    serialize_container, serialize_v3, verify_segment_attestation, verify_self_attestation,
+    MediumImage, MediumRecord, Plane, Segment, SelfMarker,
 };
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
@@ -457,8 +458,10 @@ async fn a_legacy_medium_is_succeeded_by_a_cairnb3_medium_holding_at_least_as_mu
 /// **A torn tail is REPAIRED, and the operator is told** (#500 slice 2c review, Minor 5).
 ///
 /// `capture_plane` must cut a torn medium back to its last complete section before appending
-/// — otherwise the torn remnant becomes the next section's length prefix and every later
-/// backup is silently orphaned. It does that whether or not it then appends anything, so a
+/// — otherwise the torn remnant sits where the next section's header belongs and strands
+/// every later backup behind it (loudly since #523: the remnant fails the `SECTION_MAGIC`
+/// test, so the medium reads as damaged rather than being mis-framed — which is a better
+/// diagnosis, not a recovery). It does that whether or not it then appends anything, so a
 /// nightly run over an unchanged log can print `+0 / +0 appended` beside a file that just
 /// changed size. Unexplained, that reads as corruption.
 ///
@@ -714,4 +717,199 @@ async fn a_legacy_medium_is_refused_when_the_successor_would_hold_less() {
         backup::read_health(&cl.health()).is_none(),
         "and health must not advance over a backup that did not happen"
     );
+}
+
+// ---------------------------------------------------------------------------
+// THE CONTINUATION ARM (#500 slice 2c final review, Critical 1). The two tests above guard
+// the arm that DESTROYS a legacy file. This one guards the arm that runs EVERY NIGHT — and
+// which, until `refuse_foreign_continuation`, had no identity check at all.
+// ---------------------------------------------------------------------------
+
+/// A DIFFERENT node's genuine CAIRNB3 medium: its signed genesis on the node plane, in an
+/// attested segment, exactly as that node's own `backup` would have left it.
+///
+/// Built through the production primitives (`build_segment_attestation`, `serialize_v3`,
+/// `append_segment`) rather than hand-assembled, so what is under test is the real reader
+/// meeting a real writer's output — the same discipline `a_peers_legacy_medium` follows.
+fn a_peers_cairnb3_medium() -> (Vec<u8>, String) {
+    let (peer_sk, peer_kid) = generate_key().expect("entropy for the peer's signing key");
+    let genesis = EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: identity::NIL_PATIENT.into(),
+        event_type: "node.enrolled".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc {
+            wall: 1,
+            counter: 0,
+            node_origin: "peer-clinic-v3".into(),
+        },
+        t_effective: None,
+        signer_key_id: peer_kid.clone(),
+        contributors: serde_json::json!([{"actor_id": peer_kid, "role": "recorded"}]),
+        payload: serde_json::json!({"display_name": "peer-clinic-v3", "address": "127.0.0.1:7998"}),
+        attachments: vec![],
+        plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
+    };
+    let signed = sign(&genesis, &peer_sk)
+        .expect("the peer signs its own genesis")
+        .signed_bytes;
+    // A node id IS the content-address of its genesis — the peer's real id, 32 bytes of hex.
+    let peer_node_id = hex::encode(event_address(&signed));
+
+    let records = vec![MediumRecord {
+        source_seq: 1,
+        signed_bytes: signed,
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: None,
+    }];
+    let attestation = build_segment_attestation(
+        &peer_sk,
+        &peer_kid,
+        &peer_node_id,
+        Plane::Node,
+        0,
+        "",
+        &records,
+    );
+    let segment = Segment {
+        plane: Plane::Node,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: peer_node_id.clone(),
+        attestation: Some(attestation),
+        records,
+    };
+    let mut bytes = serialize_v3(&[]).expect("an empty CAIRNB3 header");
+    append_segment(&mut bytes, &segment).expect("the fixture fits the frame cap");
+
+    // ANTI-VACUITY, and it is load-bearing twice over. The refusal under test must fire for
+    // the ATTESTED reason, not the forgeable plaintext fallback — those produce different
+    // operator text — so the segment attestation has to genuinely verify.
+    assert_eq!(
+        verify_segment_attestation(&segment),
+        Some(peer_node_id.clone()),
+        "the fixture must be a real attested segment, not a blob that merely looks like one"
+    );
+    (bytes, peer_node_id)
+}
+
+/// **A peer's CAIRNB3 medium is refused, and not one byte is appended to it.**
+///
+/// The scenario the guard exists for, and the reason it is more dangerous than the legacy
+/// arm: continuing this medium does not fail, it SUCCEEDS QUIETLY. `watermark` filters
+/// segments by plane and takes the `max` of `source_seq` — a node-local IDENTITY value — so
+/// the capture would resume from the PEER's sequence numbers. Every event of ours numbered
+/// below them is then skipped, `seq_gaps` reports no hole (the seq space looks complete),
+/// `plane_counts` counts the peer's records as ours, and `kit_verdict` returns `Restorable`.
+/// A medium missing this clinic's earliest events, holding another clinic's in their place,
+/// reported green at exit 0.
+#[tokio::test]
+async fn a_cairnb3_medium_belonging_to_another_node_is_refused_not_continued() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    let (peer_medium, peer_node_id) = a_peers_cairnb3_medium();
+    std::fs::write(cl.medium(), &peer_medium).unwrap();
+    assert_ne!(
+        peer_node_id,
+        self_node_id_hex(&cl.db).await,
+        "anti-vacuity: the fixture must genuinely belong to a DIFFERENT node"
+    );
+
+    let err = backup::backup_to(
+        &cl.db,
+        &cl.medium(),
+        &cl.health(),
+        1_700_000_000,
+        Some((&cl.sk, &cl.kid)),
+    )
+    .await
+    .expect_err("appending to another node's medium must be refused, not reported as a backup");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(&peer_node_id),
+        "the refusal must NAME whose medium this is: {msg}"
+    );
+    assert!(
+        msg.contains("ATTESTED"),
+        "and it must say the id is attested rather than a forgeable plaintext hint — the \
+         fixture's segment genuinely verifies, so anything else understates what is known: \
+         {msg}"
+    );
+    assert!(
+        msg.contains("--to at a NEW path"),
+        "and name a remedy the operator can act on tonight: {msg}"
+    );
+
+    assert_eq!(
+        std::fs::read(cl.medium()).unwrap(),
+        peer_medium,
+        "the peer's medium must be BYTE-IDENTICAL afterwards — this arm APPENDS, so a \
+         refusal that still wrote would leave two nodes' records interleaved in one file"
+    );
+    assert!(
+        backup::read_health(&cl.health()).is_none(),
+        "and health must not advance over a backup that did not happen"
+    );
+}
+
+/// The other half, and the reason the test above cannot be satisfied by a guard that refuses
+/// everything: **our OWN medium is still continued.** A guard that broke the nightly path
+/// would be reverted within a day, so the allow direction is pinned beside the refusal.
+///
+/// It also pins the property that makes the refusal safe to add at all — a second `backup`
+/// over our own medium appends rather than refusing, and the clinical event is still there.
+#[tokio::test]
+async fn our_own_cairnb3_medium_is_continued_across_two_backups() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let first = author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    let one = backup::backup_to(
+        &cl.db,
+        &cl.medium(),
+        &cl.health(),
+        1_700_000_000,
+        Some((&cl.sk, &cl.kid)),
+    )
+    .await
+    .expect("the first backup writes a fresh medium");
+    assert!(
+        one.clinical_appended > 0,
+        "anti-vacuity: the first capture must actually carry the clinical plane"
+    );
+
+    // A second event, then a second backup ONTO THE SAME FILE — the nightly path.
+    let second = author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    let two = backup::backup_to(
+        &cl.db,
+        &cl.medium(),
+        &cl.health(),
+        1_700_000_100,
+        Some((&cl.sk, &cl.kid)),
+    )
+    .await
+    .expect("continuing OUR OWN medium must not be refused by the foreign-medium guard");
+    assert!(
+        two.clinical_appended > 0,
+        "the second run must append the event authored since the first"
+    );
+
+    // Both events are on the medium, read back off disk rather than from a return value.
+    let bytes = std::fs::read(cl.medium()).unwrap();
+    for (which, signed) in [("first", &first), ("second", &second)] {
+        assert!(
+            bytes.windows(signed.len()).any(|w| w == signed.as_slice()),
+            "the {which} event's signed bytes must be on the medium after two captures"
+        );
+    }
 }

@@ -37,8 +37,15 @@ use super::{read_clinical_page, read_node_page, to_medium_record, ClinicalRow};
 pub struct PlaneCapture {
     pub plane: Plane,
     /// How many event records were appended, across every segment this call wrote —
-    /// backfilled records included. `0` means the medium was NOT touched at all (not even
-    /// by an empty segment).
+    /// backfilled records included.
+    ///
+    /// `0` means NO RECORDS WERE APPENDED. It does **not** mean the medium was left alone:
+    /// this function truncates a torn tail (`medium.truncate(m.complete_bytes)`) before it
+    /// knows whether it will append anything, so a nightly run over an unchanged log can
+    /// return `0` having shrunk the buffer. Do not treat `0` as "the buffer still equals the
+    /// file" and skip the write on it. Whether a repair happened is reported separately, by
+    /// `backup::OpenedMedium::torn_tail_repaired` out to `BackupReport::repaired_torn_tail`;
+    /// this field answers only the question it is named for.
     pub records_appended: usize,
     /// The highest `source_seq` this medium can now be trusted to hold for `plane`, or
     /// `None` when no verified segment of that plane exists. `None` is not zero: zero is
@@ -70,10 +77,21 @@ pub struct PlaneCapture {
     /// Ranges this capture ASKED the database for and the database could not supply, as the
     /// same `(after, before)` exclusive pairs. **Permanently absent, not merely absent now.**
     ///
-    /// That is the whole point, and it rests on one property: a PostgreSQL IDENTITY value is
-    /// never re-issued. So a range probed once and found empty can never be filled by any
-    /// future capture — unlike an unprobed gap, which may simply be a seq that had not
-    /// committed yet when the last capture read past it.
+    /// ⚠️ **"Permanently" is the INTENT and is not yet established by the probe.** The
+    /// property it rests on — a PostgreSQL IDENTITY value is never re-issued — guarantees a
+    /// seq will not be REUSED BY A DIFFERENT ROW. It does not guarantee the seq is not
+    /// PENDING. This probe is a read at an instant, with exactly the same exposure to
+    /// out-of-order commits as the tail read that created the gap: an open transaction
+    /// holding seq 5 makes `(4, 6)` probe empty, and it commits afterwards.
+    ///
+    /// Today nothing consumes this field, so nothing acts on the over-claim. **#549 must not
+    /// implement the "subtract it from the probe set" instruction below without first making
+    /// the claim true** — e.g. by admitting a range only once
+    /// `pg_snapshot_xmin(pg_current_snapshot())` has advanced past the probe's snapshot, so
+    /// no transaction that could still fill it is running. Subtracting an unqualified range
+    /// would exclude a real clinical event from backfill for the life of the medium, while
+    /// `watermark` reported a seq above it — this field's own failure mode, from the field
+    /// meant to prevent it.
     ///
     /// This is the durable evidence #549 needs: persisted by the caller (the backup-health
     /// sidecar is the natural home) and subtracted from the probe set on the next run, it
@@ -263,18 +281,23 @@ pub async fn capture_plane(
     // 1. Parse the existing image. A fresh medium is `serialize_v3(&[])`; anything else is
     //    whatever the last capture left behind, torn tail included.
     //
-    // ⚠️ KNOWN LIMITATION — #523, and it belongs to `cairn-medium`, not here. A `?` on this
-    // line refuses the whole capture, and one real-world artifact reaches it: the classic
-    // ext4 delayed-allocation power-loss tail, where the interrupted section arrives as a
-    // FULL-LENGTH run of NUL bytes rather than a short one. `take_section` then reads an
-    // honest-looking length over a malformed body and returns `Damaged` — so the
-    // truncate-to-`complete_bytes` recovery ten lines below, which handles every SHORT tear,
-    // never runs. Until #523 lands ("a corrupt section length under the cap is
-    // indistinguishable from a torn tail, and the two remedies are opposite"), expect such a
-    // medium to be refused rather than repaired: the operator's remedy is to start a new
-    // medium, and no data is lost, because a refused capture writes nothing and the previous
-    // good medium is untouched. Fixing it HERE would mean this file guessing at a format
-    // ambiguity, which is the one thing #523 says must not be done piecemeal.
+    // ⚠️ RESIDUAL — narrowed by #523 (which landed in this same slice), not eliminated, and
+    // it belongs to `cairn-medium`, not here. A `?` on this line refuses the whole capture,
+    // and one real-world artifact still reaches it: the classic ext4 delayed-allocation
+    // power-loss tail, where the interrupted section arrives as a FULL-LENGTH run of NUL
+    // bytes rather than a short one. Such a tail no longer reads as an honest length over a
+    // malformed body — it fails the `SECTION_MAGIC` test at the top of `take_section` — but
+    // the verdict is still `Damaged`, so the truncate-to-`complete_bytes` recovery ten lines
+    // below, which handles every SHORT tear, still does not run for it.
+    //
+    // That is the fail-CLOSED direction and it is the right one: the operator's remedy is to
+    // start a new medium, and no data is lost, because a refused capture writes nothing and
+    // the previous good medium is untouched. What #523 changed is the DIAGNOSIS — the
+    // operator is now told the medium is damaged rather than that their backup was
+    // interrupted, which were opposite remedies. Distinguishing a NUL-run tear from genuine
+    // NUL-run damage would need a format-level answer (a trailing commitment, say); doing it
+    // HERE would mean this file guessing at a format question, which is the one thing #523
+    // says must not be done piecemeal.
     let m: MediumV3 = match parse_any(medium)? {
         MediumImage::V3(m) => m,
         MediumImage::Legacy(_) => anyhow::bail!(
@@ -285,10 +308,13 @@ pub async fn capture_plane(
     };
 
     // A torn tail must be CUT BEFORE anything is appended (`MediumV3::complete_bytes`, I4):
-    // otherwise the torn remnant becomes the next section's `[u32 length]` prefix and
-    // parsing stops there forever, silently orphaning every later backup. The records that
-    // were in the torn segment are not lost — the watermark below never counted them, so
-    // the loop re-captures them.
+    // otherwise the torn remnant sits where the next section's HEADER belongs, and every
+    // later backup is unreachable behind it. Since #523 that failure is at least LOUD — the
+    // remnant almost never begins with `SECTION_MAGIC`, so the whole medium reads as
+    // `Damaged` at that boundary rather than being mis-framed by a plausible-looking length
+    // — but "loud and unreadable" is not a recovery, so the truncate is still mandatory.
+    // The records that were in the torn segment are not lost — the watermark below never
+    // counted them, so the loop re-captures them.
     if m.truncated_tail {
         medium.truncate(m.complete_bytes);
     }
@@ -507,7 +533,7 @@ fn verified_floor(m: &MediumV3, report: &ChainReport, plane: Plane) -> Option<i6
 /// The residual claim is the load-bearing part and rests on one property: the walk only ends
 /// when a page comes back empty, so by then the database has been ASKED for everything
 /// between the cursor and `before` and has supplied nothing more. A PostgreSQL IDENTITY value
-/// is never re-issued, so what the database cannot supply now it can never supply. That is
+/// is never re-issued, so what the database cannot supply now it can never supply — subject to the snapshot caveat on `PlaneCapture::probed_empty`, which #549 owes before acting on this. That is
 /// what makes [`PlaneCapture::probed_empty`] worth persisting (#549) rather than re-deriving
 /// every night.
 ///

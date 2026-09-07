@@ -10,7 +10,8 @@
 //! against a literal string.
 
 use cairn_node::backup::{
-    export_coverage_after, read_health, write_health, BackupHealth, ExportOutcome,
+    describe_health, export_coverage_after, export_outcome_for_write, read_health, write_health,
+    BackupHealth, ExportOutcome,
 };
 
 /// A v1 sidecar written by yesterday's binary must still READ. An operator upgrading must
@@ -60,6 +61,7 @@ fn a_v2_sidecar_round_trips_every_field() {
         clinical_events: 41_204,
         clinical_watermark: Some(91_338),
         export_covers_seq: Some(91_338),
+        extra: Default::default(),
     };
     // Bound to `dir`, not chained: `tempdir().unwrap().path().join(..)` drops the `TempDir`
     // guard at the end of the statement, which deletes the directory from disk before
@@ -110,6 +112,7 @@ fn the_v2_shape_is_pinned_field_by_field() {
         clinical_events: 41_204,
         clinical_watermark: Some(91_338),
         export_covers_seq: Some(91_338),
+        extra: Default::default(),
     };
     let json = serde_json::to_string_pretty(&health).unwrap();
     assert_eq!(
@@ -128,3 +131,155 @@ const PINNED_V2_JSON: &str = r#"{
   "clinical_watermark": 91338,
   "export_covers_seq": 91338
 }"#;
+
+/// #500 slice 2c final review, **Critical 2** — an export that seals, verifies, and carries
+/// NO unwrap key must NOT advance coverage.
+///
+/// `backup` reaches that state deliberately: `seal_and_write_local_state_export` warns and
+/// carries on when `<key>.unwrap` cannot be loaded (absent on a node provisioned before
+/// ADR-0066 decision 5, bit-rotted, or sealed under the other operator secret), because the
+/// medium is the load-bearing copy and an optional export must never abort a backup. The
+/// artifact that lands is durable, readable, well-formed — and opens nothing.
+///
+/// Recording `Written` for it was the exact false green [`export_coverage_after`] exists to
+/// prevent, and `ExportOutcome::Skipped`'s own doc already named "a load failure" as one of
+/// the warn-and-continue paths it covers. The call site simply did not honour it: the FILE
+/// landing was mistaken for the export ACHIEVING something. `kit_verdict(Some(N), Some(N))`
+/// then returned `Restorable` and `verify-backup` exited 0 over a kit whose every sealed
+/// body restores as ciphertext, permanently.
+#[test]
+fn an_export_carrying_no_custody_key_does_not_advance_coverage() {
+    assert_eq!(
+        export_outcome_for_write(false, 900),
+        ExportOutcome::Skipped,
+        "no key carried means the export achieved nothing a restore can use"
+    );
+    // And the ratchet must then leave the previous figure exactly where it was — the two
+    // halves are asserted together because either one alone still permits the false green.
+    assert_eq!(
+        export_coverage_after(Some(500), export_outcome_for_write(false, 900)),
+        Some(500),
+        "coverage must stay at the last figure an export genuinely achieved"
+    );
+    assert_eq!(
+        export_coverage_after(None, export_outcome_for_write(false, 900)),
+        None,
+        "and a keyless export must not manufacture a first coverage claim from nothing"
+    );
+}
+
+/// The other direction, so the test above cannot pass against a function hardwired to
+/// `Skipped` — which would silently freeze coverage forever and make every kit read STALE.
+#[test]
+fn an_export_carrying_the_custody_key_advances_coverage() {
+    assert_eq!(
+        export_outcome_for_write(true, 900),
+        ExportOutcome::Written(900),
+        "a key-bearing export is the only thing that may move the figure"
+    );
+    assert_eq!(
+        export_coverage_after(Some(500), export_outcome_for_write(true, 900)),
+        Some(900)
+    );
+}
+
+/// #500 slice 2c final review, I14 — a v1 sidecar must not be RENDERED as "0 node event(s),
+/// 0 clinical event(s)".
+///
+/// `node_events`/`clinical_events` are `#[serde(default)]`, so a v1 sidecar (whose count
+/// lived in the differently-named `event_count`) parses with both at zero. Printing those
+/// unqualified told an operator that a multi-megabyte medium holds nothing — a
+/// self-contradiction manufactured by a serde default, appearing in exactly the window
+/// between upgrading the binary and the first successful new `backup`, which is the window in
+/// which `backup` is most likely to be failing. `version` was written and never read by
+/// anything; this is what reads it.
+#[test]
+fn a_v1_sidecar_is_not_rendered_as_zero_events() {
+    let v1 = BackupHealth {
+        version: 1,
+        last_backup_unix: 1_700_000_000,
+        medium_path: "/m/backup.cairn".into(),
+        medium_bytes: 9_400_000,
+        node_events: 0,
+        clinical_events: 0,
+        clinical_watermark: None,
+        export_covers_seq: None,
+        extra: Default::default(),
+    };
+    let line = describe_health(1_700_003_600, &Some(v1));
+    assert!(
+        !line.contains("0 node event(s)"),
+        "a v1 sidecar records no per-plane scope; claiming zero is a fact it never stated: \
+         {line}"
+    );
+    assert!(
+        line.contains("per-plane") || line.contains("not recorded"),
+        "and it must say WHY the counts are missing, so the operator does not read the \
+         medium as empty: {line}"
+    );
+}
+
+/// The anti-vacuity companion: a v2 sidecar still reports its counts. Without this the test
+/// above is satisfied by a `describe_health` that never prints counts at all.
+#[test]
+fn a_v2_sidecar_still_reports_its_per_plane_counts() {
+    let v2 = BackupHealth {
+        version: 2,
+        last_backup_unix: 1_700_000_000,
+        medium_path: "/m/backup.cairn".into(),
+        medium_bytes: 9_400_000,
+        node_events: 12,
+        clinical_events: 8_000,
+        clinical_watermark: Some(8_000),
+        export_covers_seq: Some(8_000),
+        extra: Default::default(),
+    };
+    let line = describe_health(1_700_003_600, &Some(v2));
+    assert!(
+        line.contains("12 node event(s)") && line.contains("8000 clinical event(s)"),
+        "a v2 sidecar's counts are real and must still be shown: {line}"
+    );
+}
+
+/// A field written by a NEWER build must survive this build's read-modify-write.
+///
+/// `main.rs`'s export ceremony does exactly that round trip: `read_health`, advance
+/// `export_covers_seq`, `write_health`. Plain serde DROPS unknown fields, so an older binary
+/// run once against a newer sidecar — a rollback, a rescue USB, a second node sharing the key
+/// directory — would silently erase whatever the newer build had recorded there.
+///
+/// `deny_unknown_fields` is deliberately NOT the fix (it is what `LocalState` uses one layer
+/// over): v1's `event_count` is itself an unknown field to this build, so refusing would
+/// break the v1 compatibility the test at the top of this file pins. Preserving is both
+/// backward AND forward compatible; refusing is only one of those.
+#[test]
+fn a_field_from_a_newer_build_survives_a_read_modify_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("backup-status.json");
+    std::fs::write(
+        &path,
+        r#"{"version":3,"last_backup_unix":1700000000,"medium_path":"/m/backup.cairn",
+            "medium_bytes":4096,"node_events":12,"clinical_events":900,
+            "clinical_watermark":900,"export_covers_seq":880,
+            "clinical_restorable_through":870}"#,
+    )
+    .unwrap();
+
+    let mut health = read_health(&path).expect("a newer sidecar must still parse");
+    health.export_covers_seq = export_coverage_after(
+        health.export_covers_seq,
+        export_outcome_for_write(true, 900),
+    );
+    write_health(&path, &health).unwrap();
+
+    let back = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        back.contains("clinical_restorable_through"),
+        "the newer build's field must still be in the file after this build rewrote it: \
+         {back}"
+    );
+    assert!(
+        back.contains("870"),
+        "and with its value intact, not merely its name: {back}"
+    );
+}

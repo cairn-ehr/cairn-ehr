@@ -29,7 +29,7 @@
 >   is UNCHANGED: a solo clinic backs up nightly, `verify-backup` passes, and a restore still recovers who
 >   it peered with and **zero patients**. What changed is that the bytes now EXIST off-machine to be given
 >   back; before, a dead disk was total loss and no later slice could have recovered it. **2d is the read
->   half and is what closes #500.** Both halves are pinned as siblings in
+>   half and is what closes #554** (#500 closed with 2c, on its own title). Both halves are pinned as siblings in
 >   `dr_clinical_guarantee_gap.rs`: `medium_carries_both_planes` (a guarantee — it reddens if the capture
 >   regresses) and `nothing_yet_restores_a_clinical_event_from_a_medium` (a **pin** — 2d reddens it, and
 >   that is the guard working; **invert it then, never delete it**).
@@ -62,7 +62,14 @@
 >   since it is the number this file has already been wrong about. **Two human acts still owed, IN THIS
 >   ORDER:** dismiss the `cleartext-logging` alerts (per-alert verdicts in #527's comment), then make
 >   `CodeQL` a REQUIRED check — a permanently-red required check trains everyone to merge past it, which
->   is how a genuine critical sat unread for a week.
+>   is how a genuine critical sat unread for a week. **All 11 were re-triaged 2026-09-07 and written up
+>   in [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562)** — every one traced to its actual data
+>   flow rather than assumed: nine are taint-through-an-argument (a secret passed INTO a function makes
+>   its non-secret return value — a `PathBuf`, a `SocketAddr`, a count — look tainted), two are a CLI
+>   echoing back a patient UUID the operator supplied. `print_recovery_code` IS a real secret on stderr
+>   and is correct: all five call sites are interactive provisioning ceremonies, and **no cron-run command
+>   reaches it** — re-check that if a future slice ever calls `resolve_or_adopt_unwrap_secret` from an
+>   unattended path.
 > - **⇒ THE LOOSE END, NOW DECIDED.** 2c's answer to *"which carrier is authoritative for custody"* is
 >   **BOTH**. The export is the OPTIONAL artifact (a passphrase-less cron run skips it with exit 0), so
 >   custody there alone means tonight's medium beside a weeks-old export leaves every event sealed since
@@ -258,7 +265,37 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-07 (last) — the section-framing guard, and a finished slice nobody could see
+### 2026-09-07 (last) — the whole-branch review of PR #555: two false greens, found inside the slice that exists to end them
+
+**The review round (PR #555, six specialist passes).** Every finding was verified against the source
+before being acted on; two were Critical and both were **false greens** — the failure this whole slice
+exists to end, found inside it.
+
+- **The CAIRNB3 CONTINUATION arm had no identity guard**, and it is the arm that runs every night.
+  `refuse_unsafe_legacy_succession` is gated on `superseded`, which only the LEGACY arm sets, so
+  `open_or_start_medium`'s `Continued` case appended to whatever CAIRNB3 file sat at `--to`. Because
+  `watermark` filters by plane and takes `max(source_seq)` — a node-local IDENTITY value, never
+  `self_node_id_hex` — a peer's medium holding clinical seqs 1..100 made this node resume at
+  `seq > 100`: **our events 1..100 were never captured**, `seq_gaps` saw no hole, and
+  `kit_verdict(Some(300), Some(300))` said `Restorable` at exit 0. Closed by
+  `refuse_foreign_continuation`, which refuses BEFORE any capture, on an attested or a forgeable claim
+  (a forged foreign id costs one loud remediable backup; a trusted one loses data silently), and stays
+  silent when the medium names nobody.
+- **A failed unwrap-key load still advanced export coverage**, so an export carrying every wrapped DEK
+  and **no key** was reported `Restorable`. `ExportOutcome::Skipped`'s own doc already named "a load
+  failure"; the call site did not honour it. Closed by the pure `export_outcome_for_write`. **The trap
+  worth remembering: three tests in `verify_backup_scope.rs` were green over exactly this kit**, because
+  the fixture deliberately wrote no `.unwrap` file on the reasoning that the degradation was "a warning,
+  never a failure". A fixture that means *a full kit* has to build one; it does now.
+
+The rest of the round was comment rot with real consequences — `cairn-medium`'s **headline invariant
+list** still said the #523 sentinel was "deliberately NOT attempted here", and two operator-facing
+messages still told a human the two verdicts were indistinguishable in the very output that had just
+distinguished them — plus eight issues opened: **#556** (`segment_commitment` does not bind
+`attestation`/`attester_key`; **free only until a release ships a CAIRNB3 writer**), **#557**, **#558**,
+**#559**, **#560**, **#561**, **#562** (the CodeQL triage) and **#563**.
+
+### 2026-09-07 — the section-framing guard, and a finished slice nobody could see
 
 **Closes #523. Rides the 2c branch rather than its own, because it is a pre-field CAIRNB3 format
 change and 2c is the writer that starts producing media — the last moment it is free.**
