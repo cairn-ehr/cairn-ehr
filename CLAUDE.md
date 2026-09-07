@@ -219,6 +219,24 @@ These are load-bearing working agreements — hold to them on proof-of-concept s
    it. Enforced forward-only by `crates/cairn-node/tests/paper_parity_plan_section.rs` (rides the
    existing `cargo test` gate) and stated in `CONTRIBUTING.md`. (2026-07-15 review finding I9/G, #217.)
 
+8. **Every session ends in at least a DRAFT PR, and every session begins by looking for one.**
+   Work that exists only on a local branch is invisible: the maintainer's first check before starting
+   a session is the PR list, and a session that ends without one has hidden itself. This is not a
+   tidiness rule — it cost a full session on 2026-09-07. DR slice 2c had been **built, reviewed and
+   finished** on 2026-09-06 and left un-PR'd when the editor restarted and took the session with it;
+   HANDOVER and ROADMAP on that branch recorded it correctly and `main` knew nothing, so the next
+   session verified the tracking documents against `main`, found them consistent, and re-designed and
+   part-rebuilt a slice that already existed.
+   - **Ending.** Push the branch and open a PR — **draft** if the work is incomplete, mid-review, or
+     blocked — before the session ends. A draft PR whose body says *"WIP, blocked on X"* is a
+     complete handover; an unpushed branch is not. If a PR genuinely cannot be opened (no remote, no
+     permission), say so explicitly in the final message and in HANDOVER, naming the branch.
+   - **Starting.** Before acting on HANDOVER's ⇒ NEXT, check that the work it names is not already
+     done somewhere that is not `main`: `gh pr list --state all --limit 20`, then `git branch -a` and
+     `git log --all --oneline --since=<the last session date>`. **A ⇒ NEXT is only ever true of
+     `main`, and nothing in the file says so.** Checking the working tree and `main` is not checking
+     the repository.
+
 ## Working conventions
 
 - **The user is an EM physician** who codes mostly in Python and brings real ED/hospital failure

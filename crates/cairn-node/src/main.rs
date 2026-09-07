@@ -1177,9 +1177,10 @@ async fn apply_local_state_export(
 /// medium (the load-bearing copy) is already written. An operator who is not told here would
 /// find out during a restore instead.
 ///
-/// ⚠️ Still NOT true end-to-end: the backup medium carries no clinical event (#500). The
-/// restore side now DOES install what this writes (ADR-0066 decision 4 —
-/// `localstate::apply_local_state`), but it lands the unwrap key only; the carried custody
+/// ⚠️ Still NOT true end-to-end: nothing RESTORES a clinical event (#500). The medium has
+/// carried the clinical plane since DR slice 2c, and the restore side does install what this
+/// writes (ADR-0066 decision 4 — `localstate::apply_local_state`) — but it lands the unwrap
+/// key only, and `restore` still applies the federation plane alone, so the carried custody
 /// rows wait for the events they belong to. A reader arriving at "why did my restore have no
 /// clinical records" should read #500 before concluding this function is at fault.
 async fn seal_and_write_local_state_export(
@@ -1209,10 +1210,101 @@ async fn seal_and_write_local_state_export(
         }
     };
 
+    // Snapshot the CURRENT clinical high-water mark BEFORE `read_local_state` runs, never
+    // after (#500 slice 2c Task 12 fix round 1, Important 2). `read_local_state` below reads
+    // `event_dek`/`actor_event`/etc — NOT `event_log` itself — to build the bundle this
+    // export seals, so it has no seq of its own to report; the seq recorded here is a claim
+    // made ABOUT that read, and the claim must never outrun it. If a clinical event committed
+    // in the window between the two queries, querying seq AFTER would fold that event's seq
+    // into `covers_seq` even though its `event_dek` row landed too late for THIS export to
+    // carry — an OVER-claim, and the direction that manufactures a false green. Querying
+    // FIRST is the strictly safer of the two orderings and is why it is done this way. Do
+    // not "tidy" it back to after the seal: that widens the false-green window.
+    //
+    // ⚠️ IT DOES NOT ELIMINATE THAT WINDOW, and an earlier version of this comment claimed it
+    // did ("can only UNDER-claim ... never a false green"). That claim assumed seq order is
+    // commit order, which `capture::plane`'s own header establishes is false: `event_log.seq`
+    // is `GENERATED ALWAYS AS IDENTITY`, handed out at INSERT, and commits land OUT OF ORDER.
+    // Two overlapping `submit_event` transactions take seqs 10 and 11; 11 commits; this query
+    // returns 11; `read_local_state` below reads `event_custody_surviving` and does not see
+    // 10's row; 10 then commits. Coverage now claims 11 over an export that lacks seq 10's
+    // DEK, and `kit_verdict(11, Some(11))` says `Restorable`.
+    //
+    // The residual is narrow (it needs a write in flight across these two statements) and it
+    // is NOT closed here, because closing it properly means reading both under ONE snapshot
+    // — a repeatable-read transaction spanning the seq query and the bundle read — which is
+    // a change to how the export is read, not a reordering. Tracked as #560 rather than
+    // papered over.
+    //
+    // `COALESCE(…, 0)` on a clinical-event-free node records harmless coverage of "nothing
+    // yet" — `kit_verdict` never even inspects `export_seq` when the medium itself reports no
+    // clinical events (see its doc), so this can never manufacture a false claim there.
+    let row = db
+        .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
+        .await
+        .context("querying the current clinical watermark for export coverage")?;
+    let covers_seq: i64 = row.get(0);
+
     let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_ref()).await?;
     let container = cairn_node::localstate::build_export_container(wraps, &op, &bundle)?;
     let export_path = cairn_node::localstate::localstate_path_for(medium);
     cairn_node::fsio::atomic_write(&export_path, &container, Some(0o600))?;
+
+    // READ-AFTER-WRITE (#500 slice 2c Task 12). `backup_to` has re-read and re-verified its
+    // own bytes since slice B (`refuse_unsound`, called on the freshly-written medium before
+    // health is ever recorded) — the export never has, until now. A torn write, a filesystem
+    // that lied about `atomic_write`'s rename, or a disk that silently corrupts on read-back
+    // would otherwise sail through as "exported" and only be discovered at the disaster, when
+    // `restore` tries to parse this exact file. This is the ONE artifact carrying this node's
+    // custody key off the machine, so it gets the same treatment the medium already has —
+    // and stronger: `confirm_export_readback` (fix round 1, Minor 2) does not stop at
+    // "parses" (a bit flipped inside `payload_ct` still parses as valid CBOR and would have
+    // sailed through the original check) — it also insists the readback is byte-identical to
+    // what was written AND actually unseals under this SAME op-pass, which framing alone
+    // cannot prove.
+    let readback = std::fs::read(&export_path).with_context(|| {
+        format!(
+            "reading back the just-written export {} to verify it",
+            export_path.display()
+        )
+    })?;
+    cairn_node::localstate::confirm_export_readback(&container, &readback, &op).with_context(
+        || {
+            format!(
+                "the export just written to {} failed its read-after-write check",
+                export_path.display()
+            )
+        },
+    )?;
+
+    // `backup_to` already wrote a fresh `BackupHealth` for THIS run (with `export_covers_seq`
+    // preserved via `ExportOutcome::Skipped`, since from its own point of view no export ran
+    // — see that function's doc) moments before this function was called. Re-read it and
+    // advance only the one field this ceremony owns, via the SAME pure ratchet
+    // `export_coverage_after` backup_to itself uses, so the two call sites can never drift
+    // onto different ideas of when coverage may move.
+    let health_path = cairn_node::backup::health_path_for(key_path);
+    let mut health = cairn_node::backup::read_health(&health_path).with_context(|| {
+        format!(
+            "re-reading backup health at {} written moments ago by `backup_to` — the export \
+             ceremony runs only after that succeeds, so its absence here is an ordering bug",
+            health_path.display()
+        )
+    })?;
+    // WHETHER THIS RUN MAY MOVE THE FIGURE AT ALL (#500 slice 2c final review, Critical 2).
+    // `Written` used to be recorded unconditionally, so the warn-and-continue path 80 lines
+    // above — `<key>.unwrap` unloadable, export goes out with custody rows and NO key —
+    // advanced coverage for an artifact that opens nothing. `verify-backup` then returned
+    // `Restorable` at exit 0 over a kit whose every sealed body restores as ciphertext.
+    // `export_outcome_for_write` is the predicate that was missing; `ExportOutcome::Skipped`
+    // already named this case in its own doc.
+    health.export_covers_seq = cairn_node::backup::export_coverage_after(
+        health.export_covers_seq,
+        cairn_node::backup::export_outcome_for_write(unwrap.is_some(), covers_seq),
+    );
+    cairn_node::backup::write_health(&health_path, &health)
+        .context("recording export coverage in backup health")?;
+
     Ok(export_path)
 }
 
@@ -2320,8 +2412,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Backup { to, passphrase } => {
-            // Reads node_event (any role with SELECT works) and writes a self-verifying
-            // medium. Health is recorded only after the medium re-reads and verifies (see
+            // Captures BOTH event planes (#500 slice 2c) — `node_event` and, since Task 9,
+            // `event_log` with its per-record custody — onto one append-only CAIRNB3 medium.
+            // Any role with the ordinary runtime grants works: `SELECT ON node_event` plus
+            // `EXECUTE ON cairn_clinical_page` (db/051), no signing key and no validated door.
+            // Health is recorded only after the medium re-reads and re-assesses (see
             // backup_to), so it never over-claims.
             let db = cairn_node::db::connect(&cli.conn).await?;
             let now_unix = std::time::SystemTime::now()
@@ -2331,10 +2426,12 @@ async fn main() -> anyhow::Result<()> {
             let health_path = cairn_node::backup::health_path_for(&cli.key);
 
             // Load the signing key NON-INTERACTIVELY (flag/env passphrase, or a plaintext key)
-            // so the medium's self-marker can be SIGNED (tamper-evident on restore). We never
+            // so this capture's segments can carry a signed attestation (tamper-evident, and
+            // the only thing that lets the medium identify its own node on restore). We never
             // PROMPT here: an unattended/cron backup must not block on a tty, and an unsigned
-            // marker is a safe degradation (operator-error-safe, just not tamper-evident) —
-            // never a reason to fail the backup. A wrong/absent secret simply yields no key.
+            // capture is a declared limitation of the format — never a reason to fail the
+            // backup (§1.2: the operator's one nightly act must stay one). A wrong/absent
+            // secret simply yields no key.
             let key_secret: Option<Zeroizing<String>> = passphrase
                 .clone()
                 .filter(|s| !s.is_empty())
@@ -2352,25 +2449,92 @@ async fn main() -> anyhow::Result<()> {
 
             let report =
                 cairn_node::backup::backup_to(&db, &to, &health_path, now_unix, marker_key).await?;
+            // WHICH FILE IS CURRENT. Said BEFORE the counts, because when it fires it is the
+            // most important line on the screen: a CAIRNB3 segment cannot be appended to a
+            // CAIRNB1/CAIRNB2 container, so the first backup after this build starts a NEW
+            // medium in place of the legacy one. It is safe (the first capture of a fresh
+            // medium sweeps both planes from the beginning, so the successor is a superset),
+            // but an operator with rotated copies has to know which artifact is which.
+            if let cairn_node::backup::MediumOrigin::SucceededLegacy = report.origin {
+                println!(
+                    "NOTE: {} held an older-revision (CAIRNB1/CAIRNB2) medium and has been \
+                     REPLACED by a new append-only CAIRNB3 medium (a CAIRNB3 segment cannot \
+                     be appended to a legacy container). Nothing was lost: this first capture \
+                     swept both planes from the beginning, so the new file holds everything \
+                     the old one did AND the clinical record it could never carry. That is \
+                     checked, not assumed — a legacy medium naming another node, or one \
+                     holding more federation events than this capture found, is REFUSED with \
+                     the old file left untouched rather than replaced. Archived copies stay \
+                     usable either way; `restore` and `verify-backup` read both revisions.",
+                    to.display()
+                );
+            }
+            // PER PLANE, never as one total. A single scope-free count is exactly how #500
+            // stayed invisible for months while every surface reported it truly, so the line
+            // that an operator reads every night names what it is counting.
             println!(
-                "backed up {} event(s) ({} bytes) to {}",
-                report.event_count,
+                "backed up {} node event(s) + {} clinical event(s) on the medium \
+                 (+{} / +{} appended this run, {} bytes) to {}",
+                report.node_events,
+                report.clinical_events,
+                report.node_appended,
+                report.clinical_appended,
                 report.medium_bytes,
                 to.display()
             );
-            // How trustworthy is this medium's identity marker? An unsigned medium travels
-            // flagged for extra care. A signed marker is UNFORGEABLE (no off-medium private key)
-            // and bound to its event set; on a sole-enroll medium it is fully tamper-evident, on a
-            // federated medium restore will ask for confirmation (a converged peer's medium could
-            // be spliced — see crate::medium / restore::Provenance). Store any medium with care.
+            // A REPAIR changes the file's size without appending anything, so a nightly run
+            // can legitimately print `+0 / +0` beside a medium that shrank. Unexplained, that
+            // reads as corruption; explained, it is the interrupted-append recovery working.
+            if report.repaired_torn_tail {
+                println!(
+                    "NOTE: the medium's last section was TORN (a previous backup was \
+                     interrupted mid-append). It has been cut back to the last complete, \
+                     verified section before this run appended — which is why the file size \
+                     may have changed even if nothing was appended above. Nothing verified \
+                     was lost: the watermark never advanced past the torn section, so its \
+                     records were re-captured by this run if they are still in the database."
+                );
+            }
+            // A medium that would restore nothing is not an error (a genuinely new node must
+            // be able to write its first one — #502 item 2), but reporting plain success over
+            // it is a green light on an empty file whose only other refusal comes at the
+            // disaster. `verify-backup` already bails on this; `backup` must at least say it.
+            if report.carries_nothing {
+                eprintln!(
+                    "WARNING: this medium carries NO records in any plane — it is internally \
+                     consistent and it would restore NOTHING. If this node really is new, \
+                     there is nothing to back up yet and this is expected; otherwise the \
+                     database this backup read is not the one holding your records. \
+                     `verify-backup` will refuse this medium (#502 item 2)."
+                );
+            }
+            // How well does this medium identify its own node? A SIGNED capture is UNFORGEABLE
+            // (the private key never leaves the node) and each segment is bound to its
+            // contents, plane, position and predecessor; on a sole-enroll medium that is fully
+            // tamper-evident, and on a federated medium restore asks for confirmation (a
+            // converged peer's medium could be spliced — see crate::medium /
+            // restore::Provenance). Store any medium with care.
             match report.marker {
                 cairn_node::backup::WrittenMarker::Signed => {
                     println!("self-marker  SIGNED (unforgeable; identity confirmed on restore)")
                 }
+                // Operator-error-safe but not tamper-evident — the same standing this
+                // wording has always described, and it holds on CAIRNB3 only because
+                // `self_marker_source` falls back to the untrusted plaintext segment id when
+                // no attestation can supply one (#550). Without that fallback this line would
+                // be an over-claim: restore would have had nothing at all to check against.
                 cairn_node::backup::WrittenMarker::Unsigned => eprintln!(
-                    "WARNING: self-marker UNSIGNED — this medium is operator-error-safe but NOT \
-                     tamper-evident; set CAIRN_KEY_PASSPHRASE / --passphrase (or use a plaintext \
-                     key) to sign it. Store and handle this medium with extra care."
+                    "WARNING: this capture was UNSIGNED — no segment on this medium carries an \
+                     attestation, so the medium names this node only in untrusted plaintext: \
+                     operator-error-safe (restore still refuses a --superseded-node naming a \
+                     different node here) but NOT tamper-evident. The backup itself is \
+                     complete and every event still verifies individually. Set \
+                     CAIRN_KEY_PASSPHRASE / --passphrase (or use a plaintext key): the next \
+                     capture that has something to append will sign its segment, and one \
+                     signed segment is enough to identify the medium unforgeably. Note that a \
+                     capture over an unchanged log appends nothing at all (by design), so a \
+                     re-run alone will not sign this medium. Store and handle this medium with \
+                     extra care."
                 ),
                 cairn_node::backup::WrittenMarker::None => {
                     println!("self-marker  none (node not yet enrolled — nothing to attest)")
@@ -2442,13 +2606,74 @@ async fn main() -> anyhow::Result<()> {
         Cmd::VerifyBackup { from } => {
             // Offline, no DB, no key: read the medium and check every signature. A
             // tampered/bit-rotted event fails the SAME check that catches a hostile peer.
+            //
+            // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
+            // `backup` starts writing CAIRNB3, this command must keep reading it rather than
+            // refuse a perfectly good medium as "not a backup medium" — the exact regression
+            // this task exists to prevent. The COUNT printed at the end stays scoped to the
+            // NODE (federation) plane, deliberately: that is exactly what `restore` applies
+            // today, so this command's "OK" can never claim more than a restore could
+            // actually recover. Reporting the clinical plane's restorability is slice 2d's
+            // job; see `node_plane_events`'s doc.
+            //
+            // INTEGRITY is a different question and is NOT so scoped — `refuse_unsound_medium`
+            // below runs `medium::assess`, which verifies every record on the medium, clinical
+            // included, and a corrupt clinical record bails this command. That is deliberate
+            // (final review, Important 2) and it is the stricter direction: what is narrow is
+            // what this command CLAIMS, not what it checks.
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
-            let report = cairn_node::backup::verify_medium_bytes(&bytes)?;
+            let image = cairn_node::medium::parse_any(&bytes)?;
+            // #500 slice 2c review, Important 1: a torn CAIRNB3 tail must fail this check
+            // exactly as a truncated CAIRNB1/B2 frame already does (`parse_container` bails
+            // with `Damaged` at parse time). Checked BEFORE any "OK" can be printed — a
+            // nightly backup killed mid-append must never read back as sound.
+            if let Some(why) = cairn_node::backup::torn_tail_notice(&image, &from) {
+                anyhow::bail!(
+                    "backup TORN: {why} Run `backup` again to close the gap (if this was an \
+                     interrupted append, that recaptures exactly what is missing — see \
+                     above for how to tell), or locate a different, complete copy of this \
+                     medium. (`restore`, unlike this cron health check, does NOT refuse a \
+                     torn medium — it recovers the intact prefix loudly rather than \
+                     refusing outright, since restoring what verifies is never worse than \
+                     refusing all of it; this command's job is different: saying plainly \
+                     that this is not yet a complete backup.)"
+                );
+            }
+            // THE COMPOSED VERDICT (#500 slice 2c final review, Important 2). Everything
+            // below this point is a NARROWER predicate: `verify_events` checks the federation
+            // plane's signatures and nothing else — not the chain, not the clinical plane's
+            // records, not a spliced or reordered segment. This command was computing
+            // `assess()` anyway (inside `clinical_watermark_of`, further down) and throwing
+            // the verdict away, so a medium `backup` REFUSED to append to could still print
+            // `federation-plane events OK` here and exit 0. `cairn-medium`'s `health` module
+            // exists to make exactly that impossible: it is the entry point precisely so that
+            // nobody concludes a whole-medium all-clear from a fragment.
+            //
+            // WHY HERE, between the torn-tail notice and everything else. The torn-tail check
+            // stays first because a tear is not un-soundness — it has its own, milder remedy
+            // ("run `backup` again"), and `sound()` folds a torn tail in with tampering, so
+            // running this first would answer a mild, actionable situation with the wrong
+            // advice. Everything AFTER this line either prints an all-clear or reasons about
+            // coverage, and neither is meaningful over a medium that is not sound — so this
+            // is the last point at which a refusal is still cheap and unambiguous. The
+            // export/coverage checks keep their existing position below, unchanged.
+            cairn_node::backup::refuse_unsound_medium(
+                &image,
+                &format!("backup UNSOUND: the medium {}", from.display()),
+                "Nothing on this medium can be trusted as a complete backup, whatever the \
+                 per-plane counts below would have said. Locate another copy; if this node \
+                 still holds the events, run `backup --to` a NEW path to write a complete \
+                 medium. Keep this file for diagnosis.",
+            )?;
+            let events = cairn_node::backup::node_plane_events(&image)?;
+            let counts = cairn_node::backup::plane_counts(&image);
+            let report = cairn_node::backup::verify_events(&events);
             if !report.all_intact() {
                 // Non-zero exit (bail) so a cron/health check detects a bad backup.
                 anyhow::bail!(
-                    "backup FAILED self-verification: {}/{} event(s) intact, first bad at index {:?}",
+                    "backup FAILED self-verification: {}/{} federation-plane event(s) \
+                     intact, first bad at index {:?}",
                     report.intact,
                     report.total,
                     report.first_bad
@@ -2466,26 +2691,181 @@ async fn main() -> anyhow::Result<()> {
             // internally consistent" and "is this medium worth anything" are different
             // questions, and only the second belongs to the health check.
             if report.total == 0 {
+                // #500 slice 2c review, Important 3: a CAIRNB3 medium can hold zero
+                // federation events and STILL carry clinical content — "there is nothing to
+                // back up yet" would be false for it, so it does not share the truly-empty
+                // message. Kept as a composed list rather than a bare `if` so a second kind
+                // of content, should one ever be added, joins the same sentence instead of
+                // being misreported as if it held only the first checked.
+                //
+                // The unknown-plane half of this message is gone, not forgotten: since the
+                // composed-verdict check above, a medium carrying an unrecognised plane has
+                // already been refused with the "upgrade this node" remedy, so a branch here
+                // could only ever be dead code claiming to handle a case it never sees.
+                let mut other_content = Vec::new();
+                if counts.clinical > 0 {
+                    other_content.push(format!("{} clinical event(s)", counts.clinical));
+                }
+                if !other_content.is_empty() {
+                    anyhow::bail!(
+                        "backup INCOMPLETE: {} carries zero federation-plane events but \
+                         {}. This is NOT the '#502 item 2: nothing to back up yet' case — \
+                         the medium holds content, but restore cannot establish a \
+                         federation identity from it (no genesis to resolve self \
+                         against), so it is unusable as a backup as it stands.",
+                        from.display(),
+                        other_content.join(" and ")
+                    );
+                }
                 anyhow::bail!(
-                    "backup EMPTY: {} carries zero events. It is internally consistent — which \
-                     is why the integrity check passes — and it would restore nothing at all. \
-                     A medium written from a database with no events is not a backup (#502 \
-                     item 2); if this node really is new, there is nothing to back up yet.",
+                    "backup EMPTY: {} carries zero federation-plane events and nothing in \
+                     any other plane either. It is internally consistent — which is why \
+                     the integrity check passes — and it would restore nothing at all. A \
+                     medium written from a database with no federation events is not a \
+                     backup (#502 item 2); if this node really is new, there is nothing to \
+                     back up yet.",
                     from.display()
                 );
             }
             // "events verified" is now stated as exactly that, not as "backup OK" — because
             // the events are only half of what a restore needs since ADR-0066, and the older
             // wording was an affirmative all-clear over a medium whose custody key may never
-            // have left the machine (review finding I5).
-            println!("events OK: {}/{} verified", report.intact, report.total);
+            // have left the machine (review finding I5). "federation-plane" is named
+            // explicitly (#500 slice 2c): on a CAIRNB3 medium this count no longer describes
+            // everything the file holds, and an unqualified "events OK" would be exactly the
+            // kind of honest-surface-over-a-dishonest-composite this programme keeps finding.
+            println!(
+                "federation-plane events OK: {}/{} verified",
+                report.intact, report.total
+            );
+            // A WARNING about unrecognised planes used to sit here (#500 slice 2c review,
+            // Important 4). It has moved UP, into `refuse_unsound_medium`'s first arm, and
+            // became a refusal — because it is now unreachable from here: an unknown plane
+            // is a chain fault, so `assess()` cannot call such a medium sound and the check
+            // above returns first. The remedy it carried is unchanged and travels with it
+            // ("upgrade this node", never "damaged"/"fetch another copy"); what changed is
+            // the exit code, and deliberately: a cron health check that exits 0 over a
+            // medium it cannot fully read is the same composite untruth this programme keeps
+            // finding, one surface over.
             let (line, fatal) = export_verdict_line(&classify_export_beside_medium(&from), &from);
             println!("{line}");
             if fatal {
                 anyhow::bail!(
-                    "backup INCOMPLETE: the events verified, but the local-state export beside \
-                     this medium is unusable — see the line above"
+                    "backup INCOMPLETE: the federation-plane events verified, but the \
+                     local-state export beside this medium is unusable — see the line above"
                 );
+            }
+            // #500 slice 2c Task 12: framing alone never said whether a present, readable
+            // export actually COVERS what is on the medium TODAY. A well-framed export
+            // sealed weeks ago beside a medium backed up every night since prints "sealed
+            // export present" forever under the check above — that is the realistic
+            // disaster this task exists to make visible (tonight's medium beside a
+            // weeks-old export), so it is now checked explicitly, in addition to framing,
+            // never instead of it. `kit_verdict` is a pure function (`backup.rs`) precisely
+            // so this decision needed no medium, no database and no CLI to unit-test.
+            //
+            // `medium_seq` is read straight off the bytes `--from` already named above (the
+            // medium's own newest clinical seq) — never off a sidecar that could describe a
+            // DIFFERENT backup run than the file actually under test. `export_seq` has no
+            // other honest source: the export is SEALED, so what it covers can only be read
+            // from the plaintext `backup-status.json` `backup` itself writes beside the
+            // signing key. That is the one place this command reads `cli.key` — only its
+            // PATH, as a naming anchor, never any cryptographic material — so the doc above
+            // ("no key") still holds in the security sense it was making.
+            //
+            // ONE verdict, ONE match, below — every non-`Restorable` outcome (including the
+            // path-mismatch case fix round 1 adds next) shares the same exit-code policy,
+            // rather than an early `bail!` for one case and a `match` for the rest.
+            let health_path = cairn_node::backup::health_path_for(&cli.key);
+            let health = cairn_node::backup::read_health(&health_path);
+            let medium_seq = cairn_node::backup::clinical_watermark_of(&image);
+            let verdict = match &health {
+                // #500 slice 2c Task 12 fix round 1, Important 1 — REFINED in fix round 2
+                // (new Important finding). `backup-status.json` is NODE-GLOBAL (one file
+                // beside the signing key), but `export_covers_seq` is a claim about ONE
+                // specific export — the most recent successful one, for whichever medium
+                // THAT run targeted. A two-drive rotation (or any cron pointed at a fresh
+                // path) can leave a sidecar whose coverage figure describes a DIFFERENT
+                // medium than the one `--from` names. That is not "unknown" the way an
+                // absent sidecar is — it POSITIVELY describes something else — so
+                // `kit_verdict` (which knows only two seq numbers, never paths) must not
+                // even be consulted here: the caller builds `CoverageUnknown` directly,
+                // before comparing anything.
+                //
+                // `medium_seq.is_some()` is ADDITIONALLY required, and the ordering here
+                // looks arbitrary without this note: without it, a medium with a federation
+                // genesis but NO clinical events yet (reachable — the earlier `report.total
+                // == 0` bail is scoped to the FEDERATION plane only) would fail as
+                // `CoverageUnknown` merely because the node-global sidecar happens to name
+                // another path, even though this medium has NOTHING for an export to cover.
+                // That directly contradicts `kit_verdict`'s own policy (a genuinely-empty
+                // medium is `Restorable`, never flagged — see its doc) and is pure alarm
+                // fatigue on an early/rotating deployment. The guard can never introduce a
+                // false GREEN by requiring `medium_seq.is_some()`: a medium with nothing
+                // clinical on it has nothing an export could fail to cover, whichever
+                // sidecar happens to be sitting beside the signing key.
+                Some(h)
+                    if medium_seq.is_some()
+                        && !cairn_node::backup::health_describes_medium(&h.medium_path, &from) =>
+                {
+                    cairn_node::backup::KitVerdict::CoverageUnknown(format!(
+                        "the backup health at {} describes a DIFFERENT medium ({}) than the \
+                         one named by --from ({}) — this can happen on a rotation between \
+                         multiple media/drives sharing one signing key. This command cannot \
+                         establish whether THIS kit's export is current, so it refuses \
+                         rather than risk reading a coverage figure that belongs to a \
+                         different artifact. Remedy: verify this kit on the node right after \
+                         IT most recently wrote `backup --to` this exact medium, or run \
+                         `backup --to` this medium with a passphrase now so a matching, \
+                         current export is sealed beside it.",
+                        health_path.display(),
+                        h.medium_path,
+                        from.display()
+                    ))
+                }
+                _ => cairn_node::backup::kit_verdict(
+                    medium_seq,
+                    health.and_then(|h| h.export_covers_seq),
+                ),
+            };
+            // RESIDUAL, filed as #551 rather than fixed here: even with matching paths, the
+            // coverage figure still lives in a NODE-global file rather than in the kit
+            // itself, so a medium copied to a different machine carries no self-describing
+            // coverage at all (this command then falls back to `ExportMissing`/`Restorable`
+            // on `export_seq = None`, which is honest but uninformative). Giving the kit a
+            // self-describing coverage figure — a plaintext field in the `CAIRNL1` framing,
+            // or a plaintext sibling — is a format decision for slice 2e, not this task.
+            match verdict {
+                cairn_node::backup::KitVerdict::Restorable => {}
+                // Behind, not absent: an export exists and has worked before — the fix is
+                // simply to run it again. Deliberately a DIFFERENT remedy from
+                // `ExportMissing`'s below (the #502 lesson): telling an operator to
+                // re-establish an escrow that already works would be wrong advice here.
+                cairn_node::backup::KitVerdict::ExportStale {
+                    medium_seq,
+                    export_seq,
+                } => {
+                    // `export_seq` is a plain `i64` (final review, I14): it used to be an
+                    // `Option` that `kit_verdict` could never set to `None`, and the dead
+                    // arm here printed the literal words "none (unexpected)" to an operator.
+                    // The type now says what the constructor always guaranteed.
+                    let last_covered = export_seq;
+                    anyhow::bail!(
+                        "backup STALE: the medium holds clinical events up to seq \
+                         {medium_seq}, but the local-state export beside it last covered \
+                         seq {last_covered} — any sealed body written since restores as \
+                         ciphertext unless its medium-borne DEK opens it (ADR-0066). The \
+                         escrow already works and does NOT need re-establishing. Remedy: \
+                         run `backup` again with CAIRN_KEY_PASSPHRASE set (or --passphrase) \
+                         so a fresh export catches up."
+                    );
+                }
+                cairn_node::backup::KitVerdict::ExportMissing(why) => {
+                    anyhow::bail!("backup INCOMPLETE: {why}");
+                }
+                cairn_node::backup::KitVerdict::CoverageUnknown(why) => {
+                    anyhow::bail!("backup COVERAGE-UNKNOWN: {why}");
+                }
             }
         }
         Cmd::Restore {
@@ -2523,14 +2903,72 @@ async fn main() -> anyhow::Result<()> {
             };
 
             // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
+            //
+            // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
+            // `backup` starts writing CAIRNB3, a `restore` still on the legacy parser would
+            // refuse an operator's only copy at the exact moment they need it. Only the
+            // NODE (federation) plane is carried forward — restoring the clinical plane is
+            // slice 2d's job (`node_plane_events`'s doc has the full reasoning).
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
-            let container = cairn_node::medium::parse_container(&bytes)?;
+            let image = cairn_node::medium::parse_any(&bytes)?;
+            let events = cairn_node::backup::node_plane_events(&image)?;
+            // #500 slice 2c review round 2 — CONTROLLER RULING, deliberately NOT the same
+            // as `verify-backup`'s: a torn tail must not refuse `restore`. `parse_any`'s V3
+            // arm already discards the torn remnant from `MediumV3::segments` (only
+            // COMPLETE sections are kept — see `truncated_tail`'s doc), so `events` above
+            // already IS the intact, fully-verified prefix. Refusing outright would turn a
+            // recoverable partial loss into TOTAL loss at exactly the moment — a disaster —
+            // when "run backup again on the dead source node" is usually impossible, and
+            // "use a different complete copy" may not exist either: this project ranks
+            // data loss as the most catastrophic outcome after falsification, so the
+            // DEFAULT here recovers the prefix. No confirmation dialog (principle 3
+            // rejects those as a safety mechanism) — a loud warning with honest counts
+            // instead. `verify-backup`, the cron health check whose job IS to say "this is
+            // not a complete backup", keeps refusing.
+            //
+            // Round 3 correction, principle 4: proceeding does NOT rest on "at most one
+            // increment is missing" — `torn_tail_notice`'s doc explains why that claim is
+            // an overclaim (a torn tail is equally consistent with a truncated COPY, where
+            // far more could be missing). The real justification needs no such certainty:
+            // a torn tail can only ever cost what comes AFTER the intact prefix, never
+            // what is IN it, so restoring the prefix is strictly better than refusing
+            // outright regardless of how much is actually missing. Kept in ONE variable so
+            // the end-of-run summary can repeat it (below) rather than only the WARNING an
+            // operator reading just the tail of a long restore might miss.
+            let torn_notice = cairn_node::backup::torn_tail_notice(&image, &from);
+            if let Some(why) = &torn_notice {
+                eprintln!(
+                    "WARNING: this medium was TORN. {why}\n\
+                     Restoring the {} complete, verified federation event(s) below anyway: \
+                     whatever the true extent of the loss, restoring the intact prefix is \
+                     never worse than refusing it outright, which would cost all of it.",
+                    events.len()
+                );
+            }
+            // `resolve_dead_node`/`apply_medium` below both take a `Container` — CAIRNB2's
+            // shape (a self-marker plus an event list). A CAIRNB3 medium has no
+            // container-level marker at all (that concept is CAIRNB2-only and frozen; see
+            // `cairn_medium`'s crate docs) — its analogue is the per-SEGMENT attestation.
+            // `backup::self_marker_source` derives the equivalent marker for either revision
+            // AND how it was derived (see its doc for the full #53 cross-check reasoning);
+            // pinned end-to-end by `v3_medium_self_marker_still_rejects_a_named_peer` in
+            // `tests/restore.rs`, which calls this SAME function rather than replicating its
+            // logic. The SOURCE is needed one screen down: on a CAIRNB3 medium both an
+            // unforgeable attested id and an untrusted plaintext one arrive in the same
+            // `SelfMarker::Unsigned` variant, so `Provenance` alone cannot tell an operator
+            // which of the two they have.
+            let derived = cairn_node::backup::self_marker_source(&image);
+            let marker_source = derived.as_ref().map(|(_, source)| *source);
+            let container = cairn_node::medium::Container {
+                self_marker: derived.map(|(marker, _)| marker),
+                events,
+            };
             let report = cairn_node::backup::verify_events(&container.events);
             if !report.all_intact() {
                 anyhow::bail!(
-                    "refusing to restore a medium that fails self-verification: {}/{} intact, \
-                     first bad at index {:?}",
+                    "refusing to restore a medium whose federation-plane events fail \
+                     self-verification: {}/{} intact, first bad at index {:?}",
                     report.intact,
                     report.total,
                     report.first_bad
@@ -2556,13 +2994,57 @@ async fn main() -> anyhow::Result<()> {
                      event set, so a peer's genuine marker could be spliced here — the signature \
                      alone cannot rule that out. Confirm the restored node's name/address printed \
                      below match THIS node before relying on it."),
+                // SPLIT BY DERIVATION, not by variant. `self_marker_for` wraps a CAIRNB3
+                // medium's ATTESTED id in `SelfMarker::Unsigned` for a wire-shape reason
+                // (see its doc), so `resolve_dead_node` reports `Provenance::Unsigned` for a
+                // fully tamper-evident medium. Printing the unsigned warning there is a false
+                // statement to a human at the exact moment they decide whether to trust a
+                // restore — under-claiming, but still false.
+                Provenance::Unsigned
+                    if marker_source == Some(cairn_node::backup::MarkerSource::V3Attested) =>
+                {
+                    println!(
+                        "self-identity confirmed by a signed SEGMENT ATTESTATION \
+                         (tamper-evident): the node id came from a verified attestation bound \
+                         to a genesis on this same medium and signed by the same key, which \
+                         no one without this node's private key could produce."
+                    );
+                    // The CAIRNB2 `SignedFederated` caveat, stated unconditionally rather
+                    // than gated on an enroll count this arm does not have — and honestly
+                    // scoped: `cairn-medium`'s crate docs record that the converged-peer
+                    // splice is NARROWER on CAIRNB3 (segment commitments bind per-record
+                    // `source_seq`, which converged peers do not share) but is not proven
+                    // impossible.
+                    eprintln!(
+                        "NOTE: if this medium carries more than one node's genesis, confirm \
+                         the name/address printed below match THIS node. A converged peer's \
+                         medium is a narrower risk on CAIRNB3 than on CAIRNB2, not a ruled-out \
+                         one."
+                    );
+                }
                 Provenance::Unsigned => eprintln!(
-                    "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident). Confirm \
-                     the restored node's name/address printed below match THIS node before relying on it."),
+                    "WARNING: this medium's self-marker is UNSIGNED (not tamper-evident) — {}. \
+                     It still pins self and still refuses a --superseded-node naming a \
+                     different node on this medium, but anyone who could write the file could \
+                     have written the id. Confirm the restored node's name/address printed \
+                     below match THIS node before relying on it.",
+                    match marker_source {
+                        Some(cairn_node::backup::MarkerSource::V3Plaintext) =>
+                            "this medium's capture was unsigned, so the id is the untrusted \
+                             plaintext one each segment names itself with",
+                        _ => "a CAIRNB1/CAIRNB2 medium written without the node's signing key",
+                    }
+                ),
                 Provenance::NoMarker => eprintln!(
-                    "WARNING: this medium carries NO self-marker (legacy/pre-enrollment backup). \
-                     Self identity was taken from --superseded-node / a sole enroll; confirm the \
-                     name/address below match THIS node."),
+                    "WARNING: this medium carries NO usable self-marker. Either a \
+                     legacy/pre-enrollment CAIRNB2 backup (no marker was ever written), \
+                     or a CAIRNB3 medium whose chain could not attest an id (no signed \
+                     segment binds to a genesis also on the medium — e.g. an entirely \
+                     unsigned capture); restore DOES consult per-segment \
+                     self-identification for CAIRNB3 (#500), this is what it found when \
+                     that came up empty. Self identity was taken from --superseded-node / \
+                     a sole enroll — UNCHECKED against any cross-reference — so confirm \
+                     the name/address below match THIS node."),
             }
             let (name, address) =
                 cairn_node::restore::old_genesis_meta(&container.events, &dead.node_id_hex)
@@ -2696,14 +3178,30 @@ async fn main() -> anyhow::Result<()> {
                         }
                         // Declared at the operator surface rather than buried in a comment:
                         // the carried custody rows land with the clinical events, which the
-                        // medium does not yet carry (#500, slice 2). A carried-but-not-applied
-                        // count nobody sees is the exact failure this slice corrects.
+                        // medium DOES carry since slice 2c — what is still owed is the door
+                        // that reads them back (slice 2d). A carried-but-not-applied count
+                        // nobody sees is the exact failure this slice corrects.
                         if report.episode_deks_carried() > 0 {
                             println!(
                                 "note: those {} custody row(s) are carried but not yet applied \
                                  — they land with the clinical events, which this backup \
-                                 medium does not yet carry (#500)",
+                                 medium DOES carry, and which nothing restores yet (#500)",
                                 report.episode_deks_carried()
+                            );
+                        }
+                        // Same declaration for the actor registry (Task 11 / #500 fix round,
+                        // review finding I2): it rides the export now, but `actor_event` has
+                        // no INSERT door here yet either — that is slice 2d, alongside the
+                        // clinical-event apply above it must precede. Without this line an
+                        // operator would see "custody inherited" and nothing about the
+                        // registry, then discover only during a real clinical restore that
+                        // every apply door refuses this node's own history.
+                        if report.actor_registry_carried() > 0 {
+                            println!(
+                                "note: those {} actor-registry row(s) are carried but not yet \
+                                 applied — until they are, this node cannot apply ANY clinical \
+                                 event, though the medium already carries them (#500)",
+                                report.actor_registry_carried()
                             );
                         }
                     }
@@ -2721,6 +3219,44 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!("restored {applied} event(s) from {}", from.display());
+            // #500 slice 2c review round 3: repeat the tear here, not only in the early
+            // WARNING above — an operator reading just the tail of a long restore's output
+            // must still see that this medium was incomplete, not a clean summary that
+            // reads as if nothing was wrong.
+            if torn_notice.is_some() {
+                println!(
+                    "NOTE: this medium was TORN (see the WARNING above) — only the \
+                     {applied} intact, verified event(s) counted above were restored. If \
+                     the source node is still reachable, compare its \
+                     `backup-status.json` before assuming nothing more is missing."
+                );
+            }
+            // Honesty about scope (#500 slice 2c): a CAIRNB3 medium can carry clinical
+            // records — and, from a newer Cairn, records under a plane this build cannot
+            // even name — that `restore` deliberately did not touch (`node_plane_events`'s
+            // doc). Without this, "restored N event(s)" reads as "everything the medium
+            // held", which is exactly the kind of true-but-incomplete line this whole
+            // programme keeps finding — say what was left behind, not just what was moved.
+            let counts = cairn_node::backup::plane_counts(&image);
+            if counts.clinical > 0 {
+                println!(
+                    "note: this CAIRNB3 medium also carries {} clinical event(s) that were \
+                     NOT restored — restoring the clinical plane is not implemented yet \
+                     (#500)",
+                    counts.clinical
+                );
+            }
+            // #500 slice 2c review, Important 4: mirror the clinical note for a plane this
+            // build cannot even name (a newer Cairn's) — never let it sit invisibly inside
+            // an otherwise-successful restore summary.
+            if counts.unknown > 0 {
+                println!(
+                    "note: this CAIRNB3 medium also carries {} record(s) in a plane this \
+                     build does not recognise — upgrade this node; those records were NOT \
+                     restored either",
+                    counts.unknown
+                );
+            }
             // Always echo the adopted identity (name/address) so any self-mis-identification is
             // visible to the operator, whatever the marker provenance — paper-parity.
             println!("restored identity '{name}' ({address})");

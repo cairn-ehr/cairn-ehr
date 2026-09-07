@@ -12,8 +12,10 @@
 //! larger than a byte slice.
 //!
 //! SCOPE TODAY: this crate carries the format. It does NOT read a database and does not
-//! decide what goes on a medium — `cairn-node`'s `backup.rs` still reads `node_event`
-//! and nothing else, which is issue #500 and is NOT fixed by this crate existing.
+//! decide what goes on a medium — that is `cairn-node`'s `backup.rs` and `capture`, which
+//! since #500 slice 2c capture BOTH planes onto a CAIRNB3 medium. **#500 is still open and
+//! this crate does not close it**: the medium now HOLDS the clinical record and nothing
+//! restores it (slice 2d), and no property of this crate ever promised otherwise.
 //!
 //! WHY A SELF-MARKER: a backup medium is a node's `node_event` set. By set-union sync that
 //! set CONVERGES with every peer's — two fully-synced mutual peers hold byte-identical event
@@ -121,15 +123,24 @@
 //!    an invariant list is read one line at a time, and the unqualified claim overstated it.
 //!    Empty segments are refused at write, because an empty segment's commitment is the same
 //!    constant on every medium and would let anything chaining off it be spliced in freely.
-//! 4. **A torn tail never reads as corruption, but the reverse is not proven.** Fewer bytes
-//!    than a section's length prefix claims always reads as an interrupted append: keep the
-//!    complete prefix, flag the tail, re-capture — that direction is airtight, and a
-//!    MALFORMED BODY under an honest length is damage, not a tear. A length prefix BEYOND the
-//!    section cap is always corruption. But a corrupt length prefix UNDER the cap is
-//!    INDISTINGUISHABLE from a genuine torn tail: a mid-file bit flip landing inside the
-//!    length field reads as "your last backup was interrupted, run it again," and a naive
-//!    re-run then appends after the damage, permanently orphaning everything between. A
-//!    sentinel-based fix is deliberately NOT attempted here — filed as #523.
+//! 4. **A torn tail never reads as corruption, and since #523 the reverse holds too.** Fewer
+//!    bytes than a section's header claims reads as an interrupted append: keep the complete
+//!    prefix, flag the tail, re-capture. A MALFORMED BODY under an honest length is damage,
+//!    not a tear, and a length beyond the section cap is always corruption.
+//!
+//!    The direction that used NOT to hold is now closed. A section header is
+//!    `[SECTION_MAGIC 4][len 4][len_check 4]`, where `len_check` is STORED as `!len` and
+//!    VERIFIED as `len ^ len_check == u32::MAX`, and `take_section` runs every corruption
+//!    test BEFORE the only step that can conclude "torn". So a mid-file bit flip inside the
+//!    length field — which used to read as "your last backup was interrupted, run it again",
+//!    after which a naive re-run appended past the damage and orphaned everything between —
+//!    is now named as damage at the header. The ORDER is the fix, not merely the field: the
+//!    torn verdict is earned rather than fallen into, which matters because the append
+//!    recovery TRUNCATES the file on it.
+//!
+//!    What the check field is NOT is authentication: an attacker who rewrites `len` rewrites
+//!    `len_check` in the same edit, and mirrored-but-consistent corruption still reads as
+//!    torn. Tamper-evidence lives entirely in invariant 3's attestation chain.
 //! 5. **`verified_through` bounds STRUCTURAL loss, not tamper-evidence.** It marks the last
 //!    segment whose chain link (and, when signed, attestation and self-id bind) held — the
 //!    watermark is derived from it, never from the file's tail, which bounds the loss from
@@ -186,8 +197,8 @@ pub use attest::{
     build_segment_attestation, segment_commitment, verify_segment_attestation, SEGMENT_ATTEST_TYPE,
 };
 pub use chain::{
-    chain_report, locate_record, self_id_from_chain, seq_gaps, verify_records, watermark,
-    ChainReport, SegmentFault,
+    chain_report, chain_tail, locate_record, self_id_from_chain, seq_gaps, verify_records,
+    watermark, ChainReport, ChainTail, SegmentFault,
 };
 pub use container::{
     append_segment, parse_any, parse_container, parse_medium, serialize_container, serialize_v3,

@@ -29,6 +29,17 @@ use crate::marker::{SelfMarker, SELF_ATTEST_TYPE};
 use crate::record::MediumRecord;
 use crate::segment::{Plane, Segment};
 
+/// The CAIRNB3 section header for a body of `len` bytes, as hex.
+///
+/// The three pins below are about BODY layout — field order, flag bits, endianness inside a
+/// record — so each spells its own body and delegates the framing here. The framing itself is
+/// pinned as a hand-written literal by `the_cairnb3_section_header_is_exactly_these_bytes`;
+/// deriving it here as well would mean no test held it.
+fn section_header_hex(len: usize) -> String {
+    let len = len as u32;
+    format!("43423353{:08x}{:08x}", len, !len)
+}
+
 /// Render bytes as lowercase hex so a failure diff is readable rather than a wall of decimal.
 fn hex_of(b: &[u8]) -> String {
     hex::encode(b)
@@ -277,7 +288,10 @@ fn record_flag_bits_and_field_order_are_pinned() {
         .concat();
         assert_eq!(
             hex_of(&image),
-            format!("434149524e42330a{:08x}{body}", body.len() / 2),
+            format!(
+                "434149524e42330a{}{body}",
+                section_header_hex(body.len() / 2)
+            ),
             "the flags byte for a lone `{which}` must be 0x{expect_flag}: a swapped bit \
              assignment makes a field medium's authorship token decode as a wrapped DEK"
         );
@@ -327,7 +341,10 @@ fn record_flag_bits_and_field_order_are_pinned() {
     .concat();
     assert_eq!(
         hex_of(&image),
-        format!("434149524e42330a{:08x}{body}", body.len() / 2),
+        format!(
+            "434149524e42330a{}{body}",
+            section_header_hex(body.len() / 2)
+        ),
         "the hand-derived CAIRNB3 section layout drifted"
     );
 }
@@ -364,7 +381,10 @@ fn cairnb3_section_layout_is_exactly_these_bytes() {
     );
     assert_eq!(
         hex_of(&image),
-        format!("434149524e42330a{:08x}{body}", body.len() / 2),
+        format!(
+            "434149524e42330a{}{body}",
+            section_header_hex(body.len() / 2)
+        ),
         "the hand-derived CAIRNB3 section layout drifted"
     );
 
@@ -398,4 +418,50 @@ fn a_negative_source_seq_survives_the_wire() {
         panic!("not legacy")
     };
     assert_eq!(m.segments, vec![seg]);
+}
+
+/// The CAIRNB3 SECTION HEADER, byte for byte (#523).
+///
+/// Hand-written, never derived from `put_segment`: this is the only test in the crate that
+/// can catch a MIRRORED change to the framing, where the writer and the reader move together
+/// and every round-trip stays green.
+///
+/// Three separate things are pinned and each has its own failure mode:
+///   - the marker bytes `CB3S`, so a reader landing mid-file can tell a boundary from a body;
+///   - the length as BIG-endian, so a BE->LE flip cannot pass unnoticed;
+///   - the check field as the COMPLEMENT of the length. A mutation to `!len` — say to `len`
+///     itself, the duplicate form — leaves every round-trip green while silently losing the
+///     two degenerate patterns the complement exists to catch.
+#[test]
+fn the_cairnb3_section_header_is_exactly_these_bytes() {
+    let seg = Segment {
+        plane: Plane::Node,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: String::new(),
+        attestation: None,
+        records: vec![plain_record(b"E", 1)],
+    };
+    let image = serialize_v3(&[seg]).expect("fits the cap");
+    let header = &image[MEDIUM_MAGIC_V3.len()..MEDIUM_MAGIC_V3.len() + 12];
+    assert_eq!(
+        hex_of(header),
+        concat!(
+            "43423353", // SECTION_MAGIC: "CB3S"
+            "00000023", // section length 35, BIG-endian
+            "ffffffdc", // its complement: 0x23 ^ 0xffffffdc == 0xffffffff
+        ),
+        "the section header moved. If the LENGTH changed, a body field moved and the other \
+         pins in this file say which; if the marker or the complement changed, the framing \
+         itself moved and every CAIRNB3 medium becomes unreadable"
+    );
+    // The relation, asserted independently of the literal above, so a future edit that
+    // updates both the length and the complement by hand cannot quietly break it.
+    let claimed = u32::from_be_bytes(header[4..8].try_into().unwrap());
+    let check = u32::from_be_bytes(header[8..12].try_into().unwrap());
+    assert_eq!(
+        claimed ^ check,
+        u32::MAX,
+        "len_check must be the complement of the length"
+    );
 }

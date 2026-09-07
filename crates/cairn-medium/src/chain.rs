@@ -370,6 +370,58 @@ pub fn watermark(m: &MediumV3, report: &ChainReport, plane: Plane) -> Option<i64
         .max()
 }
 
+/// The two values a writer needs to append the next segment. See [`chain_tail`] for why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainTail {
+    /// The `index` the next segment must declare.
+    pub next_index: u32,
+    /// The `prev_commitment` the next segment must carry — the commitment of the last
+    /// VERIFIED segment's records, or the empty string when the chain has not started yet
+    /// (mirrors `Segment::prev_commitment`'s own rule that index 0 carries no predecessor).
+    pub prev_commitment: String,
+}
+
+/// Where the next appended segment goes: its `index` and its `prev_commitment`.
+///
+/// WHY THIS EXISTS (#522). The CAIRNB3 chain is ONE global chain in file order across both
+/// planes, so every writer must derive the same next index and predecessor. Before this,
+/// `cairn-node` (node plane) and the capture path (clinical plane) each had to compute it,
+/// and two writers deriving one invariant independently is how they come to disagree — a
+/// disagreement that shows up as a broken chain on a medium nobody can re-cut.
+///
+/// It follows the last VERIFIED segment, never the file tail, for the same reason
+/// [`watermark`] does: an unverifiable trailing segment (a torn append) must not become the
+/// predecessor of a good one, or one interrupted backup poisons every capture after it.
+///
+/// `report.verified_through == None` covers BOTH "empty medium" and "the very first segment
+/// already fails" — in either case there is no trusted predecessor, so the honest tail is
+/// index 0 with an empty `prev_commitment`, never a placeholder standing in for "none".
+///
+/// Reads `m.segments` via `.get(through)` rather than indexing directly, for the same reason
+/// [`watermark`] does: `report` and `m` have no compile-time link, and a mismatched pair
+/// (report computed from a different medium) must degrade to an empty `prev_commitment`,
+/// never panic an unattended node mid-backup.
+pub fn chain_tail(m: &MediumV3, report: &ChainReport) -> ChainTail {
+    let Some(through) = report.verified_through else {
+        return ChainTail {
+            next_index: 0,
+            prev_commitment: String::new(),
+        };
+    };
+    let prev_commitment = m
+        .segments
+        .get(through)
+        .map(|s| crate::attest::segment_commitment(&s.records))
+        .unwrap_or_default();
+    ChainTail {
+        // `through` is a `usize` position that came from enumerating `m.segments`, so it is
+        // always small enough to fit `u32` in practice (the same bound `Segment::index`
+        // itself already relies on) — `as` is a plain narrowing here, not a truncation risk.
+        next_index: through as u32 + 1,
+        prev_commitment,
+    }
+}
+
 /// Every hole in `plane`'s `source_seq` run over the verified prefix, as `(after, before)`
 /// pairs: a gap of `(3, 7)` means seqs 4, 5 and 6 are absent between the 3 and the 7 this
 /// medium holds.

@@ -24,9 +24,9 @@
 //! # Scope today
 //!
 //! This crate does no database work. It does not decide WHAT goes on a medium and it does not
-//! write one — `cairn-node`'s `backup.rs` still reads `node_event` and nothing else, which is
-//! #500 and is NOT fixed by this crate existing. The medium gains clinical events in slice 2c
-//! and gives them back in slice 2d.
+//! write one — `cairn-node`'s `backup.rs` and `capture` do, and since slice 2c they capture
+//! both planes. **#500 is still open and this crate does not close it**: the medium gained
+//! clinical events in slice 2c and gives them back in slice 2d.
 
 mod framing;
 mod medium;

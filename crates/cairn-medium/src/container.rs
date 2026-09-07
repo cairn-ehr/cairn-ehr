@@ -174,9 +174,11 @@ pub struct MediumV3 {
     /// `bytes[complete_bytes..]` is empty (clean parse) or the torn remnant.
     ///
     /// I4 (#500 final review): a WRITER recovering from a torn medium MUST
-    /// `medium.truncate(complete_bytes)` before appending — otherwise the torn remnant
-    /// becomes the next section's `[u32 length]` prefix and parsing stops there FOREVER,
-    /// silently orphaning every later backup.
+    /// `medium.truncate(complete_bytes)` before appending — otherwise the torn remnant sits
+    /// where the next section's HEADER belongs and everything after it is unreachable.
+    /// Since #523 the reader at least SAYS SO (the remnant fails the `SECTION_MAGIC` test
+    /// and the medium reads as `Damaged` at that boundary, rather than being mis-framed by a
+    /// plausible-looking length), but a loud unreadable medium is still an unreadable one.
     pub complete_bytes: usize,
 }
 
@@ -510,8 +512,9 @@ mod tests {
             2,
         );
         let mut image = serialize_v3(&[a.clone(), b.clone()]).unwrap();
-        // Corrupt the FIRST section's plane tag: 8 magic bytes + 4 length bytes.
-        image[MEDIUM_MAGIC_V3.len() + 4] = 77;
+        // Corrupt the FIRST section's plane tag, located rather than counted by hand.
+        let tag_at = crate::testkit::section_body_at(&image, 0);
+        image[tag_at] = 77;
         match parse_any(&image).unwrap() {
             MediumImage::V3(m) => {
                 assert_eq!(

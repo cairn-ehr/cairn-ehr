@@ -2386,16 +2386,18 @@ async fn shred_one_thread_leaves_the_sibling_projection_intact() {
     );
 }
 
-/// ADR-0052 wire-level shred guard — ISOLATES the serve-query CASE branch
-/// (`CASE WHEN s.target_event_id IS NULL THEN encode(d.dek_wrapped,'hex') END`, the
-/// EventsAfterSeq query in main.rs). In the ordinary crypto-shred path `cairn_execute_shred`
-/// DELETEs the `event_dek` row, so the LEFT JOIN already yields NULL and the CASE is never
+/// ADR-0052 wire-level shred guard — ISOLATES the travel filter that now lives once in
+/// db/051 (`event_custody_surviving`'s `NOT EXISTS (SELECT 1 FROM erasure_shred_log …)`,
+/// joined to `event_log` by `cairn_clinical_page` and consumed by the EventsAfterSeq arm
+/// in main.rs — slice 2c moved it there from an inline `LEFT JOIN` + `CASE WHEN` written
+/// out at that call site). In the ordinary crypto-shred path `cairn_execute_shred` DELETEs
+/// the `event_dek` row, so the view's join already yields no row and the filter is never
 /// the thing that excludes a DEK — it is defense-in-depth with no test, and a maintainer
 /// could drop it with every existing test still green. This test constructs the ONE state
-/// the CASE alone defends: an event with a LIVE `event_dek` row (custody present) that ALSO
-/// carries an `erasure_shred_log` row (the future custody-rotation path where a DEK row can
-/// co-exist with a shred-log entry). It drives the REAL serve binary, so removing the CASE
-/// from main.rs breaks this test (a copied SQL could not protect against that).
+/// the filter alone defends: an event with a LIVE `event_dek` row (custody present) that
+/// ALSO carries an `erasure_shred_log` row (the future custody-rotation path where a DEK
+/// row can co-exist with a shred-log entry). It drives the REAL serve binary, so removing
+/// the filter from db/051 breaks this test (a copied SQL could not protect against that).
 ///
 ///   Phase 1 (non-vacuous baseline): pull with NO shred-log row → B GAINS custody, proving
 ///     the live `event_dek` row genuinely ships its DEK over this wire.

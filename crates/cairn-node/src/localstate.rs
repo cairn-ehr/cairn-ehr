@@ -10,7 +10,7 @@
 //! SCOPE (slice D): this module builds the can't-retrofit SHAPE — the format, the
 //! dual-recipient secret lifecycle (a long-lived local-state DEK dual-wrapped once at
 //! provisioning), the container, and the restore path — with typed slots the clinical tier
-//! fills later via additive evolution (principle 11). **Two of those slots are no longer
+//! fills later via additive evolution (principle 11). **Three of those slots are no longer
 //! empty** — see the state of play below; this paragraph is left otherwise as written
 //! because its own expiry is the lesson recorded under it. The genuine
 //! day-one piece is `establish_lsk`: state accrued before the channel exists has no
@@ -43,15 +43,16 @@
 //!
 //! Read that narrowly, because the ADR's title — "identity dies with the disk; custody must
 //! not" — is still not fully this system's behaviour. What survives a restore today is the
-//! KEY. The custody ROWS ride along and are counted, but nothing inserts them, because the
-//! backup medium carries no clinical event for them to be custody of (#500, below). Neither
+//! KEY. The custody ROWS ride along and are counted, but nothing inserts them — because
+//! nothing yet RESTORES a clinical event for them to be custody of (#500, below). Neither
 //! half is useful without the other; do not read this section as more than it says.
 //!
 //! **STILL OPEN, do not read this module as closing them:**
 //!
-//! - **The backup medium carries no clinical event (#500).** It exports the federation
-//!   plane only. Until that lands, a restored node gets a working key and nothing to open
-//!   with it — neither half is useful alone. This is the next slice.
+//! - **Nothing restores a clinical event (#500).** Since DR slice 2c the backup medium DOES
+//!   carry the clinical plane, with each record's wrapped DEK — but `restore` and
+//!   `verify-backup` read the federation plane alone (`backup::node_plane_events`), so a
+//!   restored node still gets a working key and nothing to open with it. Slice 2d.
 //! - **The restore side lands the KEY, not yet the rows.** [`apply_local_state`] now installs
 //!   the recovered unwrap secret and registers its public half (ADR-0066 decision 4), so a
 //!   restored node's custody IS the dead node's custody — that is #495's restore half, and it
@@ -61,6 +62,16 @@
 //! - **Promise 2 has no subject.** [`LocalState::node_default_deks`] stays empty because no
 //!   node-default data-at-rest keystore exists anywhere in the built system. That slot's
 //!   emptiness is neither honoured nor violated; it names a tier that must exist first.
+//! - **The actor registry now travels, and is counted, but nothing installs it (Task 11,
+//!   #500).** [`crate::localstate_read::read_local_state`] fills
+//!   [`LocalState::actor_registry`] from `actor_event` (db/004), so the export finally
+//!   carries what `actor_current` needs — and [`apply_local_state`] reports the count in
+//!   [`AppliedLocalState::actor_registry_carried`], exactly as it does for `episode_deks`, so
+//!   the gap is visible at the surface rather than silent (Task 11's own fix round, review
+//!   finding I2). It still does not INSERT the rows: `actor_event` has no INSERT door here
+//!   yet either. That is deliberate staging, not an oversight repeated — Task 11 is the write
+//!   half only; slice 2d is the insert, exactly where `episode_deks` sat between #495 and
+//!   #500's capture half.
 //!
 //! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` holds the guards for all of the
 //! above, and says of each whether it asserts a guarantee or pins a surviving defect.
@@ -109,13 +120,15 @@ pub const SUPPORTED_LOCAL_STATE_VERSION: u8 = 1;
 /// we reserve the SLOT SHAPE without committing to the clinical tier's internal schema (no
 /// speculative generality).
 ///
-/// **Which slots carry something, as of #495 / ADR-0066** — read this before writing a
-/// comment that calls the bundle empty, because two earlier comments here said exactly that
-/// and both went stale (the module header has the history):
+/// **Which slots carry something, as of #495 / ADR-0066 / Task 11 (#500)** — read this before
+/// writing a comment that calls the bundle empty, because two earlier comments here said
+/// exactly that and both went stale (the module header has the history):
 ///
-/// - [`Self::episode_deks`] and [`Self::unwrap_secret`] are **FILLED** on a provisioned node
-///   by [`crate::localstate_read::read_local_state`]. Together they are the custody that
-///   survives a dead disk.
+/// - [`Self::episode_deks`], [`Self::unwrap_secret`] and [`Self::actor_registry`] are
+///   **FILLED** on a provisioned node by [`crate::localstate_read::read_local_state`]. The
+///   first two are the custody that survives a dead disk; the registry is what a restored
+///   node needs to be ALLOWED to apply that custody again (`actor_current` gates every
+///   clinical apply door).
 /// - [`Self::node_default_deks`], [`Self::config`] and [`Self::drafts`] are still empty,
 ///   legitimately: none of the three has a store anywhere in the built system to be filled
 ///   from. Their emptiness is "nothing exists yet", not "we forgot".
@@ -165,6 +178,33 @@ pub struct LocalState {
     /// signing identity — and an unwrap secret is exactly read access.
     #[serde(default)]
     unwrap_secret: Option<Secret32>,
+    /// Task 11 (#500): the append-only actor registry (`actor_event`, db/004), one CBOR
+    /// [`ActorRegistryRow`] per row, ordered by `seq`. It rides this export because it can
+    /// ride nothing else: `actor_event` has no `signed_bytes` and replicates nowhere, while
+    /// every clinical apply door gates on `actor_current` — without this slot a restored
+    /// node holds keys and events it is never again ALLOWED to use (2a §3).
+    ///
+    /// Appended at the END of the struct, deliberately: field order is irrelevant to decode
+    /// (CBOR here is a named map, not a tuple), so putting the new slot last keeps this diff
+    /// a pure addition against every earlier field's declaration.
+    ///
+    /// No `skip_serializing_if`, on purpose, even for the empty case — #511's lesson,
+    /// restated for a genuinely new slot rather than a type change: if an empty registry
+    /// could vanish from the wire, "the registry silently never travelled" (a bug) would be
+    /// byte-identical to "this node has no actors" (a fact), and an operator staring at a hex
+    /// dump could never tell which one they are looking at. See
+    /// `tests/localstate_wire_pins.rs`'s `the_empty_registry_encoding_is_pinned`.
+    ///
+    /// ⚠️ **Authenticated by the CONTAINER's AEAD only, never by a per-row signature.** Every
+    /// OTHER slot in this bundle is either non-clinical (config, drafts) or itself the
+    /// wrapped ciphertext of something signature-verified elsewhere (`episode_deks` opens
+    /// bodies that were verified on apply). These rows are neither: they are the ONE part of
+    /// a restore whose authenticity rests solely on "the container decrypted", not on
+    /// verify-on-apply. That is acceptable ONLY because `apply_local_state` does not yet
+    /// insert them (Task 11 is the write half; slice 2d is the apply half) — the caveat is
+    /// recorded here so 2e's ADR is not the first place it is written down.
+    #[serde(default)]
+    actor_registry: Vec<Vec<u8>>,
 }
 
 impl LocalState {
@@ -184,20 +224,24 @@ impl LocalState {
             config: None,
             drafts: Vec::new(),
             unwrap_secret: None,
+            actor_registry: Vec::new(),
         }
     }
 
     /// The OTHER producer, and the one that carries real custody: the bundle
     /// [`crate::localstate_read::read_local_state`] builds after filtering out every event
-    /// named in `erasure_shred_log`.
+    /// named in `erasure_shred_log`. Named `..._and_registry` since Task 11 (#500), which
+    /// widened it from two arguments to three — see the history note below.
     ///
     /// **Why this exists rather than a struct literal.** The fields above are PRIVATE and there
     /// are exactly TWO producers — this and [`Self::empty`] — because this struct's own doc has
     /// always warned that a third producer skipping that filter "is how an erased body's key
     /// would travel", and until #511 nothing prevented one. There is deliberately **no
-    /// `set_episode_deks`**: the custody slot is the one the filter guards, so it can only be
-    /// filled by a producer, and the only producer that fills it non-empty is this one. The
-    /// mutators below touch slots the filter has nothing to say about.
+    /// `set_episode_deks`** (and, since Task 11, no `set_actor_registry` either — a setter is
+    /// exactly how a third producer would sneak in): the custody slot is the one the filter
+    /// guards, so it can only be filled by a producer, and the only producer that fills it
+    /// non-empty is this one. The mutators below touch slots the filter has nothing to say
+    /// about.
     ///
     /// **What that does and does not promise, stated exactly.** This function does not itself
     /// filter — it takes the rows its caller hands it. What the private fields buy is that the
@@ -210,9 +254,26 @@ impl LocalState {
     /// reach. An earlier version of this paragraph claimed the filter itself was the gate, which
     /// claimed more than the code delivers.
     ///
+    /// **History: this was `from_custody(episode_deks, unwrap_secret)` before Task 11.** The
+    /// rename, not a wrapper kept alongside it, is deliberate: the producer set stays closed at
+    /// two, and a `from_custody` shim delegating to this one would not change that count (it
+    /// contains no struct literal for the guard to see) but would still be a second NAME for
+    /// filling the same slot — exactly the kind of quiet second door #511 closed. Every call
+    /// site (including this crate's own tests) was updated instead.
+    ///
+    /// `actor_registry` is not filtered the way `episode_deks` is — there is no
+    /// `erasure_shred_log`-shaped exclusion for actor-registry rows — but it is closed to this
+    /// same single producer for the same structural reason: a setter or a second constructor is
+    /// a door a reviewer has to keep re-checking forever, and a single producer is a door they
+    /// check once.
+    ///
     /// Pinned by `dr_clinical_guarantee_gap.rs`'s producer count — when it fails, ask whether
     /// the new producer filters, not whether the number should go up.
-    pub fn from_custody(episode_deks: Vec<Vec<u8>>, unwrap_secret: Option<Secret32>) -> Self {
+    pub fn from_custody_and_registry(
+        episode_deks: Vec<Vec<u8>>,
+        unwrap_secret: Option<Secret32>,
+        actor_registry: Vec<Vec<u8>>,
+    ) -> Self {
         LocalState {
             version: 1,
             node_default_deks: Vec::new(), // no node-default keystore exists yet (#495 promise 2)
@@ -220,6 +281,7 @@ impl LocalState {
             config: None,       // no node config table exists yet
             drafts: Vec::new(), // no draft store exists yet
             unwrap_secret,
+            actor_registry,
         }
     }
 
@@ -257,6 +319,21 @@ impl LocalState {
         self.unwrap_secret.as_ref()
     }
 
+    /// The surviving actor-registry rows, each a CBOR [`ActorRegistryRow`], ordered by `seq`
+    /// (Task 11 / #500). **Carried, not applied**: nothing today inserts these into a
+    /// restored node's `actor_event` — that is slice 2d. `is_empty()` on this slice means
+    /// either "no export has run since this bundle predates the registry slot" or "this node
+    /// really has no enrolled actors"; [`from_cbor`] cannot tell those apart from an old
+    /// export alone, which is exactly why the empty encoding is pinned rather than skipped
+    /// (see the field's own doc).
+    ///
+    /// ⚠️ Authenticated by the CONTAINER's AEAD only, never by a per-row signature — see the
+    /// field's doc for the full caveat before trusting these rows the way a verified clinical
+    /// event is trusted.
+    pub fn actor_registry(&self) -> &[Vec<u8>] {
+        &self.actor_registry
+    }
+
     /// Set (or clear) the custody secret.
     ///
     /// Safe in a way `set_episode_deks` would not be: the `erasure_shred_log` filter is about
@@ -284,12 +361,14 @@ impl LocalState {
     ///
     /// **Where the line is, stated once for every mutator on this type.** There are setters for
     /// `unwrap_secret`, `drafts` and `config`, plus [`Self::take_unwrap_secret`] (four mutating
-    /// methods in all), and deliberately NONE for `episode_deks`,
-    /// `node_default_deks` or `version`. `episode_deks` is the slot the `erasure_shred_log`
-    /// filter guards, so it may be filled only through [`Self::from_custody`] — whose sole
-    /// in-tree caller, [`crate::localstate_read::read_local_state`], is the code that applies
-    /// that filter; `node_default_deks` is reserved and wiped by this type's
-    /// `Drop`; `version` is a format fact, not content. A future setter for any of those three
+    /// methods in all), and deliberately NONE for `episode_deks`, `node_default_deks`,
+    /// `actor_registry` or `version`. `episode_deks` is the slot the `erasure_shred_log`
+    /// filter guards, so it may be filled only through [`Self::from_custody_and_registry`] —
+    /// whose sole in-tree caller, [`crate::localstate_read::read_local_state`], is the code
+    /// that applies that filter; `actor_registry` has no analogous filter but is closed to the
+    /// same single producer for the same reason (Task 11 — a setter is how a third producer
+    /// sneaks in); `node_default_deks` is reserved and wiped by this type's
+    /// `Drop`; `version` is a format fact, not content. A future setter for any of those four
     /// is the change to argue about, not to make.
     ///
     /// **These four mutators have no production callers today** — every call site is in
@@ -312,13 +391,16 @@ impl LocalState {
     ///
     /// Every content slot participates, [`Self::unwrap_secret`] included: a bundle carrying
     /// only the secret still carries key material, and treating it as empty would let
-    /// [`apply_local_state`] wave it through as a no-op.
+    /// [`apply_local_state`] wave it through as a no-op. [`Self::actor_registry`] joined this
+    /// list in Task 11 for the same reason — a bundle carrying only registry rows still
+    /// carries something a restore needs.
     pub fn is_empty(&self) -> bool {
         self.node_default_deks.is_empty()
             && self.episode_deks.is_empty()
             && self.config.is_none()
             && self.drafts.is_empty()
             && self.unwrap_secret.is_none()
+            && self.actor_registry.is_empty()
     }
 }
 
@@ -366,7 +448,16 @@ impl Drop for LocalState {
 /// raw key material, and the separately-carried [`LocalState::unwrap_secret`] is what opens
 /// it. `event_id` is the hyphenated UUID TEXT, matching how this crate carries every event
 /// id (tokio-postgres's `uuid` feature is not enabled here).
+///
+/// `#[serde(deny_unknown_fields)]`, matching [`LocalState`]'s own contract one level up
+/// (review finding I3 on Task 11 / #500): without it, a row written by a NEWER build
+/// carrying a field this build doesn't know would have that field SILENTLY DROPPED on read
+/// rather than loudly refused — the exact A7c failure `LocalState` guards against, one
+/// struct down. Neither field gets `#[serde(default)]`: both are the row's own identity
+/// (which event, which key) rather than optional content, so their absence should refuse —
+/// same reasoning as `LocalState::version`, which is likewise never defaulted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EpisodeDek {
     pub event_id: String,
     pub dek_wrapped: Vec<u8>,
@@ -386,8 +477,9 @@ pub fn episode_dek_to_cbor(d: &EpisodeDek) -> Vec<u8> {
 /// `dek_wrapped` that is not exactly [`cairn_event::seal::WRAPPED_DEK_LEN`] bytes can never
 /// be opened — `unwrap_dek` refuses it — so a truncated or padded row is a custody row that
 /// looks present and is permanently dead. Today that is inert: `apply_local_state` COUNTS
-/// these rows without inserting them, because the medium carries no clinical event yet
-/// (#500). **#500 is the slice that inserts them**, and after that a bad row is a chart entry
+/// these rows without inserting them, because nothing yet restores a clinical event for them
+/// to belong to (#500 — the medium carries them since slice 2c; the restore door does not
+/// read them). **#500's restore half is what inserts them**, and after that a bad row is a chart entry
 /// nobody can read or crypto-shred, discovered only when someone tries. Catching it at the
 /// decode boundary costs one comparison and is the same reasoning
 /// [`recovered_unwrap_secret`] applies one struct over — which is exactly where this check
@@ -406,6 +498,72 @@ pub fn episode_dek_from_cbor(bytes: &[u8]) -> Result<EpisodeDek, LocalStateError
         )));
     }
     Ok(row)
+}
+
+/// One row of the append-only actor registry (`actor_event`, db/004), as it travels in
+/// [`LocalState::actor_registry`] (Task 11 / #500).
+///
+/// Mirrors `actor_event`'s columns — `recorded_at` INCLUDED, since a fix round on this same
+/// task corrected the earlier "leave it behind" call: issue #99 argues for ordering by `seq`
+/// over `recorded_at` (two rows from one ceremony can share a `clock_timestamp()`), never
+/// for DROPPING the column. `actor_current` orders by `(recorded_at, seq)` with
+/// `recorded_at` PRIMARY (db/004), so an eventual restore-side insert (slice 2d) that
+/// re-stamped `clock_timestamp()` instead would permanently lose the real enrollment/
+/// revocation time — an audit fact, not a detail, and cheapest to carry now while no real
+/// export yet exists to be missing it. `actor_id` and `superseded_by` travel as raw bytes —
+/// the content-address the pinned-determinant set hashes to — and `pinned`/`recorded_at` as
+/// their TEXT source, because this crate does not enable tokio-postgres's
+/// `with-serde_json-1` / chrono features (the same idiom `matcher_actor.rs` documents for
+/// `pinned`).
+///
+/// The leaf type is a real struct, not opaque bytes, so the restore side (slice 2d) can
+/// decode a row without re-deriving its shape from the SQL — the same reason [`EpisodeDek`]
+/// exists rather than leaving `episode_deks`'s element shape to be discovered later.
+///
+/// **Additive evolution, one level down (review finding I3 on Task 11 / #500).** This struct
+/// sits directly beneath [`LocalState`], which is documented at length for exactly this
+/// contract — `#[serde(deny_unknown_fields)]` refuses a row from a NEWER build carrying a
+/// field this one doesn't know, rather than silently dropping it, and `#[serde(default)]`
+/// on the fields that are genuinely optional CONTENT (a revoke row carries no `kind` or
+/// `signing_key_id`) lets a row missing one of THOSE still decode. `actor_event_id`,
+/// `actor_id`, `op` and `seq` stay un-defaulted: they are the row's identity, not optional
+/// content, so their absence should refuse — same reasoning as `LocalState::version`.
+/// `recorded_at` gets `#[serde(default)]` too even though `actor_event` never leaves it
+/// NULL, purely so a hypothetical future variant that cannot supply one degrades to an
+/// empty string rather than refusing the whole row over one audit field.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActorRegistryRow {
+    pub actor_event_id: String,
+    pub actor_id: Vec<u8>,
+    pub op: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub pinned: Option<String>,
+    #[serde(default)]
+    pub signing_key_id: Option<String>,
+    #[serde(default)]
+    pub superseded_by: Option<Vec<u8>>,
+    pub seq: i64,
+    #[serde(default)]
+    pub recorded_at: String,
+}
+
+/// Serialize one actor-registry row for the export slot. Pure.
+pub fn actor_registry_row_to_cbor(r: &ActorRegistryRow) -> Vec<u8> {
+    let mut out = Vec::new();
+    ciborium::into_writer(r, &mut out).expect("CBOR serialization of ActorRegistryRow cannot fail");
+    out
+}
+
+/// Parse one actor-registry row from the export slot. Errors, never panics — same reasoning
+/// as [`episode_dek_from_cbor`]: a restore reading a bit-rotted or foreign element must
+/// degrade honestly rather than abort mid-recovery. Unlike that function there is no
+/// fixed-length invariant to check here — an actor-registry row has no field whose wrong
+/// length makes it provably useless the way a mis-sized wrapped DEK is.
+pub fn actor_registry_row_from_cbor(bytes: &[u8]) -> Result<ActorRegistryRow, LocalStateError> {
+    ciborium::from_reader(bytes).map_err(|e| LocalStateError::Decode(e.to_string()))
 }
 
 /// Serialize a bundle to CBOR. Pure. (No magic header — the bundle is always carried
@@ -593,6 +751,47 @@ pub fn parse_container(bytes: &[u8]) -> Result<SealedLocalState, LocalStateError
         .strip_prefix(CONTAINER_MAGIC)
         .ok_or_else(|| LocalStateError::Decode("missing CAIRNL1 magic".into()))?;
     ciborium::from_reader(body).map_err(|e| LocalStateError::Decode(e.to_string()))
+}
+
+/// Confirm a just-written `CAIRNL1` export reads back SOUND, not merely well-framed (#500
+/// slice 2c Task 12 fix round 1, Minor 2). `written` is the buffer the caller just handed
+/// `fsio::atomic_write`; `readback` is what a fresh `std::fs::read` of that same path
+/// returned a moment later; `op_pass` is the SAME operator passphrase that just sealed it.
+///
+/// Two checks, cheapest first:
+/// 1. **Byte-identical.** A torn write, a filesystem that lied about `atomic_write`'s
+///    rename, or a disk that corrupts on read-back all show up here for free — no crypto
+///    needed, and this alone catches every corruption a `diff` would catch.
+/// 2. **Actually unseals.** `parse_container` succeeding only proves the bytes are
+///    well-formed CBOR; a single bit flipped inside `payload_ct` still decodes as a valid
+///    (if numerically different) `SealedLocalState` and would sail through a framing-only
+///    check, failing only much later, at restore, when the operator can least afford it.
+///    Unsealing under the op-pass that sealed it moments ago is a real exercise of the
+///    exact operation `restore`/`status` will perform, so it catches the class check 1
+///    cannot: a container whose `written` and `readback` bytes DO match, but whose
+///    ciphertext was never actually recoverable in the first place (e.g. a caller error
+///    upstream that sealed under the wrong secret).
+///
+/// Returns the parsed container on success so the caller need not re-parse.
+pub fn confirm_export_readback(
+    written: &[u8],
+    readback: &[u8],
+    op_pass: &str,
+) -> Result<SealedLocalState, LocalStateError> {
+    if readback != written {
+        return Err(LocalStateError::Decode(
+            "the export read back from disk is not byte-identical to what was written".into(),
+        ));
+    }
+    let sealed = parse_container(readback)?;
+    if unseal_local_state_op(&sealed, op_pass).is_none() {
+        return Err(LocalStateError::Seal(
+            "the export parses but does not unseal under the SAME op-pass that just sealed \
+             it — its ciphertext is corrupt or was sealed under the wrong secret"
+                .into(),
+        ));
+    }
+    Ok(sealed)
 }
 
 /// Seal a bundle for export AND frame it as the on-disk `CAIRNL1` container, in one fallible
@@ -792,25 +991,40 @@ pub struct AppliedLocalState {
     /// How many wrapped custody rows the bundle carried. **Carried, not applied** — see
     /// [`apply_local_state`].
     episode_deks_carried: usize,
+    /// How many actor-registry rows the bundle carried (Task 11 / #500 fix round, review
+    /// finding I2). **Carried, not applied** — same status as `episode_deks_carried`, and
+    /// for the same reason it needed a field rather than a silent drop: `node_default_deks`/
+    /// `config`/`drafts` are refused BY NAME so nothing this build cannot honour is dropped
+    /// quietly, and `episode_deks` gets a count; `actor_registry` had gotten NEITHER — an
+    /// operator restoring today's export would see "custody inherited, N DEKs carried" and
+    /// nothing about the registry, then watch the node refuse its own history with no signal
+    /// the rows had even been in the bundle.
+    actor_registry_carried: usize,
 }
 
 impl AppliedLocalState {
     /// The good outcome: a key was installed at `path` AND registered. Only
     /// [`apply_local_state`] can honestly say this, which is why it is the only caller.
-    fn custody_inherited(path: PathBuf, episode_deks_carried: usize) -> Self {
+    fn custody_inherited(
+        path: PathBuf,
+        episode_deks_carried: usize,
+        actor_registry_carried: usize,
+    ) -> Self {
         Self {
             unwrap_key_installed: Some(path),
             episode_deks_carried,
+            actor_registry_carried,
         }
     }
 
     /// The degraded outcome: the bundle carried no unwrap key, so none was installed and none
     /// registered. Named rather than expressed as `None`, so the caller's warning branch is
     /// reached by a stated fact instead of an inferred one.
-    fn no_custody_key(episode_deks_carried: usize) -> Self {
+    fn no_custody_key(episode_deks_carried: usize, actor_registry_carried: usize) -> Self {
         Self {
             unwrap_key_installed: None,
             episode_deks_carried,
+            actor_registry_carried,
         }
     }
 
@@ -828,6 +1042,12 @@ impl AppliedLocalState {
     /// How many custody rows travelled. Carried, not applied (#500).
     pub fn episode_deks_carried(&self) -> usize {
         self.episode_deks_carried
+    }
+
+    /// How many actor-registry rows travelled. Carried, not applied (Task 11 / #500) —
+    /// nothing today inserts them into the restored node's `actor_event`; that is slice 2d.
+    pub fn actor_registry_carried(&self) -> usize {
+        self.actor_registry_carried
     }
 }
 
@@ -951,18 +1171,26 @@ pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &Secret32) -> a
 /// # What is CARRIED but not APPLIED, and why that is honest rather than lossy
 ///
 /// [`LocalState::episode_deks`] is counted and reported, not inserted. The rows belong to
-/// clinical events, and the backup medium does not yet carry a single clinical event
-/// (**#500**, the next slice) — so there is nothing for them to be custody OF, and building a
-/// second custody door here that #500 would immediately supersede would be waste. The count
-/// travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the restore
-/// command PRINTS it: an operator is told what came across and what is still owed, rather
-/// than finding out on the next disaster.
+/// clinical events, and while the backup medium HAS carried those since DR slice 2c, nothing
+/// on this side reads them back yet: `restore` applies the federation plane only, so there is
+/// still no restored clinical event here for these rows to be custody OF. The door that
+/// changes that is slice 2d's (**#500** stays open until it lands), and it is the same door
+/// that must insert this custody — building a second one here, ahead of it, would be waste.
+/// The count travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the
+/// restore command PRINTS it: an operator is told what came across and what is still owed,
+/// rather than finding out on the next disaster.
 ///
-/// The ordering note for whoever lands #500: custody must be registered BEFORE clinical
-/// events apply, because the door wraps each event's DEK to the registered public half. This
-/// function already does its half in that order; the *caller* currently runs it after
-/// `finalize_identity`, which is fine only while no clinical event is applied. That call site
-/// has to move up when the medium starts carrying them.
+/// [`LocalState::actor_registry`] gets the SAME treatment, for the SAME reason (Task 11's own
+/// fix round, review finding I2): counted in [`AppliedLocalState::actor_registry_carried`] and
+/// printed, never inserted — `actor_event` has no INSERT door here yet either, and that door
+/// is slice 2d's, alongside the clinical-event apply it must precede.
+///
+/// The ordering note for whoever lands #500's restore half: custody must be registered BEFORE
+/// clinical events apply, because the door wraps each event's DEK to the registered public
+/// half. This function already does its half in that order; the *caller* currently runs it
+/// after `finalize_identity`, which is fine only while no clinical event is APPLIED. The
+/// medium has carried them since slice 2c, so the trigger for moving this call site up is the
+/// slice that starts applying them, not the one that started capturing them.
 pub async fn apply_local_state(
     db: &tokio_postgres::Client,
     ls: &LocalState,
@@ -1042,8 +1270,12 @@ pub async fn apply_local_state(
     };
 
     Ok(match unwrap_key_installed {
-        Some(path) => AppliedLocalState::custody_inherited(path, ls.episode_deks.len()),
-        None => AppliedLocalState::no_custody_key(ls.episode_deks.len()),
+        Some(path) => AppliedLocalState::custody_inherited(
+            path,
+            ls.episode_deks.len(),
+            ls.actor_registry.len(),
+        ),
+        None => AppliedLocalState::no_custody_key(ls.episode_deks.len(), ls.actor_registry.len()),
     })
 }
 

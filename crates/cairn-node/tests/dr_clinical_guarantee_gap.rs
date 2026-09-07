@@ -2,11 +2,14 @@
 //! CLINICAL tier. This file holds each promise against what is actually built, so a gap is
 //! loud instead of invisible.
 //!
-//! **When this file was written all three were FALSE.** ADR-0066 has since closed the
-//! CUSTODY one (#495) — the node's unwrap key is an independent keypair that now rides the
-//! sealed export — so this is no longer "four pins plus a mechanism". It is a MIX: some
-//! tests assert the promise and stay green, others still pin today's defect. Every test
-//! below says in its own doc which of the two it is; read that before changing one.
+//! **When this file was written all three were FALSE.** Two have since moved: ADR-0066
+//! closed the CUSTODY one (#495 — the node's unwrap key is an independent keypair that now
+//! rides the sealed export), and #500 slice 2c closed the CAPTURE half of the clinical-log
+//! one (the medium now carries `event_log` with its custody; nothing restores it yet). So
+//! this is no longer "four pins plus a mechanism". It is a MIX, and several tests are
+//! GUARANTEES SCOPED TO ONE HALF rather than to a whole promise. Every test below says in
+//! its own doc which it is, and — where it is a half — which half. Read that before
+//! changing one, and before quoting one as evidence a promise holds.
 //!
 //! # The three promises
 //!
@@ -30,12 +33,13 @@
 //!
 //! # What is actually built
 //!
-//! - **STILL BROKEN (#500).** `backup::read_event_set` reads `SELECT signed_bytes FROM
-//!   node_event` — the **federation plane only** — and `backup::backup_to` writes exactly
-//!   that set to the medium. No `event_log`, no `event_clear`, no `event_dek`. Because
-//!   `event_log` also carries the demographic, identity, registration and erasure streams,
-//!   a restored solo node has **no patients and no charts at all**, not merely no clinical
-//!   content.
+//! - **HALF FIXED (#500 slice 2c).** `backup::backup_to` no longer writes `SELECT
+//!   signed_bytes FROM node_event` and nothing else: it captures BOTH planes onto an
+//!   append-only CAIRNB3 medium, the clinical one with per-record custody. So the record now
+//!   REACHES the medium. **#500 stays open**, because nothing reads it back — `restore` and
+//!   `verify-backup` both go through `backup::node_plane_events`, which deliberately returns
+//!   the federation plane alone until slice 2d. A restored solo node therefore still has no
+//!   patients and no charts; what changed is that the bytes to give it now exist off-machine.
 //! - Restore still mints a **fresh signing key** (ADR-0026 decision 4, "the private signing
 //!   key is never backed up"): `restore.rs` orchestrates the apply and the supersede,
 //!   `main.rs` owns the minting. What ADR-0066 CHANGED is the consequence. The X25519
@@ -50,7 +54,11 @@
 //!   every target named in `erasure_shred_log` — ADR-0066 decision 7) and carries the
 //!   unwrap secret itself in a third slot. `node_default_deks` stays empty, and
 //!   LEGITIMATELY so: promise 2 has **no subject** — no node-default data-at-rest keystore
-//!   exists anywhere in the built system for it to export.
+//!   exists anywhere in the built system for it to export. Task 11 (#500) added a FOURTH
+//!   filled slot, `actor_registry`, so the export finally carries what `actor_current` needs
+//!   to let a restored node apply the custody it just inherited — but nothing installs it yet
+//!   (see `localstate.rs`'s own header); that half is slice 2d, same shape as the
+//!   `episode_deks` capture/apply split before it.
 //!
 //! # Why the (former) custody gap was honest history rather than an oversight
 //!
@@ -85,9 +93,14 @@
 //!   and the only test that can fire the producer's `erasure_shred_log` filter at all. It
 //!   stages a state the production doors cannot produce, and its own doc explains why that
 //!   deliberate exception to this suite's rules is the point rather than a shortcut.
-//! - [`medium_carries_the_federation_plane_and_no_clinical_event`] — **still a PIN** (#500,
-//!   the sibling issue). It names its own inversion and goes red on the commit that fixes
-//!   the medium. Do not read the rest of this file as evidence that it is fixed.
+//! - [`medium_carries_both_planes`] — **GUARANTEE, CAPTURE HALF ONLY** (#500 slice 2c). It
+//!   replaced the pin that asserted the medium carried no clinical event at all, on the
+//!   commit that made that false. It says nothing about the RESTORE half, which is slice 2d
+//!   and is not built; read its own doc before quoting it as "#500 is fixed".
+//! - [`nothing_yet_restores_a_clinical_event_from_a_medium`] — **PIN, the RESTORE half**,
+//!   and the sibling of the one above. It is what keeps #500 open in code rather than only
+//!   in prose: the record reaches the medium and nothing reads it back. Slice 2d reddens it,
+//!   and that is the guard working — INVERT it then, never delete it.
 //! - [`local_state_producers_are_the_two_named_constructors`] — a producer COUNT guard over
 //!   the source text of EVERY crate's `src/`; it moved from 1 to 2 when the DB-reading
 //!   producer landed, and reddens at 3 wherever a third appears. #511 changed WHERE the two
@@ -108,7 +121,10 @@ use cairn_event::seal::{
     derive_unwrap_secret, seal_event_payload, seal_stub_twin, unwrap_dek, unwrap_public,
 };
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
-use cairn_node::localstate::{episode_dek_from_cbor, read_local_state, EpisodeDek, LocalState};
+use cairn_node::localstate::{
+    actor_registry_row_from_cbor, episode_dek_from_cbor, read_local_state, ActorRegistryRow,
+    EpisodeDek, LocalState,
+};
 use cairn_node::{backup, db, identity};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -128,7 +144,7 @@ fn cs() -> Option<String> {
 
 /// Bring the database to the state a real solo clinic node is in the moment before its
 /// disk dies: a provisioned node identity (so `node_event` is NON-EMPTY — see the
-/// anti-vacuity note in [`medium_carries_the_federation_plane_and_no_clinical_event`]),
+/// anti-vacuity note in [`medium_carries_both_planes`]),
 /// an enrolled actor, and a registered unwrap key.
 ///
 /// The truncation is delegated to `common::medication_setup` rather than copied: it is the
@@ -230,30 +246,37 @@ async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) ->
     (event_id, signed.signed_bytes)
 }
 
-/// **Promise 1 — "the clinical event log survives" — is FALSE (#500).**
+/// **Promise 1's CAPTURE HALF — "the clinical event log survives" — is now TRUE (#500 slice
+/// 2c Task 9).** This is the INVERSION of the pin that used to stand here, which asserted
+/// that the medium carried the federation plane and no clinical event at all.
 ///
-/// The medium a solo clinic's whole durability story rests on carries the federation
-/// plane and nothing else. After a dead disk, restore rehydrates who this node peered
-/// with and recovers zero clinical records — and, since `event_log` is also the home of
-/// the demographic, identity and registration streams, zero patients.
+/// ⚠️ **Read the scope before quoting this as "#500 is fixed", because the unscoped sentence
+/// is still false.** What this proves is that the record REACHES the medium — the writer's
+/// half, which is all slice 2c claims. Nothing yet reads a clinical event BACK: `restore`
+/// and `verify-backup` both go through `backup::node_plane_events`, which returns the
+/// federation plane only, on purpose (slice 2d owns the other half). Its sibling half —
+/// *"and nothing yet restores one"* — is pinned in this same file by
+/// `nothing_yet_restores_a_clinical_event_from_a_medium`, which Task 13 added; the limit is
+/// enforced by a test, not merely asserted by this comment. (An earlier version of this
+/// paragraph said the opposite, and was left standing after the pin landed — the shape that
+/// invites a later session to rebuild work that already exists.)
 ///
-/// Anti-vacuity, on both sides: the node is provisioned first, so the medium is genuinely
-/// NON-EMPTY (otherwise "the medium holds no clinical event" would also pass over an empty
-/// export); and `author_sealed_clinical_event` reads its event back out of `event_log`, so
-/// there is genuinely something for the medium to be missing. Together they close the
-/// 2026-08-23 lesson — a guard that cannot observe the property it names.
+/// ANTI-VACUITY, on both sides, inherited from the pin this replaced:
+/// `author_sealed_clinical_event` reads its event back out of `event_log` before returning,
+/// so the bytes looked for below genuinely exist; and the FEDERATION plane is asserted to be
+/// complete too, so "the clinical event is on the medium" cannot be satisfied by a writer
+/// that captured the clinical plane and dropped the federation one — which would have
+/// destroyed the half of disaster recovery that already worked.
 ///
-/// The pin is taken at BOTH seams on purpose. `read_event_set` is where the wrong table is
-/// named, but a plausible fix — add a clinical reader and compose both inside `backup_to` —
-/// would leave a `read_event_set`-only assertion green while closing the defect. So the
-/// medium FILE that `backup_to` actually writes is checked too.
-///
-/// **When #500 is fixed:** invert the three PINS — the clinical event's signed bytes must
-/// appear in the event set and in the medium file, and the set's count must exceed the
-/// node-plane count. The fourth assertion, `!medium.is_empty()`, is the anti-vacuity guard
-/// and stays exactly as it is.
+/// The assertion is taken on the medium FILE `backup_to` actually writes, never on
+/// `read_event_set`'s return value. That distinction mattered in BOTH directions: the pin
+/// this replaced checked both seams because a fix might have touched only one, and now
+/// `read_event_set` is no longer on the write path at all (see its doc), so an assertion
+/// about it would say nothing whatever about the backup. It survives below only as the
+/// reference spelling of *"the federation event set, according to the database"* — the thing
+/// the medium's node plane is compared against.
 #[tokio::test]
-async fn medium_carries_the_federation_plane_and_no_clinical_event() {
+async fn medium_carries_both_planes() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -263,58 +286,214 @@ async fn medium_carries_the_federation_plane_and_no_clinical_event() {
     let (sk, kid) = provisioned_clinic(&c).await;
     let (_event_id, clinical_bytes) = author_sealed_clinical_event(&c, &sk, &kid).await;
 
-    let medium = backup::read_event_set(&c).await.unwrap();
-
-    // Anti-vacuity: the export is real and non-empty, so the absence below is a real
-    // absence rather than "there was nothing to look at".
+    // The federation event set as the DATABASE holds it — the reference the medium's node
+    // plane is checked against below. Non-empty because the node was provisioned first.
+    let federation = backup::read_event_set(&c).await.unwrap();
     assert!(
-        !medium.is_empty(),
-        "the node was provisioned, so the medium must carry at least the genesis event — \
-         an empty medium would make the assertions below vacuous"
+        !federation.is_empty(),
+        "the node was provisioned, so there must be at least a genesis event — an empty \
+         federation set would make the comparison below vacuous"
     );
 
-    // Promise 1, as built: the clinical event is simply not there.
-    assert!(
-        !medium.contains(&clinical_bytes),
-        "PINS #500: the backup medium carries no clinical event. ADR-0026 decision 1 says \
-         the clinical event log survives a restore and decision 2 says clinical events back \
-         up as a cold peer; backup::read_event_set reads only `node_event`. When #500 is \
-         fixed this assertion must be INVERTED."
-    );
-
-    // The set is `node_event` verbatim. This equality is structurally guaranteed today
-    // (`read_event_set` is an unfiltered SELECT over that table), so it proves nothing
-    // about the present — it is here purely as a TRIPWIRE: any fix that widens the medium
-    // reddens it, including one that adds clinical events without touching the assertion
-    // above.
-    let node_events: i64 = c
-        .query_one("SELECT count(*) FROM node_event", &[])
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(
-        medium.len() as i64,
-        node_events,
-        "PINS #500: the medium is the `node_event` set exactly — nothing clinical has been \
-         added to it"
-    );
-
-    // And the same absence in the artifact an operator actually carries off-site: the
-    // seam a fix is most likely to touch is `backup_to`, not `read_event_set`.
     let tmp = tempfile::tempdir().unwrap();
     let medium_path = tmp.path().join("cairn.medium");
     let health_path = tmp.path().join("backup-status.json");
     backup::backup_to(&c, &medium_path, &health_path, 0, Some((&sk, &kid)))
         .await
-        .expect("the backup ceremony succeeds — which is the point");
-    let on_disk = std::fs::read(&medium_path).unwrap();
+        .expect("the backup ceremony succeeds");
+
+    let image = cairn_node::medium::parse_any(&std::fs::read(&medium_path).unwrap())
+        .expect("the medium `backup_to` wrote must parse");
+
+    // PROMISE 1, CAPTURE HALF. The clinical event is on the medium — and so is the key that
+    // opens it. ADR-0052 makes every clinical body born-sealed, so ciphertext without its
+    // custody would restore as noise while every surface reported success: the same
+    // composite untruth #500 is about, one level down.
+    let clinical = clinical_records(&image);
+    let found = clinical
+        .iter()
+        .find(|r| r.signed_bytes == clinical_bytes)
+        .expect(
+            "#500 slice 2c: the medium FILE `backup_to` writes — the artifact the operator \
+             carries off-site — must carry the clinical event. ADR-0026 decision 1 says the \
+             clinical event log survives a restore and decision 2 says clinical events back \
+             up as a cold peer.",
+        );
     assert!(
-        !on_disk
-            .windows(clinical_bytes.len())
-            .any(|w| w == clinical_bytes),
-        "PINS #500: the medium FILE `backup_to` writes — the artifact the operator carries \
-         off-site, and the one `verify-backup` reports OK over — does not contain the \
-         clinical event's bytes anywhere. When #500 is fixed this assertion must be INVERTED."
+        found.dek_wrapped.is_some(),
+        "and its custody must travel with it, or a restored solo clinic inherits ciphertext \
+         it can never open (ADR-0066)"
+    );
+
+    // ANTI-VACUITY / TRIPWIRE, the inverse of the equality that used to stand here: the
+    // medium's NODE plane must still be the `node_event` set exactly. Widening the medium
+    // was the point of this slice; NARROWING it — losing the federation plane while gaining
+    // the clinical one — would be a silent regression of the working half of DR, and nothing
+    // else in this file would notice.
+    assert_eq!(
+        backup::node_plane_events(&image).unwrap(),
+        federation,
+        "the medium's federation plane must still be the `node_event` set exactly, in order"
+    );
+}
+
+/// Every record a parsed medium carries on the CLINICAL plane, in file order.
+///
+/// One spelling for the two tests here that ask what the clinical plane holds. It panics on
+/// a legacy image rather than returning an empty list, and that choice is the point: both
+/// callers back up through `backup_to`, so a CAIRNB2 container here would mean the WRITER
+/// regressed — and an empty `Vec` would let "no clinical record on the medium" pass as an
+/// ordinary result instead of the loud failure it is.
+fn clinical_records(image: &cairn_node::medium::MediumImage) -> Vec<&cairn_medium::MediumRecord> {
+    match image {
+        cairn_node::medium::MediumImage::V3(m) => m
+            .segments
+            .iter()
+            .filter(|s| s.plane == cairn_node::medium::Plane::Clinical)
+            .flat_map(|s| s.records.iter())
+            .collect(),
+        cairn_node::medium::MediumImage::Legacy(_) => {
+            panic!("a capture must leave a CAIRNB3 medium, never a legacy container")
+        }
+    }
+}
+
+/// **Promise 1's RESTORE HALF — the sibling of [`medium_carries_both_planes`], and the pin
+/// that keeps #500 open.** Slice 2c moved the record onto the medium; NOTHING reads one
+/// back. This test says so in the one place a reader looks, so the slice can never be
+/// quoted — by a future session, a changelog, or a closing keyword — as having closed #500.
+///
+/// **This is a PIN, not a guarantee** (the file header's distinction): it asserts what is
+/// TRUE TODAY and names the inversion the fix owes. Slice 2d makes it red, and *that is the
+/// guard working*. When it does, INVERT it — do not delete it — the way
+/// `medium_carries_both_planes` inverted the pin that stood before it.
+///
+/// It is taken at BOTH seams, because either alone can be satisfied for the wrong reason:
+///
+/// 1. **The reader's selection.** `backup::node_plane_events` is the ONE function
+///    `restore` and `verify-backup` both feed (`main.rs`, two call sites); it returns the
+///    federation plane and drops the clinical one on purpose. Asserted as an EQUALITY
+///    against the federation set rather than as "the clinical bytes are absent", so a
+///    reader that returned nothing at all could not pass.
+/// 2. **The end-to-end outcome.** The clinical tier is then wiped — a fresh
+///    disaster-recovery machine holds no clinical row — and the medium is applied through
+///    the real restore door. A node restored from a medium that DEMONSTRABLY carries the
+///    clinical record comes up with zero clinical events and zero custody rows. That is the
+///    sentence #500 is about, and only this leg can observe it: a future 2d that taught
+///    `node_plane_events` nothing but wired a second reader into the restore arm would
+///    still redden here.
+///
+/// ANTI-VACUITY, in this order and for this reason: the medium is proven to carry the
+/// clinical record and its custody FIRST (else "nothing was restored" would be a statement
+/// about an empty medium); the federation set is proven non-empty; and the restore is proven
+/// to have really run (the node plane came back) BEFORE the absence of the clinical tier is
+/// asserted. Without those three, deleting the whole restore path would keep this green.
+#[tokio::test]
+async fn nothing_yet_restores_a_clinical_event_from_a_medium() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let (_event_id, clinical_bytes) = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    let federation = backup::read_event_set(&c).await.unwrap();
+    assert!(
+        !federation.is_empty(),
+        "the node was provisioned, so the federation set holds at least a genesis — an \
+         empty one would make both legs below vacuous"
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let medium_path = tmp.path().join("cairn.medium");
+    let health_path = tmp.path().join("backup-status.json");
+    backup::backup_to(&c, &medium_path, &health_path, 0, Some((&sk, &kid)))
+        .await
+        .expect("the backup ceremony succeeds");
+    let image = cairn_node::medium::parse_any(&std::fs::read(&medium_path).unwrap())
+        .expect("the medium `backup_to` wrote must parse");
+
+    // ANTI-VACUITY. The record and its key really ARE on this medium, so everything below is
+    // a statement about the RESTORE path rather than about a medium with nothing to restore.
+    let carried = clinical_records(&image)
+        .into_iter()
+        .find(|r| r.signed_bytes == clinical_bytes)
+        .expect("the medium must carry the clinical event — slice 2c's own guarantee");
+    assert!(
+        carried.dek_wrapped.is_some(),
+        "and its custody, so a restore that DID read it would have something openable"
+    );
+
+    // LEG 1 — the reader's selection. Equality, not mere absence: a `node_plane_events` that
+    // returned an empty list would satisfy "the clinical bytes are not in here" while having
+    // destroyed the half of disaster recovery that already works.
+    let restored_stream = backup::node_plane_events(&image).unwrap();
+    assert_eq!(
+        restored_stream, federation,
+        "PINS #500: the stream `restore` and `verify-backup` read is the federation plane \
+         exactly — the clinical plane is deliberately dropped (slice 2d owns reading it \
+         back). When 2d lands, this equality is what must change."
+    );
+
+    // LEG 2 — the end-to-end outcome. Wipe the clinical tier: a disaster-recovery machine
+    // has a fresh database, and without this the counts below would merely re-observe the
+    // rows this test's own fixture wrote. The list mirrors `common::medication_setup`'s
+    // clinical half (that function owns the canonical list; this is the subset a restore
+    // could plausibly repopulate).
+    c.batch_execute(
+        "TRUNCATE event_log, event_dek, event_clear, erasure_shred_log, patient_chart CASCADE",
+    )
+    .await
+    .expect("wiping the clinical tier, as a fresh DR machine would have it");
+    // And un-enrol it: the self-trusting restore door fails closed once a genesis exists.
+    db::reset_node_federation_tables(&c).await.unwrap();
+
+    let applied = cairn_node::restore::apply_medium(&c, &restored_stream)
+        .await
+        .expect("the restore door applies the medium's federation plane");
+    assert_eq!(
+        applied,
+        federation.len(),
+        "anti-vacuity: the restore really processed the whole federation stream"
+    );
+    let node_events: i64 = c
+        .query_one("SELECT count(*) FROM node_event", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        node_events > 0,
+        "anti-vacuity: the restore genuinely landed rows — the federation tier came back, \
+         so the empty clinical tier below is a fact about the clinical plane and not about \
+         a restore that silently did nothing"
+    );
+
+    // THE PIN. A node restored from a medium that provably HOLDS the clinical record comes
+    // up with none of it.
+    let clinical_rows: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        clinical_rows, 0,
+        "PINS #500: nothing yet RESTORES a clinical event from a medium. The record was on \
+         the medium (asserted above) and the restore ran (asserted above) and `event_log` \
+         is still empty. Slice 2c captured the clinical plane; reading it back is slice 2d. \
+         When 2d lands this assertion INVERTS — it must never simply be deleted."
+    );
+    let custody_rows: i64 = c
+        .query_one("SELECT count(*) FROM event_dek", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        custody_rows, 0,
+        "PINS #500: and no custody either. The medium carries the wrapped DEKs — the \
+         `dek_wrapped` asserted above — but nothing inserts them, because there is no \
+         restored event for them to be custody OF. Both halves invert together in 2d."
     );
 }
 
@@ -327,8 +506,9 @@ async fn medium_carries_the_federation_plane_and_no_clinical_event() {
 /// ADR-0066 decision 3 owns. Decision 4 (a restored node ADOPTS the exported unwrap key) has
 /// since landed too, and is pinned in `restore_inherits_custody.rs` — so the KEY now survives
 /// a restore end-to-end. The wrapped `event_dek` ROWS still do not: they are carried across
-/// and counted, but not inserted, because the medium carries no clinical event for them to be
-/// custody of (**#500**, the next slice). Writing "promise 3 is now TRUE" here would be a
+/// and counted, but not inserted, because nothing yet RESTORES a clinical event for them to be
+/// custody of (**#500** — the medium carries them since slice 2c; the restore door does not
+/// read them, which is slice 2d). Writing "promise 3 is now TRUE" here would be a
 /// freshly-minted version of the expired-precondition claim this whole suite exists to catch.
 ///
 /// The sealed local-state export (ADR-0026 slice D) is the only artifact that can carry key
@@ -414,6 +594,70 @@ async fn the_export_carries_the_unwrap_secret_and_the_surviving_dek() {
          no node-default keystore exists to be exported. When one is built, this assertion \
          must be INVERTED and `exported.node_default_deks` pinned the way episode_deks is \
          above."
+    );
+}
+
+/// **The actor registry's own behavioural guard — the one `episode_deks` already had
+/// (`the_export_filter_drops_a_custody_row_the_shred_log_forbids`) and the registry, until
+/// this fix round, did not (Task 11 / #500 review finding I1).**
+///
+/// Before this test, NOTHING with real DB behaviour touched `LocalState::actor_registry`:
+/// `localstate_wire_pins.rs` never opens a connection, and this file's own producer-count
+/// guard only counts constructions and greps for a call NAME — it would stay green if
+/// `localstate_read.rs` built the query and then threw the result away. Replacing
+/// `registry_rows` with `Vec::new()` at the read site passed every test this crate had
+/// until now; that is the gap this test closes.
+///
+/// `medication_setup` (via `common::mod.rs`) TRUNCATEs `actor_event` itself before enrolling
+/// exactly two actors — a device and a human — so this test needs no extra reset and can
+/// assert the WHOLE registry rather than merely "at least one row showed up".
+#[tokio::test]
+async fn the_export_carries_the_enrolled_actor_registry() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_sk_device, kid_device, _sk_human, kid_human) = common::medication_setup(&c).await;
+
+    let exported = read_local_state(&c, None)
+        .await
+        .expect("export must succeed");
+    let rows: Vec<ActorRegistryRow> = exported
+        .actor_registry()
+        .iter()
+        .map(|b| {
+            actor_registry_row_from_cbor(b)
+                .expect("every export element is a valid ActorRegistryRow")
+        })
+        .collect();
+
+    // Anti-vacuity: the count is exact, not "at least", so a filter that accidentally
+    // multiplies or drops a row cannot pass by chance.
+    assert_eq!(
+        rows.len(),
+        2,
+        "medication_setup enrolls exactly two actors (device, human); the export must carry \
+         both and nothing else. Carried: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.op == "enroll"
+            && r.kind.as_deref() == Some("device")
+            && r.signing_key_id.as_deref() == Some(kid_device.as_str())),
+        "the device actor's enrollment must be in the export, content intact. Carried: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.op == "enroll"
+            && r.kind.as_deref() == Some("human")
+            && r.signing_key_id.as_deref() == Some(kid_human.as_str())),
+        "the human actor's enrollment must be in the export, content intact. Carried: {rows:?}"
+    );
+    // The audit fact Minor 4's fix carries: a real `recorded_at`, not an empty default —
+    // proof the column actually crossed the wire rather than merely existing on the type.
+    assert!(
+        rows.iter().all(|r| !r.recorded_at.is_empty()),
+        "every row must carry its real enrollment timestamp. Carried: {rows:?}"
     );
 }
 
@@ -744,8 +988,11 @@ async fn shred(c: &Client, sk: &SigningKey, kid: &str, target: &str) {
 /// NOT mean a database-level restore yields unreadable bodies. `event_clear` is an ordinary
 /// logged table holding the CLEAR payload and clear twin for every sealed body this node has
 /// custody of, so a `pg_dump` or disk image carries readable content without needing any DEK
-/// at all. The narrower true statement is that the inherited DEKs are noise; and the backup
-/// MEDIUM still carries neither the DEKs nor `event_clear` (#500). The sealed EXPORT no
+/// at all. The narrower true statement is that the inherited DEKs are noise. (This sentence
+/// used to continue *"and the backup MEDIUM still carries neither the DEKs nor
+/// `event_clear`"*. Half of that expired with slice 2c, which puts the wrapped DEKs ON the
+/// medium — see [`medium_carries_both_planes`]. Only `event_clear` is still absent from it,
+/// and nothing reads either back yet, #500.) The sealed EXPORT no
 /// longer belongs in that list — since #495 it carries the custody rows and the secret that
 /// opens them, which is precisely what stopped the ADR-0026 restore path from arriving with
 /// nothing.
@@ -874,7 +1121,8 @@ fn local_state_producers_are_the_two_named_constructors() {
         2,
         "`LocalState` is built by struct literal in exactly TWO places, BOTH in \
          `localstate.rs` — `LocalState::empty()` (the legitimate zero value) and \
-         `LocalState::from_custody()` (the custody-bearing producer, which \
+         `LocalState::from_custody_and_registry()` (the custody-bearing producer, renamed from \
+         `from_custody` in Task 11/#500 when it gained the actor-registry parameter, which \
          `localstate_read::read_local_state` calls AFTER filtering on erasure_shred_log). \
          A third producer anywhere in any crate's src/ is a place an erased body's key could \
          travel from, and it reddens this. Found: {producers:?}"
@@ -885,8 +1133,9 @@ fn local_state_producers_are_the_two_named_constructors() {
     // ⚠️ THIS HALF CHANGED IN #511, AND THE CHANGE IS THE POINT — read it before "restoring"
     // the old expectation. It used to require one producer in `localstate.rs` and one in
     // `localstate_read.rs`, because the DB reader WAS a struct literal. It no longer is: the
-    // fields are `pub(crate)` and the reader calls `LocalState::from_custody`, so both
-    // literals are named constructors in `localstate.rs` and the reader holds ZERO.
+    // fields are `pub(crate)` and the reader calls `LocalState::from_custody_and_registry`
+    // (named `from_custody` before Task 11/#500 widened it), so both literals are named
+    // constructors in `localstate.rs` and the reader holds ZERO.
     //
     // That is strictly stronger, not a weakening. Before, ANY file could construct a
     // `LocalState` and only the count would object; now the type system forbids it outside
@@ -900,8 +1149,8 @@ fn local_state_producers_are_the_two_named_constructors() {
             .filter(|(rel, _, _)| rel == "crates/cairn-node/src/localstate.rs")
             .count(),
         2,
-        "both producers are named constructors in localstate.rs (`empty` and `from_custody`). \
-         Found: {producers:?}"
+        "both producers are named constructors in localstate.rs (`empty` and \
+         `from_custody_and_registry`). Found: {producers:?}"
     );
     assert_eq!(
         producers
@@ -909,9 +1158,9 @@ fn local_state_producers_are_the_two_named_constructors() {
             .filter(|(rel, _, _)| rel == "crates/cairn-node/src/localstate_read.rs")
             .count(),
         0,
-        "the DB reader must CALL `from_custody`, never build a literal of its own — that is \
-         what keeps the filtering producer the only way to fill the custody slot. \
-         Found: {producers:?}"
+        "the DB reader must CALL `from_custody_and_registry`, never build a literal of its \
+         own — that is what keeps the filtering producer the only way to fill the custody \
+         slot. Found: {producers:?}"
     );
 
     // …and it really does call it. Without this, deleting the call and returning
@@ -919,13 +1168,13 @@ fn local_state_producers_are_the_two_named_constructors() {
     // all — a silent, total loss of the thing this file is named for.
     let reader = sources::read_source(&root.join("crates/cairn-node/src/localstate_read.rs"));
     assert!(
-        reader.contains("LocalState::from_custody("),
-        "localstate_read.rs must call `LocalState::from_custody` — with no literal of its own \
-         and no call, the export would silently carry nothing"
+        reader.contains("LocalState::from_custody_and_registry("),
+        "localstate_read.rs must call `LocalState::from_custody_and_registry` — with no \
+         literal of its own and no call, the export would silently carry nothing"
     );
 
-    // Also confirm `empty()` really is the ZERO-value producer and `from_custody` really is
-    // the CUSTODY-bearing one — a count cannot notice the two being swapped.
+    // Also confirm `empty()` really is the ZERO-value producer and `from_custody_and_registry`
+    // really is the CUSTODY-bearing one — a count cannot notice the two being swapped.
     let ls = LocalState::empty();
     assert!(
         ls.is_empty(),

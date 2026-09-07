@@ -49,7 +49,17 @@ async fn read_local_state_returns_the_empty_bundle() {
     // `node_event_quarantine`), never this one. These integration binaries share one
     // serialized database, so a sibling suite's leftover custody row would otherwise make
     // this test fail depending on binary order.
-    conn.batch_execute("TRUNCATE event_dek, erasure_shred_log CASCADE")
+    //
+    // `actor_event` joined this TRUNCATE in Task 11 (#500) for the identical reason:
+    // `read_local_state` now also reads the actor registry, so "genuinely holds nothing"
+    // depends on it too. Unlike the custody plane, a REAL provisioned node always has at
+    // least one enrolled actor — this fixture's whole point is the idealized empty case, so
+    // it has to clear the table a real node never would. This DOES leave any leftover
+    // `event_log` rows in the shared serialized DB orphaned of the actor that signed them —
+    // harmless HERE only because this test never reads `event_log`, and every sibling test
+    // that DOES care about signer identity truncates both tables together itself (see the
+    // repo-wide `TRUNCATE event_log, actor_event, ...` idiom other integration files use).
+    conn.batch_execute("TRUNCATE event_dek, erasure_shred_log, actor_event CASCADE")
         .await
         .expect("clearing the custody plane so this node genuinely holds nothing");
 
@@ -217,13 +227,15 @@ fn ciphertext_damage_is_indistinguishable_from_a_wrong_recovery_code() {
 // #511 rides-along: the producer set, and structural redaction
 // ---------------------------------------------------------------------------------------
 
-/// **`from_custody` fills the custody slot, and the narrow mutators cannot.**
+/// **`from_custody_and_registry` fills the custody slot, and the narrow mutators cannot.**
 ///
 /// `LocalState`'s own doc has always said that a third producer skipping the
 /// `erasure_shred_log` filter "is how an erased body's key would travel" — and until #511
 /// nothing prevented one, because every field was `pub`. There is deliberately no
 /// `set_episode_deks`: that is the slot the filter guards, and the only way to fill it is
-/// [`LocalState::from_custody`], which `read_local_state` (the filtering producer) calls.
+/// [`LocalState::from_custody_and_registry`] (renamed from `from_custody` in Task 11, #500,
+/// when it gained the actor-registry parameter), which `read_local_state` (the filtering
+/// producer) calls.
 ///
 /// ⚠️ **This test does NOT prove the "exactly one filler" part, and its name used to claim it
 /// did.** The body below is a positive round-trip: it would pass unchanged if a third producer
@@ -239,7 +251,11 @@ fn from_custody_is_the_only_way_to_fill_the_custody_slot() {
     let secret = cairn_event::keys::Secret32::from_bytes(std::array::from_fn(|i| {
         (i as u8).wrapping_mul(7).wrapping_add(1)
     }));
-    let ls = LocalState::from_custody(vec![b"a wrapped row".to_vec()], Some(secret.clone()));
+    let ls = LocalState::from_custody_and_registry(
+        vec![b"a wrapped row".to_vec()],
+        Some(secret.clone()),
+        vec![],
+    );
     assert_eq!(ls.episode_deks().len(), 1);
     assert_eq!(ls.unwrap_secret(), Some(&secret));
     assert!(

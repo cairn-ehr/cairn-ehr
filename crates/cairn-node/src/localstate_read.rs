@@ -13,15 +13,28 @@
 //! never crosses cannot be resurrected by a restore, which is stronger than replaying the
 //! shred log afterwards and does not depend on replay ordering.
 //!
-//! Be honest about how much of that the filter below carries. It is a LAST LINE, not the
-//! only one: `cairn_execute_shred` (db/037) already DELETES the custody row when a shred
-//! executes, and `apply_remote_event` (db/020) already refuses to create one for a target
-//! already in `erasure_shred_log`. So on a healthy node the `NOT EXISTS` clause selects
-//! nothing extra. It is kept because the failure it prevents — an erased body's key
-//! resurrected on a restored node — is irreversible, and because the two upstream defences
-//! are in a different codebase layer (SQL) that this file cannot see change.
+//! Be honest about WHERE that is enforced, because it is no longer here. There are three
+//! defences and ALL THREE ARE NOW IN SQL: `cairn_execute_shred` (db/037) DELETES the custody
+//! row when a shred executes, `apply_remote_event` (db/020) refuses to create one for a
+//! target already in `erasure_shred_log`, and the filter itself is db/051's
+//! `event_custody_surviving` view.
+//!
+//! That filter used to be a `NOT EXISTS` clause written out in this file — one of two
+//! hand-written spellings of "a shredded body's key must not travel", the other living in
+//! cairn-sync's serve door. Slice 2c gave the predicate ONE home, which is ADR-0001's rule
+//! (fat Postgres, thin daemon) and closes the mirror-list defect class (#182, #404, #441)
+//! on a safety predicate. **This file is a CALLER, not the definition, and it carries no
+//! defence of its own** — an earlier version of this note argued a Rust last line still
+//! belonged here because the upstream defences were "in a layer this file cannot see change
+//! out from under it", which stopped being an argument the moment the filter joined them
+//! there. Do not read defence-in-depth into this module. What protects the irreversible
+//! failure (an erased body's key resurrected on a restored node) is the view, and the guard
+//! that keeps the view honest is `db/tests/051_clinical_capture_source_test.sql` plus
+//! `tests/shred_predicate_has_one_home.rs`.
 
-use crate::localstate::{episode_dek_to_cbor, EpisodeDek, LocalState};
+use crate::localstate::{
+    actor_registry_row_to_cbor, episode_dek_to_cbor, ActorRegistryRow, EpisodeDek, LocalState,
+};
 use cairn_event::keys::Secret32;
 
 /// Read this node's exportable local state.
@@ -41,6 +54,9 @@ use cairn_event::keys::Secret32;
 ///   copied **wrapped**, byte for byte as the database holds it; this function never
 ///   unwraps anything, so no raw key material passes through it.
 /// * `unwrap_secret` — the caller's secret, if it had one.
+/// * `actor_registry` — one CBOR [`ActorRegistryRow`] per `actor_event` row (Task 11 / #500),
+///   ordered by `seq`. See the query's own comment below for why it has to ride this export
+///   at all, and for the caveat on how much trust these rows are owed.
 /// * `node_default_deks`, `config`, `drafts` — empty, and legitimately: no node-default
 ///   keystore, node-config table, or draft store exists anywhere in the built system yet.
 ///   That is "nothing to read", not "not implemented".
@@ -64,16 +80,15 @@ pub async fn read_local_state(
     // so a UUID column cannot be decoded directly — cast in SQL and carry it as a String,
     // which is the repo-wide read idiom and is also what `EpisodeDek` stores.
     //
-    // ORDER BY makes the export DETERMINISTIC: two runs over the same custody produce
-    // byte-identical `episode_deks`, which keeps a diff of two export bundles meaningful.
+    // `event_custody_surviving` (db/051) is the ONE definition of "not shredded" — this
+    // query no longer re-derives it. ORDER BY makes the export DETERMINISTIC: two runs over
+    // the same custody produce byte-identical `episode_deks`, which keeps a diff of two
+    // export bundles meaningful.
     let rows = db
         .query(
-            "SELECT d.event_id::text AS event_id, d.dek_wrapped \
-             FROM event_dek d \
-             WHERE NOT EXISTS ( \
-                 SELECT 1 FROM erasure_shred_log s WHERE s.target_event_id = d.event_id \
-             ) \
-             ORDER BY d.event_id",
+            "SELECT c.event_id::text AS event_id, c.dek_wrapped \
+             FROM event_custody_surviving c \
+             ORDER BY c.event_id",
             &[],
         )
         .await
@@ -89,12 +104,65 @@ pub async fn read_local_state(
         })
         .collect();
 
-    // `from_custody` rather than a struct literal: it is one of only TWO producers of a
-    // `LocalState` (the other is `empty()`), and keeping the set closed is what stops a third
-    // one appearing that skips the `erasure_shred_log` filter above — the failure this file's
-    // header calls out by name (#511 rides-along 1).
-    Ok(LocalState::from_custody(
+    // The actor registry rides the export because it can ride nothing else: actor_event has
+    // no signed_bytes and replicates nowhere, while every clinical apply door gates on
+    // actor_current. Without it a restored node refuses its own history (2a §3).
+    //
+    // ⚠️ These rows arrive authenticated by the CONTAINER's AEAD, not by per-row signatures
+    // — the one part of a restore that is not verify-on-apply. 2e's ADR owes that caveat;
+    // do not let this comment be the only place it is written down.
+    //
+    // `actor_event_id::text`, `pinned::text` and `recorded_at::text`: same idiom as
+    // `event_id::text` above, and for the same underlying reason — `pinned` is JSONB and
+    // `recorded_at` is TIMESTAMPTZ, and this crate does not enable tokio-postgres's
+    // `with-serde_json-1` or chrono features, so neither type has a `FromSql` impl to land
+    // in (see `matcher_actor.rs`'s note on the identical idiom for `pinned` on the write
+    // side). Casting to `text` on the database side and carrying it as a `String` sidesteps
+    // that entirely, and doubles as this row's own legibility twin for the timestamp.
+    //
+    // ORDER BY seq, never recorded_at: two rows from one enrollment ceremony can share a
+    // `clock_timestamp()` (issue #99), and seq is the monotonic tiebreak db/004 adds for
+    // exactly this reason. `recorded_at` still travels in the SELECT list, and it must —
+    // fix round on Task 11 (review finding Minor 4): `actor_current` orders by
+    // `(recorded_at, seq)` with `recorded_at` PRIMARY, so a restore that re-stamped
+    // `clock_timestamp()` instead of carrying the original would permanently lose the real
+    // enrollment/revocation time. Ordering by `seq` here is about resolving ties in THIS
+    // query's own output order, which is orthogonal to what value each row carries.
+    let registry_rows = db
+        .query(
+            "SELECT actor_event_id::text AS actor_event_id, actor_id, op, kind, \
+                    pinned::text AS pinned, signing_key_id, superseded_by, seq, \
+                    recorded_at::text AS recorded_at \
+             FROM actor_event ORDER BY seq",
+            &[],
+        )
+        .await
+        .context("reading the actor registry for the local-state export")?;
+
+    let actor_registry = registry_rows
+        .iter()
+        .map(|r| {
+            actor_registry_row_to_cbor(&ActorRegistryRow {
+                actor_event_id: r.get::<_, String>("actor_event_id"),
+                actor_id: r.get::<_, Vec<u8>>("actor_id"),
+                op: r.get::<_, String>("op"),
+                kind: r.get::<_, Option<String>>("kind"),
+                pinned: r.get::<_, Option<String>>("pinned"),
+                signing_key_id: r.get::<_, Option<String>>("signing_key_id"),
+                superseded_by: r.get::<_, Option<Vec<u8>>>("superseded_by"),
+                seq: r.get::<_, i64>("seq"),
+                recorded_at: r.get::<_, String>("recorded_at"),
+            })
+        })
+        .collect();
+
+    // `from_custody_and_registry` rather than a struct literal: it is one of only TWO
+    // producers of a `LocalState` (the other is `empty()`), and keeping the set closed is
+    // what stops a third one appearing that skips the `erasure_shred_log` filter above — the
+    // failure this file's header calls out by name (#511 rides-along 1).
+    Ok(LocalState::from_custody_and_registry(
         episode_deks,
         unwrap_secret.cloned(),
+        actor_registry,
     ))
 }

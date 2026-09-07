@@ -43,11 +43,11 @@ use cairn_event::{event_address, sign, verify_self_described, EventBody, Hlc, Si
 pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 
 /// Commitment over a segment's records — over each record's `(event_address(signed_bytes),
-/// source_seq)` PAIR. Order-independent, sharing `marker::commitment_over` (the per-record
-/// digest is fed straight back through it, so the crate keeps ONE definition of what "a
-/// commitment over these bytes" means) — a build that reorders the byte inputs before
-/// hashing would defeat that reuse, so don't; frame reordering is harmless under set-union
-/// sync and must stay harmless here too.
+/// source_seq, dek_wrapped)`, DEK absence included. Order-independent, sharing
+/// `marker::commitment_over` (the per-record digest is fed straight back through it, so the
+/// crate keeps ONE definition of what "a commitment over these bytes" means) — a build that
+/// reorders the byte inputs before hashing would defeat that reuse, so don't; frame
+/// reordering is harmless under set-union sync and must stay harmless here too.
 ///
 /// WHY `source_seq` IS INCLUDED (C1, #500 final review — this used to commit to
 /// `signed_bytes` alone): `source_seq` is the medium's cursor — `watermark()` returns
@@ -58,33 +58,59 @@ pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 /// capture on that medium then writes nothing, forever, while the medium reports itself
 /// healthy and growing. That is the exact failure this whole slice exists to prevent.
 ///
-/// The sidecar fields (`attestation`, `attester_key`, `dek_wrapped`) stay OUT of the
-/// commitment: a legitimate re-capture may re-wrap that custody (which path owns the
-/// re-wrap is a decision the NEXT slice makes, not this one), so committing to it would
-/// break a re-capture that changed nothing clinically meaningful. That re-wrap rationale
-/// never applied to `source_seq` — it is not custody a re-capture legitimately changes; it
-/// is a fixed local fact about the capturing node's own insertion order, recorded once and
-/// never revisited.
+/// WHY `dek_wrapped` IS NOW INCLUDED, absence and all (#524 — this used to be a named
+/// RESIDUAL EXPOSURE below rather than something this function fixed): #524 was left open by
+/// slice 2a with the explicit note that "which path owns custody is slice 2c's decision."
+/// Slice 2c has now decided it — custody rides the medium — which makes a wrapped DEK
+/// exactly the kind of fact this attestation exists to protect, the same way `source_seq`
+/// is. A ONE-BYTE TAG (`0` = no DEK travelled, `1` = a DEK travelled, followed by its
+/// digest) marks the presence/absence distinction explicitly rather than leaving it to fall
+/// out of how the DEK happens to be folded in: `event_address` always emits a fixed-length
+/// digest, so `None` (nothing appended) already differs in length from `Some(vec![])` (a
+/// digest of zero bytes, still 34 bytes) even without the tag — but that is an incidental
+/// property of hashing the DEK rather than appending it raw, not something to lean on. The
+/// tag would be load-bearing on its own for any future variant that appended the DEK's raw
+/// bytes instead of its digest, where `None` and `Some(vec![])` WOULD otherwise collide at
+/// zero appended bytes; it costs one byte to make the distinction true unconditionally
+/// rather than true today. Before this fix, deleting `dek_wrapped` out of an
+/// already-verified segment left that segment's attestation intact and the medium reporting
+/// fully healthy end to end, while a later restore found a sealed body it could never open —
+/// see `deleting_a_wrapped_dek_breaks_the_commitment` below.
 ///
-/// RESIDUAL EXPOSURE, named plainly rather than fixed here — and it is ALL THREE sidecars,
-/// not just the DEK (an earlier version of this paragraph named only `dek_wrapped`, narrower
-/// than the truth already recorded in issue #524):
-///   - deleting `dek_wrapped` from an already-verified segment leaves that segment's
-///     attestation intact and the medium reporting fully healthy end to end — while a later
-///     restore finds a sealed body it can never open;
-///   - deleting `attestation` (the human authorship token) is the same shape at lower stakes:
-///     the medium still reports healthy, and a suppressing event is then refused fail-closed
-///     at the clinical apply door for want of a token that was silently dropped in transit —
-///     see `crate::record::MediumRecord::attestation`, which documents that dependence.
+/// `attestation` and `attester_key` — the record's HUMAN-authorship sidecars, as distinct
+/// from `dek_wrapped`'s custody — stay OUT of the commitment. Unlike a silently-stripped
+/// DEK, which nothing else in the system catches, a silently-stripped `attestation` is
+/// already caught fail-closed one layer up: the clinical apply door refuses a suppressing
+/// event outright for want of the token it needs to be admitted at all (see
+/// `crate::record::MediumRecord::attestation`, which documents that dependence). Committing
+/// them here would be redundant defense for a gap that is not, in fact, silent — unlike the
+/// DEK gap this function now closes. If that downstream catch is ever removed or found to
+/// have its own hole, this exclusion needs revisiting; it is not committed to here today.
 ///
-/// Nothing in this crate catches either today; only a custody-aware check at the slice that
-/// owns re-wrap can (#524).
+/// ⚠️ THIS RECIPE IS A WIRE FORMAT, not an internal implementation detail, the moment any
+/// CAIRNB3 medium exists in the field (see the re-freeze note on
+/// `segment_commitment_recipe_is_pinned_independently` in this module's tests for exactly
+/// when that stopped being hypothetical). Changing what bytes go into `per_record` — field
+/// order, the tag values, hashing vs. raw-appending the DEK — is a FORMAT BREAK needing a new
+/// container revision, never a routine edit: two builds computing different values for
+/// identical records split a fleet's chain verification silently (principle 11).
 pub fn segment_commitment(records: &[MediumRecord]) -> String {
     let per_record: Vec<Vec<u8>> = records
         .iter()
         .map(|r| {
             let mut item = event_address(&r.signed_bytes);
             item.extend_from_slice(&r.source_seq.to_be_bytes());
+            // #524 — custody is committed to, ABSENCE INCLUDED. The one-byte tag makes the
+            // None/Some distinction explicit rather than incidental (see the doc comment
+            // above for why it is belt-and-braces here but would be load-bearing for a
+            // variant that appended raw DEK bytes instead of a digest).
+            match &r.dek_wrapped {
+                None => item.push(0u8),
+                Some(dek) => {
+                    item.push(1u8);
+                    item.extend_from_slice(&event_address(dek));
+                }
+            }
             item
         })
         .collect();
@@ -280,7 +306,7 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{enroll, segment, sk};
+    use crate::testkit::{bytes, enroll, segment, sk};
 
     /// Shorthand for this module's tests: `n` distinct records under one signed segment.
     /// Delegates to `tests_support::signed` rather than building its own segment — ONE
@@ -310,10 +336,12 @@ mod tests {
     /// The commitment is order-independent: frame reordering is harmless under set-union,
     /// so it must not invalidate an attestation.
     ///
-    /// `a` and `b` MUST genuinely differ in `signed_bytes` and/or `source_seq` — the only
-    /// fields `segment_commitment` covers (see its doc comment above). `testkit::record(flags)`
-    /// varies only the sidecar fields (`attestation`, `attester_key`, `dek_wrapped`), which the
-    /// commitment deliberately excludes, so two `record(_)` fixtures are byte-identical on the
+    /// `a` and `b` MUST genuinely differ in `signed_bytes`, `source_seq` and/or `dek_wrapped` —
+    /// the fields `segment_commitment` covers (see its doc comment above). **`dek_wrapped` joined
+    /// that list in slice 2c (#524); this doc said the commitment "deliberately excludes" it,
+    /// which stopped being true the moment custody started riding the medium.**
+    /// `testkit::record(flags)` still varies only `attestation` and `attester_key`, which the
+    /// commitment does not cover, so two `record(_)` fixtures remain byte-identical on the
     /// covered axis — swapping two identical items proves nothing, and this test would still
     /// pass even if a refactor made the commitment order-DEPENDENT. Use
     /// `distinct_record(lineage, n)` (which varies both covered fields by `(lineage, n)`) or
@@ -547,17 +575,38 @@ mod tests {
     /// by OTHER NODES ON OTHER BUILDS — principle 11 makes a mixed-version fleet the normal
     /// case, so a changed recipe splits the fleet silently. N=1 and N=2 both, because the
     /// N=2 case is what pins the separator-free sorted join.
+    ///
+    /// ⚠️ RE-FROZEN 2026-09-05 (#524, slice 2c). `by_hand` below changed ON PURPOSE: the
+    /// segment commitment gained `dek_wrapped` (absence included, via a one-byte presence
+    /// tag). This is the golden pin for that recipe — this crate has no literal-hex pin for
+    /// it in `wire_pins.rs` because `segment_commitment`'s output is a computed string fed
+    /// into a signed JSON payload, not a fixed on-disk byte layout `wire_pins.rs` frames; an
+    /// INDEPENDENT re-derivation (not a copy of the function under test) is what "pinned"
+    /// means here, same as `event_set_commitment`'s pin above. It cost no compatibility
+    /// because at that moment NOTHING outside this crate's own tests wrote CAIRNB3 —
+    /// `backup_to` still wrote CAIRNB2 — so no medium in the field carried the old
+    /// commitment. After slice 2c that is no longer true: from here on a change to this
+    /// recipe is a FORMAT BREAK and needs a new container revision, not a re-freeze.
     #[test]
     fn segment_commitment_recipe_is_pinned_independently() {
         // Derive the expectation by hand, from the format definition rather than from the
         // function: content-address each record's bytes, append its big-endian source_seq,
-        // and feed the pair through the crate's one commitment primitive.
+        // then a one-byte DEK-presence tag (0 = absent; 1 = present, followed by the DEK's
+        // own content-address — #524), and feed the whole item through the crate's one
+        // commitment primitive.
         let by_hand = |records: &[MediumRecord]| -> String {
             let items: Vec<Vec<u8>> = records
                 .iter()
                 .map(|r| {
                     let mut v = cairn_event::event_address(&r.signed_bytes);
                     v.extend_from_slice(&r.source_seq.to_be_bytes());
+                    match &r.dek_wrapped {
+                        None => v.push(0u8),
+                        Some(dek) => {
+                            v.push(1u8);
+                            v.extend_from_slice(&cairn_event::event_address(dek));
+                        }
+                    }
                     v
                 })
                 .collect();
@@ -570,6 +619,16 @@ mod tests {
             segment_commitment(&one),
             by_hand(&one),
             "N=1 recipe drifted"
+        );
+        // A LITERAL golden value, not merely a match against `by_hand`: a mirrored edit to
+        // both `segment_commitment` and `by_hand` in the same commit (e.g. moving the tag
+        // after the digest, or flipping which of 0/1 means "present") would keep the
+        // assertion above green while silently changing the wire value every other build
+        // verifies against. Only a hard-coded expectation catches that class of change.
+        assert_eq!(
+            segment_commitment(&one),
+            "12207f7083a5a9cfa69b67fbab46e17e66c02238d065180bd9552a299753ac0cb691",
+            "N=1 golden commitment changed — this is a FORMAT BREAK, see segment_commitment's docstring"
         );
 
         let two = vec![
@@ -594,6 +653,124 @@ mod tests {
             segment_commitment(&one),
             segment_commitment(&moved),
             "source_seq must be bound, or the watermark is authenticated by nothing"
+        );
+
+        // #524: the DEK-ABSENCE branch (tag 0) is pinned too, not just the presence branch.
+        // `distinct_record` always sets a DEK, so without this case the `by_hand` recipe
+        // above would never exercise the tag's other arm, and a build that dropped the tag
+        // entirely for `None` (collapsing back to today's undetectable-strip bug) would
+        // still pass every assertion before this one.
+        let mut no_dek = one.clone();
+        no_dek[0].dek_wrapped = None;
+        assert_eq!(
+            segment_commitment(&no_dek),
+            by_hand(&no_dek),
+            "N=1 no-DEK recipe drifted"
+        );
+        assert_ne!(
+            segment_commitment(&one),
+            segment_commitment(&no_dek),
+            "the DEK-presence tag must change the commitment, or absence is invisible again"
+        );
+        // The no-DEK branch gets its own golden literal too, for the same reason as `one`'s
+        // above: a mirrored 0/1 flip changes BOTH `one` and `no_dek` in a way that could
+        // still satisfy every relative `assert_ne!`/`assert_eq!` above, but cannot satisfy
+        // two independently-pinned literals at once.
+        assert_eq!(
+            segment_commitment(&no_dek),
+            "1220ef08ea1ea159b8b07b77ffee93f547d0814bd5f6bb1b06b63a761e6285a21df2",
+            "N=1 no-DEK golden commitment changed — this is a FORMAT BREAK, see segment_commitment's docstring"
+        );
+    }
+
+    /// A runtime-derived stand-in for a wrapped DEK, distinguished only by `seed`. NEVER a
+    /// byte-array literal (house rule 6a, #146) — and kept named `dek_bytes`, not `salt`/
+    /// `nonce`/`iv` (house rule 6b, #527): those three names are CodeQL sinks regardless of
+    /// how the value was derived, but "dek" is not, and a wrapped DEK is genuinely what this
+    /// stands in for, so its real name is also the safe name.
+    fn dek_bytes(seed: u8) -> [u8; 32] {
+        std::array::from_fn(|i| seed ^ i as u8)
+    }
+
+    /// A `MediumRecord` fixture for isolating the DEK's effect on the commitment.
+    /// `signed_bytes` is always the SAME fixed bytes (`bytes(1, 40)`) regardless of `n` —
+    /// unlike `distinct_record`, which varies it — and only `source_seq` tracks `n`. Call it
+    /// with the SAME `n` and different `dek`s, as both `#524` tests below do, and any
+    /// commitment difference is attributable to `dek_wrapped` alone.
+    fn record_with_dek(n: u8, dek: Option<[u8; 32]>) -> MediumRecord {
+        MediumRecord {
+            signed_bytes: bytes(1, 40),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: dek.map(|d| d.to_vec()),
+            source_seq: i64::from(n),
+        }
+    }
+
+    /// #524: the attestation bound `(event_address(signed_bytes), source_seq)` and NOT the
+    /// DEK, so stripping custody out of a verified segment left the medium reporting fully
+    /// intact and the restored body silently unopenable.
+    #[test]
+    fn deleting_a_wrapped_dek_breaks_the_commitment() {
+        let with_custody = vec![record_with_dek(1, Some(dek_bytes(7)))];
+        let stripped = vec![record_with_dek(1, None)];
+        assert_ne!(
+            segment_commitment(&with_custody),
+            segment_commitment(&stripped),
+            "removing a DEK must change the commitment, or the deletion is undetectable"
+        );
+    }
+
+    /// Swapping a wrapped DEK for a different one (not just deleting it) must also change
+    /// the commitment — the commitment covers the DEK's CONTENT, not merely its presence.
+    #[test]
+    fn a_different_wrapped_dek_breaks_the_commitment() {
+        let a = vec![record_with_dek(1, Some(dek_bytes(7)))];
+        let b = vec![record_with_dek(1, Some(dek_bytes(8)))];
+        assert_ne!(segment_commitment(&a), segment_commitment(&b));
+    }
+
+    /// #524 review: `MediumRecord::dek_wrapped`'s doc says `None` (no DEK travelled) and
+    /// `Some(vec![])` (an empty DEK travelled) are DIFFERENT facts — the exact distinction
+    /// the presence tag names in its own rationale but which no test exercised. Unlike
+    /// `attestation`, where that None/Some(vec![]) distinction matters because a downstream
+    /// door treats them differently, nothing downstream distinguishes an empty DEK from no
+    /// DEK — but the commitment must still tell them apart, or a future variant that folds
+    /// the DEK in differently (see the docstring on `segment_commitment`) could silently
+    /// reintroduce the collision this tag exists to rule out.
+    #[test]
+    fn an_empty_dek_differs_from_no_dek() {
+        let none = vec![record_with_dek(1, None)];
+        let mut empty = record_with_dek(1, None);
+        empty.dek_wrapped = Some(vec![]);
+        assert_ne!(
+            segment_commitment(&none),
+            segment_commitment(&[empty]),
+            "an empty wrapped DEK must not commit identically to no DEK travelling at all"
+        );
+    }
+
+    /// #524, end-to-end: stripping a wrapped DEK out of an already-SIGNED segment must break
+    /// its attestation, not merely change the bare `segment_commitment` value in isolation —
+    /// this is the actual restore-time path #524 is about (`verify_segment_attestation` is
+    /// what `chain_report`/restore call). Same shape as
+    /// `altering_source_seq_breaks_the_attestation` above: sign a segment honestly, mutate
+    /// one record afterwards the way an attacker or corruption would, and confirm the
+    /// signature that used to verify no longer does.
+    #[test]
+    fn deleting_a_wrapped_dek_breaks_a_signed_segments_attestation() {
+        let sk = sk();
+        let mut seg = signed_segment(&sk, "abcd", Plane::Clinical, 0, "", 2);
+        assert!(
+            seg.records[0].dek_wrapped.is_some(),
+            "fixture bug: nothing to strip"
+        );
+        seg.records[0].dek_wrapped = None;
+        assert_eq!(
+            verify_segment_attestation(&seg),
+            None,
+            "stripping a wrapped DEK out of a verified segment must break its attestation, or \
+             a restored body silently becomes unopenable while the medium reports healthy (#524)"
         );
     }
 

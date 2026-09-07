@@ -467,6 +467,233 @@ async fn federated_medium_resolves_self_and_rejects_a_peer() {
     );
 }
 
+/// #500 slice 2c review, Important 2 (round 2: calls the REAL function, not a
+/// replica). A CAIRNB3 medium has no container-level self-marker (that concept is
+/// CAIRNB2-only), so `main.rs`'s restore arm derives an equivalent one via
+/// `backup::self_marker_source`. **This test covers the ATTESTED derivation**, which is
+/// preferred whenever the medium carries one and is the only unforgeable answer; the
+/// untrusted plaintext `Segment::self_node_id_hex` is a documented FALLBACK for a medium
+/// with no attestation at all (#550), pinned separately in
+/// `an_unsigned_v3_medium_resolves_self_and_still_rejects_a_named_peer`. The assertion on
+/// `MarkerSource::V3Attested` below is what keeps the two apart.
+/// A prior version of this test replicated that construction inline
+/// (`chain_report`+`self_id_from_chain`+`.map(...)`), which could not have caught a
+/// regression of `self_marker_for` (or of `main.rs` calling something else) back to
+/// `self_marker: None` — exactly the defect this test exists to prevent. It now calls
+/// `backup::self_marker_for` directly, with no database and no CLI process, to prove the
+/// cross-check a legacy medium's marker gives for free — rejecting an explicit
+/// `--superseded-node` that names a PEER (issue #53's footgun) — survives on a V3 medium
+/// too. Without it, `self_marker: None` would fall to `resolve_without_marker`, which
+/// accepts ANY id present on the medium: a restored node could silently adopt a peer's
+/// name and address and record an immutable wrong supersede edge.
+#[test]
+fn v3_medium_self_marker_still_rejects_a_named_peer() {
+    use cairn_node::medium::{
+        build_segment_attestation, parse_any, serialize_v3, MediumRecord, Plane, Segment,
+    };
+
+    let sk_self = cairn_event::generate_key().unwrap().0;
+    let sk_peer = cairn_event::generate_key().unwrap().0;
+    let kid_self = hex::encode(sk_self.verifying_key().to_bytes());
+
+    // Two real, validly-signed genesis events on one Node-plane segment — mirrors a
+    // converged/federated medium, where the events alone cannot say which is "self"
+    // (set-union convergence; issue #53).
+    let enroll_self = synth_enroll(&sk_self, "Self");
+    let enroll_peer = synth_enroll(&sk_peer, "Peer");
+    let self_id = hex::encode(cairn_event::event_address(&enroll_self));
+    let peer_id = hex::encode(cairn_event::event_address(&enroll_peer));
+
+    let records = vec![
+        MediumRecord {
+            signed_bytes: enroll_self,
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 0,
+        },
+        MediumRecord {
+            signed_bytes: enroll_peer,
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 1,
+        },
+    ];
+    let attestation =
+        build_segment_attestation(&sk_self, &kid_self, &self_id, Plane::Node, 0, "", &records);
+    let segment = Segment {
+        plane: Plane::Node,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: self_id.clone(),
+        attestation: Some(attestation),
+        records,
+    };
+
+    let bytes = serialize_v3(&[segment]).unwrap();
+    let image = parse_any(&bytes).unwrap();
+
+    // The REAL function `main.rs`'s restore arm calls — not a replica of its logic.
+    let (self_marker, source) =
+        cairn_node::backup::self_marker_source(&image).expect("an attested medium yields one");
+    assert_eq!(
+        self_marker,
+        cairn_node::medium::SelfMarker::Unsigned(self_id.clone()),
+        "the fixture's attestation must bind to its own genesis, or this test proves \
+         nothing about the cross-check it exists to pin"
+    );
+    assert_eq!(
+        source,
+        cairn_node::backup::MarkerSource::V3Attested,
+        "the id must come from the ATTESTATION, not from the plaintext fallback — the two \
+         arrive in the same `SelfMarker::Unsigned` variant, and only this distinguishes a \
+         tamper-evident medium from a forgeable one when the CLI describes it to an operator"
+    );
+    let self_marker = Some(self_marker);
+
+    let events = cairn_node::backup::node_plane_events(&image).unwrap();
+    let container = cairn_node::medium::Container {
+        self_marker,
+        events,
+    };
+
+    let dead = cairn_node::restore::resolve_dead_node(&container, None).unwrap();
+    assert_eq!(
+        dead.node_id_hex, self_id,
+        "resolves to the medium's own genesis, derived from the chain, not the plaintext"
+    );
+    assert_eq!(dead.provenance, cairn_node::restore::Provenance::Unsigned);
+
+    // The cross-check: naming the PEER's real node-id must still fail closed, exactly as
+    // it would for a legacy medium's marker.
+    let err = cairn_node::restore::resolve_dead_node(&container, Some(&peer_id)).unwrap_err();
+    assert!(
+        matches!(err, cairn_node::restore::RestoreError::NotSelf { .. }),
+        "a V3-derived marker must still reject a named peer, got: {err:?}"
+    );
+}
+
+/// **#550 — an UNSIGNED CAIRNB3 capture must be no weaker than the CAIRNB2 medium it
+/// replaced.** This is the regression `backup_to`'s switch to CAIRNB3 would otherwise have
+/// shipped, and it bites the case that cannot avoid it: an unattended cron backup has no
+/// passphrase, therefore no signing key, therefore writes UNSIGNED segments — which §1.2
+/// requires never to block a backup.
+///
+/// With no fallback, `self_marker_source` returned `None` for such a medium and
+/// `resolve_dead_node` took its marker-less path. Two failures at once, in OPPOSITE
+/// directions, both pinned below:
+///
+///   1. **too permissive** — `confirm_explicit` never runs, so ANY `--superseded-node` naming
+///      an enroll on the medium is accepted UNCHECKED. That is issue #53's original footgun:
+///      an operator typo becomes an immutable supersede edge against a peer.
+///   2. **too strict** — with NO `--superseded-node`, a multi-enroll medium is
+///      `RestoreError::Ambiguous`, so a restore that worked on a CAIRNB2 medium now REFUSES.
+///
+/// The fixture is the fully-federated worst case: two real genesis events, no attestation
+/// anywhere, and the plaintext `self_node_id_hex` naming self. That plaintext field is
+/// UNTRUSTED and so was a CAIRNB2 unsigned marker — the parity is exact, not an upgrade, and
+/// `resolve_dead_node`'s `Unsigned` arm re-checks either one against the medium's own enrolls
+/// before honouring it. `MarkerSource::V3Plaintext` is what the CLI uses to keep saying so.
+#[test]
+fn an_unsigned_v3_medium_resolves_self_and_still_rejects_a_named_peer() {
+    use cairn_node::medium::{parse_any, serialize_v3, MediumRecord, Plane, Segment};
+
+    let sk_self = cairn_event::generate_key().unwrap().0;
+    let sk_peer = cairn_event::generate_key().unwrap().0;
+    let enroll_self = synth_enroll(&sk_self, "Self");
+    let enroll_peer = synth_enroll(&sk_peer, "Peer");
+    let self_id = hex::encode(cairn_event::event_address(&enroll_self));
+    let peer_id = hex::encode(cairn_event::event_address(&enroll_peer));
+
+    let records = vec![
+        MediumRecord {
+            signed_bytes: enroll_self,
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 0,
+        },
+        MediumRecord {
+            signed_bytes: enroll_peer,
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: 1,
+        },
+    ];
+    // `attestation: None` — the whole point. This is what a passphrase-less cron capture
+    // leaves behind.
+    let segment = Segment {
+        plane: Plane::Node,
+        index: 0,
+        prev_commitment: String::new(),
+        self_node_id_hex: self_id.clone(),
+        attestation: None,
+        records,
+    };
+    let bytes = serialize_v3(&[segment]).unwrap();
+    let image = parse_any(&bytes).unwrap();
+
+    let (marker, source) = cairn_node::backup::self_marker_source(&image)
+        .expect("#550: an unsigned capture must still yield a marker, as CAIRNB2 did");
+    assert_eq!(
+        marker,
+        cairn_node::medium::SelfMarker::Unsigned(self_id.clone()),
+        "the fallback must be the segment's own plaintext id"
+    );
+    assert_eq!(
+        source,
+        cairn_node::backup::MarkerSource::V3Plaintext,
+        "and the caller must be told it is the UNTRUSTED derivation, so the CLI never \
+         describes this medium as tamper-evident"
+    );
+
+    let container = cairn_node::medium::Container {
+        self_marker: Some(marker),
+        events: cairn_node::backup::node_plane_events(&image).unwrap(),
+    };
+
+    // FAILURE 2: on a multi-enroll medium this used to be `Ambiguous` — a refusal.
+    let dead = cairn_node::restore::resolve_dead_node(&container, None).expect(
+        "#550: a multi-enroll unsigned medium must resolve self, not refuse as Ambiguous — \
+         that is a restore CAIRNB2 could do and this one could not",
+    );
+    assert_eq!(dead.node_id_hex, self_id);
+    assert_eq!(
+        dead.provenance,
+        cairn_node::restore::Provenance::Unsigned,
+        "and it must be reported as UNSIGNED — the id is forgeable plaintext, so the operator \
+         is told to confirm it"
+    );
+
+    // FAILURE 1: naming the peer must fail CLOSED, which is what a marker buys and what
+    // `resolve_without_marker` would have accepted silently.
+    let err = cairn_node::restore::resolve_dead_node(&container, Some(&peer_id)).unwrap_err();
+    assert!(
+        matches!(err, cairn_node::restore::RestoreError::NotSelf { .. }),
+        "#550/#53: an unsigned V3 medium must still reject a named peer, got: {err:?}"
+    );
+
+    // And the boundary the fallback must NOT cross: a capture from before enrolment names
+    // itself with the empty string, which is an absence, not a claim. Inventing a marker
+    // there would hand `resolve_dead_node` an id that verifies against nothing.
+    let anonymous = Segment {
+        self_node_id_hex: String::new(),
+        ..match parse_any(&bytes).unwrap() {
+            cairn_node::medium::MediumImage::V3(m) => m.segments[0].clone(),
+            cairn_node::medium::MediumImage::Legacy(_) => unreachable!(),
+        }
+    };
+    let anon_image = parse_any(&serialize_v3(&[anonymous]).unwrap()).unwrap();
+    assert_eq!(
+        cairn_node::backup::self_marker_source(&anon_image),
+        None,
+        "a medium with no attestation and no plaintext id names nobody — `None` is the \
+         honest answer, and resolve_dead_node's marker-less path is then correct"
+    );
+}
+
 /// After a restore, `status` reports the supersede lineage (this node supersedes the dead one).
 #[tokio::test]
 async fn status_reports_supersede_lineage() {
