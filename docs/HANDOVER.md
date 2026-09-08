@@ -701,10 +701,30 @@ workspace); `poc/` is frozen historical spikes.
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ DR slice 2d — #500 continues, and is the next build.** 2a (the format, 08-31), 2b (the transport
-  seam + the paged pull, 09-02), **#511** (the custody newtypes, 09-04) and **2c** (the capture, 09-06)
-  have all landed and none closed #500; **2d reads the clinical plane back off the medium** — the events,
-  the carried `event_dek` rows and the carried actor registry — and is what closes it. See ⇒ NEXT. New
+- **⇒ DR slice 2d — #554, and it is the next build. DESIGN LANDED (2026-09-09), implementation not
+  started;** draft PR **#565** on `feat/554-dr-slice-2d-restore-reads-clinical-plane`. 2a (the format,
+  08-31), 2b (the transport seam + the paged pull, 09-02), **#511** (the custody newtypes, 09-04) and
+  **2c** (the capture, 09-06) have all landed; **2d reads the clinical plane back off the medium** — the
+  events, the carried `event_dek` rows and the carried actor registry — and is what closes #554.
+  **Four things in the reviewed design contradict what earlier entries here lead a reader to expect —
+  read these before trusting the 2b entry below or ROADMAP's 2e line:**
+  1. **2d does NOT drive `cairn-sync`'s puller through `MediumTransport`.** The 2b entry below says the
+     transport seam "is what lets 2d's restore drive `cairn-sync`'s OWN puller against a file"; the
+     design takes the other route. `MediumTransport` is a *serving* abstraction (paging, label, logging
+     latch) and `cairn-node` does not depend on `cairn-wire`. Instead the pure
+     `within(verified_through) → sort by source_seq` derivation is **lifted into `cairn-medium`** (which
+     `cairn-wire` and `cairn-node` both already depend on) and both consume it — one implementation of
+     2a invariant 5, no new dependency edge. Follows 2c's Erratum E2 precedent.
+  2. **The per-peer quarantine quota does not apply to a restore-originated pen**, and the pen becomes an
+     in-DB door (`cairn_quarantine_event`, `db/052`) that `cairn-sync` and `cairn-node` share —
+     `quarantine_event` lives in `cairn-sync`'s **binary-only** crate and `cairn-node` cannot call it.
+     The quota's `Err` says *"the watermark freezes instead (delayed, never lost)"*, which needs a cursor
+     and a re-serving peer; a restore has neither, so inheriting it would lose the record at exit.
+  3. **The actor-registry door is set-shaped and resumable** (`restore_actor_registry(p_rows)`), not
+     per-row. A door refusing "any row in `actor_event`" would refuse the re-run that the
+     `finalize_identity`-moves-last ordering exists to make possible.
+  4. **The ADR is this slice's, not 2e's** — ADR-0067, and it carries the ADR-0026-decision-2
+     supersession plus the spec bump 2c deferred. See ⇒ NEXT. New
   from 2c: **#549** (a burned IDENTITY `seq` is indistinguishable from a lost clinical event; the
   probed-empty set wants a durable home and an operator surface), **#551** (the kit-restorability figure
   lives in a node-global file, not the kit — the same-path rotation case is still open) and **#552** (the
