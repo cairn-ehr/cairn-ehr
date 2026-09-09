@@ -3094,18 +3094,9 @@ async fn main() -> anyhow::Result<()> {
                 (sk, kid, Some((op, code)))
             };
 
-            // 5. Apply old events through the self-trusting door (db still un-enrolled),
-            //    then author the new genesis + supersede.
+            // 5. Apply the FEDERATION plane through the self-trusting door (db still
+            //    un-enrolled).
             let applied = cairn_node::restore::apply_medium(&db, &container.events).await?;
-            let outcome = cairn_node::restore::finalize_identity(
-                &db,
-                &sk,
-                &kid,
-                &name,
-                &address,
-                &dead.node_id_hex,
-            )
-            .await?;
 
             // 6. ADR-0026 slice D + ADR-0066 decision 4: apply the local-state export, if
             // one sits beside the medium. Applying it INSTALLS the dead node's independent
@@ -3113,23 +3104,44 @@ async fn main() -> anyhow::Result<()> {
             // minted in step 4 — and registers its public half, so the restored node's
             // custody IS the dead node's custody. It must ADOPT rather than mint:
             // `node_unwrap_key` is a singleton whose registrar refuses a differing key, so a
-            // minted key here could never be corrected.
+            // minted key here could never be corrected. Since #554 slice 2d it also INSTALLS
+            // the carried actor registry, because every clinical apply door resolves its
+            // author through `actor_current`.
             //
             // The ceremony itself lives in `apply_local_state_export`; read its doc for why
             // its `Result` is captured here rather than propagated with `?`.
             //
-            // ORDERING NOTE, and it is temporary: this runs AFTER `finalize_identity`, which
-            // is correct only while no CLINICAL event is applied here. Custody must be
-            // registered before clinical events land, because the door wraps each event's DEK
-            // to the registered public half. When the medium starts carrying clinical events
-            // (#500) this block moves up ahead of step 5. Do not read the current position as
-            // settled.
+            // ⇒ THE ORDER OF STEPS 5–8 IS LOAD-BEARING, and it changed in #554 slice 2d
+            // (design §3). It reads: apply the node plane → install custody + the registry →
+            // apply the CLINICAL plane → `finalize_identity` LAST.
+            //
+            //   * Custody before the clinical apply, because `apply_remote_event` wraps each
+            //     event's DEK to the REGISTERED public half. This block used to run AFTER
+            //     `finalize_identity`, correct only while no clinical event was applied here,
+            //     and its own comment said so and named this slice.
+            //   * The registry before the clinical apply, for a different reason: without it
+            //     the door refuses this node's own history with "signer … is not an enrolled,
+            //     non-revoked actor" — the zero-patients outcome in a different costume.
+            //   * `finalize_identity` LAST, so the WHOLE restore runs inside the un-enrolled
+            //     fence. A clinical apply that fails catastrophically then leaves a database
+            //     with no genesis written — still legitimately restorable, from the same
+            //     medium, into the same database. Under the minimal reordering (finalize
+            //     where it was, clinical after it) the same failure leaves a node already
+            //     identity-minted and already fenced, whose only recovery is a fresh
+            //     database. That is only true because `restore_actor_registry` is set-shaped
+            //     and RESUMABLE — a door refusing on "any registry row present" would turn
+            //     away the very re-run this ordering exists to enable.
+            //
+            // Two preconditions, verified rather than assumed, and PINNED by
+            // `tests/restore_ceremony_order.rs` so a future migration cannot break them
+            // silently: `cairn_register_unwrap_key` (db/037) never reads `local_node`, and
+            // `db/020_apply_remote_event.sql` contains zero `local_node` references.
             //
             // The failure is held across the summary block rather than propagated, because
-            // the node is ALREADY fully restored by this point and a local-state failure must
-            // not cost the operator the `new node` / `supersedes` / `re-peer with …` lines —
-            // those are their next step, and the door has fenced closed behind them. So:
-            // report it, finish telling them what happened, and THEN exit non-zero.
+            // the node is by then substantially restored and a local-state failure must not
+            // cost the operator the `new node` / `supersedes` / `re-peer with …` lines —
+            // those are their next step. So: report it, finish telling them what happened,
+            // and THEN exit non-zero.
             let mut local_state_failure: Option<anyhow::Error> = None;
             if let Some(bytes) = export_bytes {
                 match apply_local_state_export(

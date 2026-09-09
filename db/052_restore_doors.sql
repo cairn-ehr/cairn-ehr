@@ -258,6 +258,14 @@ COMMENT ON COLUMN sync_quarantine.dek_wrapped IS
 -- `p_peer` is NOT NULL upstream and the per-peer quota probes filter on it, so a restore
 -- passes the explicit sentinel `(restore)` rather than an empty string: a restore-penned row
 -- must be identifiable as one rather than blend into an unnamed link.
+-- Both quota parameters are BIGINT, matching the callers' own constants. A DROP of the
+-- earlier in-branch INTEGER shape rides along so a developer database that loaded it does not
+-- end up carrying BOTH overloads — `CREATE OR REPLACE` with a different argument list creates
+-- a sibling, it does not replace (db/020's lesson, and db/005's before it). Idempotent across
+-- replays, and a no-op on every database that never saw the earlier shape.
+DROP FUNCTION IF EXISTS cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEXT, BIGINT,
+                                              TEXT, BYTEA, INTEGER, BIGINT);
+
 CREATE OR REPLACE FUNCTION cairn_quarantine_event(
     p_digest       BYTEA,
     p_signed       BYTEA,
@@ -267,7 +275,7 @@ CREATE OR REPLACE FUNCTION cairn_quarantine_event(
     p_refused_seq  BIGINT,
     p_reason       TEXT,
     p_dek_wrapped  BYTEA    DEFAULT NULL,
-    p_max_rows     INTEGER  DEFAULT NULL,
+    p_max_rows     BIGINT   DEFAULT NULL,
     p_max_bytes    BIGINT   DEFAULT NULL
 ) RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -340,8 +348,8 @@ END;
 $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEXT, BIGINT,
-                                                  TEXT, BYTEA, INTEGER, BIGINT) FROM PUBLIC;
+                                                  TEXT, BYTEA, BIGINT, BIGINT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEXT, BIGINT,
-                                                 TEXT, BYTEA, INTEGER, BIGINT) TO cairn_node;
+                                                 TEXT, BYTEA, BIGINT, BIGINT) TO cairn_node;
 
 COMMIT;
