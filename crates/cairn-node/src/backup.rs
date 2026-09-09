@@ -1887,7 +1887,9 @@ mod tests {
                 .map(|&source_seq| crate::medium::MediumRecord {
                     // Not a real signed event: nothing in this function verifies a
                     // signature. Derived rather than written out, per house rule 6.
-                    signed_bytes: (0..24u8).map(|i| i.wrapping_add(source_seq as u8)).collect(),
+                    signed_bytes: (0..24u8)
+                        .map(|i| i.wrapping_add(source_seq as u8))
+                        .collect(),
                     attestation: None,
                     attester_key: None,
                     dek_wrapped: None,

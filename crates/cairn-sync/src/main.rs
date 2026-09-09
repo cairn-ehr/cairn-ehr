@@ -208,6 +208,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "051_clinical_capture_source",
         include_str!("../../../db/051_clinical_capture_source.sql"),
     ),
+    // db/052 (#554 slice 2d): restore_actor_registry + cairn_quarantine_event. In BOTH
+    // lists because THIS crate's pull and requeue loops now pen through the shared in-DB
+    // door rather than their own INSERT — a node whose loader lags would fail to pen a
+    // refused event, i.e. fail on exactly the path a refusal takes.
+    (
+        "052_restore_doors",
+        include_str!("../../../db/052_restore_doors.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS

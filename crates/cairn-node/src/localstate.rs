@@ -526,11 +526,22 @@ pub fn episode_dek_from_cbor(bytes: &[u8]) -> Result<EpisodeDek, LocalStateError
 /// field this one doesn't know, rather than silently dropping it, and `#[serde(default)]`
 /// on the fields that are genuinely optional CONTENT (a revoke row carries no `kind` or
 /// `signing_key_id`) lets a row missing one of THOSE still decode. `actor_event_id`,
-/// `actor_id`, `op` and `seq` stay un-defaulted: they are the row's identity, not optional
-/// content, so their absence should refuse — same reasoning as `LocalState::version`.
-/// `recorded_at` gets `#[serde(default)]` too even though `actor_event` never leaves it
-/// NULL, purely so a hypothetical future variant that cannot supply one degrades to an
-/// empty string rather than refusing the whole row over one audit field.
+/// `actor_id`, `op`, `seq` and `recorded_at` stay un-defaulted: they are the row's identity,
+/// not optional content, so their absence should refuse — same reasoning as
+/// `LocalState::version`.
+///
+/// **`recorded_at` LOST its `#[serde(default)]` in #554 slice 2d, and the reason is worth
+/// keeping.** It carried one, justified as degrading *"rather than refusing the whole row
+/// over one audit field."* It is not an audit field. `actor_current` (db/004) resolves the
+/// trust anchor with `ORDER BY ae.actor_id, ae.recorded_at DESC, ae.seq DESC` and compares
+/// revocations with `(r.recorded_at, r.seq) >= (ae.recorded_at, ae.seq)`, so `recorded_at`
+/// is the PRIMARY ordering key deciding **who may author** — `seq` is only the tiebreak. A
+/// restored `enroll` whose timestamp defaulted to empty-or-now would outrank a genuine older
+/// `revoke` and silently re-authorise a recalled actor, arriving through
+/// `restore_actor_registry`, the door built to restore the registry. That was harmless only
+/// while nothing INSTALLED these rows; slice 2d installs them — which is exactly what #554
+/// item 4's decode-refusal test was asked to find. Pinned by
+/// `an_actor_registry_row_without_recorded_at_is_refused` in this file's tests.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActorRegistryRow {
@@ -546,7 +557,8 @@ pub struct ActorRegistryRow {
     #[serde(default)]
     pub superseded_by: Option<Vec<u8>>,
     pub seq: i64,
-    #[serde(default)]
+    /// Required — see the struct doc. A defaulted value here can re-authorise a
+    /// recalled actor.
     pub recorded_at: String,
 }
 
@@ -1309,6 +1321,140 @@ mod tests {
         assert!(
             back.is_empty(),
             "a fresh node's bundle has no content today"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // THE SERDE CONTRACT OF THE TWO CARRIED-ROW TYPES (#554 item 4, slice 2d design §2.4).
+    //
+    // These structs were harmless while nothing INSTALLED their rows — a dropped field cost
+    // a count, not a record. Slice 2d installs both, so the contract is now load-bearing and
+    // it is tested rather than merely written down: #554 asked for the decode-refusal test
+    // in as many words, and the finding it turned up is `recorded_at`.
+    //
+    // Both directions matter and they fail differently:
+    //   * a MISSING required field must refuse (a silently-defaulted `recorded_at` outranks a
+    //     genuine older revoke and re-authorises a recalled actor);
+    //   * an UNKNOWN field must refuse (`deny_unknown_fields`) — a row written by a NEWER
+    //     build carrying a field this one does not know would otherwise have it SILENTLY
+    //     DROPPED, which is the A7c failure `LocalState` guards against, one struct down.
+    // -----------------------------------------------------------------------
+
+    /// Encode an arbitrary field map as CBOR, so a test can present a row this build's own
+    /// `Serialize` could never produce — an older node's row missing a field, or a newer
+    /// node's row carrying one. Round-tripping through the real struct cannot express either.
+    fn cbor_map(fields: &[(&str, ciborium::value::Value)]) -> Vec<u8> {
+        let map = ciborium::value::Value::Map(
+            fields
+                .iter()
+                .map(|(k, v)| (ciborium::value::Value::Text((*k).to_string()), v.clone()))
+                .collect(),
+        );
+        let mut out = Vec::new();
+        ciborium::into_writer(&map, &mut out).unwrap();
+        out
+    }
+
+    fn text(s: &str) -> ciborium::value::Value {
+        ciborium::value::Value::Text(s.to_string())
+    }
+
+    /// `recorded_at` REFUSES rather than defaulting — design §2.4.
+    ///
+    /// It is not an audit field. `actor_current` (db/004) orders on
+    /// `(recorded_at DESC, seq DESC)` with `recorded_at` PRIMARY and compares revocations
+    /// with `(r.recorded_at, r.seq) >= (ae.recorded_at, ae.seq)`, so it is the key that
+    /// decides WHO MAY AUTHOR. A row whose timestamp defaulted to empty-or-now would outrank
+    /// a genuine older `revoke` and silently re-authorise a recalled actor — arriving through
+    /// the door built to restore the registry.
+    #[test]
+    fn an_actor_registry_row_without_recorded_at_is_refused() {
+        let complete = [
+            (
+                "actor_event_id",
+                text("aaaaaaaa-0000-7000-8000-000000000001"),
+            ),
+            ("actor_id", ciborium::value::Value::Bytes(vec![1, 2, 3])),
+            ("op", text("enroll")),
+            ("seq", ciborium::value::Value::Integer(1.into())),
+            ("recorded_at", text("2026-01-01 00:00:00+00")),
+        ];
+        actor_registry_row_from_cbor(&cbor_map(&complete))
+            .expect("anti-vacuity: the complete row must decode");
+
+        let missing: Vec<_> = complete
+            .iter()
+            .filter(|(k, _)| *k != "recorded_at")
+            .cloned()
+            .collect();
+        assert!(
+            actor_registry_row_from_cbor(&cbor_map(&missing)).is_err(),
+            "a registry row with no recorded_at must REFUSE, never default — it is \
+             actor_current's primary ordering key, not an audit detail"
+        );
+    }
+
+    /// `deny_unknown_fields` is pinned on BOTH carried-row types.
+    ///
+    /// Deleting the attribute must redden something, which before this test it did not. The
+    /// failure it prevents is silent: a row from a NEWER build carrying a field this one does
+    /// not know would decode with that field DROPPED, so a restore would install a
+    /// registry row or a custody row that is a lossy shadow of what was exported — and
+    /// nothing anywhere would say so.
+    #[test]
+    fn both_carried_row_types_refuse_an_unknown_field() {
+        let registry = [
+            (
+                "actor_event_id",
+                text("aaaaaaaa-0000-7000-8000-000000000001"),
+            ),
+            ("actor_id", ciborium::value::Value::Bytes(vec![1, 2, 3])),
+            ("op", text("enroll")),
+            ("seq", ciborium::value::Value::Integer(1.into())),
+            ("recorded_at", text("2026-01-01 00:00:00+00")),
+            ("custody_scope", text("a field from a newer build")),
+        ];
+        assert!(
+            actor_registry_row_from_cbor(&cbor_map(&registry)).is_err(),
+            "an unknown field on a registry row must refuse, never be dropped"
+        );
+
+        let dek = [
+            ("event_id", text("11111111-1111-7111-8111-111111111111")),
+            (
+                "dek_wrapped",
+                ciborium::value::Value::Bytes(vec![0u8; cairn_event::seal::WRAPPED_DEK_LEN]),
+            ),
+            ("rewrap_epoch", ciborium::value::Value::Integer(2.into())),
+        ];
+        assert!(
+            episode_dek_from_cbor(&cbor_map(&dek)).is_err(),
+            "an unknown field on a custody row must refuse, never be dropped"
+        );
+    }
+
+    /// An `EpisodeDek` missing a field is refused — neither field is optional CONTENT, both
+    /// are the row's identity (which event, which key).
+    #[test]
+    fn an_episode_dek_missing_a_field_is_refused() {
+        let wrapped = ciborium::value::Value::Bytes(vec![0u8; cairn_event::seal::WRAPPED_DEK_LEN]);
+        episode_dek_from_cbor(&cbor_map(&[
+            ("event_id", text("11111111-1111-7111-8111-111111111111")),
+            ("dek_wrapped", wrapped.clone()),
+        ]))
+        .expect("anti-vacuity: the complete row must decode");
+
+        assert!(
+            episode_dek_from_cbor(&cbor_map(&[("dek_wrapped", wrapped)])).is_err(),
+            "a custody row with no event_id names no event and must refuse"
+        );
+        assert!(
+            episode_dek_from_cbor(&cbor_map(&[(
+                "event_id",
+                text("11111111-1111-7111-8111-111111111111")
+            )]))
+            .is_err(),
+            "a custody row with no key must refuse"
         );
     }
 
