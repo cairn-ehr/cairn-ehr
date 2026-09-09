@@ -53,25 +53,35 @@
 //!   carry the clinical plane, with each record's wrapped DEK — but `restore` and
 //!   `verify-backup` read the federation plane alone (`backup::node_plane_events`), so a
 //!   restored node still gets a working key and nothing to open with it. Slice 2d.
-//! - **The restore side lands the KEY, not yet the rows.** [`apply_local_state`] now installs
-//!   the recovered unwrap secret and registers its public half (ADR-0066 decision 4), so a
-//!   restored node's custody IS the dead node's custody — that is #495's restore half, and it
-//!   is closed. What it still does not do is INSERT the carried `episode_deks`: they belong to
-//!   clinical events, and the medium carries none of those yet (#500). The count is reported
-//!   to the operator rather than buried, so the gap is visible at the surface.
+//! - **The restore side lands the KEY, and the rows land with the events.**
+//!   [`apply_local_state`] installs the recovered unwrap secret and registers its public half
+//!   (ADR-0066 decision 4), so a restored node's custody IS the dead node's custody — #495's
+//!   restore half, closed. The carried `episode_deks` are still not inserted HERE, and that is
+//!   now a placement decision rather than a gap: since #554 slice 2d the restore unwraps each
+//!   record's DEK in Rust and passes the PLAINTEXT to `apply_remote_event`, which re-wraps it
+//!   through the one door that owns `event_dek`. Piping a carried, already-wrapped key
+//!   straight into that door's `p_dek` would DOUBLE-WRAP every key in the clinic's record —
+//!   rows that are present, well-formed, the right length, and unwrap to noise. The count is
+//!   still reported, because the export's copy is the fallback when a medium's is missing.
 //! - **Promise 2 has no subject.** [`LocalState::node_default_deks`] stays empty because no
 //!   node-default data-at-rest keystore exists anywhere in the built system. That slot's
 //!   emptiness is neither honoured nor violated; it names a tier that must exist first.
-//! - **The actor registry now travels, and is counted, but nothing installs it (Task 11,
-//!   #500).** [`crate::localstate_read::read_local_state`] fills
-//!   [`LocalState::actor_registry`] from `actor_event` (db/004), so the export finally
-//!   carries what `actor_current` needs — and [`apply_local_state`] reports the count in
-//!   [`AppliedLocalState::actor_registry_carried`], exactly as it does for `episode_deks`, so
-//!   the gap is visible at the surface rather than silent (Task 11's own fix round, review
-//!   finding I2). It still does not INSERT the rows: `actor_event` has no INSERT door here
-//!   yet either. That is deliberate staging, not an oversight repeated — Task 11 is the write
-//!   half only; slice 2d is the insert, exactly where `episode_deks` sat between #495 and
-//!   #500's capture half.
+//! - **The actor registry travels AND is installed (#554 slice 2d).**
+//!   [`crate::localstate_read::read_local_state`] fills [`LocalState::actor_registry`] from
+//!   `actor_event` (db/004), and [`apply_local_state`] now hands the whole set to
+//!   `restore_actor_registry` (db/052) — so a restored node can resolve the authors of its own
+//!   history rather than refusing every clinical event it just inherited. Two counts are
+//!   reported, deliberately apart: [`AppliedLocalState::actor_registry_carried`] (what the
+//!   export held) and [`AppliedLocalState::actor_registry_restored`] (what THIS run inserted),
+//!   which differ on a resumed restore.
+//!
+//!   **These rows are the one part of a restore that is not verify-on-apply.** They arrive
+//!   authenticated by the `CAIRNL1` container's AEAD and nothing else — no per-row signature —
+//!   while every clinical event around them is individually signature-verified by
+//!   `apply_remote_event`. Accepted deliberately (ADR-0067): whoever holds the export AND its
+//!   passphrase or recovery code already controls the restored node completely, so refusing
+//!   here would cost the record and buy nothing. It is PRINTED to the operator at restore
+//!   time, because a limitation living only in a design doc is one nobody finds.
 //!
 //! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` holds the guards for all of the
 //! above, and says of each whether it asserts a guarantee or pins a surviving defect.
@@ -562,6 +572,55 @@ pub struct ActorRegistryRow {
     pub recorded_at: String,
 }
 
+/// Shape a decoded registry set into the JSON array `restore_actor_registry` (db/052) parses.
+/// **Pure**, so the encoding can be tested without a database — which matters because a
+/// mis-encoded `actor_id` would be refused by the door mid-disaster, and the only way to see
+/// that coming is to assert the encoding on its own.
+///
+/// `actor_id` and `superseded_by` travel as HEX, because the door decodes them through
+/// `cairn_decode_hex_or_raise` — the one helper that names the field it could not read
+/// instead of raising `invalid input syntax for type bytea` at an operator holding their
+/// only copy of a registry.
+///
+/// `pinned` travels as a JSON **string** holding JSON source, matching how this crate carries
+/// it everywhere else (it does not enable tokio-postgres's `with-serde_json-1` feature); the
+/// door casts it back with `::JSONB`.
+///
+/// Built with `serde_json` rather than `format!`, deliberately: a `signing_key_id` or a
+/// `pinned` blob containing a quote would otherwise produce a payload the door cannot parse,
+/// and the failure would arrive as a JSON syntax error naming no row at all.
+pub fn actor_registry_rows_to_json(rows: &[ActorRegistryRow]) -> String {
+    let values: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut o = serde_json::Map::new();
+            o.insert("actor_event_id".into(), r.actor_event_id.clone().into());
+            o.insert("actor_id".into(), hex::encode(&r.actor_id).into());
+            o.insert("op".into(), r.op.clone().into());
+            o.insert("seq".into(), r.seq.into());
+            o.insert("recorded_at".into(), r.recorded_at.clone().into());
+            // The optional columns are OMITTED when absent rather than sent as JSON null:
+            // the door reads them with `->>`, which maps a JSON null to SQL NULL anyway, but
+            // an omitted key makes "this row had no kind" and "this row had a null kind" the
+            // same statement, which for `actor_event` they are.
+            if let Some(kind) = &r.kind {
+                o.insert("kind".into(), kind.clone().into());
+            }
+            if let Some(pinned) = &r.pinned {
+                o.insert("pinned".into(), pinned.clone().into());
+            }
+            if let Some(key) = &r.signing_key_id {
+                o.insert("signing_key_id".into(), key.clone().into());
+            }
+            if let Some(by) = &r.superseded_by {
+                o.insert("superseded_by".into(), hex::encode(by).into());
+            }
+            serde_json::Value::Object(o)
+        })
+        .collect();
+    serde_json::Value::Array(values).to_string()
+}
+
 /// Serialize one actor-registry row for the export slot. Pure.
 pub fn actor_registry_row_to_cbor(r: &ActorRegistryRow) -> Vec<u8> {
     let mut out = Vec::new();
@@ -1003,15 +1062,19 @@ pub struct AppliedLocalState {
     /// How many wrapped custody rows the bundle carried. **Carried, not applied** — see
     /// [`apply_local_state`].
     episode_deks_carried: usize,
-    /// How many actor-registry rows the bundle carried (Task 11 / #500 fix round, review
-    /// finding I2). **Carried, not applied** — same status as `episode_deks_carried`, and
-    /// for the same reason it needed a field rather than a silent drop: `node_default_deks`/
-    /// `config`/`drafts` are refused BY NAME so nothing this build cannot honour is dropped
-    /// quietly, and `episode_deks` gets a count; `actor_registry` had gotten NEITHER — an
-    /// operator restoring today's export would see "custody inherited, N DEKs carried" and
-    /// nothing about the registry, then watch the node refuse its own history with no signal
-    /// the rows had even been in the bundle.
+    /// How many actor-registry rows the bundle CARRIED (Task 11 / #500 fix round, review
+    /// finding I2). Kept beside `actor_registry_restored` rather than replaced by it: the two
+    /// numbers differ on a RESUMED restore, where the export carries the whole registry and
+    /// this run installs only the remainder. Reporting the carried count alone would hide the
+    /// resume; reporting the restored count alone would read as data loss.
     actor_registry_carried: usize,
+    /// How many of those rows this run actually INSERTED (#554 slice 2d).
+    ///
+    /// Lower than `actor_registry_carried` means a resume completed a prior interrupted
+    /// restore — the door is set-shaped and idempotent, so it reports what IT did rather than
+    /// re-claiming the set. Zero with a non-zero carried count on a FRESH database would mean
+    /// the registry was already fully present, which is the same resume case at its end.
+    actor_registry_restored: usize,
 }
 
 impl AppliedLocalState {
@@ -1021,22 +1084,29 @@ impl AppliedLocalState {
         path: PathBuf,
         episode_deks_carried: usize,
         actor_registry_carried: usize,
+        actor_registry_restored: usize,
     ) -> Self {
         Self {
             unwrap_key_installed: Some(path),
             episode_deks_carried,
             actor_registry_carried,
+            actor_registry_restored,
         }
     }
 
     /// The degraded outcome: the bundle carried no unwrap key, so none was installed and none
     /// registered. Named rather than expressed as `None`, so the caller's warning branch is
     /// reached by a stated fact instead of an inferred one.
-    fn no_custody_key(episode_deks_carried: usize, actor_registry_carried: usize) -> Self {
+    fn no_custody_key(
+        episode_deks_carried: usize,
+        actor_registry_carried: usize,
+        actor_registry_restored: usize,
+    ) -> Self {
         Self {
             unwrap_key_installed: None,
             episode_deks_carried,
             actor_registry_carried,
+            actor_registry_restored,
         }
     }
 
@@ -1056,10 +1126,21 @@ impl AppliedLocalState {
         self.episode_deks_carried
     }
 
-    /// How many actor-registry rows travelled. Carried, not applied (Task 11 / #500) —
-    /// nothing today inserts them into the restored node's `actor_event`; that is slice 2d.
+    /// How many actor-registry rows travelled in the export.
+    ///
+    /// Since #554 slice 2d they are also INSTALLED — see [`Self::actor_registry_restored`]
+    /// for how many this run actually inserted, and why the two numbers are kept apart.
     pub fn actor_registry_carried(&self) -> usize {
         self.actor_registry_carried
+    }
+
+    /// How many actor-registry rows this run INSERTED into `actor_event` (#554 slice 2d).
+    ///
+    /// Report this to the operator alongside [`Self::actor_registry_carried`], never instead
+    /// of it: a resumed restore legitimately carries N and installs fewer, and either number
+    /// shown alone tells a false story about what happened.
+    pub fn actor_registry_restored(&self) -> usize {
+        self.actor_registry_restored
     }
 }
 
@@ -1281,13 +1362,77 @@ pub async fn apply_local_state(
         None => None,
     };
 
+    // Step 5 — INSTALL the carried actor registry (#554 slice 2d).
+    //
+    // WHY IT IS HERE AND NOT LATER. Every clinical apply door gates on `actor_current`
+    // (db/004), so without this a restored node refuses its own history and "restored" means
+    // a node with no patients. It runs BEFORE the clinical plane is applied, which is the
+    // whole reason design §3 reorders the restore ceremony to put `finalize_identity` last.
+    //
+    // WHY IT IS HERE AND NOT EARLIER: the unwrap key installs first (steps 3–4) because the
+    // clinical apply that follows needs custody registered before it can wrap a single DEK.
+    //
+    // WHAT AUTHENTICATES THESE ROWS: the `CAIRNL1` container's AEAD, and nothing else — the
+    // one part of a restore that is not verify-on-apply, accepted deliberately (ADR-0067) and
+    // PRINTED to the operator by the caller, because a limitation that lives only in a design
+    // doc is one nobody finds.
+    //
+    // A DECODE FAILURE REFUSES THE WHOLE SET rather than skipping the row. The registry is
+    // not a bag of independent facts: a dropped `revoke` silently re-authorises a recalled
+    // actor, so admitting "most of" a registry is strictly worse than admitting none of it
+    // and telling the operator which row is unreadable.
+    let mut registry: Vec<ActorRegistryRow> = Vec::with_capacity(ls.actor_registry.len());
+    for (i, raw) in ls.actor_registry.iter().enumerate() {
+        registry.push(actor_registry_row_from_cbor(raw).map_err(|e| {
+            anyhow::anyhow!(
+                "the restored local-state export carries an actor-registry row (#{i}) this \
+                 build cannot decode ({e}) — refusing to install a PARTIAL registry. A \
+                 registry is not a bag of independent facts: a dropped revoke silently \
+                 re-authorises a recalled actor. Restore from an export this build can read.",
+                i = i,
+                e = e
+            )
+        })?);
+    }
+    let actor_registry_restored = if registry.is_empty() {
+        0
+    } else {
+        let payload = actor_registry_rows_to_json(&registry);
+        // `$1::text::jsonb`, not `$1::jsonb`: tokio-postgres infers a parameter's type from
+        // its cast TARGET, and this crate does not enable the `with-serde_json-1` feature, so
+        // the payload travels as TEXT and Postgres does the parse.
+        let row = db
+            .query_one(
+                "SELECT restore_actor_registry($1::text::jsonb)",
+                &[&payload],
+            )
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "the carried actor registry could not be restored ({e}). Until it is, \
+                     this node cannot apply ANY clinical event — every apply door resolves \
+                     its author through `actor_current`. The database is still un-enrolled, \
+                     so the same medium and export can be restored again once the cause is \
+                     fixed.",
+                    e = crate::db_diagnosis::legible_db_error(&e)
+                )
+            })?;
+        let inserted: i32 = row.get(0);
+        usize::try_from(inserted).unwrap_or(0)
+    };
+
     Ok(match unwrap_key_installed {
         Some(path) => AppliedLocalState::custody_inherited(
             path,
             ls.episode_deks.len(),
             ls.actor_registry.len(),
+            actor_registry_restored,
         ),
-        None => AppliedLocalState::no_custody_key(ls.episode_deks.len(), ls.actor_registry.len()),
+        None => AppliedLocalState::no_custody_key(
+            ls.episode_deks.len(),
+            ls.actor_registry.len(),
+            actor_registry_restored,
+        ),
     })
 }
 
