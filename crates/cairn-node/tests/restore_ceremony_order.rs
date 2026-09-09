@@ -160,3 +160,53 @@ fn finalize_identity_runs_after_the_clinical_apply() {
          events it cannot open and refuses this node's own history as unenrolled."
     );
 }
+
+/// **The registry door closes for good when `finalize_identity` runs, and the operator must be
+/// told the right remedy BEFORE that happens** (#554 review finding 4).
+///
+/// `restore_actor_registry`'s first fence refuses any node whose `local_node` is populated, and
+/// `finalize_identity` writes that row at the end of every restore. So a restore that ran
+/// without an actor registry produces a pen that **can never be drained**: each row fails
+/// requeue forever on an unenrolled signer, and nothing after the restore can install the
+/// registry. The remedy is a fresh database, not a requeue.
+///
+/// That distinction is invisible in the code and expensive to discover, so the restore arm
+/// prints two DIFFERENT warnings for two different missing preconditions — and this pins that
+/// they stayed different. An earlier version printed the custody remedy ("recover the export
+/// and requeue") for both, which is a false promise made to someone mid-disaster.
+///
+/// Positional, like its sibling above, because staging a real no-export restore to read stderr
+/// costs a live database and a keystore for a property a reviewer checks by eye.
+#[test]
+fn a_missing_registry_and_a_missing_key_get_different_remedies() {
+    let main_rs = repo_root().join("crates/cairn-node/src/main.rs");
+    let text = std::fs::read_to_string(&main_rs).expect("reading main.rs");
+    let restore_arm = text
+        .split("Cmd::Restore {")
+        .nth(1)
+        .expect("main.rs must have a Cmd::Restore arm");
+
+    let registry_warning = restore_arm.find("NO actor registry").expect(
+        "the restore arm must warn when the registry is missing — without it every \
+                 clinical record is refused as authored by an unenrolled signer",
+    );
+    let tail = &restore_arm[registry_warning..];
+    // The registry warning must reach its own remedy before the custody warning begins.
+    let end = tail
+        .find("no custody key is installed")
+        .unwrap_or(tail.len());
+    let registry_block = &tail[..end];
+
+    assert!(
+        registry_block.contains("will NOT fix this"),
+        "the registry warning must say plainly that requeue does not fix it. It is the \
+         obvious next step, it is printed elsewhere in this same command for the CUSTODY \
+         case, and here it is a promise the code cannot keep: `finalize_identity` runs \
+         moments later and closes the registry door permanently."
+    );
+    assert!(
+        registry_block.contains("FRESHLY CREATED database"),
+        "…and it must name the remedy that DOES work. A warning whose only content is that \
+         the obvious remedy fails leaves an operator with nothing to do."
+    );
+}

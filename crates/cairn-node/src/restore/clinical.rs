@@ -237,6 +237,14 @@ pub async fn apply_clinical_plane(
             .get(0);
 
         // Step 3 — the one door. The DEK is the PLAINTEXT (module header, decision 1).
+        //
+        // `as_slice()`, never `to_vec()`. `unwrap_dek` returns a `Secret32` whose bytes are
+        // wiped on drop; copying them into a plain `Vec` would leave an UNWIPED plaintext DEK
+        // on the heap for every sealed record in the clinic's log — thousands of them, on a
+        // machine mid-disaster — while the zeroizing original wipes correctly and hides that
+        // it happened. `cairn-sync`'s two sibling call sites both borrow, and this must match
+        // them (#554 review finding 5). Borrowing also allocates nothing.
+        let dek_param: Option<&[u8]> = dek.as_ref().map(|d| d.as_bytes().as_slice());
         match db
             .execute(
                 "SELECT apply_remote_event($1, $2, $3, $4)",
@@ -244,7 +252,7 @@ pub async fn apply_clinical_plane(
                     &record.signed_bytes,
                     &record.attestation,
                     &record.attester_key,
-                    &dek.as_ref().map(|d| d.as_bytes().to_vec()),
+                    &dek_param,
                 ],
             )
             .await

@@ -132,6 +132,42 @@ pub fn clinical_plane_records(
     })
 }
 
+/// The warning an operator must see when a medium holds MORE clinical records than a restore
+/// was entitled to apply. **Pure.** `None` when every record on the medium was trusted.
+///
+/// # The failure this exists for (#554 review finding 1)
+///
+/// `clinical_plane_records` stops at `verified_through` — trust stops at the last segment
+/// whose chain link held (2a invariant 5), and that is correct. But a mid-file chain break is
+/// **not** a torn tail: `torn_tail_notice` says nothing about it, and the restore summary
+/// counts applied records against `plane_counts().clinical`, which counts every record on the
+/// medium including the untrusted ones. So the numbers silently fail to add up.
+///
+/// With the break in **segment 0** it is worse than confusing. `verified_through` is `None`,
+/// the trusted set is empty, and the summary reads *"0 applied, 0 already present, 0 refused
+/// (of N on the medium)"* — at **exit 0**. That is #500's exact zero-patients signature,
+/// reproduced inside the slice built to close it, and it is why this is a WARNING with a
+/// remedy rather than a note.
+///
+/// It does not refuse. Refusing would convert a partial recovery into a total loss, which is
+/// the trade this whole command rejects — the verified prefix is still worth having.
+pub fn untrusted_clinical_notice(trusted: usize, on_medium: usize) -> Option<String> {
+    let untrusted = on_medium.saturating_sub(trusted);
+    if untrusted == 0 {
+        return None;
+    }
+    Some(format!(
+        "WARNING: {untrusted} of this medium's {on_medium} clinical record(s) sit PAST its \
+         last verified chain link and were NOT applied. This is not a torn tail — it is a \
+         break in the chain, so everything after it could have been spliced in and cannot be \
+         trusted. Only the {trusted} verified record(s) were restored.\n\
+         \x20   If another copy of this medium exists — an earlier rotation, a second \
+         off-site drive — run `cairn-node verify-backup` against it and restore from \
+         whichever copy verifies furthest. Restoring twice into the same fresh database is \
+         safe: the apply door is idempotent."
+    ))
+}
+
 /// How many records a medium carries in each plane — the shared arithmetic behind every
 /// operator-facing scope message in `verify-backup`/`restore` (#500 slice 2c review,
 /// Important 3 & 4). One function so the three call sites (the empty-medium check, the
@@ -1867,6 +1903,41 @@ mod tests {
     // the design review caught, and `equals_the_shared_derivation` below is what stops one
     // growing back.
     // -----------------------------------------------------------------------
+
+    /// The zero-patients signature the untrusted-records notice exists to break (#554 review).
+    ///
+    /// With a chain break in segment 0 the trusted set is EMPTY while the medium visibly holds
+    /// records, so a restore reports "0 applied … of N on the medium" at exit 0 — #500's own
+    /// sentence, reproduced inside the slice built to close it. The notice must fire, must
+    /// name both numbers, and must offer a remedy an operator can act on mid-disaster.
+    #[test]
+    fn an_empty_trusted_set_over_a_non_empty_medium_is_the_loudest_case() {
+        let notice = untrusted_clinical_notice(0, 4_000).expect("silence here IS the defect");
+        assert!(notice.contains("4000"), "{notice}");
+        assert!(
+            notice.contains("verify-backup"),
+            "a warning with no remedy is one an operator cannot act on: {notice}"
+        );
+        assert!(
+            notice.contains("not a torn tail"),
+            "a torn tail is a DIFFERENT verdict with a different cause, and the two must not \
+             be confused at the moment someone decides whether to look for another copy: \
+             {notice}"
+        );
+    }
+
+    /// It is silent when there is nothing to say — otherwise the ordinary nightly restore
+    /// carries a warning, and a warning that always fires is one nobody reads.
+    #[test]
+    fn a_fully_verified_medium_gets_no_untrusted_notice() {
+        assert_eq!(untrusted_clinical_notice(12, 12), None);
+        assert_eq!(
+            untrusted_clinical_notice(12, 0),
+            None,
+            "a trusted count above the medium count is nonsense rather than a negative \
+             warning — saturate, never underflow"
+        );
+    }
 
     /// A CAIRNB3 image holding one UNSIGNED clinical segment.
     ///

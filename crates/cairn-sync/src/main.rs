@@ -565,25 +565,7 @@ fn decode_blob_slice(raw: &[u8]) -> (bool, u64, &[u8]) {
 /// gone for good — caused by nothing more than starting a daemon.
 fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
     match std::fs::read(path) {
-        Ok(bytes) => {
-            let text = std::str::from_utf8(&bytes).map_err(|_| {
-                format!(
-                    "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
-                     key?); refusing to overwrite it. Point --key at this daemon's own key file."
-                )
-            })?;
-            let seed: [u8; 32] = hex::decode(text.trim())
-                .map_err(|e| {
-                    format!("{path} exists but is not valid hex ({e}); refusing to overwrite it")
-                })?
-                .try_into()
-                .map_err(|_| {
-                    format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
-                })?;
-            let sk = SigningKey::from_bytes(&seed);
-            let kid = hex::encode(sk.verifying_key().to_bytes());
-            Ok((sk, kid))
-        }
+        Ok(bytes) => parse_key_bytes(path, &bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // The only path that creates. Absence is the one state where writing cannot
             // destroy anything.
@@ -604,6 +586,40 @@ fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
         // and treating it as absent is how the overwrite happened.
         Err(e) => Err(format!("cannot read {path} ({e}); refusing to overwrite it").into()),
     }
+}
+
+/// Parse a hex-seed key file's bytes. **Pure.** Shared by [`load_or_create_key`] and
+/// [`load_existing_key`] so the two cannot drift on what a malformed key file means — every
+/// arm's message is a refusal that names the file and the reason.
+fn parse_key_bytes(path: &str, bytes: &[u8]) -> R<(SigningKey, String)> {
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        format!(
+            "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
+             key?); refusing to overwrite it. Point --key at this daemon's own key file."
+        )
+    })?;
+    let seed: [u8; 32] = hex::decode(text.trim())
+        .map_err(|e| format!("{path} exists but is not valid hex ({e}); refusing to overwrite it"))?
+        .try_into()
+        .map_err(|_| {
+            format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
+        })?;
+    let sk = SigningKey::from_bytes(&seed);
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+    Ok((sk, kid))
+}
+
+/// Load this node's signing key, and **never create one**.
+///
+/// The load-only sibling of [`load_or_create_key`], added for `requeue` (#554 review finding 3).
+/// Creating a key is right for a daemon being provisioned and wrong for a RECOVERY command: an
+/// operator running `cairn-sync requeue` from the wrong directory would otherwise mint a stray
+/// `node.key`, resolve custody against an identity that has never authored anything, and be told
+/// nothing about it. Absence here is a plain refusal that names the path.
+fn load_existing_key(path: &str) -> R<(SigningKey, String)> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("cannot read this node's signing key at {path} ({e})"))?;
+    parse_key_bytes(path, &bytes)
 }
 
 fn now_ms() -> i64 {
@@ -4481,12 +4497,39 @@ fn cmd_requeue(conn: &str, metrics: bool, key_path: &str, unwrap_key_path: Optio
     // Requeue re-applies through the in-DB door, so it needs a current cairn_pgx.
     let mut client = connect_checked_apply(conn)?;
     // The node's custody key, so a penned SEALED event releases WITH its DEK (#554 slice 2d).
-    // Resolved exactly as `cmd_pull` resolves it — the same refusals on a divergence, a
-    // restored node, or a corrupt file, because releasing an event with the WRONG key would
-    // write custody that opens nothing and looks correct.
-    let (sk, _kid) = load_or_create_key(key_path)?;
-    let custody = unwrap_key::resolve_at_startup(&mut client, key_path, unwrap_key_path, sk)?;
-    match do_requeue(&mut client, Some(&custody.unwrap_secret)) {
+    //
+    // ⚠️ BEST-EFFORT, AND DELIBERATELY UNLIKE `cmd_pull` — #554 review finding 3. An earlier
+    // version resolved it exactly as the pull path does, which broke this command in two ways
+    // that both bite hardest in the situation it exists for:
+    //
+    //   * `load_or_create_key` SILENTLY MINTS `node.key` when the path does not exist, so an
+    //     operator running `requeue` from the wrong directory would create a stray signing key
+    //     and then resolve custody against it. `load_existing_key` refuses instead.
+    //   * `resolve_at_startup` REFUSES on a divergence or a corrupt key file. Correct for a
+    //     daemon that is about to gain custody of new events; wrong here, because `requeue` is
+    //     the recovery command a restore's own output points operators at, and a recovery
+    //     command that aborts before releasing anything is worse than one that releases
+    //     without custody. Custody-less release is exactly what this path did before slice 2d,
+    //     so the degraded behaviour is the OLD behaviour, not a new hole.
+    //
+    // The failure is reported, never swallowed: an operator who needed custody has to know
+    // they did not get it, or they will read a clean release as a complete one.
+    let custody = match load_existing_key(key_path).and_then(|(sk, _kid)| {
+        unwrap_key::resolve_at_startup(&mut client, key_path, unwrap_key_path, sk)
+    }) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!(
+                "requeue: this node's custody key could not be resolved ({e}) — releasing \
+                 events WITHOUT custody. Any SEALED event released now keeps its ciphertext \
+                 and loses its key permanently, so if these rows were penned by a `restore`, \
+                 FIX THE KEY FIRST and run requeue again: the pen holds both halves until you \
+                 do."
+            );
+            None
+        }
+    };
+    match do_requeue(&mut client, custody.as_ref().map(|c| &c.unwrap_secret)) {
         Ok(m) => {
             if metrics {
                 println!("{m}");
@@ -5894,8 +5937,11 @@ USAGE (all take --conn <postgres-uri>):
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
   attachment-flags --conn URI
               (list attachment references this node admitted but cannot fetch: type, reason, count, example)
-  requeue     --conn URI [--metrics]
+  requeue     --conn URI [--metrics] [--key PATH] [--unwrap-key PATH]
               (re-process quarantined events through the apply door after fixing the cause)
+              (--key/--unwrap-key: this node's custody, so a penned SEALED event is released
+               WITH its DEK. Best-effort: an unresolvable key releases without custody and
+               says so — a recovery command must not abort before releasing anything.)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
   serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH] [--unwrap-key PATH]
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
