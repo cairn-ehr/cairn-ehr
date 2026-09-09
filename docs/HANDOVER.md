@@ -311,6 +311,63 @@ rediscover — the per-slice narrative is ROADMAP's.
   split a full pen from a local fault, so the wrapper sits in an `else` arm. It is still pinned
   **by shape**. *"The count fell by three while a wrapper was added"* is exactly the reading that
   constant exists to prevent.
+- **⇒ A SECOND REVIEW ROUND (five specialised reviewers) FOUND TWO CRITICAL DEFECTS THE FIRST
+  MISSED, BOTH IN THE SAME BLIND SPOT: the door's RETURN is not the record's fate.** (1) **A
+  sealed record can land with no key and no clear view and still count as `applied`.** db/020
+  has two LENIENT arms that `RAISE WARNING` and admit — a presented DEK that does not open the
+  body, and an unregistered node unwrap key — and both skip step 9 entirely (no `event_dek`, no
+  `event_clear`, no twin, no projection) and then **return normally**. Right for a puller,
+  which sees the DEK again next cycle; for a restore it is the zero-patients outcome with a
+  clean summary on top, and **the only signal is a Postgres `WARNING` that nothing in this tree
+  polls**. Fixed by asking the DATABASE instead of the door (`custody_landed`), penning as
+  `CustodyDidNotLand`. A logged shred still counts as landed — db/020's anti-resurrection rule
+  is arrival-order independent and a shredded target's custody must never come back. (2)
+  **Every door error was penned as a verdict about the bytes**, local faults included, four
+  statements after the newness probe draws that exact line and says why. `refusal_is_deliberate`
+  is re-expressed in `cairn-node` (the binary-only-crate wall again, same as the quota
+  constants); a non-`P0001` SQLSTATE now aborts the run instead of filing the operator's disk
+  fault as a refusal of their medium.
+- **⇒ AND TWO MORE MESSAGES THAT LIED, OF THE SAME SPECIES AS THE FIRST ROUND'S THREE.** (1)
+  The untrusted-records warning compared a **deduped** count against a **raw** one, so any
+  clinic whose nightly capture was once interrupted and re-run restored a perfectly intact
+  medium and was told records *"could have been spliced in"* and to go find a second off-site
+  drive. `plane_records_with_accounting` now reports `gated_out` and `collapsed` **apart**, and
+  the notice reads the trust number only — a caller must never reconstruct it by subtraction
+  from a population the derivation never saw. (2) With **no registry** the restore warned
+  correctly that `requeue` cannot fix it, then applied anyway — writing the clinic's whole
+  corpus a second time into a pen nothing can ever drain — and closed by printing the pen's
+  standard *"requeue completes the restore"* promise. The precondition now lives in
+  `apply_clinical_plane`, which offers nothing and says so, and the run **exits non-zero**
+  (checked before the pen test, which would otherwise hand a script exit 0 for a restore that
+  recovered no charts).
+- **⇒ THE COMPLETENESS WARNING WAS BUILT, THEN REVERTED BEFORE IT SHIPPED — READ #549 BEFORE
+  BUILDING IT AGAIN.** The review was right that `restore` never asks whether the medium is
+  complete: `seq_gaps` is called by the capture loop and nowhere in the restore path, so a
+  medium holding clinical seqs 1–100 and 500–900 prints *"800 applied … of 800 on the medium"*
+  at exit 0. The warning was written and **it was the wrong fix**: [#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)
+  documents that **every duplicate apply burns a `seq`**, so holes are routine on any federating
+  node and grow for the life of the medium. *"N event(s) are missing"* would have been
+  confidently wrong most of the time — the permanent alarm #549 predicts, crying wolf and
+  masking the one hole that is a genuinely lost event, which is the SAME defect species this
+  round was fixing. The deferral in ROADMAP stands and is better-informed than the finding was;
+  #549 now records that the surface has **two** consumers, capture and restore, and that the
+  restore side is the higher-stakes one. Two siblings DID land: a **straddled duplicate** (two
+  DIFFERENT records at one `source_seq`, which the serving path refuses and this path silently
+  applied twice) and a **V3 medium with an empty clinical plane**, which fell through both
+  summary arms and said nothing at all.
+- **⇒ THE STALEST DOC WAS ON THE FUNCTION THE SLICE REWROTE.** `apply_local_state`'s doc still
+  said the actor registry is *"counted … printed, never inserted — that door is slice 2d's"*
+  while step 5 of its own body installs it, and that the caller *"currently runs it after
+  `finalize_identity`"* after the slice moved that call last. Eight such sites across three
+  files, all corrected. A reader six months out trusts the function doc over the module header.
+- **⇒ FILED, NOT FIXED: #567–#571.** `verify-backup`'s OK is still federation-only, so a green
+  verify says nothing about the plane a restore now applies (**#567**, and the comment that used
+  to call that scoping a safety property now calls it a gap). `do_requeue`'s custody-carrying
+  arm — **the remedy every penned reason advertises** — has zero tests; every test call site
+  passes `None` (**#568**). db/052's registry door silently discards a **content** conflict and
+  leaves `actor_event_id`/`seq` unvalidated (**#569**). The restore CLI surface is untested,
+  exit code included (**#570**). Provenance does not gate the clinical plane and ADR-0067 does
+  not say so (**#571**).
 - **⇒ THE SESSION STARTED BY FINDING ITS OWN ⇒ NEXT HALF-DONE.** PR #565 was open as a DRAFT
   saying *"do not merge"* and had been **merged anyway** on 2026-09-09, carrying the 2d DESIGN
   and nothing else. `gh pr list --state all` before acting is what surfaced it — HANDOVER said
