@@ -916,3 +916,135 @@ fn an_empty_segment_is_a_fault_and_does_not_anchor_a_chain() {
         "and must anchor nothing — its commitment is identical on every medium ever written"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `plane_records` — the ONE derivation of a medium's servable/restorable record
+// set (#554 slice 2d, design §5.0).
+//
+// These four tests are the whole contract. `cairn-wire`'s `MediumTransport` and
+// `cairn-node`'s restore both consume this function, so a regression here reaches
+// both the serving path and the disaster-recovery path at once. Each test names the
+// failure it exists to catch, because three of the four describe defects that a
+// second, independently-written derivation actually committed in review.
+// ---------------------------------------------------------------------------
+
+/// TRUST STOPS AT `verified_through` (2a invariant 5) — the gate a re-derivation dropped.
+///
+/// A medium with a broken link mid-file must yield records from the verified prefix and
+/// **not one record past it**. Without this, a restore applies records from a torn tail or
+/// past a spliced segment: each is still individually signature-verified downstream, so
+/// nothing *forged* gets in, but the segment-splice residual the chain pass exists to
+/// narrow reopens silently.
+#[test]
+fn plane_records_stops_at_verified_through() {
+    let (mut m, seqs) = crate::testkit::chain_of(4, 1);
+    m.segments[2].prev_commitment = "deadbeef".into();
+    let r = chain_report(&m);
+    let got = plane_records(&m, &r, Plane::Clinical);
+    assert_eq!(
+        got.iter().map(|x| x.source_seq).collect::<Vec<_>>(),
+        seqs[..2].to_vec(),
+        "segments 0 and 1 are verified; 2 broke the chain, so 2 and 3 must not appear"
+    );
+}
+
+/// `None` (nothing verified) yields an EMPTY set, never "all".
+///
+/// The dangerous default: a medium whose very first segment fails has verified nothing, and
+/// a derivation that treated `None` as "no limit" would hand back the entire file — the
+/// exact inversion of what the gate means.
+#[test]
+fn plane_records_of_an_unverified_medium_is_empty() {
+    let (mut m, _) = crate::testkit::chain_of(3, 1);
+    m.segments[0].attestation = Some(crate::testkit::bytes(200, 64));
+    let r = chain_report(&m);
+    assert_eq!(r.verified_through, None, "fixture must verify nothing");
+    assert!(plane_records(&m, &r, Plane::Clinical).is_empty());
+}
+
+/// ASCENDING `source_seq`, whatever order the segments sit in.
+///
+/// Segments sit in CAPTURE order, and 2c's capture backfills burned-`seq` gaps
+/// NEWEST-FIRST under a bounded probe budget, so a record with a LOWER `source_seq`
+/// legitimately sits in a LATER segment. Applied in raw medium order an overlay would be
+/// offered before the event it targets and `apply_remote_event` would refuse it — a
+/// self-inflicted quarantine entry, on a medium that carried everything needed.
+///
+/// The fixture is deliberately built OUT of seq order; one built in capture order passes
+/// against an unsorted implementation and proves nothing (2b named this trap).
+#[test]
+fn plane_records_sorts_by_source_seq_across_segments() {
+    let k = sk();
+    let mut segments = Vec::new();
+    let mut prev = String::new();
+    // Segment 0 holds the HIGH seq, segment 1 the LOW one: capture order is the reverse
+    // of source order, which is what the gap backfill actually produces.
+    for (i, seq) in [70i64, 7i64].into_iter().enumerate() {
+        let rec = MediumRecord {
+            signed_bytes: enroll(&k, &format!("n{seq}")),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq: seq,
+        };
+        let seg = tests_support::signed(&k, "abcd", Plane::Clinical, i as u32, &prev, vec![rec]);
+        prev = segment_commitment(&seg.records);
+        segments.push(seg);
+    }
+    let m = crate::testkit::medium_v3(segments);
+    let r = chain_report(&m);
+    assert_eq!(
+        plane_records(&m, &r, Plane::Clinical)
+            .iter()
+            .map(|x| x.source_seq)
+            .collect::<Vec<_>>(),
+        vec![7, 70],
+        "capture order is not source order; the derivation must sort"
+    );
+}
+
+/// A byte-identical re-capture collapses; a record differing in ONE CUSTODY SIDECAR does not.
+///
+/// Interrupt a capture and re-run it and the second pass re-writes seqs the first already
+/// wrote — expected DATA, not a fault, so the duplicate collapses. But `MediumRecord`
+/// carries three sidecars beside `signed_bytes`, and a re-capture can straddle a change to
+/// any of them: an unwrap-key rotation re-wraps `dek_wrapped`, or a CRYPTO-SHRED lands
+/// between the passes and drives it `Some -> None`. Collapsing on the body alone would keep
+/// whichever copy sorted first — handing a restore a DEK it cannot open, or resurrecting one
+/// that was supposed to be gone for good (ADR-0005). Those must stay visible as a genuine
+/// duplicate `source_seq` for the caller to name.
+#[test]
+fn plane_records_collapses_only_a_wholly_identical_duplicate() {
+    let k = sk();
+    let base = MediumRecord {
+        signed_bytes: enroll(&k, "n"),
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: Some(crate::testkit::bytes(4, 48)),
+        source_seq: 5,
+    };
+    let shredded_between_passes = MediumRecord {
+        dek_wrapped: None,
+        ..base.clone()
+    };
+    let build = |records: Vec<MediumRecord>| {
+        let seg = tests_support::signed(&k, "abcd", Plane::Clinical, 0, "", records);
+        crate::testkit::medium_v3(vec![seg])
+    };
+
+    let identical = build(vec![base.clone(), base.clone()]);
+    let r = chain_report(&identical);
+    assert_eq!(
+        plane_records(&identical, &r, Plane::Clinical).len(),
+        1,
+        "a byte-identical re-capture overlap is one record, not two"
+    );
+
+    let straddled = build(vec![base, shredded_between_passes]);
+    let r = chain_report(&straddled);
+    assert_eq!(
+        plane_records(&straddled, &r, Plane::Clinical).len(),
+        2,
+        "records differing in a custody sidecar must stay visible, never silently collapse"
+    );
+}

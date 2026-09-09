@@ -92,6 +92,46 @@ pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupErro
     })
 }
 
+/// Which CLINICAL records the RESTORE path applies, for either medium revision — the
+/// sibling of [`node_plane_events`] and, since #554 slice 2d, the reader that finally makes
+/// a restored node have patients.
+///
+/// **It is a thin adapter over [`cairn_medium::plane_records`] and must stay one.** That
+/// function gates on `verified_through`, sorts by `source_seq` and collapses byte-identical
+/// re-capture duplicates; re-implementing any of it here would be a second derivation of a
+/// trust boundary, which is what an earlier draft of this slice did and what its review
+/// caught. `cairn_wire::MediumTransport` serves from the same function, so the serving path
+/// and the disaster-recovery path cannot drift onto two different answers about what a
+/// medium may be trusted for.
+///
+/// **Why whole [`MediumRecord`]s and not bare bytes**, where `node_plane_events` returns
+/// `Vec<Vec<u8>>`: the clinical plane carries three things the federation plane does not —
+/// the attestation pair (which the apply door re-verifies for a suppressing event) and the
+/// **wrapped DEK**, without which a restored sealed body is permanently unreadable. Handing
+/// back only `signed_bytes` here would have made design §2.2's dropped-custody failure
+/// unreachable to fix at the call site.
+///
+/// **A legacy medium returns EMPTY**, and that is the truthful answer: CAIRNB1/CAIRNB2
+/// predate the plane split, so no clinical record exists on one to fail to read. It is not
+/// a truthful thing to show an operator on its own — *"restored, 0 clinical events"* is
+/// #500's exact signature reproduced inside the machinery built to close it — so naming
+/// that outcome is the CALLER's job (design §5.2), not this function's.
+///
+/// Returns `Result` for symmetry with [`node_plane_events`] and this module's other readers.
+/// Given an already-parsed image it cannot fail today; the signature leaves room for a
+/// revision that can, without changing every caller.
+pub fn clinical_plane_records(
+    image: &MediumImage,
+) -> Result<Vec<cairn_medium::MediumRecord>, BackupError> {
+    Ok(match image {
+        MediumImage::Legacy(_) => Vec::new(),
+        MediumImage::V3(m) => {
+            let report = cairn_medium::chain_report(m);
+            cairn_medium::plane_records(m, &report, Plane::Clinical)
+        }
+    })
+}
+
 /// How many records a medium carries in each plane — the shared arithmetic behind every
 /// operator-facing scope message in `verify-backup`/`restore` (#500 slice 2c review,
 /// Important 3 & 4). One function so the three call sites (the empty-medium check, the
@@ -1813,6 +1853,101 @@ mod tests {
             read_health(&p),
             None,
             "a corrupt sidecar must fail safe to None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // `clinical_plane_records` — the restore path's reader (#554 slice 2d, design §5.1).
+    //
+    // These are ADAPTER tests, deliberately. The gate, the sort and the duplicate collapse
+    // are `cairn_medium::plane_records`' contract and are tested there, once. What is
+    // testable HERE is the only thing this function adds: that each medium revision maps to
+    // the right call, and — critically — that the V3 arm delegates rather than re-deriving.
+    // A second derivation that sorted but did not gate on `verified_through` is exactly what
+    // the design review caught, and `equals_the_shared_derivation` below is what stops one
+    // growing back.
+    // -----------------------------------------------------------------------
+
+    /// A CAIRNB3 image holding one UNSIGNED clinical segment.
+    ///
+    /// Unsigned is deliberate and is what makes this fixture usable without a signing key:
+    /// `chain_report` treats an unsigned segment as chain-verified (an unavailable key must
+    /// never block a backup — it is simply not tamper-evident), so `verified_through` covers
+    /// it and the records are servable. Soundness is a different question and not one these
+    /// adapter tests ask.
+    fn clinical_image(seqs: &[i64]) -> MediumImage {
+        let seg = crate::medium::Segment {
+            plane: Plane::Clinical,
+            index: 0,
+            prev_commitment: String::new(),
+            self_node_id_hex: String::new(),
+            attestation: None,
+            records: seqs
+                .iter()
+                .map(|&source_seq| crate::medium::MediumRecord {
+                    // Not a real signed event: nothing in this function verifies a
+                    // signature. Derived rather than written out, per house rule 6.
+                    signed_bytes: (0..24u8).map(|i| i.wrapping_add(source_seq as u8)).collect(),
+                    attestation: None,
+                    attester_key: None,
+                    dek_wrapped: None,
+                    source_seq,
+                })
+                .collect(),
+        };
+        let bytes = crate::medium::serialize_v3(std::slice::from_ref(&seg)).unwrap();
+        crate::medium::parse_any(&bytes).unwrap()
+    }
+
+    /// The V3 arm IS the shared derivation, not a lookalike of it.
+    ///
+    /// Asserting equality against `chain::plane_records` for the same image is what makes
+    /// this an adapter rather than a second reader: a re-implementation that dropped the
+    /// `verified_through` gate would still return "the clinical records, sorted" and would
+    /// pass any test written in terms of the records alone.
+    #[test]
+    fn clinical_plane_records_equals_the_shared_derivation() {
+        let image = clinical_image(&[70, 7, 40]);
+        let MediumImage::V3(ref m) = image else {
+            panic!("serialize_v3 must produce a CAIRNB3 image");
+        };
+        let report = crate::medium::chain_report(m);
+        assert_eq!(
+            clinical_plane_records(&image).unwrap(),
+            crate::medium::plane_records(m, &report, Plane::Clinical),
+            "the adapter must delegate; a second derivation loses the trust gate"
+        );
+        assert_eq!(
+            clinical_plane_records(&image)
+                .unwrap()
+                .iter()
+                .map(|r| r.source_seq)
+                .collect::<Vec<_>>(),
+            vec![7, 40, 70],
+            "anti-vacuity: the delegation must actually be producing the sorted set"
+        );
+    }
+
+    /// A legacy medium has no clinical plane AT ALL, and this returns empty for it.
+    ///
+    /// Empty is the truthful answer here — CAIRNB1/B2 predate the plane split, so there is
+    /// no clinical record on such a medium to fail to read. It is NOT a truthful thing to
+    /// show an operator on its own: "restored, 0 clinical events" is #500's exact signature
+    /// reproduced inside the machinery built to close it. Naming that outcome is the CALLER's
+    /// job (design §5.2), which is why this function is allowed to be silent about it.
+    #[test]
+    fn clinical_plane_records_of_a_legacy_medium_is_empty() {
+        let container = crate::medium::Container {
+            self_marker: None,
+            events: vec![vec![1, 2, 3]],
+        };
+        let image = MediumImage::Legacy(container);
+        assert!(clinical_plane_records(&image).unwrap().is_empty());
+        assert_eq!(
+            node_plane_events(&image).unwrap().len(),
+            1,
+            "and the federation plane is untouched by this slice: every legacy event IS \
+             the federation plane"
         );
     }
 

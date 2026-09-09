@@ -19,6 +19,7 @@
 //! ([`watermark`], [`self_id_from_chain`]) READ a `ChainReport`, they never redecide it.
 
 use crate::container::MediumV3;
+use crate::record::MediumRecord;
 use crate::segment::Plane;
 use crate::verify::{verify_events, VerifyReport};
 
@@ -420,6 +421,63 @@ pub fn chain_tail(m: &MediumV3, report: &ChainReport) -> ChainTail {
         next_index: through as u32 + 1,
         prev_commitment,
     }
+}
+
+/// Every record this medium can be TRUSTED to hand out for `plane`, in the order a
+/// consumer must take them: the verified prefix only, ascending by `source_seq`, with
+/// byte-identical re-capture duplicates collapsed.
+///
+/// **This is the ONE derivation of that set** (#554 slice 2d, design §5.0).
+/// `cairn_wire::MediumTransport` serves from it and `cairn-node`'s `restore` applies from
+/// it, so the serving path and the disaster-recovery path can never drift onto two different
+/// answers about what a medium may be trusted for. It lives here, in the module that owns
+/// `verified_through`, because the trust gate is the part a second implementation loses —
+/// and it is written as a pure function of `(medium, report, plane)` so both callers can use
+/// it without inheriting the other's machinery.
+///
+/// Three steps, each load-bearing, each with a failure it exists to prevent:
+///
+/// 1. **TRUST STOPS AT `verified_through`** (2a invariant 5). Handing out records past the
+///    last verified chain link would let a torn tail or a spliced segment through. Each such
+///    record is still individually signature-verified downstream, so nothing FORGED gets in,
+///    but per-event signatures say nothing about a segment SPLICE — narrowing that residual
+///    is the whole reason the chain pass exists. `None` (nothing verified) yields an EMPTY
+///    set, never "all": the dangerous default is the inverse of the gate.
+/// 2. **Sort by `source_seq`.** Segments sit in CAPTURE order, which stops matching source
+///    order the moment a re-capture or a gap backfill happens — 2c's capture fills burned-seq
+///    holes NEWEST-FIRST, so a record with a lower seq legitimately sits in a later segment.
+///    A consumer taking raw medium order would offer an overlay before the event it targets
+///    (the apply door refuses that) and, on the serving path, would advance a puller's
+///    contiguous-prefix cursor past events it had not yet delivered. `event_log.seq` IS
+///    causal on the node that wrote it, so this restores causal order exactly.
+/// 3. **Collapse only a WHOLLY identical duplicate.** A re-capture writes the same seq
+///    twice; that is expected data, not a fault. But `MediumRecord` carries three custody
+///    sidecars beside `signed_bytes`, and a re-capture can straddle a change to any of them
+///    (an unwrap-key rotation re-wraps `dek_wrapped`; a crypto-shred drives it `Some ->
+///    None`). Comparing bodies alone would silently keep whichever copy sorted first — which
+///    could hand a restore a DEK it cannot open, or resurrect one ADR-0005 erasure destroyed.
+///    `MediumRecord`'s `PartialEq` spans all five fields, so plain `dedup` collapses a pair
+///    only when EVERY field agrees; anything still differing stays visible as a duplicate
+///    `source_seq` for the caller to name.
+///
+/// Reads the prefix via `.get(..=through)` rather than indexing, for the same reason
+/// [`watermark`] and [`chain_tail`] do: `report` and `m` have no compile-time link, so a
+/// mismatched pair must degrade to an empty set, never panic an unattended node.
+pub fn plane_records(m: &MediumV3, report: &ChainReport, plane: Plane) -> Vec<MediumRecord> {
+    let Some(through) = report.verified_through else {
+        return Vec::new();
+    };
+    let Some(prefix) = m.segments.get(..=through) else {
+        return Vec::new();
+    };
+    let mut records: Vec<MediumRecord> = prefix
+        .iter()
+        .filter(|s| s.plane == plane)
+        .flat_map(|s| s.records.iter().cloned())
+        .collect();
+    records.sort_by_key(|r| r.source_seq);
+    records.dedup();
+    records
 }
 
 /// Every hole in `plane`'s `source_seq` run over the verified prefix, as `(after, before)`
