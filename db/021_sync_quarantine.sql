@@ -63,8 +63,16 @@ CREATE TABLE IF NOT EXISTS sync_quarantine (
     -- (COALESCE in the dedupe UPDATE) — a token once seen is never dropped.
     attestation    BYTEA,
     attester_key   BYTEA,
-    -- Which link shipped it (sync_state.peer naming) — the mixed-version
-    -- diagnosis ("peer X appears pre-ADR-0040") groups on this.
+    -- Which link shipped it (sync_state.peer naming). NOT NULL because the
+    -- per-peer quota probes (#197) filter on it: `WHERE peer = $5 AND NOT acked`,
+    -- both the row-count and the byte-sum probe. That is this column's ONE
+    -- machine consumer — an earlier version of this comment also claimed the
+    -- mixed-version diagnosis ("peer X appears pre-ADR-0040") "groups on this",
+    -- and it does not: that diagnosis is composed in Rust from the peer name and
+    -- the first signing context of the cycle, and never reads sync_quarantine.
+    -- There is no GROUP BY over this table anywhere. Corrected because the false
+    -- version invites the opposite conclusion about what a shared or sentinel
+    -- peer value would break.
     peer           TEXT        NOT NULL,
     -- The legible verify-failure reason AT QUARANTINE TIME (EventError Display /
     -- cairn_verify_error vocabulary): 'signing-context mismatch …' vs 'signature
