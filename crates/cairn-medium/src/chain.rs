@@ -464,20 +464,74 @@ pub fn chain_tail(m: &MediumV3, report: &ChainReport) -> ChainTail {
 /// [`watermark`] and [`chain_tail`] do: `report` and `m` have no compile-time link, so a
 /// mismatched pair must degrade to an empty set, never panic an unattended node.
 pub fn plane_records(m: &MediumV3, report: &ChainReport, plane: Plane) -> Vec<MediumRecord> {
-    let Some(through) = report.verified_through else {
-        return Vec::new();
-    };
-    let Some(prefix) = m.segments.get(..=through) else {
-        return Vec::new();
-    };
-    let mut records: Vec<MediumRecord> = prefix
+    plane_records_with_accounting(m, report, plane).records
+}
+
+/// The trusted set, WITH the arithmetic that explains how it differs from the raw record
+/// count — so no caller has to reconstruct that by subtraction from a population
+/// [`plane_records`] never saw.
+///
+/// # The failure this shape exists to prevent (PR #566 review, important 1)
+///
+/// Steps 1 and 3 above remove records for OPPOSITE reasons. Step 1 removes records that
+/// cannot be TRUSTED; step 3 removes records that are merely REDUNDANT, and the module's own
+/// prose calls a re-capture overlap *"expected data, not a fault"*. `restore` built its
+/// operator warning by subtracting `records.len()` from the medium's raw count, which folds
+/// the two together — so a clinic whose nightly capture was once interrupted and re-run
+/// restored a perfectly intact medium and was told that records *"sit PAST its last verified
+/// chain link"* and *"could have been spliced in and cannot be trusted"*, and to go find a
+/// second off-site drive. Every clause false, printed to someone mid-disaster.
+///
+/// The three fields sum to the plane's raw record count on the medium, so a caller needs no
+/// second derivation to state any of the four numbers honestly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaneRecords {
+    /// The trusted set, exactly as [`plane_records`] returns it.
+    pub records: Vec<MediumRecord>,
+    /// Records in this plane sitting PAST `verified_through` — the trust finding, and the
+    /// only one of these numbers an "untrusted records" warning may ever report.
+    pub gated_out: usize,
+    /// Byte-identical re-capture duplicates collapsed by step 3. **Not a trust finding**, and
+    /// never to be reported as one.
+    pub collapsed: usize,
+}
+
+/// See [`PlaneRecords`]. This is the derivation; [`plane_records`] is the common projection
+/// of it, so the two can never disagree about what a medium may be trusted for.
+pub fn plane_records_with_accounting(
+    m: &MediumV3,
+    report: &ChainReport,
+    plane: Plane,
+) -> PlaneRecords {
+    let on_medium: usize = m
+        .segments
         .iter()
         .filter(|s| s.plane == plane)
-        .flat_map(|s| s.records.iter().cloned())
-        .collect();
+        .map(|s| s.records.len())
+        .sum();
+    // Step 1 — trust stops at `verified_through`; `None` yields the EMPTY set, never "all".
+    let mut records: Vec<MediumRecord> = report
+        .verified_through
+        .and_then(|through| m.segments.get(..=through))
+        .map(|prefix| {
+            prefix
+                .iter()
+                .filter(|s| s.plane == plane)
+                .flat_map(|s| s.records.iter().cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let gated_out = on_medium - records.len();
+    // Step 2 — restore causal order. Step 3 — collapse only a WHOLLY identical duplicate.
     records.sort_by_key(|r| r.source_seq);
+    let before_dedup = records.len();
     records.dedup();
-    records
+    let collapsed = before_dedup - records.len();
+    PlaneRecords {
+        records,
+        gated_out,
+        collapsed,
+    }
 }
 
 /// Every hole in `plane`'s `source_seq` run over the verified prefix, as `(after, before)`

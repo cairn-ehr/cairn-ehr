@@ -51,9 +51,10 @@ use crate::medium::{MediumImage, Plane};
 ///   is exactly what `parse_container` always handed back. Media already in the field are
 ///   unaffected, forever.
 /// - **CAIRNB3:** only the records carried by `Plane::Node` segments, in file order. A
-///   CAIRNB3 medium written by this build carries the CLINICAL plane too, but restoring it
-///   is slice 2d's job — returning it here would silently let 2c be read as having closed
-///   #500's restore half, which it has deliberately not (design doc §8).
+///   CAIRNB3 medium written by this build carries the CLINICAL plane too, and since #554
+///   slice 2d that plane IS restored — by [`clinical_plane_accounting`], a SIBLING reader.
+///   Never by widening this one: keeping the two apart is what stops a federation record's
+///   fate depending on a clinical segment's chain, and the reverse.
 ///
 /// **Design choice, made explicit because the alternative is tempting and wrong: every
 /// Node-plane segment is returned, never only the prefix `chain::chain_report` could
@@ -123,13 +124,78 @@ pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupErro
 pub fn clinical_plane_records(
     image: &MediumImage,
 ) -> Result<Vec<cairn_medium::MediumRecord>, BackupError> {
+    Ok(clinical_plane_accounting(image)?.records)
+}
+
+/// The same adapter, keeping the derivation's own accounting — which record was removed by
+/// the TRUST gate and which merely as a duplicate.
+///
+/// [`clinical_plane_records`] is the projection of this, so the two can never disagree.
+/// `restore` needs the split because it reports both facts to an operator and they are not
+/// the same fact: see [`untrusted_clinical_notice`].
+///
+/// A legacy medium predates the plane split, so it carries no clinical plane at all — every
+/// count is zero rather than an untrusted-record warning about a medium that never had one.
+pub fn clinical_plane_accounting(
+    image: &MediumImage,
+) -> Result<cairn_medium::PlaneRecords, BackupError> {
     Ok(match image {
-        MediumImage::Legacy(_) => Vec::new(),
+        MediumImage::Legacy(_) => cairn_medium::PlaneRecords {
+            records: Vec::new(),
+            gated_out: 0,
+            collapsed: 0,
+        },
         MediumImage::V3(m) => {
             let report = cairn_medium::chain_report(m);
-            cairn_medium::plane_records(m, &report, Plane::Clinical)
+            cairn_medium::plane_records_with_accounting(m, &report, Plane::Clinical)
         }
     })
+}
+
+/// The warning an operator must see when a medium's clinical plane still holds two DIFFERENT
+/// records at one `source_seq`. **Pure.** `None` when every seq is unique.
+///
+/// # Why this is not silence, and not a refusal either (PR #566 review)
+///
+/// `plane_records` collapses only a WHOLLY identical duplicate. A re-capture that straddled a
+/// change to a custody sidecar — an unwrap-key rotation re-wrapping `dek_wrapped`, or a
+/// crypto-shred driving it `Some -> None` — leaves two records at one seq that differ, and the
+/// derivation deliberately leaves them visible *"for the caller to name"*.
+///
+/// The SERVING caller names it: `cairn-sync`'s page validation refuses a page whose seqs are
+/// not strictly ascending. The restore named nothing — it applied both copies in stable-sort
+/// order and reported them as ordinary applies. Refusing is wrong here (a partial restore
+/// beats a total loss, and db/020 is arrival-order independent about shreds, so the dangerous
+/// resurrection case is already closed at the door), but so is saying nothing: the operator is
+/// the only one who can tell which capture was the right one.
+pub fn straddled_duplicate_notice(records: &[cairn_medium::MediumRecord]) -> Option<String> {
+    let mut seqs: Vec<i64> = records.iter().map(|r| r.source_seq).collect();
+    seqs.sort_unstable();
+    let mut repeated: Vec<i64> = Vec::new();
+    for pair in seqs.windows(2) {
+        if pair[0] == pair[1] && repeated.last() != Some(&pair[0]) {
+            repeated.push(pair[0]);
+        }
+    }
+    if repeated.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = repeated.iter().take(10).map(|s| s.to_string()).collect();
+    let more = if repeated.len() > 10 {
+        format!(" (and {} more)", repeated.len() - 10)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "WARNING: this medium holds two or more DIFFERENT records at the same source \
+         position(s): {}{more}. A byte-identical re-capture is collapsed silently and is \
+         expected; these differ — typically a capture that straddled an unwrap-key rotation \
+         or a crypto-shred, so the copies disagree about CUSTODY. All of them were applied \
+         (the apply door is idempotent and refuses custody for an already-shredded target, so \
+         nothing erased can come back). Review these positions: only you can tell which \
+         capture reflects what the dead node actually held.",
+        shown.join(", ")
+    ))
 }
 
 /// The warning an operator must see when a medium holds MORE clinical records than a restore
@@ -151,11 +217,19 @@ pub fn clinical_plane_records(
 ///
 /// It does not refuse. Refusing would convert a partial recovery into a total loss, which is
 /// the trade this whole command rejects — the verified prefix is still worth having.
-pub fn untrusted_clinical_notice(trusted: usize, on_medium: usize) -> Option<String> {
-    let untrusted = on_medium.saturating_sub(trusted);
+pub fn untrusted_clinical_notice(acc: &cairn_medium::PlaneRecords) -> Option<String> {
+    // ⚠️ READ `gated_out`, NEVER a subtraction. An earlier version took two bare counts and
+    // derived this by `on_medium - trusted`, which folds in the re-capture duplicates
+    // `plane_records` collapses — expected data, not a fault — so an intact medium from a
+    // clinic whose capture was once interrupted reported a chain break and sent someone
+    // mid-disaster after a second drive (PR #566 review, important 1). The derivation reports
+    // its own arithmetic precisely so no caller has to reconstruct it.
+    let untrusted = acc.gated_out;
     if untrusted == 0 {
         return None;
     }
+    let trusted = acc.records.len();
+    let on_medium = trusted + acc.gated_out + acc.collapsed;
     Some(format!(
         "WARNING: {untrusted} of this medium's {on_medium} clinical record(s) sit PAST its \
          last verified chain link and were NOT applied. This is not a torn tail — it is a \
@@ -901,11 +975,15 @@ pub struct BackupReport {
 /// with per-record custody, and `BackupHealth` v2 reports the two planes separately instead
 /// of one scope-free total.
 ///
-/// **What is still open, and must not be read off this comment as fixed.** #500 itself stays
-/// open: the medium HOLDS the clinical record, and nothing yet RESTORES it —
-/// [`node_plane_events`] hands `restore`/`verify-backup` the federation plane alone, on
-/// purpose, and slice 2d owns the other half. `tests/dr_clinical_guarantee_gap.rs` pins both
-/// halves: that the medium carries both planes, and that nothing reads the clinical one back.
+/// **What each half now does.** #554 slice 2d closed the read-back: the medium HOLDS the
+/// clinical record and `restore` now APPLIES it, through [`clinical_plane_accounting`].
+/// [`node_plane_events`] still hands `restore` the federation plane alone, on purpose — the
+/// two planes are read by sibling functions rather than one widened reader.
+/// `tests/dr_clinical_guarantee_gap.rs` pins both halves: that the medium carries both
+/// planes, and that a clinical event genuinely restores from one.
+///
+/// `verify-backup` is the remaining asymmetry: its count is still federation-only, so a green
+/// verify says nothing about the clinical plane's restorability (#567).
 ///
 /// **What this function is FOR now.** It answers the narrower question its name asks — "what
 /// is this node's federation event set?" — for callers that want the events themselves rather
@@ -1910,9 +1988,89 @@ mod tests {
     /// records, so a restore reports "0 applied … of N on the medium" at exit 0 — #500's own
     /// sentence, reproduced inside the slice built to close it. The notice must fire, must
     /// name both numbers, and must offer a remedy an operator can act on mid-disaster.
+    /// Fabricate a [`cairn_medium::PlaneRecords`] with the three counts this notice reads.
+    /// The record BODIES are irrelevant here — only how many survived each of the
+    /// derivation's three steps — so they are placeholders, not fixtures.
+    fn accounting(
+        trusted: usize,
+        gated_out: usize,
+        collapsed: usize,
+    ) -> cairn_medium::PlaneRecords {
+        cairn_medium::PlaneRecords {
+            records: (0..trusted)
+                .map(|i| cairn_medium::MediumRecord {
+                    signed_bytes: vec![i as u8],
+                    attestation: None,
+                    attester_key: None,
+                    dek_wrapped: None,
+                    source_seq: i as i64,
+                })
+                .collect(),
+            gated_out,
+            collapsed,
+        }
+    }
+
+    /// **A STRADDLED DUPLICATE IS NAMED, NOT SILENTLY APPLIED TWICE** (PR #566 review).
+    #[test]
+    fn two_different_records_at_one_seq_are_named_for_the_operator() {
+        let rec = |seq: i64, dek: Option<Vec<u8>>| cairn_medium::MediumRecord {
+            signed_bytes: vec![1, 2, 3],
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: dek,
+            source_seq: seq,
+        };
+        assert_eq!(
+            straddled_duplicate_notice(&[rec(1, None), rec(2, None)]),
+            None,
+            "a clean run has nothing to say"
+        );
+
+        let notice =
+            straddled_duplicate_notice(&[rec(7, Some(vec![9])), rec(7, None), rec(8, None)])
+                .expect("two records disagreeing about CUSTODY at one position must be named");
+        assert!(
+            notice.contains(" 7"),
+            "the operator needs the position: {notice}"
+        );
+        assert!(
+            notice.contains("custody"),
+            "and the likely cause, which is what makes it actionable: {notice}"
+        );
+    }
+
+    /// **A COLLAPSED DUPLICATE IS NOT A TAMPERING FINDING** (PR #566 review, important 1).
+    ///
+    /// A clinic whose nightly capture was once interrupted and re-run carries byte-identical
+    /// overlaps. The chain is intact and every record is trusted. Building this warning by
+    /// subtracting the trusted set from the medium's raw count reported those duplicates as
+    /// records that *"could have been spliced in"*, and sent someone mid-disaster hunting for
+    /// a second off-site drive that does not exist.
+    #[test]
+    fn a_collapsed_duplicate_is_not_reported_as_untrusted() {
+        assert_eq!(
+            untrusted_clinical_notice(&accounting(4_000, 0, 40)),
+            None,
+            "40 collapsed re-capture duplicates on a fully verified medium are EXPECTED \
+             DATA, and there is nothing to warn about"
+        );
+        let notice = untrusted_clinical_notice(&accounting(4_000, 7, 40))
+            .expect("genuinely untrusted records must still be named");
+        assert!(
+            notice.contains(" 7 of "),
+            "only the GATED-OUT records are untrusted, never the collapsed ones: {notice}"
+        );
+        assert!(
+            notice.contains("4047"),
+            "and the denominator is still every record on the medium: {notice}"
+        );
+    }
+
     #[test]
     fn an_empty_trusted_set_over_a_non_empty_medium_is_the_loudest_case() {
-        let notice = untrusted_clinical_notice(0, 4_000).expect("silence here IS the defect");
+        let notice = untrusted_clinical_notice(&accounting(0, 4_000, 0))
+            .expect("silence here IS the defect");
         assert!(notice.contains("4000"), "{notice}");
         assert!(
             notice.contains("verify-backup"),
@@ -1930,13 +2088,7 @@ mod tests {
     /// carries a warning, and a warning that always fires is one nobody reads.
     #[test]
     fn a_fully_verified_medium_gets_no_untrusted_notice() {
-        assert_eq!(untrusted_clinical_notice(12, 12), None);
-        assert_eq!(
-            untrusted_clinical_notice(12, 0),
-            None,
-            "a trusted count above the medium count is nonsense rather than a negative \
-             warning — saturate, never underflow"
-        );
+        assert_eq!(untrusted_clinical_notice(&accounting(12, 0, 0)), None);
     }
 
     /// A CAIRNB3 image holding one UNSIGNED clinical segment.

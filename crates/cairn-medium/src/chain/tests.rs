@@ -1048,3 +1048,71 @@ fn plane_records_collapses_only_a_wholly_identical_duplicate() {
         "records differing in a custody sidecar must stay visible, never silently collapse"
     );
 }
+
+/// **A COLLAPSED DUPLICATE IS NOT AN UNTRUSTED RECORD** (PR #566 review, important 1).
+///
+/// The operator warning that names records *"PAST this medium's last verified chain link"* was
+/// built by subtracting the trusted set's length from the medium's RAW record count. Those two
+/// populations differ by exactly the duplicates step 3 collapses — expected data after an
+/// interrupted-then-rerun capture, not a fault — so a perfectly intact medium reported a chain
+/// break and sent an operator mid-disaster hunting for a second drive that does not exist.
+///
+/// The derivation therefore says which of its three steps removed each record. A caller must
+/// never have to reconstruct that by subtraction from a population this function never saw.
+#[test]
+fn plane_records_reports_collapsed_and_gated_out_apart() {
+    let k = sk();
+    // ONE record, cloned — `enroll` signs afresh on every call, so two calls would differ in
+    // their bytes and step 3 would (correctly) refuse to collapse them.
+    let rec = MediumRecord {
+        signed_bytes: enroll(&k, "n"),
+        attestation: None,
+        attester_key: None,
+        dek_wrapped: Some(crate::testkit::bytes(4, 48)),
+        source_seq: 5,
+    };
+
+    // A HEALTHY medium whose capture was interrupted and re-run: one byte-identical overlap,
+    // chain fully intact. Nothing here is untrusted.
+    let seg = tests_support::signed(
+        &k,
+        "abcd",
+        Plane::Clinical,
+        0,
+        "",
+        vec![rec.clone(), rec.clone()],
+    );
+    let healthy = crate::testkit::medium_v3(vec![seg]);
+    let r = chain_report(&healthy);
+    let got = plane_records_with_accounting(&healthy, &r, Plane::Clinical);
+    assert_eq!(got.records.len(), 1, "the overlap collapses to one record");
+    assert_eq!(
+        got.collapsed, 1,
+        "and the collapse is REPORTED, not inferred"
+    );
+    assert_eq!(
+        got.gated_out, 0,
+        "a duplicate is not a record past the verified chain link, and reporting it as one \
+         is a false tampering diagnosis handed to someone mid-disaster"
+    );
+
+    // And the genuinely untrusted case still counts, so the fix cannot be a silent zero.
+    let unverified = crate::testkit::medium_v3(vec![tests_support::signed(
+        &k,
+        "abcd",
+        Plane::Clinical,
+        0,
+        "",
+        vec![rec],
+    )]);
+    let empty = ChainReport {
+        verified_through: None,
+        ..chain_report(&unverified)
+    };
+    let got = plane_records_with_accounting(&unverified, &empty, Plane::Clinical);
+    assert!(got.records.is_empty(), "nothing verified, nothing trusted");
+    assert_eq!(
+        got.gated_out, 1,
+        "the untrusted record is still named as untrusted"
+    );
+}
