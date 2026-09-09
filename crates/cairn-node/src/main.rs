@@ -3353,7 +3353,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 cairn_node::restore::clinical::apply_clinical_plane(
                     &db,
-                    &clinical_records,
+                    clinical_records,
                     restore_secret.as_ref(),
                 )
                 .await?
