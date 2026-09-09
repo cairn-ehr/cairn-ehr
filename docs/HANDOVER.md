@@ -28,12 +28,36 @@
 > **beside** that reader rather than widening it, which is what keeps a federation record's
 > fate independent of a clinical segment's chain.
 >
-> **⇒ THE ONE THING 2d STILL OWES: the §1.2 measurement.** #512's budget — *a restore of a
+> **⇒ TWO THINGS 2d STILL OWES, AND THE FIRST IS A DECISION, NOT A PATCH.**
+>
+> **1. §5.2's `Provenance` ruling for clinical segments is NOT implemented** (design test 18).
+> The design says clinical segments *"inherit the same `Provenance` treatment the node plane
+> already gets"* and that an unsigned or non-sole-enroll-signed medium *"requires the operator's
+> identity confirmation before its clinical records are applied."* **Those are two different
+> things and the sentence supports both readings.** The node plane's treatment is a **printed
+> warning**, never a blocking prompt — every `Provenance` match arm in `main.rs` is an
+> `eprintln!` — so on the first reading the clinical plane already inherits it (the warnings
+> print before any clinical record is applied). On the second it is a **blocking gate that
+> exists nowhere in the tree**, and building one would be the restore path's first interactive
+> confirmation, which principle 3's *"confirmation dialogs are explicitly NOT an acceptable
+> safety mechanism"* argues against. **Maintainer's call.** It is load-bearing for the
+> benchmark, not just the code: the design argues `M = 3` *because* of that third act.
+>
+> **2. The §1.2 measurement.** #512's budget — *a restore of a
 > 100 000-event medium completes in ≤ 10 min, one secret, no knowledge of the dead node's
 > config* — is **not measured**. The three step numbers (paper *N* = 2 → forced *M* = 3 →
 > bundling *K* = 2) are #512's, unchanged and not re-derived; `M > N` stays **filed, never
 > argued away**. **If the measurement falls outside the budget, that IS the finding — file it
 > against #512, never adjust the budget.**
+>
+> **Eight §7 tests are also unwritten** — the behaviour is built and green, the pins are not:
+> 4 (custody survives the pen → requeue → the body opens), 7 (the pen uncapped **at a volume
+> above the row cap**, which the design demands explicitly because a handful of events passes
+> against the unfixed quota), 14 end-to-end through the CLI, 16 (duplicate `source_seq`
+> no-op / substitution refused), 17, 19 behaviourally (the mid-restore-crash re-restore), 22
+> and 23. **PR [#566](https://github.com/cairn-ehr/cairn-ehr/pull/566) carries the table.** The
+> design's own standard is that *"a decision in §2–§6 with no entry here is a decision this
+> slice is not entitled to claim"* — so 2d does not claim them.
 >
 > **⇒ 2e IS RETIRED AS A LABEL** (ADR-0067 took its ADR and its spec bump). What was under the
 > name is operational and lives on its own issues: **#551** (the kit-restorability figure has
