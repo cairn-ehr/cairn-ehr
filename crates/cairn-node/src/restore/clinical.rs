@@ -66,8 +66,9 @@ use tokio_postgres::Client;
 pub const RESTORE_PEER_SENTINEL: &str = "(restore)";
 
 /// The ordinary per-peer pen quota, mirrored from `cairn-sync` so a restore can SAY when it
-/// has exceeded what a sync link would have been allowed — see [`ClinicalRestoreReport::
-/// exceeds_ordinary_quota`]. A restore passes NULL to the door (unbounded) and reports
+/// has exceeded what a sync link would have been allowed — see
+/// [`ClinicalRestoreReport::exceeds_ordinary_quota`]. A restore passes NULL to the door
+/// (unbounded) and reports
 /// instead of enforcing; these are the numbers it reports against.
 ///
 /// ⚠️ A second home for two constants whose first home is `cairn-sync`'s `main.rs`, which is
@@ -76,6 +77,9 @@ pub const RESTORE_PEER_SENTINEL: &str = "(restore)";
 /// a drift costs an inaccurate sentence rather than a wrong verdict — but if `cairn-sync` ever
 /// gains a `lib.rs`, these should follow the pen and stop being copied.
 pub const ORDINARY_QUOTA_ROWS: usize = 10_000;
+
+/// The byte half of the quota described on [`ORDINARY_QUOTA_ROWS`]. Same origin, same
+/// caveat: reported against, never enforced by a restore.
 pub const ORDINARY_QUOTA_BYTES: usize = 64 * 1024 * 1024;
 
 /// What a clinical restore did, in the shape the operator summary needs.
@@ -97,6 +101,19 @@ pub struct ClinicalRestoreReport {
     pub refusals: BTreeMap<String, usize>,
     /// Total `signed_bytes` penned, for the disk-cost line in the summary.
     pub penned_bytes: usize,
+    /// Of the penned records, how many the pen reports were ALREADY ACKED.
+    ///
+    /// An ack is an operator's recorded decision that those bytes will never enter the
+    /// record, and `do_requeue` skips them. Counted apart because every other penned record
+    /// carries the promise that `cairn-sync requeue` completes the restore, and for these it
+    /// does not — a false remedy written into `sync_quarantine.reason`, read weeks later.
+    pub penned_but_acked: usize,
+    /// The run declined to offer ANY record, because this node has no actor registry.
+    ///
+    /// A separate fact from "nothing was refused", and the summary must not read the two the
+    /// same way: an all-zero report with this set means the clinical plane is still entirely
+    /// on the medium and still restorable, which is the opposite of a completed restore.
+    pub skipped_no_registry: bool,
 }
 
 impl ClinicalRestoreReport {
@@ -136,6 +153,14 @@ pub fn pen_reason(cause: &RefusalCause) -> String {
              recover the right one and `cairn-sync requeue`."
         ),
         RefusalCause::Door(text) => format!("{PREFIX}: the apply door refused it — {text}"),
+        RefusalCause::CustodyDidNotLand => format!(
+            "{PREFIX}: the apply door ADMITTED this record but stored no custody for it. \
+             Either the DEK it was handed did not open the sealed body, or this node's \
+             unwrap key is not registered. Admitted-without-custody is right for a peer that \
+             will re-deliver the key; a restore has no second delivery, so the record is held \
+             here instead. The bytes AND the key are kept: fix the cause, then `cairn-sync \
+             requeue` to complete the restore without redoing it."
+        ),
     }
 }
 
@@ -154,6 +179,11 @@ pub enum RefusalCause {
     DekWillNotOpen,
     /// `apply_remote_event` refused, carrying its own legible text.
     Door(String),
+    /// The door ADMITTED the record and did not store the custody it was handed — db/020's
+    /// two lenient arms (a DEK that did not open the body, an unregistered node unwrap key).
+    /// See [`apply_clinical_plane`]'s step 4 for why that is a refusal here and a warning
+    /// on the pull path.
+    CustodyDidNotLand,
 }
 
 /// A short, groupable label for a refusal — what the summary counts by.
@@ -168,11 +198,40 @@ pub fn refusal_label(cause: &RefusalCause) -> &'static str {
         RefusalCause::NoCustodyKey => "carries custody, no key installed to open it",
         RefusalCause::DekWillNotOpen => "custody key would not open this record's DEK",
         RefusalCause::Door(_) => "refused by the apply door",
+        RefusalCause::CustodyDidNotLand => "admitted by the door, but its custody did not land",
     }
 }
 
+/// The SQLSTATE Postgres assigns to a bare `RAISE EXCEPTION` in PL/pgSQL.
+const SQLSTATE_RAISE_EXCEPTION: &str = "P0001";
+
+/// Did the apply door DELIBERATELY refuse these bytes, or did something on this node break?
+/// **Pure.**
+///
+/// Every refusal in `apply_remote_event` (db/020) is a bare `RAISE EXCEPTION`, which db/001's
+/// header states is a CONTRACT rather than an accident. So `P0001` means the floor decided
+/// against this record and will decide the same way on every retry: pen it, and let
+/// `cairn-sync requeue` release it once the cause is fixed. Anything else — a lock timeout, a
+/// serialization failure, a full disk, a dropped connection — is a verdict about NOTHING, and
+/// the very same bytes may well apply on a re-run.
+///
+/// Getting it backwards is the #480/#489 defect: the restore reports that the safety floor
+/// refused the clinic's records, and the operator audits their medium over a fault on their
+/// own disk. `None` (no SQLSTATE reached us at all) is never a door verdict.
+///
+/// ⚠️ A SECOND HOME for a rule whose first home is `cairn-sync`'s `refusal_is_deliberate`,
+/// behind the same binary-only-crate wall that put the pen in the database (db/052) and
+/// copies [`ORDINARY_QUOTA_ROWS`] here. Unlike those constants this one drives a DECISION, so
+/// a drift costs a wrong verdict rather than an inaccurate sentence. Keep the two identical;
+/// if `cairn-sync` ever gains a `lib.rs`, delete this and import that one.
+fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
+    sqlstate == Some(SQLSTATE_RAISE_EXCEPTION)
+}
+
 /// Apply a medium's clinical records, in the order [`crate::backup::clinical_plane_records`]
-/// returns them (ascending `source_seq` — see that function for why the sort is load-bearing).
+/// returns them: ascending `source_seq`. That adapter is thin — see
+/// [`cairn_medium::plane_records`] for why each of the derivation's three steps is
+/// load-bearing, the sort included.
 ///
 /// **MUST run while the database is still un-enrolled and AFTER custody and the actor
 /// registry are installed.** Both halves of that are design §3's reordered ceremony:
@@ -191,6 +250,37 @@ pub async fn apply_clinical_plane(
     unwrap_secret: Option<&Secret32>,
 ) -> anyhow::Result<ClinicalRestoreReport> {
     let mut report = ClinicalRestoreReport::default();
+
+    // Step 0 — THE REGISTRY PRECONDITION, checked before a single record is offered.
+    //
+    // Every apply door resolves its author through `actor_current`, so with no registry the
+    // door refuses this node's own history as an unenrolled signer — every record, one at a
+    // time, each one penned with its bytes and its key. That pen cannot be drained:
+    // `finalize_identity` runs at the end of the restore and closes `restore_actor_registry`'s
+    // first fence permanently, so nothing after this point can install a registry and every
+    // penned row would fail `requeue` forever on the same unenrolled signer.
+    //
+    // Applying anyway therefore bought nothing and cost two real things (PR #566 review): the
+    // clinic's whole clinical corpus written a SECOND time to disk on a disaster-recovery
+    // machine, and a summary that closed by promising `cairn-sync requeue` would finish the
+    // job. Declining is the honest answer, and it leaves the database restorable from this
+    // same medium once the export is recovered.
+    let registry_present: bool = db
+        .query_one("SELECT EXISTS(SELECT 1 FROM actor_event)", &[])
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "reading this node's actor registry failed during a restore ({}). This is a \
+                 LOCAL fault: the restore stops rather than guessing at the one precondition \
+                 that decides whether any record can be admitted at all.",
+                crate::db_diagnosis::legible_db_error(&e)
+            )
+        })?
+        .get(0);
+    if !registry_present {
+        report.skipped_no_registry = true;
+        return Ok(report);
+    }
 
     for record in records {
         // Step 1 — resolve custody, in Rust, before the door is ever called.
@@ -258,6 +348,22 @@ pub async fn apply_clinical_plane(
             .await
         {
             Ok(_) => {
+                // Step 4 — DID THE CUSTODY LAND? A door that returned OK is not yet a record
+                // that came back. db/020 has two LENIENT arms that RAISE WARNING and admit
+                // WITHOUT custody: a presented DEK that does not open the sealed body, and an
+                // unregistered node unwrap key. Both skip db/020's step 9 entirely — no
+                // `event_dek`, no `event_clear`, no twin, no projection — and return normally.
+                //
+                // That is right for a PULLER, which sees the DEK again next cycle. For a
+                // restore there is no next cycle, and the WARNING is invisible: nothing in
+                // this tree polls the connection's message stream, so the door's only signal
+                // that it withheld custody goes nowhere. Counting it as `applied` is how a
+                // clinic reads "N applied" at exit 0 and finds an empty chart months later —
+                // the outcome this whole slice exists to close, arriving one layer down.
+                if dek.is_some() && !custody_landed(db, &content_address).await? {
+                    pen(db, record, RefusalCause::CustodyDidNotLand, &mut report).await?;
+                    continue;
+                }
                 if existed {
                     report.already_present += 1;
                 } else {
@@ -265,6 +371,23 @@ pub async fn apply_clinical_plane(
                 }
             }
             Err(e) => {
+                // NOT every door error is a verdict about these bytes. A lock timeout, a
+                // serialization failure or a full disk is this node's machine, and penning
+                // it would file the operator's own fault as a refusal of their medium —
+                // then do it again for every record behind it. Same ruling, and the same
+                // reasoning, as the newness probe above.
+                if !refusal_is_deliberate(e.code().map(|c| c.code())) {
+                    return Err(anyhow::anyhow!(
+                        "applying a clinical record failed on THIS NODE's database ({}). \
+                         This is a LOCAL fault, not a refusal of the medium: the restore \
+                         stops here rather than penning this record and every one behind it \
+                         under a diagnosis that would send an operator to audit their backup \
+                         over a fault on their own machine. Nothing is lost — \
+                         `finalize_identity` has not run, so this same medium and export \
+                         restore again once the cause is fixed.",
+                        crate::db_diagnosis::legible_db_error(&e)
+                    ));
+                }
                 let text = crate::db_diagnosis::legible_db_error(&e);
                 pen(db, record, RefusalCause::Door(text), &mut report).await?;
             }
@@ -272,6 +395,43 @@ pub async fn apply_clinical_plane(
     }
 
     Ok(report)
+}
+
+/// Did the custody this restore presented actually land for `content_address`?
+///
+/// Asked of the DATABASE rather than inferred from the door's return, because the door
+/// returns `OK` on both of db/020's lenient arms — see [`apply_clinical_plane`]'s step 4.
+///
+/// **A logged shred counts as landed, and that is not a loophole.** db/020's step 9 refuses
+/// custody outright for an already-shredded target (`NOT EXISTS (erasure_shred_log …)`), which
+/// is ADR-0005's anti-resurrection rule and is arrival-order independent by design: set-union
+/// may re-deliver the row forever, custody never comes back. Such a record restored EXACTLY as
+/// it stands on the dead node, so penning it would hold a record whose key was destroyed on
+/// purpose — the same mistake as keying the no-export path on sealedness rather than custody.
+async fn custody_landed(db: &Client, content_address: &[u8]) -> anyhow::Result<bool> {
+    let landed: bool = db
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1 FROM event_log el
+                  WHERE el.content_address = $1
+                    AND (EXISTS (SELECT 1 FROM event_dek d
+                                  WHERE d.event_id = el.event_id)
+                      OR EXISTS (SELECT 1 FROM erasure_shred_log s
+                                  WHERE s.target_event_id = el.event_id))
+             )",
+            &[&content_address],
+        )
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "checking whether a restored record's custody landed failed ({}). This is a \
+                 LOCAL fault, not a bad medium: the restore stops rather than reporting \
+                 custody it could not verify.",
+                crate::db_diagnosis::legible_db_error(&e)
+            )
+        })?
+        .get(0);
+    Ok(landed)
 }
 
 /// Pen one refused record, preserving its custody, and record it in the report.
@@ -295,30 +455,39 @@ async fn pen(
 ) -> anyhow::Result<()> {
     let digest = cairn_event::event_address(&record.signed_bytes);
     let reason = pen_reason(&cause);
-    db.execute(
-        "SELECT cairn_quarantine_event($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)",
-        &[
-            &digest,
-            &record.signed_bytes,
-            &record.attestation,
-            &record.attester_key,
-            &RESTORE_PEER_SENTINEL,
-            &record.source_seq,
-            &reason,
-            &record.dek_wrapped,
-        ],
-    )
-    .await
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "a refused clinical record could not be penned ({}). The restore stops here \
+    // The door's RETURN is read, not discarded: db/052 documents it as TRUE when the bytes
+    // are already ACKED — an operator's recorded decision that they will never enter the
+    // record. `do_requeue` skips those, so counting them with the rest would attach the pen's
+    // standard "requeue completes the restore" promise to rows requeue will not touch.
+    let already_acked: bool = db
+        .query_one(
+            "SELECT cairn_quarantine_event($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)",
+            &[
+                &digest,
+                &record.signed_bytes,
+                &record.attestation,
+                &record.attester_key,
+                &RESTORE_PEER_SENTINEL,
+                &record.source_seq,
+                &reason,
+                &record.dek_wrapped,
+            ],
+        )
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "a refused clinical record could not be penned ({}). The restore stops here \
              rather than continuing: penning is what preserves the bytes AND the key for a \
              later `cairn-sync requeue`, so a restore that could not pen would be silently \
              discarding the clinic's record one event at a time.",
-            crate::db_diagnosis::legible_db_error(&e)
-        )
-    })?;
+                crate::db_diagnosis::legible_db_error(&e)
+            )
+        })?
+        .get(0);
 
+    if already_acked {
+        report.penned_but_acked += 1;
+    }
     *report
         .refusals
         .entry(refusal_label(&cause).into())
@@ -340,6 +509,7 @@ mod tests {
         for cause in [
             RefusalCause::NoCustodyKey,
             RefusalCause::DekWillNotOpen,
+            RefusalCause::CustodyDidNotLand,
             RefusalCause::Door("apply_remote_event: overlay targets unknown event".into()),
         ] {
             let text = pen_reason(&cause);
@@ -374,12 +544,20 @@ mod tests {
             refusal_label(&RefusalCause::DekWillNotOpen),
             "the two custody failures have DIFFERENT remedies and must not be folded together"
         );
+        assert_ne!(
+            refusal_label(&RefusalCause::CustodyDidNotLand),
+            refusal_label(&RefusalCause::Door(String::new())),
+            "a door that ADMITTED the record and dropped its custody is a different fact \
+             from a door that refused it, and only one of them is visible in `event_log`"
+        );
     }
 
     /// `exceeds_ordinary_quota` reports, and it reports on EITHER bound.
     ///
     /// The row cap alone would miss a restore that penned a few hundred very large events;
-    /// the byte cap alone would miss #512's 100 000-event scale of small ones. The quota it
+    /// the byte cap alone would miss a clinic-scale log of small ones — the 100 000-event
+    /// scale this slice benchmarks against (design §6.2; #512 sets the ten-minute budget,
+    /// not the event count). The quota it
     /// compares against is not enforced here — it is what a sync peer would have been allowed
     /// — so this is the sentence that keeps "unbounded" from meaning "unreported".
     #[test]
@@ -410,5 +588,33 @@ mod tests {
         r.refusals.insert("a".into(), 2);
         r.refusals.insert("b".into(), 3);
         assert_eq!(r.penned(), 5);
+    }
+
+    /// A door error is a VERDICT about these bytes only when the floor deliberately raised.
+    /// Everything else is THIS NODE'S MACHINE, and penning it files the operator's own disk
+    /// fault as a refusal of their medium — #480/#489's shape, arriving in the one command
+    /// where a misdiagnosis is least recoverable and the operator has the least context.
+    ///
+    /// The newness probe four statements earlier already draws this line and says why; this
+    /// test exists because the door call did not, and a future "simplification" that folds
+    /// the two arms back together must redden with a reason rather than in production.
+    #[test]
+    fn only_a_deliberate_raise_is_a_door_verdict() {
+        assert!(
+            refusal_is_deliberate(Some(SQLSTATE_RAISE_EXCEPTION)),
+            "a bare RAISE EXCEPTION is how every db/020 refusal reaches us"
+        );
+        for local in [
+            "40001", "40P01", "57014", "53100", "55P03", "25P02", "53300", "08006",
+        ] {
+            assert!(
+                !refusal_is_deliberate(Some(local)),
+                "SQLSTATE {local} is this node's machine, not a verdict about the record"
+            );
+        }
+        assert!(
+            !refusal_is_deliberate(None),
+            "no SQLSTATE at all (a dropped connection) is never a door verdict"
+        );
     }
 }

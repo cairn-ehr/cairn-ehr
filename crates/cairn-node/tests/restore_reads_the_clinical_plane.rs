@@ -236,6 +236,16 @@ async fn a_clinical_event_restores_from_a_medium_and_its_body_opens() {
         report.refusals
     );
     assert!(report.applied > 0, "anti-vacuity: records genuinely landed");
+    // COMPLETENESS. Every record on the medium must be accounted for by exactly one of the
+    // three outcomes. Without this, a loop that stopped after the first record — or a
+    // `continue` on a path that should have applied — passes every other assertion here
+    // while a chart comes back holding its first event and nothing else. "Restored N of M,
+    // honestly" is the whole subject of #500/#554, and N was never compared to M.
+    assert_eq!(
+        report.applied + report.already_present + report.penned(),
+        records.len(),
+        "every record on the medium must land in exactly one outcome: {report:?}"
+    );
 
     let rows: i64 = c
         .query_one("SELECT count(*) FROM event_log", &[])
@@ -266,6 +276,22 @@ async fn a_clinical_event_restores_from_a_medium_and_its_body_opens() {
     assert_eq!(
         restored_twin, twin,
         "the restored body must decrypt to what the dead node held"
+    );
+
+    // AND THE CLINICIAN CAN FIND IT. `event_clear` holding a readable body is not yet a chart:
+    // db/020 raises `cairn.remote_apply` across the projection triggers so they clamp-and-flag
+    // rather than veto, and a projection that silently no-opped under that marker would leave
+    // `event_log` and `event_clear` exactly as asserted above with the chart list EMPTY. That
+    // is the zero-patients outcome wearing its third costume, and it costs one query to close.
+    let charted: i64 = c
+        .query_one("SELECT count(*) FROM patient_chart", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        charted > 0,
+        "a restored node must have PATIENTS, not merely rows: the projections must have run \
+         under the remote-apply marker"
     );
 }
 
@@ -497,4 +523,313 @@ async fn clear_actor_registry(c: &Client) {
     )
     .await
     .unwrap();
+}
+
+/// **CUSTODY THAT DOES NOT LAND IS A REFUSAL, NOT A SUCCESS** (PR #566 review, critical 1).
+///
+/// `apply_remote_event` has two LENIENT arms that warn and admit: a presented DEK that fails
+/// to open the sealed body (db/020's *"sidecar DEK failed to open sealed body"*), and an
+/// unregistered node unwrap key. Both leave `v_inner` or `v_pub` NULL, which skips db/020's
+/// step 9 entirely — no `event_dek`, no `event_clear`, no twin, no projection — and then
+/// **return normally**. That is correct for a PULLER, which will see the DEK again next cycle.
+///
+/// For a RESTORE it is the zero-patients outcome with a clean summary on top. The door said
+/// OK, so the record counted as `applied`; the only signal db/020 gives is a Postgres
+/// `WARNING`, and nothing in this tree polls the connection's message stream. The clinic reads
+/// *"N applied"* at exit 0 and a clinician opens an empty chart months later, by which time the
+/// medium has been rotated. The module header reasons about db/020's lenient arm and pens the
+/// two failures it can see IN RUST; this is the third, and only the door can see it.
+///
+/// The fixture presents a **validly wrapped but wrong** DEK: it unwraps cleanly on this side,
+/// so every restore-side custody check passes and the record reaches the door — which is
+/// precisely the state the lenient arm exists for.
+#[tokio::test]
+async fn a_record_whose_custody_does_not_land_is_penned_not_counted_applied() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let (event_id, clinical_bytes, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let records = capture_clinical_records(&c, &sk, &kid, tmp.path()).await;
+    let secret = fixture_unwrap_secret(&sk);
+
+    // A DEK that is WRONG for this body but perfectly well-formed and wrapped to this node,
+    // derived at runtime rather than written as a literal (house rule 6a). `lineage`, not
+    // `salt`: it discriminates a fixture, it constructs nothing cryptographic (rule 6b).
+    let lineage = 7u8;
+    let wrong_dek = Secret32::from_bytes(std::array::from_fn(|i| {
+        (i as u8).wrapping_mul(lineage).wrapping_add(3)
+    }));
+    let wrong_wrapped =
+        cairn_event::seal::wrap_dek_for(&wrong_dek, &cairn_event::seal::unwrap_public(&secret))
+            .expect("a well-formed wrap to this node's own public half");
+
+    let mutated: Vec<cairn_medium::MediumRecord> = records
+        .iter()
+        .cloned()
+        .map(|mut r| {
+            if r.signed_bytes == clinical_bytes {
+                r.dek_wrapped = Some(wrong_wrapped.clone());
+            }
+            r
+        })
+        .collect();
+    assert!(
+        mutated
+            .iter()
+            .any(|r| r.signed_bytes == clinical_bytes
+                && r.dek_wrapped.as_ref() == Some(&wrong_wrapped)),
+        "anti-vacuity: the fixture must actually have swapped the DEK, or this test asserts \
+         nothing about the lenient arm"
+    );
+
+    let bundle = cairn_node::localstate_read::read_local_state(&c, Some(&secret))
+        .await
+        .expect("the export is readable on a live node");
+
+    wipe_to_a_fresh_dr_machine(&c).await;
+    clear_actor_registry(&c).await;
+
+    let keydir = tempfile::tempdir().unwrap();
+    cairn_node::localstate::apply_local_state(
+        &c,
+        &bundle,
+        &cairn_node::localstate::CustodyKeyDestination::Plaintext {
+            path: &keydir.path().join("restored.key.unwrap"),
+        },
+    )
+    .await
+    .expect("the export applies into a fresh database");
+
+    let report = apply_clinical_plane(&c, &mutated, Some(&secret))
+        .await
+        .expect("a wrong DEK is a refusal of one record, never a failure of the run");
+
+    // THE ASSERTION. The door admitted the row and withheld custody; the restore must not
+    // report that as a record it applied.
+    let custody: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_dek WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        custody, 0,
+        "fixture precondition: db/020's lenient arm withholds custody for a wrong DEK"
+    );
+    assert!(
+        report.penned() > 0,
+        "a record whose custody did not land is a REFUSAL: it must be penned, with its \
+         bytes and its key held for a later `cairn-sync requeue`, not counted as applied. \
+         report = {report:?}"
+    );
+
+    let penned: i64 = c
+        .query_one(
+            "SELECT count(*) FROM sync_quarantine WHERE peer = $1",
+            &[&RESTORE_PEER_SENTINEL],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        penned > 0,
+        "and it is genuinely in the pen, not merely counted"
+    );
+}
+/// **WITHOUT A REGISTRY, NOT ONE RECORD IS OFFERED** (PR #566 review, important 2).
+///
+/// Every apply door resolves its author through `actor_current`, so with no registry the door
+/// refuses this node's own history as an unenrolled signer — every record, one at a time. The
+/// old behaviour warned about that correctly and then applied anyway, which wrote the clinic's
+/// entire clinical corpus a SECOND time into `sync_quarantine` to build a pen that cannot be
+/// drained: `finalize_identity` runs at the end of the restore and closes the registry door
+/// permanently, so nothing can ever release those rows.
+///
+/// It then closed by printing the pen's standard remedy, promising `cairn-sync requeue` would
+/// complete the restore — the exact false promise the warning above it exists to prevent, made
+/// to someone mid-disaster who reads the tail of a long run.
+///
+/// Refusing to start is the honest answer, and it leaves the database restorable from the same
+/// medium once the export is recovered.
+#[tokio::test]
+async fn with_no_actor_registry_the_clinical_plane_is_not_offered_at_all() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let (_event_id, _bytes, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let records = capture_clinical_records(&c, &sk, &kid, tmp.path()).await;
+    let secret = fixture_unwrap_secret(&sk);
+
+    // The disaster, WITHOUT the registry half of the export ever arriving.
+    wipe_to_a_fresh_dr_machine(&c).await;
+    clear_actor_registry(&c).await;
+
+    let report = apply_clinical_plane(&c, &records, Some(&secret))
+        .await
+        .expect("a missing registry is a precondition, never a crash");
+
+    assert!(
+        report.skipped_no_registry,
+        "the run must SAY it declined, so the summary can print the fresh-database remedy \
+         instead of the pen's requeue promise: {report:?}"
+    );
+    assert_eq!(
+        report.penned(),
+        0,
+        "not one record may be penned: {report:?}"
+    );
+    assert_eq!(report.applied, 0, "and none applied: {report:?}");
+
+    let penned: i64 = c
+        .query_one("SELECT count(*) FROM sync_quarantine", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        penned, 0,
+        "the pen must be EMPTY — filling it here doubles the clinic's corpus on disk to \
+         build something no `requeue` can ever drain"
+    );
+}
+/// **A RESUME IS NOT A RUN THAT DID NOTHING** (PR #566 review).
+///
+/// The door is idempotent, so re-running a restore over a medium it already applied is safe —
+/// and that is precisely why the two outcomes must be told apart. `already_present` exists so
+/// a resumed restore cannot be mistaken for a first run that silently applied nothing, and
+/// until now nothing asserted it: the field was printed and never checked, so folding it back
+/// into `applied` would have gone unnoticed.
+#[tokio::test]
+async fn a_second_pass_counts_already_present_rather_than_applying_again() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let _ = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let records = capture_clinical_records(&c, &sk, &kid, tmp.path()).await;
+    let secret = fixture_unwrap_secret(&sk);
+    let bundle = cairn_node::localstate_read::read_local_state(&c, Some(&secret))
+        .await
+        .expect("the export is readable on a live node");
+
+    wipe_to_a_fresh_dr_machine(&c).await;
+    clear_actor_registry(&c).await;
+    let keydir = tempfile::tempdir().unwrap();
+    cairn_node::localstate::apply_local_state(
+        &c,
+        &bundle,
+        &cairn_node::localstate::CustodyKeyDestination::Plaintext {
+            path: &keydir.path().join("restored.key.unwrap"),
+        },
+    )
+    .await
+    .expect("the export applies into a fresh database");
+
+    let first = apply_clinical_plane(&c, &records, Some(&secret))
+        .await
+        .expect("the first pass applies");
+    assert!(
+        first.applied > 0,
+        "anti-vacuity: the first pass did the work"
+    );
+    assert_eq!(first.already_present, 0, "nothing was here before it");
+
+    // THE RESUME: the same medium, into the same database, exactly as an operator re-running
+    // an interrupted restore would.
+    let second = apply_clinical_plane(&c, &records, Some(&secret))
+        .await
+        .expect("re-applying the same medium is safe");
+    assert_eq!(
+        second.applied, 0,
+        "a second pass applies nothing new: {second:?}"
+    );
+    assert_eq!(
+        second.already_present,
+        records.len(),
+        "and it must SAY the records were already here — folded into `applied` this reads \
+         as a working restore, folded into nothing it reads as one that did nothing: {second:?}"
+    );
+    assert_eq!(second.penned(), 0, "and refuses nothing: {second:?}");
+}
+/// **AN ACKED PEN ROW DOES NOT GET THE REQUEUE PROMISE** (PR #566 review).
+///
+/// `cairn_quarantine_event` returns TRUE when the bytes are already ACKED — db/052 documents
+/// that return as load-bearing, and `cairn-sync` reads it. The restore threw it away, so on a
+/// resumed restore an operator's recorded decision that a record will never enter the record
+/// was counted as an ordinary refusal, and both the summary and the reason stored in
+/// `sync_quarantine.reason` promised `cairn-sync requeue` would complete the restore — for a
+/// row `do_requeue` deliberately skips.
+#[tokio::test]
+async fn a_pen_row_already_acked_is_counted_apart_from_an_ordinary_refusal() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let _ = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let records = capture_clinical_records(&c, &sk, &kid, tmp.path()).await;
+    let secret = fixture_unwrap_secret(&sk);
+    let bundle = cairn_node::localstate_read::read_local_state(&c, Some(&secret))
+        .await
+        .expect("the export is readable on a live node");
+
+    wipe_to_a_fresh_dr_machine(&c).await;
+    clear_actor_registry(&c).await;
+    let keydir = tempfile::tempdir().unwrap();
+    cairn_node::localstate::apply_local_state(
+        &c,
+        &bundle,
+        &cairn_node::localstate::CustodyKeyDestination::Plaintext {
+            path: &keydir.path().join("restored.key.unwrap"),
+        },
+    )
+    .await
+    .expect("the export applies into a fresh database");
+
+    // Pass 1 with NO custody key: every record carrying one is penned with its key.
+    let first = apply_clinical_plane(&c, &records, None)
+        .await
+        .expect("the no-export path pens rather than fails");
+    assert!(first.penned() > 0, "anti-vacuity: the pen is not empty");
+    assert_eq!(
+        first.penned_but_acked, 0,
+        "a freshly penned row carries no decision yet: {first:?}"
+    );
+
+    // The operator records a decision: these bytes will never enter the record.
+    c.execute("UPDATE sync_quarantine SET acked = true", &[])
+        .await
+        .unwrap();
+
+    // Pass 2, as a resumed restore re-offers the same medium.
+    let second = apply_clinical_plane(&c, &records, None)
+        .await
+        .expect("re-penning an acked row is not a failure");
+    assert!(
+        second.penned_but_acked > 0,
+        "the pen SAID these were already acked and the restore must not discard that — \
+         otherwise the summary promises a `requeue` that deliberately skips them: {second:?}"
+    );
 }
