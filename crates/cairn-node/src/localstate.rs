@@ -41,18 +41,19 @@
 //! 3) and [`apply_local_state`] installs it on arrival, re-sealed under the restored node's
 //! own secrets, and registers its public half (decision 4).
 //!
-//! Read that narrowly, because the ADR's title — "identity dies with the disk; custody must
-//! not" — is still not fully this system's behaviour. What survives a restore today is the
-//! KEY. The custody ROWS ride along and are counted, but nothing inserts them — because
-//! nothing yet RESTORES a clinical event for them to be custody of (#500, below). Neither
-//! half is useful without the other; do not read this section as more than it says.
+//! Read that narrowly. Since #554 slice 2d a restore lands the KEY, the ACTOR REGISTRY and
+//! the clinical events themselves, so the ADR's title — "identity dies with the disk; custody
+//! must not" — is now this system's behaviour for the path those three cover. The one custody
+//! carrier this module still only COUNTS is [`LocalState::episode_deks`], and that is
+//! deliberate rather than pending: the medium already carries each record's wrapped DEK
+//! beside it, and piping the export's second copy into `apply_remote_event`'s `p_dek` would
+//! double-wrap it, because the door wraps what it is handed. See
+//! [`crate::restore::clinical`]'s header for the full argument.
 //!
 //! **STILL OPEN, do not read this module as closing them:**
 //!
-//! - **Nothing restores a clinical event (#500).** Since DR slice 2c the backup medium DOES
-//!   carry the clinical plane, with each record's wrapped DEK — but `restore` and
-//!   `verify-backup` read the federation plane alone (`backup::node_plane_events`), so a
-//!   restored node still gets a working key and nothing to open with it. Slice 2d.
+//! - **`node_default_deks` has no subject.** The slot is carried and counted; nothing
+//!   consumes it, because no event type yet takes a node-default DEK.
 //! - **The restore side lands the KEY, and the rows land with the events.**
 //!   [`apply_local_state`] installs the recovered unwrap secret and registers its public half
 //!   (ADR-0066 decision 4), so a restored node's custody IS the dead node's custody — #495's
@@ -330,8 +331,9 @@ impl LocalState {
     }
 
     /// The surviving actor-registry rows, each a CBOR [`ActorRegistryRow`], ordered by `seq`
-    /// (Task 11 / #500). **Carried, not applied**: nothing today inserts these into a
-    /// restored node's `actor_event` — that is slice 2d. `is_empty()` on this slice means
+    /// (Task 11 / #500). **Carried AND applied since #554 slice 2d**: [`apply_local_state`]
+    /// installs them through `restore_actor_registry` (db/052), before the clinical plane, so
+    /// every apply door can resolve its author through `actor_current`. `is_empty()` on this slice means
     /// either "no export has run since this bundle predates the registry slot" or "this node
     /// really has no enrolled actors"; [`from_cbor`] cannot tell those apart from an old
     /// export alone, which is exactly why the empty encoding is pinned rather than skipped
@@ -1072,8 +1074,9 @@ pub struct AppliedLocalState {
     ///
     /// Lower than `actor_registry_carried` means a resume completed a prior interrupted
     /// restore — the door is set-shaped and idempotent, so it reports what IT did rather than
-    /// re-claiming the set. Zero with a non-zero carried count on a FRESH database would mean
-    /// the registry was already fully present, which is the same resume case at its end.
+    /// re-claiming the set. Zero with a non-zero carried count means the registry was ALREADY
+    /// fully present, which is that same resume case at its end: the database is not fresh, it
+    /// is the target of a prior interrupted restore that had already finished this step.
     actor_registry_restored: usize,
 }
 
@@ -1258,32 +1261,34 @@ pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &Secret32) -> a
 /// 3. **Install it** at `custody`, proving it reads back (see
 ///    [`CustodyKeyDestination::install`]).
 /// 4. **Register its public half**, so the restored node's custody IS the dead node's
-///    custody. Registration comes last of the three because it is the step that can never be
-///    taken back.
+///    custody. Registration comes after the install because a registered public half whose
+///    secret is not on disk is unrecoverable, whereas a written file with no registration is
+///    fixed by re-running.
+/// 5. **Install the actor registry** through `restore_actor_registry` (db/052) — set-shaped
+///    and resumable, so an interrupted restore re-runs without special-casing. It comes after
+///    custody and before the caller's clinical apply, because every apply door resolves its
+///    author through `actor_current`: without it the door refuses this node's own history as
+///    *"signer … is not an enrolled, non-revoked actor"*.
 ///
-/// # What is CARRIED but not APPLIED, and why that is honest rather than lossy
+/// # What is CARRIED but not APPLIED, and why that is deliberate rather than pending
 ///
-/// [`LocalState::episode_deks`] is counted and reported, not inserted. The rows belong to
-/// clinical events, and while the backup medium HAS carried those since DR slice 2c, nothing
-/// on this side reads them back yet: `restore` applies the federation plane only, so there is
-/// still no restored clinical event here for these rows to be custody OF. The door that
-/// changes that is slice 2d's (**#500** stays open until it lands), and it is the same door
-/// that must insert this custody — building a second one here, ahead of it, would be waste.
-/// The count travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the
-/// restore command PRINTS it: an operator is told what came across and what is still owed,
-/// rather than finding out on the next disaster.
+/// [`LocalState::episode_deks`] is counted and reported, never inserted — and since #554
+/// slice 2d that is a DECISION, not a gap waiting on a door. The medium already carries each
+/// clinical record's wrapped DEK beside the record itself, and that is the copy the restore
+/// uses. Piping this second copy into `apply_remote_event`'s `p_dek` would **double-wrap**
+/// it, because the door wraps what it is handed; see [`crate::restore::clinical`]'s header for
+/// why that defect is invisible to every count and surfaces months later. The count still
+/// travels back in [`AppliedLocalState::episode_deks_carried`] and the restore command PRINTS
+/// it, so an operator is told what came across rather than finding out on the next disaster.
 ///
-/// [`LocalState::actor_registry`] gets the SAME treatment, for the SAME reason (Task 11's own
-/// fix round, review finding I2): counted in [`AppliedLocalState::actor_registry_carried`] and
-/// printed, never inserted — `actor_event` has no INSERT door here yet either, and that door
-/// is slice 2d's, alongside the clinical-event apply it must precede.
+/// # The ordering this function's caller owes it
 ///
-/// The ordering note for whoever lands #500's restore half: custody must be registered BEFORE
-/// clinical events apply, because the door wraps each event's DEK to the registered public
-/// half. This function already does its half in that order; the *caller* currently runs it
-/// after `finalize_identity`, which is fine only while no clinical event is APPLIED. The
-/// medium has carried them since slice 2c, so the trigger for moving this call site up is the
-/// slice that starts applying them, not the one that started capturing them.
+/// Custody must be registered BEFORE clinical events apply, because the door wraps each
+/// event's DEK to the registered public half; the registry must land before them too, for the
+/// reason in step 5; and `finalize_identity` must run LAST, so the whole restore happens
+/// inside the un-enrolled fence and a failure leaves a database that is still restorable from
+/// the same medium. `restore` does exactly that, and
+/// `crates/cairn-node/tests/restore_ceremony_order.rs` pins it.
 pub async fn apply_local_state(
     db: &tokio_postgres::Client,
     ls: &LocalState,
@@ -1453,8 +1458,46 @@ pub fn describe_local_state(lsk_present: bool, export_present: bool) -> String {
     }
 }
 
+/// The operator line reporting what the actor-registry restore did. **Pure.**
+///
+/// Both numbers, never one: they differ on a RESUMED restore, where the export carries the
+/// whole registry and this run inserts only the remainder. *"N carried"* alone hides that a
+/// resume happened; *"0 restored"* alone reads as data loss.
+///
+/// The resume clause is CONDITIONAL, which it was not (PR #566 review). On the ordinary fresh
+/// restore — overwhelmingly the common case — every carried row is inserted, and the line
+/// still read *"3 of 3 carried row(s) inserted (the rest were already present — a resumed
+/// restore)"*. There is no rest, and it was not a resume. A summary that describes a state
+/// the machine is not in is the same defect class as the three misleading messages this
+/// slice's own review round removed, arriving one line further down.
+pub fn actor_registry_line(restored: usize, carried: usize) -> String {
+    let resume = if restored < carried {
+        " (the rest were already present — a resumed restore)"
+    } else {
+        ""
+    };
+    format!("actor registry restored: {restored} of {carried} carried row(s) inserted{resume}")
+}
+
 #[cfg(test)]
 mod tests {
+    /// A fresh restore is not a resume, and the line must not say it was.
+    #[test]
+    fn the_resume_clause_only_appears_on_an_actual_resume() {
+        let fresh = super::actor_registry_line(3, 3);
+        assert!(
+            !fresh.contains("resumed"),
+            "every carried row was inserted: there is no rest to have been present: {fresh}"
+        );
+        assert!(fresh.contains("3 of 3"), "{fresh}");
+
+        let resumed = super::actor_registry_line(1, 3);
+        assert!(
+            resumed.contains("resumed restore"),
+            "a genuine resume must still be named, or the fix is a silent deletion: {resumed}"
+        );
+    }
+
     use super::*;
 
     #[test]

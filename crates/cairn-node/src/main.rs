@@ -2611,10 +2611,16 @@ async fn main() -> anyhow::Result<()> {
             // `backup` starts writing CAIRNB3, this command must keep reading it rather than
             // refuse a perfectly good medium as "not a backup medium" — the exact regression
             // this task exists to prevent. The COUNT printed at the end stays scoped to the
-            // NODE (federation) plane, deliberately: that is exactly what `restore` applies
-            // today, so this command's "OK" can never claim more than a restore could
-            // actually recover. Reporting the clinical plane's restorability is slice 2d's
-            // job; see `node_plane_events`'s doc.
+            // NODE (federation) plane; see `node_plane_events`'s doc.
+            //
+            // ⚠️ THAT SCOPING IS NOW A KNOWN GAP, not a safety property. It used to be one:
+            // while `restore` applied the federation plane alone, a count scoped the same way
+            // could never claim more than a restore could recover. Since #554 slice 2d
+            // `restore` applies BOTH planes, so this command's "OK" now says nothing about
+            // the half a clinic actually depends on — and `untrusted_clinical_notice`, which
+            // names records a restore will not be able to trust, is wired into `restore`
+            // only. An operator can therefore verify green and still restore a medium whose
+            // clinical plane is partly untrusted. Tracked as its own slice (#567).
             //
             // INTEGRITY is a different question and is NOT so scoped — `refuse_unsound_medium`
             // below runs `medium::assess`, which verifies every record on the medium, clinical
@@ -2906,9 +2912,11 @@ async fn main() -> anyhow::Result<()> {
             //
             // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
             // `backup` starts writing CAIRNB3, a `restore` still on the legacy parser would
-            // refuse an operator's only copy at the exact moment they need it. Only the
-            // NODE (federation) plane is carried forward — restoring the clinical plane is
-            // slice 2d's job (`node_plane_events`'s doc has the full reasoning).
+            // refuse an operator's only copy at the exact moment they need it. THIS read is
+            // the NODE (federation) plane only. The clinical plane is read separately at step
+            // 7 below, through `clinical_plane_accounting` — a sibling reader, never a
+            // widening of this one, so a federation record's fate never depends on a clinical
+            // segment's chain (`node_plane_events`'s doc has the full reasoning).
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let image = cairn_node::medium::parse_any(&bytes)?;
@@ -3195,10 +3203,11 @@ async fn main() -> anyhow::Result<()> {
                         // resume happened; "0 restored" alone reads as data loss.
                         if report.actor_registry_carried() > 0 {
                             println!(
-                                "actor registry restored: {} of {} carried row(s) inserted \
-                                 (the rest were already present — a resumed restore)",
-                                report.actor_registry_restored(),
-                                report.actor_registry_carried()
+                                "{}",
+                                cairn_node::localstate::actor_registry_line(
+                                    report.actor_registry_restored(),
+                                    report.actor_registry_carried()
+                                )
                             );
                             // THE AEAD CAVEAT, printed rather than left in a design doc.
                             // These rows are the ONE part of a restore that is not
@@ -3261,11 +3270,23 @@ async fn main() -> anyhow::Result<()> {
             //    set — and every record would then be penned as "no key installed", with a
             //    remedy that sends the operator after custody they already have. The keystore
             //    file is the authority on what this node's custody actually is; ask it.
-            let restore_secret = cairn_node::keystore::load_unwrap_secret(
+            //    ⚠️ ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS. An `.ok()` here collapsed
+            //    them, and the warning printed below then told an operator whose export had
+            //    applied perfectly that no custody key was installed — sending them after
+            //    something they already have while the fault that ate the file went unnamed
+            //    (#502 items 1 and 3, one command over).
+            let restore_secret = match cairn_node::keystore::load_unwrap_secret(
                 &unwrap_path,
                 new_secrets.as_ref().map(|(op, _)| op.as_str()),
-            )
-            .ok();
+            ) {
+                Ok(secret) => Some(secret),
+                Err(e) => {
+                    if let Some(notice) = unreadable_custody_notice(&e, &unwrap_path) {
+                        eprintln!("{notice}");
+                    }
+                    None
+                }
+            };
             //    And the registry is a SEPARATE precondition with a separate failure. Asked of
             //    the database rather than inferred from the report, because "the rows are
             //    there" is the fact the apply door actually depends on — whether this run put
@@ -3275,18 +3296,26 @@ async fn main() -> anyhow::Result<()> {
                 .await?
                 .get(0);
 
-            let clinical_records = cairn_node::backup::clinical_plane_records(&image)?;
+            // The accounting, not just the records: `restore` reports BOTH how many records
+            // this medium could not be trusted for AND how many were merely duplicates, and
+            // conflating them is a false tampering diagnosis (PR #566 review, important 1).
+            let clinical_plane = cairn_node::backup::clinical_plane_accounting(&image)?;
+            let clinical_records = &clinical_plane.records;
             let counts = cairn_node::backup::plane_counts(&image);
             //    THE SILENT-DROP WARNING (#554 review finding 1). The reader stops at
             //    `verified_through`, which is right, but a mid-file chain break is not a torn
             //    tail — nothing else in this command mentions it, and the summary below counts
             //    against the medium's FULL clinical total. With the break in segment 0 that
             //    reads "0 applied … of N on the medium" at exit 0: #500's own signature.
-            let untrusted_notice = cairn_node::backup::untrusted_clinical_notice(
-                clinical_records.len(),
-                counts.clinical,
-            );
+            let untrusted_notice = cairn_node::backup::untrusted_clinical_notice(&clinical_plane);
             if let Some(notice) = &untrusted_notice {
+                eprintln!("{notice}");
+            }
+            //    And a re-capture that straddled a custody change leaves two DIFFERENT
+            //    records at one position. The derivation leaves those visible for a caller to
+            //    name; the serving path refuses such a page, and this path — where refusing
+            //    would lose data — says so instead of applying both in silence.
+            if let Some(notice) = cairn_node::backup::straddled_duplicate_notice(clinical_records) {
                 eprintln!("{notice}");
             }
 
@@ -3376,6 +3405,33 @@ async fn main() -> anyhow::Result<()> {
                 for (reason, n) in &clinical.refusals {
                     println!("  refused — {reason}: {n}");
                 }
+                // Repeated at the tail for the same reason the untrusted note is: an
+                // all-zero clinical line is otherwise indistinguishable from a medium that
+                // held nothing, and the two have opposite remedies. Without this the reader
+                // of a long restore's last screen sees "0 applied, 0 refused" and no cause.
+                // An acked row is an operator's recorded decision that those bytes will
+                // never enter the record, and `do_requeue` skips them — so the pen's usual
+                // "requeue completes the restore" promise below is not true of these, and
+                // saying so here is cheaper than letting someone discover it at the pen.
+                if clinical.penned_but_acked > 0 {
+                    println!(
+                        "  NOTE: {} of those held record(s) were ALREADY ACKED in this pen — \
+                         a recorded decision that they will never enter the record. \
+                         `cairn-sync requeue` deliberately skips them; un-ack them first if \
+                         that decision no longer stands.",
+                        clinical.penned_but_acked
+                    );
+                }
+                if clinical.skipped_no_registry {
+                    println!(
+                        "  NOTE: NOT ONE record was offered to the apply door — this node \
+                         has no actor registry, so every one would have been refused as \
+                         authored by an unenrolled signer (see the WARNING above). The \
+                         clinical plane is still entirely on this medium and still \
+                         restorable: recover the local-state export and restore again, from \
+                         this same medium, into a FRESHLY CREATED database."
+                    );
+                }
                 // Repeated here, not only in the WARNING far above: an operator reading just
                 // the tail of a long restore must still see that part of this medium could
                 // not be trusted, rather than a clean summary whose numbers quietly disagree.
@@ -3384,8 +3440,7 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "  NOTE: {} of those {} were past this medium's last verified chain \
                          link and were never offered to the door (see the WARNING above)",
-                        counts.clinical - clinical_records.len(),
-                        counts.clinical
+                        clinical_plane.gated_out, counts.clinical
                     );
                 }
                 if clinical.penned() > 0 {
@@ -3419,6 +3474,17 @@ async fn main() -> anyhow::Result<()> {
                      and there are no clinical events ON THIS MEDIUM to restore. If this node \
                      held charts, they are NOT on this medium: find a newer capture."
                 );
+            } else {
+                // A CAIRNB3 medium with an EMPTY clinical plane fell through both arms and
+                // said nothing at all (PR #566 review) — the restore printed "restored N
+                // event(s)" and not one word about patients. That is reachable exactly when
+                // the clinical capture failed, was scoped out, or wrote an empty segment:
+                // the states most likely to accompany a bad backup, and #500's own signature.
+                println!(
+                    "note: this CAIRNB3 medium carries NO clinical records. The federation \
+                     plane was restored. If this node held charts, they are NOT on this \
+                     medium — check the capture that wrote it and find a medium that has them."
+                );
             }
             // #500 slice 2c review, Important 4: mirror the clinical note for a plane this
             // build cannot even name (a newer Cairn's) — never let it sit invisibly inside
@@ -3451,6 +3517,18 @@ async fn main() -> anyhow::Result<()> {
             // A restore that penned events is not a success — a script must see that — but
             // the `new node` / `supersedes` / `re-peer with …` lines above are their next
             // step and must never be lost to an early exit.
+            // Declining to offer the clinical plane at all is the MOST incomplete outcome
+            // of the three, so it must fail at least as loudly as a pen. It is checked
+            // first and separately: it pens nothing, so a `penned() > 0` test alone would
+            // hand a monitoring script exit 0 for a restore that recovered no charts.
+            if clinical.skipped_no_registry {
+                anyhow::bail!(
+                    "the clinical plane was NOT restored: this node has no actor registry, so \
+                     no record could be admitted (details above). The node IS restored as a \
+                     federation peer; recover the local-state export and restore again into a \
+                     freshly created database to recover the charts."
+                );
+            }
             if clinical.penned() > 0 {
                 anyhow::bail!(
                     "{} clinical record(s) were refused and are held in the quarantine pen \
@@ -5147,8 +5225,80 @@ async fn ensure_registration_actor(db: &tokio_postgres::Client, kid: &str) -> an
     Ok(())
 }
 
+/// Is this custody-load failure a PRESENT file we could not read, and if so what must the
+/// operator be told? **Pure.**
+///
+/// `None` means the file is simply absent, which is a legitimate, supported outcome with its
+/// own warning: an unattended restore with no passphrase, or an export that carried rows but
+/// no key. Anything else means the bytes are there and this node could not open them, which is
+/// a different fault with a different remedy — and folding the two together sends someone who
+/// already recovered their export back out to recover it again (PR #566 review).
+fn unreadable_custody_notice(
+    e: &cairn_node::keystore::KeystoreError,
+    path: &std::path::Path,
+) -> Option<String> {
+    if let cairn_node::keystore::KeystoreError::Io(io) = e {
+        if io.kind() == std::io::ErrorKind::NotFound {
+            return None;
+        }
+    }
+    Some(format!(
+        "WARNING: the custody key at {} is PRESENT but could not be read ({e}). This is NOT \
+         the same as having no export: the key may be on that disk and unreadable only \
+         because of this fault. Every clinical record carrying custody will be penned WITH \
+         its key. Fix the cause — permissions, a failing mount, the wrong passphrase — and \
+         run `cairn-sync requeue --key <this node\'s key>`; do NOT conclude the export was \
+         missing.",
+        path.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+    /// **ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS** (PR #566 review).
+    ///
+    /// The restore reads back the custody key it just wrote, and an `.ok()` there collapsed
+    /// three outcomes into two. Absence is a legitimate, supported state — every unattended
+    /// cron run restores without a passphrase — and the warning written for it tells the
+    /// operator to recover the export and run `requeue`. A file that is PRESENT and could not
+    /// be read is a potential loss of this node's entire custody key, and it rendered
+    /// IDENTICALLY to absence: the operator is sent after an export they already recovered
+    /// successfully, while the fault that ate the file goes unnamed. Same defect #502 items 1
+    /// and 3 named one command over.
+    #[test]
+    fn a_present_but_unreadable_custody_file_is_not_reported_as_absent() {
+        use std::io::ErrorKind;
+        let path = std::path::Path::new("/media/usb/restored.key.unwrap");
+
+        assert_eq!(
+            super::unreadable_custody_notice(
+                &cairn_node::keystore::KeystoreError::Io(ErrorKind::NotFound.into()),
+                path
+            ),
+            None,
+            "no file is the ordinary no-export path, and it already has its own warning"
+        );
+
+        let notice = super::unreadable_custody_notice(
+            &cairn_node::keystore::KeystoreError::Io(ErrorKind::PermissionDenied.into()),
+            path,
+        )
+        .expect("a file we could not read must be NAMED, never rendered as absence");
+        assert!(
+            notice.contains("restored.key.unwrap"),
+            "an operator needs the path to act on: {notice}"
+        );
+
+        assert!(
+            super::unreadable_custody_notice(
+                &cairn_node::keystore::KeystoreError::Key("truncated".into()),
+                path
+            )
+            .is_some(),
+            "corrupt key material is a present-but-unreadable file, not an absent one"
+        );
+    }
+
     use super::*;
 
     #[test]

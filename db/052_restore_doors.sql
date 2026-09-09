@@ -19,8 +19,8 @@
 -- below). It is the highest-value new privilege in this slice, so it is granted to
 -- `cairn_node` and explicitly NOT to `cairn_agent` — an advisory actor must never be able to
 -- re-authorise itself by "restoring" a registry. That grant is a TESTED property
--- (`crates/cairn-node/tests/…`), not a comment: the #430/#431 shape is a decoy path around a
--- floor that looks correct at its own site.
+-- (`crates/cairn-node/tests/restore_actor_registry_door.rs`), not a comment: the #430/#431
+-- shape is a decoy path around a floor that looks correct at its own site.
 
 BEGIN;
 
