@@ -9,8 +9,8 @@
 //! so a solo clinic backed up nightly, passed `verify-backup`, lost its disk, and restored a
 //! node that knew who it had peered with and **zero patients**. This module is the reader.
 //!
-//! It sits beside [`super::apply_medium`] (the federation plane's applier) rather than inside
-//! it, because the two planes differ in three ways that are all safety-relevant: the clinical
+//! It sits beside [`crate::restore::apply_medium`] (the federation plane's applier) rather than
+//! inside it, because the two planes differ in three safety-relevant ways: the clinical
 //! plane carries custody, it goes through a different door, and a per-event refusal must not
 //! abort the run.
 //!

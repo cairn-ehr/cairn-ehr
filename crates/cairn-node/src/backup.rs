@@ -104,7 +104,7 @@ pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupErro
 /// and the disaster-recovery path cannot drift onto two different answers about what a
 /// medium may be trusted for.
 ///
-/// **Why whole [`MediumRecord`]s and not bare bytes**, where `node_plane_events` returns
+/// **Why whole [`cairn_medium::MediumRecord`]s and not bare bytes**, where `node_plane_events` returns
 /// `Vec<Vec<u8>>`: the clinical plane carries three things the federation plane does not —
 /// the attestation pair (which the apply door re-verifies for a suppressing event) and the
 /// **wrapped DEK**, without which a restored sealed body is permanently unreadable. Handing
