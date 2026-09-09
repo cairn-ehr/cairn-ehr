@@ -292,6 +292,28 @@ rediscover — the per-slice narrative is ROADMAP's.
   and nothing else. `gh pr list --state all` before acting is what surfaced it — HANDOVER said
   "next build is 2d" and was two days stale. The rule paid for itself the first session after it
   was written.
+- **⇒ THE REVIEW ROUND FOUND THREE WAYS THE SLICE LIED TO AN OPERATOR MID-DISASTER**, all
+  fixed, and all of the same species: a message that is confidently wrong is worse than none.
+  (1) **Clinical records past `verified_through` were dropped silently** — the reader stopping
+  at the last verified chain link is correct, but a mid-file chain break is NOT a torn tail and
+  nothing said so, while the summary counted against the medium's FULL clinical total. With the
+  break in **segment 0** that reads *"0 applied … of N on the medium"* at **exit 0**: #500's
+  own zero-patients signature, inside the slice built to close it. (2) **A registry-only failure
+  produced a wrong diagnosis** — `restore_secret` was gated on `local_state_failure`, but
+  `apply_local_state` installs custody FIRST and the registry SECOND, so a registry failure left
+  a good key on disk while every record was penned as *"no key installed"*. **Read the file, not
+  the failure.** (3) **A missing registry and a missing key got the SAME remedy, and one was
+  false**: custody can be recovered later (the pen holds both halves, so requeue works), but
+  `finalize_identity` permanently closes `restore_actor_registry`'s first fence, so a restore
+  that ran without a registry produces a pen that **can never be drained** and the remedy is a
+  fresh database. Pinned, because the distinction is invisible in the code.
+- **⇒ `requeue` MUST NOT ABORT — it is the command a restore's own output points at.** Resolving
+  custody exactly as the pull path does made it refuse on a divergence or a corrupt key, and
+  `load_or_create_key` would **silently mint a stray `node.key`** for an operator in the wrong
+  directory. Custody there is best-effort now (new `load_existing_key` never creates), and
+  custody-less release is the pre-2d behaviour, so the degraded path is the old one.
+- **A plaintext DEK must be BORROWED out of `Zeroizing`, never `to_vec()`d** — one unwiped heap
+  copy per sealed record, on a machine mid-disaster. Both `cairn-sync` call sites already did.
 - **A `cairn-node` test cannot pass a `serde_json::Value` as a parameter** (no
   `with-serde_json-1` feature) and **cannot use `$1::jsonb`** either — tokio-postgres infers a
   parameter's type from its cast TARGET. The payload travels as TEXT through `$1::text::jsonb`.
