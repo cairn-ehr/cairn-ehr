@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -3152,6 +3153,25 @@ async fn main() -> anyhow::Result<()> {
                 // Printing first means the worst case is a shown code for an unwritten key
                 // (restore simply re-runs), never a permanently sealed, unrecoverable node.
                 print_recovery_code(&code);
+                // #572 / ADR-0069. A restore can now run with no human at the terminal, and
+                // the code just printed is the only off-node way to recover this node's key.
+                //
+                // Keyed on the STREAM rather than on which flags were passed, because that is
+                // the honest question — and because the exposure is OLDER AND WIDER than the
+                // flag this slice adds: a medium with no local-state export sibling never
+                // reaches the recovery-code prompt at all, so a sealed restore of one has
+                // always been able to run unattended and print a code into a log. That is why
+                // #527/#562's triage note ("no cron-run command reaches print_recovery_code")
+                // is CORRECTED by ADR-0069 rather than broken by it.
+                //
+                // This REPORTS the exposure. It does not prevent it, and the wording must
+                // never suggest otherwise — the real fix is tracked separately.
+                if !std::io::stderr().is_terminal() {
+                    eprintln!(
+                        "{}",
+                        cairn_node::restore::recovery_code::minted_code_exposure_warning()
+                    );
+                }
                 let (sk, kid) = cairn_node::keystore::generate_sealed(&cli.key, &op, &code)?;
                 // The restored node gets its OWN day-one local-state escrow under its NEW
                 // secrets (ADR-0026 slice D) — the old `.lsk` was on the dead disk.
