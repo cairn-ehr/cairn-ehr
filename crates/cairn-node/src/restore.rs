@@ -19,6 +19,12 @@
 //! (operator-error-safe) but is flagged; a marker-less legacy medium falls back to an explicit
 //! `--superseded-node` (or a sole-enroll medium).
 
+/// Applying the medium's CLINICAL plane (#554 slice 2d). Kept in its own file because the two
+/// planes differ in three safety-relevant ways — custody, a different door, and a per-event
+/// refusal that must not abort the run — and because `restore.rs` is already at the crate's
+/// size cap (house rule 4).
+pub mod clinical;
+
 use crate::medium::{enrolls, scan_enrolls, verify_self_attestation, Container, SelfMarker};
 
 #[derive(thiserror::Error, Debug)]

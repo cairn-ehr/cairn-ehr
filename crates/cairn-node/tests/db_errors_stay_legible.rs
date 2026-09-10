@@ -396,17 +396,16 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
         r#""cairn-sync serve: trust-set lookup for puller {kid} failed: {}", legible_db_error(&e)"#,
     ),
     (
-        "quarantine_event's dedupe UPDATE — the FIRST statement of a pen write, and the \
-         one a lock storm or an aborted transaction meets (#490 item 2)",
-        r#".map_err(|e| LocalDbFault::boxed("recording a re-offer of already-penned bytes", e))?"#,
-    ),
-    (
-        "quarantine_event's INSERT — the pen write itself",
-        r#".map_err(|e| LocalDbFault::boxed("penning a refused event in sync_quarantine", e))?"#,
-    ),
-    (
-        "quarantine_event's over-quota probe, which was a bare `?`",
-        r#".map_err(|e| LocalDbFault::boxed("distinguishing a full pen from a lost race", e))?"#,
+        "quarantine_event's pen write. ONE site since #554 slice 2d, where three were \
+         pinned before it: the dedupe UPDATE, the INSERT and the over-quota probe were \
+         three Rust statements and are now one call to `cairn_quarantine_event` (db/052), \
+         shared with `cairn-node`'s restore path — the daemon crate is binary-only, so the \
+         alternative was a second copy of the pen in another crate. This is the site a lock \
+         storm or an aborted transaction meets (#490 item 2), and it is the ONLY one that \
+         must keep rendering. NOTE the `if` above it: a FULL PEN is a deliberate verdict \
+         about the peer's flood and deliberately does NOT become a LocalDbFault, or a \
+         flooding peer reaches bet_a.py as a fault on this operator's own disk",
+        r#"LocalDbFault::boxed("penning a refused event in sync_quarantine", e)"#,
     ),
     (
         "the pen-release DELETE in the pull loop, whose `{de}` was the literal `db error` \
@@ -438,7 +437,18 @@ const SYNC_DAEMON_RENDERINGS: &[(&str, &str)] = &[
 /// wrapper and the count drops with it. Bumping it is the forced acknowledgement when a
 /// wrapped site is added. The shapes above also catch a revert and name which site; the count
 /// catches one whose shape was edited rather than deleted.
-const SYNC_DAEMON_LOCAL_DB_FAULT_SITES: usize = 6;
+///
+/// **6 → 3 in #554 slice 2d, and TWO different things caused it.** Three pen-write sites
+/// (the dedupe UPDATE, the INSERT, the over-quota probe) became one when the pen moved into
+/// `cairn_quarantine_event` (db/052) so `cairn-node`'s restore path could share it. And that
+/// one remaining site is **not counted by this needle**, because it is not a bare
+/// `.map_err(|e| LocalDbFault::boxed(` — the closure has to split a FULL PEN (a deliberate
+/// verdict about the peer's flood, which must not gain the `local_fault` class) from a genuine
+/// local fault, so the wrapper sits inside an `else` arm. It is still pinned, by SHAPE, in the
+/// list above; that entry is what protects it. Stated here because "the count went down by
+/// three while a wrapper was added" is otherwise exactly the reading this constant exists to
+/// prevent.
+const SYNC_DAEMON_LOCAL_DB_FAULT_SITES: usize = 3;
 
 /// `cairn-sync`'s run loop keeps rendering its database failures (#479).
 ///

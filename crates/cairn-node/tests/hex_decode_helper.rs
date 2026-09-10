@@ -195,6 +195,14 @@ fn every_hex_door_still_calls_the_helper() {
         // bare decode() there would raise in the 22 class and freeze that peer's pull cursor
         // rather than skipping past a malformed event.
         ("048_sensitivity_stream.sql", 2),
+        // #554 slice 2d: `restore_actor_registry` decodes the two BYTEA columns an exported
+        // actor-registry row carries as hex — `actor_id` (the content address of the pinned
+        // determinant set) and a supersede row's `superseded_by`. Both matter here for the
+        // same reason as the clinical sites: this door runs mid-DISASTER, on an operator's
+        // only copy, and a bare decode() would refuse their registry with `invalid input
+        // syntax for type bytea` and no field name — leaving them to guess which of a
+        // registry's rows is malformed with no node to inspect it on.
+        ("052_restore_doors.sql", 2),
     ]
     .iter()
     .map(|(f, n)| (f.to_string(), *n))

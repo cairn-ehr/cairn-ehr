@@ -208,6 +208,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "051_clinical_capture_source",
         include_str!("../../../db/051_clinical_capture_source.sql"),
     ),
+    // db/052 (#554 slice 2d): restore_actor_registry + cairn_quarantine_event. In BOTH
+    // lists because THIS crate's pull and requeue loops now pen through the shared in-DB
+    // door rather than their own INSERT — a node whose loader lags would fail to pen a
+    // refused event, i.e. fail on exactly the path a refusal takes.
+    (
+        "052_restore_doors",
+        include_str!("../../../db/052_restore_doors.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS
@@ -557,25 +565,7 @@ fn decode_blob_slice(raw: &[u8]) -> (bool, u64, &[u8]) {
 /// gone for good — caused by nothing more than starting a daemon.
 fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
     match std::fs::read(path) {
-        Ok(bytes) => {
-            let text = std::str::from_utf8(&bytes).map_err(|_| {
-                format!(
-                    "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
-                     key?); refusing to overwrite it. Point --key at this daemon's own key file."
-                )
-            })?;
-            let seed: [u8; 32] = hex::decode(text.trim())
-                .map_err(|e| {
-                    format!("{path} exists but is not valid hex ({e}); refusing to overwrite it")
-                })?
-                .try_into()
-                .map_err(|_| {
-                    format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
-                })?;
-            let sk = SigningKey::from_bytes(&seed);
-            let kid = hex::encode(sk.verifying_key().to_bytes());
-            Ok((sk, kid))
-        }
+        Ok(bytes) => parse_key_bytes(path, &bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // The only path that creates. Absence is the one state where writing cannot
             // destroy anything.
@@ -596,6 +586,40 @@ fn load_or_create_key(path: &str) -> R<(SigningKey, String)> {
         // and treating it as absent is how the overwrite happened.
         Err(e) => Err(format!("cannot read {path} ({e}); refusing to overwrite it").into()),
     }
+}
+
+/// Parse a hex-seed key file's bytes. **Pure.** Shared by [`load_or_create_key`] and
+/// [`load_existing_key`] so the two cannot drift on what a malformed key file means — every
+/// arm's message is a refusal that names the file and the reason.
+fn parse_key_bytes(path: &str, bytes: &[u8]) -> R<(SigningKey, String)> {
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        format!(
+            "{path} exists but is not a hex seed (it looks binary — a sealed cairn-node \
+             key?); refusing to overwrite it. Point --key at this daemon's own key file."
+        )
+    })?;
+    let seed: [u8; 32] = hex::decode(text.trim())
+        .map_err(|e| format!("{path} exists but is not valid hex ({e}); refusing to overwrite it"))?
+        .try_into()
+        .map_err(|_| {
+            format!("{path} exists but is not a 32-byte hex seed; refusing to overwrite it")
+        })?;
+    let sk = SigningKey::from_bytes(&seed);
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+    Ok((sk, kid))
+}
+
+/// Load this node's signing key, and **never create one**.
+///
+/// The load-only sibling of [`load_or_create_key`], added for `requeue` (#554 review finding 3).
+/// Creating a key is right for a daemon being provisioned and wrong for a RECOVERY command: an
+/// operator running `cairn-sync requeue` from the wrong directory would otherwise mint a stray
+/// `node.key`, resolve custody against an identity that has never authored anything, and be told
+/// nothing about it. Absence here is a plain refusal that names the path.
+fn load_existing_key(path: &str) -> R<(SigningKey, String)> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("cannot read this node's signing key at {path} ({e})"))?;
+    parse_key_bytes(path, &bytes)
 }
 
 fn now_ms() -> i64 {
@@ -2822,56 +2846,26 @@ fn quarantine_event(
     refused_seq: i64,
     reason: &str,
 ) -> R<bool> {
+    // A THIN CALLER since #554 slice 2d. The pen's whole implementation — the dedupe bump,
+    // the quota probes, the full-pen-vs-lost-race distinction — moved into
+    // `cairn_quarantine_event` (db/052) so `cairn-node`'s RESTORE path could reach it too.
+    // This crate is binary-only (no `lib.rs`), so the alternative was a second copy of a
+    // safety floor in another crate; ADR-0001's "fat Postgres, thin daemons" says where it
+    // belongs instead.
+    //
+    // **The sync path's behaviour is unchanged**, and that is what this call's shape
+    // guarantees: the ordinary per-peer quota is passed explicitly, so a peer that floods
+    // still hits the same cap with the same message. The RESTORE caller is the one that
+    // passes NULL (unbounded), for reasons that do not obtain here — it has no hostile peer
+    // to bound, and no cursor to freeze.
+    //
+    // No `dek_wrapped` on THIS path: a puller that refused a sealed event has already
+    // unwrapped nothing, and its peer will re-serve the key on a later cycle. The column
+    // exists for the restore path, which has no peer to re-serve anything.
     let digest = cairn_event::event_address(signed_bytes);
-    // Dedupe first: a re-offer of known bytes always succeeds (it does not grow
-    // the pen), even when the peer is over quota.
-    let bumped = client
-        .query_opt(
-            "UPDATE sync_quarantine
-            SET last_seen    = clock_timestamp(),
-                seen_count   = seen_count + 1,
-                attestation  = COALESCE(attestation, $2),
-                attester_key = COALESCE(attester_key, $3)
-          WHERE content_digest = $1
-          RETURNING acked",
-            &[&digest, &attestation, &attester_key],
-        )
-        .map_err(|e| LocalDbFault::boxed("recording a re-offer of already-penned bytes", e))?;
-    if let Some(row) = bumped {
-        return Ok(row.get(0));
-    }
-    // New bytes: admit only within the per-peer quota (INCLUDING this event's
-    // own size, so one huge frame cannot overshoot the byte budget). The
-    // aggregate probes ride the same statement so the check and the insert
-    // cannot disagree; a concurrent writer can still overshoot by one row —
-    // the cap is a resource budget, not an exact invariant. Only UNACKED rows
-    // count (issue #197, mirrors the node plane): an acked row is a resolved
-    // human decision, retained as the record of it, never auto-deleted — if it
-    // still consumed quota, "ack the held rows" (this function's own documented
-    // remedy, below) could never free the pen and a peer that flooded then got
-    // acked would wedge the cursor forever, with a manual DELETE the only way out.
-    // The accepted flip side: the retained ACKED set is bounded per ack round (each
-    // ack licenses another quota's worth of kept bytes), not absolutely — operators
-    // may DELETE acked rows to reclaim disk (the db/021 grant exists for this).
-    // refused_seq (issue #196) is set on INSERT only; the dedupe UPDATE above leaves
-    // it untouched — FORENSICS ("at what serving seq was this first refused"), never
-    // a fetch input. The re-offer POSITION is sync_state.quarantine_floor_seq, a
-    // separate column do_pull recomputes each cycle precisely so it can self-clear
-    // on a clean cycle while this pen row survives as the audit trace. (Deriving the
-    // floor from min(refused_seq) here — the node-plane model — was considered and
-    // REJECTED: it re-ships from the low seq forever after a one-time corruption
-    // heals, until a manual ack. See the db/036 header + the #223 PR description.)
-    let inserted = client
-        .execute(
-            "INSERT INTO sync_quarantine
-             (content_digest, signed_bytes, attestation, attester_key, peer, refused_seq, reason)
-         SELECT $1,$2,$3,$4,$5,$6,$7
-          WHERE (SELECT count(*) FROM sync_quarantine
-                   WHERE peer = $5 AND NOT acked) < $8
-            AND (SELECT COALESCE(sum(octet_length(signed_bytes)),0)
-                   FROM sync_quarantine
-                   WHERE peer = $5 AND NOT acked) + octet_length($2::bytea) <= $9
-         ON CONFLICT (content_digest) DO NOTHING",
+    let row = client
+        .query_one(
+            "SELECT cairn_quarantine_event($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9)",
             &[
                 &digest,
                 &signed_bytes,
@@ -2884,31 +2878,31 @@ fn quarantine_event(
                 &MAX_QUARANTINE_BYTES_PER_PEER,
             ],
         )
-        .map_err(|e| LocalDbFault::boxed("penning a refused event in sync_quarantine", e))?;
-    if inserted == 0 {
-        // Zero rows means EITHER over-quota OR a concurrent writer penned the
-        // same bytes first (ON CONFLICT DO NOTHING). Distinguish them — a false
-        // "quota" diagnosis on the safety path would send the operator chasing
-        // a condition that does not exist.
-        if let Some(row) = client
-            .query_opt(
-                "SELECT acked FROM sync_quarantine WHERE content_digest = $1",
-                &[&digest],
-            )
-            .map_err(|e| LocalDbFault::boxed("distinguishing a full pen from a lost race", e))?
-        {
-            return Ok(row.get(0)); // lost a benign race: the trace exists
-        }
-        return Err(format!(
-            "quarantine pen for peer '{peer_name}' is at its quota of unacked rows \
-             ({MAX_QUARANTINE_ROWS_PER_PEER} rows / {MAX_QUARANTINE_BYTES_PER_PEER} bytes) — \
-             refusing to grow it; the watermark freezes instead (delayed, never lost). \
-             Inspect with `cairn-sync quarantine` and fix or ack the held rows \
-             (acked rows stop counting against the quota)."
-        )
-        .into());
-    }
-    Ok(false)
+        // TWO OUTCOMES ARRIVE THROUGH ONE `Err` NOW, and they must not be conflated —
+        // splitting them is what moving the pen into the database (#554 slice 2d) put at
+        // risk, and two existing tests caught a first draft that did conflate them.
+        //
+        //   * A FULL PEN is a deliberate policy verdict about the PEER's flood, not a failure
+        //     of this node's machine. It must NOT gain the `local_fault` class, or a flooding
+        //     peer reaches `bet_a.py` as a fault on the operator's own disk and sends them to
+        //     the wrong place entirely. It keeps the old shape: a plain error carrying the
+        //     door's text. `refusal_is_deliberate` is the same SQLSTATE test the apply path
+        //     uses for the same distinction (ADR-0056 decision 5), so the two floors agree
+        //     about what "a verdict" means rather than each deciding for itself.
+        //   * ANYTHING ELSE — a lock timeout, an aborted transaction, a revoked grant — IS
+        //     this node's database, and `classify_pull_failure` has to reach the
+        //     `postgres::Error` through `source()` and keep its SQLSTATE. Flattening it into
+        //     a String is the #480/#489 shape: the cycle reclassifies as a `partition` and
+        //     the operator is told to audit the peer's signatures over a fault on their own
+        //     disk. Not hypothetical — a first draft of this call site did exactly that.
+        .map_err(|e| {
+            if refusal_is_deliberate(e.code().map(|c| c.code())) {
+                Box::<dyn Error>::from(legible_db_error(&e))
+            } else {
+                LocalDbFault::boxed("penning a refused event in sync_quarantine", e)
+            }
+        })?;
+    Ok(row.get(0))
 }
 
 /// Pull from `peer` on the clinical plane, seq-cursored (issue #196). Cursors on
@@ -4144,7 +4138,14 @@ fn apply_page(
 /// the skew-vs-tampering diagnosis; #110 review finding 5). Never a raw INSERT:
 /// release goes through `apply_remote_event` (db/020), so requeue can only ever
 /// ADMIT what the floor admits.
-fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
+fn do_requeue(
+    client: &mut postgres::Client,
+    // The node's own unwrap secret, so a penned SEALED event can be released WITH its
+    // custody (#554 slice 2d — the pen carries `dek_wrapped` since db/052). `None` is the
+    // honest degradation for a node that could not load its key: the events still release,
+    // just without custody, exactly as the pull path degrades.
+    unwrap_secret: Option<&Secret32>,
+) -> R<serde_json::Value> {
     // Digests only up front; each row's (possibly large) bytes are fetched one
     // at a time inside the loop, so a pen holding a whole legacy history cannot
     // OOM the recovery path (#110 review: the pen is unbounded-ish by design —
@@ -4238,7 +4239,7 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         // passed in are exactly the completed ones.
         let Some(row) = client
             .query_opt(
-                "SELECT signed_bytes, attestation, attester_key
+                "SELECT signed_bytes, attestation, attester_key, dek_wrapped
              FROM sync_quarantine WHERE content_digest=$1",
                 &[digest],
             )
@@ -4264,11 +4265,45 @@ fn do_requeue(client: &mut postgres::Client) -> R<serde_json::Value> {
         let signed: Vec<u8> = row.get(0);
         let att: Option<Vec<u8>> = row.get(1);
         let akey: Option<Vec<u8>> = row.get(2);
-        // No sidecar DEK on the requeue path: the quarantine pen holds only the
-        // refused signed bytes + attestation pair, never custody. A re-queued sealed
-        // event is admitted structurally without custody; its DEK rides a later
-        // normal pull once the peer serves it. Pass None (ADR-0052).
-        match apply_signed(client, &signed, att.as_deref(), akey.as_deref(), None) {
+        // THE PEN CARRIES CUSTODY NOW (#554 slice 2d, db/052).
+        //
+        // This used to pass `None`, on the stated reasoning that "a re-queued sealed event is
+        // admitted structurally without custody; its DEK rides a later normal pull once the
+        // peer serves it." That is sound for SYNC and false for a RESTORE: a restored solo
+        // node has no peer, the medium is the only carrier of the key, and `finalize_identity`
+        // fences the door behind the operator — so a requeue that dropped the key would admit
+        // permanently-unopenable ciphertext at exit 0.
+        //
+        // It strictly improves the sync path too: a penned sealed event whose peer is later
+        // decommissioned becomes recoverable instead of lost.
+        //
+        // The DEK is unwrapped HERE and the PLAINTEXT is handed on, exactly as `do_pull` does
+        // one screen up — the door feeds `p_dek` into `cairn_wrap_dek`, so passing the wrapped
+        // copy through would double-wrap it into a key that unwraps to noise. `None` on a
+        // failure to open is the honest degradation and matches the pull path: no custody is
+        // recoverable, but the event still is.
+        let penned_dek: Option<Vec<u8>> = row.get(3);
+        let dek = match (&unwrap_secret, &penned_dek) {
+            (Some(secret), Some(wrapped)) => match cairn_event::seal::unwrap_dek(wrapped, secret) {
+                Ok(d) => Some(d),
+                Err(_) => {
+                    eprintln!(
+                        "requeue: {} carries a wrapped DEK that did not open with this \
+                         node's custody key — releasing the event WITHOUT custody",
+                        hex_prefix(digest)
+                    );
+                    None
+                }
+            },
+            _ => None,
+        };
+        match apply_signed(
+            client,
+            &signed,
+            att.as_deref(),
+            akey.as_deref(),
+            dek.as_ref().map(|d| d.as_bytes().as_slice()),
+        ) {
             Ok(_) => {
                 // #471: `released` has NOT been incremented for this row yet, and that is
                 // correct — the event is in `event_log`, but the row is not released until
@@ -4458,10 +4493,43 @@ fn connect_checked_apply(conn: &str) -> R<postgres::Client> {
     Ok(client)
 }
 
-fn cmd_requeue(conn: &str, metrics: bool) -> R<()> {
+fn cmd_requeue(conn: &str, metrics: bool, key_path: &str, unwrap_key_path: Option<&str>) -> R<()> {
     // Requeue re-applies through the in-DB door, so it needs a current cairn_pgx.
     let mut client = connect_checked_apply(conn)?;
-    match do_requeue(&mut client) {
+    // The node's custody key, so a penned SEALED event releases WITH its DEK (#554 slice 2d).
+    //
+    // ⚠️ BEST-EFFORT, AND DELIBERATELY UNLIKE `cmd_pull` — #554 review finding 3. An earlier
+    // version resolved it exactly as the pull path does, which broke this command in two ways
+    // that both bite hardest in the situation it exists for:
+    //
+    //   * `load_or_create_key` SILENTLY MINTS `node.key` when the path does not exist, so an
+    //     operator running `requeue` from the wrong directory would create a stray signing key
+    //     and then resolve custody against it. `load_existing_key` refuses instead.
+    //   * `resolve_at_startup` REFUSES on a divergence or a corrupt key file. Correct for a
+    //     daemon that is about to gain custody of new events; wrong here, because `requeue` is
+    //     the recovery command a restore's own output points operators at, and a recovery
+    //     command that aborts before releasing anything is worse than one that releases
+    //     without custody. Custody-less release is exactly what this path did before slice 2d,
+    //     so the degraded behaviour is the OLD behaviour, not a new hole.
+    //
+    // The failure is reported, never swallowed: an operator who needed custody has to know
+    // they did not get it, or they will read a clean release as a complete one.
+    let custody = match load_existing_key(key_path).and_then(|(sk, _kid)| {
+        unwrap_key::resolve_at_startup(&mut client, key_path, unwrap_key_path, sk)
+    }) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!(
+                "requeue: this node's custody key could not be resolved ({e}) — releasing \
+                 events WITHOUT custody. Any SEALED event released now keeps its ciphertext \
+                 and loses its key permanently, so if these rows were penned by a `restore`, \
+                 FIX THE KEY FIRST and run requeue again: the pen holds both halves until you \
+                 do."
+            );
+            None
+        }
+    };
+    match do_requeue(&mut client, custody.as_ref().map(|c| &c.unwrap_secret)) {
         Ok(m) => {
             if metrics {
                 println!("{m}");
@@ -5869,8 +5937,11 @@ USAGE (all take --conn <postgres-uri>):
   quarantine  --conn URI    (list refused events: digest, peer, reason, requeue error, acked)
   attachment-flags --conn URI
               (list attachment references this node admitted but cannot fetch: type, reason, count, example)
-  requeue     --conn URI [--metrics]
+  requeue     --conn URI [--metrics] [--key PATH] [--unwrap-key PATH]
               (re-process quarantined events through the apply door after fixing the cause)
+              (--key/--unwrap-key: this node's custody, so a penned SEALED event is released
+               WITH its DEK. Best-effort: an unresolvable key releases without custody and
+               says so — a recovery command must not abort before releasing anything.)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
   serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH] [--unwrap-key PATH]
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
@@ -5973,7 +6044,12 @@ fn main() -> R<()> {
         )?,
         "quarantine" => cmd_quarantine(&need(conn))?,
         "attachment-flags" => cmd_attachment_flags(&need(conn))?,
-        "requeue" => cmd_requeue(&need(conn), args.iter().any(|a| a == "--metrics"))?,
+        "requeue" => cmd_requeue(
+            &need(conn),
+            args.iter().any(|a| a == "--metrics"),
+            &flag(&args, "--key").unwrap_or_else(|| "node.key".into()),
+            flag(&args, "--unwrap-key").as_deref(),
+        )?,
         "gen-blob" => cmd_gen_blob(
             &need(conn),
             flag(&args, "--size-mb")
@@ -9301,7 +9377,7 @@ mod quarantine_tests {
         )
         .unwrap();
 
-        let metrics = do_requeue(&mut c);
+        let metrics = do_requeue(&mut c, None);
 
         for (name, sql) in SCHEMA {
             if name.starts_with("020") {
@@ -9491,7 +9567,7 @@ mod quarantine_tests {
             .unwrap();
         c.batch_execute("SET lock_timeout = '750ms'").unwrap();
 
-        let err = do_requeue(&mut c).expect_err("the newness probe cannot read event_log");
+        let err = do_requeue(&mut c, None).expect_err("the newness probe cannot read event_log");
 
         c.batch_execute("RESET lock_timeout").unwrap();
         blocker.batch_execute("ROLLBACK;").unwrap();
@@ -9617,11 +9693,23 @@ mod quarantine_tests {
             text.contains("25P02"),
             "the SQLSTATE is what tells an operator which condition was met: {text}"
         );
-        // The dedupe UPDATE is the FIRST statement `quarantine_event` runs, so it is the
-        // one that meets an aborted transaction — and naming the operation is half of
-        // what `LocalDbFault` exists for.
+        // …AND THE LINE MUST SAY WHAT THIS NODE WAS DOING — half of what `LocalDbFault`
+        // exists for.
+        //
+        // The expected text CHANGED in #554 slice 2d, deliberately and with a cost worth
+        // stating. This used to name the pen's FIRST statement ("recording a re-offer of
+        // already-penned bytes"), because the dedupe UPDATE, the quota probe and the insert
+        // were three separate Rust statements each with its own label. They are now one call
+        // to `cairn_quarantine_event` (db/052), shared with `cairn-node`'s restore path, so
+        // the honest label is the operation rather than the step inside it.
+        //
+        // What is LOST: an operator can no longer tell from this line which of the pen's
+        // internal statements met the fault. What is KEPT is everything the remedy turns on —
+        // the SQLSTATE, the reachable `postgres::Error`, and the operation. For a lock
+        // timeout or an aborted transaction the remedy is identical whichever statement met
+        // it, which is why the trade was taken rather than worked around.
         assert!(
-            text.contains("recording a re-offer of already-penned bytes"),
+            text.contains("penning a refused event in sync_quarantine"),
             "…and the line must say what this node was DOING: {text}"
         );
     }
@@ -10675,7 +10763,7 @@ mod quarantine_tests {
             &[&kid_x],
         )
         .unwrap();
-        let m = do_requeue(&mut c).unwrap();
+        let m = do_requeue(&mut c, None).unwrap();
         assert_eq!(m["released"], 1, "the repaired event is admitted");
         assert_eq!(
             m["references_unlearnable"], 1,
@@ -10850,7 +10938,7 @@ mod quarantine_tests {
         // Short enough that the test is quick, long enough that a loaded rig does not
         // trip it spuriously on the FIRST row (which is unlocked and returns at once).
         c.batch_execute("SET lock_timeout = '750ms'").unwrap();
-        let err = do_requeue(&mut c).expect_err("the release DELETE on row 2 must fail");
+        let err = do_requeue(&mut c, None).expect_err("the release DELETE on row 2 must fail");
 
         // Let the blocker go before asserting: a panic below must not leave a lock held
         // for the rest of the suite.
@@ -11943,7 +12031,7 @@ mod quarantine_tests {
             .unwrap();
         }
 
-        let m = do_requeue(&mut c).unwrap();
+        let m = do_requeue(&mut c, None).unwrap();
         assert_eq!(m["examined"], 2);
         assert_eq!(
             m["released"], 1,

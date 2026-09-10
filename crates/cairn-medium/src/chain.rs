@@ -19,6 +19,7 @@
 //! ([`watermark`], [`self_id_from_chain`]) READ a `ChainReport`, they never redecide it.
 
 use crate::container::MediumV3;
+use crate::record::MediumRecord;
 use crate::segment::Plane;
 use crate::verify::{verify_events, VerifyReport};
 
@@ -419,6 +420,117 @@ pub fn chain_tail(m: &MediumV3, report: &ChainReport) -> ChainTail {
         // itself already relies on) — `as` is a plain narrowing here, not a truncation risk.
         next_index: through as u32 + 1,
         prev_commitment,
+    }
+}
+
+/// Every record this medium can be TRUSTED to hand out for `plane`, in the order a
+/// consumer must take them: the verified prefix only, ascending by `source_seq`, with
+/// byte-identical re-capture duplicates collapsed.
+///
+/// **This is the ONE derivation of that set** (#554 slice 2d, design §5.0).
+/// `cairn_wire::MediumTransport` serves from it and `cairn-node`'s `restore` applies from
+/// it, so the serving path and the disaster-recovery path can never drift onto two different
+/// answers about what a medium may be trusted for. It lives here, in the module that owns
+/// `verified_through`, because the trust gate is the part a second implementation loses —
+/// and it is written as a pure function of `(medium, report, plane)` so both callers can use
+/// it without inheriting the other's machinery.
+///
+/// Three steps, each load-bearing, each with a failure it exists to prevent:
+///
+/// 1. **TRUST STOPS AT `verified_through`** (2a invariant 5). Handing out records past the
+///    last verified chain link would let a torn tail or a spliced segment through. Each such
+///    record is still individually signature-verified downstream, so nothing FORGED gets in,
+///    but per-event signatures say nothing about a segment SPLICE — narrowing that residual
+///    is the whole reason the chain pass exists. `None` (nothing verified) yields an EMPTY
+///    set, never "all": the dangerous default is the inverse of the gate.
+/// 2. **Sort by `source_seq`.** Segments sit in CAPTURE order, which stops matching source
+///    order the moment a re-capture or a gap backfill happens — 2c's capture fills burned-seq
+///    holes NEWEST-FIRST, so a record with a lower seq legitimately sits in a later segment.
+///    A consumer taking raw medium order would offer an overlay before the event it targets
+///    (the apply door refuses that) and, on the serving path, would advance a puller's
+///    contiguous-prefix cursor past events it had not yet delivered. `event_log.seq` IS
+///    causal on the node that wrote it, so this restores causal order exactly.
+/// 3. **Collapse only a WHOLLY identical duplicate.** A re-capture writes the same seq
+///    twice; that is expected data, not a fault. But `MediumRecord` carries three custody
+///    sidecars beside `signed_bytes`, and a re-capture can straddle a change to any of them
+///    (an unwrap-key rotation re-wraps `dek_wrapped`; a crypto-shred drives it `Some ->
+///    None`). Comparing bodies alone would silently keep whichever copy sorted first — which
+///    could hand a restore a DEK it cannot open, or resurrect one ADR-0005 erasure destroyed.
+///    `MediumRecord`'s `PartialEq` spans all five fields, so plain `dedup` collapses a pair
+///    only when EVERY field agrees; anything still differing stays visible as a duplicate
+///    `source_seq` for the caller to name.
+///
+/// Reads the prefix via `.get(..=through)` rather than indexing, for the same reason
+/// [`watermark`] and [`chain_tail`] do: `report` and `m` have no compile-time link, so a
+/// mismatched pair must degrade to an empty set, never panic an unattended node.
+pub fn plane_records(m: &MediumV3, report: &ChainReport, plane: Plane) -> Vec<MediumRecord> {
+    plane_records_with_accounting(m, report, plane).records
+}
+
+/// The trusted set, WITH the arithmetic that explains how it differs from the raw record
+/// count — so no caller has to reconstruct that by subtraction from a population
+/// [`plane_records`] never saw.
+///
+/// # The failure this shape exists to prevent (PR #566 review, important 1)
+///
+/// Steps 1 and 3 above remove records for OPPOSITE reasons. Step 1 removes records that
+/// cannot be TRUSTED; step 3 removes records that are merely REDUNDANT, and the module's own
+/// prose calls a re-capture overlap *"expected data, not a fault"*. `restore` built its
+/// operator warning by subtracting `records.len()` from the medium's raw count, which folds
+/// the two together — so a clinic whose nightly capture was once interrupted and re-run
+/// restored a perfectly intact medium and was told that records *"sit PAST its last verified
+/// chain link"* and *"could have been spliced in and cannot be trusted"*, and to go find a
+/// second off-site drive. Every clause false, printed to someone mid-disaster.
+///
+/// The three fields sum to the plane's raw record count on the medium, so a caller needs no
+/// second derivation to state any of the four numbers honestly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaneRecords {
+    /// The trusted set, exactly as [`plane_records`] returns it.
+    pub records: Vec<MediumRecord>,
+    /// Records in this plane sitting PAST `verified_through` — the trust finding, and the
+    /// only one of these numbers an "untrusted records" warning may ever report.
+    pub gated_out: usize,
+    /// Byte-identical re-capture duplicates collapsed by step 3. **Not a trust finding**, and
+    /// never to be reported as one.
+    pub collapsed: usize,
+}
+
+/// See [`PlaneRecords`]. This is the derivation; [`plane_records`] is the common projection
+/// of it, so the two can never disagree about what a medium may be trusted for.
+pub fn plane_records_with_accounting(
+    m: &MediumV3,
+    report: &ChainReport,
+    plane: Plane,
+) -> PlaneRecords {
+    let on_medium: usize = m
+        .segments
+        .iter()
+        .filter(|s| s.plane == plane)
+        .map(|s| s.records.len())
+        .sum();
+    // Step 1 — trust stops at `verified_through`; `None` yields the EMPTY set, never "all".
+    let mut records: Vec<MediumRecord> = report
+        .verified_through
+        .and_then(|through| m.segments.get(..=through))
+        .map(|prefix| {
+            prefix
+                .iter()
+                .filter(|s| s.plane == plane)
+                .flat_map(|s| s.records.iter().cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let gated_out = on_medium - records.len();
+    // Step 2 — restore causal order. Step 3 — collapse only a WHOLLY identical duplicate.
+    records.sort_by_key(|r| r.source_seq);
+    let before_dedup = records.len();
+    records.dedup();
+    let collapsed = before_dedup - records.len();
+    PlaneRecords {
+        records,
+        gated_out,
+        collapsed,
     }
 }
 

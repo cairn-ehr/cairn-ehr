@@ -41,37 +41,48 @@
 //! 3) and [`apply_local_state`] installs it on arrival, re-sealed under the restored node's
 //! own secrets, and registers its public half (decision 4).
 //!
-//! Read that narrowly, because the ADR's title — "identity dies with the disk; custody must
-//! not" — is still not fully this system's behaviour. What survives a restore today is the
-//! KEY. The custody ROWS ride along and are counted, but nothing inserts them — because
-//! nothing yet RESTORES a clinical event for them to be custody of (#500, below). Neither
-//! half is useful without the other; do not read this section as more than it says.
+//! Read that narrowly. Since #554 slice 2d a restore lands the KEY, the ACTOR REGISTRY and
+//! the clinical events themselves, so the ADR's title — "identity dies with the disk; custody
+//! must not" — is now this system's behaviour for the path those three cover. The one custody
+//! carrier this module still only COUNTS is [`LocalState::episode_deks`], and that is
+//! deliberate rather than pending: the medium already carries each record's wrapped DEK
+//! beside it, and piping the export's second copy into `apply_remote_event`'s `p_dek` would
+//! double-wrap it, because the door wraps what it is handed. See
+//! [`crate::restore::clinical`]'s header for the full argument.
 //!
 //! **STILL OPEN, do not read this module as closing them:**
 //!
-//! - **Nothing restores a clinical event (#500).** Since DR slice 2c the backup medium DOES
-//!   carry the clinical plane, with each record's wrapped DEK — but `restore` and
-//!   `verify-backup` read the federation plane alone (`backup::node_plane_events`), so a
-//!   restored node still gets a working key and nothing to open with it. Slice 2d.
-//! - **The restore side lands the KEY, not yet the rows.** [`apply_local_state`] now installs
-//!   the recovered unwrap secret and registers its public half (ADR-0066 decision 4), so a
-//!   restored node's custody IS the dead node's custody — that is #495's restore half, and it
-//!   is closed. What it still does not do is INSERT the carried `episode_deks`: they belong to
-//!   clinical events, and the medium carries none of those yet (#500). The count is reported
-//!   to the operator rather than buried, so the gap is visible at the surface.
+//! - **`node_default_deks` has no subject.** The slot is carried and counted; nothing
+//!   consumes it, because no event type yet takes a node-default DEK.
+//! - **The restore side lands the KEY, and the rows land with the events.**
+//!   [`apply_local_state`] installs the recovered unwrap secret and registers its public half
+//!   (ADR-0066 decision 4), so a restored node's custody IS the dead node's custody — #495's
+//!   restore half, closed. The carried `episode_deks` are still not inserted HERE, and that is
+//!   now a placement decision rather than a gap: since #554 slice 2d the restore unwraps each
+//!   record's DEK in Rust and passes the PLAINTEXT to `apply_remote_event`, which re-wraps it
+//!   through the one door that owns `event_dek`. Piping a carried, already-wrapped key
+//!   straight into that door's `p_dek` would DOUBLE-WRAP every key in the clinic's record —
+//!   rows that are present, well-formed, the right length, and unwrap to noise. The count is
+//!   still reported, because the export's copy is the fallback when a medium's is missing.
 //! - **Promise 2 has no subject.** [`LocalState::node_default_deks`] stays empty because no
 //!   node-default data-at-rest keystore exists anywhere in the built system. That slot's
 //!   emptiness is neither honoured nor violated; it names a tier that must exist first.
-//! - **The actor registry now travels, and is counted, but nothing installs it (Task 11,
-//!   #500).** [`crate::localstate_read::read_local_state`] fills
-//!   [`LocalState::actor_registry`] from `actor_event` (db/004), so the export finally
-//!   carries what `actor_current` needs — and [`apply_local_state`] reports the count in
-//!   [`AppliedLocalState::actor_registry_carried`], exactly as it does for `episode_deks`, so
-//!   the gap is visible at the surface rather than silent (Task 11's own fix round, review
-//!   finding I2). It still does not INSERT the rows: `actor_event` has no INSERT door here
-//!   yet either. That is deliberate staging, not an oversight repeated — Task 11 is the write
-//!   half only; slice 2d is the insert, exactly where `episode_deks` sat between #495 and
-//!   #500's capture half.
+//! - **The actor registry travels AND is installed (#554 slice 2d).**
+//!   [`crate::localstate_read::read_local_state`] fills [`LocalState::actor_registry`] from
+//!   `actor_event` (db/004), and [`apply_local_state`] now hands the whole set to
+//!   `restore_actor_registry` (db/052) — so a restored node can resolve the authors of its own
+//!   history rather than refusing every clinical event it just inherited. Two counts are
+//!   reported, deliberately apart: [`AppliedLocalState::actor_registry_carried`] (what the
+//!   export held) and [`AppliedLocalState::actor_registry_restored`] (what THIS run inserted),
+//!   which differ on a resumed restore.
+//!
+//!   **These rows are the one part of a restore that is not verify-on-apply.** They arrive
+//!   authenticated by the `CAIRNL1` container's AEAD and nothing else — no per-row signature —
+//!   while every clinical event around them is individually signature-verified by
+//!   `apply_remote_event`. Accepted deliberately (ADR-0067): whoever holds the export AND its
+//!   passphrase or recovery code already controls the restored node completely, so refusing
+//!   here would cost the record and buy nothing. It is PRINTED to the operator at restore
+//!   time, because a limitation living only in a design doc is one nobody finds.
 //!
 //! `crates/cairn-node/tests/dr_clinical_guarantee_gap.rs` holds the guards for all of the
 //! above, and says of each whether it asserts a guarantee or pins a surviving defect.
@@ -320,8 +331,9 @@ impl LocalState {
     }
 
     /// The surviving actor-registry rows, each a CBOR [`ActorRegistryRow`], ordered by `seq`
-    /// (Task 11 / #500). **Carried, not applied**: nothing today inserts these into a
-    /// restored node's `actor_event` — that is slice 2d. `is_empty()` on this slice means
+    /// (Task 11 / #500). **Carried AND applied since #554 slice 2d**: [`apply_local_state`]
+    /// installs them through `restore_actor_registry` (db/052), before the clinical plane, so
+    /// every apply door can resolve its author through `actor_current`. `is_empty()` on this slice means
     /// either "no export has run since this bundle predates the registry slot" or "this node
     /// really has no enrolled actors"; [`from_cbor`] cannot tell those apart from an old
     /// export alone, which is exactly why the empty encoding is pinned rather than skipped
@@ -526,11 +538,22 @@ pub fn episode_dek_from_cbor(bytes: &[u8]) -> Result<EpisodeDek, LocalStateError
 /// field this one doesn't know, rather than silently dropping it, and `#[serde(default)]`
 /// on the fields that are genuinely optional CONTENT (a revoke row carries no `kind` or
 /// `signing_key_id`) lets a row missing one of THOSE still decode. `actor_event_id`,
-/// `actor_id`, `op` and `seq` stay un-defaulted: they are the row's identity, not optional
-/// content, so their absence should refuse — same reasoning as `LocalState::version`.
-/// `recorded_at` gets `#[serde(default)]` too even though `actor_event` never leaves it
-/// NULL, purely so a hypothetical future variant that cannot supply one degrades to an
-/// empty string rather than refusing the whole row over one audit field.
+/// `actor_id`, `op`, `seq` and `recorded_at` stay un-defaulted: they are the row's identity,
+/// not optional content, so their absence should refuse — same reasoning as
+/// `LocalState::version`.
+///
+/// **`recorded_at` LOST its `#[serde(default)]` in #554 slice 2d, and the reason is worth
+/// keeping.** It carried one, justified as degrading *"rather than refusing the whole row
+/// over one audit field."* It is not an audit field. `actor_current` (db/004) resolves the
+/// trust anchor with `ORDER BY ae.actor_id, ae.recorded_at DESC, ae.seq DESC` and compares
+/// revocations with `(r.recorded_at, r.seq) >= (ae.recorded_at, ae.seq)`, so `recorded_at`
+/// is the PRIMARY ordering key deciding **who may author** — `seq` is only the tiebreak. A
+/// restored `enroll` whose timestamp defaulted to empty-or-now would outrank a genuine older
+/// `revoke` and silently re-authorise a recalled actor, arriving through
+/// `restore_actor_registry`, the door built to restore the registry. That was harmless only
+/// while nothing INSTALLED these rows; slice 2d installs them — which is exactly what #554
+/// item 4's decode-refusal test was asked to find. Pinned by
+/// `an_actor_registry_row_without_recorded_at_is_refused` in this file's tests.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActorRegistryRow {
@@ -546,8 +569,58 @@ pub struct ActorRegistryRow {
     #[serde(default)]
     pub superseded_by: Option<Vec<u8>>,
     pub seq: i64,
-    #[serde(default)]
+    /// Required — see the struct doc. A defaulted value here can re-authorise a
+    /// recalled actor.
     pub recorded_at: String,
+}
+
+/// Shape a decoded registry set into the JSON array `restore_actor_registry` (db/052) parses.
+/// **Pure**, so the encoding can be tested without a database — which matters because a
+/// mis-encoded `actor_id` would be refused by the door mid-disaster, and the only way to see
+/// that coming is to assert the encoding on its own.
+///
+/// `actor_id` and `superseded_by` travel as HEX, because the door decodes them through
+/// `cairn_decode_hex_or_raise` — the one helper that names the field it could not read
+/// instead of raising `invalid input syntax for type bytea` at an operator holding their
+/// only copy of a registry.
+///
+/// `pinned` travels as a JSON **string** holding JSON source, matching how this crate carries
+/// it everywhere else (it does not enable tokio-postgres's `with-serde_json-1` feature); the
+/// door casts it back with `::JSONB`.
+///
+/// Built with `serde_json` rather than `format!`, deliberately: a `signing_key_id` or a
+/// `pinned` blob containing a quote would otherwise produce a payload the door cannot parse,
+/// and the failure would arrive as a JSON syntax error naming no row at all.
+pub fn actor_registry_rows_to_json(rows: &[ActorRegistryRow]) -> String {
+    let values: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut o = serde_json::Map::new();
+            o.insert("actor_event_id".into(), r.actor_event_id.clone().into());
+            o.insert("actor_id".into(), hex::encode(&r.actor_id).into());
+            o.insert("op".into(), r.op.clone().into());
+            o.insert("seq".into(), r.seq.into());
+            o.insert("recorded_at".into(), r.recorded_at.clone().into());
+            // The optional columns are OMITTED when absent rather than sent as JSON null:
+            // the door reads them with `->>`, which maps a JSON null to SQL NULL anyway, but
+            // an omitted key makes "this row had no kind" and "this row had a null kind" the
+            // same statement, which for `actor_event` they are.
+            if let Some(kind) = &r.kind {
+                o.insert("kind".into(), kind.clone().into());
+            }
+            if let Some(pinned) = &r.pinned {
+                o.insert("pinned".into(), pinned.clone().into());
+            }
+            if let Some(key) = &r.signing_key_id {
+                o.insert("signing_key_id".into(), key.clone().into());
+            }
+            if let Some(by) = &r.superseded_by {
+                o.insert("superseded_by".into(), hex::encode(by).into());
+            }
+            serde_json::Value::Object(o)
+        })
+        .collect();
+    serde_json::Value::Array(values).to_string()
 }
 
 /// Serialize one actor-registry row for the export slot. Pure.
@@ -991,15 +1064,20 @@ pub struct AppliedLocalState {
     /// How many wrapped custody rows the bundle carried. **Carried, not applied** — see
     /// [`apply_local_state`].
     episode_deks_carried: usize,
-    /// How many actor-registry rows the bundle carried (Task 11 / #500 fix round, review
-    /// finding I2). **Carried, not applied** — same status as `episode_deks_carried`, and
-    /// for the same reason it needed a field rather than a silent drop: `node_default_deks`/
-    /// `config`/`drafts` are refused BY NAME so nothing this build cannot honour is dropped
-    /// quietly, and `episode_deks` gets a count; `actor_registry` had gotten NEITHER — an
-    /// operator restoring today's export would see "custody inherited, N DEKs carried" and
-    /// nothing about the registry, then watch the node refuse its own history with no signal
-    /// the rows had even been in the bundle.
+    /// How many actor-registry rows the bundle CARRIED (Task 11 / #500 fix round, review
+    /// finding I2). Kept beside `actor_registry_restored` rather than replaced by it: the two
+    /// numbers differ on a RESUMED restore, where the export carries the whole registry and
+    /// this run installs only the remainder. Reporting the carried count alone would hide the
+    /// resume; reporting the restored count alone would read as data loss.
     actor_registry_carried: usize,
+    /// How many of those rows this run actually INSERTED (#554 slice 2d).
+    ///
+    /// Lower than `actor_registry_carried` means a resume completed a prior interrupted
+    /// restore — the door is set-shaped and idempotent, so it reports what IT did rather than
+    /// re-claiming the set. Zero with a non-zero carried count means the registry was ALREADY
+    /// fully present, which is that same resume case at its end: the database is not fresh, it
+    /// is the target of a prior interrupted restore that had already finished this step.
+    actor_registry_restored: usize,
 }
 
 impl AppliedLocalState {
@@ -1009,22 +1087,29 @@ impl AppliedLocalState {
         path: PathBuf,
         episode_deks_carried: usize,
         actor_registry_carried: usize,
+        actor_registry_restored: usize,
     ) -> Self {
         Self {
             unwrap_key_installed: Some(path),
             episode_deks_carried,
             actor_registry_carried,
+            actor_registry_restored,
         }
     }
 
     /// The degraded outcome: the bundle carried no unwrap key, so none was installed and none
     /// registered. Named rather than expressed as `None`, so the caller's warning branch is
     /// reached by a stated fact instead of an inferred one.
-    fn no_custody_key(episode_deks_carried: usize, actor_registry_carried: usize) -> Self {
+    fn no_custody_key(
+        episode_deks_carried: usize,
+        actor_registry_carried: usize,
+        actor_registry_restored: usize,
+    ) -> Self {
         Self {
             unwrap_key_installed: None,
             episode_deks_carried,
             actor_registry_carried,
+            actor_registry_restored,
         }
     }
 
@@ -1044,10 +1129,21 @@ impl AppliedLocalState {
         self.episode_deks_carried
     }
 
-    /// How many actor-registry rows travelled. Carried, not applied (Task 11 / #500) —
-    /// nothing today inserts them into the restored node's `actor_event`; that is slice 2d.
+    /// How many actor-registry rows travelled in the export.
+    ///
+    /// Since #554 slice 2d they are also INSTALLED — see [`Self::actor_registry_restored`]
+    /// for how many this run actually inserted, and why the two numbers are kept apart.
     pub fn actor_registry_carried(&self) -> usize {
         self.actor_registry_carried
+    }
+
+    /// How many actor-registry rows this run INSERTED into `actor_event` (#554 slice 2d).
+    ///
+    /// Report this to the operator alongside [`Self::actor_registry_carried`], never instead
+    /// of it: a resumed restore legitimately carries N and installs fewer, and either number
+    /// shown alone tells a false story about what happened.
+    pub fn actor_registry_restored(&self) -> usize {
+        self.actor_registry_restored
     }
 }
 
@@ -1165,32 +1261,34 @@ pub fn secret_opens_the_carried_custody(ls: &LocalState, secret: &Secret32) -> a
 /// 3. **Install it** at `custody`, proving it reads back (see
 ///    [`CustodyKeyDestination::install`]).
 /// 4. **Register its public half**, so the restored node's custody IS the dead node's
-///    custody. Registration comes last of the three because it is the step that can never be
-///    taken back.
+///    custody. Registration comes after the install because a registered public half whose
+///    secret is not on disk is unrecoverable, whereas a written file with no registration is
+///    fixed by re-running.
+/// 5. **Install the actor registry** through `restore_actor_registry` (db/052) — set-shaped
+///    and resumable, so an interrupted restore re-runs without special-casing. It comes after
+///    custody and before the caller's clinical apply, because every apply door resolves its
+///    author through `actor_current`: without it the door refuses this node's own history as
+///    *"signer … is not an enrolled, non-revoked actor"*.
 ///
-/// # What is CARRIED but not APPLIED, and why that is honest rather than lossy
+/// # What is CARRIED but not APPLIED, and why that is deliberate rather than pending
 ///
-/// [`LocalState::episode_deks`] is counted and reported, not inserted. The rows belong to
-/// clinical events, and while the backup medium HAS carried those since DR slice 2c, nothing
-/// on this side reads them back yet: `restore` applies the federation plane only, so there is
-/// still no restored clinical event here for these rows to be custody OF. The door that
-/// changes that is slice 2d's (**#500** stays open until it lands), and it is the same door
-/// that must insert this custody — building a second one here, ahead of it, would be waste.
-/// The count travels back to the caller in [`AppliedLocalState::episode_deks_carried`] and the
-/// restore command PRINTS it: an operator is told what came across and what is still owed,
-/// rather than finding out on the next disaster.
+/// [`LocalState::episode_deks`] is counted and reported, never inserted — and since #554
+/// slice 2d that is a DECISION, not a gap waiting on a door. The medium already carries each
+/// clinical record's wrapped DEK beside the record itself, and that is the copy the restore
+/// uses. Piping this second copy into `apply_remote_event`'s `p_dek` would **double-wrap**
+/// it, because the door wraps what it is handed; see [`crate::restore::clinical`]'s header for
+/// why that defect is invisible to every count and surfaces months later. The count still
+/// travels back in [`AppliedLocalState::episode_deks_carried`] and the restore command PRINTS
+/// it, so an operator is told what came across rather than finding out on the next disaster.
 ///
-/// [`LocalState::actor_registry`] gets the SAME treatment, for the SAME reason (Task 11's own
-/// fix round, review finding I2): counted in [`AppliedLocalState::actor_registry_carried`] and
-/// printed, never inserted — `actor_event` has no INSERT door here yet either, and that door
-/// is slice 2d's, alongside the clinical-event apply it must precede.
+/// # The ordering this function's caller owes it
 ///
-/// The ordering note for whoever lands #500's restore half: custody must be registered BEFORE
-/// clinical events apply, because the door wraps each event's DEK to the registered public
-/// half. This function already does its half in that order; the *caller* currently runs it
-/// after `finalize_identity`, which is fine only while no clinical event is APPLIED. The
-/// medium has carried them since slice 2c, so the trigger for moving this call site up is the
-/// slice that starts applying them, not the one that started capturing them.
+/// Custody must be registered BEFORE clinical events apply, because the door wraps each
+/// event's DEK to the registered public half; the registry must land before them too, for the
+/// reason in step 5; and `finalize_identity` must run LAST, so the whole restore happens
+/// inside the un-enrolled fence and a failure leaves a database that is still restorable from
+/// the same medium. `restore` does exactly that, and
+/// `crates/cairn-node/tests/restore_ceremony_order.rs` pins it.
 pub async fn apply_local_state(
     db: &tokio_postgres::Client,
     ls: &LocalState,
@@ -1269,13 +1367,77 @@ pub async fn apply_local_state(
         None => None,
     };
 
+    // Step 5 — INSTALL the carried actor registry (#554 slice 2d).
+    //
+    // WHY IT IS HERE AND NOT LATER. Every clinical apply door gates on `actor_current`
+    // (db/004), so without this a restored node refuses its own history and "restored" means
+    // a node with no patients. It runs BEFORE the clinical plane is applied, which is the
+    // whole reason design §3 reorders the restore ceremony to put `finalize_identity` last.
+    //
+    // WHY IT IS HERE AND NOT EARLIER: the unwrap key installs first (steps 3–4) because the
+    // clinical apply that follows needs custody registered before it can wrap a single DEK.
+    //
+    // WHAT AUTHENTICATES THESE ROWS: the `CAIRNL1` container's AEAD, and nothing else — the
+    // one part of a restore that is not verify-on-apply, accepted deliberately (ADR-0067) and
+    // PRINTED to the operator by the caller, because a limitation that lives only in a design
+    // doc is one nobody finds.
+    //
+    // A DECODE FAILURE REFUSES THE WHOLE SET rather than skipping the row. The registry is
+    // not a bag of independent facts: a dropped `revoke` silently re-authorises a recalled
+    // actor, so admitting "most of" a registry is strictly worse than admitting none of it
+    // and telling the operator which row is unreadable.
+    let mut registry: Vec<ActorRegistryRow> = Vec::with_capacity(ls.actor_registry.len());
+    for (i, raw) in ls.actor_registry.iter().enumerate() {
+        registry.push(actor_registry_row_from_cbor(raw).map_err(|e| {
+            anyhow::anyhow!(
+                "the restored local-state export carries an actor-registry row (#{i}) this \
+                 build cannot decode ({e}) — refusing to install a PARTIAL registry. A \
+                 registry is not a bag of independent facts: a dropped revoke silently \
+                 re-authorises a recalled actor. Restore from an export this build can read.",
+                i = i,
+                e = e
+            )
+        })?);
+    }
+    let actor_registry_restored = if registry.is_empty() {
+        0
+    } else {
+        let payload = actor_registry_rows_to_json(&registry);
+        // `$1::text::jsonb`, not `$1::jsonb`: tokio-postgres infers a parameter's type from
+        // its cast TARGET, and this crate does not enable the `with-serde_json-1` feature, so
+        // the payload travels as TEXT and Postgres does the parse.
+        let row = db
+            .query_one(
+                "SELECT restore_actor_registry($1::text::jsonb)",
+                &[&payload],
+            )
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "the carried actor registry could not be restored ({e}). Until it is, \
+                     this node cannot apply ANY clinical event — every apply door resolves \
+                     its author through `actor_current`. The database is still un-enrolled, \
+                     so the same medium and export can be restored again once the cause is \
+                     fixed.",
+                    e = crate::db_diagnosis::legible_db_error(&e)
+                )
+            })?;
+        let inserted: i32 = row.get(0);
+        usize::try_from(inserted).unwrap_or(0)
+    };
+
     Ok(match unwrap_key_installed {
         Some(path) => AppliedLocalState::custody_inherited(
             path,
             ls.episode_deks.len(),
             ls.actor_registry.len(),
+            actor_registry_restored,
         ),
-        None => AppliedLocalState::no_custody_key(ls.episode_deks.len(), ls.actor_registry.len()),
+        None => AppliedLocalState::no_custody_key(
+            ls.episode_deks.len(),
+            ls.actor_registry.len(),
+            actor_registry_restored,
+        ),
     })
 }
 
@@ -1296,8 +1458,46 @@ pub fn describe_local_state(lsk_present: bool, export_present: bool) -> String {
     }
 }
 
+/// The operator line reporting what the actor-registry restore did. **Pure.**
+///
+/// Both numbers, never one: they differ on a RESUMED restore, where the export carries the
+/// whole registry and this run inserts only the remainder. *"N carried"* alone hides that a
+/// resume happened; *"0 restored"* alone reads as data loss.
+///
+/// The resume clause is CONDITIONAL, which it was not (PR #566 review). On the ordinary fresh
+/// restore — overwhelmingly the common case — every carried row is inserted, and the line
+/// still read *"3 of 3 carried row(s) inserted (the rest were already present — a resumed
+/// restore)"*. There is no rest, and it was not a resume. A summary that describes a state
+/// the machine is not in is the same defect class as the three misleading messages this
+/// slice's own review round removed, arriving one line further down.
+pub fn actor_registry_line(restored: usize, carried: usize) -> String {
+    let resume = if restored < carried {
+        " (the rest were already present — a resumed restore)"
+    } else {
+        ""
+    };
+    format!("actor registry restored: {restored} of {carried} carried row(s) inserted{resume}")
+}
+
 #[cfg(test)]
 mod tests {
+    /// A fresh restore is not a resume, and the line must not say it was.
+    #[test]
+    fn the_resume_clause_only_appears_on_an_actual_resume() {
+        let fresh = super::actor_registry_line(3, 3);
+        assert!(
+            !fresh.contains("resumed"),
+            "every carried row was inserted: there is no rest to have been present: {fresh}"
+        );
+        assert!(fresh.contains("3 of 3"), "{fresh}");
+
+        let resumed = super::actor_registry_line(1, 3);
+        assert!(
+            resumed.contains("resumed restore"),
+            "a genuine resume must still be named, or the fix is a silent deletion: {resumed}"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1309,6 +1509,140 @@ mod tests {
         assert!(
             back.is_empty(),
             "a fresh node's bundle has no content today"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // THE SERDE CONTRACT OF THE TWO CARRIED-ROW TYPES (#554 item 4, slice 2d design §2.4).
+    //
+    // These structs were harmless while nothing INSTALLED their rows — a dropped field cost
+    // a count, not a record. Slice 2d installs both, so the contract is now load-bearing and
+    // it is tested rather than merely written down: #554 asked for the decode-refusal test
+    // in as many words, and the finding it turned up is `recorded_at`.
+    //
+    // Both directions matter and they fail differently:
+    //   * a MISSING required field must refuse (a silently-defaulted `recorded_at` outranks a
+    //     genuine older revoke and re-authorises a recalled actor);
+    //   * an UNKNOWN field must refuse (`deny_unknown_fields`) — a row written by a NEWER
+    //     build carrying a field this one does not know would otherwise have it SILENTLY
+    //     DROPPED, which is the A7c failure `LocalState` guards against, one struct down.
+    // -----------------------------------------------------------------------
+
+    /// Encode an arbitrary field map as CBOR, so a test can present a row this build's own
+    /// `Serialize` could never produce — an older node's row missing a field, or a newer
+    /// node's row carrying one. Round-tripping through the real struct cannot express either.
+    fn cbor_map(fields: &[(&str, ciborium::value::Value)]) -> Vec<u8> {
+        let map = ciborium::value::Value::Map(
+            fields
+                .iter()
+                .map(|(k, v)| (ciborium::value::Value::Text((*k).to_string()), v.clone()))
+                .collect(),
+        );
+        let mut out = Vec::new();
+        ciborium::into_writer(&map, &mut out).unwrap();
+        out
+    }
+
+    fn text(s: &str) -> ciborium::value::Value {
+        ciborium::value::Value::Text(s.to_string())
+    }
+
+    /// `recorded_at` REFUSES rather than defaulting — design §2.4.
+    ///
+    /// It is not an audit field. `actor_current` (db/004) orders on
+    /// `(recorded_at DESC, seq DESC)` with `recorded_at` PRIMARY and compares revocations
+    /// with `(r.recorded_at, r.seq) >= (ae.recorded_at, ae.seq)`, so it is the key that
+    /// decides WHO MAY AUTHOR. A row whose timestamp defaulted to empty-or-now would outrank
+    /// a genuine older `revoke` and silently re-authorise a recalled actor — arriving through
+    /// the door built to restore the registry.
+    #[test]
+    fn an_actor_registry_row_without_recorded_at_is_refused() {
+        let complete = [
+            (
+                "actor_event_id",
+                text("aaaaaaaa-0000-7000-8000-000000000001"),
+            ),
+            ("actor_id", ciborium::value::Value::Bytes(vec![1, 2, 3])),
+            ("op", text("enroll")),
+            ("seq", ciborium::value::Value::Integer(1.into())),
+            ("recorded_at", text("2026-01-01 00:00:00+00")),
+        ];
+        actor_registry_row_from_cbor(&cbor_map(&complete))
+            .expect("anti-vacuity: the complete row must decode");
+
+        let missing: Vec<_> = complete
+            .iter()
+            .filter(|(k, _)| *k != "recorded_at")
+            .cloned()
+            .collect();
+        assert!(
+            actor_registry_row_from_cbor(&cbor_map(&missing)).is_err(),
+            "a registry row with no recorded_at must REFUSE, never default — it is \
+             actor_current's primary ordering key, not an audit detail"
+        );
+    }
+
+    /// `deny_unknown_fields` is pinned on BOTH carried-row types.
+    ///
+    /// Deleting the attribute must redden something, which before this test it did not. The
+    /// failure it prevents is silent: a row from a NEWER build carrying a field this one does
+    /// not know would decode with that field DROPPED, so a restore would install a
+    /// registry row or a custody row that is a lossy shadow of what was exported — and
+    /// nothing anywhere would say so.
+    #[test]
+    fn both_carried_row_types_refuse_an_unknown_field() {
+        let registry = [
+            (
+                "actor_event_id",
+                text("aaaaaaaa-0000-7000-8000-000000000001"),
+            ),
+            ("actor_id", ciborium::value::Value::Bytes(vec![1, 2, 3])),
+            ("op", text("enroll")),
+            ("seq", ciborium::value::Value::Integer(1.into())),
+            ("recorded_at", text("2026-01-01 00:00:00+00")),
+            ("custody_scope", text("a field from a newer build")),
+        ];
+        assert!(
+            actor_registry_row_from_cbor(&cbor_map(&registry)).is_err(),
+            "an unknown field on a registry row must refuse, never be dropped"
+        );
+
+        let dek = [
+            ("event_id", text("11111111-1111-7111-8111-111111111111")),
+            (
+                "dek_wrapped",
+                ciborium::value::Value::Bytes(vec![0u8; cairn_event::seal::WRAPPED_DEK_LEN]),
+            ),
+            ("rewrap_epoch", ciborium::value::Value::Integer(2.into())),
+        ];
+        assert!(
+            episode_dek_from_cbor(&cbor_map(&dek)).is_err(),
+            "an unknown field on a custody row must refuse, never be dropped"
+        );
+    }
+
+    /// An `EpisodeDek` missing a field is refused — neither field is optional CONTENT, both
+    /// are the row's identity (which event, which key).
+    #[test]
+    fn an_episode_dek_missing_a_field_is_refused() {
+        let wrapped = ciborium::value::Value::Bytes(vec![0u8; cairn_event::seal::WRAPPED_DEK_LEN]);
+        episode_dek_from_cbor(&cbor_map(&[
+            ("event_id", text("11111111-1111-7111-8111-111111111111")),
+            ("dek_wrapped", wrapped.clone()),
+        ]))
+        .expect("anti-vacuity: the complete row must decode");
+
+        assert!(
+            episode_dek_from_cbor(&cbor_map(&[("dek_wrapped", wrapped)])).is_err(),
+            "a custody row with no event_id names no event and must refuse"
+        );
+        assert!(
+            episode_dek_from_cbor(&cbor_map(&[(
+                "event_id",
+                text("11111111-1111-7111-8111-111111111111")
+            )]))
+            .is_err(),
+            "a custody row with no key must refuse"
         );
     }
 

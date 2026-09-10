@@ -324,6 +324,15 @@ const SCHEMA: &[(&str, &str)] = &[
         "051_clinical_capture_source",
         include_str!("../../../db/051_clinical_capture_source.sql"),
     ),
+    // db/052 (#554 slice 2d): restore_actor_registry + cairn_quarantine_event — the doors a
+    // disaster recovery needs. In BOTH lists: `cairn-sync`'s pull and requeue loops call the
+    // pen door, so a node whose loader lags would pen through a function that does not
+    // exist — and the pen is the path a REFUSED event takes, i.e. exactly the path that must
+    // not fail a second time.
+    (
+        "052_restore_doors",
+        include_str!("../../../db/052_restore_doors.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

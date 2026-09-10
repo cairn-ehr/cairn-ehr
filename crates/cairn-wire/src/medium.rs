@@ -165,51 +165,26 @@ impl MediumTransport {
             ));
         };
         let chain = chain_report(&m);
-        // TRUST STOPS AT `verified_through` (2a invariant 5). Serving past it would hand a
-        // puller records whose chain link never held — and the puller's cursor would then
-        // advance over them. `None` (nothing verified) yields an empty set, never "all".
-        let through = chain.verified_through;
-        let mut servable: Vec<MediumRecord> = m
-            .segments
-            .iter()
-            .take(through.map_or(0, |t| t + 1))
-            .filter(|s| s.plane == Plane::Clinical)
-            .flat_map(|s| s.records.iter().cloned())
-            .collect();
-        // Segments sit in CAPTURE order, which stops matching source_seq order after a
-        // re-capture. The puller's contiguous-prefix cursor RELIES on strictly ascending
-        // arrival, so a medium serving capture order would advance a cursor past events it
-        // had not yet delivered. `partition_point` in `request` below depends on this sort —
-        // the two must not drift apart.
-        servable.sort_by_key(|r| r.source_seq);
-        // …AND THE SAME RE-CAPTURE PRODUCES OVERLAPS, not merely re-ordering. Interrupt a
-        // capture and run it again and the second pass re-writes source_seqs the first pass
-        // already wrote: two segments, byte-identical records, one `source_seq` each. Served
-        // as-is that is a page whose seqs are not STRICTLY ascending, which `cairn-sync`'s
-        // `validate_page` refuses outright — "peer returned malformed seqs … refusing to
-        // checkpoint" — failing this page and every page after it, and naming the medium a
-        // buggy or hostile peer. In slice 2d that lands mid-disaster, as an opaque refusal of
-        // a perfectly recoverable backup: precisely the outcome `BackupError`'s three-way
-        // split exists to prevent. `cairn_medium::chain::seq_gaps` builds the identical
-        // prefix/plane/flat_map pipeline and calls `seqs.dedup()` for the same reason — a
-        // repeated seq on a medium is expected DATA, not a fault.
+        // THE ONE DERIVATION OF THIS SET, and it deliberately does not live here.
         //
-        // BYTE-IDENTICAL RECORD, not merely byte-identical BODY. `MediumRecord` carries three
-        // custody sidecars beside `signed_bytes` — `attestation`, `attester_key`, and
-        // `dek_wrapped` — and a re-capture can straddle a change to any of them: an unwrap-key
-        // rotation re-wraps `dek_wrapped` to a different key between the two passes, or a
-        // CRYPTO-SHRED lands between them and drives it `Some -> None`. Crypto-shredding IS
-        // this project's erasure (ADR-0005), and the wire path is built so a shredded event
-        // NEVER ships its DEK again — comparing `signed_bytes` alone would silently keep
-        // whichever copy sorted first and could hand a restore a DEK it cannot open, or worse,
-        // resurrect a DEK that was supposed to be gone for good. `MediumRecord` derives
-        // `PartialEq` over all five fields for exactly this reason, so plain `Vec::dedup`
-        // (which uses `PartialEq` directly) collapses a pair only when EVERY field agrees. Two
-        // records that still differ after that — in the body or in a sidecar — are a genuine
-        // medium fault (a forked log, a tampered file, or a sidecar rewritten out of step with
-        // its body) and are left as a duplicate `source_seq`, so the refusal above fires and 2d
-        // can name it.
-        servable.dedup();
+        // `plane_records` gates on `verified_through`, sorts by `source_seq` and collapses
+        // byte-identical re-capture duplicates — the three steps this constructor used to
+        // perform inline. It moved into `cairn-medium` (the crate that owns the chain) in
+        // #554 slice 2d, when `cairn-node`'s RESTORE needed the identical set: two
+        // independently-written derivations is two places for the trust gate to be lost, and
+        // the review of that slice caught a draft that had already lost it. Read
+        // `chain::plane_records`' doc for why each of the three steps is load-bearing.
+        //
+        // WHAT THIS CALL SITE STILL OWNS, because it is specific to SERVING rather than to
+        // the medium: `request` below reaches into `servable` with `partition_point`, which
+        // is correct only because this set is sorted ascending — the two must not drift
+        // apart. And a duplicate `source_seq` that SURVIVES the collapse (records differing
+        // in a body or a custody sidecar) is a page whose seqs are not strictly ascending,
+        // which `cairn-sync`'s `validate_page` refuses outright, failing this page and every
+        // page after it and naming the medium a buggy or hostile peer. That refusal is
+        // `request`'s, one screen down, and it is the reason the collapse is exact rather
+        // than lenient.
+        let servable = cairn_medium::plane_records(&m, &chain, Plane::Clinical);
         // …AND SAY SO IF THE MEDIUM CANNOT VOUCH FOR ALL OF ITSELF. Promise 3 in the module
         // doc: the wire cannot express "this is all I am willing to serve" without reading as
         // a faulty peer, so the only honest channel is this line plus `health()`. See
