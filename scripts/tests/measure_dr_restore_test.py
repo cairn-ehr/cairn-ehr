@@ -12,7 +12,10 @@ session, and house rule 7 says a figure outside its budget is a finding. A
 finding derived from a mis-read line is worse than no finding.
 
 Every fixture below is **verbatim output from a real run** on 2026-09-10, not
-text invented to make a parser pass.
+text invented to make a parser pass — with one deliberate exception: the recovery
+code itself is derived at runtime rather than committed, because a real one is
+cryptographic material (house rule 6). Its shape is the shipped shape, which is
+all the parser looks at.
 
 Standard library only, no pytest — run it directly, the way
 `scripts/tests/check_closing_keywords_test.py` is run:
@@ -33,9 +36,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import measure_dr_restore as rig  # noqa: E402  (path set above)
 
 
-INIT_OUTPUT = """
+#: Crockford base32, the alphabet `generate_recovery_code` draws from — no I, L,
+#: O or U. Kept here so the sample below is built the way a real code is shaped.
+_B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+#: A recovery code of exactly the shipped shape — six groups of five plus a final
+#: two, 38 characters — **derived at runtime, never a literal.**
+#:
+#: House rule 6: a real code is 160 bits of off-node escrow for a node key, and
+#: writing one into a repository is writing down cryptographic material even when
+#: the node it belonged to was a throwaway in /tmp. The banner and the surrounding
+#: lines below ARE verbatim from a real run, which is what makes them a useful
+#: fixture; only the secret itself is synthetic, and the parser cannot tell the
+#: difference because it matches on shape.
+SAMPLE_RECOVERY_CODE = "-".join(
+    ["".join(_B32[(group * 7 + position) % len(_B32)] for position in range(5))
+     for group in range(6)]
+    + ["".join(_B32[position] for position in range(2))]
+)
+
+INIT_OUTPUT = f"""
 === RECOVERY CODE — shown ONCE. Write it down; store it OFF-SITE. ===
-    R9RQ0-3XZAB-ZCNN8-51WGR-QSXP2-H13MA-SV
+    {SAMPLE_RECOVERY_CODE}
 === This is the only off-node way to recover this node's signing key. ===
 === Lose BOTH this code and the passphrase and the node is permanently ===
 === lost — recoverable only by re-provisioning a new identity. ===
@@ -68,10 +90,18 @@ clinical records: 0 applied, 0 already present, 0 refused (of 403 on the medium)
 
 class ReadsTheRecoveryCode(unittest.TestCase):
     def test_it_finds_the_code_printed_once(self) -> None:
-        self.assertEqual(
-            rig.parse_recovery_code(INIT_OUTPUT),
-            "R9RQ0-3XZAB-ZCNN8-51WGR-QSXP2-H13MA-SV",
-        )
+        self.assertEqual(rig.parse_recovery_code(INIT_OUTPUT), SAMPLE_RECOVERY_CODE)
+
+    def test_the_shipped_shape_is_38_characters(self) -> None:
+        """Six groups of five plus a final two, dash-joined.
+
+        `generate_recovery_code` base32-encodes 160 bits, which is 32 characters,
+        and chunks them in fives. The published results file said 37; it is 38, and
+        that is the kind of number a reader checks by counting.
+        """
+        self.assertEqual(len(SAMPLE_RECOVERY_CODE), 38)
+        self.assertEqual([len(g) for g in SAMPLE_RECOVERY_CODE.split("-")],
+                         [5, 5, 5, 5, 5, 5, 2])
 
     def test_a_missing_code_raises_rather_than_returning_none(self) -> None:
         """Silence here would strand the rig at an unanswerable prompt minutes later.
@@ -83,12 +113,29 @@ class ReadsTheRecoveryCode(unittest.TestCase):
         with self.assertRaises(rig.RigError):
             rig.parse_recovery_code("provisioned node 1220ab\nfingerprint 408D\n")
 
-    def test_it_does_not_mistake_the_banner_for_the_code(self) -> None:
-        # The banner lines are all-caps with dashes too; only the indented
-        # group-of-five-characters shape is the code.
-        code = rig.parse_recovery_code(INIT_OUTPUT)
-        self.assertNotIn("RECOVERY", code)
-        self.assertNotIn("=", code)
+    def test_the_banner_alone_yields_no_code(self) -> None:
+        """Banner text must not be mistaken for a code — tested by removing the code.
+
+        The previous version of this test asserted that the returned code contained
+        neither "RECOVERY" nor "=", which the pattern makes structurally impossible:
+        no group is wider than five characters, so an eight-character word can never
+        appear in a match. It could not fail for any input that parsed at all.
+
+        Feeding the banner WITHOUT a code is the real question, and the answer must
+        be a raise rather than a banner fragment.
+        """
+        banner_only = INIT_OUTPUT.replace(SAMPLE_RECOVERY_CODE, "")
+        with self.assertRaises(rig.RigError):
+            rig.parse_recovery_code(banner_only)
+
+    def test_the_fingerprint_is_not_mistaken_for_the_code(self) -> None:
+        """The other dashed, upper-case token `init` prints.
+
+        Its groups are four characters wide; a code's are five, with at least six
+        of them. Shape is what separates them, so this pins the shape.
+        """
+        with self.assertRaises(rig.RigError):
+            rig.parse_recovery_code("fingerprint 408D-0788-795E-381D-E1C0\n")
 
 
 class ReadsTheClinicalSummary(unittest.TestCase):
@@ -129,6 +176,27 @@ class ReadsTheClinicalSummary(unittest.TestCase):
         """
         text = "clinical records: 3 applied, 400 already present, 0 refused (of 403 on the medium)"
         self.assertTrue(rig.parse_clinical_summary(text).is_complete)
+
+    def test_an_empty_medium_is_not_a_complete_restore(self) -> None:
+        """Nothing on the medium, nothing applied: vacuously "complete", actually empty.
+
+        Every other clause is satisfied trivially — nothing refused, nothing
+        missing — so without an explicit `on_medium > 0` the rig would record a
+        one-second timing as a PASS. `restore` happens not to print the summary
+        line at all today when it carried no clinical records, which makes this
+        unreachable through the CLI; that is a detail of a Rust file this suite
+        cannot see change, so the invariant is pinned here.
+        """
+        self.assertFalse(rig.ClinicalSummary(0, 0, 0, 0).is_complete)
+
+    def test_a_refusal_alone_defeats_completeness(self) -> None:
+        """The `refused == 0` clause, tested where nothing else fires.
+
+        The existing partial-restore case trips the count clause AND the refusal
+        clause at once, so deleting `refused == 0` from the predicate left it
+        green. Here the counts add up perfectly and only the refusal is wrong.
+        """
+        self.assertFalse(rig.ClinicalSummary(403, 0, 2, 403).is_complete)
 
     def test_a_missing_summary_raises(self) -> None:
         with self.assertRaises(rig.RigError):
@@ -174,6 +242,66 @@ class FormatsTheResultsTable(unittest.TestCase):
         self.assertFalse(over.within_budget)
         self.assertIn("PASS", rig.format_results_table([under]))
         self.assertIn("FAIL", rig.format_results_table([over]))
+
+    def test_each_measured_number_lands_in_its_own_column(self) -> None:
+        """The mapping from `Measurement` field to published column, pinned exactly.
+
+        This is the only place a measured float becomes a figure somebody quotes,
+        and it was previously "tested" by three substring assertions against a
+        whole rendered table — which cannot tell WHICH column a number is in.
+        Transposing the Backup and Restore cells in the f-string left the entire
+        suite green while writing the backup time into the column headed Restore,
+        i.e. a wrong number in the one column the whole measurement exists to
+        produce and grade against the budget.
+
+        Every value here is distinct on purpose. Two equal values are two values a
+        transposition cannot be seen through, and the old fixtures set `applied`
+        equal to `on_medium` in every row.
+        """
+        table = rig.format_results_table([
+            rig.Measurement(
+                seed_s=1.0, backup_s=2.0, restore_s=3.0, applied=4, on_medium=5
+            )
+        ]).splitlines()
+        self.assertEqual(
+            table[0],
+            "| Events on medium | Seed (s) | Backup (s) | **Restore (s)** | "
+            "Applied | \u2264 10 min |",
+        )
+        self.assertEqual(table[2], "| 5 | 1.0 | 2.0 | **3.0** | 4 | PASS |")
+
+    def test_the_defaults_are_the_published_curve(self) -> None:
+        """A bare invocation must reproduce the recorded figures.
+
+        The default drifted to `100,1000,3000,6000` once, so a bare run would have
+        produced points that do not line up with the dated results file. It was
+        caught by eye in a follow-up commit. This is the guard that would have
+        caught it instead.
+        """
+        runbook = (
+            Path(__file__).resolve().parents[2]
+            / "crates" / "cairn-node" / "results" / "RUNBOOK.md"
+        ).read_text()
+        self.assertIn(f"--sizes {rig.DEFAULT_SIZES}", runbook)
+        self.assertEqual(rig.DEFAULT_MEDS_PER_PATIENT, 17)
+        self.assertIn(f"default `{rig.DEFAULT_MEDS_PER_PATIENT}`", runbook)
+
+    def test_the_budget_boundary_is_inclusive(self) -> None:
+        """Exactly at the budget is a PASS; a tenth of a second over is not.
+
+        This one comparison is what turns a measurement into a house-rule-7
+        finding, and it was only ever exercised far from its boundary.
+        """
+        at = rig.Measurement(
+            seed_s=1.0, backup_s=1.0, restore_s=float(rig.BUDGET_SECONDS),
+            applied=1, on_medium=1,
+        )
+        over = rig.Measurement(
+            seed_s=1.0, backup_s=1.0, restore_s=rig.BUDGET_SECONDS + 0.1,
+            applied=1, on_medium=1,
+        )
+        self.assertTrue(at.within_budget)
+        self.assertFalse(over.within_budget)
 
     def test_the_budget_is_ten_minutes_and_is_not_a_parameter(self) -> None:
         """The budget is #512's, not the rig's, so it is a constant here.
