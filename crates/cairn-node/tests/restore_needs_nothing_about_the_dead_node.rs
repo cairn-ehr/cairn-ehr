@@ -30,13 +30,19 @@
 //! approximation of it — the same route `restore_torn_medium_cli.rs` and `cli_localstate.rs`
 //! already take. No DB, no key, no fixture.
 //!
-//! **The secret half is deliberately NOT pinned here**, because today it would pin a defect.
-//! `restore` needs two secrets, not one: a passphrase for the NEW key (invented at restore
-//! time, so not *retained* — it has both `--passphrase` and `CAIRN_KEY_PASSPHRASE`) and the
-//! OLD node's recovery code, which unseals the local-state export. Only the second is
-//! retained, so the budget's "one secret" holds as written — but the recovery code has
-//! **no flag and no environment variable at all**; it is read through `rpassword`, which
-//! fails on any non-tty. Filed from the #512 measurement run.
+//! **The secret half is pinned now, and it could not be before (#572).** `restore` needs two
+//! secrets, not one: a passphrase for the NEW key (invented at restore time, so not *retained*
+//! — it has both `--passphrase` and `CAIRN_KEY_PASSPHRASE`) and the OLD node's recovery code,
+//! which unseals the local-state export. Only the second is retained, so the budget's "one
+//! secret" holds as written.
+//!
+//! Until #572 that retained secret had **no flag and no environment variable at all** — it was
+//! read through `rpassword`, which fails on any non-tty, so a DR drill could not be scripted and
+//! this very CLI surface could not be tested. Pinning the clause then would have pinned the
+//! defect, which is why the paragraph that stood here declined to. It now has
+//! `--old-recovery-code-file` (ADR-0069), and the two properties that matter are asserted below:
+//! the flag EXISTS, and it is **optional**, so a solo clinic still supplies nothing but `--conn`
+//! and `--from`.
 
 use std::process::Command;
 use std::sync::OnceLock;
@@ -320,5 +326,41 @@ fn the_dead_node_id_stays_optional() {
         !required_flags(&help).contains(&"--superseded-node".to_string()),
         "--superseded-node names a DEAD node's id; requiring it would make a solo restore \
          depend on a fact that died with the disk. It is auto-detected from a sole enroll."
+    );
+}
+
+/// #572: the RETAINED secret has a non-interactive path at all.
+///
+/// Before this existed, the one command whose correctness matters most could not be exercised:
+/// a piped recovery code did not merely get ignored — the read errored, the export never
+/// opened, and the restore finished having recovered ZERO PATIENTS while exiting non-zero. A
+/// clinic could not rehearse, and the measurement rig had to allocate a pseudo-terminal.
+///
+/// Read as a DOCUMENTED flag rather than a required one: requiring it is the failure the test
+/// below guards, and the two are separated so a reader seeing one red does not chase the other.
+#[test]
+fn the_retained_secret_has_a_non_interactive_path() {
+    let help = restore_help();
+    assert!(
+        documented_flags(&help).contains(&"--old-recovery-code-file".to_string()),
+        "restore must offer a non-interactive path for the OLD node's recovery code — without \
+         one, a DR drill cannot be scripted and this surface cannot be tested (#572). Full \
+         help:\n{help}"
+    );
+}
+
+/// And it must stay OPTIONAL, which is the clause this whole file exists to defend.
+///
+/// The operator whose disk just died supplies the new database and the medium, and nothing
+/// else. A restore from a medium with no local-state export beside it needs no recovery code at
+/// all, and an attended restore should still be able to simply type one.
+#[test]
+fn the_recovery_code_file_stays_optional() {
+    let help = restore_help();
+    assert!(
+        !required_flags(&help).contains(&"--old-recovery-code-file".to_string()),
+        "the recovery-code file must be optional: a medium with no local-state export needs no \
+         code at all, and an attended operator should still be able to type one. Full \
+         help:\n{help}"
     );
 }
