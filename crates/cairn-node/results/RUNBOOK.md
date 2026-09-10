@@ -46,9 +46,14 @@ cargo build --release -p cairn-node --example seed_measurement_corpus
 python3 scripts/measure_dr_restore.py --sizes 100,1000,2500,5000
 ```
 
-Sizes are **patient counts**. Each patient contributes 3 demographic events (registration, name, date
-of birth — ADR-0061's search-carrying act) plus `--meds-per-patient` **born-sealed** clinical events,
-so the default `17` puts the 5 000-patient point at just over 100 000 events.
+Sizes are **patient counts**. Each patient contributes 3 events — one
+`identity.registration.asserted` (ADR-0061's search-carrying act) plus two
+`demographic.field.asserted`, name and date of birth — and `--meds-per-patient` **born-sealed**
+clinical events, so the default `17` puts the 5 000-patient point at just over 100 000 events. The run
+adds 3 more for its one-off warm-up registration, which is why the recorded points end in 003.
+
+The cluster is **discovered**, not assumed: the rig calls `scripts/pg-target.sh`, which picks a
+cluster and refuses one below the schema's version floor. Pass `--port` to name one explicitly.
 
 The rig runs, per size:
 
@@ -94,7 +99,20 @@ psql "$DST_CONN" -tAc "SELECT left(twin,60) FROM event_clear LIMIT 2"
 The third command must print readable medication text. A double-wrapped DEK would leave the first two
 counts agreeing and the plaintext unreadable.
 
-## 4. Record the result
+## 4. Clean up
+
+The rig leaves the media and both databases in place, deliberately — a failed run is worth
+inspecting. Once the result is recorded:
+
+```bash
+rm -rf /tmp/cairn-dr-measure
+psql -h "$PGHOST" -p "$PGPORT" -d postgres -c 'DROP DATABASE IF EXISTS cairn_dr_measure_src'
+psql -h "$PGHOST" -p "$PGPORT" -d postgres -c 'DROP DATABASE IF EXISTS cairn_dr_measure_dst'
+```
+
+At the largest point the working directory holds roughly 140 MB per size on the curve.
+
+## 5. Record the result
 
 Copy [`TEMPLATE.md`](TEMPLATE.md) to `YYYY-MM-DD-<host>.md` and fill it in. Record what you measured,
 not what the budget hoped for.

@@ -32,8 +32,10 @@
 > BEHAVIOUR: ONE RECORDED A DECISION, THE OTHER MEASURED ONE.**
 >
 > **1. §5.2's `Provenance` ruling — DECIDED, [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), spec v0.70, closes #571.**
-> **Provenance warns; it never gates, on either plane.** The shipped `eprintln!` arms were
-> already the answer. Four reasons, and do not re-derive them: refusing converts a partial loss
+> **Provenance warns; it never gates, on either plane.** The shipped print-only arms were
+> already the answer (a `println!` confirmation where the marker is tamper-evident, an
+> `eprintln!` warning where it is not — **not** all-`eprintln!`, which is what the ADR's first
+> draft said and a review caught before merge). Four reasons, and do not re-derive them: refusing converts a partial loss
 > into a **total** one (the ruling already made for a torn tail, an `Unknown` plane, a legacy
 > medium); a gate does not buy what it looks like — per-event signatures stop **forgery, not
 > omission**, so a prompt ratifies an **identity**, never a **record set**; principle 3 forbids
@@ -52,6 +54,40 @@
 > runbook + template beside it. Verified past the summary line (85 000 `event_dek` / `event_clear`
 > / `medication_statement`, plus a twin read back) — **rows arriving is not a body opening.**
 >
+> **⇒ THE REVIEW ROUND ON #573 FOUND FOUR THINGS THAT MATTERED, ALL FIXED ON THE BRANCH
+> (2026-09-10, second pass). None changed the published figure; three changed whether the rig
+> could be trusted to produce it again.**
+>
+> 1. **ADR-0068 said something false about the code and contradicted itself.** Its context
+>    section claimed every `Provenance` arm is an `eprintln!`; two of five are `println!`, and
+>    the ADR's own "what the operator is told" section said so correctly. Corrected in the ADR,
+>    the decisions index and the design-doc amendment. ⚠️ **This is the one that had a
+>    deadline**: ADRs are immutable once merged, so the same sentence after merge is a permanent
+>    erratum rather than an edit.
+> 2. **The rig answered the recovery-code prompt on the wrong string.** It matched
+>    `"recovery code"`, which the NEW node's shown-once banner satisfies **two steps before the
+>    real prompt** — so it typed the answer into the terminal minutes early and worked only as
+>    type-ahead, and only because the pinned `rpassword` uses `TCSANOW`. A flushing version would
+>    have turned the measurement into a silent hour-long hang. It now matches `"old recovery
+>    code"` (in `rpassword`'s prompts, in neither banner) and **answers up to the three tries
+>    `restore` actually allows** — answering once left a lost first answer indistinguishable from
+>    a slow restore.
+> 3. **The restore's exit status was captured and discarded.** `restore` deliberately prints its
+>    whole summary and only THEN fails, so a refused local-state bundle — custody NOT installed —
+>    arrives as a clean clinical line plus a non-zero exit. The rig read only the line. Reproduced
+>    against a stub and now refused.
+> 4. **The suite could not see which column a number landed in.** Mutation-tested: transposing
+>    the Backup and Restore cells left all twelve tests green while writing 15.0 s into the column
+>    headed **Restore**. Six mutants survived in total; all six are now killed, and the exact
+>    rendered row is pinned.
+>
+> Also fixed: the cluster is **discovered** via `pg-target.sh` rather than assuming 5532 (the
+> assumption that script exists to abolish, #564); nav omissions now **fail the strict docs
+> build** (`validation.nav.omitted_files`, which is why ADR-0067 could go un-navigated —
+> `--strict` does not promote INFO); house rule 6 (a real recovery code and two sealing
+> passphrases were literals); and the `--help` guard now sees a required **positional**, which is
+> how this CLI already spells `unpeer <NODE_ID>` and was its blind spot.
+
 > **⇒ `M > N` STILL STANDS AND #512 STAYS OPEN — BUT THE EXCESS ACT CHANGED IDENTITY, AND THE
 > NEW ONE IS BETTER-POSED.** ADR-0068 deleted the provenance confirmation DR slice 1's plan
 > blamed for `M = 3`. The third act is real anyway and the plan mis-assigned it: its claim that
