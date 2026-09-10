@@ -154,6 +154,19 @@ async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) ->
     (event_id, twin)
 }
 
+/// Whether the export carries the node's unwrap SECRET, or only its custody rows and registry.
+///
+/// [`Self::Missing`] is not a contrived fixture: it is exactly what
+/// `seal_and_write_local_state_export` writes when the keystore's `.unwrap` file cannot be
+/// loaded — it warns and carries on, because the export is optional and the medium is the
+/// load-bearing copy. A restore from such an export installs the actor registry but no custody
+/// key, so every record carrying one is PENNED with its key rather than admitted.
+#[derive(Clone, Copy)]
+enum ExportCustody {
+    Carried,
+    Missing,
+}
+
 /// Write a medium AND its sealed `CAIRNL1` export sibling, exactly as the `backup` command
 /// does, and return the medium's path.
 ///
@@ -169,6 +182,7 @@ async fn medium_with_export(
     dir: &std::path::Path,
     op: &str,
     code: &str,
+    custody: ExportCustody,
 ) -> std::path::PathBuf {
     let medium_path = dir.join("cairn.medium");
     let health_path = dir.join("backup-status.json");
@@ -177,7 +191,11 @@ async fn medium_with_export(
         .expect("the backup ceremony succeeds");
 
     let unwrap_secret = fixture_unwrap_secret(sk);
-    let bundle = localstate::read_local_state(c, Some(&unwrap_secret))
+    let carried = match custody {
+        ExportCustody::Carried => Some(&unwrap_secret),
+        ExportCustody::Missing => None,
+    };
+    let bundle = localstate::read_local_state(c, carried)
         .await
         .expect("reading this node's local state");
     let wraps = localstate::establish_lsk(op, code).expect("establishing the LSK escrow");
@@ -197,7 +215,19 @@ async fn medium_with_export(
 }
 
 /// Put the database in the state a disaster-recovery machine is in: no clinical tier, no
-/// federation identity.
+/// federation identity, and **no actor registry**.
+///
+/// ⚠️ **The registry is the half that is easy to forget, and forgetting it makes this whole
+/// file weaker than it looks.** `actor_event` survives a clinical-tier truncate, so a wipe that
+/// omitted it left the enrolled signers from `medication_setup` in place — and the apply door
+/// would then have accepted every record on its own, whether or not the export's registry ever
+/// arrived. Every assertion here about custody or the registry travelling would still have
+/// passed, while proving strictly less than it claimed. A real replacement machine has an empty
+/// `actor_event`, which is exactly why `restore_actor_registry` (db/052) exists at all.
+///
+/// `actor_event` is append-only (db/004 refuses DELETE by trigger), so this disables that
+/// trigger for the duration. A test-fixture act, never something a node does — the door's own
+/// fence is what protects a real registry, and it is pinned in the SQL mirror.
 async fn wipe_to_a_fresh_dr_machine(c: &Client) {
     c.batch_execute(
         "TRUNCATE event_log, event_dek, event_clear, erasure_shred_log, patient_chart CASCADE",
@@ -207,6 +237,13 @@ async fn wipe_to_a_fresh_dr_machine(c: &Client) {
     c.batch_execute("DELETE FROM sync_quarantine")
         .await
         .unwrap();
+    c.batch_execute(
+        "ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update;
+         DELETE FROM actor_event;
+         ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update;",
+    )
+    .await
+    .expect("clearing the actor registry, as a fresh DR machine has it");
     db::reset_node_federation_tables(c).await.unwrap();
 }
 
@@ -236,7 +273,16 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
 
     let (sk, kid) = provisioned_clinic(&c).await;
     let (event_id, twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
-    let medium = medium_with_export(&c, &sk, &kid, dir.path(), &op, &code).await;
+    let medium = medium_with_export(
+        &c,
+        &sk,
+        &kid,
+        dir.path(),
+        &op,
+        &code,
+        ExportCustody::Carried,
+    )
+    .await;
 
     wipe_to_a_fresh_dr_machine(&c).await;
 
@@ -331,7 +377,16 @@ async fn a_wrong_code_in_a_file_degrades_honestly_and_counts_one_attempt() {
 
     let (sk, kid) = provisioned_clinic(&c).await;
     let (_event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
-    let medium = medium_with_export(&c, &sk, &kid, dir.path(), &op, &code).await;
+    let medium = medium_with_export(
+        &c,
+        &sk,
+        &kid,
+        dir.path(),
+        &op,
+        &code,
+        ExportCustody::Carried,
+    )
+    .await;
 
     wipe_to_a_fresh_dr_machine(&c).await;
 
@@ -467,7 +522,16 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
 
     let (sk, kid) = provisioned_clinic(&c).await;
     let (event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
-    let medium = medium_with_export(&c, &sk, &kid, dir.path(), &op, &code).await;
+    let medium = medium_with_export(
+        &c,
+        &sk,
+        &kid,
+        dir.path(),
+        &op,
+        &code,
+        ExportCustody::Carried,
+    )
+    .await;
 
     wipe_to_a_fresh_dr_machine(&c).await;
     let new_key = dir.path().join("restored.key");
@@ -505,5 +569,182 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
         readable, 0,
         "without the recovery code the export never opened, so no sealed body can be read — \
          if this is ever non-zero, the headline test is not proving what it claims"
+    );
+}
+
+/// **#570 item 1, the loudest bail: a restore that could not offer ONE record must exit
+/// non-zero.** And #570 item 2 for the "NO actor registry" warning, whose reachability a
+/// source-text grep cannot establish.
+///
+/// A medium carrying charts, with no export beside it, is the most incomplete of the three
+/// outcomes: without the registry every record would be refused as authored by an unenrolled
+/// signer, so the door is never offered any of them. It pens nothing, which is exactly why it
+/// is checked separately from the pen — a `penned() > 0` test alone hands a monitoring script
+/// exit 0 for a restore that recovered no charts at all.
+///
+/// The remedy in the message is the load-bearing part. `cairn-sync requeue` will NOT fix this,
+/// because `finalize_identity` runs at the end of this restore and permanently closes the
+/// registry door — printing the custody remedy here would be a false promise to someone
+/// mid-disaster.
+#[tokio::test]
+async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_remedy() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let (event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    // Charts on the medium, and NO export sibling — so no actor registry travels.
+    let medium = dir.path().join("cairn.medium");
+    backup::backup_to(
+        &c,
+        &medium,
+        &dir.path().join("backup-status.json"),
+        0,
+        Some((&sk, kid.as_str())),
+    )
+    .await
+    .unwrap();
+
+    wipe_to_a_fresh_dr_machine(&c).await;
+    let new_key = dir.path().join("restored.key");
+
+    let out = cairn_node()
+        .args(["--conn", &base, "--key"])
+        .arg(&new_key)
+        .args(["restore", "--from"])
+        .arg(&medium)
+        .args(["--insecure-plaintext"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "a restore that offered NOT ONE record to the door must exit non-zero — a monitoring \
+         script reading exit 0 files an incomplete restore as clean; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
+    // Reachability, which the text-grepping guard cannot establish: gate this block behind
+    // `if false` and that guard stays green while this test goes red.
+    assert!(
+        stderr.contains("NO actor registry"),
+        "the operator must be warned that no registry travelled; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("requeue` will NOT fix this") || stderr.contains("will NOT fix this"),
+        "the warning must say requeue cannot fix this — finalize_identity closes the registry \
+         door permanently, so the custody remedy would be a false promise; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("NOT ONE record was offered"),
+        "the summary must say the plane was never offered, not merely report zeroes — an \
+         all-zero clinical line is indistinguishable from a medium that held nothing, and the \
+         two have opposite remedies; stdout:\n{stdout}"
+    );
+    // The charts really are still unrecovered, so the non-zero exit is telling the truth.
+    let readable: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(readable, 0, "no chart can have been recovered here");
+}
+
+/// **#570 item 1, the pen bail — and the AEAD caveat's reachability (#570 item 2).**
+///
+/// An export written by a node whose `.unwrap` keystore file could not be loaded carries the
+/// actor registry and the custody ROWS, but no key to open them. That is not a contrived
+/// fixture: `seal_and_write_local_state_export` warns and writes exactly that, because the
+/// export is optional and the medium is the load-bearing copy.
+///
+/// So the registry lands, the door accepts the signers, and every record carrying custody is
+/// PENNED **with its key beside it** — recoverable later by `cairn-sync requeue`, which is the
+/// remedy the message must name here and must NOT have named in the test above.
+#[tokio::test]
+async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    let op = an_op_passphrase(5);
+    let code = a_recovery_code(5);
+    let dir = tempfile::tempdir().unwrap();
+
+    let (sk, kid) = provisioned_clinic(&c).await;
+    let (event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    let medium = medium_with_export(
+        &c,
+        &sk,
+        &kid,
+        dir.path(),
+        &op,
+        &code,
+        ExportCustody::Missing,
+    )
+    .await;
+
+    wipe_to_a_fresh_dr_machine(&c).await;
+    let code_file = dir.path().join("old-recovery-code");
+    std::fs::write(&code_file, &code).unwrap();
+    let new_key = dir.path().join("restored.key");
+
+    let out = cairn_node()
+        .args(["--conn", &base, "--key"])
+        .arg(&new_key)
+        .args(["restore", "--from"])
+        .arg(&medium)
+        .args(["--old-recovery-code-file"])
+        .arg(&code_file)
+        .args(["--insecure-plaintext"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "a restore holding records in the pen is INCOMPLETE and a script must see that; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // THE AEAD CAVEAT. Reachable only when a registry actually restores, which is why it is
+    // asserted here rather than guessed at from the source.
+    assert!(
+        stdout.contains("NOT by a per-row signature"),
+        "the one part of a restore that is not verify-on-apply must be said out loud — a \
+         limitation living only in a design doc is one nobody finds; stdout:\n{stdout}"
+    );
+    // The pen's remedy IS true here, unlike the registry case above: the bytes and the key are
+    // both held, so a requeue genuinely completes the restore.
+    assert!(
+        stdout.contains("quarantine pen with their custody"),
+        "the operator must be told the records are held WITH their key; stdout:\n{stdout}"
+    );
+    // The body is not readable yet, and that is correct — it is penned, not lost.
+    let readable: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid",
+            &[&event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        readable, 0,
+        "a penned record is held, not admitted — if this is readable the pen did not engage"
     );
 }
