@@ -359,6 +359,15 @@ are applied — the third human act the paper-parity benchmark counts, and #512'
 that act cannot be quietly dropped from the step count: it is a safety gate, and this slice is the one
 that extends it to patient data.
 
+> **Superseded 2026-09-10 by [ADR-0068](../../spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md)
+> ([#571](https://github.com/cairn-ehr/cairn-ehr/issues/571)).** The paragraph above supports two
+> readings and the shipped code implements the other one: the node plane's `Provenance` treatment is a
+> **printed warning**, never a blocking prompt, so "inherits the same treatment" was already satisfied
+> the day this was written. **Provenance warns; it never gates.** The wording is left standing because
+> the divergence is the point — a design sentence with two readings and no test is how this sat unnoticed
+> through a merge. The `M = 3` claim in the last sentence does not follow either; #512's count is
+> re-derived by measurement.
+
 ---
 
 ## 6. Failure policy: skip, count, pen, report
@@ -534,8 +543,16 @@ this slice is not entitled to claim.
     refused as a substitution.
 17. **A legacy medium is a named outcome, not a silent zero** (§5.2), and an `Unknown(tag)` segment is
     noted with its record count rather than applied.
-18. **Provenance gates the clinical plane.** A non-sole-enroll-signed medium requires the operator's
-    identity confirmation before clinical records are applied (§5.2, and the third act #512 counts).
+18. **Provenance warns before any clinical record is applied, and never blocks.** ~~Provenance gates
+    the clinical plane. A non-sole-enroll-signed medium requires the operator's identity confirmation
+    before clinical records are applied (§5.2, and the third act #512 counts).~~ **Restated 2026-09-10
+    by [ADR-0068](../../spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md)**
+    (closing [#571](https://github.com/cairn-ehr/cairn-ehr/issues/571)). The struck wording is left
+    standing because it is what the plan said when it was accepted, and the divergence between it and
+    the shipped `eprintln!` arms is the thing worth being able to see. There is no gate, on either
+    plane, and there is no third act: refusing converts a partial loss into a total one, a prompt
+    ratifies an identity rather than a record set, and principle 3 forbids the mechanism by name. #512's
+    step count is re-derived by measurement, not by this line.
 
 **The ceremony and the report**
 
