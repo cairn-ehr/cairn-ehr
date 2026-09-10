@@ -28,29 +28,101 @@
 > **beside** that reader rather than widening it, which is what keeps a federation record's
 > fate independent of a clinical segment's chain.
 >
-> **⇒ TWO THINGS 2d STILL OWES, AND THE FIRST IS A DECISION, NOT A PATCH.**
+> **⇒ BOTH THINGS 2d OWED ARE DISCHARGED (2026-09-10, PR #573). NEITHER CHANGED PRODUCT
+> BEHAVIOUR: ONE RECORDED A DECISION, THE OTHER MEASURED ONE.**
 >
-> **1. §5.2's `Provenance` ruling for clinical segments is NOT implemented** (design test 18).
-> The design says clinical segments *"inherit the same `Provenance` treatment the node plane
-> already gets"* and that an unsigned or non-sole-enroll-signed medium *"requires the operator's
-> identity confirmation before its clinical records are applied."* **Those are two different
-> things and the sentence supports both readings.** The node plane's treatment is a **printed
-> warning**, never a blocking prompt — every `Provenance` match arm in `main.rs` is an
-> `eprintln!` — so on the first reading the clinical plane already inherits it (the warnings
-> print before any clinical record is applied). On the second it is a **blocking gate that
-> exists nowhere in the tree**, and building one would be the restore path's first interactive
-> confirmation, which principle 3's *"confirmation dialogs are explicitly NOT an acceptable
-> safety mechanism"* argues against. **Maintainer's call.** It is load-bearing for the
-> benchmark, not just the code: the design argues `M = 3` *because* of that third act.
+> **1. §5.2's `Provenance` ruling — DECIDED, [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), spec v0.70, closes #571.**
+> **Provenance warns; it never gates, on either plane.** The shipped print-only arms were
+> already the answer (a `println!` confirmation where the marker is tamper-evident, an
+> `eprintln!` warning where it is not — **not** all-`eprintln!`, which is what the ADR's first
+> draft said and a review caught before merge). Four reasons, and do not re-derive them: refusing converts a partial loss
+> into a **total** one (the ruling already made for a torn tail, an `Unknown` plane, a legacy
+> medium); a gate does not buy what it looks like — per-event signatures stop **forgery, not
+> omission**, so a prompt ratifies an **identity**, never a **record set**; principle 3 forbids
+> the mechanism by name; and **input is not ceremony** — the recovery-code prompt asks for a
+> secret only the operator holds, a provenance confirmation asks them to ratify a judgment the
+> machine already printed. Design test 18 is **restated, not dropped**, accepted wording left
+> struck through above it. ⚠️ **Recorded as a NEW ADR, not the ADR-0067 erratum #571 asked for**:
+> the errata rule needs a passage factually false *about the code* to sit above the correction,
+> and ADR-0067 never mentions provenance; decision-shaped content takes a new ADR.
 >
-> **2. The §1.2 measurement.** #512's budget — *a restore of a
-> 100 000-event medium completes in ≤ 10 min, one secret, no knowledge of the dead node's
-> config* — is **not measured**. The three step numbers (paper *N* = 2 → forced *M* = 3 →
-> bundling *K* = 2) are #512's, unchanged and not re-derived; `M > N` stays **filed, never
-> argued away**. **If the measurement falls outside the budget, that IS the finding — file it
-> against #512, never adjust the budget.**
+> **2. The §1.2 measurement — MEASURED, and it PASSES with ~5× headroom.**
+> **100 003 events restore in 116.7 s against a 600 s budget; 85 000 sealed bodies open on the
+> restored node.** Linear at **1.17 ms/event, no bend**, so the ceiling is predictable rather
+> than a cliff: 600 s arrives near **510 000 events** on an M3 Max. Rig
+> `scripts/measure_dr_restore.py`; write-up `crates/cairn-node/results/2026-09-10-macos-m3max.md`;
+> runbook + template beside it. Verified past the summary line (85 000 `event_dek` / `event_clear`
+> / `medication_statement`, plus a twin read back) — **rows arriving is not a body opening.**
 >
-> **Eight §7 tests are also unwritten** — the behaviour is built and green, the pins are not:
+> **⇒ THE REVIEW ROUND ON #573 FOUND FOUR THINGS THAT MATTERED, ALL FIXED ON THE BRANCH
+> (2026-09-10, second pass). None changed the published figure; three changed whether the rig
+> could be trusted to produce it again.**
+>
+> 1. **ADR-0068 said something false about the code and contradicted itself.** Its context
+>    section claimed every `Provenance` arm is an `eprintln!`; two of five are `println!`, and
+>    the ADR's own "what the operator is told" section said so correctly. Corrected in the ADR,
+>    the decisions index and the design-doc amendment. ⚠️ **This is the one that had a
+>    deadline**: ADRs are immutable once merged, so the same sentence after merge is a permanent
+>    erratum rather than an edit.
+> 2. **The rig answered the recovery-code prompt on the wrong string.** It matched
+>    `"recovery code"`, which the NEW node's shown-once banner satisfies **two steps before the
+>    real prompt** — so it typed the answer into the terminal minutes early and worked only as
+>    type-ahead, and only because the pinned `rpassword` uses `TCSANOW`. A flushing version would
+>    have turned the measurement into a silent hour-long hang. It now matches `"old recovery
+>    code"` (in `rpassword`'s prompts, in neither banner) and **answers up to the three tries
+>    `restore` actually allows** — answering once left a lost first answer indistinguishable from
+>    a slow restore.
+> 3. **The restore's exit status was captured and discarded.** `restore` deliberately prints its
+>    whole summary and only THEN fails, so a refused local-state bundle — custody NOT installed —
+>    arrives as a clean clinical line plus a non-zero exit. The rig read only the line. Reproduced
+>    against a stub and now refused.
+> 4. **The suite could not see which column a number landed in.** Mutation-tested: transposing
+>    the Backup and Restore cells left all twelve tests green while writing 15.0 s into the column
+>    headed **Restore**. Six mutants survived in total; all six are now killed, and the exact
+>    rendered row is pinned.
+>
+> Also fixed: the cluster is **discovered** via `pg-target.sh` rather than assuming 5532 (the
+> assumption that script exists to abolish, #564); nav omissions now **fail the strict docs
+> build** (`validation.nav.omitted_files`, which is why ADR-0067 could go un-navigated —
+> `--strict` does not promote INFO); house rule 6 (a real recovery code and two sealing
+> passphrases were literals); and the `--help` guard now sees a required **positional**, which is
+> how this CLI already spells `unpeer <NODE_ID>` and was its blind spot.
+
+> **⇒ `M > N` STILL STANDS AND #512 STAYS OPEN — BUT THE EXCESS ACT CHANGED IDENTITY, AND THE
+> NEW ONE IS BETTER-POSED.** ADR-0068 deleted the provenance confirmation DR slice 1's plan
+> blamed for `M = 3`. The third act is real anyway and the plan mis-assigned it: its claim that
+> the escrow secret and the invocation are *"one interactive ceremony"* is **false** — the old
+> node's recovery code is a **second, separately-prompted secret**, asked for after the node
+> plane is already applied. Progress, not a lateral move: an identity confirmation has no paper
+> counterpart and could never be bundled, a second prompt plausibly can, which is what keeps
+> `K = 2` believable.
+>
+> **⇒ #572 IS NEW AND IS THE SHARPEST THING THIS RUN FOUND: A RESTORE CANNOT BE SCRIPTED AT
+> ALL.** The recovery code is read through `rpassword` (fails on any non-tty) and has **no flag
+> and no env var**, unlike the new key's passphrase. A piped code does not merely fail — the read
+> errors, the export never opens, and the restore recovers **ZERO PATIENTS** while exiting
+> non-zero. So no cron DR drill, no scripted rehearsal, and the measurement rig has to allocate a
+> pty purely to work around it. Needs a **decision** (flag / file / env / explicit
+> `--non-interactive` refusal), and #527's *"no cron-run command reaches `print_recovery_code`"*
+> triage would need re-checking by whichever lands.
+>
+> **⇒ #552 IS CONFIRMED WITH A NUMBER IT DID NOT HAVE.** A single capture is linear
+> (~0.15 ms/event); the cost that bites is the one that never goes away. **A second capture of
+> the same 100 003-event medium with ZERO new events cost 9.95 s**, against 15.0 s for the one
+> that wrote all of them — about **two thirds of a nightly capture is independent of how much is
+> new**. Its ~23 000-event estimate for crossing a 2 s budget is if anything optimistic;
+> interpolation puts it near **14 000**.
+>
+> **⇒ THE STRONGEST REMAINING DR CANDIDATE IS THE §7 TEST DEBT** — it is what 2d explicitly
+> declined to claim, and it now bundles cleanly with three of the issues 2d filed: **#568**
+> (`do_requeue`'s custody-carrying arm — **the remedy every penned reason advertises** — has zero
+> tests; every call site passes `None`), **#570** (the restore CLI surface is untested, exit code
+> included) and **#567** (`verify-backup`'s OK is still federation-only, so a green verify says
+> nothing about the plane a restore now applies — arguably the sharpest safety gap left on this
+> path). Note **#570 and #572 are the same wall**: a CLI test cannot drive the recovery-code
+> prompt without a pty either, which is one reason that surface has no tests.
+>
+> **Eight §7 tests are unwritten** — the behaviour is built and green, the pins are not:
 > 4 (custody survives the pen → requeue → the body opens), 7 (the pen uncapped **at a volume
 > above the row cap**, which the design demands explicitly because a handful of events passes
 > against the unfixed quota), 14 end-to-end through the CLI, 16 (duplicate `source_seq`
@@ -72,7 +144,9 @@
 > **read-side peak memory is unbudgeted** and a Pi or Android node is a legitimate restore
 > target, so streaming stays deferred here) · **#536** (an unopenable DEK is counted on the
 > RESTORE path only; the sync half is open) · **#502 item 4** (a discarded keystore-load
-> reason) · **#101 items 2–3** · **#512**.
+> reason) · **#101 items 2–3** · **#512** (`M > N` stands; the TIME half is now measured and
+> passes — see above) · **#572** (**new** — no non-interactive path for the recovery code, so a
+> restore cannot be scripted or rehearsed by cron; needs a decision, not a patch).
 >
 > **Never cite ADR-0026 decision 1's promise 2** — *"node-default data-at-rest keys survive"* —
 > as met by any of this. It has **no subject at all**: no node-default key tier exists, so it is
@@ -82,10 +156,13 @@
 > **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it
 > (read-only; `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a
 > **REAL defect**, not the #146/#520 false-positive class, and are gone from `main`. Measured
-> 2026-09-04: **11 open, all `rust/cleartext-logging`, all high, zero critical** — quote that
+> **2026-09-10 (re-run, this is the current figure): 10 open, all `rust/cleartext-logging`, all high,
+> zero critical, all on `refs/heads/main`** — one fewer than the 11 measured 2026-09-04. Quote that
 > only after re-running the script, since it is the number this file has already been wrong
-> about. All 11 were re-triaged 2026-09-07 and written up in
-> [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine are taint-through-an-argument
+> about. The open set is now **#5, #6, #7, #8, #13, #15, #16, #20, #21, #22** — the 2026-09-07
+> triage covered **11**, so exactly one has dropped off since, and the remainder are the same
+> class. That triage is written up in
+> [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine were taint-through-an-argument
 > (a secret passed INTO a function makes its non-secret return — a `PathBuf`, a `SocketAddr`, a
 > count — look tainted), two are a CLI echoing back a patient UUID the operator supplied.
 > `print_recovery_code` IS a real secret on stderr and is correct: all five call sites are
@@ -225,7 +302,7 @@ registration row until widened; (2) **the accessibility pass** — a live VoiceO
 checks, keyboard-only (`cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`), DOM
 assertions automated by **#332**; (3) **make CI jobs REQUIRED status checks** (**#444**, admin-only — "clippy + cargo
 test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per `CONTRIBUTING.md`'s dated table; (4)
-**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (11 open as of 2026-09-04,
+**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (**10** open as of 2026-09-10,
 zero critical), THEN make `CodeQL` a fourth required check, in that order (see ⇒ NEXT). **If a measurement falls outside its budget, that is the finding — file an
 issue, never adjust the budget.**
 
@@ -254,7 +331,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-10 (**DR slice 2d — the record comes home.** `restore` reads the clinical plane back and a restored node's sealed body OPENS; closes **#554**, adds **ADR-0067** (spec v0.68 → v0.69) and **`db/052`** (SCHEMA 51 → 52); the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**; the quarantine pen moved into the database with two callers and gained custody; `ActorRegistryRow::recorded_at` lost its serde default. **The §1.2 measurement at #512's scale is the residual.**) · previous: 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — a header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch, the last moment a pre-field format change is free. **The same session found 2c itself unmerged and un-PR'd**) · 2026-09-06 (**DR slice 2c** — the medium carries the clinical record, and nothing yet restored one; closed #522/#524, fixed #550 in-branch, opened #549/#551/#552) · 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed, reopened + a CI guard) and, earlier that day, **#511** (**the custody newtypes**; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; opened #531, #532, #534–#538) and, earlier, **#527** (the CodeQL backlog; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave) · 2026-08-30 (**#503**, the shared keystore crate) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** **v0.69** ([ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-10, second session (**the DR restore's budget, measured — and the ruling 2d never wrote down.** Closes **#571** with **ADR-0068** (*provenance warns, never gates*; spec v0.69 → **v0.70**); **measures #512's §1.2 budget** — 100 003 events restore in **116.7 s against 600 s**, linear at 1.17 ms/event, 85 000 sealed bodies opening on the restored node. `M > N` still stands but the excess act **changed identity**. Opened **#572** (a restore cannot be scripted at all); **confirmed #552** with a number. No product-behaviour change, no migration, no SCHEMA bump.) · earlier that day: (**DR slice 2d — the record comes home.** `restore` reads the clinical plane back and a restored node's sealed body OPENS; closes **#554**, adds **ADR-0067** (spec v0.68 → v0.69) and **`db/052`** (SCHEMA 51 → 52); the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**; the quarantine pen moved into the database with two callers and gained custody; `ActorRegistryRow::recorded_at` lost its serde default. **Its §1.2 residual is discharged by the session above.**) · previous: 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — a header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch, the last moment a pre-field format change is free. **The same session found 2c itself unmerged and un-PR'd**) · 2026-09-06 (**DR slice 2c** — the medium carries the clinical record, and nothing yet restored one; closed #522/#524, fixed #550 in-branch, opened #549/#551/#552) · 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed, reopened + a CI guard) and, earlier that day, **#511** (**the custody newtypes**; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; opened #531, #532, #534–#538) and, earlier, **#527** (the CodeQL backlog; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave) · 2026-08-30 (**#503**, the shared keystore crate) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** **v0.70** ([ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; and [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -278,128 +355,105 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-10 (last) — DR slice 2d: the record comes home
+### 2026-09-10 (last) — the restore's budget, measured; and the ruling 2d never wrote down
 
-**Closes #554.** ADR-0067, spec v0.69, `db/052` (SCHEMA 52). Four crates, so the gate is the
-FULL workspace (#503's lesson). What follows is what a next session would otherwise have to
-rediscover — the per-slice narrative is ROADMAP's.
+**Closes #571 (ADR-0068, spec v0.70). Measures #512's time half. Opens #572. Confirms #552.** No
+product-behaviour change, no migration, no SCHEMA bump. PR #573. What generalises past the slice:
 
-- **⇒ THE HEADLINE TEST DECRYPTS A BODY, AND THAT IS THE POINT.** `apply_remote_event`'s
-  `p_dek` feeds straight into `cairn_wrap_dek(p_dek, v_pub)` — **the door wraps what it is
-  handed** — and both carriers hold keys already wrapped to this node. Piping either through
-  would double-wrap every key in the clinic's record: rows present, well-formed, exactly the
-  right length, counts agreeing, `verify-backup` green, and the defect surfacing months later
-  when a clinician opens a chart. **A test that counted rows would have shipped it.** The
-  restore unwraps in Rust and hands the door the plaintext; `restore_reads_the_clinical_plane.rs`
-  reads a real sealed body back to its twin text, and a second test names the regression so a
-  future "simplification" reddens with a reason rather than a decryption failure.
-- **⇒ THE GUARANTEE TEST CAUGHT ITS OWN MISSING STEP, AND THE MESSAGE IS THE LESSON.** Written
-  without the registry restore, it failed with *"signer … is not an enrolled, non-revoked
-  actor"* — **the zero-patients outcome wearing a different costume**, arriving through the
-  slice built to end it. Every clinical apply door resolves its author through `actor_current`;
-  a restored node with no registry refuses its own history.
-- **⇒ TWO REGRESSIONS THE EXISTING TESTS CAUGHT WHILE MOVING THE PEN.** A draft **flattened the
-  `postgres::Error` into a String** (the #480/#489 shape: the cycle reclassifies as a
-  `partition` and the operator audits the peer's signatures over a fault on their own disk).
-  Then wrapping everything in `LocalDbFault` **conflated a FULL PEN with a local fault** — a
-  quota refusal is a deliberate verdict about the peer's flood. Split by `refusal_is_deliberate`,
-  the same SQLSTATE test the apply path uses. **Both were caught by tests that already existed**,
-  which is the argument for #480/#489's guards paying for themselves.
-- **⇒ `db_errors_stay_legible`'s COUNT WENT 6 → 3 FROM TWO CAUSES AT ONCE**, and the entry now
-  says so: three pen-write sites became one when the pen moved into `db/052`, AND that one is no
-  longer matched by the needle (`.map_err(|e| LocalDbFault::boxed(`) because the closure has to
-  split a full pen from a local fault, so the wrapper sits in an `else` arm. It is still pinned
-  **by shape**. *"The count fell by three while a wrapper was added"* is exactly the reading that
-  constant exists to prevent.
-- **⇒ A SECOND REVIEW ROUND (five specialised reviewers) FOUND TWO CRITICAL DEFECTS THE FIRST
-  MISSED, BOTH IN THE SAME BLIND SPOT: the door's RETURN is not the record's fate.** (1) **A
-  sealed record can land with no key and no clear view and still count as `applied`.** db/020
-  has two LENIENT arms that `RAISE WARNING` and admit — a presented DEK that does not open the
-  body, and an unregistered node unwrap key — and both skip step 9 entirely (no `event_dek`, no
-  `event_clear`, no twin, no projection) and then **return normally**. Right for a puller,
-  which sees the DEK again next cycle; for a restore it is the zero-patients outcome with a
-  clean summary on top, and **the only signal is a Postgres `WARNING` that nothing in this tree
-  polls**. Fixed by asking the DATABASE instead of the door (`custody_landed`), penning as
-  `CustodyDidNotLand`. A logged shred still counts as landed — db/020's anti-resurrection rule
-  is arrival-order independent and a shredded target's custody must never come back. (2)
-  **Every door error was penned as a verdict about the bytes**, local faults included, four
-  statements after the newness probe draws that exact line and says why. `refusal_is_deliberate`
-  is re-expressed in `cairn-node` (the binary-only-crate wall again, same as the quota
-  constants); a non-`P0001` SQLSTATE now aborts the run instead of filing the operator's disk
-  fault as a refusal of their medium.
-- **⇒ AND TWO MORE MESSAGES THAT LIED, OF THE SAME SPECIES AS THE FIRST ROUND'S THREE.** (1)
-  The untrusted-records warning compared a **deduped** count against a **raw** one, so any
-  clinic whose nightly capture was once interrupted and re-run restored a perfectly intact
-  medium and was told records *"could have been spliced in"* and to go find a second off-site
-  drive. `plane_records_with_accounting` now reports `gated_out` and `collapsed` **apart**, and
-  the notice reads the trust number only — a caller must never reconstruct it by subtraction
-  from a population the derivation never saw. (2) With **no registry** the restore warned
-  correctly that `requeue` cannot fix it, then applied anyway — writing the clinic's whole
-  corpus a second time into a pen nothing can ever drain — and closed by printing the pen's
-  standard *"requeue completes the restore"* promise. The precondition now lives in
-  `apply_clinical_plane`, which offers nothing and says so, and the run **exits non-zero**
-  (checked before the pen test, which would otherwise hand a script exit 0 for a restore that
-  recovered no charts).
-- **⇒ THE COMPLETENESS WARNING WAS BUILT, THEN REVERTED BEFORE IT SHIPPED — READ #549 BEFORE
-  BUILDING IT AGAIN.** The review was right that `restore` never asks whether the medium is
-  complete: `seq_gaps` is called by the capture loop and nowhere in the restore path, so a
-  medium holding clinical seqs 1–100 and 500–900 prints *"800 applied … of 800 on the medium"*
-  at exit 0. The warning was written and **it was the wrong fix**: [#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)
-  documents that **every duplicate apply burns a `seq`**, so holes are routine on any federating
-  node and grow for the life of the medium. *"N event(s) are missing"* would have been
-  confidently wrong most of the time — the permanent alarm #549 predicts, crying wolf and
-  masking the one hole that is a genuinely lost event, which is the SAME defect species this
-  round was fixing. The deferral in ROADMAP stands and is better-informed than the finding was;
-  #549 now records that the surface has **two** consumers, capture and restore, and that the
-  restore side is the higher-stakes one. Two siblings DID land: a **straddled duplicate** (two
-  DIFFERENT records at one `source_seq`, which the serving path refuses and this path silently
-  applied twice) and a **V3 medium with an empty clinical plane**, which fell through both
-  summary arms and said nothing at all.
-- **⇒ THE STALEST DOC WAS ON THE FUNCTION THE SLICE REWROTE.** `apply_local_state`'s doc still
-  said the actor registry is *"counted … printed, never inserted — that door is slice 2d's"*
-  while step 5 of its own body installs it, and that the caller *"currently runs it after
-  `finalize_identity`"* after the slice moved that call last. Eight such sites across three
-  files, all corrected. A reader six months out trusts the function doc over the module header.
-- **⇒ FILED, NOT FIXED: #567–#571.** `verify-backup`'s OK is still federation-only, so a green
-  verify says nothing about the plane a restore now applies (**#567**, and the comment that used
-  to call that scoping a safety property now calls it a gap). `do_requeue`'s custody-carrying
-  arm — **the remedy every penned reason advertises** — has zero tests; every test call site
-  passes `None` (**#568**). db/052's registry door silently discards a **content** conflict and
-  leaves `actor_event_id`/`seq` unvalidated (**#569**). The restore CLI surface is untested,
-  exit code included (**#570**). Provenance does not gate the clinical plane and ADR-0067 does
-  not say so (**#571**).
-- **⇒ THE SESSION STARTED BY FINDING ITS OWN ⇒ NEXT HALF-DONE.** PR #565 was open as a DRAFT
-  saying *"do not merge"* and had been **merged anyway** on 2026-09-09, carrying the 2d DESIGN
-  and nothing else. `gh pr list --state all` before acting is what surfaced it — HANDOVER said
-  "next build is 2d" and was two days stale. The rule paid for itself the first session after it
-  was written.
-- **⇒ THE REVIEW ROUND FOUND THREE WAYS THE SLICE LIED TO AN OPERATOR MID-DISASTER**, all
-  fixed, and all of the same species: a message that is confidently wrong is worse than none.
-  (1) **Clinical records past `verified_through` were dropped silently** — the reader stopping
-  at the last verified chain link is correct, but a mid-file chain break is NOT a torn tail and
-  nothing said so, while the summary counted against the medium's FULL clinical total. With the
-  break in **segment 0** that reads *"0 applied … of N on the medium"* at **exit 0**: #500's
-  own zero-patients signature, inside the slice built to close it. (2) **A registry-only failure
-  produced a wrong diagnosis** — `restore_secret` was gated on `local_state_failure`, but
-  `apply_local_state` installs custody FIRST and the registry SECOND, so a registry failure left
-  a good key on disk while every record was penned as *"no key installed"*. **Read the file, not
-  the failure.** (3) **A missing registry and a missing key got the SAME remedy, and one was
-  false**: custody can be recovered later (the pen holds both halves, so requeue works), but
-  `finalize_identity` permanently closes `restore_actor_registry`'s first fence, so a restore
-  that ran without a registry produces a pen that **can never be drained** and the remedy is a
-  fresh database. Pinned, because the distinction is invisible in the code.
-- **⇒ `requeue` MUST NOT ABORT — it is the command a restore's own output points at.** Resolving
-  custody exactly as the pull path does made it refuse on a divergence or a corrupt key, and
-  `load_or_create_key` would **silently mint a stray `node.key`** for an operator in the wrong
-  directory. Custody there is best-effort now (new `load_existing_key` never creates), and
-  custody-less release is the pre-2d behaviour, so the degraded path is the old one.
-- **A plaintext DEK must be BORROWED out of `Zeroizing`, never `to_vec()`d** — one unwiped heap
-  copy per sealed record, on a machine mid-disaster. Both `cairn-sync` call sites already did.
-- **A `cairn-node` test cannot pass a `serde_json::Value` as a parameter** (no
-  `with-serde_json-1` feature) and **cannot use `$1::jsonb`** either — tokio-postgres infers a
-  parameter's type from its cast TARGET. The payload travels as TEXT through `$1::text::jsonb`.
-  Same for reading a refusal: `Display` on a `tokio_postgres::Error` is the two words "db error";
-  `common::db_msg` is the shared accessor for the server's actual message.
+- **⇒ A DESIGN SENTENCE WITH TWO READINGS AND NO TEST SURVIVED A MERGE, AND THAT IS THE LESSON.**
+  2d's §5.2 said clinical segments *"inherit the same `Provenance` treatment the node plane already
+  gets"*. The node plane's treatment is a **printed warning**; the same paragraph then called it a
+  *"safety gate"* forcing `M = 3`. One reading was already built, the other existed nowhere, ADR-0067
+  recorded **neither**, and the divergence was invisible because design test 18 was never written.
+  The restatement leaves the accepted wording **struck through and standing** for exactly that reason.
+- **⇒ THE ERRATA RULE SAID NO TO WHAT THE ISSUE ASKED FOR.** #571 asked for a paragraph appended to
+  ADR-0067. `decisions/README.md` allows an erratum only where a passage is factually false **about
+  the code**, placed below that passage — and ADR-0067 never mentions provenance, so there was nothing
+  to sit under; decision-shaped content takes a new ADR. **Check the rule before honouring the ask.**
+- **⇒ THE MEASUREMENT'S REAL RESULT IS THE SHAPE, NOT THE HEADLINE.** 116.7 s against 600 s is
+  comfortable, but the useful fact is **linear at 1.17 ms/event with no bend**, which converts the
+  budget from a pass/fail into a ceiling at ~510 000 events. A single dot could not have said that,
+  which is why the rig runs a curve.
+- **⇒ THE RIG REFUSES TO TIME AN INCOMPLETE RESTORE, AND THAT GUARD IS NOT PARANOIA.** A restore that
+  applies nothing is **fast**. Driving the real binary produced that outcome on the first attempt (the
+  piped recovery code, #572), and a rig that timed it would have written a flattering wrong number
+  into a dated file that outlives the session.
+- **⇒ A TEST CAUGHT A DUPLICATED COUNT BEFORE IT REACHED THE RESULTS FILE.** `Measurement` carried
+  both a seeder-derived event count and the restore's own; they disagree, because the medium also
+  holds the warm-up registration. The field was **deleted**, not reconciled — a second spelling of a
+  count is a second thing that can be wrong, and this one would have been the published one.
+- **⇒ THE SEEDER GOES THROUGH THE PRODUCTION ORCHESTRATORS, AND THE MIX IS LOAD-BEARING.** 85% of the
+  corpus is born-sealed. A demographics-only medium carries **no `event_dek` rows**, so the per-record
+  unwrap and re-wrap — the expensive half and ADR-0067's whole subject — would never run. Every
+  medication assert is authored by an **enrolled human**, so the restore genuinely re-resolves authors
+  through `actor_current` rather than leaving decision 1's registry re-entry barely exercised.
+- **⇒ THE NODE'S OWN `device` ACTOR IS ENROLLED BY A CLI CEREMONY THE LIB DOES NOT EXPOSE.**
+  `ensure_registration_actor` is private to `main.rs`, so the rig runs one real `patient-register`
+  first rather than re-spelling it — the mirror-list defect class, avoided by paying one process start.
+- **A `results/` directory beside the crate is the existing pattern** (`cairn-gui/cairn-gui-tauri/results/`):
+  runbook, template, dated file. The runbook's own precedent holds — *a runbook nobody has executed is
+  a runbook that does not work* — and executing this one is what found the pty problem.
+
+### 2026-09-10 (earlier) — DR slice 2d: the record comes home (condensed)
+
+**Closed #554.** ADR-0067, spec v0.69, `db/052` (SCHEMA 52), four crates. The per-slice narrative is
+ROADMAP's; the traps that outlive it are in the trap list and ⇒ NEXT above.
+
+**Filed, not fixed — all still open except #571:** **#567** (`verify-backup`'s OK is federation-only,
+so a green verify says nothing about the plane a restore now applies; the comment that used to call
+that scoping a safety property now calls it a gap) · **#568** (`do_requeue`'s custody-carrying arm —
+the remedy every penned reason advertises — has zero tests; every test call site passes `None`) ·
+**#569** (db/052's registry door silently discards a **content** conflict and leaves
+`actor_event_id`/`seq` unvalidated) · **#570** (the restore CLI surface is untested, exit code
+included) · **#571** (provenance does not gate the clinical plane and ADR-0067 does not say so —
+**closed by the session above, ADR-0068**).
+
+What still generalises:
+
+- **⇒ THE HEADLINE TEST DECRYPTS A BODY, AND THAT IS THE POINT.** `apply_remote_event`'s `p_dek`
+  feeds into `cairn_wrap_dek(p_dek, v_pub)` — **the door wraps what it is handed** — and both carriers
+  hold keys already wrapped to this node. Piping either through would double-wrap every key in the
+  clinic's record: rows present, well-formed, exactly the right length, counts agreeing,
+  `verify-backup` green, and the defect surfacing months later when a clinician opens a chart. **A
+  test that counted rows would have shipped it.**
+- **⇒ THE DOOR'S RETURN IS NOT THE RECORD'S FATE**, the blind spot a second review round (five
+  specialised reviewers) found two Criticals in. db/020 has two LENIENT arms that `RAISE WARNING` and
+  admit — a DEK that does not open the body, an unregistered node unwrap key — skipping step 9
+  entirely and **returning normally**. Right for a puller; for a restore it is the zero-patients
+  outcome with a clean summary on top, signalled only by a Postgres `WARNING` nothing polls. Fixed by
+  asking the DATABASE (`custody_landed`). Same round: every door error was penned as a verdict about
+  the **bytes**, local faults included — split by `refusal_is_deliberate`.
+- **⇒ THE GUARANTEE TEST CAUGHT ITS OWN MISSING STEP.** Written without the registry restore, it
+  failed with *"signer … is not an enrolled, non-revoked actor"* — **the zero-patients outcome wearing
+  a different costume**, arriving through the slice built to end it. Every clinical apply door resolves
+  its author through `actor_current`.
+- **⇒ FIVE OPERATOR MESSAGES LIED MID-DISASTER, ALL THE SAME SPECIES: a message that is confidently
+  wrong is worse than none.** Records past `verified_through` dropped silently while the summary
+  counted against the medium's full total (*"0 applied … of N"* at exit 0, in segment 0). A
+  registry-only failure produced *"no key installed"* — **read the file, not the failure**. A missing
+  registry and a missing key got the same remedy and one was false. The untrusted-records warning
+  compared a **deduped** count against a **raw** one. And with no registry the restore warned, applied
+  anyway into a pen nothing can drain, then printed the pen's standard promise.
+- **⇒ THE COMPLETENESS WARNING WAS BUILT, THEN REVERTED — READ #549 BEFORE BUILDING IT AGAIN.**
+  `restore` never asks whether the medium is complete, and the warning was still the wrong fix:
+  **every duplicate apply burns a `seq`**, so holes are routine on any federating node and grow for
+  the life of the medium. *"N event(s) are missing"* would have been confidently wrong most of the
+  time — the same defect species the round was fixing.
+- **⇒ `requeue` MUST NOT ABORT** — it is the command a restore's own output points at. Resolving
+  custody exactly as the pull path does made it refuse on a divergence, and `load_or_create_key` would
+  **silently mint a stray `node.key`**. Custody there is best-effort now (`load_existing_key` never
+  creates).
+- **A plaintext DEK must be BORROWED out of `Zeroizing`, never `to_vec()`d** — one unwiped heap copy
+  per sealed record, on a machine mid-disaster.
+- **A `cairn-node` test cannot pass a `serde_json::Value` as a parameter** (no `with-serde_json-1`)
+  and **cannot use `$1::jsonb`** — tokio-postgres infers a parameter's type from its cast TARGET, so
+  the payload travels as `$1::text::jsonb`. `Display` on a `tokio_postgres::Error` is the two words
+  "db error"; `common::db_msg` is the shared accessor.
+- **⇒ THE STALEST DOC WAS ON THE FUNCTION THE SLICE REWROTE**, and eight such sites across three files
+  were corrected. A reader six months out trusts the function doc over the module header.
+- **⇒ THE SESSION STARTED BY FINDING ITS OWN ⇒ NEXT HALF-DONE.** PR #565 was open as a DRAFT saying
+  *"do not merge"* and had been **merged anyway**. `gh pr list --state all` before acting is what
+  surfaced it — the rule paid for itself the first session after it was written.
 
 ### 2026-09-07 — the whole-branch review of PR #555, and the section-framing guard (condensed)
 
