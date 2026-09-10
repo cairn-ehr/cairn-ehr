@@ -39,6 +39,7 @@
 //! fails on any non-tty. Filed from the #512 measurement run.
 
 use std::process::Command;
+use std::sync::OnceLock;
 
 /// Pull the **required** flags out of a clap `--help` listing.
 ///
@@ -53,15 +54,61 @@ use std::process::Command;
 /// `Usage: cairn-node --conn <CONN> restore [OPTIONS] --from <FROM>` the required set is
 /// exactly `{--conn, --from}` and everything else is inside `[OPTIONS]`.
 fn required_flags(help: &str) -> Vec<String> {
-    usage_line(help)
-        .split_whitespace()
-        // `[OPTIONS]` is clap's placeholder for the optional group, and a `[`-wrapped token
-        // is an optional argument spelled out. Neither is required.
-        .filter(|t| !t.starts_with('['))
+    required_tokens(help)
+        .into_iter()
         .filter(|t| t.starts_with("--"))
-        // A flag may be printed as `--name=<V>`; keep the name.
-        .filter_map(|t| t.split('=').next())
-        .map(str::to_string)
+        .collect()
+}
+
+/// What `restore` is permitted to demand: the NEW database, and the medium.
+const PERMITTED_REQUIRED: [&str; 2] = ["--conn", "--from"];
+
+/// Every token clap prints as REQUIRED on the usage line, in all three shapes it uses.
+///
+/// The guard used to see only one of the three:
+///
+/// * a long flag, `--from <FROM>`
+/// * a short-only flag, `-n <NAME>`
+/// * a bare positional, `<NODE_NAME>`
+///
+/// **The positional is the dangerous omission**, because it is not hypothetical: this CLI
+/// already uses required positionals idiomatically (`unpeer <NODE_ID>`, `pair-accept
+/// <OFFER>`), so `restore <SUPERSEDED_NODE>` is the most natural way anyone would make a
+/// restore demand the dead node's id — and a filter keeping only `--`-prefixed tokens let
+/// exactly that through green, under an assertion whose message says "and nothing else".
+///
+/// `[...]` tokens are clap's optional group and its spelled-out optional arguments, so they
+/// are dropped. A `<VALUE>` immediately following a flag is that flag's value rather than a
+/// positional. Bare words are the binary name and the subcommand path.
+fn required_tokens(help: &str) -> Vec<String> {
+    let usage = usage_line(help);
+    let tokens: Vec<&str> = usage.split_whitespace().collect();
+    let mut out = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if token.starts_with('[') {
+            continue;
+        }
+        if token.starts_with('-') {
+            // A flag may be printed as `--name=<V>`; keep the name.
+            out.push(token.split('=').next().unwrap_or(token).to_string());
+        } else if token.starts_with('<') {
+            let is_a_flags_value = index > 0 && tokens[index - 1].starts_with('-');
+            if !is_a_flags_value {
+                out.push((*token).to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Required tokens beyond the two `restore` may legitimately demand.
+///
+/// Shared by the synthetic parser tests and the real guard, so a test drives the SAME
+/// comparison the guard makes instead of re-implementing a copy of it that can drift.
+fn unexpected_required(help: &str) -> Vec<String> {
+    required_tokens(help)
+        .into_iter()
+        .filter(|t| !PERMITTED_REQUIRED.contains(&t.as_str()))
         .collect()
 }
 
@@ -81,9 +128,17 @@ fn documented_flags(help: &str) -> Vec<String> {
         if !in_options {
             continue;
         }
-        // Option lines are indented and start with the flag (possibly after a short form,
-        // e.g. `  -h, --help`). Wrapped description lines are indented further and do not
-        // begin with a dash, so they fall through.
+        // clap indents an option line by 2-6 spaces and its wrapped DESCRIPTION by ten.
+        // Without this bound, a description whose wrap point lands a flag name in the first
+        // two tokens ("...else --passphrase, else prompt") registers as a documented flag —
+        // which would let `the_dead_node_id_stays_optional` pass green over a flag that had
+        // been REMOVED but was still mentioned in another option's help text.
+        let indent = line.len() - line.trim_start().len();
+        if indent > 8 {
+            continue;
+        }
+        // Option lines start with the flag, possibly after a short form (`  -h, --help`),
+        // which is why the first two tokens are scanned rather than only the first.
         for token in line.split_whitespace().take(2) {
             if let Some(name) = token.trim_end_matches(',').split('=').next() {
                 if name.starts_with("--") {
@@ -151,18 +206,63 @@ fn the_parser_folds_a_wrapped_usage_line_rather_than_truncating_it() {
 
 #[test]
 fn the_parser_sees_a_newly_required_flag() {
-    // Drive the guard's assertion, not just its parser: this is the shape the real check
-    // below rejects, and pinning it is what makes a green run meaningful.
+    // Drives `unexpected_required`, the SAME function the real guard below calls — not a
+    // re-spelled copy of its filter, which could drift from the thing it claims to pin.
     let help = "Usage: cairn-node --conn <CONN> restore [OPTIONS] --from <FROM> --origin <O>\n";
-    let unexpected: Vec<String> = required_flags(help)
-        .into_iter()
-        .filter(|f| f != "--conn" && f != "--from")
-        .collect();
-    assert_eq!(unexpected, vec!["--origin".to_string()]);
+    assert_eq!(unexpected_required(help), vec!["--origin".to_string()]);
+}
+
+#[test]
+fn the_parser_sees_a_newly_required_positional() {
+    // The blind spot this guard had. A required positional strands the same operator a
+    // required flag would, and it is how this CLI already spells `unpeer <NODE_ID>`.
+    let help =
+        "Usage: cairn-node --conn <CONN> restore [OPTIONS] --from <FROM> <SUPERSEDED_NODE>\n";
+    assert_eq!(
+        unexpected_required(help),
+        vec!["<SUPERSEDED_NODE>".to_string()],
+        "a required positional is a demand on the operator just as a required flag is"
+    );
+}
+
+#[test]
+fn the_parser_sees_a_newly_required_short_only_flag() {
+    let help = "Usage: cairn-node --conn <CONN> restore [OPTIONS] --from <FROM> -n <NAME>\n";
+    assert_eq!(unexpected_required(help), vec!["-n".to_string()]);
+}
+
+#[test]
+fn a_flags_own_value_is_not_mistaken_for_a_positional() {
+    // `<CONN>` and `<FROM>` follow flags, so they are those flags' values. Only a `<...>`
+    // that follows something other than a flag is a positional.
+    let help = "Usage: cairn-node --conn <CONN> restore [OPTIONS] --from <FROM>\n";
+    assert!(unexpected_required(help).is_empty());
+}
+
+#[test]
+fn a_wrapped_description_mentioning_a_flag_is_not_a_documented_flag() {
+    // Ten-space indentation is clap's description wrap. Counting it as an option line would
+    // let the optionality guard pass over a flag that no longer exists.
+    let help = "Options:\n      --from <FROM>\n          the medium, else --superseded-node\n";
+    assert_eq!(
+        documented_flags(help),
+        vec!["--from"],
+        "a description line is not a flag declaration"
+    );
 }
 
 /// The `--help` text of `cairn-node restore`, from the real binary.
+///
+/// Cached: the text cannot change within a run, and on macOS the first execution of a
+/// freshly-linked binary pays a one-time Gatekeeper assessment that can take minutes. Paying
+/// it once per test rather than once per run is the difference between a guard a developer
+/// runs locally and one they learn to skip.
 fn restore_help() -> String {
+    static HELP: OnceLock<String> = OnceLock::new();
+    HELP.get_or_init(restore_help_uncached).clone()
+}
+
+fn restore_help_uncached() -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_cairn-node"))
         .args(["restore", "--help"])
         .output()
@@ -190,6 +290,15 @@ fn restore_requires_the_medium_and_the_new_database_and_nothing_else() {
         "restore must demand only the NEW database and the medium — every fact about the \
          DEAD node has to come off the medium, because the operator's disk is gone (#512's \
          \"no knowledge of the dead node's config\"). Full help:\n{help}"
+    );
+    // The same clause again, over EVERY required shape rather than long flags alone — a
+    // required positional or short-only flag strands the identical operator.
+    assert!(
+        unexpected_required(&help).is_empty(),
+        "restore demands {:?} beyond the medium and the new database. A required \
+         positional or short flag is as unobtainable after total hardware loss as a \
+         required long one. Full help:\n{help}",
+        unexpected_required(&help)
     );
 }
 

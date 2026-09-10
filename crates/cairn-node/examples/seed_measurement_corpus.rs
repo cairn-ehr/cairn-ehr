@@ -82,7 +82,10 @@ struct Args {
     /// How many born-sealed medication asserts per patient.
     #[arg(long, default_value_t = 17)]
     meds_per_patient: usize,
-    /// Print a progress line every N patients.
+    /// Print a progress line every N patients. `0` prints none.
+    ///
+    /// The zero sentinel is documented because a caller relies on it, and an undocumented
+    /// sentinel is a contract only the implementation knows.
     #[arg(long, default_value_t = 250)]
     progress_every: usize,
 }
@@ -202,7 +205,8 @@ async fn main() -> anyhow::Result<()> {
             &displayed,
         )
         .await?;
-        // registration + name + date of birth
+        // registration + name + date of birth. This is an EXPECTATION, not an observation;
+        // the log is queried at the end and disagreement is an error, not a silent shortfall.
         events += 3;
 
         for k in 0..args.meds_per_patient {
@@ -242,10 +246,28 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let secs = started.elapsed().as_secs_f64();
+
+    // ASK THE LOG, do not trust the running total. `events` is incremented by a hardcoded
+    // `+= 3` per registration, which duplicates `register_patient`'s internal branching —
+    // and that branching is CONDITIONAL (it writes a name event only if given a name, a DOB
+    // event only if given a date). The moment those conditions change, the seeder would
+    // print a corpus larger than the one it wrote, and a short corpus makes the restore it
+    // feeds look FASTER than it really is. A count that can be measured should never be
+    // assumed, least of all by a rig whose product is a number.
+    let actual: i64 = db
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await?
+        .get(0);
+    if actual < events as i64 {
+        anyhow::bail!(
+            "seeded corpus is SHORT: authored {events} event(s) but the log holds {actual}. \
+             A restore measured against this medium would be measuring less than it claims."
+        );
+    }
     println!(
-        "seeded {events} events across {} patients in {secs:.1}s ({:.0} events/s)",
+        "seeded {actual} events across {} patients in {secs:.1}s ({:.0} events/s)",
         args.patients,
-        events as f64 / secs
+        actual as f64 / secs
     );
     Ok(())
 }

@@ -19,6 +19,28 @@ exclude_docs: |
   superpowers/
   requirements.txt
 
+# A page that exists but is in no nav entry is INVISIBLE in the built site, and MkDocs
+# reports that at INFO — which `--strict` does not promote, because `--strict` only turns
+# WARNINGs into errors. So the strict build in `docs-check.yml` stayed green for weeks while
+# ADR-0067 was missing from the nav, and the omission was found by hand while adding ADR-0068
+# (PR #573). A guard checked only by hand is not a control (#444), so raise the omission to a
+# WARNING and list the three deliberate exceptions here, where a reviewer can see them.
+#
+# `warn` and not `error`: MkDocs only accepts warn/info/ignore here, and `--strict` — which is
+# what BOTH `docs-check.yml` and `docs.yml` run — turns any warning into a failure. So a page
+# that lands off-nav now fails CI, while a local `mkdocs build` still completes and says so.
+#
+# `not_in_nav` is the allow-list: a page matched here is expected to be off-nav and stays
+# silent. ROADMAP.md is reached by link, not nav; the two archived code reviews are history
+# kept out of the reader's path. Anything else that lands off-nav now FAILS the strict build.
+not_in_nav: |
+  ROADMAP.md
+  code_reviews/*.md
+
+validation:
+  nav:
+    omitted_files: warn
+
 theme:
   name: material
   logo: assets/logo.svg

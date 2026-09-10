@@ -242,6 +242,24 @@ jobs:
           echo "deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list
 
+      # ---- pure script suites, BEFORE the substrate ------------------------------
+      # These need no database and no binaries, and they are placed here deliberately.
+      # A job stops at its first failing step, so anything sitting behind the pgrx build,
+      # the PostgreSQL startup, clippy and the full workspace suite does not run at all on
+      # the very runs where the substrate is what broke — which is exactly when a guard
+      # that "would still pass if this job's cluster were broken" is worth having. Running
+      # them first also fails a typo in a few seconds instead of ten minutes.
+      - name: scripts/pg-target.sh tests (pure)
+        run: bash scripts/tests/pg_target_test.sh
+
+      # The #512 measurement rig's parsers: stdlib-only, about a second. They ride CI for the
+      # reason #444 records — a guard checked only by hand is not a control. What they protect
+      # is not the rig running, it is the FIGURE it writes into a dated results file that
+      # outlives the session. A mis-parsed summary does not crash; it records a plausible wrong
+      # number against a budget house rule 7 says never to move.
+      - name: scripts/measure_dr_restore.py parser tests (pure)
+        run: python3 scripts/tests/measure_dr_restore_test.py
+
       # ---- system prerequisites: PostgreSQL + its server headers + libclang --------
       # postgresql-server-dev-N supplies pg_config and the server headers pgrx's
       # bindgen step needs; clang/libclang-dev supply the libclang bindgen links against
@@ -382,17 +400,7 @@ jobs:
       # so they cost about a second and would still pass if this job's cluster were broken,
       # which is the point: the guard has to fail correctly precisely when the substrate is
       # what is wrong.
-      - name: scripts/pg-target.sh tests (pure)
-        run: bash scripts/tests/pg_target_test.sh
 
-      # The #512 measurement rig's parsers. Pure (no database, no binaries) and stdlib-only,
-      # so they cost about a second and ride here for the same reason the resolver's tests do:
-      # a guard checked only by hand is not a control (#444's lesson). What they protect is not
-      # the rig running — it is the FIGURE it writes into a dated results file, which outlives
-      # the session that produced it. A mis-parsed summary does not crash; it records a
-      # plausible wrong number against a budget house rule 7 says never to move.
-      - name: scripts/measure_dr_restore.py parser tests (pure)
-        run: python3 scripts/tests/measure_dr_restore_test.py
 
       - name: db/tests SQL mirrors (throwaway database)
         env:
