@@ -385,6 +385,15 @@ jobs:
       - name: scripts/pg-target.sh tests (pure)
         run: bash scripts/tests/pg_target_test.sh
 
+      # The #512 measurement rig's parsers. Pure (no database, no binaries) and stdlib-only,
+      # so they cost about a second and ride here for the same reason the resolver's tests do:
+      # a guard checked only by hand is not a control (#444's lesson). What they protect is not
+      # the rig running — it is the FIGURE it writes into a dated results file, which outlives
+      # the session that produced it. A mis-parsed summary does not crash; it records a
+      # plausible wrong number against a budget house rule 7 says never to move.
+      - name: scripts/measure_dr_restore.py parser tests (pure)
+        run: python3 scripts/tests/measure_dr_restore_test.py
+
       - name: db/tests SQL mirrors (throwaway database)
         env:
           PGHOST: 127.0.0.1
