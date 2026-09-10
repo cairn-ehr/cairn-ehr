@@ -120,10 +120,13 @@
 > **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it
 > (read-only; `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a
 > **REAL defect**, not the #146/#520 false-positive class, and are gone from `main`. Measured
-> 2026-09-04: **11 open, all `rust/cleartext-logging`, all high, zero critical** — quote that
+> **2026-09-10 (re-run, this is the current figure): 10 open, all `rust/cleartext-logging`, all high,
+> zero critical, all on `refs/heads/main`** — one fewer than the 11 measured 2026-09-04. Quote that
 > only after re-running the script, since it is the number this file has already been wrong
-> about. All 11 were re-triaged 2026-09-07 and written up in
-> [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine are taint-through-an-argument
+> about. The open set is now **#5, #6, #7, #8, #13, #15, #16, #20, #21, #22** — the 2026-09-07
+> triage covered **11**, so exactly one has dropped off since, and the remainder are the same
+> class. That triage is written up in
+> [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine were taint-through-an-argument
 > (a secret passed INTO a function makes its non-secret return — a `PathBuf`, a `SocketAddr`, a
 > count — look tainted), two are a CLI echoing back a patient UUID the operator supplied.
 > `print_recovery_code` IS a real secret on stderr and is correct: all five call sites are
@@ -263,7 +266,7 @@ registration row until widened; (2) **the accessibility pass** — a live VoiceO
 checks, keyboard-only (`cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`), DOM
 assertions automated by **#332**; (3) **make CI jobs REQUIRED status checks** (**#444**, admin-only — "clippy + cargo
 test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per `CONTRIBUTING.md`'s dated table; (4)
-**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (11 open as of 2026-09-04,
+**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (**10** open as of 2026-09-10,
 zero critical), THEN make `CodeQL` a fourth required check, in that order (see ⇒ NEXT). **If a measurement falls outside its budget, that is the finding — file an
 issue, never adjust the budget.**
 
