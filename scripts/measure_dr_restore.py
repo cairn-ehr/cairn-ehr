@@ -34,7 +34,7 @@ the rig; see the issue filed from the measurement run.
 
 # Usage
 
-    python3 scripts/measure_dr_restore.py --sizes 100,1000,3000,6000
+    python3 scripts/measure_dr_restore.py --sizes 100,1000,2500,5000
 
 Sizes are **patient counts**; each patient yields 3 demographic events plus
 `--meds-per-patient` born-sealed clinical events. Run `--self-test` to exercise
@@ -399,8 +399,14 @@ def measure_one(args: argparse.Namespace, patients: int) -> Measurement:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=5532)
-    parser.add_argument("--sizes", default="100,1000,3000,6000",
-                        help="comma-separated PATIENT counts (not event counts)")
+    parser.add_argument(
+        "--sizes",
+        # The curve actually run and published, so the bare command reproduces the
+        # recorded figures. At the default 17 meds/patient these are roughly 2k, 20k,
+        # 50k and 100k events — the last being #512's own reference point.
+        default="100,1000,2500,5000",
+        help="comma-separated PATIENT counts (not event counts)",
+    )
     parser.add_argument("--meds-per-patient", type=int, default=17)
     parser.add_argument("--db-prefix", default="cairn_dr_measure")
     parser.add_argument("--workdir", default="/tmp/cairn-dr-measure")
