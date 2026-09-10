@@ -23,8 +23,9 @@ restorable without operator confirmation."*
 > clinical records are applied — the third human act the paper-parity benchmark counts, and #512's
 > `M = 3`.
 
-The node plane's actual treatment is a **printed warning**. Every `Provenance` match arm in the restore
-path of `crates/cairn-node/src/main.rs` is an `eprintln!`; nothing blocks, and nothing ever has. So on
+The node plane's actual treatment is a **print**. Every `Provenance` match arm in the restore path of
+`crates/cairn-node/src/main.rs` is a `println!` or an `eprintln!` — a stdout confirmation where the
+marker is tamper-evident, a stderr warning where it is not; **nothing blocks, and nothing ever has.** So on
 the first reading the clinical plane already inherits it, because the warnings print before any clinical
 record is applied. On the second reading it is a blocking gate that exists nowhere in the tree.
 
@@ -69,8 +70,8 @@ second is ceremony, and ceremony is what principle 3 rejects.
 
 ### What the operator is told instead
 
-The four arms are the whole of the treatment, and they are deliberately unequal because the situations
-are:
+The five match arms are the whole of the treatment, grouped in four below because `Unsigned` and
+`NoMarker` share one. They are deliberately unequal because the situations are:
 
 - **`Signed`** — self-identity confirmed by a signed self-marker, tamper-evident. Printed to stdout, not
   a warning.
@@ -84,7 +85,7 @@ are:
 - **`Unsigned` / `NoMarker`** — a warning naming which of the two applies and why, and telling the
   operator to confirm the name and address printed below against **this** node.
 
-Each warning ends by naming the check the operator can actually perform. That is the substitute for the
+Each of the two warnings ends by naming the check the operator can actually perform. That is the substitute for the
 gate, and it is available at every rung including the ones where a gate would have been unavailable.
 
 ---
