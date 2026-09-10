@@ -51,6 +51,7 @@ import os
 import pty
 import re
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -251,6 +252,7 @@ def restore_under_pty(
     boundary: the operator's stopwatch starts when they press return.
     """
     started = time.perf_counter()
+    reaped = False
     child_pid, master_fd = pty.fork()
     if child_pid == 0:  # child
         os.execvpe(cmd[0], cmd, env)
@@ -282,8 +284,21 @@ def restore_under_pty(
             if not answered and time.perf_counter() > prompt_deadline:
                 raise RigError("the restore never asked for a recovery code")
         _, status = os.waitpid(child_pid, 0)
+        reaped = True
     finally:
         os.close(master_fd)
+        # A rig error inside the loop — a wedged restore, or a prompt that never
+        # came — leaves the child ALIVE holding a database connection and, on the
+        # restore path, a half-populated database. The next size in the curve then
+        # fails to `DROP DATABASE` because a connection is still attached, and the
+        # run dies reporting the wrong cause. Kill and reap it here so the error
+        # that surfaces is the one that happened.
+        if not reaped:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+                os.waitpid(child_pid, 0)
+            except OSError:
+                pass  # already gone; nothing to clean up
     elapsed = time.perf_counter() - started
     return "".join(chunks), elapsed, os.waitstatus_to_exitcode(status)
 
