@@ -112,11 +112,17 @@ fn a_missing_path_is_refused_distinguishably() {
 fn a_supplied_code_is_asked_once_and_a_prompt_keeps_its_retries() {
     assert_eq!(recovery_code_attempts(true), 1);
     assert_eq!(recovery_code_attempts(false), RECOVERY_CODE_ATTEMPTS);
-    assert!(
-        RECOVERY_CODE_ATTEMPTS > 1,
-        "the prompt must have retries at all — the budget exists because this prompt lands \
-         after `finalize_identity` has fenced the restore door"
-    );
+    // A `const` block, because the value IS a constant and `clippy::assertions_on_constants`
+    // is right to say so: this now fails the BUILD rather than a test run, which is the
+    // stronger place for it. The guard matters because setting the budget to 1 would silently
+    // collapse the prompt path into the file path — and the budget exists precisely because
+    // this prompt lands after `finalize_identity` has fenced the restore door.
+    const {
+        assert!(
+            RECOVERY_CODE_ATTEMPTS > 1,
+            "the prompt must have retries at all"
+        )
+    };
 }
 
 /// The warning REPORTS an exposure. It must not imply it prevented one: a future reader who
