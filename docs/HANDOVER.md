@@ -89,6 +89,35 @@
 > neither honoured nor violated, and ADR-0067 says so in as many words.
 
 > [!WARNING]
+> **⇒ CODEQL: THE TEN ALERTS ARE DISMISSED (maintainer, 2026-09-11) AND THE CHECK IS GREEN — AND
+> A PR NOW MAKES THAT STAY TRUE WITHOUT PER-ALERT DISMISSALS. IT NEEDS ONE SETTINGS FLIP BEFORE
+> IT CAN EVEN REPORT.** `ci/codeql-advanced-setup-barrier-models` moves CodeQL from GitHub's
+> default setup (languages + suite only, **no tuning possible**) to a committed workflow,
+> config and **model pack** (`.github/codeql/packs/cairn/codeql-models`). The finding that shaped
+> it, and that #562's triage got wrong: `rust/cleartext-logging`'s sources are **NAME heuristics**
+> — a call to any function whose name contains `key`/`cert`/`secret`/`password`/`identifier`/
+> `trusted` is a source, and there is no hook to declare a function innocent. The pack holds one
+> `barrierModel` row per such function on its **return value**, each with its return type and
+> reason beside it. Proven on a CodeQL database of the whole workspace at CI's exact versions
+> (CLI 2.27.0, `rust-queries@0.1.42`): **44 → 3**, the three being a variable literally named
+> `patient_id` that a CLI echoes back to the operator — unbarrierable, and already dismissed.
+> 44, not 10, because the other 34 were dismissed in earlier rounds and would resurface the
+> moment a line moved.
+>
+> **The flip is DONE (maintainer, 2026-09-12) and the PR's `CodeQL (rust)` is GREEN — with a
+> lesson that cost a round trip: disabling default setup in the REPOSITORY settings was not
+> enough.** GitHub's own `Analyze (…)` jobs kept running on the next push and the upload kept
+> being rejected (*"CodeQL analyses from advanced configurations cannot be processed when the
+> default setup is enabled"*) until the **organization-level security configuration** was
+> changed too. Repository Settings alone is silently overridden by an org configuration that
+> has CodeQL default setup *Enabled*; the org option that permits a committed workflow is
+> *Enabled with advanced setup allowed*, or *Disabled*. The observable test is whether
+> `Analyze (…)` jobs still appear on a fresh push. **ONE human act remains, AFTER the merge:**
+> make `CodeQL (rust)` a required check (#444). Not before — the job names changed with the
+> switch, and a required name that no job reports blocks every PR.
+> **Read the alert list with `scripts/codeql-alerts.sh`, never assume it** (`gh api` stays
+> deny-listed). Reproducing an alert locally now takes three minutes — CONTRIBUTING's CodeQL
+> section has the recipe, and `gh codeql` is installed on the Mac at 2.27.0.
 > **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it
 > (read-only; `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a **REAL
 > defect**, not the #146/#520 false-positive class, and are gone from `main`. Measured
@@ -268,8 +297,8 @@ registration row until widened; (2) **the accessibility pass** — a live VoiceO
 checks, keyboard-only (`cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`), DOM
 assertions automated by **#332**; (3) **make CI jobs REQUIRED status checks** (**#444**, admin-only — "clippy + cargo
 test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per `CONTRIBUTING.md`'s dated table; (4)
-**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (**10** open as of 2026-09-10,
-zero critical), THEN make `CodeQL` a fourth required check, in that order (see ⇒ NEXT). **If a measurement falls outside its budget, that is the finding — file an
+**making `CodeQL (rust)` a required check, AFTER PR #576 merges** — the alerts are dismissed
+(2026-09-11) and the advanced-setup flip is done at repo AND org level (2026-09-12); see ⇒ NEXT. **If a measurement falls outside its budget, that is the finding — file an
 issue, never adjust the budget.**
 
 **Other build candidates** (after #500; nothing blocks a choice): the **registration/search UI slice**
@@ -297,6 +326,7 @@ surface has never been through one — include it next.
 
 ---
 
+**Session date:** 2026-09-12 (**CodeQL moves to advanced setup with a model pack** — the ten false positives are gone by construction, not by dismissal: `rust/cleartext-logging`'s sources are NAME heuristics, eight `barrierModel` rows on named functions' return values take the workspace from **44 → 3** at CI's exact versions; the Settings flip to advanced is done at repo AND org level (the org configuration was the real blocker); PR #576 green; CONTRIBUTING gains the recipe. ⚠️ Branched from `main`, so this line does not know about PR #574 (2026-09-11, #572/#570) — reconcile whichever merges second.) · previous: 2026-09-10, second session (**the DR restore's budget, measured — and the ruling 2d never wrote down.** Closes **#571** with **ADR-0068** (*provenance warns, never gates*; spec v0.69 → **v0.70**); **measures #512's §1.2 budget** — 100 003 events restore in **116.7 s against 600 s**, linear at 1.17 ms/event, 85 000 sealed bodies opening on the restored node. `M > N` still stands but the excess act **changed identity**. Opened **#572** (a restore cannot be scripted at all); **confirmed #552** with a number. No product-behaviour change, no migration, no SCHEMA bump.) · earlier that day: (**DR slice 2d — the record comes home.** `restore` reads the clinical plane back and a restored node's sealed body OPENS; closes **#554**, adds **ADR-0067** (spec v0.68 → v0.69) and **`db/052`** (SCHEMA 51 → 52); the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**; the quarantine pen moved into the database with two callers and gained custody; `ActorRegistryRow::recorded_at` lost its serde default. **Its §1.2 residual is discharged by the session above.**) · previous: 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — a header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch, the last moment a pre-field format change is free. **The same session found 2c itself unmerged and un-PR'd**) · 2026-09-06 (**DR slice 2c** — the medium carries the clinical record, and nothing yet restored one; closed #522/#524, fixed #550 in-branch, opened #549/#551/#552) · 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed, reopened + a CI guard) and, earlier that day, **#511** (**the custody newtypes**; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; opened #531, #532, #534–#538) and, earlier, **#527** (the CodeQL backlog; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave) · 2026-08-30 (**#503**, the shared keystore crate) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** **v0.70** ([ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; and [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 **Session date:** 2026-09-11 (**the restore's recovery code gets a non-interactive path, and the CLI surface gets its first tests.** Closes **#572** and **#570** with **[ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md)** (spec v0.70 → **v0.71**); opens **#575**. `--old-recovery-code-file` — a path, never a flag value or an env var — so a DR drill can be **rehearsed**; six CLI tests on plain pipes, one of which reads a sealed body back in clear through the shipped binary; the measurement rig drops its pseudo-terminal. **No migration, no SCHEMA bump, no wire change.** PR **#574**.) · previous: 2026-09-10 second session (**the §1.2 budget measured** — 116.7 s against 600 s, linear at 1.17 ms/event — plus **ADR-0068**, *provenance warns, never gates*; closed #571, opened #572, confirmed #552) · 2026-09-10 earlier (**DR slice 2d — the record comes home**; closed #554, **ADR-0067**, **`db/052`** SCHEMA 51 → 52; the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**) · 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — and the session that found 2c unmerged and un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**the closing-keyword guard**, and earlier **#511** the custody newtypes) · 2026-09-02 (**DR slice 2b**, and earlier **#527** the CodeQL backlog) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
@@ -321,67 +351,90 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-11 (last) — the restore's recovery code gets a non-interactive path
+### 2026-09-12 (last) — CodeQL: advanced setup, and a model pack instead of dismissals
 
-**Closes #572 and #570 (ADR-0069, spec v0.71). Opens #575.** No migration, no SCHEMA bump, no
-wire change. PR #574. What generalises past the slice:
+**Opens PR `ci/codeql-advanced-setup-barrier-models`; closes nothing yet** (the merge waits on a
+Settings flip). New: `.github/workflows/codeql.yml`, `.github/codeql/codeql-config.yml`,
+`.github/codeql/packs/cairn/codeql-models` (8 rows), a CONTRIBUTING section. What generalises:
 
-- **⇒ THE REFUSAL I RECOMMENDED FIRST WAS WRONG, AND THE REASON IS A STANDING FACT ABOUT THIS
-  CODE.** The design opened by refusing `--old-recovery-code-file` beside a sealed key, to
-  mechanically preserve #527/#562's *"no cron-run command reaches `print_recovery_code`"*. Reading
-  the restore arm showed that note was **already false**: a medium with no local-state export
-  sibling never reaches the recovery-code prompt, so a sealed restore of one has always run
-  unattended and printed a fresh code to stderr. **A guard that keys on a flag cannot protect a
-  path the flag does not appear on.** Recorded in ADR-0069's Rejected section so it is not
-  re-proposed.
-- **⇒ A FIXTURE THAT WIPES THE CLINICAL TIER BUT NOT `actor_event` PROVES LESS THAN IT CLAIMS.**
-  The enrolled signers survived the wipe, so the apply door would have accepted every record
-  whether or not the export's registry ever arrived — every assertion about the registry
-  travelling would have passed. A real replacement machine has an **empty** `actor_event`, which
-  is why `restore_actor_registry` (db/052) exists at all. Found only because a test that expected
-  the never-offered bail got the pen bail instead.
-- **⇒ WHEN A TEST IS WRITTEN AFTER THE FEATURE, VACUITY IS THE RISK, NOT FAILURE.** Task 4's four
-  tests all passed first time, which proves nothing on its own. The contrast test
-  (`without_the_flag_a_piped_restore_still_inherits_no_custody`) is what makes them mean
-  something: same medium, same pipes, one flag apart, **zero** readable bodies. #572 asked for
-  that test in as many words.
-- **⇒ CONDENSING ROADMAP DROPPED EIGHT OPEN ISSUE NUMBERS IN ONE LINE.** #556–#563 all lived in a
-  single 2b review sentence. **The check that catches this is diffing the issue SET before and
-  after, not reading the diff** — restored in full.
-- **A path, not a flag value or an env var, and the name says "old".** The recovery code is the one
-  RETAINED off-node secret; a path keeps it off the process table, out of shell history and out of
-  the environment, and composes with `/dev/stdin` for free. "Old" because this command also mints
-  and prints a NEW code — the #512 rig matched `"recovery code"` and the new node's banner
-  satisfied it two steps early.
-- **The code is read in the step-0 pre-flight**, so a drill script with a wrong path costs nothing
-  rather than an identity. A **blank file is refused**, because normalization turns it into an
-  empty secret whose failure is indistinguishable from a wrong code.
+- **⇒ #562's TRIAGE WAS THE WRONG SHAPE, AND THE ALERT TEXT SAID SO.** *"writes `foo(...)` to a
+  log file"* names a **call**: CodeQL's Rust sources are name heuristics on function calls,
+  variables and fields, not taint through an argument. There is no model hook to declare a
+  function innocent; there IS a `barrierModel` extensible, kind `log-injection`, on the return.
+  One row per function, return type in the comment, or it cannot be reviewed.
+- **⇒ FOUR RULES ONLY A RUN COULD ESTABLISH, each after a variant that failed:** `ReturnValue` is
+  the CALL node and is what a barrier needs, async or not (`ReturnValue.Future` alone and
+  `neutralModel` do nothing); a barrier cannot be narrower than the taint (a tuple built from
+  one tainted part is tainted whole, so `Field[0]` cannot spare `bind_serve`'s ServeConfig — the
+  row says what that costs); read the SARIF `codeFlows` before choosing the function (the
+  passphrase alerts rode the `?` early-return of the *caller*, never touching
+  `localstate::apply_local_state`); the binary crate is rooted at the package name **with its
+  hyphen** (`cairn-node::f`), the lib at `cairn_node::m::f`, test crates at the target name.
+- **⇒ 44, NOT 10.** A full-workspace database at CI's versions found 44; GitHub showed 10 open
+  because 34 were dismissed in earlier rounds. A dismissed alert resurfaces when its line moves.
+- **⇒ DEFAULT SETUP ALLOWS NO TUNING, AND AN ADVANCED WORKFLOW IS REJECTED WHILE IT IS ON.** The
+  settings flip is a human act that must precede the merge. On the far side, rename →
+  required-check orphaning (CONTRIBUTING).
+- **In-repo model pack without publishing:** `CODEQL_ACTION_EXTRA_OPTIONS` reaches
+  `database run-queries` with `--additional-packs` + `--model-packs`; the config's `packs:`
+  resolves only registry names at `database init`. Fallback: publish to GHCR.
+- **Local reproduction is three minutes now** (`gh codeql`; CONTRIBUTING has the commands). Copy
+  the database and run variants concurrently — one CodeQL process locks a database.
 
-**⇒ HOW THIS SLICE WAS GATED, AND THE TWO MISTAKES WORTH NOT REPEATING.**
-`clippy --locked --workspace --tests -D warnings` **exit 0**; `cargo doc --workspace` under
-`RUSTDOCFLAGS=-D warnings` **exit 0**; `cargo fmt --check` clean; every SQL mirror through
-`db/052` passed; the measurement rig ran **end to end with no pty** (2003 events seeded, 2003
-applied, PASS) and its scratch databases were dropped per the runbook.
+### 2026-09-10 — the restore's budget, measured; and the ruling 2d never wrote down
 
-1. **I ran `cargo test --workspace` with only `CAIRN_TEST_PG` set.** `db_gate_actually_ran`
-   refused it — correctly, since `CAIRN_TEST_PG2`/`PG3` were unset and the in-DB floor suite
-   would have self-skipped while printing `ok` (#442, #450). **Use
-   `scripts/run-db-gated-tests.sh`, which bakes all three in.** 40 of 41 suites had passed
-   before it stopped; nothing in the branch failed.
-2. **I started the workspace clippy run, judged it slow, and stopped it to free the build
-   lock — and a `clippy::assertions_on_constants` error then failed CI.** Clippy costs ~7
-   minutes and pays **no Gatekeeper penalty** (it checks, it never links test binaries), so it
-   is the cheap pre-push check. The fix was better than the original:
-   `const { assert!(..) }` moves the guard to build time.
+**Closes #571 (ADR-0068, spec v0.70). Measures #512's time half. Opens #572. Confirms #552.** No
+product-behaviour change, no migration, no SCHEMA bump. PR #573. What generalises past the slice:
 
-**The local full test sweep was STOPPED at 65/~132 binaries after 4h40m** (64 suites green,
-zero failures) once `syspolicyd` confirmed the Gatekeeper sweep. That is the documented call —
-a cross-cutting relink costs ~4.5 h locally and CI does the same gate in minutes.
+- **⇒ A DESIGN SENTENCE WITH TWO READINGS AND NO TEST SURVIVED A MERGE, AND THAT IS THE LESSON.**
+  2d's §5.2 said clinical segments *"inherit the same `Provenance` treatment the node plane already
+  gets"*. The node plane's treatment is a **printed warning**; the same paragraph then called it a
+  *"safety gate"* forcing `M = 3`. One reading was already built, the other existed nowhere, ADR-0067
+  recorded **neither**, and the divergence was invisible because design test 18 was never written.
+  The restatement leaves the accepted wording **struck through and standing** for exactly that reason.
+- **⇒ THE ERRATA RULE SAID NO TO WHAT THE ISSUE ASKED FOR.** #571 asked for a paragraph appended to
+  ADR-0067. `decisions/README.md` allows an erratum only where a passage is factually false **about
+  the code**, placed below that passage — and ADR-0067 never mentions provenance, so there was nothing
+  to sit under; decision-shaped content takes a new ADR. **Check the rule before honouring the ask.**
+- **⇒ THE MEASUREMENT'S REAL RESULT IS THE SHAPE, NOT THE HEADLINE.** 116.7 s against 600 s is
+  comfortable, but the useful fact is **linear at 1.17 ms/event with no bend**, which converts the
+  budget from a pass/fail into a ceiling at ~510 000 events. A single dot could not have said that,
+  which is why the rig runs a curve.
+- **⇒ THE RIG REFUSES TO TIME AN INCOMPLETE RESTORE, AND THAT GUARD IS NOT PARANOIA.** A restore that
+  applies nothing is **fast**. Driving the real binary produced that outcome on the first attempt (the
+  piped recovery code, #572), and a rig that timed it would have written a flattering wrong number
+  into a dated file that outlives the session.
+- **⇒ A TEST CAUGHT A DUPLICATED COUNT BEFORE IT REACHED THE RESULTS FILE.** `Measurement` carried
+  both a seeder-derived event count and the restore's own; they disagree, because the medium also
+  holds the warm-up registration. The field was **deleted**, not reconciled — a second spelling of a
+  count is a second thing that can be wrong, and this one would have been the published one.
+- **⇒ THE SEEDER GOES THROUGH THE PRODUCTION ORCHESTRATORS, AND THE MIX IS LOAD-BEARING.** 85% of the
+  corpus is born-sealed. A demographics-only medium carries **no `event_dek` rows**, so the per-record
+  unwrap and re-wrap — the expensive half and ADR-0067's whole subject — would never run. Every
+  medication assert is authored by an **enrolled human**, so the restore genuinely re-resolves authors
+  through `actor_current` rather than leaving decision 1's registry re-entry barely exercised.
+- **⇒ THE NODE'S OWN `device` ACTOR IS ENROLLED BY A CLI CEREMONY THE LIB DOES NOT EXPOSE.**
+  `ensure_registration_actor` is private to `main.rs`, so the rig runs one real `patient-register`
+  first rather than re-spelling it — the mirror-list defect class, avoided by paying one process start.
+- **A `results/` directory beside the crate is the existing pattern** (`cairn-gui/cairn-gui-tauri/results/`):
+  runbook, template, dated file. The runbook's own precedent holds — *a runbook nobody has executed is
+  a runbook that does not work* — and executing this one is what found the pty problem.
 
-### 2026-09-10 — DR slice 2d, and the §1.2 budget measured (condensed)
+### 2026-09-10 (earlier) — DR slice 2d: the record comes home (condensed)
 
-**Closed #554 and #571; measured #512's time half.** ADR-0067, ADR-0068, `db/052` (SCHEMA 52), four
-crates. Per-slice narrative is ROADMAP's. What still generalises:
+**Closed #554.** ADR-0067, spec v0.69, `db/052` (SCHEMA 52), four crates. The per-slice narrative is
+ROADMAP's; the traps that outlive it are in the trap list and ⇒ NEXT above.
+
+**Filed, not fixed — all still open except #571:** **#567** (`verify-backup`'s OK is federation-only,
+so a green verify says nothing about the plane a restore now applies; the comment that used to call
+that scoping a safety property now calls it a gap) · **#568** (`do_requeue`'s custody-carrying arm —
+the remedy every penned reason advertises — has zero tests; every test call site passes `None`) ·
+**#569** (db/052's registry door silently discards a **content** conflict and leaves
+`actor_event_id`/`seq` unvalidated) · **#570** (the restore CLI surface is untested, exit code
+included) · **#571** (provenance does not gate the clinical plane and ADR-0067 does not say so —
+**closed by the session above, ADR-0068**).
+
+What still generalises:
 
 - **⇒ THE HEADLINE TEST DECRYPTS A BODY, AND THAT IS THE POINT.** `apply_remote_event`'s `p_dek`
   feeds into `cairn_wrap_dek(p_dek, v_pub)` — **the door wraps what it is handed** — and both

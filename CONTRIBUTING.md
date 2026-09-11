@@ -166,6 +166,71 @@ stays yours to keep. Run it, and the shell that feeds it, directly with
 `python3 scripts/tests/check_closing_keywords_test.py` and
 `bash scripts/tests/collect_pr_text_test.sh`.
 
+## CodeQL — advanced setup, and the model pack that keeps it honest
+
+CodeQL runs as **advanced setup**: the workflow is [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml),
+its configuration is [`.github/codeql/codeql-config.yml`](.github/codeql/codeql-config.yml), and a **model
+pack** at [`.github/codeql/packs/cairn/codeql-models`](.github/codeql/packs/cairn/codeql-models) refines how the
+standard Rust queries model this repository's own functions. All three are reviewable in a diff, which is
+the point — GitHub's default setup allows no tuning at all, and a permanently red check that nobody can fix
+teaches everyone to merge past it. That is how alert #24, a real defect, sat unread for a week (#527).
+
+**Why the model pack exists.** `rust/cleartext-logging` identifies its *sources* by **name**: a call to any
+function whose name contains a sensitive word — `key`, `cert`, `secret`, `password`, `identifier`,
+`trusted`, … — is treated as sensitive data, and there is no hook to declare a function innocent. A codebase
+that names its key-handling functions honestly trips the rule on their harmless return values. The pack
+holds one `barrierModel` row per such function, declaring that a specific part of its **return value** is
+not sensitive for the `log-injection` taint kind. A row says nothing about the function's arguments, which
+stay tainted, and nothing about any other query. The query itself stays fully armed — #24 and #575 are
+why.
+
+**When a new alert appears, in this order:**
+
+1. **Read the alert, do not assume it.** `scripts/codeql-alerts.sh` prints the open list (read-only;
+   `gh api` is deny-listed and must stay so). *"This operation writes `foo(...)` to a log file"* means the
+   source is the **call** `foo(...)`, matched by name. *"writes `bar` to a log file"* names a **variable**
+   or **field**, and no row can help — see 4.
+2. **Decide whether it is real.** If the printed value genuinely derives from a secret, it is a defect: fix
+   the code. #575 is an open example of this shape.
+3. **If it is a name-heuristic false positive, add a row** to
+   `.github/codeql/packs/cairn/codeql-models/models/cleartext-logging.model.yml`. The row must name the
+   function's **return type** in its comment and say why that value is not the secret the name suggests.
+   `ReturnValue` is the **call expression**, for `async fn` too — `ReturnValue.Future` alone and
+   `neutralModel` were both tried and silently do nothing as barriers. A barrier cannot be narrower than
+   the taint: CodeQL taints a tuple or struct built from one tainted part as a *whole*, so `…Field[0]` on
+   a tuple return will not intercept it; when a row therefore covers more than what is printed, say what
+   else it covers. The binary crate's functions are rooted at the package name with its hyphen
+   (`cairn-node::f`), the library's at `cairn_node::module::f`. A row without a stated return type cannot
+   be checked by a reviewer and should not be merged.
+4. **A variable or field named like a secret** (`patient_id`, `trusted`) cannot be barriered by function
+   path. Either the print is fine — a CLI echoing the patient id the operator just typed — and the alert
+   is **dismissed in the Security tab** with the reason, or the name is misleading and renaming the local
+   is the honest fix. Do not rename a *function* to dodge the scanner.
+5. **If a modelled function's return type changes to carry key material, delete its row.** The row is now
+   a false statement, and the diff will show it — which is why the reasoning lives in a file rather than
+   in an issue thread.
+
+**Reproducing an alert locally** takes about three minutes and needs no CI round trip:
+`gh codeql database create db --language=rust --build-mode=none --source-root=crates/<crate>`, then
+`gh codeql database analyze db codeql/rust-queries:queries/security/CWE-312/CleartextLogging.ql
+--additional-packs=.github/codeql/packs --model-packs=cairn/codeql-models --format=sarif-latest --output=x.sarif`.
+The `gh codeql` extension installs a CLI-only distribution, so the packs come from
+`gh codeql pack download codeql/rust-queries codeql/rust-all` first. Pin the CLI to the version CI's
+`Analyze` log names (`gh codeql set-version <v>`).
+
+**If uploads are rejected with *"cannot be processed when the default setup is enabled"* although the
+repository shows advanced setup:** the organization's security configuration is re-applying default setup
+over the repository setting. Fix it at the organization (Settings → Code security → Configurations: set
+CodeQL default setup to *Enabled with advanced setup allowed* or *Disabled*, and re-apply), then push a
+commit: GitHub's own `Analyze (…)` jobs must no longer appear. This cost one round trip on 2026-09-12.
+
+**How the pack is loaded, and why it is not under `packs:` in the config file.** That key resolves pack
+*names* from the registry at `database init`, and this pack is unpublished. The workflow's Analyze step
+sets `CODEQL_ACTION_EXTRA_OPTIONS` so that `codeql database run-queries` receives `--additional-packs`
+(where to look in the checkout) and `--model-packs=cairn/codeql-models` (what to load). That is the
+action's documented escape hatch; if it ever breaks, the fallback is publishing the pack to the GitHub
+Container Registry and naming it under `packs:`.
+
 ## Paper-parity benchmark — a required slice-plan section
 
 Paper-parity is the [governing law](docs/spec/vision.md#12-the-paper-parity-test-normative): §1.2

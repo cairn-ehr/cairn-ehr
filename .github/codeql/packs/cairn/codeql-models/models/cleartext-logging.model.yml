@@ -1,0 +1,106 @@
+# Barriers for `rust/cleartext-logging` — one row per function, each with its reason.
+#
+# HOW TO READ A ROW. `["<canonical path>", "<what part of the return>", "log-injection", "manual"]`
+# declares that the named part of that function's RETURN VALUE is not sensitive for the
+# cleartext-logging taint kind, so printing something derived from it is not a finding. It says
+# nothing about the function's ARGUMENTS, which stay tainted, and nothing about any other query.
+#
+# WHY ROWS EXIST AT ALL. CodeQL identifies this query's sources by NAME: any call to a function whose
+# name contains a sensitive word (key, cert, secret, password, identifier, …) is a source, and there
+# is no hook to declare a function innocent. A codebase that names its key-handling functions
+# honestly therefore trips the rule on their harmless return values. The honest fix is to say, per
+# function, what the return actually is — not to rename the function to fool a scanner, and not to
+# suppress the query, which alert #24 (a real defect) and #575 (a real exposure) are the reasons to
+# keep armed.
+#
+# THE RULE FOR ADDING A ROW. Name the function's return TYPE in the comment and say why it is not
+# the secret the name suggests. Barrier the NARROWEST part that is printed: a tuple element
+# (`ReturnValue.Field[0]`) rather than a whole tuple whose other half holds key material. A row
+# without a stated return type is a row a reviewer cannot check, and should not be merged.
+#
+# THE RULE FOR REMOVING ONE. If a function's return type changes to carry key material, its row is
+# now false and must go — #562 item 3 said exactly this about the prose triage these rows replace.
+# The point of putting the reasoning in a file the diff shows is that this can be seen.
+#
+# Canonical paths are `crate_name::module::function`. Integration-test crates are rooted at the
+# test target's name (the file stem under tests/).
+#
+# THREE THINGS ESTABLISHED BY RUNNING THE QUERY, not by reading about it (2026-09-12, CLI 2.27.0,
+# rust-queries 0.1.42 — the same versions CI runs):
+#
+# 1. `ReturnValue` is the CALL EXPRESSION, and that is the node a barrier needs — for `async fn`
+#    too. `ReturnValue.Future` on its own silently did nothing as a barrier, and so did
+#    `neutralModel` (a "no flow through this function" declaration): neither stops CodeQL from
+#    analysing the function body. If a row seems to have no effect, the flow is not passing
+#    through the node you named; read the alert's path (`codeFlows` in the SARIF) to see where
+#    it does pass.
+#
+# 2. A barrier cannot be narrower than the taint. Taint tracking treats a tuple or struct built
+#    from one tainted part as tainted as a WHOLE, so `ReturnValue.Field[0]` on a tuple return
+#    does not intercept a flow that CodeQL believes taints the entire tuple. The rows below say
+#    so wherever it costs precision.
+#
+# 3. The BINARY crate's functions are rooted at the PACKAGE name with its hyphen,
+#    `cairn-node::function`; the library's at the crate name, `cairn_node::module::function`.
+#    Integration-test crates are rooted at the test target's name (the file stem under tests/).
+extensions:
+  - addsTo:
+      pack: codeql/rust-all
+      extensible: barrierModel
+    data:
+      # ---- cairn-event ------------------------------------------------------------------------
+      # Returns Result<(String, PublicKey32), EventError>: the certified key id and the PUBLIC half
+      # of an unwrap key, parsed out of a signed cert. The name says "key" and "cert"; the return
+      # holds neither a private key nor the cert bytes. (a unit test's panic! message)
+      - ["cairn_event::verify_unwrap_key_cert", "ReturnValue", "log-injection", "manual"]
+
+      # Returns Result<Vec<u8>, EventError>: the COSE_Sign1 bytes of an unwrap-key CERT — a signed
+      # statement over a PUBLIC x25519 key and a key id. The signing key it is handed never reaches
+      # the return. (assertion messages in cairn-sync's tests)
+      - ["cairn_event::sign_unwrap_key_cert", "ReturnValue", "log-injection", "manual"]
+
+      # ---- cairn-node, the BINARY (package-name root, hyphen) -----------------------------------
+      # Returns Result<Option<AppliedLocalState>>: a keystore FILE PATH and two row counts.
+      # The flow CodeQL reports is NOT through the value this function constructs. The old
+      # recovery-code prompt returns an io::Result that is tainted as a whole (source: the call
+      # to `rpassword::prompt_password`); its `?` early-return hands that Result to the caller,
+      # and taint tracking does not separate the Err arm from the Ok arm on the way back to the
+      # caller's `match`, so the `report` bound there looks tainted. Nothing the caller prints
+      # derives from the prompt. A row on `cairn_node::localstate::apply_local_state` — the
+      # function that actually builds the report — was tried first and had no effect, because
+      # the path never goes through it. (the restore ceremony's "custody inherited: unwrap key
+      # installed at <path>" and "<n> episode DEK(s) carried" lines)
+      - ["cairn-node::apply_local_state_export", "ReturnValue", "log-injection", "manual"]
+
+      # ---- cairn-node, the LIBRARY ------------------------------------------------------------
+
+      # Returns Result<(SocketAddr, ServeConfig)>. What is printed is the bound ADDRESS, which is
+      # not derived from the signing key; the name-heuristic source is `with_single_cert` inside
+      # `server_config`, upstream of this call. ⚠️ PRECISION COST, stated because it matters: the
+      # row barriers the WHOLE return, including element 1, the TLS server config that holds the
+      # private key. An element-only barrier (`…Field[0]`) was tried and cannot work — CodeQL
+      # taints the tuple as a whole (header, point 2). Consequence: this query will NOT flag a
+      # future `eprintln!("{serve_cfg:?}")`. That is a smaller hole than a permanently red check,
+      # but it is a hole, and this comment is where it is recorded.
+      # ("serving node_event sync on <addr>", and the pull loop's peer key derived from it)
+      - ["cairn_node::sync::bind_serve", "ReturnValue", "log-injection", "manual"]
+
+      # Returns Option<String>: operator-facing NOTICE TEXT about records past a medium's last
+      # verified chain link. The heuristic source is a LOCAL VARIABLE named `trusted` inside its
+      # body (a record count), which flows into the text; the barrier sits downstream of it on the
+      # return. (its own unit tests' assertion messages)
+      - ["cairn_node::backup::untrusted_clinical_notice", "ReturnValue", "log-injection", "manual"]
+
+      # ---- cairn-wire -------------------------------------------------------------------------
+      # Returns String: a WARNING TEXT about a certificate that was ignored. Flagged for "cert".
+      - ["cairn_wire::medium::ignored_cert_warning", "ReturnValue", "log-injection", "manual"]
+
+      # ---- integration-test crates (rooted at the test target's name) -------------------------
+      # Returns Vec<PathBuf>: the repository FILE PATHS the guard reads. Flagged for "trusted".
+      - ["no_drugref_dependency::trusted_sources", "ReturnValue", "log-injection", "manual"]
+
+      # Returns Vec<(String, String, String, String)>: the identifier rows of a SYNTHETIC fixture
+      # patient, read back for an assertion message. Real patient identifiers never enter this
+      # crate — house rule 6 forbids real data in fixtures — which is the only reason this row is
+      # honest. (assertion messages)
+      - ["patient_register_demographics::patient_identifiers", "ReturnValue", "log-injection", "manual"]
