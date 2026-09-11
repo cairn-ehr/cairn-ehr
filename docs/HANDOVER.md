@@ -39,15 +39,31 @@
 > true.** The real fix — a `--new-recovery-code-file` sink, or a refusal to mint a sealed key when
 > nothing can show its code to a human — is **[#575](https://github.com/cairn-ehr/cairn-ehr/issues/575)**.
 
-> **⇒ THE STRONGEST REMAINING DR WORK IS THE §7 TEST DEBT, now two issues rather than three.**
-> **#568** (`do_requeue`'s custody-carrying arm — **the remedy every penned reason advertises** —
-> has zero tests; every call site passes `None`) and **#567** (`verify-backup`'s OK is still
-> federation-only, so a green verify says nothing about the plane a restore now applies —
-> arguably the sharpest safety gap left on this path). #570 is **done**; the wall it shared with
-> #572 is gone, so a CLI test for `requeue` is now writable the same way.
+> **⇒ #568 IS DONE (2026-09-12). THE REMAINING DR TEST DEBT IS #567, AND IT IS NOW THE SHARPEST
+> SAFETY GAP LEFT ON THIS PATH.** **#567**: `verify-backup`'s OK is still federation-only, so an
+> operator reads green and rotates the drive while the clinical plane on that medium may be
+> chain-broken, gapped or **empty**. The one command whose entire purpose is *"can I still recover
+> from this?"* does not ask the question about the half a solo clinic depends on. ⚠️ The notice
+> functions it needs are NOT all there — `untrusted_clinical_notice` exists in
+> `cairn-node/src/backup.rs`, but **`clinical_gap_notice`, which #567's scope section says was
+> added in PR #566, does not exist anywhere in the tree**. Check that before sizing the work.
 >
-> **Eight §7 design tests remain unwritten** — the behaviour is built and green, the pins are not:
-> 4 (custody survives the pen → requeue → the body opens), 7 (the pen uncapped **at a volume above
+> **What #568 bought, and the one thing to carry from it.** Four DB-gated tests in
+> `crates/cairn-sync/tests/requeue_releases_custody.rs` drive the shipped `cairn-sync requeue`
+> binary; the assertion is that a sealed body **OPENS** (`event_clear.twin` reads back the dead
+> node's text), and all three custody outcomes are pinned separately. **FIVE MUTATIONS WERE RUN AND
+> ALL ARE KILLED — and the fourth SURVIVED the first draft**, because the missing-key test named a
+> path inside a subdirectory that did not exist either, so the minting loader failed on the absent
+> parent rather than being refused. The matrix is in the file header. **A test written against
+> behaviour that already works proves nothing until a deliberate break has been shown to fail it.**
+>
+> Two shipped-code facts the fixture had to learn by failing: `sync_quarantine.refused_seq` is
+> **NOT NULL** (a restore passes the record's own `source_seq`), and `cairn_quarantine_event`'s
+> BOOLEAN return is **`acked`**, not "was it penned" — a fresh row comes back FALSE.
+>
+> **SEVEN §7 design tests remain unwritten** — the behaviour is built and green, the pins are not.
+> **Test 4 (custody survives the pen → requeue → the body opens) is WRITTEN**, by #568 above.
+> Still owed: 7 (the pen uncapped **at a volume above
 > the row cap**, which the design demands explicitly because a handful of events passes against the
 > unfixed quota), 14 end-to-end through the CLI, 16 (duplicate `source_seq` no-op / substitution
 > refused), 17, 19 behaviourally (the mid-restore-crash re-restore), 22 and 23. **PR
