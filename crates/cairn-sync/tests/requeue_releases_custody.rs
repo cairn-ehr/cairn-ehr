@@ -46,6 +46,28 @@
 //! Arm 2 is the anti-vacuity twin of arm 1: without it, a suite that never opened anything at all
 //! would still pass arm 1's shape.
 //!
+//! # Mutation results — why this file is trusted
+//!
+//! A test written against behaviour that already works proves nothing until a deliberate break has
+//! been shown to make it fail. Five mutations were applied to `main.rs` and run (2026-09-12); every
+//! one is killed, and the fourth is the reason this section exists at all.
+//!
+//! | # | mutation in `main.rs` | 1 opens | 2 unresolvable | 3 foreign | 4 minting |
+//! |---|-----------------------|---------|----------------|-----------|-----------|
+//! | 1 | the wrapped DEK passed through unwrapped (the double-wrap) | **FAIL** | ok | **FAIL** | ok |
+//! | 2 | `row.get(3)` → `row.get(2)`, the `attester_key` column | **FAIL** | ok | **FAIL** | ok |
+//! | 3 | `do_requeue(&mut client, None)` — the pre-slice-2d behaviour | **FAIL** | ok | **FAIL** | ok |
+//! | 4 | `load_existing_key` → the minting `load_or_create_key` | ok | ok | ok | **FAIL** |
+//! | 5 | custody resolution REFUSES instead of degrading best-effort | ok | **FAIL** | ok | **FAIL** |
+//!
+//! Mutations 1–3 all surface at the SAME assertion — `event_clear.twin` is `None` where the dead
+//! node's text belongs — which is the point: three different ways of losing the key produce one
+//! legible failure, and it names the record rather than a row count.
+//!
+//! **Mutation 4 SURVIVED the first draft of test 4**, and the correction is written into that test:
+//! it named a key path inside a subdirectory that did not exist, so the mint failed on the missing
+//! parent rather than being refused, and the test was green for a reason unrelated to its subject.
+//!
 //! Skips unless `CAIRN_TEST_PG` is set. Serialized via cairn-node's `db::test_serial_guard` —
 //! advisory locks are scoped PER DATABASE, not cluster-wide (#476) — because this file TRUNCATEs
 //! tables every other DB-gated suite also uses.
@@ -292,7 +314,10 @@ async fn pen_with_custody(c: &Client, record: &DeadNodeRecord, dek: &[u8]) {
         .await
         .expect("the pen door accepts a restore-originated row")
         .get(0);
-    assert!(!acked, "a freshly penned row is not an acked human decision");
+    assert!(
+        !acked,
+        "a freshly penned row is not an acked human decision"
+    );
 
     let held: Option<Vec<u8>> = c
         .query_one(
@@ -399,7 +424,10 @@ async fn a_penned_sealed_record_releases_with_its_custody_and_the_body_opens() {
     pen_with_custody(&c, &record, &record.dek_wrapped).await;
 
     let (ok, stdout, stderr) = run_requeue(&base, &key_path);
-    assert!(ok, "requeue must succeed\nstdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        ok,
+        "requeue must succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
     let m = metrics(&stdout, &stderr);
     assert_eq!(m["released"], 1, "the penned record must be released: {m}");
     assert_eq!(m["still_quarantined"], 0, "nothing should stay held: {m}");
@@ -514,11 +542,9 @@ async fn a_penned_dek_from_another_node_releases_the_record_and_says_custody_was
         .expect("the fixture's own DEK opens with the node that sealed it");
     let stranger_secret =
         cairn_event::seal::generate_unwrap_secret().expect("mint a stranger's custody key");
-    let foreign = cairn_event::seal::wrap_dek_for(
-        &dek,
-        &cairn_event::seal::unwrap_public(&stranger_secret),
-    )
-    .expect("re-wrap for a stranger");
+    let foreign =
+        cairn_event::seal::wrap_dek_for(&dek, &cairn_event::seal::unwrap_public(&stranger_secret))
+            .expect("re-wrap for a stranger");
     pen_with_custody(&c, &record, &foreign).await;
 
     let (ok, stdout, stderr) = run_requeue(&base, &key_path);
@@ -569,7 +595,14 @@ async fn requeue_refuses_a_missing_key_file_rather_than_minting_one() {
     let (dir, _key_path, _sk, record) = dead_node_with_a_penned_record(&mut c).await;
     pen_with_custody(&c, &record, &record.dek_wrapped).await;
 
-    let absent = dir.path().join("not-here").join("node.key");
+    // ⚠️ THE PATH MUST BE IN AN EXISTING DIRECTORY, and this is the whole difficulty of the test.
+    // The first draft named a file inside a subdirectory that did not exist either — and MUTATION
+    // TESTING CAUGHT IT: swapping `load_existing_key` for the minting `load_or_create_key` left
+    // this test GREEN, because the mint failed on the missing parent directory rather than being
+    // refused, so the assertion below held for a reason that had nothing to do with the guard.
+    // An operator in the wrong directory is in a directory that EXISTS; that is the case to model.
+    let absent = dir.path().join("wrong-directory-node.key");
+    assert!(!absent.exists(), "the fixture path must start absent");
     let absent_path = absent.to_str().unwrap().to_string();
 
     let (ok, stdout, stderr) = run_requeue(&base, &absent_path);
