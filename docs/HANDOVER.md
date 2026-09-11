@@ -153,25 +153,31 @@
 > neither honoured nor violated, and ADR-0067 says so in as many words.
 
 > [!WARNING]
-> **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it
-> (read-only; `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a
-> **REAL defect**, not the #146/#520 false-positive class, and are gone from `main`. Measured
-> **2026-09-10 (re-run, this is the current figure): 10 open, all `rust/cleartext-logging`, all high,
-> zero critical, all on `refs/heads/main`** — one fewer than the 11 measured 2026-09-04. Quote that
-> only after re-running the script, since it is the number this file has already been wrong
-> about. The open set is now **#5, #6, #7, #8, #13, #15, #16, #20, #21, #22** — the 2026-09-07
-> triage covered **11**, so exactly one has dropped off since, and the remainder are the same
-> class. That triage is written up in
-> [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine were taint-through-an-argument
-> (a secret passed INTO a function makes its non-secret return — a `PathBuf`, a `SocketAddr`, a
-> count — look tainted), two are a CLI echoing back a patient UUID the operator supplied.
-> `print_recovery_code` IS a real secret on stderr and is correct: all five call sites are
-> interactive provisioning ceremonies and **no cron-run command reaches it** — re-check that if
-> a future slice ever calls `resolve_or_adopt_unwrap_secret` from an unattended path.
-> **Two human acts still owed, IN THIS ORDER:** dismiss the `cleartext-logging` alerts
-> (per-alert verdicts in #527's comment), THEN make `CodeQL` a REQUIRED check. A
-> permanently-red required check trains everyone to merge past it, which is how a genuine
-> critical sat unread for a week.
+> **⇒ CODEQL: THE TEN ALERTS ARE DISMISSED (maintainer, 2026-09-11) AND THE CHECK IS GREEN — AND
+> A PR NOW MAKES THAT STAY TRUE WITHOUT PER-ALERT DISMISSALS. IT NEEDS ONE SETTINGS FLIP BEFORE
+> IT CAN EVEN REPORT.** `ci/codeql-advanced-setup-barrier-models` moves CodeQL from GitHub's
+> default setup (languages + suite only, **no tuning possible**) to a committed workflow,
+> config and **model pack** (`.github/codeql/packs/cairn/codeql-models`). The finding that shaped
+> it, and that #562's triage got wrong: `rust/cleartext-logging`'s sources are **NAME heuristics**
+> — a call to any function whose name contains `key`/`cert`/`secret`/`password`/`identifier`/
+> `trusted` is a source, and there is no hook to declare a function innocent. The pack holds one
+> `barrierModel` row per such function on its **return value**, each with its return type and
+> reason beside it. Proven on a CodeQL database of the whole workspace at CI's exact versions
+> (CLI 2.27.0, `rust-queries@0.1.42`): **44 → 3**, the three being a variable literally named
+> `patient_id` that a CLI echoes back to the operator — unbarrierable, and already dismissed.
+> 44, not 10, because the other 34 were dismissed in earlier rounds and would resurface the
+> moment a line moved.
+>
+> **Two human acts, IN THIS ORDER, and the first must happen BEFORE the PR merges:**
+> (1) Settings → Code security → CodeQL analysis → *Switch to advanced* → *Disable CodeQL*.
+> While default setup is enabled, an advanced workflow's upload is **rejected outright**
+> (*"CodeQL analyses from advanced configurations cannot be processed when the default setup is
+> enabled"*), so the PR's own CodeQL run cannot go green until the flip, and `main` has no CodeQL
+> between the flip and the merge. (2) Only THEN make `CodeQL (rust)` a required check (#444) —
+> the job names change with the switch, and a required name that no job reports blocks every PR.
+> **Read the alert list with `scripts/codeql-alerts.sh`, never assume it** (`gh api` stays
+> deny-listed). Reproducing an alert locally now takes three minutes — CONTRIBUTING's CodeQL
+> section has the recipe, and `gh codeql` is installed on the Mac at 2.27.0.
 
 > [!IMPORTANT]
 > **⇒ #500 SPENT THREE DAYS *CLOSED ON GITHUB*, AND SIX OTHERS WITH IT (2026-09-04):** #101,
@@ -302,8 +308,8 @@ registration row until widened; (2) **the accessibility pass** — a live VoiceO
 checks, keyboard-only (`cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001`), DOM
 assertions automated by **#332**; (3) **make CI jobs REQUIRED status checks** (**#444**, admin-only — "clippy + cargo
 test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per `CONTRIBUTING.md`'s dated table; (4)
-**#527's two Security-tab acts** — dismiss the triaged `cleartext-logging` alerts (**10** open as of 2026-09-10,
-zero critical), THEN make `CodeQL` a fourth required check, in that order (see ⇒ NEXT). **If a measurement falls outside its budget, that is the finding — file an
+**the CodeQL settings flip to advanced setup, then making `CodeQL (rust)` required** — the alerts are
+dismissed (2026-09-11); see the ⇒ NEXT WARNING for why the order is load-bearing. **If a measurement falls outside its budget, that is the finding — file an
 issue, never adjust the budget.**
 
 **Other build candidates** (after #500; nothing blocks a choice): the **registration/search UI slice**
@@ -331,7 +337,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-10, second session (**the DR restore's budget, measured — and the ruling 2d never wrote down.** Closes **#571** with **ADR-0068** (*provenance warns, never gates*; spec v0.69 → **v0.70**); **measures #512's §1.2 budget** — 100 003 events restore in **116.7 s against 600 s**, linear at 1.17 ms/event, 85 000 sealed bodies opening on the restored node. `M > N` still stands but the excess act **changed identity**. Opened **#572** (a restore cannot be scripted at all); **confirmed #552** with a number. No product-behaviour change, no migration, no SCHEMA bump.) · earlier that day: (**DR slice 2d — the record comes home.** `restore` reads the clinical plane back and a restored node's sealed body OPENS; closes **#554**, adds **ADR-0067** (spec v0.68 → v0.69) and **`db/052`** (SCHEMA 51 → 52); the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**; the quarantine pen moved into the database with two callers and gained custody; `ActorRegistryRow::recorded_at` lost its serde default. **Its §1.2 residual is discharged by the session above.**) · previous: 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — a header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch, the last moment a pre-field format change is free. **The same session found 2c itself unmerged and un-PR'd**) · 2026-09-06 (**DR slice 2c** — the medium carries the clinical record, and nothing yet restored one; closed #522/#524, fixed #550 in-branch, opened #549/#551/#552) · 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed, reopened + a CI guard) and, earlier that day, **#511** (**the custody newtypes**; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; opened #531, #532, #534–#538) and, earlier, **#527** (the CodeQL backlog; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave) · 2026-08-30 (**#503**, the shared keystore crate) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** **v0.70** ([ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; and [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-12 (**CodeQL moves to advanced setup with a model pack** — the ten false positives are gone by construction, not by dismissal: `rust/cleartext-logging`'s sources are NAME heuristics, eight `barrierModel` rows on named functions' return values take the workspace from **44 → 3** at CI's exact versions; needs the Settings flip to advanced BEFORE merge; PR on `ci/codeql-advanced-setup-barrier-models`; CONTRIBUTING gains the recipe. ⚠️ Branched from `main`, so this line does not know about PR #574 (2026-09-11, #572/#570) — reconcile whichever merges second.) · previous: 2026-09-10, second session (**the DR restore's budget, measured — and the ruling 2d never wrote down.** Closes **#571** with **ADR-0068** (*provenance warns, never gates*; spec v0.69 → **v0.70**); **measures #512's §1.2 budget** — 100 003 events restore in **116.7 s against 600 s**, linear at 1.17 ms/event, 85 000 sealed bodies opening on the restored node. `M > N` still stands but the excess act **changed identity**. Opened **#572** (a restore cannot be scripted at all); **confirmed #552** with a number. No product-behaviour change, no migration, no SCHEMA bump.) · earlier that day: (**DR slice 2d — the record comes home.** `restore` reads the clinical plane back and a restored node's sealed body OPENS; closes **#554**, adds **ADR-0067** (spec v0.68 → v0.69) and **`db/052`** (SCHEMA 51 → 52); the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**; the quarantine pen moved into the database with two callers and gained custody; `ActorRegistryRow::recorded_at` lost its serde default. **Its §1.2 residual is discharged by the session above.**) · previous: 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — a header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch, the last moment a pre-field format change is free. **The same session found 2c itself unmerged and un-PR'd**) · 2026-09-06 (**DR slice 2c** — the medium carries the clinical record, and nothing yet restored one; closed #522/#524, fixed #550 in-branch, opened #549/#551/#552) · 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed, reopened + a CI guard) and, earlier that day, **#511** (**the custody newtypes**; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; opened #531, #532, #534–#538) and, earlier, **#527** (the CodeQL backlog; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave) · 2026-08-30 (**#503**, the shared keystore crate) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** **v0.70** ([ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; and [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -355,7 +361,37 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-10 (last) — the restore's budget, measured; and the ruling 2d never wrote down
+### 2026-09-12 (last) — CodeQL: advanced setup, and a model pack instead of dismissals
+
+**Opens PR `ci/codeql-advanced-setup-barrier-models`; closes nothing yet** (the merge waits on a
+Settings flip). New: `.github/workflows/codeql.yml`, `.github/codeql/codeql-config.yml`,
+`.github/codeql/packs/cairn/codeql-models` (8 rows), a CONTRIBUTING section. What generalises:
+
+- **⇒ #562's TRIAGE WAS THE WRONG SHAPE, AND THE ALERT TEXT SAID SO.** *"writes `foo(...)` to a
+  log file"* names a **call**: CodeQL's Rust sources are name heuristics on function calls,
+  variables and fields, not taint through an argument. There is no model hook to declare a
+  function innocent; there IS a `barrierModel` extensible, kind `log-injection`, on the return.
+  One row per function, return type in the comment, or it cannot be reviewed.
+- **⇒ FOUR RULES ONLY A RUN COULD ESTABLISH, each after a variant that failed:** `ReturnValue` is
+  the CALL node and is what a barrier needs, async or not (`ReturnValue.Future` alone and
+  `neutralModel` do nothing); a barrier cannot be narrower than the taint (a tuple built from
+  one tainted part is tainted whole, so `Field[0]` cannot spare `bind_serve`'s ServeConfig — the
+  row says what that costs); read the SARIF `codeFlows` before choosing the function (the
+  passphrase alerts rode the `?` early-return of the *caller*, never touching
+  `localstate::apply_local_state`); the binary crate is rooted at the package name **with its
+  hyphen** (`cairn-node::f`), the lib at `cairn_node::m::f`, test crates at the target name.
+- **⇒ 44, NOT 10.** A full-workspace database at CI's versions found 44; GitHub showed 10 open
+  because 34 were dismissed in earlier rounds. A dismissed alert resurfaces when its line moves.
+- **⇒ DEFAULT SETUP ALLOWS NO TUNING, AND AN ADVANCED WORKFLOW IS REJECTED WHILE IT IS ON.** The
+  settings flip is a human act that must precede the merge. On the far side, rename →
+  required-check orphaning (CONTRIBUTING).
+- **In-repo model pack without publishing:** `CODEQL_ACTION_EXTRA_OPTIONS` reaches
+  `database run-queries` with `--additional-packs` + `--model-packs`; the config's `packs:`
+  resolves only registry names at `database init`. Fallback: publish to GHCR.
+- **Local reproduction is three minutes now** (`gh codeql`; CONTRIBUTING has the commands). Copy
+  the database and run variants concurrently — one CodeQL process locks a database.
+
+### 2026-09-10 — the restore's budget, measured; and the ruling 2d never wrote down
 
 **Closes #571 (ADR-0068, spec v0.70). Measures #512's time half. Opens #572. Confirms #552.** No
 product-behaviour change, no migration, no SCHEMA bump. PR #573. What generalises past the slice:
