@@ -1,0 +1,9 @@
+# A CodeQL MODEL pack: no queries, only data extensions that refine how the standard Rust queries
+# model THIS repository's functions. Loaded by .github/codeql/codeql-config.yml.
+name: cairn/codeql-models
+version: 0.1.0
+library: true
+extensionTargets:
+  codeql/rust-all: '*'
+dataExtensions:
+  - models/*.yml

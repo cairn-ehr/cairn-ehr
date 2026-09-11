@@ -1,0 +1,13 @@
+# CodeQL advanced-setup configuration. See .github/workflows/codeql.yml for why this exists.
+#
+# No `paths-ignore`: tests stay scanned. The false positives in test code are handled the same
+# way as in src/ — one barrier row per named function in the model pack — because alert #24, the
+# one genuine defect this scanner found, was assumed to be a false positive for a week, and a
+# scanner that skips a whole tree cannot find the next one.
+#
+# The model pack is NOT listed under `packs:` here on purpose. That key resolves pack NAMES from
+# the registry at `database init`, and this pack is unpublished — it lives in this repository at
+# .github/codeql/packs/cairn/codeql-models. It is loaded instead by the CODEQL_ACTION_EXTRA_OPTIONS
+# env on the Analyze step of the workflow, which reaches `database run-queries` with
+# `--additional-packs` (where to look) and `--model-packs` (what to load).
+name: cairn

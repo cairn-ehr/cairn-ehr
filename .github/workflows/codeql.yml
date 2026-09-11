@@ -1,0 +1,89 @@
+name: CodeQL
+
+# CodeQL as ADVANCED SETUP — a committed, reviewable configuration — replacing GitHub's default
+# setup, which allows no tuning at all (languages and query suite only).
+#
+# WHY THIS EXISTS (2026-09-11). `rust/cleartext-logging` identifies its SOURCES by NAME: any call to a
+# function whose name contains a sensitive word (`verify_unwrap_key_cert`, `patient_identifiers`,
+# `prompt_password`, …) is treated as sensitive data, and there is no way to declare a function
+# innocent. In a codebase that names its key-handling functions honestly, that produced ten high
+# alerts that were all false positives (#527, #562), and a permanently red non-required check that
+# taught everyone to merge past it — which is how alert #24, a REAL defect, sat unread for a week.
+# Per-alert dismissal recurs on every new call site of the same shape.
+#
+# The fix is NOT to suppress the query: alert #24 and #575 are why it stays fully armed. It is a
+# model pack (`.github/codeql/packs/cairn/codeql-models`) declaring, per function, that a specific
+# RETURN VALUE is a barrier for the `log-injection` taint kind. One row per function, each with the
+# reason written beside it. A barrier on `bind_serve`'s return says only that the address it returns
+# is not the signing key it was handed — nothing more.
+#
+# ⚠️ SEQUENCING. While GitHub's default setup is enabled, an advanced workflow's upload is REJECTED
+# ("CodeQL analyses from advanced configurations cannot be processed when the default setup is
+# enabled"). The repository setting must be switched to advanced (Settings → Code security → CodeQL
+# analysis → Switch to advanced → Disable CodeQL) BEFORE this workflow's first run can report.
+#
+# The job name below is the check name. If `CodeQL (rust)` is ever made a required check (#444),
+# renaming it orphans branch protection — see CONTRIBUTING.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, off-peak (UTC). Default setup also ran on a schedule; a scheduled run catches a newly
+    # published query or model update against unchanged code.
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  packages: read
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same four languages GitHub's default setup analysed for this repository.
+        include:
+          - language: rust
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        env:
+          # Load the in-repository MODEL pack for the Rust analysis. The action's config file can
+          # only name PUBLISHED packs (resolved from the registry at `database init`), so an
+          # unpublished pack in the checkout is handed straight to the CLI instead: the action
+          # appends these options to `codeql database run-queries`, looked up by that command's
+          # path (getExtraOptionsFromEnv in codeql-action/src/codeql.ts). `--additional-packs`
+          # says where to look; `--model-packs` says what to load. Harmless for the other three
+          # languages: the pack's extensions target codeql/rust-all only.
+          CODEQL_ACTION_EXTRA_OPTIONS: >-
+            {"database":{"run-queries":[
+              "--additional-packs=${{ github.workspace }}/.github/codeql/packs",
+              "--model-packs=cairn/codeql-models"
+            ]}}
+        with:
+          category: "/language:${{ matrix.language }}"
