@@ -25,6 +25,12 @@
 /// size cap (house rule 4).
 pub mod clinical;
 
+/// How the OLD node's recovery code reaches a restore that has no terminal (#572). Kept in its
+/// own file for the same two reasons `clinical` is: `restore.rs` is already at the crate's size
+/// cap (house rule 4), and these are pure functions whose whole value is being testable without
+/// a database, a tty or a spawned binary.
+pub mod recovery_code;
+
 use crate::medium::{enrolls, scan_enrolls, verify_self_attestation, Container, SelfMarker};
 
 #[derive(thiserror::Error, Debug)]
