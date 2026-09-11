@@ -357,6 +357,27 @@ wire change. PR #574. What generalises past the slice:
   rather than an identity. A **blank file is refused**, because normalization turns it into an
   empty secret whose failure is indistinguishable from a wrong code.
 
+**⇒ HOW THIS SLICE WAS GATED, AND THE TWO MISTAKES WORTH NOT REPEATING.**
+`clippy --locked --workspace --tests -D warnings` **exit 0**; `cargo doc --workspace` under
+`RUSTDOCFLAGS=-D warnings` **exit 0**; `cargo fmt --check` clean; every SQL mirror through
+`db/052` passed; the measurement rig ran **end to end with no pty** (2003 events seeded, 2003
+applied, PASS) and its scratch databases were dropped per the runbook.
+
+1. **I ran `cargo test --workspace` with only `CAIRN_TEST_PG` set.** `db_gate_actually_ran`
+   refused it — correctly, since `CAIRN_TEST_PG2`/`PG3` were unset and the in-DB floor suite
+   would have self-skipped while printing `ok` (#442, #450). **Use
+   `scripts/run-db-gated-tests.sh`, which bakes all three in.** 40 of 41 suites had passed
+   before it stopped; nothing in the branch failed.
+2. **I started the workspace clippy run, judged it slow, and stopped it to free the build
+   lock — and a `clippy::assertions_on_constants` error then failed CI.** Clippy costs ~7
+   minutes and pays **no Gatekeeper penalty** (it checks, it never links test binaries), so it
+   is the cheap pre-push check. The fix was better than the original:
+   `const { assert!(..) }` moves the guard to build time.
+
+**The local full test sweep was STOPPED at 65/~132 binaries after 4h40m** (64 suites green,
+zero failures) once `syspolicyd` confirmed the Gatekeeper sweep. That is the documented call —
+a cross-cutting relink costs ~4.5 h locally and CI does the same gate in minutes.
+
 ### 2026-09-10 — DR slice 2d, and the §1.2 budget measured (condensed)
 
 **Closed #554 and #571; measured #512's time half.** ADR-0067, ADR-0068, `db/052` (SCHEMA 52), four
