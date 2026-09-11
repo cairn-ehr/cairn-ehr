@@ -4,9 +4,10 @@
 
 use cairn_node::db;
 use cairn_node::localstate::{
-    apply_local_state, establish_lsk, from_cbor, localstate_path_for, lsk_sidecar_path_for,
-    parse_container, read_local_state, seal_local_state, serialize_container, serialize_sidecar,
-    to_cbor, unseal_local_state_rec, CustodyKeyDestination, LocalState,
+    actor_registry_rows_to_json, apply_local_state, establish_lsk, from_cbor, localstate_path_for,
+    lsk_sidecar_path_for, parse_container, read_local_state, seal_local_state, serialize_container,
+    serialize_sidecar, to_cbor, unseal_local_state_rec, ActorRegistryRow, CustodyKeyDestination,
+    LocalState,
 };
 use tempfile::tempdir;
 
@@ -316,4 +317,148 @@ fn taking_the_secret_leaves_the_bundle_without_one() {
     assert_eq!(ls.take_unwrap_secret(), Some(secret));
     assert_eq!(ls.unwrap_secret(), None);
     assert!(ls.is_empty(), "and the bundle is back to its zero value");
+}
+
+// ---------------------------------------------------------------------------
+// #570 item 3 — the actor-registry encoder, pinned through the RUST path.
+//
+// `actor_registry_rows_to_json` had no direct content assertion. The SQL mirror in
+// `db/tests/052_restore_doors_test.sql` proves the enroll-then-revoke ordering property with
+// HAND-WRITTEN JSON that bypasses this encoder entirely, so `recorded_at` travels
+// `TIMESTAMPTZ → ::text → String → JSON → ::TIMESTAMPTZ` with nothing asserting it at any
+// point. A precision or timezone bug there re-authorises a revoked clinician through the very
+// door built to restore the registry — and it would do so silently, mid-disaster.
+// ---------------------------------------------------------------------------
+
+/// Bytes for an actor id, derived at runtime rather than written as a literal.
+///
+/// Named `lineage` rather than `salt`/`nonce`/`iv` on purpose (house rule 6b): CodeQL picks its
+/// sink by the NAME of the binding a value flows into, so a discriminator wearing a
+/// cryptographic name mints a critical alert per call site no matter what the value is.
+fn actor_id_bytes(lineage: u8) -> Vec<u8> {
+    (0..32u8)
+        .map(|i| i.wrapping_mul(11).wrapping_add(lineage))
+        .collect()
+}
+
+/// A registry row with EVERY optional field populated, including the two the SQL mirror never
+/// exercises through this encoder: `op = "supersede"` with a `superseded_by`, and a non-null
+/// `pinned` (ADR-0029's agent-actor determinant).
+///
+/// The `pinned` blob deliberately contains a QUOTE. That is the case the encoder's own comment
+/// exists for — it is built with `serde_json` rather than `format!` precisely so a quote cannot
+/// produce a payload the door parses as a syntax error naming no row at all.
+fn a_fully_populated_row() -> ActorRegistryRow {
+    ActorRegistryRow {
+        actor_event_id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b".into(),
+        actor_id: actor_id_bytes(3),
+        op: "supersede".into(),
+        kind: Some("agent".into()),
+        pinned: Some(r#"{"model":"a \"quoted\" name","skill_epoch":7}"#.into()),
+        signing_key_id: Some("key-with-a-\"quote\"".into()),
+        superseded_by: Some(actor_id_bytes(9)),
+        seq: 42,
+        recorded_at: "2026-09-11 04:05:06.123456+00".into(),
+    }
+}
+
+#[test]
+fn the_registry_encoder_sends_ids_as_hex_and_recorded_at_byte_for_byte() {
+    let row = a_fully_populated_row();
+    let encoded = actor_registry_rows_to_json(std::slice::from_ref(&row));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&encoded).expect("a quote in `pinned` must not break the payload");
+    let o = parsed
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_object())
+        .expect("the encoder emits an array of objects");
+
+    // HEX, because the door decodes these through `cairn_decode_hex_or_raise` — the one helper
+    // that names the field it could not read instead of raising `invalid input syntax for type
+    // bytea` at an operator holding their only copy of a registry.
+    assert_eq!(o["actor_id"], serde_json::json!(hex::encode(&row.actor_id)));
+    assert_eq!(
+        o["superseded_by"],
+        serde_json::json!(hex::encode(row.superseded_by.as_ref().unwrap()))
+    );
+
+    // BYTE FOR BYTE, sub-second precision and offset included. This is the field whose silent
+    // corruption re-authorises a recalled actor.
+    assert_eq!(o["recorded_at"], serde_json::json!(row.recorded_at));
+
+    // `pinned` travels as a JSON STRING holding JSON source, not as a nested object: this crate
+    // does not enable tokio-postgres's `with-serde_json-1` feature, and the door casts it back
+    // with `::JSONB`. A nested object here would reach the door as the wrong type.
+    assert!(
+        o["pinned"].is_string(),
+        "pinned must be a string holding JSON source, not a nested object: {:?}",
+        o["pinned"]
+    );
+    assert_eq!(o["pinned"], serde_json::json!(row.pinned.as_ref().unwrap()));
+
+    assert_eq!(o["op"], serde_json::json!("supersede"));
+    assert_eq!(o["seq"], serde_json::json!(42));
+    assert_eq!(o["kind"], serde_json::json!("agent"));
+    assert_eq!(
+        o["signing_key_id"],
+        serde_json::json!(row.signing_key_id.as_ref().unwrap())
+    );
+}
+
+/// An absent optional is OMITTED, never sent as JSON null.
+///
+/// The door reads these with `->>`, which maps a JSON null to SQL NULL anyway — so this is
+/// about meaning, not mechanism. For `actor_event`, "this row had no kind" and "this row had a
+/// null kind" are the same statement, and the encoder says so by omission.
+#[test]
+fn the_registry_encoder_omits_absent_optionals_rather_than_nulling_them() {
+    let row = ActorRegistryRow {
+        actor_event_id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c".into(),
+        actor_id: actor_id_bytes(1),
+        op: "enroll".into(),
+        kind: None,
+        pinned: None,
+        signing_key_id: None,
+        superseded_by: None,
+        seq: 1,
+        recorded_at: "2026-09-11 04:05:06+00".into(),
+    };
+    let encoded = actor_registry_rows_to_json(std::slice::from_ref(&row));
+    let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    let o = parsed.as_array().unwrap()[0].as_object().unwrap();
+
+    for absent in ["kind", "pinned", "signing_key_id", "superseded_by"] {
+        assert!(
+            !o.contains_key(absent),
+            "{absent} must be omitted, not nulled: {o:?}"
+        );
+    }
+    // The required five are all still there.
+    for present in ["actor_event_id", "actor_id", "op", "seq", "recorded_at"] {
+        assert!(o.contains_key(present), "{present} is required: {o:?}");
+    }
+}
+
+/// Row ORDER survives the encoding, because for a registry it is a safety property.
+///
+/// A registry is not a bag of independent facts: an enroll applied after the revoke that
+/// recalled it re-authorises an actor the clinic has already withdrawn. The SQL mirror proves
+/// the door honours the order it is given; this proves the encoder does not reshuffle it on the
+/// way in.
+#[test]
+fn the_registry_encoder_preserves_row_order() {
+    let mut enroll = a_fully_populated_row();
+    enroll.op = "enroll".into();
+    enroll.seq = 1;
+    let mut revoke = a_fully_populated_row();
+    revoke.op = "revoke".into();
+    revoke.seq = 2;
+
+    let encoded = actor_registry_rows_to_json(&[enroll, revoke]);
+    let parsed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    let rows = parsed.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["op"], serde_json::json!("enroll"));
+    assert_eq!(rows[1]["op"], serde_json::json!("revoke"));
 }

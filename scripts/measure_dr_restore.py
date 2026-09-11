@@ -25,16 +25,25 @@ medium at a realistic scale, and it runs through the `seed_measurement_corpus`
 example rather than the CLI because a hundred thousand process starts would cost
 six hours of overhead measuring nothing.
 
-# The pseudo-terminal, and why it is here
+# The pseudo-terminal that used to be here (#572 — CLOSED)
 
-A restore prompts for the OLD node's recovery code through `rpassword`, which
-reads `/dev/tty` and **fails on any non-tty** — there is no flag and no
-environment variable for it, unlike the new key's passphrase. So a restore **of a
-sealed node's medium** — the only kind the budget describes, since an
-`--insecure-plaintext` node writes no sealed export and never reaches the prompt
-— cannot be scripted, piped or run from cron, and this rig has to allocate a pty
-to drive one. That is a finding about the product, not a convenience of the rig;
-see the issue filed from the measurement run.
+This rig once allocated a pty, and the reason is worth keeping: a restore read
+the OLD node's recovery code through `rpassword`, which opens `/dev/tty` and
+**fails on any non-tty**, and unlike the new key's passphrase it had no flag and
+no environment variable at all. A restore **of a sealed node's medium** — the
+only kind the budget describes, since an `--insecure-plaintext` node writes no
+sealed export and never reaches the prompt — therefore could not be scripted,
+piped or run from cron. A piped code did not merely get ignored: the read
+errored, the export never opened, and the restore recovered ZERO PATIENTS.
+
+That was a finding about the product, not a convenience of the rig, and it was
+filed as #572 from this rig's first real run. `--old-recovery-code-file`
+(ADR-0069) closed it, so the rig now drives `restore` on plain pipes like every
+other leg. A path rather than a flag value or an environment variable, because
+the recovery code is the one RETAINED off-node secret: a path keeps it off the
+process table, out of shell history and out of the environment.
+
+**A pty reappearing here would mean #572 has regressed.**
 
 # Usage
 
@@ -57,11 +66,8 @@ import argparse
 import errno
 import getpass
 import os
-import pty
 import re
 import secrets
-import select
-import signal
 import subprocess
 import sys
 import time
@@ -77,10 +83,6 @@ from pathlib import Path
 #: to make a run pass; house rule 7 says a figure outside its budget is the
 #: finding, so the budget has to be the fixed thing.
 BUDGET_SECONDS = 600
-
-#: How long to wait for the recovery-code prompt before giving up. Generous: the
-#: prompt comes after the node plane is applied, which grows with the medium.
-PROMPT_TIMEOUT_SECONDS = 900
 
 #: Ceiling on any single child process, so a wedged run fails the rig instead of
 #: hanging a session. Comfortably above the budget it is measuring. Named for the
@@ -107,11 +109,6 @@ DEFAULT_SIZES = "100,1000,2500,5000"
 #: Meds per patient in the published run. With the 3 events a registration
 #: authors, this makes each patient 20 events.
 DEFAULT_MEDS_PER_PATIENT = 17
-
-#: `cairn-node restore` re-prompts this many times for the old recovery code
-#: (`RECOVERY_CODE_ATTEMPTS` in `crates/cairn-node/src/main.rs`). The rig must be
-#: willing to answer every one of them — see `restore_under_pty`.
-RECOVERY_CODE_ATTEMPTS = 3
 
 
 class RigError(RuntimeError):
@@ -373,9 +370,6 @@ def fresh_database(host: str, port: int, name: str) -> None:
 #: "old recovery code" appears in `rpassword`'s two prompts ("old recovery code: "
 #: and "old recovery code (try again): ") and in NEITHER banner — the second says
 #: "old node's recovery code", which does not contain it.
-_PROMPT_MARKER = "old recovery code"
-
-
 def _redact(text: str, secret: str) -> str:
     """Blank a secret out of a transcript before it is printed.
 
@@ -387,149 +381,59 @@ def _redact(text: str, secret: str) -> str:
     return text.replace(secret, "<recovery code redacted>") if secret else text
 
 
-def restore_under_pty(
-    cmd: list[str], env: dict[str, str], recovery_code: str
+def restore_with_code_file(
+    cmd: list[str], env: dict[str, str], recovery_code: str, code_path: str
 ) -> tuple[str, float, int]:
-    """Run `cairn-node restore` on a pseudo-terminal, answering its prompts.
+    """Run `cairn-node restore` on plain pipes, handing it the code in a file.
 
     Returns the combined output, the wall-clock seconds, and the exit status.
 
-    **Why a pty and not a pipe.** `rpassword::prompt_password` opens `/dev/tty`
-    and fails with *"Device not configured"* on anything else (that wording is
-    macOS's ENXIO; other platforms word it differently), so a piped recovery code
-    is not merely ignored — the read errors, the export never opens, and the
-    restore completes having applied **zero** clinical records while exiting
-    non-zero. That outcome is fast, which is why the rig checks what was recovered
-    before it records a time.
+    **This used to need a pseudo-terminal, and no longer does (#572, ADR-0069).**
+    `restore` read the OLD node's recovery code through `rpassword::prompt_password`,
+    which opens `/dev/tty` and fails on anything else, and it had no flag and no
+    environment variable. A piped code was not merely ignored: the read errored, the
+    export never opened, and the restore finished having recovered ZERO PATIENTS
+    while exiting non-zero. This rig is what found that, and allocating a pty was the
+    workaround. `--old-recovery-code-file` replaced it.
 
-    **Why it answers more than once.** `restore` allows `RECOVERY_CODE_ATTEMPTS`
-    tries and re-prompts after a failure. A rig that answers once and then stops
-    listening would, on any lost or mistimed first answer, sit until the ceiling
-    and report "exceeded the rig's ceiling" — indistinguishable from a slow
-    restore, which is the one thing this rig exists to measure.
+    **The file, not a flag value or an environment variable.** The recovery code is
+    the one RETAINED off-node secret; a path keeps it off the process table, out of
+    shell history and out of the environment. The rig writes it to a scratch file
+    under the run's own temporary directory.
 
-    The clock starts before `fork` and stops after the child is reaped, so
-    process start and teardown are inside the measurement. That is the honest
-    boundary: the operator's stopwatch starts when they press return.
+    **What did NOT go away with the pty.** The exit status is still returned and
+    still checked by the caller, and the caller still refuses to record a timing for
+    an incomplete restore. Neither had anything to do with the terminal: `restore`
+    deliberately prints its whole summary and only THEN fails, so a refused
+    local-state bundle arrives as a clean-looking clinical line followed by a
+    non-zero exit — and a restore that applies nothing is FAST, so a rig that timed
+    it would write a flattering wrong number into a dated file that outlives the run.
     """
+    with open(code_path, "w", encoding="utf-8") as handle:
+        handle.write(recovery_code)
+    os.chmod(code_path, 0o600)
+
+    full = list(cmd) + ["--old-recovery-code-file", code_path]
     started = time.perf_counter()
-    reaped = False
-    status = 0
-    child_pid, master_fd = pty.fork()
-    if child_pid == 0:  # child
-        try:
-            os.execvpe(cmd[0], cmd, env)
-        except BaseException:  # noqa: BLE001 — deliberate; see below
-            # `execvpe` RAISES on failure, it does not return. Without this the
-            # exception unwinds the forked COPY of the parent interpreter, which
-            # runs the parent's cleanup and flushes its inherited stdout buffer —
-            # re-emitting output the parent already printed and exiting 1 rather
-            # than saying "could not exec".
-            os._exit(127)
-        os._exit(127)  # genuinely unreachable: a successful exec replaced the image
-
-    chunks: list[str] = []
-    answers_sent = 0
-    prompts_seen = 0
-    carry = ""
-    deadline = started + SUBPROCESS_TIMEOUT_SECONDS
-    prompt_deadline = started + PROMPT_TIMEOUT_SECONDS
-
-    def transcript() -> str:
-        return _redact("".join(chunks), recovery_code)
-
     try:
-        while True:
-            if time.perf_counter() > deadline:
-                raise RigError(
-                    "restore exceeded the rig's ceiling; aborting. Last output:\n"
-                    + transcript()[-4000:]
-                )
-            ready, _, _ = select.select([master_fd], [], [], 1.0)
-            if ready:
-                try:
-                    data = os.read(master_fd, 65536)
-                except OSError as exc:
-                    # EIO is the normal pty EOF: the last slave closed, so the
-                    # child's stdio is gone. Anything else is NOT end-of-output,
-                    # and treating it as one would silently truncate the very
-                    # transcript completeness is judged from.
-                    if exc.errno != errno.EIO:
-                        raise RigError(
-                            f"reading the restore's pty failed ({exc}); the "
-                            "transcript is incomplete, so no timing can be "
-                            "recorded. Partial output:\n" + transcript()[-4000:]
-                        ) from exc
-                    break
-                if not data:
-                    break
-                text = data.decode("utf-8", errors="replace")
-                chunks.append(text)
-                # Count prompts INCREMENTALLY, and only while another answer could
-                # still be owed. Re-scanning the whole transcript on every read
-                # would be quadratic in the output size, and this loop is inside
-                # the measured leg — the rig would be timing its own bookkeeping.
-                if answers_sent < RECOVERY_CODE_ATTEMPTS:
-                    window = (carry + text).lower()
-                    prompts_seen += window.count(_PROMPT_MARKER)
-                    # Carry one character less than the marker, so a marker split
-                    # across two reads is still seen and none can be counted twice.
-                    carry = text[-(len(_PROMPT_MARKER) - 1):]
-            # Answer once per prompt actually seen, up to the number of tries the
-            # command allows. Counting prompts rather than setting a one-shot flag
-            # is what keeps a re-prompt answerable.
-            while answers_sent < min(prompts_seen, RECOVERY_CODE_ATTEMPTS):
-                os.write(master_fd, (recovery_code + "\n").encode())
-                answers_sent += 1
-            # The prompt deadline stays armed until the FIRST answer goes out; a
-            # restore that never asks is a different failure from a slow one.
-            if answers_sent == 0 and time.perf_counter() > prompt_deadline:
-                raise RigError(
-                    "the restore never asked for a recovery code. Output:\n"
-                    + transcript()[-4000:]
-                )
-        # Reaping is inside the ceiling too: pty EOF means the child's stdio
-        # closed, NOT that the process exited, so a blocking `waitpid` here could
-        # hang past the ceiling that exists to stop exactly that.
-        while True:
-            pid, status = os.waitpid(child_pid, os.WNOHANG)
-            if pid:
-                reaped = True
-                break
-            if time.perf_counter() > deadline:
-                raise RigError(
-                    "the restore closed its pty but never exited; aborting. "
-                    "Output:\n" + transcript()[-4000:]
-                )
-            time.sleep(0.05)
-    finally:
-        # Kill BEFORE closing the master. A rig error inside the loop — a wedged
-        # restore, or a prompt that never came — leaves the child ALIVE holding a
-        # database connection and, on the restore path, a half-populated database.
-        # The next size in the curve then fails to `DROP DATABASE` because a
-        # connection is still attached, and the run dies reporting the wrong cause.
-        # If `os.close` ran first and raised, the kill would be skipped entirely.
-        if not reaped:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-                os.waitpid(child_pid, 0)
-            except ProcessLookupError:
-                pass  # ESRCH, and only ESRCH, means "already gone"
-            except OSError as exc:
-                # EPERM means the kill did NOT happen and the child still holds
-                # the destination database. Say so here rather than letting the
-                # next `DROP DATABASE` be the first sign of it.
-                print(
-                    f"  WARNING: could not reap the restore child {child_pid}: "
-                    f"{exc}. It may still hold a database connection.",
-                    file=sys.stderr,
-                )
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass  # the child closing the pty can already have invalidated it
+        proc = subprocess.run(
+            full,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = _decode(exc.stdout) + _decode(exc.stderr)
+        raise RigError(
+            f"the restore did not finish within {SUBPROCESS_TIMEOUT_SECONDS}s and was "
+            f"killed. That is a rig failure, not a measurement. Partial output:\n"
+            + _redact(partial, recovery_code)
+        ) from exc
     elapsed = time.perf_counter() - started
-    return transcript(), elapsed, os.waitstatus_to_exitcode(status)
+    combined = proc.stdout + proc.stderr
+    return _redact(combined, recovery_code), elapsed, proc.returncode
 
 
 def measure_one(args: argparse.Namespace, patients: int) -> Measurement:
@@ -605,10 +509,10 @@ def measure_one(args: argparse.Namespace, patients: int) -> Measurement:
     # 5. The measured leg.
     fresh_database(args.host, args.port, dst)
     restore_env = dict(os.environ, CAIRN_KEY_PASSPHRASE=args.new_passphrase)
-    out, restore_s, code = restore_under_pty(
+    out, restore_s, code = restore_with_code_file(
         [args.binary, "--conn", dst_conn, "--key", str(restored_key), "restore",
          "--from", str(medium)],
-        restore_env, recovery_code,
+        restore_env, recovery_code, str(Path(args.workdir) / f"old-recovery-code-{patients}"),
     )
     # The exit status is checked FIRST, and it is strictly broader than the
     # summary. `restore` deliberately prints its whole report and only THEN

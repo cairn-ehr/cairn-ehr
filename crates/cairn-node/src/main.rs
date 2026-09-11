@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -955,12 +956,13 @@ fn export_verdict_line(presence: &ExportPresence, medium: &std::path::Path) -> (
     }
 }
 
-/// How many times `restore` will ask for the dead node's recovery code before giving up.
-///
-/// Bounded, not infinite: an unattended restore must not hang forever on a prompt. Three is
-/// enough for a typo and a re-read of the paper the code is written on, and few enough that
-/// an operator who simply does not have the code is told so rather than asked a fourth time.
-const RECOVERY_CODE_ATTEMPTS: usize = 3;
+// The retry budget for the dead node's recovery code used to be a `const` here. #572 moved it
+// to `cairn_node::restore::recovery_code::RECOVERY_CODE_ATTEMPTS`, so that
+// `recovery_code_attempts` — which chooses between it and ONE, because a code read from a FILE
+// cannot change on a second read — is testable without spawning this binary. There is exactly
+// one definition, and `apply_local_state_export` now takes the RESOLVED count rather than the
+// constant: a message saying "did not open after 3 attempts" when the file was read once lies
+// to an operator mid-disaster.
 
 /// Print the warning that EVERY "this node ended up with no custody key" outcome owes the
 /// operator, whatever route reached it.
@@ -1050,8 +1052,13 @@ fn unseal_local_state_with_retries(
 ///
 /// Pure, so the honesty of the wording is unit-testable without a database or a tty.
 fn unsealing_failed_cause(export_path: &std::path::Path, attempts: usize) -> String {
+    // Pluralized because #572 made the count VARIABLE: a code read from a file is tried once,
+    // and "did not open after 1 attempts" is the kind of sentence an operator reads at the
+    // worst moment of their year. `attempts` is never 0 — `recovery_code_attempts` returns 1
+    // or RECOVERY_CODE_ATTEMPTS — so there is no third case to word.
+    let tries = if attempts == 1 { "attempt" } else { "attempts" };
     format!(
-        "the local-state export at {} did not open after {attempts} attempts. TWO CAUSES \
+        "the local-state export at {} did not open after {attempts} {tries}. TWO CAUSES \
          LOOK IDENTICAL HERE and this node cannot tell them apart: either every recovery \
          code entered was wrong, or the export's sealed body is DAMAGED (off-site media \
          bit-rot). The container's frame parsed, but that check covers only the CAIRNL1 \
@@ -1089,6 +1096,7 @@ async fn apply_local_state_export(
     bytes: &[u8],
     export_path: &std::path::Path,
     unwrap_path: &std::path::Path,
+    supplied_code: Option<&Zeroizing<String>>,
     new_secrets: Option<&(Zeroizing<String>, Zeroizing<String>)>,
 ) -> anyhow::Result<Option<cairn_node::localstate::AppliedLocalState>> {
     // A corrupt/bit-rotted export sibling must NOT fail the restore: by this point the node
@@ -1108,23 +1116,40 @@ async fn apply_local_state_export(
         return Ok(None);
     };
 
-    eprintln!("Local-state export found. Enter the OLD node's recovery code to unseal it:");
+    // #572 / ADR-0069: the code may already be in hand, read from a file during the pre-flight.
+    // Only the ASK differs. The loop, the degradation and every message below are SHARED, so a
+    // scripted restore and an attended one cannot drift apart — which is the whole reason a
+    // drill is worth running.
+    let attempts =
+        cairn_node::restore::recovery_code::recovery_code_attempts(supplied_code.is_some());
+    if supplied_code.is_some() {
+        eprintln!(
+            "Local-state export found. Using the OLD node's recovery code from the file given."
+        );
+    } else {
+        eprintln!("Local-state export found. Enter the OLD node's recovery code to unseal it:");
+    }
     // Bounded re-prompt, because this prompt is past the point of no return — see
     // `unseal_local_state_with_retries`. A wrong code still degrades the same way in the end
     // (warn + skip): a bad guess at the OPTIONAL local-state must not kill an otherwise
-    // complete restore.
-    let plaintext = unseal_local_state_with_retries(&sealed, RECOVERY_CODE_ATTEMPTS, |attempt| {
-        Ok(Zeroizing::new(rpassword::prompt_password(
-            if attempt == 1 {
-                "old recovery code: "
-            } else {
-                "old recovery code (try again): "
-            },
-        )?))
-    })?;
+    // complete restore. A SUPPLIED code gets exactly one attempt: re-reading the same file
+    // cannot change the answer.
+    let plaintext =
+        unseal_local_state_with_retries(&sealed, attempts, |attempt| match supplied_code {
+            Some(code) => Ok(code.clone()),
+            None => Ok(Zeroizing::new(rpassword::prompt_password(
+                if attempt == 1 {
+                    "old recovery code: "
+                } else {
+                    "old recovery code (try again): "
+                },
+            )?)),
+        })?;
     let Some(plaintext) = plaintext else {
         warn_no_custody_key_installed(
-            &unsealing_failed_cause(export_path, RECOVERY_CODE_ATTEMPTS),
+            // The RESOLVED count, never the constant: "did not open after 3 attempts" when the
+            // file was read once is a message that lies to an operator mid-disaster.
+            &unsealing_failed_cause(export_path, attempts),
             "Find the OLD node's recovery code (it is the one printed at that node's `init` \
              or `seal-key`, stored off-site) and run `restore` again from the SAME medium \
              into a DIFFERENT, freshly-created database — this database is now enrolled and \
@@ -1435,6 +1460,18 @@ enum Cmd {
         /// Operational passphrase for the NEW sealed key (else CAIRN_KEY_PASSPHRASE, else prompt).
         #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
         passphrase: Option<String>,
+        /// Read the OLD node's recovery code from this file instead of prompting for it, so a
+        /// disaster-recovery drill can be scripted (#572, ADR-0069). The file's contents are
+        /// the code; a trailing newline is fine, and `/dev/stdin` or a named pipe works.
+        ///
+        /// A path rather than a flag value or an environment variable, deliberately: this is
+        /// the one RETAINED off-node secret, and a path keeps it off the process table, out of
+        /// shell history and out of the environment.
+        ///
+        /// NOT to be confused with the NEW recovery code this command mints and prints —
+        /// hence "old". That ambiguity is why the flag is named this way.
+        #[arg(long)]
+        old_recovery_code_file: Option<PathBuf>,
         /// Write the new key UNSEALED (test nodes only — no recovery escrow).
         #[arg(long)]
         insecure_plaintext: bool,
@@ -2878,6 +2915,7 @@ async fn main() -> anyhow::Result<()> {
             from,
             superseded_node,
             passphrase,
+            old_recovery_code_file,
             insecure_plaintext,
         } => {
             // 0. PRE-FLIGHT, before a single byte is minted or written. Both checks below
@@ -2907,6 +2945,33 @@ async fn main() -> anyhow::Result<()> {
                     export_path.display()
                 ),
             };
+            //    #572 / ADR-0069. A supplied recovery code is read HERE, in the pre-flight, for
+            //    exactly the reason the two checks above live here: by the time the unseal
+            //    actually runs, `finalize_identity` has fenced the restore door closed and
+            //    there is no free second attempt. A drill script pointed at a path that does
+            //    not exist should cost nothing — before this, the equivalent mistake cost an
+            //    identity and a database.
+            let supplied_code = match &old_recovery_code_file {
+                Some(path) => Some(cairn_node::restore::recovery_code::read_recovery_code_file(
+                    path,
+                )?),
+                None => None,
+            };
+            //    A supplied code with NO export beside the medium is inert. Warn rather than
+            //    fail: nothing is wrong with such a restore, and refusing one would break the
+            //    legitimate case of a drill script pointed at a federation-only medium. But a
+            //    green run that silently exercised none of the custody path it exists to
+            //    exercise is worse than a red one, so say so.
+            if supplied_code.is_some() && export_bytes.is_none() {
+                eprintln!(
+                    "WARNING: --old-recovery-code-file was given, but no local-state export \
+                     sits beside {}. Nothing will be unsealed and NO CUSTODY WILL BE \
+                     INHERITED, so any sealed clinical body this medium carries will stay \
+                     unopenable. If this is a drill, it is not exercising the path you think \
+                     it is.",
+                    from.display()
+                );
+            }
 
             // 1. Read + verify the medium offline (no DB needed yet). Bail on tamper.
             //
@@ -3094,6 +3159,25 @@ async fn main() -> anyhow::Result<()> {
                 // Printing first means the worst case is a shown code for an unwritten key
                 // (restore simply re-runs), never a permanently sealed, unrecoverable node.
                 print_recovery_code(&code);
+                // #572 / ADR-0069. A restore can now run with no human at the terminal, and
+                // the code just printed is the only off-node way to recover this node's key.
+                //
+                // Keyed on the STREAM rather than on which flags were passed, because that is
+                // the honest question — and because the exposure is OLDER AND WIDER than the
+                // flag this slice adds: a medium with no local-state export sibling never
+                // reaches the recovery-code prompt at all, so a sealed restore of one has
+                // always been able to run unattended and print a code into a log. That is why
+                // #527/#562's triage note ("no cron-run command reaches print_recovery_code")
+                // is CORRECTED by ADR-0069 rather than broken by it.
+                //
+                // This REPORTS the exposure. It does not prevent it, and the wording must
+                // never suggest otherwise — the real fix is tracked separately.
+                if !std::io::stderr().is_terminal() {
+                    eprintln!(
+                        "{}",
+                        cairn_node::restore::recovery_code::minted_code_exposure_warning()
+                    );
+                }
                 let (sk, kid) = cairn_node::keystore::generate_sealed(&cli.key, &op, &code)?;
                 // The restored node gets its OWN day-one local-state escrow under its NEW
                 // secrets (ADR-0026 slice D) — the old `.lsk` was on the dead disk.
@@ -3157,6 +3241,7 @@ async fn main() -> anyhow::Result<()> {
                     &bytes,
                     &export_path,
                     &unwrap_path,
+                    supplied_code.as_ref(),
                     new_secrets.as_ref(),
                 )
                 .await
@@ -6168,6 +6253,10 @@ mod tests {
     /// and then spending a second superseding identity for nothing.
     #[test]
     fn the_spent_attempts_line_names_both_causes_and_claims_neither() {
+        // The budget lives in the library since #572; imported here rather than at module
+        // scope because this test module is its only consumer inside the binary.
+        use cairn_node::restore::recovery_code::RECOVERY_CODE_ATTEMPTS;
+
         let path = std::path::Path::new("/var/lib/cairn/medium.cairnl1");
         let msg = unsealing_failed_cause(path, RECOVERY_CODE_ATTEMPTS);
 
