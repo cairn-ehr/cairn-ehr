@@ -218,6 +218,12 @@ The `gh codeql` extension installs a CLI-only distribution, so the packs come fr
 `gh codeql pack download codeql/rust-queries codeql/rust-all` first. Pin the CLI to the version CI's
 `Analyze` log names (`gh codeql set-version <v>`).
 
+**If uploads are rejected with *"cannot be processed when the default setup is enabled"* although the
+repository shows advanced setup:** the organization's security configuration is re-applying default setup
+over the repository setting. Fix it at the organization (Settings → Code security → Configurations: set
+CodeQL default setup to *Enabled with advanced setup allowed* or *Disabled*, and re-apply), then push a
+commit: GitHub's own `Analyze (…)` jobs must no longer appear. This cost one round trip on 2026-09-12.
+
 **How the pack is loaded, and why it is not under `packs:` in the config file.** That key resolves pack
 *names* from the registry at `database init`, and this pack is unpublished. The workflow's Analyze step
 sets `CODEQL_ACTION_EXTRA_OPTIONS` so that `codeql database run-queries` receives `--additional-packs`
