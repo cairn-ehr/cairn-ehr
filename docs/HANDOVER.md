@@ -212,7 +212,10 @@
 >    practice must be told:** completing an erasure across backups is **rotation** — capture fresh, destroy
 >    old — and that interval IS the maximum time an erasure takes to complete across all copies. The
 >    clinic's policy call, not Cairn's (principle 9; ADR-0005's *deletion is best-effort and declared*).
->    **2e's ADR owes that sentence in as many words.**
+>    ⚠️ **THE ADR THAT OWED THAT SENTENCE NO LONGER EXISTS**: this said "2e's ADR owes it", and
+>    "2e" was retired as a label when ADR-0067 took its ADR and its spec bump. The rotation
+>    sentence is therefore UNWRITTEN in any decision record, and this trap is currently its only
+>    home. Whichever slice next touches backup policy owes it a written home.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
