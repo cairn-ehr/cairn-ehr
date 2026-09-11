@@ -1052,8 +1052,13 @@ fn unseal_local_state_with_retries(
 ///
 /// Pure, so the honesty of the wording is unit-testable without a database or a tty.
 fn unsealing_failed_cause(export_path: &std::path::Path, attempts: usize) -> String {
+    // Pluralized because #572 made the count VARIABLE: a code read from a file is tried once,
+    // and "did not open after 1 attempts" is the kind of sentence an operator reads at the
+    // worst moment of their year. `attempts` is never 0 — `recovery_code_attempts` returns 1
+    // or RECOVERY_CODE_ATTEMPTS — so there is no third case to word.
+    let tries = if attempts == 1 { "attempt" } else { "attempts" };
     format!(
-        "the local-state export at {} did not open after {attempts} attempts. TWO CAUSES \
+        "the local-state export at {} did not open after {attempts} {tries}. TWO CAUSES \
          LOOK IDENTICAL HERE and this node cannot tell them apart: either every recovery \
          code entered was wrong, or the export's sealed body is DAMAGED (off-site media \
          bit-rot). The container's frame parsed, but that check covers only the CAIRNL1 \
@@ -2961,8 +2966,9 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!(
                     "WARNING: --old-recovery-code-file was given, but no local-state export \
                      sits beside {}. Nothing will be unsealed and NO CUSTODY WILL BE \
-                     INHERITED, so every sealed clinical body stays unopenable. If this is a \
-                     drill, it is not exercising the path you think it is.",
+                     INHERITED, so any sealed clinical body this medium carries will stay \
+                     unopenable. If this is a drill, it is not exercising the path you think \
+                     it is.",
                     from.display()
                 );
             }

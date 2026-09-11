@@ -424,9 +424,11 @@ async fn a_wrong_code_in_a_file_degrades_honestly_and_counts_one_attempt() {
     // Principle 4: this node cannot tell a wrong code from a damaged export, and must not
     // pretend otherwise.
     assert!(
-        stderr.contains("1 attempts") || stderr.contains("after 1"),
-        "the spent-attempts line must report the RESOLVED count — a file is read once, and \
-         claiming three lies to an operator mid-disaster; stderr:\n{stderr}"
+        stderr.contains("after 1 attempt.") && !stderr.contains("1 attempts"),
+        "the spent-attempts line must report the RESOLVED count, correctly pluralized — a \
+         file is read once, so claiming three lies to an operator mid-disaster and \
+         \"1 attempts\" is the sentence they read at the worst moment of their year; \
+         stderr:\n{stderr}"
     );
 }
 
