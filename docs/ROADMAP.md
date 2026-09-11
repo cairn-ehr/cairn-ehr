@@ -514,11 +514,12 @@ Spec: `docs/superpowers/specs/2026-09-09-dr-slice-2d-restore-reads-the-clinical-
   the events they belong to — #500). **DR slice 2c (2026-09-06) added the enrolled ACTOR REGISTRY to the
   same bundle** (2c writes it, 2d installs it: without it a restored node holds clinical events authored by
   actors it cannot resolve), and made the export **verified after write** — it is unsealed and read back,
-  and `verify-backup` refuses a kit whose export is stale or describes a different medium. **Still owed:
-  nothing RESTORES a clinical event, so the carried DEK and registry rows still wait —
-  [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500), slice 2d — ADR-0026 decision 1 must NOT be
-  cited as met, and its promise 2 ("node-default data-at-rest keys survive") has no subject in the built
-  system at all.** **ADR-0026 slices A, C and D complete; B is partial — see #500.** **Uniform key-material zeroization** ✓ ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)):
+  and `verify-backup` refuses a kit whose export is stale or describes a different medium. **Closed by slice 2d
+  (2026-09-10, [#554](https://github.com/cairn-ehr/cairn-ehr/issues/554), ADR-0067): a restore reads the
+  clinical plane, installs the carried DEKs and the actor registry, and a restored node's sealed body
+  OPENS.** ADR-0026 decision 1 is still NOT met in full, and its promise 2 ("node-default data-at-rest
+  keys survive") **has no subject in the built system at all** — no node-default key tier exists, so it
+  is neither honoured nor violated. **ADR-0026 slices A, C and D complete; B is now complete too.** **Uniform key-material zeroization** ✓ ([#54](https://github.com/cairn-ehr/cairn-ehr/issues/54)):
   every transient KEK/DEK/seed/LSK in `Zeroizing`, with residual **#508** (CBOR leaves unwiped copies of
   the unwrap secret in freed heap). Optional follow-on: escrow rungs (Shamir M-of-N, QR, TPM).
 - **Trusted-time anchoring** — graded-interval `t_recorded` with clock-confidence grade; transparency-log multi-anchor existence proof ([ADR-0027](spec/decisions/0027-trusted-time-anchoring.md)).
@@ -527,8 +528,8 @@ Spec: `docs/superpowers/specs/2026-09-09-dr-slice-2d-restore-reads-the-clinical-
 ## Phase 6 — Federation hardening
 
 - **Revocation cascade; anchor-as-power** ([ADR-0018](spec/decisions/0018-federation-revocation-cascade-and-the-anchor-as-power.md)).
-- **DR / recovery escrow** — ADR-0026 slices A, C, D done at node level; **slice B's medium now CARRIES the
-  clinical plane (DR slice 2c) but nothing RESTORES it (#500, slice 2d)**, see Phase 5. Federation-tier
+- **DR / recovery escrow** — ADR-0026 slices A, C, D done at node level; **slice B is COMPLETE — the medium
+  carries the clinical plane (2c) and a restore reads it back (2d, #554)**, see Phase 5. Federation-tier
   follow-ons: peer-quorum (social) recovery + escrow rungs
   (Shamir M-of-N, QR, TPM/keyring). Node-tier residual **#505** (the ADR-0066 migration path mints a second
   recovery code).
