@@ -3957,10 +3957,22 @@ fn apply_page(
                         // UNVERIFIABLE bytes can never reach this arm — they never
                         // apply — so the pen's forensic trace is preserved by
                         // construction, not by a special case. An `acked` row IS
-                        // released when it reaches here, deliberately (same rule
-                        // `do_requeue` uses): an event the floor has now ADMITTED is
-                        // held in event_log, so a pen row claiming it is excluded
-                        // would be the misleading state. But note the reach — the
+                        // released when it reaches here, deliberately: an event the
+                        // floor has now ADMITTED is held in event_log, so a pen row
+                        // claiming it is excluded would be the misleading state.
+                        //
+                        // ⚠️ THIS IS NOT THE RULE `do_requeue` USES, AND THE ASYMMETRY
+                        // IS DELIBERATE (#581, 2026-09-12 — this comment used to claim
+                        // they were the same). Here the PEER re-served the bytes and the
+                        // floor admitted them: set-union will keep delivering that event
+                        // whatever this node decides, so honouring the ack would change
+                        // nothing except leave a stale row. `requeue` is the opposite —
+                        // nothing forces it. The node is holding those bytes and an
+                        // operator is asking it to push them through the door, so
+                        // applying a row a human recorded as excluded would be this
+                        // node's own choice to override that decision. It skips instead,
+                        // loudly, naming how to un-ack. **If that ruling is wrong, the
+                        // fix is in `do_requeue`, not here.** But note the reach — the
                         // floor gate means an acked row only gets here while some
                         // OTHER unresolved slot is still pinning this peer's floor;
                         // an ack that cleared the last floor leaves its row in place
