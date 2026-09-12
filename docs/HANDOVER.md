@@ -39,15 +39,47 @@
 > true.** The real fix — a `--new-recovery-code-file` sink, or a refusal to mint a sealed key when
 > nothing can show its code to a human — is **[#575](https://github.com/cairn-ehr/cairn-ehr/issues/575)**.
 
-> **⇒ THE STRONGEST REMAINING DR WORK IS THE §7 TEST DEBT, now two issues rather than three.**
-> **#568** (`do_requeue`'s custody-carrying arm — **the remedy every penned reason advertises** —
-> has zero tests; every call site passes `None`) and **#567** (`verify-backup`'s OK is still
-> federation-only, so a green verify says nothing about the plane a restore now applies —
-> arguably the sharpest safety gap left on this path). #570 is **done**; the wall it shared with
-> #572 is gone, so a CLI test for `requeue` is now writable the same way.
+> **⇒ #568 IS DONE (2026-09-12). THE REMAINING DR TEST DEBT IS #567, AND IT IS NOW THE SHARPEST
+> SAFETY GAP LEFT ON THIS PATH.** **#567**: `verify-backup`'s OK is still federation-only, so an
+> operator reads green and rotates the drive while the clinical plane on that medium may be
+> chain-broken, gapped or **empty**. The one command whose entire purpose is *"can I still recover
+> from this?"* does not ask the question about the half a solo clinic depends on. ⚠️ The notice
+> functions it needs are NOT all there — `untrusted_clinical_notice` exists in
+> `cairn-node/src/backup.rs`, but **`clinical_gap_notice`, which #567's scope section says was
+> added in PR #566, does not exist anywhere in the tree**. Check that before sizing the work.
 >
-> **Eight §7 design tests remain unwritten** — the behaviour is built and green, the pins are not:
-> 4 (custody survives the pen → requeue → the body opens), 7 (the pen uncapped **at a volume above
+> **What #568 bought, and the one thing to carry from it.** FIVE DB-gated tests in
+> `crates/cairn-sync/tests/requeue_releases_custody.rs` drive the shipped `cairn-sync requeue`
+> binary; the assertion is that a sealed body **OPENS** (`event_clear.twin` reads back the dead
+> node's text), and the custody arm is pinned by INPUT PAIR, not by outcome — the `_` arm absorbs
+> three distinct pairs, and counting outcomes is how the modal one (`(Some, None)`, a keyless pen
+> row while the key resolves) went untested in the first draft. **SEVEN MUTATIONS WERE RUN AND ALL
+> ARE KILLED — and TWO of them survived a first draft**: the missing-key test named a path inside a
+> subdirectory that did not exist either, so the minting loader failed on the absent parent rather
+> than being refused; and the pen-row-deleted-without-applying mutation, written first as a
+> reordering, could not fail at all because every arm feeds the door bytes it accepts. Both are
+> written up in the file header. **A test written against behaviour that already works proves
+> nothing until a deliberate break has been shown to fail it — and the break has to match the shape
+> of the claim.**
+>
+> ⚠️ **THE REVIEW OF #568 FOUND FOUR PRODUCTION DEFECTS IN THE CODE IT WAS TESTING, AND #578 IS THE
+> ONE TO READ FIRST.** A node whose `node_unwrap_key` row is absent resolves custody **silently**
+> (`unwrap_key::resolve`'s `| Absent | none |` row), unwraps fine, and then hits `db/020` step 9,
+> which finds no public key, raises a WARNING nothing in this tree reads, and skips custody
+> entirely — after which `do_requeue` deletes the pen row and counts it released, at exit 0. The
+> guard already exists one module over: `restore::clinical` asks `custody_landed` rather than
+> trusting the door's OK, for this exact reason. **The pen's own remedy text routes operators into
+> this.** Also **#579** (the metrics object cannot express custody loss, against `do_pull`'s own
+> precedent), **#580** (the warning promises the pen holds both halves, then empties it), **#581**
+> (a comment claims `do_requeue` skips acked rows; it does not).
+>
+> Two shipped-code facts the fixture had to learn by failing: `sync_quarantine.refused_seq` is
+> **NOT NULL** (a restore passes the record's own `source_seq`), and `cairn_quarantine_event`'s
+> BOOLEAN return is **`acked`**, not "was it penned" — a fresh row comes back FALSE.
+>
+> **SEVEN §7 design tests remain unwritten** — the behaviour is built and green, the pins are not.
+> **Test 4 (custody survives the pen → requeue → the body opens) is WRITTEN**, by #568 above.
+> Still owed: 7 (the pen uncapped **at a volume above
 > the row cap**, which the design demands explicitly because a handful of events passes against the
 > unfixed quota), 14 end-to-end through the CLI, 16 (duplicate `source_seq` no-op / substitution
 > refused), 17, 19 behaviourally (the mid-restore-crash re-restore), 22 and 23. **PR
@@ -89,9 +121,9 @@
 > neither honoured nor violated, and ADR-0067 says so in as many words.
 
 > [!WARNING]
-> **⇒ CODEQL: THE TEN ALERTS ARE DISMISSED (maintainer, 2026-09-11) AND THE CHECK IS GREEN — AND
-> A PR NOW MAKES THAT STAY TRUE WITHOUT PER-ALERT DISMISSALS. IT NEEDS ONE SETTINGS FLIP BEFORE
-> IT CAN EVEN REPORT.** `ci/codeql-advanced-setup-barrier-models` moves CodeQL from GitHub's
+> **⇒ CODEQL: ZERO OPEN ALERTS, MEASURED 2026-09-12 — AND THE MODEL PACK IS WHAT KEEPS IT THAT
+> WAY. PR #576 IS MERGED; ONE HUMAN ACT IS NOW DUE.** `scripts/codeql-alerts.sh` prints *"none —
+> the alert gate should be green"*. PR **#576** moved CodeQL from GitHub's
 > default setup (languages + suite only, **no tuning possible**) to a committed workflow,
 > config and **model pack** (`.github/codeql/packs/cairn/codeql-models`). The finding that shaped
 > it, and that #562's triage got wrong: `rust/cleartext-logging`'s sources are **NAME heuristics**
@@ -112,23 +144,13 @@
 > changed too. Repository Settings alone is silently overridden by an org configuration that
 > has CodeQL default setup *Enabled*; the org option that permits a committed workflow is
 > *Enabled with advanced setup allowed*, or *Disabled*. The observable test is whether
-> `Analyze (…)` jobs still appear on a fresh push. **ONE human act remains, AFTER the merge:**
-> make `CodeQL (rust)` a required check (#444). Not before — the job names changed with the
-> switch, and a required name that no job reports blocks every PR.
+> `Analyze (…)` jobs still appear on a fresh push. **THE MERGE HAS HAPPENED, SO THE ONE HUMAN
+> ACT IS NOW DUE:** make `CodeQL (rust)` a required check (**#444**). It was deliberately held
+> until after the merge — the job names changed with the switch, and a required name that no job
+> reports blocks every PR.
 > **Read the alert list with `scripts/codeql-alerts.sh`, never assume it** (`gh api` stays
 > deny-listed). Reproducing an alert locally now takes three minutes — CONTRIBUTING's CodeQL
 > section has the recipe, and `gh codeql` is installed on the Mac at 2.27.0.
-> **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it
-> (read-only; `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a **REAL
-> defect**, not the #146/#520 false-positive class, and are gone from `main`. Measured
-> **2026-09-10: 10 open, all `rust/cleartext-logging`, all high, zero critical, all on
-> `refs/heads/main`** — #5, #6, #7, #8, #13, #15, #16, #20, #21, #22. Quote that only after
-> re-running the script, since it is the number this file has already been wrong about. The triage
-> is written up in [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine are
-> taint-through-an-argument, two are a CLI echoing back a patient UUID the operator supplied.
-> **Two human acts still owed, IN THIS ORDER:** dismiss the `cleartext-logging` alerts, THEN make
-> `CodeQL` a REQUIRED check. A permanently-red required check trains everyone to merge past it,
-> which is how a genuine critical sat unread for a week.
 
 > [!IMPORTANT]
 > **⇒ #500 SPENT THREE DAYS *CLOSED ON GITHUB*, AND SIX OTHERS WITH IT (2026-09-04):** #101, #115,
@@ -145,47 +167,6 @@
 > any ✓, check whether the sentence that justified it is still true.** Slice 2b's grep found SEVEN
 > more of this shape in FOUR crates where memory said one; **#511 then found two more inside
 > `seal.rs` itself**. **Grep, do not recall.**
-
-
-> [!WARNING]
-> **⇒ #527: READ THE ALERT LIST, DO NOT ASSUME IT.** `scripts/codeql-alerts.sh` prints it
-> (read-only; `gh api` is deny-listed repo-wide and must stay so). The critical 18 were a
-> **REAL defect**, not the #146/#520 false-positive class, and are gone from `main`. Measured
-> **2026-09-10 (re-run, this is the current figure): 10 open, all `rust/cleartext-logging`, all high,
-> zero critical, all on `refs/heads/main`** — one fewer than the 11 measured 2026-09-04. Quote that
-> only after re-running the script, since it is the number this file has already been wrong
-> about. The open set is now **#5, #6, #7, #8, #13, #15, #16, #20, #21, #22** — the 2026-09-07
-> triage covered **11**, so exactly one has dropped off since, and the remainder are the same
-> class. That triage is written up in
-> [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562): nine were taint-through-an-argument
-> (a secret passed INTO a function makes its non-secret return — a `PathBuf`, a `SocketAddr`, a
-> count — look tainted), two are a CLI echoing back a patient UUID the operator supplied.
-> `print_recovery_code` IS a real secret on stderr and is correct: all five call sites are
-> interactive provisioning ceremonies and **no cron-run command reaches it** — re-check that if
-> a future slice ever calls `resolve_or_adopt_unwrap_secret` from an unattended path.
-> **Two human acts still owed, IN THIS ORDER:** dismiss the `cleartext-logging` alerts
-> (per-alert verdicts in #527's comment), THEN make `CodeQL` a REQUIRED check. A
-> permanently-red required check trains everyone to merge past it, which is how a genuine
-> critical sat unread for a week.
-
-> [!IMPORTANT]
-> **⇒ #500 SPENT THREE DAYS *CLOSED ON GITHUB*, AND SIX OTHERS WITH IT (2026-09-04):** #101,
-> #115, #434, #441, #468, #500, #534, all reopened. GitHub reads `close`/`fix`/`resolve`
-> **adjacent** to a reference and never the sentence around it, so the sentences disclaiming the
-> close performed it. Now guarded by `scripts/check_closing_keywords.py` +
-> `.github/workflows/closing-keywords.yml` (which also prints what each merge WILL close);
-> promotion to a required check is **#444**. **The commit convention `fix(#500):` is SAFE** —
-> the parenthesis breaks the adjacency.
->
-> **The reusable lesson, and the reason #500 hid for weeks:** *a deferral is only honest while
-> its stated precondition holds, and nothing in the repo watches for one expiring.*
-> `localstate.rs`'s header declared its seam truthfully — *"the federation-node tier has no
-> clinical surface yet"* — and ADR-0052 made that false without reopening it, while ROADMAP kept
-> recording slices A–D as ✓ done. **Before trusting any ✓, check whether the sentence that
-> justified it is still true.** Slice 2b's grep found SEVEN more of this shape in FOUR crates
-> where memory said one; **#511 then found two more inside `seal.rs` itself**, still describing
-> the identity↔custody coupling ADR-0066 had deleted eleven days earlier. **Grep, do not
-> recall.**
 
 > [!IMPORTANT]
 > **Seven traps. Each is a step a next session takes in good faith.** (Five came from slice 1; trap 5 was minted by #511, trap 7 by DR slice 2c.)
@@ -247,7 +228,10 @@
 >    practice must be told:** completing an erasure across backups is **rotation** — capture fresh, destroy
 >    old — and that interval IS the maximum time an erasure takes to complete across all copies. The
 >    clinic's policy call, not Cairn's (principle 9; ADR-0005's *deletion is best-effort and declared*).
->    **2e's ADR owes that sentence in as many words.**
+>    ⚠️ **THE ADR THAT OWED THAT SENTENCE NO LONGER EXISTS**: this said "2e's ADR owes it", and
+>    "2e" was retired as a label when ADR-0067 took its ADR and its spec bump. The rotation
+>    sentence is therefore UNWRITTEN in any decision record, and this trap is currently its only
+>    home. Whichever slice next touches backup policy owes it a written home.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
@@ -326,8 +310,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-12 (**CodeQL moves to advanced setup with a model pack** — the ten false positives are gone by construction, not by dismissal: `rust/cleartext-logging`'s sources are NAME heuristics, eight `barrierModel` rows on named functions' return values take the workspace from **44 → 3** at CI's exact versions; the Settings flip to advanced is done at repo AND org level (the org configuration was the real blocker); PR #576 green; CONTRIBUTING gains the recipe. ⚠️ Branched from `main`, so this line does not know about PR #574 (2026-09-11, #572/#570) — reconcile whichever merges second.) · previous: 2026-09-10, second session (**the DR restore's budget, measured — and the ruling 2d never wrote down.** Closes **#571** with **ADR-0068** (*provenance warns, never gates*; spec v0.69 → **v0.70**); **measures #512's §1.2 budget** — 100 003 events restore in **116.7 s against 600 s**, linear at 1.17 ms/event, 85 000 sealed bodies opening on the restored node. `M > N` still stands but the excess act **changed identity**. Opened **#572** (a restore cannot be scripted at all); **confirmed #552** with a number. No product-behaviour change, no migration, no SCHEMA bump.) · earlier that day: (**DR slice 2d — the record comes home.** `restore` reads the clinical plane back and a restored node's sealed body OPENS; closes **#554**, adds **ADR-0067** (spec v0.68 → v0.69) and **`db/052`** (SCHEMA 51 → 52); the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**; the quarantine pen moved into the database with two callers and gained custody; `ActorRegistryRow::recorded_at` lost its serde default. **Its §1.2 residual is discharged by the session above.**) · previous: 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — a header vouches for its own length, so a corrupt length stops reading as an interrupted append; folded into the 2c branch, the last moment a pre-field format change is free. **The same session found 2c itself unmerged and un-PR'd**) · 2026-09-06 (**DR slice 2c** — the medium carries the clinical record, and nothing yet restored one; closed #522/#524, fixed #550 in-branch, opened #549/#551/#552) · 2026-09-04 (**the closing-keyword guard**: seven issues GitHub had closed that nobody closed, reopened + a CI guard) and, earlier that day, **#511** (**the custody newtypes**; opened #541) · 2026-09-02 (**DR slice 2b** — the transport seam and the paged pull; opened #531, #532, #534–#538) and, earlier, **#527** (the CodeQL backlog; opened #529, #530) · 2026-09-01/08-31 (**DR slice 2a** + its review wave) · 2026-08-30 (**#503**, the shared keystore crate) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier sessions: see *Recent sessions* below. · **Spec/ADRs:** **v0.70** ([ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; and [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
-**Session date:** 2026-09-11 (**the restore's recovery code gets a non-interactive path, and the CLI surface gets its first tests.** Closes **#572** and **#570** with **[ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md)** (spec v0.70 → **v0.71**); opens **#575**. `--old-recovery-code-file` — a path, never a flag value or an env var — so a DR drill can be **rehearsed**; six CLI tests on plain pipes, one of which reads a sealed body back in clear through the shipped binary; the measurement rig drops its pseudo-terminal. **No migration, no SCHEMA bump, no wire change.** PR **#574**.) · previous: 2026-09-10 second session (**the §1.2 budget measured** — 116.7 s against 600 s, linear at 1.17 ms/event — plus **ADR-0068**, *provenance warns, never gates*; closed #571, opened #572, confirmed #552) · 2026-09-10 earlier (**DR slice 2d — the record comes home**; closed #554, **ADR-0067**, **`db/052`** SCHEMA 51 → 52; the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**) · 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — and the session that found 2c unmerged and un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**the closing-keyword guard**, and earlier **#511** the custody newtypes) · 2026-09-02 (**DR slice 2b**, and earlier **#527** the CodeQL backlog) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-12 (**`requeue` releases custody, and something proves it.** Closes **#568** — `do_requeue`'s custody-carrying arm, the remedy every restore-penned reason advertises, had zero tests. Five DB-gated tests drive the shipped `cairn-sync requeue` binary against a node whose pen is the only copy of its record; the assertion is that a sealed body **OPENS**, not that a row exists. **No production code change.** Seven mutations run, all killed — and TWO of them survived a first draft and were rewritten, both written up in the file header. Opened **#578** (requeue deletes the pen row when custody did not land, silently, at exit 0 — the sharpest of the four), **#579**, **#580**, **#581** from the review. **No migration, no SCHEMA bump, no wire change.** PR **#577**.) · earlier that day: (**CodeQL moves to advanced setup with a model pack** — the ten false positives are gone by construction, not by dismissal: `rust/cleartext-logging`'s sources are NAME heuristics, eight `barrierModel` rows on named functions' return values take the workspace from **44 → 3** at CI's exact versions; the Settings flip to advanced is done at repo AND org level — the org configuration was the real blocker; CONTRIBUTING gains the recipe. PR **#576**.) · previous: 2026-09-11 (**the restore's recovery code gets a non-interactive path, and the CLI surface gets its first tests**; closes **#572**/**#570** with **ADR-0069**, spec v0.70 → **v0.71**; opens #575; PR #574) · previous: 2026-09-10 second session (**the §1.2 budget measured** — 116.7 s against 600 s, linear at 1.17 ms/event — plus **ADR-0068**, *provenance warns, never gates*; closed #571, opened #572, confirmed #552) · 2026-09-10 earlier (**DR slice 2d — the record comes home**; closed #554, **ADR-0067**, **`db/052`** SCHEMA 51 → 52; the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**) · 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — and the session that found 2c unmerged and un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**the closing-keyword guard**, and earlier **#511** the custody newtypes) · 2026-09-02 (**DR slice 2b**, and earlier **#527** the CodeQL backlog) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -425,14 +408,14 @@ product-behaviour change, no migration, no SCHEMA bump. PR #573. What generalise
 **Closed #554.** ADR-0067, spec v0.69, `db/052` (SCHEMA 52), four crates. The per-slice narrative is
 ROADMAP's; the traps that outlive it are in the trap list and ⇒ NEXT above.
 
-**Filed, not fixed — all still open except #571:** **#567** (`verify-backup`'s OK is federation-only,
-so a green verify says nothing about the plane a restore now applies; the comment that used to call
-that scoping a safety property now calls it a gap) · **#568** (`do_requeue`'s custody-carrying arm —
-the remedy every penned reason advertises — has zero tests; every test call site passes `None`) ·
+**Filed by this chain; #567 and #569 are the two still open:** **#567** (`verify-backup`'s OK is
+federation-only, so a green verify says nothing about the plane a restore now applies; the comment
+that used to call that scoping a safety property now calls it a gap) ·
 **#569** (db/052's registry door silently discards a **content** conflict and leaves
 `actor_event_id`/`seq` unvalidated) · **#570** (the restore CLI surface is untested, exit code
-included) · **#571** (provenance does not gate the clinical plane and ADR-0067 does not say so —
-**closed by the session above, ADR-0068**).
+included — **closed 2026-09-11, PR #574**) · **#571** (provenance does not gate the clinical plane
+and ADR-0067 does not say so — **closed by the session above, ADR-0068**) · **#568** (`do_requeue`'s
+custody-carrying arm had zero tests — **closed 2026-09-12**, the slice at the top of this file).
 
 What still generalises:
 
@@ -460,7 +443,7 @@ What still generalises:
 - **⇒ THE SEEDER GOES THROUGH THE PRODUCTION ORCHESTRATORS, AND THE MIX IS LOAD-BEARING.** 85% of
   the corpus is born-sealed; a demographics-only medium carries **no `event_dek` rows**, so the
   per-record unwrap and re-wrap — the expensive half — would never run.
-- **Filed by 2d and still open:** **#567**, **#568**, **#569**. (**#570** and **#571** are closed.)
+- **Filed by 2d and still open:** **#567**, **#569**. (**#568**, **#570** and **#571** are closed — #568 by the 2026-09-12 slice at the top of this file.)
 
 ### 2026-09-07 → 08-20 — the sessions before slice 2d (condensed to what generalises)
 
@@ -521,7 +504,8 @@ workspace); `poc/` is frozen historical spikes.
   pinned to the trust set, set-union `node_event` sync, `db/007`'s doors with a deny-all admission gate,
   genesis-stable `node_id`. Every honest gap declared at build time is closed **except the `localstate`
   clinical seams — custody travels (slice 1) and the clinical event log now REACHES the medium (slice 2c),
-  but nothing restores one — **#500**, the ⇒ NEXT warning); optional escrow rungs (Shamir/QR/TPM) remain. **Dual-identifier
+  and a restore reads one back (slice 2d, **#554**, ADR-0067) — what remains on this path is TEST
+  DEBT, see ⇒ NEXT); optional escrow rungs (Shamir/QR/TPM) remain. **Dual-identifier
   discipline** (ADR-0031) — the canonical plane (UUIDv7 + multihash) is the only identifier on the
   wire/in signed bodies; the projection plane may intern node-local `bigint` surrogates (`db/008` +
   leakage guard).
@@ -537,42 +521,28 @@ workspace); `poc/` is frozen historical spikes.
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ DR slice 2d — #554, and it is the next build. DESIGN LANDED (2026-09-09), implementation not
-  started;** draft PR **#565** on `feat/554-dr-slice-2d-restore-reads-clinical-plane`. 2a (the format,
-  08-31), 2b (the transport seam + the paged pull, 09-02), **#511** (the custody newtypes, 09-04) and
-  **2c** (the capture, 09-06) have all landed; **2d reads the clinical plane back off the medium** — the
-  events, the carried `event_dek` rows and the carried actor registry — and is what closes #554.
-  **Four things in the reviewed design contradict what earlier entries here lead a reader to expect —
-  read these before trusting the 2b entry below or ROADMAP's 2e line:**
-  1. **2d does NOT drive `cairn-sync`'s puller through `MediumTransport`.** The 2b entry below says the
-     transport seam "is what lets 2d's restore drive `cairn-sync`'s OWN puller against a file"; the
-     design takes the other route. `MediumTransport` is a *serving* abstraction (paging, label, logging
-     latch) and `cairn-node` does not depend on `cairn-wire`. Instead the pure
-     `within(verified_through) → sort by source_seq` derivation is **lifted into `cairn-medium`** (which
-     `cairn-wire` and `cairn-node` both already depend on) and both consume it — one implementation of
-     2a invariant 5, no new dependency edge. Follows 2c's Erratum E2 precedent.
-  2. **The per-peer quarantine quota does not apply to a restore-originated pen**, and the pen becomes an
-     in-DB door (`cairn_quarantine_event`, `db/052`) that `cairn-sync` and `cairn-node` share —
-     `quarantine_event` lives in `cairn-sync`'s **binary-only** crate and `cairn-node` cannot call it.
-     The quota's `Err` says *"the watermark freezes instead (delayed, never lost)"*, which needs a cursor
-     and a re-serving peer; a restore has neither, so inheriting it would lose the record at exit.
-  3. **The actor-registry door is set-shaped and resumable** (`restore_actor_registry(p_rows)`), not
-     per-row. A door refusing "any row in `actor_event`" would refuse the re-run that the
-     `finalize_identity`-moves-last ordering exists to make possible.
-  4. **The ADR is this slice's, not 2e's** — ADR-0067, and it carries the ADR-0026-decision-2
-     supersession plus the spec bump 2c deferred. See ⇒ NEXT. New
-  from 2c: **#549** (a burned IDENTITY `seq` is indistinguishable from a lost clinical event; the
-  probed-empty set wants a durable home and an operator surface), **#551** (the kit-restorability figure
-  lives in a node-global file, not the kit — the same-path rotation case is still open) and **#552** (the
-  nightly capture is O(whole medium), so the < 2 s budget is crossed at ~23 000 events). Still 2a's: **#525**
-  (**#523** was 2a's too and is CLOSED by this branch — see the framing-guard entry below). New from #511:
-  **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module). From 2b: **#531** (decompose
-  `cairn-sync/src/main.rs` — the older **#329** names the same file; a maintainer decision is wanted on
-  which to keep) and **#532** (a multi-page pull that fails late reports nothing about the pages that
-  landed). New from 2b's **final whole-branch review**: **#534** (a freeze stops content convergence, not
-  just the cursor — wants a design decision), **#535** (`applied_addresses` unbounded per cycle), **#536**
-  (an unopenable DEK is counted nowhere), **#537** (a failed pen release is permanent) and **#538** (the
-  byte tier discards the new error taxonomy).
+- **⇒ DR — #554 IS BUILT AND MERGED (slice 2d, PR #565/#566, 2026-09-09/10); so are the §1.2
+  measurement (#512's time half, PR #573) and the non-interactive recovery code (#572/#570, PR
+  #574). What remains on this path is the §7 TEST DEBT — see ⇒ NEXT.** The whole 2a→2d chain has
+  landed: 2a the format (08-31), 2b the transport seam + paged pull (09-02), **#511** the custody
+  newtypes (09-04), 2c the capture (09-06), 2d the read-back (09-09/10). **Two things a reader is
+  otherwise led to expect and will not find:**
+  1. **2d does NOT drive `cairn-sync`'s puller through `MediumTransport`.** `MediumTransport` is a
+     *serving* abstraction (paging, label, logging latch) and `cairn-node` does not depend on
+     `cairn-wire`. The pure `within(verified_through) → sort by source_seq` derivation was lifted
+     into `cairn-medium` instead, which both already depend on — one implementation of 2a
+     invariant 5, no new dependency edge.
+  2. **The per-peer quarantine quota does not apply to a restore-originated pen**, and the pen is
+     an in-DB door (`cairn_quarantine_event`, `db/052`) that `cairn-sync` and `cairn-node` share.
+     The quota's `Err` says *"the watermark freezes instead"*, which needs a cursor and a
+     re-serving peer; a restore has neither, so inheriting it would lose the record at exit.
+
+  Open issues this chain filed, none closed by it: **#549**, **#551**, **#552**, **#525** (2a),
+  **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module), **#531**/**#329** (decompose
+  `cairn-sync/src/main.rs` — a maintainer decision is wanted on which to keep), **#532**,
+  **#534**–**#538**, **#556**–**#563**, **#567**, **#569**, **#575**. (The range **#567**–**#572**
+  stood here until 2026-09-12 and was wrong by then: **#568**, **#570**, **#571** and **#572** have
+  all since closed. A range silently absorbs the issues that leave it — spell them out.)
 - **§5.9 parts C/D** (#232) — see ⇒ NEXT. Related: **#235** (shred authorization hooks), **#236** (FTS/RAG
   must build on `event_clear`).
 - **`clinical.medication` — slices 1–6b DONE** (ADR-0059). Next: **drugref term→anchor lookup** (⇒
