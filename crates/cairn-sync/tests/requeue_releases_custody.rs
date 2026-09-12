@@ -20,6 +20,10 @@
 //! for the unwrap secret; only production ever passed a real key. `cmd_requeue`'s `--key` /
 //! `--unwrap-key` plumbing — *"where a wrong default would live"* — had no test at all.
 //!
+//! This file closes the `--key` half. `--unwrap-key` is still uncovered, deliberately — see
+//! *What this file does NOT cover* below, so nobody reads the paragraph above as a list of what
+//! now exists.
+//!
 //! # What these tests assert, and why it is the twin and not a row count
 //!
 //! The load-bearing assertion is that **a sealed body OPENS**: `event_clear.twin` reads back the
@@ -33,40 +37,90 @@
 //! double-wrap leaves no `event_dek` row AND no `event_clear` row. The instruction is still the
 //! right one, for the better reason above.
 //!
-//! # The three arms, and why all three are here
+//! # The four arms, and why all four are here
 //!
-//! `do_requeue`'s custody decision has exactly three outcomes, and a suite that reached only the
-//! first would be green while proving almost nothing:
+//! `do_requeue`'s custody decision produces three OUTCOMES from four INPUT PAIRS, and the
+//! difference matters: the match at `main.rs`'s `let dek = match (&unwrap_secret, &penned_dek)`
+//! has a `_` arm that absorbs three distinct pairs into one silent `None`. Counting outcomes and
+//! calling the job done is how the modal pair goes untested, so the arms here are indexed by
+//! INPUT:
 //!
-//! 1. **Custody resolves and the DEK opens** — the body comes back (`the_body_opens`).
-//! 2. **No custody resolves at all** — the event still releases, sealed (`custody_unresolvable`).
-//! 3. **Custody resolves but this key does not open THAT DEK** — a foreign medium; the event
-//!    releases, sealed, and says so (`a_penned_dek_from_another_node`).
+//! 1. `(Some, Some)` → opens. **Custody resolves and the DEK opens** — the body comes back.
+//! 2. `(None, Some)` → `_`. **No custody resolves at all** — the event still releases, sealed.
+//! 3. `(Some, Some)` → fails. **This key does not open THAT DEK** — a foreign medium; the event
+//!    releases, sealed, and says so.
+//! 4. `(Some, None)` → `_`. **A keyless pen row while custody resolves** — the ordinary, non-DR
+//!    shape (`dek_wrapped` is nullable and every plaintext pull row has it NULL). Releases, and
+//!    must raise NO custody alarm.
+//!
+//! The remaining pair, `(None, None)`, is the trivial composition of 2 and 4 and is left untested
+//! deliberately: it reaches the same `_` arm with neither input present and has no behaviour of
+//! its own.
 //!
 //! Arm 2 is the anti-vacuity twin of arm 1: without it, a suite that never opened anything at all
-//! would still pass arm 1's shape.
+//! would still pass arm 1's shape. Arm 4 is the FALSE-POSITIVE twin of arm 3 — arm 3 proves the
+//! alarm fires when custody is genuinely lost, arm 4 that it stays silent when nothing is wrong.
+//!
+//! # What this file does NOT cover
+//!
+//! Stated here rather than left for a reader to discover, because a coverage boundary belongs with
+//! the durable artifact and not with the disposable plan:
+//!
+//! * **It cannot isolate a fault inside `do_requeue` from one inside the resolution.** The route is
+//!   the composed CLI command, so a red run says the composition is wrong, never which half.
+//! * **`--unwrap-key` and the whole `FileOutcome::Loaded` path are untested.** `run_requeue` passes
+//!   `--key` alone and never writes a `<key>.unwrap` sibling, so every arm resolves through the
+//!   pre-ADR-0066 DERIVED fallback. The provisioned-file path — including a `--unwrap-key` pointed
+//!   at the wrong directory, which is #515's shape — would stay green under a mutation. Closing
+//!   that is #517's business, not this file's.
+//! * **Every arm pens exactly ONE record.** `do_requeue` computes `dek` inside its loop, so
+//!   degradation is per-row today; nothing here would notice it being hoisted above the loop.
 //!
 //! # Mutation results — why this file is trusted
 //!
 //! A test written against behaviour that already works proves nothing until a deliberate break has
-//! been shown to make it fail. Five mutations were applied to `main.rs` and run (2026-09-12); every
-//! one is killed, and the fourth is the reason this section exists at all.
+//! been shown to make it fail. Every mutation below was applied to `main.rs` and RUN; every one is
+//! killed, and mutation 4 is the reason this section exists at all.
 //!
-//! | # | mutation in `main.rs` | 1 opens | 2 unresolvable | 3 foreign | 4 minting |
-//! |---|-----------------------|---------|----------------|-----------|-----------|
-//! | 1 | the wrapped DEK passed through unwrapped (the double-wrap) | **FAIL** | ok | **FAIL** | ok |
-//! | 2 | `row.get(3)` → `row.get(2)`, the `attester_key` column | **FAIL** | ok | **FAIL** | ok |
-//! | 3 | `do_requeue(&mut client, None)` — the pre-slice-2d behaviour | **FAIL** | ok | **FAIL** | ok |
-//! | 4 | `load_existing_key` → the minting `load_or_create_key` | ok | ok | ok | **FAIL** |
-//! | 5 | custody resolution REFUSES instead of degrading best-effort | ok | **FAIL** | ok | **FAIL** |
+//! | # | mutation in `main.rs` | 1 opens | 2 unresolvable | 3 foreign | 4 keyless | 5 minting |
+//! |---|-----------------------|---------|----------------|-----------|-----------|-----------|
+//! | 1 | the wrapped DEK passed through unwrapped, i.e. NOT unwrapped at all (the double-wrap) | **FAIL** | ok | **FAIL** | ok | ok |
+//! | 2 | `row.get(3)` → `row.get(2)`, the `attester_key` column | **FAIL** | ok | **FAIL** | ok | ok |
+//! | 3 | `do_requeue(&mut client, None)` — the pre-slice-2d behaviour | **FAIL** | ok | **FAIL** | ok | ok |
+//! | 4 | `load_existing_key` → the minting `load_or_create_key` | ok | ok | ok | ok | **FAIL** |
+//! | 5 | custody resolution REFUSES instead of degrading best-effort | ok | **FAIL** | ok | ok | **FAIL** |
+//! | 6 | the `_` arm folded in: `(Some(secret), maybe)` → `unwrap_dek(maybe.as_deref().unwrap_or(&[]), secret)` | ok | ok | ok | **FAIL** | ok |
+//! | 7 | `apply_signed` never called — the door's OK assumed, the pen row still deleted | **FAIL** | **FAIL** | **FAIL** | **FAIL** | **FAIL** |
 //!
-//! Mutations 1–3 all surface at the SAME assertion — `event_clear.twin` is `None` where the dead
-//! node's text belongs — which is the point: three different ways of losing the key produce one
-//! legible failure, and it names the record rather than a row count.
+//! **Where mutations 1–3 surface is one assertion PER ARM, and not the same one.** In arm 1 it is
+//! the twin: `event_clear.twin` is `None` where the dead node's text belongs. In arm 3 the twin is
+//! legitimately `None` either way — that arm EXPECTS a sealed body — so the killer there is the
+//! per-record stderr report, which all three mutations remove by routing around the unwrap. Reading
+//! this as "one assertion" would send a maintainer debugging a red arm 3 to the wrong line.
 //!
-//! **Mutation 4 SURVIVED the first draft of test 4**, and the correction is written into that test:
-//! it named a key path inside a subdirectory that did not exist, so the mint failed on the missing
-//! parent rather than being refused, and the test was green for a reason unrelated to its subject.
+//! **TWO mutations survived a first draft, and both write-ups are the point of this section.**
+//!
+//! **Mutation 4** named a key path inside a subdirectory that did not exist, so the mint failed on
+//! the missing parent rather than being refused, and test 5 was green for a reason unrelated to its
+//! subject. The correction is written into that test: an operator in the wrong directory is in a
+//! directory that EXISTS, and that is the case to model.
+//!
+//! **Mutation 7** is the one the first review caught, and it took two attempts to write. Arms 2, 3
+//! and 4 originally proved the event had survived using only `released`, a counter inside the
+//! function under test, so a release path that deleted the pen row without applying the bytes would
+//! report `released: 1` over a record that no longer existed — and only arm 1, via the twin, would
+//! notice. `event_survived` is the fix: every arm now asks the LOG, not the tool.
+//!
+//! ⚠️ Its first draft SURVIVED. It merely moved the `DELETE FROM sync_quarantine` ahead of
+//! `apply_signed` and swallowed the apply's error. That is a real defect in production — an apply
+//! that fails now loses the pen row — but it is invisible to THIS suite, because every arm feeds
+//! the door bytes it accepts, so the apply succeeds and the reordering changes nothing observable.
+//! Modelling "the pen row is deleted and the event never reaches the log" requires skipping the
+//! door entirely, which is what row 7 now does. The lesson is the file's own, one turn deeper: a
+//! mutation that cannot fail is not evidence, and the shape of the break has to match the shape of
+//! the claim. **The ordering defect it failed to model is therefore still uncovered here** —
+//! `do_requeue`'s own `interrupted(...)` path is what guards it, and issue #471's tests are its
+//! home, not this file's.
 //!
 //! Skips unless `CAIRN_TEST_PG` is set. Serialized via cairn-node's `db::test_serial_guard` —
 //! advisory locks are scoped PER DATABASE, not cluster-wide (#476) — because this file TRUNCATEs
@@ -105,9 +159,11 @@ fn cs() -> Option<String> {
 
 /// Everything a test needs about the one sealed record, read off the node BEFORE its disk "died".
 ///
-/// These four values are exactly what the backup medium carries for a sealed event (slice 2c): the
-/// signed bytes, their content address, the DEK wrapped for this node's custody key, and — the one
-/// a medium does NOT carry, because it is what we are trying to get back — the clear twin.
+/// Of these four, the backup medium carries exactly TWO verbatim — `signed_bytes` and
+/// `dek_wrapped` (a real `MediumRecord` also carries attestation, attester key and source seq,
+/// which this fixture does not need). The `digest` is NOT carried: a restore re-derives it from the
+/// bytes with `event_address`. And the `twin` is precisely what a medium never carries, because it
+/// is what we are trying to get back. Do not read this struct as the medium's format.
 struct DeadNodeRecord {
     signed_bytes: Vec<u8>,
     digest: Vec<u8>,
@@ -156,8 +212,10 @@ fn write_key_file(dir: &Path, name: &str, sk: &SigningKey) -> String {
 /// **Derived deliberately — do not switch this to `generate_unwrap_secret`.** `cairn-sync` has no
 /// `establish-unwrap-key` command: `unwrap_key::resolve_at_startup` finds its secret either in a
 /// `<key>.unwrap` sibling file or, absent one, by deriving it from the signing seed and checking
-/// that it matches what `node_unwrap_key` has registered (the pre-ADR-0066 fallback, trap 3 in
-/// HANDOVER). Registering a DERIVED key here is what lets these tests drive the shipped binary
+/// that it matches what `node_unwrap_key` has registered (the pre-ADR-0066 fallback — the decision
+/// table on `unwrap_key::resolve` is the durable statement of it, and ADR-0066 the reasoning;
+/// HANDOVER's trap list says the same thing but is renumbered as traps are minted, so it is not a
+/// citable address). Registering a DERIVED key here is what lets these tests drive the shipped binary
 /// with `--key` alone. A generated key would satisfy the authoring path and then silently fail to
 /// resolve at requeue time — turning a loud failure into a quiet wrong answer.
 fn derived_unwrap_secret(sk: &SigningKey) -> Secret32 {
@@ -290,11 +348,19 @@ async fn wipe_clinical_tier(c: &Client) {
     .expect("wipe the clinical tier");
 }
 
-/// Pen a record through the REAL door (`db/052`), exactly as a restore does — never a raw INSERT.
+/// Pen a record through the REAL door (`db/052`), as a restore does — never a raw INSERT.
 ///
-/// `dek` is passed separately from the record so a test can pen a DEK this node cannot open (the
-/// foreign-medium arm) without having to fake the rest of the row.
-async fn pen_with_custody(c: &Client, record: &DeadNodeRecord, dek: &[u8]) {
+/// NOT *exactly* as a restore does, and the gap is worth naming: a restore passes the medium's
+/// `attestation` / `attester_key` (`restore::clinical`), where this fixture passes NULL for both,
+/// because a locally-authored medication assertion carries neither. The DOOR is the same, which is
+/// the property being preserved; the row is a restore-shaped subset, not a replica.
+///
+/// `dek` is passed separately from the record, and is an `Option`, for two reasons:
+///   * `Some(other)` pens a DEK this node cannot open — the foreign-medium arm — without having to
+///     fake the rest of the row;
+///   * `None` pens the KEYLESS row an ordinary `pull` creates for a plaintext event, which is the
+///     modal production shape and the one input pair `do_requeue`'s `_` arm absorbs silently.
+async fn pen(c: &Client, record: &DeadNodeRecord, dek: Option<&[u8]>) {
     // ⚠️ THE DOOR'S BOOLEAN IS `acked`, NOT "was it penned". A fresh row comes back FALSE, a
     // re-offer of an already-acked one TRUE, and a pen it genuinely refuses RAISEs rather than
     // returning anything. An earlier draft of this fixture read it as success and asserted the
@@ -329,9 +395,37 @@ async fn pen_with_custody(c: &Client, record: &DeadNodeRecord, dek: &[u8]) {
         .get(0);
     assert_eq!(
         held.as_deref(),
-        Some(dek),
-        "the pen must be holding the key: a requeue test over a keyless pen row proves nothing"
+        dek,
+        "the pen must be holding exactly the key this test meant to give it — a custody arm tested \
+         over the wrong pen contents proves nothing about either"
     );
+}
+
+/// Did the EVENT come back, whatever happened to its key?
+///
+/// The twin answers "did the CHART come back", and in every degraded arm the answer is a correct
+/// `None` — which is equally consistent with the event never having been applied at all. So the
+/// degraded arms need this second, POSITIVE question, or their central claim ("a recovery command
+/// must still recover the event") rests on nothing but `released`, a counter inside the very
+/// function under test. A release path that deleted the pen row without applying the event would
+/// otherwise report `released: 1` over a record that no longer exists anywhere.
+async fn event_survived(c: &Client, record: &DeadNodeRecord) -> bool {
+    c.query_one(
+        "SELECT EXISTS (SELECT 1 FROM event_log WHERE content_address = $1)",
+        &[&record.digest],
+    )
+    .await
+    .expect("ask whether the event is in the log")
+    .get(0)
+}
+
+/// How many rows are left in the pen. A released row must LEAVE it; a row still sitting there
+/// after a `released` count means the two halves of the release disagree.
+async fn pen_rows(c: &Client) -> i64 {
+    c.query_one("SELECT count(*) FROM sync_quarantine", &[])
+        .await
+        .expect("count the pen")
+        .get(0)
 }
 
 /// The `event_clear.twin` for this record, or `None` when the door withheld custody.
@@ -372,6 +466,21 @@ fn metrics(stdout: &str, stderr: &str) -> serde_json::Value {
     serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
         panic!("requeue --metrics must print one JSON object ({e})\nstdout: {stdout}\nstderr: {stderr}")
     })
+}
+
+/// The single stderr line carrying `needle`, panicking with the whole stream if there is none.
+///
+/// **Why a LINE and not `stderr.contains`.** `requeue` prints one line per record plus one for the
+/// run, and a bare `contains` over the whole stream lets a DIFFERENT line satisfy an assertion.
+/// That is not hypothetical here: the success line `"requeue: <digest> released through the apply
+/// door"` names the same record on the same run, so asserting the digest and the custody-failure
+/// phrase separately would pass even if the digest were stripped out of the failure message —
+/// precisely the property arm 3 exists to pin. Both halves must land on ONE line or neither counts.
+fn stderr_line_with<'a>(stderr: &'a str, needle: &str) -> &'a str {
+    stderr
+        .lines()
+        .find(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("no stderr line contains {needle:?}\nstderr was:\n{stderr}"))
 }
 
 /// Provision a node and leave it holding one penned sealed record, ready for `requeue`.
@@ -421,7 +530,7 @@ async fn a_penned_sealed_record_releases_with_its_custody_and_the_body_opens() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (_dir, key_path, sk, record) = dead_node_with_a_penned_record(&mut c).await;
-    pen_with_custody(&c, &record, &record.dek_wrapped).await;
+    pen(&c, &record, Some(&record.dek_wrapped)).await;
 
     let (ok, stdout, stderr) = run_requeue(&base, &key_path);
     assert!(
@@ -456,12 +565,7 @@ async fn a_penned_sealed_record_releases_with_its_custody_and_the_body_opens() {
     cairn_event::seal::unwrap_dek(&stored, &derived_unwrap_secret(&sk))
         .expect("the stored DEK must open with this node's own custody key");
 
-    let left: i64 = c
-        .query_one("SELECT count(*) FROM sync_quarantine", &[])
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(left, 0, "a released row leaves the pen");
+    assert_eq!(pen_rows(&c).await, 0, "a released row leaves the pen");
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +592,7 @@ async fn without_resolvable_custody_the_record_still_releases_but_stays_sealed()
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (dir, _key_path, _sk, record) = dead_node_with_a_penned_record(&mut c).await;
-    pen_with_custody(&c, &record, &record.dek_wrapped).await;
+    pen(&c, &record, Some(&record.dek_wrapped)).await;
 
     // A stranger's key file: a real, well-formed signing key that is simply not this node's.
     let (stranger_sk, _kid) = cairn_event::generate_key().unwrap();
@@ -503,16 +607,29 @@ async fn without_resolvable_custody_the_record_still_releases_but_stays_sealed()
     let m = metrics(&stdout, &stderr);
     assert_eq!(m["released"], 1, "the event is still recovered: {m}");
 
+    // POSITIVE evidence, not the binary's own counter. `released` is incremented inside the
+    // function under test; only the log says the record is actually back.
+    assert!(
+        event_survived(&c, &record).await,
+        "the EVENT must be in the log. `released: 1` is `do_requeue`'s own count — a path that \
+         deleted the pen row without applying the bytes would report exactly this over a record \
+         that no longer exists anywhere.\nstderr: {stderr}"
+    );
+    assert_eq!(pen_rows(&c).await, 0, "a released row leaves the pen");
+
     assert_eq!(
         twin_after_release(&c, &record).await,
         None,
         "with no custody the body must stay SEALED — if this reads back, arm 1 is passing for \
          some reason other than the custody arm and the whole file is vacuous"
     );
+    // The RESOLUTION failed, which is a different arm from a DEK that would not open (arm 3).
+    // `"WITHOUT custody"` alone cannot tell them apart — it appears in both messages — so this
+    // asserts the fragment unique to `cmd_requeue`'s resolution failure.
     assert!(
-        stderr.contains("WITHOUT custody"),
-        "the operator must be told they did not get custody, or they will read a clean release \
-         as a complete one: {stderr}"
+        stderr.contains("custody key could not be resolved"),
+        "the operator must be told they did not get custody, and WHY, or they will read a clean \
+         release as a complete one: {stderr}"
     );
 }
 
@@ -545,7 +662,7 @@ async fn a_penned_dek_from_another_node_releases_the_record_and_says_custody_was
     let foreign =
         cairn_event::seal::wrap_dek_for(&dek, &cairn_event::seal::unwrap_public(&stranger_secret))
             .expect("re-wrap for a stranger");
-    pen_with_custody(&c, &record, &foreign).await;
+    pen(&c, &record, Some(&foreign)).await;
 
     let (ok, stdout, stderr) = run_requeue(&base, &key_path);
     assert!(
@@ -556,18 +673,91 @@ async fn a_penned_dek_from_another_node_releases_the_record_and_says_custody_was
     let m = metrics(&stdout, &stderr);
     assert_eq!(m["released"], 1, "the event is still recovered: {m}");
 
+    assert!(
+        event_survived(&c, &record).await,
+        "losing a record because its key belongs to another node would be the worst of both — \
+         the event must be in the log.\nstderr: {stderr}"
+    );
+    assert_eq!(pen_rows(&c).await, 0, "a released row leaves the pen");
+
     assert_eq!(
         twin_after_release(&c, &record).await,
         None,
         "a DEK that does not open must not somehow produce a clear view"
     );
+    // ONE line must carry both the phrase and the record, for the reason in `stderr_line_with`:
+    // the success line names this same record on this same run, so two separate `contains` checks
+    // over the whole stream would still pass with the digest stripped out of THIS message.
+    let failure_line = stderr_line_with(&stderr, "did not open with this node's custody key");
     assert!(
-        stderr.contains("did not open with this node's custody key"),
-        "the unwrap failure must be reported per record, naming it: {stderr}"
+        failure_line.contains(&hex::encode(&record.digest)[..8]),
+        "the unwrap failure must name WHICH record ON ITS OWN LINE, or an operator reading a \
+         multi-record run cannot act on it. Line was: {failure_line}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Arm 4 — a KEYLESS pen row while custody resolves: the quiet, modal case
+// ---------------------------------------------------------------------------
+
+/// **The input pair `do_requeue`'s `_` arm absorbs in silence, and the one that is NOT a disaster.**
+///
+/// `sync_quarantine.dek_wrapped` is nullable (`db/052`), and every pen row an ordinary `pull`
+/// creates for a PLAINTEXT event has it NULL. So `(Some(secret), None)` — a working custody key
+/// over a keyless row — is not an exotic combination; outside disaster recovery it is the modal
+/// one, and until this test nothing reached it: arms 1 and 3 pen a DEK, arms 2 and 5 resolve no
+/// secret.
+///
+/// What must hold is mostly NEGATIVE, and that is the point. The event releases, no clear view
+/// appears (there is no key and the event is sealed), and — the assertion with teeth — **neither
+/// custody warning is printed**, because nothing went wrong. An operator requeueing an ordinary
+/// pen must not be told their custody failed.
+///
+/// Watched failing before it was trusted (mutation 6): collapsing the match to
+/// `(Some(secret), dek) => unwrap_dek(dek.as_deref().unwrap_or(&[]), secret)` makes every keyless
+/// row report a custody failure, and this test fails on the "no false alarm" assertion. The
+/// `.expect()` variant of the same slip panics mid-loop and discards the partial-completion report
+/// #471 exists to preserve; that fails here too, on `assert!(ok)`.
+#[tokio::test]
+async fn a_keyless_pen_row_releases_quietly_and_raises_no_custody_alarm() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (_dir, key_path, _sk, record) = dead_node_with_a_penned_record(&mut c).await;
+    // The node's own key resolves; the PEN simply carries no DEK.
+    pen(&c, &record, None).await;
+
+    let (ok, stdout, stderr) = run_requeue(&base, &key_path);
+    assert!(
+        ok,
+        "an ordinary keyless pen row is not a failure\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(metrics(&stdout, &stderr)["released"], 1);
+    assert!(
+        event_survived(&c, &record).await,
+        "the event must be recovered\nstderr: {stderr}"
+    );
+    assert_eq!(pen_rows(&c).await, 0, "a released row leaves the pen");
+    assert_eq!(
+        twin_after_release(&c, &record).await,
+        None,
+        "a sealed event whose pen carried no key cannot gain a clear view from nowhere"
+    );
+
+    // THE ASSERTION. A keyless row is not a custody failure, and reporting one here would train
+    // operators to ignore the message on the run where it is real.
+    assert!(
+        !stderr.contains("did not open with this node's custody key"),
+        "FALSE ALARM: a pen row that never carried a DEK was reported as one that failed to \
+         open. An operator who sees this on every ordinary requeue stops reading it — and the \
+         run where custody genuinely was lost is the one it then hides.\nstderr: {stderr}"
     );
     assert!(
-        stderr.contains(&hex::encode(&record.digest)[..8]),
-        "and it must name WHICH record, or an operator cannot act on it: {stderr}"
+        !stderr.contains("custody key could not be resolved"),
+        "the key resolved fine; only the pen row was keyless: {stderr}"
     );
 }
 
@@ -577,7 +767,9 @@ async fn a_penned_dek_from_another_node_releases_the_record_and_says_custody_was
 
 /// **`requeue` must never MINT a signing key, however wrong the `--key` path is.**
 ///
-/// `cmd_requeue`'s doc names this as the reason it calls `load_existing_key` rather than the
+/// The comment INSIDE `cmd_requeue` — it has no `///`, so this does not appear in `cargo doc`;
+/// look just above its `let custody = match load_existing_key(...)` — names this as the reason it
+/// calls `load_existing_key` rather than the
 /// `load_or_create_key` the pull path uses: an operator running `requeue` from the wrong directory
 /// would otherwise create a stray signing key and then resolve custody against it — which is not
 /// merely useless but actively misleading, since the resulting node has a key file that belongs to
@@ -593,7 +785,7 @@ async fn requeue_refuses_a_missing_key_file_rather_than_minting_one() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (dir, _key_path, _sk, record) = dead_node_with_a_penned_record(&mut c).await;
-    pen_with_custody(&c, &record, &record.dek_wrapped).await;
+    pen(&c, &record, Some(&record.dek_wrapped)).await;
 
     // ⚠️ THE PATH MUST BE IN AN EXISTING DIRECTORY, and this is the whole difficulty of the test.
     // The first draft named a file inside a subdirectory that did not exist either — and MUTATION
@@ -612,13 +804,18 @@ async fn requeue_refuses_a_missing_key_file_rather_than_minting_one() {
     );
     assert_eq!(metrics(&stdout, &stderr)["released"], 1);
     assert!(
+        event_survived(&c, &record).await,
+        "the recovery command still recovers the EVENT, whatever happened to the key\nstderr: {stderr}"
+    );
+    assert_eq!(pen_rows(&c).await, 0, "a released row leaves the pen");
+    assert!(
         !absent.exists(),
         "requeue MINTED a signing key at {} — an operator in the wrong directory now has a key \
          file that belongs to nothing, and custody resolved against it",
         absent.display()
     );
     assert!(
-        stderr.contains("WITHOUT custody"),
-        "and it must say custody was not obtained: {stderr}"
+        stderr.contains("custody key could not be resolved"),
+        "and it must say custody was not obtained, and why: {stderr}"
     );
 }
