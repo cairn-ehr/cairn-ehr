@@ -102,9 +102,10 @@
 > Android node is a legitimate restore target, so streaming stays deferred) · **#536** (an unopenable
 > DEK is counted on the RESTORE path only; the sync half is open) · **#569** (db/052's registry door
 > silently discards a **content** conflict and leaves `actor_event_id`/`seq` unvalidated) · **#502
-> item 4** (a discarded keystore-load reason) · **#101 items 2–3** · **#512** · **#575** (new — the
-> minted recovery code still reaches stderr on both paths) · **#556**–**#563** (the 2b/2c review
-> wave; see ROADMAP).
+> item 4** (a discarded keystore-load reason) · **#101 items 2–3** · **#512** · **#575** (the
+> minted recovery code still reaches stderr on both paths) · **#583** (new — a DB-gated suite can
+> depend on global state a predecessor left, and only the hours-long full local gate can see it) ·
+> **#556**–**#563** (the 2b/2c review wave; see ROADMAP).
 >
 > **Never cite ADR-0026 decision 1's promise 2** — *"node-default data-at-rest keys survive"* — as
 > met by any of this. It has **no subject at all**: no node-default key tier exists, so it is
@@ -367,6 +368,21 @@ migration file, no SCHEMA bump. What generalises past the slice:
 - **A 400-line fixture is shared, not copied** (`tests/common/dead_node.rs`, the `#[path]`
   convention `common/serve.rs` set). #568's header already records two fixture mistakes that each
   made a test pass for the wrong reason; a second copy is two more chances at that.
+- **⇒ THE GATE FAILED ON SOMETHING THIS BRANCH DID NOT CAUSE, AND THE DIAGNOSIS NAMED THE WRONG
+  FILE (#583).** `restore_inherits_custody` failed with *"this database already has an enrolled
+  node"* — a statement about its own fixture. Cause: `restore_actor_registry`'s first fence reads
+  `local_node`; `restore_cli_surface` (landed 2026-09-11, correct in itself) drives a real restore
+  and leaves a `local_node` row; cargo runs the two adjacent. Both failing tests truncated
+  `node_unwrap_key` and called that *"a restore target database is fresh"*. **The suite passes
+  alone, every time, and CI never runs this sweep — so only the hours-long local gate sees it, and
+  it arrives attached to an innocent branch.** Fixed at the CONSUMER: a producer-side cleanup does
+  not run when one of its own tests fails early, and this tree's reliable pattern is
+  reset-at-start. **⚠️ `cairn_test` is never recreated between Rust sweeps**, so a killed or
+  partial gate changes the next run's verdict — truncate `local_node` before trusting a red.
+- **A guard this project already has earned its keep on this branch.**
+  `shred_predicate_has_one_home.rs` caught `cairn_custody_landed` as a new decision site AND the
+  now-stale entry for the file it moved out of, before the gate did. #583 asks for the same shape
+  over the tables a restore door fences on.
 
 ### 2026-09-12 (earlier) — CodeQL: advanced setup, and a model pack instead of dismissals
 
