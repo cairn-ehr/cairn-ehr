@@ -384,12 +384,20 @@ GRANT EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEX
 -- it. SECURITY DEFINER for the same reason the doors beside it are — the three tables it
 -- reads carry the clinical plane's custody state, and a caller needs the ANSWER, never
 -- SELECT on `event_dek`.
+--
+-- ⚠️ `pg_temp` LAST IS LOAD-BEARING, NOT HOUSE STYLE (#426). Postgres searches the session's
+-- TEMPORARY schema FIRST for relation names unless the path names `pg_temp` explicitly, and
+-- PUBLIC holds `TEMPORARY` by default. Without it, any caller could `CREATE TEMP TABLE
+-- event_dek (…)` and make this definer body answer from their own decoy — which for THIS
+-- function means dictating whether `requeue` deletes a pen row holding the last copy of a
+-- clinical key, in either direction. Pinned over the whole catalogue by
+-- `crates/cairn-node/tests/search_path_pg_temp.rs`, which is what caught it here.
 CREATE OR REPLACE FUNCTION cairn_custody_landed(p_content_address BYTEA)
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = pg_catalog, public
+SET search_path = public, pg_temp
 AS $$
     SELECT EXISTS (
         SELECT 1 FROM event_log el

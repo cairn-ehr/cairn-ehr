@@ -379,10 +379,18 @@ migration file, no SCHEMA bump. What generalises past the slice:
   not run when one of its own tests fails early, and this tree's reliable pattern is
   reset-at-start. **⚠️ `cairn_test` is never recreated between Rust sweeps**, so a killed or
   partial gate changes the next run's verdict — truncate `local_node` before trusting a red.
-- **A guard this project already has earned its keep on this branch.**
+- **⇒ TWO CATALOGUE-WIDE GUARDS CAUGHT REAL DEFECTS IN THIS SLICE, AND ONE WAS A SECURITY HOLE.**
   `shred_predicate_has_one_home.rs` caught `cairn_custody_landed` as a new decision site AND the
-  now-stale entry for the file it moved out of, before the gate did. #583 asks for the same shape
-  over the tables a restore door fences on.
+  now-stale entry for the file it moved out of. Then `search_path_pg_temp.rs` (#426) caught the new
+  door pinning `SET search_path = pg_catalog, public` — **no trailing `pg_temp`**. Postgres searches
+  the session's TEMPORARY schema FIRST for relation names unless the path names `pg_temp`, and
+  PUBLIC holds `TEMPORARY` by default, so any caller could `CREATE TEMP TABLE event_dek (…)` and
+  make that `SECURITY DEFINER` body answer from their own decoy — dictating, for this function,
+  whether `requeue` deletes a pen row holding the last copy of a clinical key, in either direction.
+  **A new definer function copies its `SET` clause from a neighbour; write `public, pg_temp` and let
+  the catalogue guard confirm it.** #583 asks for a third guard of the same shape over the tables a
+  restore door fences on — the catalogue, never a per-function assertion, is what covers the site
+  nobody has written yet.
 
 ### 2026-09-12 (earlier) — CodeQL: advanced setup, and a model pack instead of dismissals
 
