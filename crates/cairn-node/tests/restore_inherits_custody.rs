@@ -399,7 +399,15 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
 
     // The restore target: a fresh database (no unwrap key registered) and a key path that
     // does not exist yet, because `restore` has just minted the signing key beside it.
-    c.batch_execute("TRUNCATE node_unwrap_key")
+    // ⚠️ `local_node` IS PART OF "FRESH", AND LEAVING IT OUT MADE THIS FILE ORDER-DEPENDENT.
+    // `restore_actor_registry`'s FIRST fence is `EXISTS (SELECT 1 FROM local_node)` — "a live
+    // node is never a restore target" — so a database carrying another suite's enrolled node
+    // fails every restore here, with a diagnosis about THIS test's fixture that is nothing to
+    // do with it. `restore_cli_surface` drives a real `cairn-node` restore and legitimately
+    // leaves a `local_node` row behind; cargo runs it immediately before this file. Truncating
+    // it here rather than there is deliberate: a test should establish its own preconditions,
+    // not depend on every possible predecessor cleaning up after itself.
+    c.batch_execute("TRUNCATE node_unwrap_key, local_node CASCADE")
         .await
         .expect("a restore target database is fresh");
     let new_key = dir.path().join("restored-node.key");
@@ -775,7 +783,8 @@ async fn a_bundle_with_no_custody_rows_still_restores() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let dir = tempdir().unwrap();
 
-    c.batch_execute("TRUNCATE node_unwrap_key, event_dek, erasure_shred_log CASCADE")
+    // `local_node` for the same reason as the site above — see its note.
+    c.batch_execute("TRUNCATE node_unwrap_key, event_dek, erasure_shred_log, local_node CASCADE")
         .await
         .unwrap();
     let dead_key = dir.path().join("dead-node.key.unwrap");
