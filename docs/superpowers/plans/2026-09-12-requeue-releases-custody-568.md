@@ -71,7 +71,7 @@ composed command is right. Task 4 narrows that by driving the two failure arms s
 ## One correction to #568's own text, carried into the code
 
 #568 says *"counting an `event_dek` row is not enough; that is exactly the assertion that would pass
-under a double-wrap."* Against **this** door it would not. `db/020` line 329 unseals with `p_dek`
+under a double-wrap."* Against **this** door it would not. `db/020`'s step 8 (`IF v_sealed AND p_dek IS NOT NULL`) unseals with `p_dek`
 first, and a double-wrapped value fails that unseal, which sets `v_inner := NULL` and skips the whole
 custody block — so a double-wrap leaves **no `event_dek` row and no `event_clear` row**, and a count
 would catch it.
@@ -112,7 +112,7 @@ before proving it can be used. Task 3 asserts both, twin first.
 
 ### Task 2 — RED: watch the headline fail for the right reason
 
-- [ ] Write `a_restore_penned_sealed_event_releases_with_its_custody_and_the_body_opens`, run it
+- [ ] Write `a_penned_sealed_record_releases_with_its_custody_and_the_body_opens`, run it
       against a build where `do_requeue`'s unwrap is mutated to pass `wrapped` through unchanged
       (the double-wrap), and confirm it fails on the TWIN assertion, not on a count or a panic.
 - [ ] Revert the mutation. Record the observed failure text in the test's doc comment.
@@ -126,12 +126,12 @@ before proving it can be used. Task 3 asserts both, twin first.
 
 ### Task 4 — The two degradation arms, separately
 
-- [ ] `without_resolvable_custody_the_event_still_releases_but_the_body_stays_sealed`: run with a
+- [ ] `without_resolvable_custody_the_record_still_releases_but_stays_sealed`: run with a
       `--key` naming a DIFFERENT node's key file. `resolve_at_startup` refuses (the derived key does
       not match the registered one), `cmd_requeue` degrades **best-effort** and warns, and the event
       still releases at exit 0 with NO `event_clear` row. This is the anti-vacuity twin of Task 3 —
       without it, a suite that never opened anything would still be green.
-- [ ] `a_penned_dek_from_another_node_releases_the_event_without_custody_and_says_so`: pen the DEK
+- [ ] `a_penned_dek_from_another_node_releases_the_record_and_says_custody_was_lost`: pen the DEK
       re-wrapped for a STRANGER's unwrap public key, run with this node's REAL key. Custody
       resolves, the unwrap fails, and `do_requeue`'s `Err(_)` arm fires — the only one of the three
       arms the other two tests never reach. Assert the warning names the digest.
@@ -150,3 +150,58 @@ before proving it can be used. Task 3 asserts both, twin first.
       `scripts/run-db-gated-tests.sh`.
 - [ ] HANDOVER + ROADMAP record the slice; #568 is named as closed by the PR body, never by a
       commit-message keyword adjacent to the number.
+
+---
+
+## Amendment (2026-09-12, after review)
+
+The plan said *"if a test finds a defect, the fix lands here and the plan is amended rather than the
+test weakened."* The review found defects in the **tests**, not via them, and this is what changed.
+
+### A fifth test, because the arms were indexed by the wrong thing
+
+The plan enumerated `do_requeue`'s custody decision as **three outcomes**. That is true of the
+outcome set and false of the input set: the match's `_` arm absorbs three distinct
+`(unwrap_secret, penned_dek)` pairs into one silent `None`, and only `(None, Some)` was tested.
+`(Some, None)` — a keyless pen row while custody resolves — is the shape **every plaintext pull
+creates**, so the untested pair was the modal one outside disaster recovery.
+
+Added `a_keyless_pen_row_releases_quietly_and_raises_no_custody_alarm`. Its load-bearing assertion
+is negative: **no custody warning is printed**, because nothing went wrong. An operator trained by
+false alarms stops reading the message on the run where it is real. `pen_with_custody` became
+`pen(…, Option<&[u8]>)` to express a keyless row through the same real door.
+
+### Every degraded arm now asks the log, not the tool
+
+Arms 2, 3 and 4 each claimed *"a recovery command must still recover the EVENT"* and proved it only
+with `released` — a counter **inside the function under test** — while their sole database
+assertion was the negative `twin == None`, which is equally consistent with the event never having
+been applied. `event_survived` (an `EXISTS` over `event_log`) and `pen_rows` now back every arm.
+
+### Two mutations survived a first draft, not one
+
+The plan anticipated this discipline and it earned its keep twice:
+
+* **Mutation 4** (recorded in the original file header): the missing-key test named a path inside a
+  directory that did not exist either, so the minting loader failed on the absent parent rather
+  than being refused.
+* **Mutation 7** (new): written first as *"move the `DELETE` ahead of `apply_signed` and swallow the
+  error"*, it **could not fail** — every arm feeds the door bytes it accepts, so the apply succeeds
+  and the reordering changes nothing observable. Modelling the claim required skipping the door
+  entirely. The ordering defect it failed to model is therefore still uncovered here, and that is
+  stated in the file header rather than papered over.
+
+### Coverage boundaries moved into the file header
+
+`--unwrap-key` and the whole `FileOutcome::Loaded` path remain untested (every arm resolves through
+the derived fallback), every arm pens exactly one record, and the CLI route cannot isolate a fault
+inside `do_requeue` from one inside the resolution. All three were known and stated only here, in
+the disposable artifact. They are now in the durable one.
+
+### Four production defects filed, none fixed here
+
+The slice stays test-only. **#578** (requeue deletes the pen row when custody did not land —
+silently, exit 0; the guard exists one module over as `custody_landed`), **#579** (the metrics
+object cannot express custody loss), **#580** (the warning promises the pen holds both halves, then
+empties it), **#581** (a comment claims `do_requeue` skips acked rows, and the unwrap error's
+malformed-vs-foreign distinction is discarded).
