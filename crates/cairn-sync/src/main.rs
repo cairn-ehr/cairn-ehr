@@ -507,18 +507,31 @@ impl Error for RequeueInterruptedError {}
 /// than folded into either side of the arithmetic (PR #478 review, finding 12).
 fn requeue_interrupted_message(
     examined: usize,
-    released: usize,
-    still_quarantined: usize,
-    vanished: usize,
+    counts: &requeue::RequeueCounts,
     at: &str,
     cause: &str,
 ) -> String {
+    // ALL FIVE OUTCOMES, from the one value that holds them (#578/#579). This used to take
+    // three loose counters and say "counted in none of those three", so the two outcomes added
+    // with the custody rule would have gone unmentioned in the one sentence an operator reads
+    // after a failure — a second, shorter spelling of the run's result, and a second thing that
+    // can be wrong about it.
+    let requeue::RequeueCounts {
+        released,
+        custody_retained,
+        skipped_acked,
+        still_quarantined,
+        vanished,
+        ..
+    } = *counts;
     format!(
         "requeue: INTERRUPTED at {at}, of {examined} pen row(s) listed — this node's own \
          DATABASE failed: {cause}. Work already done is NOT lost: {released} released \
-         (durable in event_log, their pen rows gone), {still_quarantined} still held, \
+         (durable in event_log, their pen rows gone), {custody_retained} kept for custody \
+         (applied, but the key did not land, so the row and its key are both still held), \
+         {skipped_acked} skipped (a human acked them), {still_quarantined} still held, \
          {vanished} vanished before release. The row at {at} is counted in none of those \
-         three: it was reached, and the failure above is exactly what left its outcome \
+         five: it was reached, and the failure above is exactly what left its outcome \
          undecided — on a failed release its event may already be durable in event_log \
          while its pen row survives. Every row after it was never examined. The \
          attachment-reference report did not run, so it reports null rather than zero. Fix \
@@ -4192,25 +4205,22 @@ fn do_requeue(
     // failures arrive as `ApplyError`, which has already read the `DbError` it needed.
     let interrupted = |digest: &[u8], counts: &requeue::RequeueCounts, why: String| {
         RequeueInterruptedError {
-            message: requeue_interrupted_message(
-                examined,
-                counts.released,
-                counts.still_quarantined,
-                counts.vanished,
-                &hex_prefix(digest),
-                &why,
-            ),
+            message: requeue_interrupted_message(examined, counts, &hex_prefix(digest), &why),
             // null, NEVER 0: the #465 report never ran, and a number here would tell a
             // monitor this run had looked and found nothing (#465's own rule).
             metrics: counts.metrics(examined, serde_json::Value::Null),
         }
     };
     // Content addresses of the events this run put through the apply door (issue #465).
+    // ⚠️ NOT "the events this run RELEASED" — since #578 those are different sets. A row kept
+    // for custody WAS applied, so its attachment references were learned or flagged exactly as a
+    // released row's were, and leaving it out would silently shrink the one report that says what
+    // this node now stands holding. Renamed from `released_addresses` for that reason.
     // `sync_quarantine.content_digest` IS the event content address — the same key the
     // pull path's release DELETE uses — so no re-hashing is needed. As on the pull path,
     // an already-held event is recorded too: the flag_id watermark below, not newness, is
     // what keeps a re-delivery quiet (#466 review; see `unlearnable_references`).
-    let mut released_addresses: Vec<Vec<u8>> = Vec::new();
+    let mut applied_addresses: Vec<Vec<u8>> = Vec::new();
     let flag_watermark = attachment_flag_watermark(client);
     for digest in &digests {
         // The row can vanish between the listing and here — and NOT only via an operator
@@ -4363,6 +4373,7 @@ fn do_requeue(
                         )
                         .map_err(|e| interrupted(digest, &counts, legible_db_error(&e)))?;
                     counts.custody_retained += 1;
+                    applied_addresses.push(digest.clone());
                     eprintln!("{note}");
                     continue;
                 }
@@ -4380,7 +4391,7 @@ fn do_requeue(
                 if landed {
                     counts.released_with_custody += 1;
                 }
-                released_addresses.push(digest.clone());
+                applied_addresses.push(digest.clone());
                 eprintln!(
                     "requeue: released {} through the apply door",
                     hex_prefix(digest)
@@ -4468,7 +4479,7 @@ fn do_requeue(
         &mut io::stderr(),
         "requeue",
         flag_watermark
-            .and_then(|since| unlearnable_references(client, &released_addresses, since))
+            .and_then(|since| unlearnable_references(client, &applied_addresses, since))
             .map_err(|e| legible_db_error(&e)),
     );
 
@@ -10871,11 +10882,19 @@ mod quarantine_tests {
     /// wording is pinned without breaking a database mid-loop.
     #[test]
     fn an_interrupted_requeue_reports_the_work_that_survived_it() {
+        // Every outcome DISTINCT and non-zero, so a message that dropped one, or rendered
+        // two from the same field, cannot pass by coincidence.
+        let counts = requeue::RequeueCounts {
+            released: 4,
+            released_with_custody: 3,
+            custody_retained: 2,
+            skipped_acked: 5,
+            still_quarantined: 1,
+            vanished: 6,
+        };
         let msg = requeue_interrupted_message(
             20,
-            4,
-            1,
-            0,
+            &counts,
             "a1b2c3d4e5f60718",
             "permission denied for table sync_quarantine [42501]",
         );
@@ -10909,8 +10928,19 @@ mod quarantine_tests {
             !msg.contains("the remaining rows were never examined"),
             "the row at `at` WAS reached, so this claim is false about it: {msg}"
         );
+        // #578: the two outcomes the custody rule added must appear HERE too, or the one
+        // sentence an operator reads after a failure is a shorter, different account of the
+        // run than the `--metrics` object gives — a second spelling of the same result.
         assert!(
-            msg.contains("counted in none of those three"),
+            msg.contains("2 kept for custody"),
+            "a row kept for custody is work this run did, and the operator must be told: {msg}"
+        );
+        assert!(
+            msg.contains("5 skipped"),
+            "…as must a row a human had already excluded: {msg}"
+        );
+        assert!(
+            msg.contains("counted in none of those five"),
             "…so the undecided row is named as undecided instead: {msg}"
         );
         assert!(
@@ -10939,9 +10969,11 @@ mod quarantine_tests {
         let e = RequeueInterruptedError {
             message: requeue_interrupted_message(
                 20,
-                4,
-                1,
-                0,
+                &requeue::RequeueCounts {
+                    released: 4,
+                    still_quarantined: 1,
+                    ..Default::default()
+                },
                 "a1b2c3d4e5f60718",
                 "permission denied for table sync_quarantine [42501]",
             ),
