@@ -402,25 +402,19 @@ pub async fn apply_clinical_plane(
 /// Asked of the DATABASE rather than inferred from the door's return, because the door
 /// returns `OK` on both of db/020's lenient arms — see [`apply_clinical_plane`]'s step 4.
 ///
-/// **A logged shred counts as landed, and that is not a loophole.** db/020's step 9 refuses
-/// custody outright for an already-shredded target (`NOT EXISTS (erasure_shred_log …)`), which
-/// is ADR-0005's anti-resurrection rule and is arrival-order independent by design: set-union
-/// may re-deliver the row forever, custody never comes back. Such a record restored EXACTLY as
-/// it stands on the dead node, so penning it would hold a record whose key was destroyed on
-/// purpose — the same mistake as keying the no-export path on sealedness rather than custody.
+/// **The predicate itself lives in `db/052_restore_doors.sql`, not here (#578).** It used to be
+/// inlined at this call site, which was fine while this restore was the only caller. It is not:
+/// `cairn-sync`'s `requeue` must ask the identical question before it deletes a pen row, and it
+/// cannot call this function — `cairn-node` is the higher layer and the two crates use different
+/// Postgres clients. The door's own comment carries the reasoning that must not fork, in
+/// particular that **a logged shred counts as landed** (ADR-0005's anti-resurrection rule: the
+/// key was destroyed on purpose, so waiting for it is waiting forever).
+///
+/// What stays here is the ERROR wording, which is this caller's and not the door's: a restore
+/// that cannot verify custody stops rather than reporting custody it did not confirm.
 async fn custody_landed(db: &Client, content_address: &[u8]) -> anyhow::Result<bool> {
     let landed: bool = db
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM event_log el
-                  WHERE el.content_address = $1
-                    AND (EXISTS (SELECT 1 FROM event_dek d
-                                  WHERE d.event_id = el.event_id)
-                      OR EXISTS (SELECT 1 FROM erasure_shred_log s
-                                  WHERE s.target_event_id = el.event_id))
-             )",
-            &[&content_address],
-        )
+        .query_one("SELECT cairn_custody_landed($1)", &[&content_address])
         .await
         .map_err(|e| {
             anyhow::anyhow!(
@@ -459,6 +453,14 @@ async fn pen(
     // are already ACKED — an operator's recorded decision that they will never enter the
     // record. `do_requeue` skips those, so counting them with the rest would attach the pen's
     // standard "requeue completes the restore" promise to rows requeue will not touch.
+    //
+    // ⚠️ THAT SENTENCE WAS FALSE WHEN IT WAS WRITTEN, AND IS TRUE NOW (issue #581). `do_requeue`
+    // had no `acked` filter at all — its listing was an unqualified `SELECT ... FROM
+    // sync_quarantine` — so a requeue re-applied rows a human had explicitly excluded, and this
+    // rationale rested on a behaviour that existed nowhere. The skip was added in the same change
+    // that fixed #578 rather than the comment being weakened, because `db/021` is explicit that
+    // `acked` records "a recorded human decision, never an automatic one" and `do_pull` had
+    // honoured it all along. Do not re-derive this: the asymmetry was the defect.
     let already_acked: bool = db
         .query_one(
             "SELECT cairn_quarantine_event($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)",

@@ -271,3 +271,82 @@ BEGIN
 END $$;
 
 ROLLBACK;
+
+-- ---------------------------------------------------------------------------
+-- cairn_custody_landed (#578)
+-- ---------------------------------------------------------------------------
+--
+-- WHY THIS DOOR IS MIRRORED HERE. It answers "did the custody this caller presented
+-- actually land?", and it exists because TWO crates must ask it: `cairn-node`'s restore
+-- (which has asked it since slice 2d, inline) and `cairn-sync`'s `requeue` (which never
+-- asked it at all, and deleted the pen row holding the last copy of the key — #578).
+-- Neither can call the other's Rust: `cairn-node` is the higher layer and the two use
+-- different Postgres clients. So the predicate lives in the database, and its behaviour is
+-- pinned HERE rather than in either caller's suite — a difference between the two callers
+-- would now be a difference in this one function.
+--
+-- The shred arm is the part that must never be dropped by a reader tidying this up: a
+-- LOGGED SHRED COUNTS AS LANDED. db/020 step 9 refuses custody outright for an
+-- already-shredded target (ADR-0005's anti-resurrection rule), so a caller that treated
+-- that as "custody did not land" would hold the record forever waiting for a key that was
+-- destroyed ON PURPOSE.
+
+BEGIN;
+
+DO $$
+DECLARE
+    v_with_dek   UUID := gen_random_uuid();
+    v_shredded   UUID := gen_random_uuid();
+    v_bare       UUID := gen_random_uuid();
+    a_with_dek   BYTEA;
+    a_shredded   BYTEA;
+    a_bare       BYTEA;
+BEGIN
+    -- Three events that differ ONLY in their custody state, so a wrong answer cannot be
+    -- blamed on anything else about the row. The content address is derived from the
+    -- signed bytes exactly as the real one is (`\x1220` is the sha256 multihash prefix).
+    a_with_dek := '\x1220'::bytea || digest(v_with_dek::text::bytea, 'sha256');
+    a_shredded := '\x1220'::bytea || digest(v_shredded::text::bytea, 'sha256');
+    a_bare     := '\x1220'::bytea || digest(v_bare::text::bytea, 'sha256');
+
+    INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall,
+        hlc_counter, node_origin, signed_bytes, content_address, body, contributors,
+        signer_key_id, plaintext_twin)
+    VALUES
+      (v_with_dek, gen_random_uuid(), 'custody.probe', 'test-1', 1, 0, 'n',
+       v_with_dek::text::bytea, a_with_dek, '{}', '[]', 'k', 't'),
+      (v_shredded, gen_random_uuid(), 'custody.probe', 'test-1', 2, 0, 'n',
+       v_shredded::text::bytea, a_shredded, '{}', '[]', 'k', 't'),
+      (v_bare,     gen_random_uuid(), 'custody.probe', 'test-1', 3, 0, 'n',
+       v_bare::text::bytea,     a_bare,     '{}', '[]', 'k', 't');
+
+    -- 1. Custody present: an `event_dek` row is the ordinary "it landed".
+    INSERT INTO event_dek (event_id, dek_wrapped) VALUES (v_with_dek, '\xdeadbeef'::bytea);
+    IF NOT cairn_custody_landed(a_with_dek) THEN
+        RAISE EXCEPTION 'an event WITH an event_dek row must report custody landed';
+    END IF;
+
+    -- 2. Shredded: no DEK will ever exist, and that is the completed state, not a pending
+    --    one. Without this arm a restore or a requeue holds the row forever.
+    INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)
+    VALUES (v_shredded, gen_random_uuid(), 'test');
+    IF NOT cairn_custody_landed(a_shredded) THEN
+        RAISE EXCEPTION 'a SHREDDED event must report custody landed (ADR-0005: the key was '
+                        'destroyed on purpose; waiting for it is waiting forever)';
+    END IF;
+
+    -- 3. Neither: the sealed event is admitted and unopenable. This is the #578 state, and
+    --    the answer that must stop `requeue` deleting the pen row.
+    IF cairn_custody_landed(a_bare) THEN
+        RAISE EXCEPTION 'a sealed event with NO event_dek and NO shred must report custody '
+                        'did NOT land';
+    END IF;
+
+    -- 4. An address this node has never seen is not "landed" either. Anti-vacuity: without
+    --    this, a function that returned FALSE for everything would pass arm 3.
+    IF cairn_custody_landed('\x1220'::bytea || digest('absent'::bytea, 'sha256')) THEN
+        RAISE EXCEPTION 'an address absent from event_log must report custody did NOT land';
+    END IF;
+END $$;
+
+ROLLBACK;

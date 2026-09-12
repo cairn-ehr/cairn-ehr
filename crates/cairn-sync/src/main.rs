@@ -51,6 +51,11 @@ mod unwrap_key;
 // oversized (#531) and this is where new pull-loop logic goes.
 mod pull_page;
 
+// The requeue loop's outcome accounting and operator words (#578/#579/#580/#581). Same reason
+// as `pull_page` above: the rule that decides whether a pen row may be deleted is worth stating
+// once, in a file a reviewer can hold in their head, rather than inline in a 13k-line main.rs.
+mod requeue;
+
 // A slice (not a fixed-size array) so appending a migration is a one-line change
 // — the hand-counted length annotation bought nothing and taxed every migration.
 //
@@ -4164,29 +4169,16 @@ fn do_requeue(
         .iter()
         .map(|r| r.get(0))
         .collect();
-    let (mut released, mut still_quarantined, mut vanished) = (0usize, 0usize, 0usize);
+    // ALL the counters in one value (#579). They used to be three loose `usize`s threaded
+    // through two closures by position, which is how `released` came to mean "the row is
+    // gone" rather than "the record came back" without anything noticing. `RequeueCounts`
+    // names each outcome and states, at its own definition, which of them partition and
+    // which is a subset.
+    let mut counts = requeue::RequeueCounts::default();
     // Every count as it stands RIGHT NOW, for either exit — the `Ok` at the bottom of this
-    // function or an interruption inside the loop (issue #471). Stated once so the two can
-    // never disagree about what a requeue reports.
+    // function or an interruption inside the loop (issue #471). Built in ONE place so the
+    // two can never disagree about what a requeue reports.
     let examined = digests.len();
-    let snapshot = |released: usize,
-                    still_quarantined: usize,
-                    vanished: usize,
-                    references_unlearnable: serde_json::Value| {
-        serde_json::json!({
-            "op": "requeue",
-            // examined == released + still_quarantined + vanished on a COMPLETE run. An
-            // interrupted one is short by the rows it never reached PLUS ONE — the row it
-            // stopped on, which was reached and is deliberately counted nowhere because
-            // the failure is what left its outcome undecided. The message states both in
-            // words; reconciling the four numbers alone would mislead by exactly that one.
-            "examined": examined,
-            "released": released,
-            "still_quarantined": still_quarantined,
-            "vanished": vanished,
-            "references_unlearnable": references_unlearnable
-        })
-    };
     // Built once per failing statement: the FOUR sites below differ only in which
     // statement failed, and every one of them owes the same report (ADR-0060 decision 2).
     // (Three raw statements from #471, plus the apply door itself since #480.)
@@ -4198,27 +4190,21 @@ fn do_requeue(
     // substitution #480 was filed to prevent. Taking a rendered reason rather than a
     // `postgres::Error` is what lets the apply path reach this closure at all: the door's
     // failures arrive as `ApplyError`, which has already read the `DbError` it needed.
-    let interrupted =
-        |digest: &[u8], released: usize, still_quarantined: usize, vanished: usize, why: String| {
-            RequeueInterruptedError {
-                message: requeue_interrupted_message(
-                    examined,
-                    released,
-                    still_quarantined,
-                    vanished,
-                    &hex_prefix(digest),
-                    &why,
-                ),
-                // null, NEVER 0: the #465 report never ran, and a number here would tell a
-                // monitor this run had looked and found nothing (#465's own rule).
-                metrics: snapshot(
-                    released,
-                    still_quarantined,
-                    vanished,
-                    serde_json::Value::Null,
-                ),
-            }
-        };
+    let interrupted = |digest: &[u8], counts: &requeue::RequeueCounts, why: String| {
+        RequeueInterruptedError {
+            message: requeue_interrupted_message(
+                examined,
+                counts.released,
+                counts.still_quarantined,
+                counts.vanished,
+                &hex_prefix(digest),
+                &why,
+            ),
+            // null, NEVER 0: the #465 report never ran, and a number here would tell a
+            // monitor this run had looked and found nothing (#465's own rule).
+            metrics: counts.metrics(examined, serde_json::Value::Null),
+        }
+    };
     // Content addresses of the events this run put through the apply door (issue #465).
     // `sync_quarantine.content_digest` IS the event content address — the same key the
     // pull path's release DELETE uses — so no re-hashing is needed. As on the pull path,
@@ -4239,21 +4225,13 @@ fn do_requeue(
         // passed in are exactly the completed ones.
         let Some(row) = client
             .query_opt(
-                "SELECT signed_bytes, attestation, attester_key, dek_wrapped
+                "SELECT signed_bytes, attestation, attester_key, dek_wrapped, acked
              FROM sync_quarantine WHERE content_digest=$1",
                 &[digest],
             )
-            .map_err(|e| {
-                interrupted(
-                    digest,
-                    released,
-                    still_quarantined,
-                    vanished,
-                    legible_db_error(&e),
-                )
-            })?
+            .map_err(|e| interrupted(digest, &counts, legible_db_error(&e)))?
         else {
-            vanished += 1;
+            counts.vanished += 1;
             eprintln!(
                 "requeue: {} left the pen between listing and release (a concurrent pull \
                  auto-released it, another requeue took it, or an operator deleted it) — \
@@ -4262,6 +4240,24 @@ fn do_requeue(
             );
             continue;
         };
+        // A HUMAN ALREADY DECIDED THIS ONE (issue #581). `db/021` describes `acked` as the
+        // flag by which "a human explicitly licenses the exclusion" of a record, and
+        // `do_pull` has always honoured it (`skipped_acked`, in the paging loop above).
+        // `do_requeue` had no filter at all, so a requeue re-applied records a human had
+        // decided would never enter the record — overriding a recorded decision, silently.
+        // A comment in `cairn-node`'s restore path asserted this skip existed long before it
+        // did; that comment is now true.
+        //
+        // It is announced rather than silent, because the mirror-image failure is just as
+        // bad: an operator who acked rows during a flood, then fixed the cause and ran
+        // requeue, needs to be told why those rows did not come back — and how to bring them.
+        // This is also the ONLY way a genuinely unopenable row ever leaves the pen, now that
+        // custody retention (below) holds every row whose key did not land.
+        if row.get::<_, bool>(4) {
+            counts.skipped_acked += 1;
+            eprintln!("{}", requeue::acked_skip_message(&hex_prefix(digest)));
+            continue;
+        }
         let signed: Vec<u8> = row.get(0);
         let att: Option<Vec<u8>> = row.get(1);
         let akey: Option<Vec<u8>> = row.get(2);
@@ -4283,19 +4279,38 @@ fn do_requeue(
         // failure to open is the honest degradation and matches the pull path: no custody is
         // recoverable, but the event still is.
         let penned_dek: Option<Vec<u8>> = row.get(3);
+        // `gap` records WHY custody will be missing, for the operator line further down. It is
+        // decided at three different points — here for the first two causes, and after the
+        // apply door for the third — which is what makes the three distinguishable at all.
+        let mut gap: Option<requeue::CustodyGap> = None;
         let dek = match (&unwrap_secret, &penned_dek) {
             (Some(secret), Some(wrapped)) => match cairn_event::seal::unwrap_dek(wrapped, secret) {
                 Ok(d) => Some(d),
+                // ⚠️ THE REASON IS CLASSIFIED, NOT ASSUMED (issue #581). This arm used to catch
+                // `Err(_)` and then assert one specific cause — "did not open with this node's
+                // custody key" — which an operator acts on by going to look for the right key.
+                // But `unwrap_dek` length-checks BEFORE it attempts any decryption, so a
+                // wrong-length blob is a truncated or damaged pen row (a db/052 write defect or
+                // storage rot) that no key would have opened. Different finding, different
+                // action. The classification is structural — `WRAPPED_DEK_LEN`, the same check
+                // `unwrap_dek` makes — never a match on the error's text.
                 Err(_) => {
-                    eprintln!(
-                        "requeue: {} carries a wrapped DEK that did not open with this \
-                         node's custody key — releasing the event WITHOUT custody",
-                        hex_prefix(digest)
-                    );
+                    gap = Some(requeue::CustodyGap::DekFault(
+                        requeue::classify_wrapped_dek(wrapped),
+                    ));
                     None
                 }
             },
-            _ => None,
+            // A row that carries a key this node could not even try to open. `cmd_requeue` has
+            // already printed the resolution failure; this is its per-row consequence, and the
+            // row will be RETAINED below rather than released without its key (issue #580).
+            (None, Some(_)) => {
+                gap = Some(requeue::CustodyGap::KeyUnresolved);
+                None
+            }
+            // No key in the pen row at all: a plaintext event, or one penned before db/052
+            // added the column. There is no custody to lose, and nothing to report.
+            (_, None) => None,
         };
         match apply_signed(
             client,
@@ -4305,6 +4320,52 @@ fn do_requeue(
             dek.as_ref().map(|d| d.as_bytes().as_slice()),
         ) {
             Ok(_) => {
+                // ⇒ THE DOOR RETURNING `Ok` IS NOT THE SAME CLAIM AS THE RECORD COMING BACK
+                // (issue #578). `db/020` step 9 has TWO lenient arms — a presented DEK that
+                // does not open the sealed body, and an unregistered `node_unwrap_key` —
+                // that `RAISE WARNING`, skip custody entirely (no `event_dek`, no
+                // `event_clear`, no twin, no projection) and return normally. Nothing in this
+                // tree polls the connection's message stream, so that warning goes nowhere.
+                //
+                // This arm used to delete the pen row on that `Ok`. On a restored solo node
+                // the pen row is the LAST COPY of the event's key, so the command the pen's
+                // own remedy text points an operator at destroyed the key it was holding, at
+                // exit 0, with a success line. `restore::clinical` has asked the database
+                // this same question since slice 2d, for this same reason; `do_requeue` did
+                // the opposite for the same class of failure.
+                //
+                // Keyed on the PEN ROW's `dek_wrapped`, never on `dek` — a row whose key
+                // could not be opened or resolved has `dek == None` and is exactly the case
+                // that must be retained (issue #580). See `requeue.rs` for why the rule is
+                // uniform across all three causes, and how an unopenable row eventually
+                // leaves the pen (a human's `acked`).
+                let carried_custody = penned_dek.is_some();
+                let landed = if carried_custody {
+                    custody_landed(client, digest)
+                        .map_err(|e| interrupted(digest, &counts, legible_db_error(&e)))?
+                } else {
+                    false
+                };
+                if carried_custody && !landed {
+                    // The event IS in the log — the door admitted it — but its body cannot be
+                    // opened, so the row stays and keeps the key. Annotated BESIDE the
+                    // original reason, never over it, exactly as the refusal arm below does.
+                    let gap = gap.unwrap_or(requeue::CustodyGap::DoorWithheld);
+                    let note = requeue::custody_retained_message(&hex_prefix(digest), gap);
+                    client
+                        .execute(
+                            "UPDATE sync_quarantine
+                                SET last_seen = clock_timestamp(),
+                                    last_requeue_at = clock_timestamp(),
+                                    last_requeue_error = $2
+                              WHERE content_digest = $1",
+                            &[&digest, &note],
+                        )
+                        .map_err(|e| interrupted(digest, &counts, legible_db_error(&e)))?;
+                    counts.custody_retained += 1;
+                    eprintln!("{note}");
+                    continue;
+                }
                 // #471: `released` has NOT been incremented for this row yet, and that is
                 // correct — the event is in `event_log`, but the row is not released until
                 // its pen entry is gone, and this is the statement that failed. Reporting
@@ -4314,16 +4375,11 @@ fn do_requeue(
                         "DELETE FROM sync_quarantine WHERE content_digest=$1",
                         &[&digest],
                     )
-                    .map_err(|e| {
-                        interrupted(
-                            digest,
-                            released,
-                            still_quarantined,
-                            vanished,
-                            legible_db_error(&e),
-                        )
-                    })?;
-                released += 1;
+                    .map_err(|e| interrupted(digest, &counts, legible_db_error(&e)))?;
+                counts.released += 1;
+                if landed {
+                    counts.released_with_custody += 1;
+                }
                 released_addresses.push(digest.clone());
                 eprintln!(
                     "requeue: released {} through the apply door",
@@ -4359,13 +4415,7 @@ fn do_requeue(
             // and it costs nothing, because the row behind it would meet the same broken
             // database anyway.
             Err(e) if apply_failure_is_local(e.sqlstate.as_deref()) => {
-                return Err(Box::new(interrupted(
-                    digest,
-                    released,
-                    still_quarantined,
-                    vanished,
-                    e.operator_text(),
-                )));
+                return Err(Box::new(interrupted(digest, &counts, e.operator_text())));
             }
             Err(e) => {
                 // Still not admitted: keep the row and record what happened beside (never
@@ -4402,16 +4452,8 @@ fn do_requeue(
                      WHERE content_digest = $1",
                         &[&digest, &annotation],
                     )
-                    .map_err(|ue| {
-                        interrupted(
-                            digest,
-                            released,
-                            still_quarantined,
-                            vanished,
-                            legible_db_error(&ue),
-                        )
-                    })?;
-                still_quarantined += 1;
+                    .map_err(|ue| interrupted(digest, &counts, legible_db_error(&ue)))?;
+                counts.still_quarantined += 1;
                 eprintln!(
                     "requeue: {} still not admitted: {annotation}",
                     hex_prefix(digest)
@@ -4430,12 +4472,44 @@ fn do_requeue(
             .map_err(|e| legible_db_error(&e)),
     );
 
-    Ok(snapshot(
-        released,
-        still_quarantined,
-        vanished,
-        references_unlearnable,
-    ))
+    // THE OUTCOMES MUST PARTITION on a run that reached the bottom of the loop (every
+    // interrupted run returns via `interrupted` above, never here). This is not decoration: the
+    // loop grew from three outcomes to five in one change, and a sixth added later that forgets
+    // its counter would silently make `examined` disagree with the rest of the object — the kind
+    // of arithmetic an operator reconciles by hand at 3am and concludes they have lost records.
+    // A debug assertion catches it in every test and dev build and costs nothing in release.
+    debug_assert_eq!(
+        counts.accounted_for(),
+        examined,
+        "a requeue outcome was reached without being counted: {counts:?} over {examined} rows"
+    );
+    Ok(counts.metrics(examined, references_unlearnable))
+}
+
+/// Did the custody presented for this event actually land? (issue #578)
+///
+/// **The predicate lives in the DATABASE** (`cairn_custody_landed`, `db/052_restore_doors.sql`),
+/// not here, and that is the point of it: `cairn-node`'s restore must ask exactly the same
+/// question before it pens a record, and neither crate can call the other's Rust — `cairn-node`
+/// is the higher layer, and the two use different Postgres clients. A second implementation
+/// would fork a rule that must not fork, in particular that **a logged shred counts as landed**
+/// (ADR-0005: the key was destroyed on purpose, so waiting for it is waiting forever). The door's
+/// own comment carries the full reasoning.
+///
+/// `sync_quarantine.content_digest` IS the event content address, so the pen row's own key is
+/// what goes in — no re-hashing, the same identity the release `DELETE` uses.
+///
+/// The error is left as a raw `postgres::Error` for the caller to route: inside `do_requeue` this
+/// is a LOCAL fault on this node's own database, and it takes the same partial-completion path as
+/// every other statement in that loop (#471 / ADR-0060 decision 2) rather than being mistaken for
+/// a verdict about the record.
+fn custody_landed(
+    client: &mut postgres::Client,
+    content_digest: &[u8],
+) -> Result<bool, postgres::Error> {
+    Ok(client
+        .query_one("SELECT cairn_custody_landed($1)", &[&content_digest])?
+        .get(0))
 }
 
 /// First 16 hex chars of a content digest — enough to identify a row in logs and
@@ -4519,12 +4593,22 @@ fn cmd_requeue(conn: &str, metrics: bool, key_path: &str, unwrap_key_path: Optio
     }) {
         Ok(c) => Some(c),
         Err(e) => {
+            // ⚠️ THIS SENTENCE USED TO BE FALSIFIED BY THE NEXT STATEMENT (issue #580). It
+            // promised "the pen holds both halves until you do" and then called a `do_requeue`
+            // that emptied the pen — true for the duration of one function call, false forever
+            // afterwards, to an operator who reasonably read it as having time to act.
+            //
+            // It is true now, and it is a DESCRIPTION of what this run will do rather than a
+            // promise about what still holds: `do_requeue` retains every row whose custody did
+            // not land. Rows with nothing to lose — plaintext, or penned before db/052 added
+            // the column — still release, which is why this says "may still release" and not
+            // "releases nothing".
             eprintln!(
-                "requeue: this node's custody key could not be resolved ({e}) — releasing \
-                 events WITHOUT custody. Any SEALED event released now keeps its ciphertext \
-                 and loses its key permanently, so if these rows were penned by a `restore`, \
-                 FIX THE KEY FIRST and run requeue again: the pen holds both halves until you \
-                 do."
+                "requeue: this node's custody key could not be resolved ({e}) — no SEALED event \
+                 can be released with its key on this run. Every pen row carrying a wrapped DEK \
+                 is KEPT, with both halves, and reported as `custody_retained`; rows with no key \
+                 to lose may still release. Fix the key and run requeue again to complete the \
+                 recovery."
             );
             None
         }
@@ -4534,9 +4618,19 @@ fn cmd_requeue(conn: &str, metrics: bool, key_path: &str, unwrap_key_path: Optio
             if metrics {
                 println!("{m}");
             } else {
+                // The human line names the SAME five outcomes the metrics object does. It used
+                // to name three, so a run that kept every key it was asked to recover read as
+                // "3 examined, 3 released" — and the two channels disagreeing about what
+                // happened is how a defect hides in the one an operator actually reads.
                 println!(
-                    "requeue: {} examined, {} released, {} still quarantined",
-                    m["examined"], m["released"], m["still_quarantined"]
+                    "requeue: {} examined, {} released ({} with custody), {} kept for custody, \
+                     {} skipped (acked), {} still quarantined",
+                    m["examined"],
+                    m["released"],
+                    m["released_with_custody"],
+                    m["custody_retained"],
+                    m["skipped_acked"],
+                    m["still_quarantined"]
                 );
             }
             Ok(())
