@@ -4171,9 +4171,12 @@ fn apply_page(
 fn do_requeue(
     client: &mut postgres::Client,
     // The node's own unwrap secret, so a penned SEALED event can be released WITH its
-    // custody (#554 slice 2d — the pen carries `dek_wrapped` since db/052). `None` is the
-    // honest degradation for a node that could not load its key: the events still release,
-    // just without custody, exactly as the pull path degrades.
+    // custody (#554 slice 2d — the pen carries `dek_wrapped` since db/052).
+    //
+    // `None` no longer means "release anyway, without custody" (#578/#580). A pen row that
+    // carries a `dek_wrapped` is RETAINED when custody cannot be made to land, because that
+    // row is the last copy of the key; rows with no key to lose still release. See
+    // `requeue.rs` for the rule and why it is uniform.
     unwrap_secret: Option<&Secret32>,
 ) -> R<serde_json::Value> {
     // Digests only up front; each row's (possibly large) bytes are fetched one
@@ -4606,8 +4609,10 @@ fn cmd_requeue(conn: &str, metrics: bool, key_path: &str, unwrap_key_path: Optio
     //     daemon that is about to gain custody of new events; wrong here, because `requeue` is
     //     the recovery command a restore's own output points operators at, and a recovery
     //     command that aborts before releasing anything is worse than one that releases
-    //     without custody. Custody-less release is exactly what this path did before slice 2d,
-    //     so the degraded behaviour is the OLD behaviour, not a new hole.
+    //     what it safely can. ⚠️ SINCE #578 "what it safely can" EXCLUDES any row carrying a
+    //     wrapped DEK: those are retained, with both halves, rather than released without
+    //     their key. The degradation is now a retained row and a second run, not a key nobody
+    //     can get back — which is what this rationale used to license.
     //
     // The failure is reported, never swallowed: an operator who needed custody has to know
     // they did not get it, or they will read a clean release as a complete one.
@@ -6057,8 +6062,8 @@ USAGE (all take --conn <postgres-uri>):
   requeue     --conn URI [--metrics] [--key PATH] [--unwrap-key PATH]
               (re-process quarantined events through the apply door after fixing the cause)
               (--key/--unwrap-key: this node's custody, so a penned SEALED event is released
-               WITH its DEK. Best-effort: an unresolvable key releases without custody and
-               says so — a recovery command must not abort before releasing anything.)
+               WITH its DEK. A row whose custody cannot be made to land is KEPT in the pen,
+               with its key, and reported as custody_retained — fix the cause and re-run.)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
   serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH] [--unwrap-key PATH]
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
