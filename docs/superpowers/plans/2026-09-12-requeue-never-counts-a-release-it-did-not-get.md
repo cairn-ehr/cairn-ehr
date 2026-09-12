@@ -247,3 +247,33 @@ project's convention, not a separate docs PR). Full-workspace `cargo test` via
 - **It does not add a `--dry-run` or a `--require-custody` flag.** #580 mentions both as
   possibilities; neither is needed once the pen stops emptying itself, and a flag that must be
   remembered is a worse safety mechanism than a default that cannot lose the key.
+
+---
+
+## What the build changed about this plan
+
+Recorded here rather than edited into the tasks above, so the difference between what was planned
+and what was found stays visible.
+
+1. **Task 1's test went to the SQL mirror, not a Rust test.** `db/tests/052_restore_doors_test.sql`
+   is where this file's doors are already pinned, and `restore_actor_registry_door.rs`'s header
+   states the rule: a door's BEHAVIOUR belongs at the SQL layer, because a later slice could
+   legitimately replace the Rust caller without touching any of it. Four arms, plus two mutations
+   (shred clause removed, always-TRUE) run and killed.
+2. **Three tests were inverted, not two.** `requeue_refuses_a_missing_key_file_rather_than_minting_one`
+   also asserted `released: 1`. What that arm is *about* — no key file may be minted — is unchanged.
+3. **The dead-node fixture was extracted to `tests/common/dead_node.rs`.** Four hundred lines of
+   provisioning that both requeue suites need, and #568's own header already records two fixture
+   mistakes that each made a test pass for the wrong reason; a second copy is two more chances at
+   that. `requeue_releases_custody.rs` drops from 821 to 481 lines as a result.
+4. **Two defects in this branch's own diff, found reviewing it and fixed in a third commit.** The
+   `released_addresses` set feeding the #465 unlearnable-reference report is *"what went through the
+   apply door"*, which is no longer the same set as *"what was released"* — a retained row was
+   silently dropped from it (renamed `applied_addresses`, pushed in both arms). And
+   `requeue_interrupted_message` still rendered three outcomes and told the operator the stopped row
+   was *"counted in none of those three"*, so the two new outcomes would have been missing from the
+   one sentence read after a failure.
+5. **`accounted_for` earned a production caller.** It was written for the unit test, which made it
+   dead code in the binary; a `debug_assert_eq!` at the end of `do_requeue` is the honest home — the
+   loop went from three outcomes to five in one change, and a sixth that forgets its counter is
+   exactly what it catches.
