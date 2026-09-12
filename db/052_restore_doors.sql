@@ -352,4 +352,72 @@ REVOKE EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TE
 GRANT EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEXT, BIGINT,
                                                  TEXT, BYTEA, BIGINT, BIGINT) TO cairn_node;
 
+-- ---------------------------------------------------------------------------
+-- 4. Did the custody a caller presented actually land? (issue #578)
+-- ---------------------------------------------------------------------------
+
+-- TRUE when `p_content_address` names an event whose custody question is SETTLED here:
+-- either this node holds a wrapped DEK for it, or the event has been shredded and never
+-- will.
+--
+-- WHY THIS IS A DOOR AND NOT A LINE OF SQL IN EACH CALLER. `apply_remote_event` returns
+-- normally on TWO lenient arms — a presented DEK that does not open the sealed body, and an
+-- unregistered `node_unwrap_key` — both of which skip step 9 entirely (no `event_dek`, no
+-- `event_clear`, no twin, no projection) after a `RAISE WARNING` that nothing in this tree
+-- reads. So a caller that trusts the door's OK cannot tell a recovered record from an
+-- unopenable one. TWO callers must ask this, and neither can call the other's Rust —
+-- `cairn-node` is the higher layer, and the two use different Postgres clients:
+--
+--   * `cairn-node`'s restore (`restore::clinical`) has asked it since slice 2d, inline, and
+--     pens the record as `CustodyDidNotLand` when the answer is FALSE.
+--   * `cairn-sync`'s `requeue` never asked at all: it deleted the pen row on the door's OK,
+--     and on a restored solo node that row was the LAST copy of the key (#578).
+--
+-- ⚠️ A LOGGED SHRED COUNTS AS LANDED, AND THAT IS NOT A LOOPHOLE. db/020 step 9 refuses
+-- custody outright for an already-shredded target (`NOT EXISTS (erasure_shred_log …)`),
+-- which is ADR-0005's anti-resurrection rule and is arrival-order independent by design:
+-- set-union may re-deliver the row forever, custody never comes back. Such a record stands
+-- EXACTLY as it stood on the dead node, so a caller that read this as "not landed" would
+-- hold it forever waiting for a key that was destroyed on purpose.
+--
+-- STABLE, not VOLATILE: it reads and never writes, so a caller may be planned freely around
+-- it. SECURITY DEFINER for the same reason the doors beside it are — the three tables it
+-- reads carry the clinical plane's custody state, and a caller needs the ANSWER, never
+-- SELECT on `event_dek`.
+--
+-- ⚠️ `pg_temp` LAST IS LOAD-BEARING, NOT HOUSE STYLE (#426). Postgres searches the session's
+-- TEMPORARY schema FIRST for relation names unless the path names `pg_temp` explicitly, and
+-- PUBLIC holds `TEMPORARY` by default. Without it, any caller could `CREATE TEMP TABLE
+-- event_dek (…)` and make this definer body answer from their own decoy — which for THIS
+-- function means dictating whether `requeue` deletes a pen row holding the last copy of a
+-- clinical key, in either direction. Pinned over the whole catalogue by
+-- `crates/cairn-node/tests/search_path_pg_temp.rs`, which is what caught it here.
+CREATE OR REPLACE FUNCTION cairn_custody_landed(p_content_address BYTEA)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM event_log el
+         WHERE el.content_address = p_content_address
+           AND (EXISTS (SELECT 1 FROM event_dek d
+                         WHERE d.event_id = el.event_id)
+             OR EXISTS (SELECT 1 FROM erasure_shred_log s
+                         WHERE s.target_event_id = el.event_id))
+    );
+$$;
+
+COMMENT ON FUNCTION cairn_custody_landed(BYTEA) IS
+    'Did the custody presented for this event actually land? TRUE for an event_dek row or a '
+    'logged shred (ADR-0005: the key was destroyed on purpose), FALSE for a sealed event '
+    'holding neither. The shared answer for cairn-node''s restore and cairn-sync''s requeue '
+    '(issue #578).';
+
+-- Read-only, but it reads custody state, so it follows the file's posture rather than the
+-- default: PUBLIC gets nothing and the node role gets the answer.
+REVOKE EXECUTE ON FUNCTION cairn_custody_landed(BYTEA) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_custody_landed(BYTEA) TO cairn_node;
+
 COMMIT;
