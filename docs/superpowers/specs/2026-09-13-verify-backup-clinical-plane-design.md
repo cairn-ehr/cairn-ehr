@@ -149,10 +149,10 @@ Otherwise it prints what the clinical plane holds and continues.
 >   collapsed on either side, so nothing needs reconciling.
 > - **The newest seq alone misses a medium short BELOW its newest seq.** A capture backfills
 >   late-committing holes under the watermark (`capture/plane.rs`). Night 1 captures seqs 1–100 while
->   seq 97's transaction is still uncommitted; nothing new is written before night 2, whose capture
->   only backfills 97, so the sidecar records watermark 100 and 101 clinical records. Put the night-1
+>   seq 97's transaction is still uncommitted (yielding 99 records); nothing new is written before night 2, whose
+>   capture only backfills 97, so the sidecar records watermark 100 and 100 clinical records. Put the night-1
 >   copy back: its newest seq is 100, level with the evidence, and the watermark-only rule exits 0
->   over a medium missing an event. Its raw count is 100 < 101, which the count axis catches.
+>   over a medium missing an event. Its raw count is 99 < 100, which the count axis catches.
 > - **v1 sidecars are excluded from the count axis**, because their 0 is a serde default, not a
 >   recorded fact.
 >

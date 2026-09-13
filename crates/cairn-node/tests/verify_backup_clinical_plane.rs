@@ -1,7 +1,7 @@
 //! `verify-backup` asks about the CLINICAL plane (#567), driven through the real binary.
 //!
 //! Before #567 this command printed one line about the federation plane and nothing about the
-//! clinical plane a restore now applies. These tests pin the three things the design
+//! clinical plane a restore now applies. These tests pin the four things the design
 //! (`docs/superpowers/specs/2026-09-13-verify-backup-clinical-plane-design.md`) decided:
 //!
 //! 1. an older copy put back at the path the nightly backup writes to fails `backup SHORT` —
@@ -9,11 +9,11 @@
 //! 2. a clinical chain break with every record signature intact still fails, and fails BEFORE
 //!    any clinical all-clear is printed (the reason `untrusted_clinical_notice` is not wired);
 //! 3. a sidecar about ANOTHER path is not evidence, even when it records clinical events;
-//! 4. two DIFFERENT records at one `source_seq` reach the operator as an advisory on stderr, and
-//!    never as a `backup SHORT` refusal.
+//! 4. two DIFFERENT records at one `source_seq` are printed as an advisory on stderr via the
+//!    binary, never as a `backup SHORT` refusal.
 //!
-//! The pure policy is unit-tested in `src/backup/clinical_verdict.rs`; these prove the arm
-//! gathers the right facts and acts on the verdict.
+//! The pure policy is unit-tested in `src/backup/clinical_verdict/tests.rs`; these prove the
+//! arm gathers the right facts and acts on the verdict.
 
 mod common;
 

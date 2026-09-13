@@ -145,16 +145,16 @@ fn a_medium_ahead_of_the_evidence_is_not_short() {
 // --- the shortfall rule: the record-count axis -------------------------------------------
 
 /// **The case the newest seq alone cannot see** (final review, 2026-09-14). Night 1 captures
-/// seqs 1–100 while seq 97's transaction is still uncommitted; night 2 writes nothing new but
-/// backfills 97 below the watermark, and records 101 clinical records. The night-1 copy put
-/// back has the SAME newest seq and one record fewer.
+/// seqs 1–100 while seq 97's transaction is still uncommitted (yielding 99 records); night 2
+/// writes nothing new but backfills 97 below the watermark, and records 100 clinical records.
+/// The night-1 copy put back has the SAME newest seq and one record fewer.
 #[test]
 fn the_same_newest_seq_with_fewer_records_is_short() {
     assert_eq!(
-        shortfall(Some(100), 100, recorded(Some(100), 101)),
+        shortfall(Some(100), 99, recorded(Some(100), 100)),
         Some(Shortfall {
             newest_seq: None,
-            clinical_records: Some(101),
+            clinical_records: Some(100),
         })
     );
 }
@@ -381,7 +381,7 @@ fn the_same_newest_seq_with_fewer_records_refuses_naming_the_counts() {
         "the seq axis is level, so it is not reported as short: {refusal}"
     );
     assert!(
-        refusal.contains("unless every missing record was a byte-identical re-capture"),
+        refusal.contains("unless every missing record was a re-capture (byte-identical or with different custody)"),
         "a count shortfall alone is not a certain loss: {refusal}"
     );
     assert!(

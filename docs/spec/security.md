@@ -205,8 +205,8 @@ The spec designed *deliberate* key-death as a first-class audited operation ([§
 >   the clinical plane a restore would apply, and fails a medium whose newest clinical record, or
 >   clinical record count, falls short of what this node's own last backup recorded for that path.
 >   What it does **not** do: report holes in the `source_seq` run
->   ([#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)); compare anything for a kit verified
->   on another machine, which holds no evidence about it
+>   ([#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)); use evidence from another machine's
+>   sidecar unless it names the same path (a shared mount point, say)
 >   ([#551](https://github.com/cairn-ehr/cairn-ehr/issues/551)); fail an EMPTY drive at a DIFFERENT
 >   path, which still reads green even when this node has charts, because the evidence is about a
 >   path and this command does not bind a medium to its node

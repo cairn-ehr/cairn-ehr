@@ -232,8 +232,9 @@ fn straddled_advisory(accounting: &PlaneRecords) -> Option<String> {
 /// - **"newest clinical seq N"**, never "through seq N": the latter implies no gaps below N,
 ///   which is exactly what a below-watermark backfill makes false.
 /// - **A certain loss only when the newest seq is short.** Then the newest recorded event is not
-///   on this medium. On the count axis alone the missing records could all have been
-///   byte-identical re-captures of records still present, which a restore collapses anyway.
+///   on this medium. On the count axis alone the missing records could all have been re-captures
+///   (byte-identical or with different custody) of records still present, which a restore
+///   collapses or applies regardless.
 fn short_refusal(short: &Shortfall, newest: Option<i64>, medium_records: usize) -> String {
     let mut findings = Vec::new();
     if let Some(recorded) = short.newest_seq {
@@ -252,7 +253,13 @@ fn short_refusal(short: &Shortfall, newest: Option<i64>, medium_records: usize) 
         "a restore from it would bring back less than this node last captured"
     } else {
         "a restore from it would bring back less than this node last captured, unless every \
-         missing record was a byte-identical re-capture of one still present"
+         missing record was a re-capture (byte-identical or with different custody) of one \
+         still present"
+    };
+    let rotation_suffix = if short.newest_seq.is_some() {
+        " — and until then it really would restore less"
+    } else {
+        " — and until then it may restore less"
     };
     format!(
         "backup SHORT: this medium holds less than this node's last backup to this path \
@@ -260,8 +267,7 @@ fn short_refusal(short: &Shortfall, newest: Option<i64>, medium_records: usize) 
          truncated copy, or an older one put back in its place — and {consequence}. Remedy: run \
          `backup --to` this path again while this node still holds its events, or locate the \
          complete copy. (Rotating drives through one mount point? The drive that missed the \
-         latest backup reads SHORT until its own next backup catches it up — and until then it \
-         really would restore less.)",
+         latest backup reads SHORT until its own next backup catches it up{rotation_suffix}.)",
         findings.join(" ")
     )
 }
