@@ -30,7 +30,12 @@ pub use crate::medium::{
 use crate::capture;
 use crate::medium::{MediumImage, Plane};
 
-/// What `verify-backup` says about a medium's clinical plane, and when it refuses (#567).
+// What `verify-backup` says about a medium's clinical plane, and when it refuses (#567).
+//
+// A plain comment, NOT a `///` doc comment, and that is load-bearing: rustdoc joins an outer
+// doc on a `mod` declaration with the file's own `//!` docs and then resolves EVERY intra-doc
+// link in the joined text from THIS (parent) module, so `clinical_verdict.rs`'s links to its
+// own items (such as `shortfall`) fail `RUSTDOCFLAGS=-D warnings`. Its docs live in its file.
 pub mod clinical_verdict;
 
 // ---------------------------------------------------------------------------
