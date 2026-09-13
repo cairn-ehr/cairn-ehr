@@ -106,30 +106,60 @@ watermark is below the sidecar's is also not what the last backup wrote.
 **`verify-backup` fails on a clinical-plane shortfall only when it has evidence; everything the bytes
 cannot settle is reported loudly and exits 0.**
 
-The **evidence rule**, stated once:
+The **evidence rule**, stated once (two axes since the final review's correction — see below):
 
-> The sidecar at `health_path_for(--key)` exists, **describes the medium named by `--from`**
-> (`health_describes_medium`), and records `clinical_watermark = Some(s)`; and the medium's own
-> `clinical_watermark_of` is `None` or strictly less than `s`.
+> The sidecar at `health_path_for(--key)` exists and **describes the medium named by `--from`**
+> (`health_describes_medium`); and EITHER
+>
+> 1. **newest seq:** it records `clinical_watermark = Some(s)`, and the medium's own newest trusted
+>    clinical seq is `None` or strictly less than `s`; OR
+> 2. **record count:** it is a v2-or-newer sidecar (`version >= SUPPORTED_HEALTH_VERSION`) recording
+>    `clinical_events = n`, and the medium's RAW clinical record count
+>    (`plane_counts(&image).clinical`) is strictly less than `n`.
 
-When it holds, the command fails with `backup SHORT`. Otherwise it prints what the clinical plane
-holds and continues.
+When it holds, the command fails with `backup SHORT`, naming the axis (or both) that fell short.
+Otherwise it prints what the clinical plane holds and continues.
 
 **Cases the rule deliberately does not fail:**
 
-- **No sidecar, a v1 sidecar, or a sidecar with `clinical_watermark = None`** (serde default). No
-  evidence, so a note and exit 0. This covers a fresh clinic.
+- **No sidecar.** No evidence, so a note and exit 0.
+- **A sidecar with `clinical_watermark = None`** (serde default, or a fresh clinic): no newest-seq
+  evidence, and a recorded count of 0 can never be undercut. This covers a fresh clinic.
+- **A v1 sidecar.** It recorded no per-plane counts; serde defaults `clinical_events` to 0, which is a
+  claim nobody made (`describe_health` already refuses to render it). The count axis is not consulted.
 - **A sidecar that describes a different path.** Not evidence about this file. A medium with clinical
   content still meets Task 12's existing `CoverageUnknown` refusal, unchanged. An empty one stays
   green, which `verify_backup_is_clean_on_an_empty_clinical_medium_even_with_a_mismatched_sidecar`
   already pins.
-- **A medium watermark above the sidecar's.** This happens when a backup wrote the medium durably and
-  then failed to write the sidecar ("Health was NOT advanced"). The medium holds more than the
-  sidecar says, which is not a shortfall.
+- **A medium AHEAD of the sidecar on either axis.** This happens when a backup wrote the medium durably
+  and then failed to write the sidecar ("Health was NOT advanced"). The medium holds more than the
+  sidecar says, which is not a shortfall. The axes are independent: ahead on one never excuses short
+  on the other.
 
-**Why the watermark and not the record count.** The sidecar's `clinical_events` counts raw records
-including byte-identical re-captures, which the accounting collapses. The watermark is derived the
-same way on both sides, so comparing it needs no reconciliation.
+> [!NOTE]
+> **Correction made by the final review, 2026-09-14.** This section first compared the newest seq
+> alone, and justified it with a paragraph headed *"Why the watermark and not the record count"*: the
+> sidecar's `clinical_events` counts raw records including byte-identical re-captures, which the
+> accounting collapses, so a count comparison would need reconciliation. That reasoning was wrong, and
+> the rule it defended missed a real shortfall.
+>
+> - **The comparison it rejected is raw against raw.** The sidecar's `clinical_events` is
+>   `plane_counts(&written_image).clinical` — every record on the medium `backup` wrote — and
+>   `plane_counts(&image).clinical` is the same raw count over the file under test. Nothing is
+>   collapsed on either side, so nothing needs reconciling.
+> - **The newest seq alone misses a medium short BELOW its newest seq.** A capture backfills
+>   late-committing holes under the watermark (`capture/plane.rs`). Night 1 captures seqs 1–100 while
+>   seq 97's transaction is still uncommitted; nothing new is written before night 2, whose capture
+>   only backfills 97, so the sidecar records watermark 100 and 101 clinical records. Put the night-1
+>   copy back: its newest seq is 100, level with the evidence, and the watermark-only rule exits 0
+>   over a medium missing an event. Its raw count is 100 < 101, which the count axis catches.
+> - **v1 sidecars are excluded from the count axis**, because their 0 is a serde default, not a
+>   recorded fact.
+>
+> One wording consequence: on the count axis ALONE the refusal does not claim a certain loss. The
+> missing records could all have been byte-identical re-captures of records still present, which a
+> restore collapses anyway, so the message says a restore brings back less *unless* that is so. With
+> the newest seq short, the newest recorded event is absent and the loss is certain.
 
 ### 3.1 The consequence to state plainly: same-mount-point rotation
 
@@ -156,13 +186,16 @@ After `federation-plane events OK: N/N verified`, and before the local-state exp
 | …and two *different* records share a `source_seq` | the same line | a straddled-duplicate advisory worded for a check that has applied nothing (exit unaffected, as in `restore`) | continues |
 | CAIRNB3, clinical plane empty, no evidence | `clinical plane: EMPTY — this medium would restore NO patient data. If this node holds charts, they are NOT on this medium.` | — | continues |
 | CAIRNB1/CAIRNB2 (legacy), no evidence | `clinical plane: NONE — this CAIRNB1/CAIRNB2 medium predates the clinical plane and carries no patient data at all.` | — | continues |
-| any of the above with evidence of a shortfall | the plane line first, then the refusal | `backup SHORT: …` | **1** |
+| any of the above with evidence of a shortfall — a newest clinical seq below the recorded one, or fewer raw clinical records than recorded (§3; corrected 2026-09-14) | the plane line first, then the refusal | `backup SHORT: …` naming the axis, or both | **1** |
 
-The `SHORT` text names both numbers (or "none" for the medium), says the file at this path is **not
-what the last backup wrote** (a truncated or older copy), and gives two remedies: run `backup --to`
-this path again while the node is alive, or locate the complete copy. It must not suggest
-re-establishing an escrow or upgrading the node; those remedies belong to other failures (the #502
-lesson).
+The `SHORT` text says what **this node's last backup to this path** recorded — *this path*, not *this
+medium*: in a rotation it was a different drive — and what the file holds, for each axis that fell
+short: "newest clinical seq N" against the medium's newest (or "no clinical records at all"), and the
+two record counts. It says "newest clinical seq N", never "clinical events through seq N", which would
+imply no gaps below N. It says the file at this path is **not what the last backup wrote** (typically
+a truncated or older copy), and gives two remedies: run `backup --to` this path again while the node
+is alive, or locate the complete copy; the rotation hint stays. It must not suggest re-establishing an
+escrow or upgrading the node; those remedies belong to other failures (the #502 lesson).
 
 **Why before the export checks.** Export coverage (`kit_verdict`) compares the export against the
 medium's watermark. Over a short medium the export looks *ahead* and the kit verdict says
@@ -187,10 +220,11 @@ declares `restore/clinical.rs` and `restore/recovery_code.rs`. Neither existing 
 One pure function computes the whole decision from facts the caller has already gathered:
 
 - **Inputs:** the clinical `PlaneRecords` accounting (from `clinical_plane_accounting`), whether the
-  image is legacy, the medium's clinical watermark, and the **evidence** — the sidecar's
-  `clinical_watermark`, supplied only when the sidecar describes this medium. The caller reduces
-  "no sidecar", "a sidecar for another path" and "a sidecar with no watermark" to the same `None`,
-  because the verdict treats all three the same way.
+  image is legacy, the medium's raw clinical record count (`plane_counts`), and the **evidence** —
+  the sidecar's `clinical_watermark` and (v2 and newer only) `clinical_events`, supplied only when
+  the sidecar describes this medium. The caller reduces "no sidecar" and "a sidecar for another
+  path" to the same `None`; a recorded fact that is absent (no watermark, a v1 count) is `None`
+  inside the evidence. (Corrected 2026-09-14 with §3.)
 - **Output:** the stdout summary line, an optional advisory for stderr (the straddled-duplicate
   finding — the position search is shared with `restore`, but the wording is not: `restore`'s
   notice says the copies "were applied", which would be false here), and an optional refusal
@@ -234,12 +268,24 @@ retracting `verified_through` without failing `sound()`, this test fails and say
 3. Two different records at one seq → advisory present; no refusal.
 4. CAIRNB3, empty, no evidence → EMPTY line; no refusal.
 5. Legacy, no evidence → NONE line; no refusal.
-6. Empty, evidence `Some(s)` → refusal naming `s` and "none".
+6. Empty, evidence `Some(s)` → refusal naming `s` and "no clinical records at all".
 7. Watermark `m < s` → refusal naming both.
 8. Watermark `m == s` → no refusal (the boundary).
 9. Watermark `m > s` → no refusal (the failed-sidecar-write case).
 10. Legacy with evidence → refusal (a legacy file where this node last wrote clinical events is not
     what the last backup wrote).
+
+Added by the 2026-09-14 correction (§3):
+
+11. Same newest seq, fewer raw records than recorded → refusal naming the two counts, and not
+    claiming a certain loss.
+12. More raw records than recorded → no refusal; the same count → no refusal (the boundary).
+13. v1 evidence (no recorded count) with a lower medium count → no count-based refusal.
+14. Both axes short → ONE refusal naming both.
+15. Ahead on one axis, short on the other → refusal (the axes are independent).
+16. The refusal says "this node's last backup to this path" and "newest clinical seq N", never
+    "this medium" or "through seq N".
+17. The adapter: a v1 sidecar yields no count evidence; a sidecar for another path yields none.
 
 ### 6.3 `cairn-node`, DB-gated, driving the real binary
 

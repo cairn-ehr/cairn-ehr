@@ -85,7 +85,7 @@ async fn an_older_copy_at_the_backed_up_path_fails_as_short() {
     );
     assert!(stderr.contains("backup SHORT"), "named as SHORT: {stderr}");
     assert!(
-        stderr.contains(&format!("through seq {recorded}")),
+        stderr.contains(&format!("newest clinical seq {recorded}")),
         "naming what the last backup recorded: {stderr}"
     );
     assert!(

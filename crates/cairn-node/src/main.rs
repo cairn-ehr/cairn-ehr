@@ -2655,8 +2655,9 @@ async fn main() -> anyhow::Result<()> {
             // said nothing about the half a solo clinic depends on. After the federation line
             // below, `clinical_verdict` prints what the clinical half of a restore would bring
             // back, and fails `backup SHORT` ONLY ON EVIDENCE — this node's own sidecar
-            // describes this medium and records a newer clinical watermark than it holds
-            // (maintainer decision, 2026-09-13). Two things it deliberately does NOT do:
+            // describes this path and records a newer clinical seq, or more clinical records,
+            // than the medium holds (maintainer decision, 2026-09-13; the record-count axis from
+            // the final review, 2026-09-14). Two things it deliberately does NOT do:
             //   - warn about records past the last verified chain link. Such a medium is not
             //     sound, so `refuse_unsound_medium` below has already failed it; `cairn-medium`'s
             //     `a_medium_that_gates_records_out_is_never_sound` pins why, and says to wire
@@ -2796,12 +2797,16 @@ async fn main() -> anyhow::Result<()> {
             let clinical = cairn_node::backup::clinical_verdict::clinical_plane_verdict(
                 &cairn_node::backup::clinical_verdict::ClinicalPlaneFacts {
                     accounting: &clinical_plane,
+                    // The RAW count `plane_counts` already took above — the same arithmetic
+                    // `backup` recorded as the sidecar's `clinical_events`, so the two compare
+                    // directly. Reused rather than recounted, so the INCOMPLETE message above
+                    // and this comparison can never disagree about what the medium holds.
+                    medium_clinical_records: counts.clinical,
                     legacy: matches!(image, cairn_node::medium::MediumImage::Legacy(_)),
-                    recorded_for_this_medium:
-                        cairn_node::backup::clinical_verdict::recorded_watermark_for(
-                            health.as_ref(),
-                            &from,
-                        ),
+                    evidence: cairn_node::backup::clinical_verdict::last_backup_evidence_for(
+                        health.as_ref(),
+                        &from,
+                    ),
                 },
             );
             println!("{}", clinical.summary);

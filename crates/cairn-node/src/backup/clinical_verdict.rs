@@ -15,8 +15,9 @@
 //! - an **advisory** when two DIFFERENT records share a `source_seq` (a re-capture that straddled
 //!   a custody change). It never changes the exit code — as in `restore`;
 //! - a **refusal**, `backup SHORT`, ONLY ON EVIDENCE: this node's own `backup-status.json`
-//!   describes this medium and records a newer clinical watermark than the medium holds
-//!   ([`shortfall`]). Maintainer decision, 2026-09-13.
+//!   describes this path, and the medium holds less than that backup recorded — an older newest
+//!   clinical seq, or fewer clinical records ([`shortfall`]). Maintainer decision, 2026-09-13;
+//!   the record-count axis was added by the branch's final review, 2026-09-14.
 //!
 //! # What it deliberately does not do
 //!
@@ -42,12 +43,40 @@ pub struct ClinicalPlaneFacts<'a> {
     /// The trusted records and the derivation's own arithmetic, from
     /// [`super::clinical_plane_accounting`] — never re-derived here.
     pub accounting: &'a PlaneRecords,
+    /// EVERY clinical record on the medium, counted raw — byte-identical re-captures included —
+    /// from [`super::plane_counts`]. That is the same arithmetic `backup` recorded as the
+    /// sidecar's `clinical_events`, so the two compare with no reconciliation.
+    pub medium_clinical_records: usize,
     /// A CAIRNB1/CAIRNB2 medium: its format predates the clinical plane entirely.
     pub legacy: bool,
-    /// The clinical watermark this node's last backup recorded FOR THIS MEDIUM, or `None`
-    /// whenever there is no such evidence. Build it with [`recorded_watermark_for`], which is
-    /// what keeps a sidecar about some other drive from counting.
-    pub recorded_for_this_medium: Option<i64>,
+    /// What this node's last backup TO THIS PATH recorded, or `None` when no sidecar describes
+    /// this path. Build it with [`last_backup_evidence_for`], which is what keeps a sidecar
+    /// about some other drive from counting.
+    pub evidence: Option<LastBackupEvidence>,
+}
+
+/// What this node's own last backup to one path recorded about the clinical plane — the only
+/// evidence `backup SHORT` may act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LastBackupEvidence {
+    /// The newest clinical `source_seq` that backup recorded (the sidecar's
+    /// `clinical_watermark`). `None` when it recorded none.
+    pub newest_seq: Option<i64>,
+    /// How many clinical records that backup's medium held, counted raw (the sidecar's
+    /// `clinical_events`). `None` for a sidecar older than
+    /// [`super::SUPPORTED_HEALTH_VERSION`]: those never recorded a count, and serde defaults
+    /// the field to 0 — a 0 nobody wrote is a claim, not a fact.
+    pub clinical_records: Option<u64>,
+}
+
+/// Which way(s) a medium falls short of the evidence. [`shortfall`] only ever returns one with
+/// at least one field set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shortfall {
+    /// `Some(recorded)` when the medium's newest clinical seq is absent or below `recorded`.
+    pub newest_seq: Option<i64>,
+    /// `Some(recorded)` when the medium holds fewer raw clinical records than `recorded`.
+    pub clinical_records: Option<u64>,
 }
 
 /// What to print, and whether to fail.
@@ -67,18 +96,43 @@ pub fn clinical_plane_verdict(facts: &ClinicalPlaneFacts<'_>) -> ClinicalPlaneVe
     ClinicalPlaneVerdict {
         summary: summary_line(facts, newest),
         advisory: straddled_advisory(facts.accounting),
-        refusal: shortfall(newest, facts.recorded_for_this_medium)
-            .map(|recorded| short_refusal(recorded, newest)),
+        refusal: shortfall(newest, facts.medium_clinical_records, facts.evidence)
+            .map(|short| short_refusal(&short, newest, facts.medium_clinical_records)),
     }
 }
 
-/// PURE. `Some(recorded)` when the medium holds LESS than this node's last backup recorded for
-/// it: nothing at all, or a newest seq below the recorded one. `None` when there is no evidence,
-/// or the medium holds at least what was recorded.
+/// PURE. `Some` when the medium holds LESS than this node's last backup to this path recorded,
+/// on either axis; `None` when there is no evidence, or the medium holds at least what was
+/// recorded on both.
 ///
-/// Level is complete. AHEAD is also fine: a backup can write the medium durably and then fail to
-/// write its sidecar, which leaves the medium holding more than the sidecar says.
-pub fn shortfall(medium_newest: Option<i64>, recorded: Option<i64>) -> Option<i64> {
+/// **Why two axes.** The newest seq alone misses a medium that is short BELOW its newest seq.
+/// A capture backfills late-committing holes under the watermark (`capture::plane`), so night 1
+/// can capture seqs 1–100 while 97 is still uncommitted and night 2 add only 97: the night-1
+/// copy put back has the same newest seq and one record fewer. The raw record count sees that.
+/// It compares raw against raw — the sidecar's `clinical_events` is `plane_counts` over the
+/// medium `backup` wrote, and [`ClinicalPlaneFacts::medium_clinical_records`] is `plane_counts`
+/// over the file under test — so duplicates need no reconciliation. The count axis is only
+/// consulted when the sidecar recorded one (v2 and newer); the seq axis stays for every sidecar.
+///
+/// Level is complete on each axis. AHEAD is also fine on each: a backup can write the medium
+/// durably and then fail to write its sidecar, which leaves the medium holding more than the
+/// sidecar says. The axes are independent — ahead on one never excuses short on the other.
+pub fn shortfall(
+    medium_newest: Option<i64>,
+    medium_records: usize,
+    evidence: Option<LastBackupEvidence>,
+) -> Option<Shortfall> {
+    let evidence = evidence?;
+    let short = Shortfall {
+        newest_seq: newest_seq_short(medium_newest, evidence.newest_seq),
+        clinical_records: record_count_short(medium_records, evidence.clinical_records),
+    };
+    (short.newest_seq.is_some() || short.clinical_records.is_some()).then_some(short)
+}
+
+/// PURE. The newest-seq axis: `Some(recorded)` when the medium has no newest seq, or one below
+/// what was recorded.
+fn newest_seq_short(medium_newest: Option<i64>, recorded: Option<i64>) -> Option<i64> {
     let recorded = recorded?;
     match medium_newest {
         Some(held) if held >= recorded => None,
@@ -86,18 +140,39 @@ pub fn shortfall(medium_newest: Option<i64>, recorded: Option<i64>) -> Option<i6
     }
 }
 
-/// The evidence rule's ONE impure step: the sidecar's clinical watermark, but only when that
-/// sidecar describes the medium under test.
+/// PURE. The record-count axis: `Some(recorded)` when the medium holds fewer raw records.
+fn record_count_short(medium_records: usize, recorded: Option<u64>) -> Option<u64> {
+    let recorded = recorded?;
+    // `usize` is at most 64 bits on every target this crate builds for, so the cast is exact.
+    ((medium_records as u64) < recorded).then_some(recorded)
+}
+
+/// The evidence rule's ONE impure step: what the sidecar recorded, but only when that sidecar
+/// describes the medium under test.
 ///
 /// `backup-status.json` is node-global — one file beside the signing key, rewritten by every
 /// backup to any path. A sidecar naming another path is a statement about another artifact,
 /// possibly another node's (this command does not bind a medium to `--key`'s node), so it is not
 /// evidence about this one. `health_describes_medium` canonicalizes paths, which is why this
 /// is not pure and why it stays out of [`clinical_plane_verdict`].
-pub fn recorded_watermark_for(health: Option<&BackupHealth>, medium: &Path) -> Option<i64> {
+pub fn last_backup_evidence_for(
+    health: Option<&BackupHealth>,
+    medium: &Path,
+) -> Option<LastBackupEvidence> {
     health
         .filter(|h| super::health_describes_medium(&h.medium_path, medium))
-        .and_then(|h| h.clinical_watermark)
+        .map(evidence_in)
+}
+
+/// PURE. The two facts one sidecar recorded, with the version rule applied: a sidecar older
+/// than v2 recorded no per-plane count, so its serde-default 0 is not passed on as evidence
+/// (the same rule `describe_health` applies before rendering one).
+fn evidence_in(health: &BackupHealth) -> LastBackupEvidence {
+    LastBackupEvidence {
+        newest_seq: health.clinical_watermark,
+        clinical_records: (health.version >= super::SUPPORTED_HEALTH_VERSION)
+            .then_some(health.clinical_events),
+    }
 }
 
 /// The newest trusted clinical `source_seq`: the same number `cairn_medium::watermark` returns
@@ -147,257 +222,62 @@ fn straddled_advisory(accounting: &PlaneRecords) -> Option<String> {
     ))
 }
 
-fn short_refusal(recorded: i64, newest: Option<i64>) -> String {
-    let held = match newest {
-        Some(seq) => format!("clinical records only through seq {seq}"),
-        None => "no clinical records at all".to_string(),
+/// The `backup SHORT` message: one sentence per axis that fell short, then what it means and
+/// what to do.
+///
+/// Worded so every clause is true in every case that reaches it (principle 4):
+///
+/// - **"to this path"**, never "to this medium": the evidence is about a path, and in a rotation
+///   the last backup there went to a different drive.
+/// - **"newest clinical seq N"**, never "through seq N": the latter implies no gaps below N,
+///   which is exactly what a below-watermark backfill makes false.
+/// - **A certain loss only when the newest seq is short.** Then the newest recorded event is not
+///   on this medium. On the count axis alone the missing records could all have been
+///   byte-identical re-captures of records still present, which a restore collapses anyway.
+fn short_refusal(short: &Shortfall, newest: Option<i64>, medium_records: usize) -> String {
+    let mut findings = Vec::new();
+    if let Some(recorded) = short.newest_seq {
+        findings.push(format!(
+            "That backup recorded newest clinical seq {recorded}; {}.",
+            medium_newest_clause(newest, medium_records)
+        ));
+    }
+    if let Some(recorded) = short.clinical_records {
+        findings.push(format!(
+            "That backup recorded {recorded} clinical record(s); this medium holds \
+             {medium_records}."
+        ));
+    }
+    let consequence = if short.newest_seq.is_some() {
+        "a restore from it would bring back less than this node last captured"
+    } else {
+        "a restore from it would bring back less than this node last captured, unless every \
+         missing record was a byte-identical re-capture of one still present"
     };
     format!(
-        "backup SHORT: this node's last backup to this medium recorded clinical events through \
-         seq {recorded}, but the medium holds {held}. The file at this path is not what that \
-         backup wrote — a truncated copy, or an older one put back in its place — and a restore \
-         from it would bring back less than this node last captured. Remedy: run `backup --to` \
-         this path again while this node still holds its events, or locate the complete copy. \
-         (Rotating drives through one mount point? The drive that missed the latest backup \
-         reads SHORT until its own next backup catches it up — and until then it really would \
-         restore less.)"
+        "backup SHORT: this medium holds less than this node's last backup to this path \
+         recorded. {} The file at this path is not what that backup wrote — typically a \
+         truncated copy, or an older one put back in its place — and {consequence}. Remedy: run \
+         `backup --to` this path again while this node still holds its events, or locate the \
+         complete copy. (Rotating drives through one mount point? The drive that missed the \
+         latest backup reads SHORT until its own next backup catches it up — and until then it \
+         really would restore less.)",
+        findings.join(" ")
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cairn_medium::MediumRecord;
-
-    /// Runtime-derived bytes for a fixture field — never a literal (house rule 6: a byte
-    /// literal in a custody field trips CodeQL's hard-coded-cryptographic-value query).
-    fn filler(seed: u8, len: usize) -> Vec<u8> {
-        (0..len).map(|i| seed.wrapping_add(i as u8)).collect()
-    }
-
-    /// One record at `seq`. `variant` changes the custody sidecar, so two records at one seq
-    /// with different variants are DIFFERENT records (a straddled re-capture).
-    fn rec(seq: i64, variant: Option<u8>) -> MediumRecord {
-        MediumRecord {
-            signed_bytes: filler(1, 8),
-            attestation: None,
-            attester_key: None,
-            dek_wrapped: variant.map(|v| filler(v, 16)),
-            source_seq: seq,
-        }
-    }
-
-    fn plane(records: Vec<MediumRecord>, collapsed: usize) -> PlaneRecords {
-        PlaneRecords {
-            records,
-            gated_out: 0,
-            collapsed,
-        }
-    }
-
-    fn verdict(acc: &PlaneRecords, legacy: bool, recorded: Option<i64>) -> ClinicalPlaneVerdict {
-        clinical_plane_verdict(&ClinicalPlaneFacts {
-            accounting: acc,
-            legacy,
-            recorded_for_this_medium: recorded,
-        })
-    }
-
-    fn health_for(medium_path: &str, clinical_watermark: Option<i64>) -> BackupHealth {
-        BackupHealth {
-            version: super::super::SUPPORTED_HEALTH_VERSION,
-            last_backup_unix: 0,
-            medium_path: medium_path.into(),
-            medium_bytes: 0,
-            node_events: 1,
-            clinical_events: 0,
-            clinical_watermark,
-            export_covers_seq: None,
-            extra: serde_json::Map::new(),
-        }
-    }
-
-    // --- the shortfall rule, alone -------------------------------------------------------
-
-    #[test]
-    fn no_evidence_is_never_a_shortfall() {
-        assert_eq!(shortfall(None, None), None);
-        assert_eq!(shortfall(Some(40), None), None);
-    }
-
-    #[test]
-    fn an_empty_medium_against_evidence_is_short() {
-        assert_eq!(shortfall(None, Some(40)), Some(40));
-    }
-
-    #[test]
-    fn a_medium_behind_the_evidence_is_short() {
-        assert_eq!(shortfall(Some(39), Some(40)), Some(40));
-    }
-
-    /// The boundary: holding exactly what the last backup recorded is complete.
-    #[test]
-    fn a_medium_level_with_the_evidence_is_not_short() {
-        assert_eq!(shortfall(Some(40), Some(40)), None);
-    }
-
-    /// A backup that wrote the medium durably and then failed to write its sidecar leaves the
-    /// medium AHEAD of the evidence. Holding more than recorded is not a shortfall.
-    #[test]
-    fn a_medium_ahead_of_the_evidence_is_not_short() {
-        assert_eq!(shortfall(Some(41), Some(40)), None);
-    }
-
-    // --- the verdict ---------------------------------------------------------------------
-
-    #[test]
-    fn records_present_without_evidence_report_count_and_newest_seq() {
-        let acc = plane(vec![rec(3, None), rec(5, None), rec(8, None)], 0);
-        let v = verdict(&acc, false, None);
-        assert_eq!(
-            v.summary,
-            "clinical-plane records OK: 3 verified, newest seq 8"
-        );
-        assert_eq!(v.advisory, None);
-        assert_eq!(v.refusal, None);
-    }
-
-    #[test]
-    fn collapsed_re_captures_are_named_in_the_summary() {
-        let acc = plane(vec![rec(1, None), rec(2, None)], 4);
-        let v = verdict(&acc, false, None);
-        assert_eq!(
-            v.summary,
-            "clinical-plane records OK: 2 verified, newest seq 2, 4 byte-identical \
-             re-capture(s) collapsed"
-        );
-    }
-
-    #[test]
-    fn a_straddled_duplicate_is_advisory_and_never_refuses() {
-        let acc = plane(vec![rec(7, Some(4)), rec(7, None), rec(8, None)], 0);
-        let v = verdict(&acc, false, Some(8));
-        let advisory = v
-            .advisory
-            .expect("two different records at one seq must be named");
-        assert!(
-            advisory.contains(": 7."),
-            "the position is named: {advisory}"
-        );
-        assert!(
-            advisory.contains("A restore would apply all of them"),
-            "worded for a check that has applied nothing: {advisory}"
-        );
-        assert!(
-            !advisory.contains("were applied"),
-            "restore's past tense would be false here: {advisory}"
-        );
-        assert_eq!(v.refusal, None, "a straddle is not a restorability failure");
-    }
-
-    #[test]
-    fn an_empty_plane_without_evidence_says_empty_and_does_not_refuse() {
-        let acc = plane(vec![], 0);
-        let v = verdict(&acc, false, None);
-        assert!(
-            v.summary.starts_with("clinical plane: EMPTY — "),
-            "{}",
-            v.summary
-        );
-        assert!(
-            v.summary.contains("restore NO patient data"),
-            "{}",
-            v.summary
-        );
-        assert_eq!(
-            v.refusal, None,
-            "a fresh clinic's empty plane is a correct backup"
-        );
-    }
-
-    #[test]
-    fn a_legacy_medium_without_evidence_says_none_and_does_not_refuse() {
-        let acc = plane(vec![], 0);
-        let v = verdict(&acc, true, None);
-        assert!(
-            v.summary.starts_with("clinical plane: NONE — "),
-            "{}",
-            v.summary
-        );
-        assert!(v.summary.contains("CAIRNB1/CAIRNB2"), "{}", v.summary);
-        assert_eq!(v.refusal, None);
-    }
-
-    #[test]
-    fn an_empty_plane_against_evidence_refuses_naming_both_sides() {
-        let acc = plane(vec![], 0);
-        let v = verdict(&acc, false, Some(4812));
-        let refusal = v
-            .refusal
-            .expect("the sidecar proves this path held clinical events");
-        assert!(refusal.starts_with("backup SHORT: "), "{refusal}");
-        assert!(refusal.contains("through seq 4812"), "{refusal}");
-        assert!(refusal.contains("no clinical records at all"), "{refusal}");
-        assert!(
-            refusal.contains("run `backup --to`"),
-            "the remedy: {refusal}"
-        );
-        assert!(
-            v.summary.starts_with("clinical plane: EMPTY"),
-            "the plane line still prints first: {}",
-            v.summary
-        );
-    }
-
-    #[test]
-    fn a_plane_behind_evidence_refuses_naming_both_seqs() {
-        let acc = plane(vec![rec(1, None), rec(30, None)], 0);
-        let refusal = verdict(&acc, false, Some(40)).refusal.expect("30 < 40");
-        assert!(refusal.contains("through seq 40"), "{refusal}");
-        assert!(refusal.contains("only through seq 30"), "{refusal}");
-    }
-
-    /// A legacy file at a path where this node last wrote clinical events is not what that
-    /// backup wrote either: `backup` converts a legacy medium to CAIRNB3 on its next capture.
-    #[test]
-    fn a_legacy_medium_against_evidence_refuses() {
-        let acc = plane(vec![], 0);
-        assert!(verdict(&acc, true, Some(12)).refusal.is_some());
-    }
-
-    #[test]
-    fn a_plane_level_with_evidence_does_not_refuse() {
-        let acc = plane(vec![rec(40, None)], 0);
-        assert_eq!(verdict(&acc, false, Some(40)).refusal, None);
-    }
-
-    // --- the evidence adapter ------------------------------------------------------------
-
-    #[test]
-    fn a_sidecar_describing_this_medium_is_evidence() {
-        let h = health_for("/nonexistent-567/cairn.medium", Some(40));
-        assert_eq!(
-            recorded_watermark_for(Some(&h), Path::new("/nonexistent-567/cairn.medium")),
-            Some(40)
-        );
-    }
-
-    /// The case only a node-global sidecar can create: a rotation drive at another path.
-    /// That sidecar is about some other artifact — possibly another node's — never this one.
-    #[test]
-    fn a_sidecar_describing_another_medium_is_not_evidence() {
-        let h = health_for("/nonexistent-567/drive-a.medium", Some(40));
-        assert_eq!(
-            recorded_watermark_for(Some(&h), Path::new("/nonexistent-567/drive-b.medium")),
-            None
-        );
-    }
-
-    #[test]
-    fn no_sidecar_or_no_recorded_watermark_is_not_evidence() {
-        let medium = Path::new("/nonexistent-567/cairn.medium");
-        assert_eq!(recorded_watermark_for(None, medium), None);
-        let v1_shaped = health_for("/nonexistent-567/cairn.medium", None);
-        assert_eq!(recorded_watermark_for(Some(&v1_shaped), medium), None);
+/// What the medium holds on the newest-seq axis, as the second half of that sentence.
+///
+/// "No clinical records at all" is keyed on the RAW count, because that is what it claims. On a
+/// sound medium an absent newest seq always means zero raw records, but this function cannot
+/// see soundness, so raw records with none verified get a sentence that says exactly that.
+fn medium_newest_clause(newest: Option<i64>, medium_records: usize) -> String {
+    match (newest, medium_records) {
+        (Some(seq), _) => format!("this medium's newest clinical seq is {seq}"),
+        (None, 0) => "this medium holds no clinical records at all".to_string(),
+        (None, n) => format!("none of this medium's {n} clinical record(s) is verified"),
     }
 }
+
+#[cfg(test)]
+mod tests;
