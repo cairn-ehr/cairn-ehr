@@ -37,7 +37,8 @@
 //! erasure takes to complete across all copies. That number is the clinic's policy call, not
 //! Cairn's: founding principle 9 (mechanism, never policy) and ADR-0005's *deletion is
 //! best-effort and declared, never guaranteed*. Cairn's obligations are to make the residue
-//! legible and to say this plainly; slice 2e's ADR owes the sentence in as many words.
+//! legible and to say this plainly; `docs/spec/security.md` states it in as many words (the
+//! *Erasure survives DR* bullet); no ADR does.
 //!
 //! # Why this is a separate file
 //!

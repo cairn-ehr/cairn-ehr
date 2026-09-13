@@ -109,8 +109,8 @@ pub async fn read_local_state(
     // actor_current. Without it a restored node refuses its own history (2a §3).
     //
     // ⚠️ These rows arrive authenticated by the CONTAINER's AEAD, not by per-row signatures
-    // — the one part of a restore that is not verify-on-apply. 2e's ADR owes that caveat;
-    // do not let this comment be the only place it is written down.
+    // — the one part of a restore that is not verify-on-apply. ADR-0067 decision 1 records
+    // that caveat, and `restore` prints it to the operator.
     //
     // `actor_event_id::text`, `pinned::text` and `recorded_at::text`: same idiom as
     // `event_id::text` above, and for the same underlying reason — `pinned` is JSONB and

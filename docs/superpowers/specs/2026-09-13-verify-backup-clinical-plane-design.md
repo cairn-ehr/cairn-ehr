@@ -153,7 +153,7 @@ After `federation-plane events OK: N/N verified`, and before the local-state exp
 | medium | stdout | stderr | exit |
 |---|---|---|---|
 | CAIRNB3, clinical records present, no shortfall | `clinical-plane records OK: N verified, newest seq S` (plus `, K byte-identical re-capture(s) collapsed` when K > 0) | — | continues |
-| …and two *different* records share a `source_seq` | the same line | `straddled_duplicate_notice` (advisory, as in `restore`) | continues |
+| …and two *different* records share a `source_seq` | the same line | a straddled-duplicate advisory worded for a check that has applied nothing (exit unaffected, as in `restore`) | continues |
 | CAIRNB3, clinical plane empty, no evidence | `clinical plane: EMPTY — this medium would restore NO patient data. If this node holds charts, they are NOT on this medium.` | — | continues |
 | CAIRNB1/CAIRNB2 (legacy), no evidence | `clinical plane: NONE — this CAIRNB1/CAIRNB2 medium predates the clinical plane and carries no patient data at all.` | — | continues |
 | any of the above with evidence of a shortfall | the plane line first, then the refusal | `backup SHORT: …` | **1** |
@@ -192,7 +192,9 @@ One pure function computes the whole decision from facts the caller has already 
   "no sidecar", "a sidecar for another path" and "a sidecar with no watermark" to the same `None`,
   because the verdict treats all three the same way.
 - **Output:** the stdout summary line, an optional advisory for stderr (the straddled-duplicate
-  notice, reused as it is), and an optional refusal message.
+  finding — the position search is shared with `restore`, but the wording is not: `restore`'s
+  notice says the copies "were applied", which would be false here), and an optional refusal
+  message.
 
 `health_describes_medium` touches the filesystem (it canonicalizes paths), so it stays in the
 caller. The verdict never sees a path. The exact type names and signature belong to the plan.
