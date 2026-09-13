@@ -272,81 +272,217 @@ END $$;
 
 ROLLBACK;
 
+
 -- ---------------------------------------------------------------------------
--- cairn_custody_landed (#578)
+-- cairn_custody_state / cairn_custody_landed / cairn_release_pen_row (#578)
 -- ---------------------------------------------------------------------------
 --
--- WHY THIS DOOR IS MIRRORED HERE. It answers "did the custody this caller presented
--- actually land?", and it exists because TWO crates must ask it: `cairn-node`'s restore
--- (which has asked it since slice 2d, inline) and `cairn-sync`'s `requeue` (which never
--- asked it at all, and deleted the pen row holding the last copy of the key — #578).
--- Neither can call the other's Rust: `cairn-node` is the higher layer and the two use
--- different Postgres clients. So the predicate lives in the database, and its behaviour is
--- pinned HERE rather than in either caller's suite — a difference between the two callers
--- would now be a difference in this one function.
+-- WHY THESE ARE MIRRORED HERE. Two crates must ask "did the custody a caller presented
+-- actually land?": `cairn-node`'s restore, before it counts a record as applied, and
+-- `cairn-sync`, before it deletes a pen row that may hold the last copy of a record's key
+-- (`requeue`'s release AND `pull`'s auto-release — #578, and that review's finding that the
+-- pull path had never asked). Neither crate can call the other's Rust: `cairn-node` is the
+-- higher layer and the two use different Postgres clients. So the predicate lives in the
+-- database, and its behaviour is pinned HERE rather than in any caller's suite — a
+-- difference between callers would now be a difference in one of these functions.
 --
--- The shred arm is the part that must never be dropped by a reader tidying this up: a
--- LOGGED SHRED COUNTS AS LANDED. db/020 step 9 refuses custody outright for an
--- already-shredded target (ADR-0005's anti-resurrection rule), so a caller that treated
--- that as "custody did not land" would hold the record forever waiting for a key that was
--- destroyed ON PURPOSE.
+-- Two answers must never be dropped by a reader tidying this up:
+--
+--   * A LOGGED SHRED IS SETTLED. db/020 step 9 refuses custody outright for an
+--     already-shredded target (ADR-0005's anti-resurrection rule), so a caller that treated
+--     that as "custody did not land" would hold the record forever waiting for a key that was
+--     destroyed ON PURPOSE — and would keep a copy of that key in the pen while it waited.
+--   * A PLAINTEXT EVENT IS SETTLED. It has no body to open, so a DEK riding beside it is
+--     meaningless; holding its pen row would strand a record that is fully readable.
+--
+-- The fixture's UUIDs are fixed, not random, so the block that re-runs the questions AS THE
+-- NODE ROLE (arm 9) can re-derive the same addresses without a shared temp table. They are
+-- fixture identifiers, not key material.
 
 BEGIN;
 
 DO $$
 DECLARE
-    v_with_dek   UUID := gen_random_uuid();
-    v_shredded   UUID := gen_random_uuid();
-    v_bare       UUID := gen_random_uuid();
-    a_with_dek   BYTEA;
-    a_shredded   BYTEA;
-    a_bare       BYTEA;
+    v_held      UUID := 'c0570d1a-0000-7000-8000-000000000001';
+    v_shredded  UUID := 'c0570d1a-0000-7000-8000-000000000002';
+    v_withheld  UUID := 'c0570d1a-0000-7000-8000-000000000003';
+    v_plaintext UUID := 'c0570d1a-0000-7000-8000-000000000004';
+    a_held      BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000001'::bytea);
+    a_shredded  BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000002'::bytea);
+    a_withheld  BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000003'::bytea);
+    a_plaintext BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000004'::bytea);
+    a_absent    BYTEA := '\x1220'::bytea || sha256('absent'::bytea);
 BEGIN
-    -- Three events that differ ONLY in their custody state, so a wrong answer cannot be
-    -- blamed on anything else about the row. The content address is derived from the
-    -- signed bytes exactly as the real one is (`\x1220` is the sha256 multihash prefix).
-    a_with_dek := '\x1220'::bytea || digest(v_with_dek::text::bytea, 'sha256');
-    a_shredded := '\x1220'::bytea || digest(v_shredded::text::bytea, 'sha256');
-    a_bare     := '\x1220'::bytea || digest(v_bare::text::bytea, 'sha256');
-
+    -- Four events that differ ONLY in their custody state, so a wrong answer cannot be blamed
+    -- on anything else about the row. Three are SEALED, as the door records a sealed arrival
+    -- (db/020 writes `sealed` from the envelope); the fourth is the plaintext control. The
+    -- content address is derived from the signed bytes exactly as the real one is (`\x1220` is
+    -- the sha256 multihash prefix).
     INSERT INTO event_log (event_id, patient_id, event_type, schema_version, hlc_wall,
         hlc_counter, node_origin, signed_bytes, content_address, body, contributors,
-        signer_key_id, plaintext_twin)
+        signer_key_id, plaintext_twin, sealed)
     VALUES
-      (v_with_dek, gen_random_uuid(), 'custody.probe', 'test-1', 1, 0, 'n',
-       v_with_dek::text::bytea, a_with_dek, '{}', '[]', 'k', 't'),
-      (v_shredded, gen_random_uuid(), 'custody.probe', 'test-1', 2, 0, 'n',
-       v_shredded::text::bytea, a_shredded, '{}', '[]', 'k', 't'),
-      (v_bare,     gen_random_uuid(), 'custody.probe', 'test-1', 3, 0, 'n',
-       v_bare::text::bytea,     a_bare,     '{}', '[]', 'k', 't');
-
-    -- 1. Custody present: an `event_dek` row is the ordinary "it landed".
-    INSERT INTO event_dek (event_id, dek_wrapped) VALUES (v_with_dek, '\xdeadbeef'::bytea);
-    IF NOT cairn_custody_landed(a_with_dek) THEN
-        RAISE EXCEPTION 'an event WITH an event_dek row must report custody landed';
-    END IF;
-
-    -- 2. Shredded: no DEK will ever exist, and that is the completed state, not a pending
-    --    one. Without this arm a restore or a requeue holds the row forever.
+      (v_held,      gen_random_uuid(), 'custody.probe', 'test-1', 1, 0, 'n',
+       v_held::text::bytea,      a_held,      '{}', '[]', 'k', 't', TRUE),
+      (v_shredded,  gen_random_uuid(), 'custody.probe', 'test-1', 2, 0, 'n',
+       v_shredded::text::bytea,  a_shredded,  '{}', '[]', 'k', 't', TRUE),
+      (v_withheld,  gen_random_uuid(), 'custody.probe', 'test-1', 3, 0, 'n',
+       v_withheld::text::bytea,  a_withheld,  '{}', '[]', 'k', 't', TRUE),
+      (v_plaintext, gen_random_uuid(), 'custody.probe', 'test-1', 4, 0, 'n',
+       v_plaintext::text::bytea, a_plaintext, '{}', '[]', 'k', 't', FALSE);
+    INSERT INTO event_dek (event_id, dek_wrapped) VALUES (v_held, '\xdeadbeef'::bytea);
     INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)
     VALUES (v_shredded, gen_random_uuid(), 'test');
+
+    -- 1. Every state is named. A caller counts, words and exits on these, so each must be a
+    --    distinct answer rather than a boolean a caller has to reverse-engineer.
+    IF cairn_custody_state(a_held) <> 'held' THEN
+        RAISE EXCEPTION 'an event WITH an event_dek row is held, got %', cairn_custody_state(a_held);
+    END IF;
+    IF cairn_custody_state(a_shredded) <> 'shredded' THEN
+        RAISE EXCEPTION 'a logged shred is shredded, got %', cairn_custody_state(a_shredded);
+    END IF;
+    IF cairn_custody_state(a_withheld) <> 'withheld' THEN
+        RAISE EXCEPTION 'a sealed event with no DEK and no shred is withheld, got %',
+                        cairn_custody_state(a_withheld);
+    END IF;
+    IF cairn_custody_state(a_plaintext) <> 'plaintext' THEN
+        RAISE EXCEPTION 'an unsealed event is plaintext, got %', cairn_custody_state(a_plaintext);
+    END IF;
+    IF cairn_custody_state(a_absent) <> 'absent' THEN
+        RAISE EXCEPTION 'an address this node never saw is absent, got %', cairn_custody_state(a_absent);
+    END IF;
+
+    -- 2. Held, shredded and plaintext are SETTLED: custody "landed" in the only sense a caller
+    --    deciding whether to let go of a key can use.
+    IF NOT cairn_custody_landed(a_held) THEN
+        RAISE EXCEPTION 'held custody must report landed';
+    END IF;
     IF NOT cairn_custody_landed(a_shredded) THEN
-        RAISE EXCEPTION 'a SHREDDED event must report custody landed (ADR-0005: the key was '
-                        'destroyed on purpose; waiting for it is waiting forever)';
+        RAISE EXCEPTION 'a SHREDDED event must report landed (ADR-0005: the key was destroyed on '
+                        'purpose; waiting for it is waiting forever)';
+    END IF;
+    IF NOT cairn_custody_landed(a_plaintext) THEN
+        RAISE EXCEPTION 'a PLAINTEXT event must report landed: there is no body a DEK could open';
     END IF;
 
-    -- 3. Neither: the sealed event is admitted and unopenable. This is the #578 state, and
-    --    the answer that must stop `requeue` deleting the pen row.
-    IF cairn_custody_landed(a_bare) THEN
-        RAISE EXCEPTION 'a sealed event with NO event_dek and NO shred must report custody '
-                        'did NOT land';
+    -- 3. Withheld is the #578 state — the answer that must stop anyone deleting the pen row.
+    IF cairn_custody_landed(a_withheld) THEN
+        RAISE EXCEPTION 'a sealed event with NO event_dek and NO shred must report NOT landed';
     END IF;
 
-    -- 4. An address this node has never seen is not "landed" either. Anti-vacuity: without
-    --    this, a function that returned FALSE for everything would pass arm 3.
-    IF cairn_custody_landed('\x1220'::bytea || digest('absent'::bytea, 'sha256')) THEN
-        RAISE EXCEPTION 'an address absent from event_log must report custody did NOT land';
+    -- 4. Absent is not landed either. This is NOT the anti-vacuity arm for an always-FALSE
+    --    function (arm 2 kills that, and an always-FALSE function would PASS this one). What it
+    --    kills is any "everything but withheld" reading — `cairn_custody_state(p) <> 'withheld'`,
+    --    or an inverted anti-join over the log — which passes arms 2 and 3 and answers TRUE for an
+    --    address this node does not hold. A caller whose digest matched no event would then read
+    --    "landed" and delete the key.
+    IF cairn_custody_landed(a_absent) THEN
+        RAISE EXCEPTION 'an address absent from event_log must report NOT landed';
+    END IF;
+
+    -- Pen one row per state, each carrying a DEK and the event's OWN signed bytes (the release
+    -- guard asks about the event those bytes address, not the digest a row is filed under — arm
+    -- 6b), plus a KEYLESS row for an event this node never saw. Through the real pen door.
+    PERFORM cairn_quarantine_event(a_held,      v_held::text::bytea,      NULL, NULL, '(restore)', 1, 'r', '\xaa'::bytea, NULL, NULL);
+    PERFORM cairn_quarantine_event(a_shredded,  v_shredded::text::bytea,  NULL, NULL, '(restore)', 2, 'r', '\xaa'::bytea, NULL, NULL);
+    PERFORM cairn_quarantine_event(a_withheld,  v_withheld::text::bytea,  NULL, NULL, '(restore)', 3, 'r', '\xaa'::bytea, NULL, NULL);
+    PERFORM cairn_quarantine_event(a_plaintext, v_plaintext::text::bytea, NULL, NULL, '(restore)', 4, 'r', '\xaa'::bytea, NULL, NULL);
+    PERFORM cairn_quarantine_event(a_absent,    'absent'::bytea,          NULL, NULL, 'node-a',    5, 'r', NULL,          NULL, NULL);
+END $$;
+
+-- 5. THE GUARD. A keyed row whose custody did not land is NOT released, whoever asks — the
+--    rule `requeue` states, and the one `pull`'s auto-release used to break.
+DO $$
+DECLARE
+    a_withheld BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000003'::bytea);
+BEGIN
+    IF cairn_release_pen_row(a_withheld) THEN
+        RAISE EXCEPTION 'a pen row holding a key that did NOT land must not be released';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM sync_quarantine WHERE content_digest = a_withheld) THEN
+        RAISE EXCEPTION 'and the row, with its key, must still be there';
     END IF;
 END $$;
+
+-- 6. Settled keyed rows ARE released, and the function says so. Anti-vacuity for arm 5: a
+--    function that refused everything would pass it.
+DO $$
+DECLARE
+    a_held      BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000001'::bytea);
+    a_shredded  BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000002'::bytea);
+    a_plaintext BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000004'::bytea);
+BEGIN
+    IF NOT cairn_release_pen_row(a_held) THEN
+        RAISE EXCEPTION 'a keyed row whose custody is HELD must be released';
+    END IF;
+    IF NOT cairn_release_pen_row(a_shredded) THEN
+        RAISE EXCEPTION 'a keyed row over a SHREDDED event must be released — keeping it would '
+                        'keep a copy of a key erasure destroyed on purpose';
+    END IF;
+    IF NOT cairn_release_pen_row(a_plaintext) THEN
+        RAISE EXCEPTION 'a keyed row over a PLAINTEXT event must be released';
+    END IF;
+    IF EXISTS (SELECT 1 FROM sync_quarantine WHERE content_digest IN (a_held, a_shredded, a_plaintext)) THEN
+        RAISE EXCEPTION 'a released row must actually leave the pen';
+    END IF;
+END $$;
+
+-- 6b. A MIS-KEYED row is judged by its BYTES, not by the digest it is filed under. Filed under
+--     the held event's address (free again after arm 6) but holding the WITHHELD event's bytes and
+--     a key: the address it is filed under has settled custody, the event it carries does not. A
+--     guard that trusted the caller's digest would delete the only copy of that event's key.
+DO $$
+DECLARE
+    a_held     BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000001'::bytea);
+BEGIN
+    PERFORM cairn_quarantine_event(a_held, 'c0570d1a-0000-7000-8000-000000000003'::bytea, NULL,
+                                   NULL, '(restore)', 6, 'mis-keyed', '\xaa'::bytea, NULL, NULL);
+    IF cairn_release_pen_row(a_held) THEN
+        RAISE EXCEPTION 'a row filed under a settled address but carrying a withheld event''s bytes '
+                        'and key must NOT be released';
+    END IF;
+    DELETE FROM sync_quarantine WHERE content_digest = a_held;  -- tidy for the arms below
+END $$;
+
+-- 7. A KEYLESS row has no custody to lose and releases whatever its event's state — the modal
+--    sync-path row, which a guard that read `landed` for every row would strand.
+DO $$
+DECLARE
+    a_absent BYTEA := '\x1220'::bytea || sha256('absent'::bytea);
+BEGIN
+    IF NOT cairn_release_pen_row(a_absent) THEN
+        RAISE EXCEPTION 'a keyless pen row must be released';
+    END IF;
+END $$;
+
+-- 8. Releasing a row that is not there reports FALSE rather than raising: a concurrent pull or
+--    requeue taking the row first is ordinary during a recovery session.
+DO $$
+BEGIN
+    IF cairn_release_pen_row('\x0badd1'::bytea) THEN
+        RAISE EXCEPTION 'releasing an absent row must report FALSE';
+    END IF;
+END $$;
+
+-- 9. THE NODE ROLE CAN ASK. Every other arm runs as the table owner, which holds every
+--    privilege and so cannot notice a missing GRANT — the exact gap a production `requeue`
+--    connecting as a `cairn_node` member would hit at its first keyed row. These functions
+--    run with the CALLER's rights, so this also proves `cairn_node` can read the three tables
+--    they consult and delete from the pen.
+SET LOCAL ROLE cairn_node;
+DO $$
+DECLARE
+    a_held     BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000001'::bytea);
+    a_withheld BYTEA := '\x1220'::bytea || sha256('c0570d1a-0000-7000-8000-000000000003'::bytea);
+BEGIN
+    IF cairn_custody_state(a_held) <> 'held' OR NOT cairn_custody_landed(a_held) THEN
+        RAISE EXCEPTION 'the node role must get the same answers the owner does';
+    END IF;
+    IF cairn_release_pen_row(a_withheld) THEN
+        RAISE EXCEPTION 'the guard must hold for the node role too';
+    END IF;
+END $$;
+RESET ROLE;
 
 ROLLBACK;

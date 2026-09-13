@@ -51,16 +51,27 @@
 > advisory.
 >
 > **What the #578 bundle settled, and the one rule to carry.** `do_requeue` deleted a pen row
-> whenever the apply door returned `Ok` — and `db/020` step 9 returns `Ok` on two LENIENT arms that
-> admit a sealed event WITHOUT custody after a `RAISE WARNING` nothing in this tree reads. On a
+> whenever the apply door returned `Ok` — and `db/020` returns `Ok` while admitting a sealed event
+> WITHOUT custody on four paths (step 7's DEK-does-not-open-the-body and step 9's no-registered-key,
+> both a `RAISE WARNING` nothing reads; plus a NULL DEK and a shredded target, silently). On a
 > restored solo node that row is the **last copy of the event's DEK**. THE RULE NOW, stated once in
-> `crates/cairn-sync/src/requeue.rs`: **a pen row that carries a wrapped DEK is released only when
-> custody actually landed.** Four mutations run and all killed; the one worth remembering is that
-> keying the guard on `dek.is_some()` rather than on the pen row's own `dek_wrapped` **passes the
-> headline test** and still destroys the key in the #580 case, where there is no `dek` precisely
-> because no key resolved. Three tests in `requeue_releases_custody.rs` were **inverted, not
-> deleted**. `do_requeue` also skips `acked` rows now, as `do_pull` always has and as
-> `restore::clinical`'s comment had claimed since slice 2d while the listing had no filter at all.
+> `crates/cairn-sync/src/requeue.rs` and enforced again in the database by `cairn_release_pen_row`
+> (`db/052`): **a pen row that carries a wrapped DEK is released only when custody for its event is
+> SETTLED** — held, shredded, or plaintext (`cairn_custody_state`). `pull`'s auto-release releases
+> through the same door, and `pen_rows_leave_through_one_door.rs` fails if anything else deletes a
+> pen row. `do_requeue` does not put an `acked` row through the door — **which is NOT what `do_pull`
+> does** (pull re-offers acked bytes and only silences their refusals); the difference is argued in
+> `requeue.rs`.
+>
+> **The PR #582 review (2026-09-13) changed three things a next session must not undo.** (1) **A
+> run that leaves work exits 3 (INCOMPLETE)** — rows still held, or a released record whose chart
+> needs a heal — distinct from 1 (failed); `cairn-node restore` already treated a pen as incomplete.
+> (2) **Custody that lands for an event already admitted without it opens the body and leaves the
+> chart EMPTY** — `requeue` reports `reproject_owed` and names `cairn-node reproject` (trap 9; the
+> structural fix is **#584**). (3) **The no-key message
+> names WHICH key opened the DEK and warns** that `establish-unwrap-key` with no key file in place on
+> a restored node forecloses the real key forever; a DEK that opens but not the body is its own
+> cause and never sends the operator to register a key. **#585**: nothing reads Postgres notices.
 >
 > **Two shipped-code facts the #568 fixture had to learn by failing, still true:**
 > `sync_quarantine.refused_seq` is **NOT NULL** (a restore passes the record's own `source_seq`),
@@ -103,8 +114,12 @@
 > DEK is counted on the RESTORE path only; the sync half is open) · **#569** (db/052's registry door
 > silently discards a **content** conflict and leaves `actor_event_id`/`seq` unvalidated) · **#502
 > item 4** (a discarded keystore-load reason) · **#101 items 2–3** · **#512** · **#575** (the
-> minted recovery code still reaches stderr on both paths) · **#583** (new — a DB-gated suite can
+> minted recovery code still reaches stderr on both paths) · **#583** (a DB-gated suite can
 > depend on global state a predecessor left, and only the hours-long full local gate can see it) ·
+> **#584** (new — late custody never re-projects; recovery owes a `cairn-node reproject`, reported by
+> one run only) · **#585** (new — no caller reads Postgres WARNING notices) · **#586** (new — two
+> source guards stop scanning at a file's first test module) · **#587** (new — `cairn-sync`
+> pull/requeue on a sync-only DB loaded by an older build fail with a raw 42883, not "run init") ·
 > **#556**–**#563** (the 2b/2c review wave; see ROADMAP).
 >
 > **Never cite ADR-0026 decision 1's promise 2** — *"node-default data-at-rest keys survive"* — as
@@ -160,7 +175,7 @@
 > `seal.rs` itself**. **Grep, do not recall.**
 
 > [!IMPORTANT]
-> **Eight traps. Each is a step a next session takes in good faith.** (Five came from slice 1; trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578.)
+> **Nine traps. Each is a step a next session takes in good faith.** (Five came from slice 1; trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -231,12 +246,25 @@
 >    the right `<key>.unwrap` on a USB stick they have not plugged in, which is the #495 shape this
 >    whole DR path exists to survive, and the pen row is the only copy of that key. The escape is
 >    `db/021`'s `acked` — *"a recorded human decision, never an automatic one"* — which `do_requeue`
->    now honours; a human decides the key is unrecoverable, never the code. Pinned by
+>    now honours; a human decides the key is unrecoverable, never the code. (A row whose custody is
+>    later settled by other means — a peer's pull lands it — releases on the next requeue.) Pinned by
 >    `crates/cairn-sync/tests/requeue_releases_custody.rs::a_penned_dek_from_another_node_is_kept_until_a_human_decides_otherwise`
 >    (**inverted** from the arm that used to assert the opposite) and by
 >    `requeue_retains_unlanded_custody.rs`. **The narrow fix that looks equivalent and is not:**
->    keying the guard on `dek.is_some()` rather than on the pen row's own `dek_wrapped` passes the
->    headline test and still destroys the key whenever no custody key resolved at all.
+>    keying the guard on the opened `dek` rather than on the pen row's own `dek_wrapped` passes the
+>    headline test and skips the check whenever the key did not open. `cairn_release_pen_row` now
+>    catches that in the database too — do not read the floor as licence to drop the Rust check,
+>    which is what tells the operator WHY.
+> 9. **⇒ "THE BODY OPENS" IS NOT "THE CHART HAS IT". DO NOT DROP `reproject_owed` OR EXIT 3 AS
+>    NOISE (#584, 2026-09-13).** When a pen row's key lands on an event that was already admitted
+>    without it, `event_clear.twin` reads back and `medication_statement` stays empty, because the
+>    projection trigger is `AFTER INSERT` and a re-apply inserts nothing. `requeue` says so and exits
+>    3, naming `cairn-node reproject` (owner connection, heal mode). It looks like a spurious failure
+>    on a run whose every row released. It is the only thing between an operator and a medication
+>    list that silently omits a recovered record. Pinned by
+>    `requeue_retains_unlanded_custody.rs::an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_chart`,
+>    which asserts the chart is 0 before the heal and 1 after. If #584 makes the door re-project,
+>    retire the heal step there — the test's own premise assertion will say when.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
@@ -315,7 +343,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-12, second session (**`requeue` never counts a release it did not get.** Closes **#578**/**#579**/**#580**/**#581** — the four production defects the #568 review found, fixed together because they are one code path. `do_requeue` deleted a pen row on the apply door's `Ok`, and the door returns `Ok` on two LENIENT arms that admit a sealed event WITHOUT custody; on a restored solo node that row is the last copy of the DEK. THE RULE: a pen row carrying a wrapped DEK is released only when custody actually landed. `cairn_custody_landed` joins **`db/052`** — one definition both crates ask — with **NO new migration file and NO SCHEMA bump** (every `db/*.sql` replays on connect). Four mutations run, all killed; three tests **inverted, not deleted**. Full local gate GREEN — 164 binaries, 2025 tests, zero self-skips. Opened **#583**. PR **#582**.) · earlier that day: (**`requeue` releases custody, and something proves it.** Closes **#568** — `do_requeue`'s custody-carrying arm, the remedy every restore-penned reason advertises, had zero tests. Five DB-gated tests drive the shipped `cairn-sync requeue` binary against a node whose pen is the only copy of its record; the assertion is that a sealed body **OPENS**, not that a row exists. **No production code change.** Seven mutations run, all killed — and TWO of them survived a first draft and were rewritten, both written up in the file header. Opened **#578** (requeue deletes the pen row when custody did not land, silently, at exit 0 — the sharpest of the four), **#579**, **#580**, **#581** from the review. **No migration, no SCHEMA bump, no wire change.** PR **#577**.) · also that day: (**CodeQL moves to advanced setup with a model pack** — the ten false positives are gone by construction, not by dismissal: `rust/cleartext-logging`'s sources are NAME heuristics, eight `barrierModel` rows on named functions' return values take the workspace from **44 → 3** at CI's exact versions; the Settings flip to advanced is done at repo AND org level — the org configuration was the real blocker; CONTRIBUTING gains the recipe. PR **#576**.) · previous: 2026-09-11 (**the restore's recovery code gets a non-interactive path, and the CLI surface gets its first tests**; closes **#572**/**#570** with **ADR-0069**, spec v0.70 → **v0.71**; opens #575; PR #574) · previous: 2026-09-10 second session (**the §1.2 budget measured** — 116.7 s against 600 s, linear at 1.17 ms/event — plus **ADR-0068**, *provenance warns, never gates*; closed #571, opened #572, confirmed #552) · 2026-09-10 earlier (**DR slice 2d — the record comes home**; closed #554, **ADR-0067**, **`db/052`** SCHEMA 51 → 52; the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**) · 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — and the session that found 2c unmerged and un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**the closing-keyword guard**, and earlier **#511** the custody newtypes) · 2026-09-02 (**DR slice 2b**, and earlier **#527** the CodeQL backlog) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-13 (**the PR #582 review, fixed on the branch.** Five reviewers; two critical findings — a retained record's recovery left the medication list EMPTY, and the no-key message named a command that forecloses the real key on a restored node — plus pull's auto-release deleting keyed pen rows unasked. New: `cairn_custody_state` + `cairn_release_pen_row` in **`db/052`** (still no new migration, no SCHEMA bump), exit **3 = INCOMPLETE**, `reproject_owed`, the `pen_rows_leave_through_one_door.rs` guard, retention-suite arms 5–7. Opened **#584** (late custody never re-projects), **#585** (no caller reads Postgres notices) **#586** (two source guards stop at a file's first test module) and **#587** (a sync-only DB loaded by an older build gets a raw 42883, not "run `cairn-sync init`"). Targeted gate green; full sweep left to CI. Same PR **#582**.) · before that: 2026-09-12, second session (**`requeue` never counts a release it did not get.** Closes **#578**/**#579**/**#580**/**#581** — the four production defects the #568 review found, fixed together because they are one code path. `do_requeue` deleted a pen row on the apply door's `Ok`, and the door returns `Ok` on two LENIENT arms that admit a sealed event WITHOUT custody; on a restored solo node that row is the last copy of the DEK. THE RULE: a pen row carrying a wrapped DEK is released only when custody actually landed. `cairn_custody_landed` joins **`db/052`** — one definition both crates ask — with **NO new migration file and NO SCHEMA bump** (every `db/*.sql` replays on connect). Four mutations run, all killed; three tests **inverted, not deleted**. Full local gate GREEN — 164 binaries, 2025 tests, zero self-skips. Opened **#583**. PR **#582**.) · earlier that day: (**`requeue` releases custody, and something proves it.** Closes **#568** — `do_requeue`'s custody-carrying arm, the remedy every restore-penned reason advertises, had zero tests. Five DB-gated tests drive the shipped `cairn-sync requeue` binary against a node whose pen is the only copy of its record; the assertion is that a sealed body **OPENS**, not that a row exists. **No production code change.** Seven mutations run, all killed — and TWO of them survived a first draft and were rewritten, both written up in the file header. Opened **#578** (requeue deletes the pen row when custody did not land, silently, at exit 0 — the sharpest of the four), **#579**, **#580**, **#581** from the review. **No migration, no SCHEMA bump, no wire change.** PR **#577**.) · also that day: (**CodeQL moves to advanced setup with a model pack** — the ten false positives are gone by construction, not by dismissal: `rust/cleartext-logging`'s sources are NAME heuristics, eight `barrierModel` rows on named functions' return values take the workspace from **44 → 3** at CI's exact versions; the Settings flip to advanced is done at repo AND org level — the org configuration was the real blocker; CONTRIBUTING gains the recipe. PR **#576**.) · previous: 2026-09-11 (**the restore's recovery code gets a non-interactive path, and the CLI surface gets its first tests**; closes **#572**/**#570** with **ADR-0069**, spec v0.70 → **v0.71**; opens #575; PR #574) · previous: 2026-09-10 second session (**the §1.2 budget measured** — 116.7 s against 600 s, linear at 1.17 ms/event — plus **ADR-0068**, *provenance warns, never gates*; closed #571, opened #572, confirmed #552) · 2026-09-10 earlier (**DR slice 2d — the record comes home**; closed #554, **ADR-0067**, **`db/052`** SCHEMA 51 → 52; the pin `nothing_yet_restores_a_clinical_event_from_a_medium` **inverted, not deleted**) · 2026-09-07 (**the CAIRNB3 section-framing guard, #523** — and the session that found 2c unmerged and un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**the closing-keyword guard**, and earlier **#511** the custody newtypes) · 2026-09-02 (**DR slice 2b**, and earlier **#527** the CodeQL backlog) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -338,6 +366,41 @@ JS, no npm), pane/routing/freshness state machine tested but **not wired**.
 ROADMAP carries the per-slice narrative and **every open issue number** (including an index of the ones
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
+
+### 2026-09-13 — the PR #582 review, fixed on the branch
+
+A five-agent review of #582 (code, tests, comments, silent failures, type design); every finding fixed
+in the PR or filed (**#584**, **#585**). The plan's *What the review changed* section is the full
+ledger. What generalises:
+
+- **⇒ A TEST THAT ASSERTS "THE BODY OPENS" CAN PASS OVER AN EMPTY CHART.** The first version of the
+  retention suite stopped at `event_clear.twin` and passed while the recovery it described left
+  `medication_statement` at zero — the exact state `decide_custody` had already measured and
+  documented for `pull --full`. **When custody can arrive after its event, assert the projection, not
+  only the clear view.** Three of five reviewers found it independently; none of the build's own
+  mutations could, because none of them targeted a claim the suite never made.
+- **⇒ THE ACKED-ROW RULING WAS RIGHT AND ITS JUSTIFICATION WAS FALSE.** "As `do_pull` always has" was
+  written in three files; `do_pull` re-offers acked bytes and releases them if they now apply. A
+  comment asserting another code path's behaviour is a claim to grep — this slice's own lesson one
+  entry below, repeated by the fix for it.
+- **⇒ A REMEDY IN AN OPERATOR MESSAGE IS CODE, AND IT CAN BE THE DANGEROUS KIND.** The no-key line
+  named `cairn-node establish-unwrap-key`, which `cairn-node` itself warns forecloses the real key when
+  run without the key file on a restored node. Before printing a command as the fix, read that
+  command's own warnings.
+- **⇒ PUT THE RULE IN THE DATABASE AND THE MUTATION TELLS YOU.** With `cairn_release_pen_row`
+  enforcing the retention rule, the classic narrow mutation (key the check on the opened DEK) no longer
+  loses the key — the floor keeps the row — and running it exposed a second defect: a FALSE from the
+  door was reported as "the row vanished". A floor's refusal must be read back as a refusal.
+- **⇒ REVIEW THE REVIEW'S FIXES.** A second two-agent pass over the fix diff alone found five more
+  real defects, one in a guard written that same hour: the new source guard skipped everything after
+  a file's first `#[cfg(test)] mod` — ~96% of `cairn-node/src/main.rs` — and had copied that from two
+  older guards (**#586**). **A guard needs a positive control that it sees the code it guards**, not
+  only a synthetic self-test of its matcher. The rest are in the plan's second-review section.
+- **Gate this time:** the test binaries this change reaches, run directly against PG18 (cairn-sync's
+  203 in-crate tests, both requeue suites, `clinical_pull`, the restore suites and the source guards),
+  plus the db/052 SQL mirror with six SQL mutations. **The full local sweep was NOT re-run** — the
+  macOS per-binary assessment makes it hours; CI's `clippy + cargo test (cairn_pgx floor)` job is the
+  full gate for this push.
 
 ### 2026-09-12 (last) — `requeue` never counts a release it did not get
 
@@ -363,8 +426,9 @@ migration file, no SCHEMA bump. What generalises past the slice:
   still needs its paired `ALTER` — #207 — neither of which a function triggers.)
 - **⇒ A COMMENT CAN ASSERT A BEHAVIOUR THAT EXISTS NOWHERE, AND SURVIVE A MERGE.**
   `restore::clinical` justified its counting with *"`do_requeue` skips those"* about acked rows.
-  `do_requeue` had no filter at all. The fix was the CODE, not the comment, because `do_pull` had
-  honoured `acked` all along and the asymmetry was the defect. **Grep the claim, do not read it.**
+  `do_requeue` had no filter at all. The fix was the CODE, not the comment, because `db/021` makes
+  `acked` a recorded human decision. **Grep the claim, do not read it.** (This bullet's first version
+  added *"because `do_pull` had honoured `acked` all along"* — itself false, see 2026-09-13 above.)
 - **A 400-line fixture is shared, not copied** (`tests/common/dead_node.rs`, the `#[path]`
   convention `common/serve.rs` set). #568's header already records two fixture mistakes that each
   made a test pass for the wrong reason; a second copy is two more chances at that.
@@ -387,6 +451,8 @@ migration file, no SCHEMA bump. What generalises past the slice:
   PUBLIC holds `TEMPORARY` by default, so any caller could `CREATE TEMP TABLE event_dek (…)` and
   make that `SECURITY DEFINER` body answer from their own decoy — dictating, for this function,
   whether `requeue` deletes a pen row holding the last copy of a clinical key, in either direction.
+  (The review then found the `DEFINER` itself unjustified — `cairn_node` already reads all three
+  tables — and the custody doors now run with invoker rights; `pg_temp` stays pinned.)
   **A new definer function copies its `SET` clause from a neighbour; write `public, pg_temp` and let
   the catalogue guard confirm it.** #583 asks for a third guard of the same shape over the tables a
   restore door fences on — the catalogue, never a per-function assertion, is what covers the site

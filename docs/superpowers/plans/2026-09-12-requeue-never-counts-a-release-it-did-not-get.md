@@ -28,10 +28,12 @@ owes its report), and `db/021`'s `acked` (a human explicitly licenses an exclusi
 the code agree with them; it decides nothing new.
 
 Paper-parity: not clinical-surface — `cairn-sync requeue` is an operator recovery command, not a
-clinician workflow, and this slice changes no step on any path a clinician walks. It *removes* an
-operator act (the second requeue that used to be needed after the first had already destroyed the
-key) rather than adding one, and it adds no confirmation prompt, which §1.2 forbids as a safety
-mechanism.
+clinician workflow, and this slice changes no step on any path a clinician walks. For the OPERATOR it
+adds acts rather than removing them — a retained row needs a second run once the cause is fixed, and
+a record whose key lands after its event was admitted needs a `cairn-node reproject` (#584) — which
+is the right trade against a key destroyed at exit 0. It adds no confirmation prompt, which §1.2
+forbids as a safety mechanism. (An earlier draft of this line claimed the slice *removed* an operator
+act; the PR #582 review showed that backwards.)
 
 ## Global Constraints
 
@@ -86,7 +88,8 @@ unopenable row would otherwise sit in the pen forever. `db/021` already has the 
 `acked = TRUE` is *"a human explicitly licenses the exclusion"*. Task 4 makes `do_requeue` honour it,
 so the operator's recorded decision — not a guess by the code — is what finally drops the row.
 
-**Exit code: 0.** A run that retained rows reports loudly on stderr and in `--metrics`, and exits 0,
+**Exit code: 0.** ⚠️ *Reversed by the PR #582 review — see "What the review changed" below: an
+incomplete run now exits 3.* A run that retained rows reports loudly on stderr and in `--metrics`, and exits 0,
 matching `do_pull`'s standing ruling that a sanctioned degradation *"must not fail the cycle but must
 be alertable"* — the same rule #579 cites. Nothing is lost when a row is retained, and the remedy is
 a later run, not a failed one. ⚠️ **This is the one place a reviewer should push back if they
@@ -240,10 +243,12 @@ project's convention, not a separate docs PR). Full-workspace `cargo test` via
 ## What this slice does NOT do
 
 - **It does not change the exit code.** Reasoning above; flagged for review rather than settled
-  quietly.
+  quietly. ⚠️ *Reversed by the review (below).*
 - **It does not touch `do_pull`.** The pull path deletes its pen row on release too, but a puller
   sees the DEK again next cycle and the peer still holds it — the asymmetry ADR-0067 already records.
-  Whether the pull path owes the same guard is **#536**, which is open and stays open.
+  Whether the pull path owes the same guard is **#536**, which is open and stays open. ⚠️ *Both halves
+  were wrong, and the review reversed this (below): the peer need NOT hold the key — it may have
+  withheld custody — and #536 is about counting Rust-side unwrap failures, not this guard.*
 - **It does not add a `--dry-run` or a `--require-custody` flag.** #580 mentions both as
   possibilities; neither is needed once the pen stops emptying itself, and a flag that must be
   remembered is a worse safety mechanism than a default that cannot lose the key.
@@ -277,3 +282,118 @@ and what was found stays visible.
    dead code in the binary; a `debug_assert_eq!` at the end of `do_requeue` is the honest home — the
    loop went from three outcomes to five in one change, and a sixth that forgets its counter is
    exactly what it catches.
+
+---
+
+## What the review changed (PR #582, 2026-09-13)
+
+A five-agent review (code, tests, comments, silent failures, type design) of the branch as first
+pushed. Its findings, and what was done with each — kept here, after the build's own notes, so the
+three stages (plan, build, review) stay distinguishable.
+
+**Critical.**
+
+1. **The recovery the retention message promised left the chart empty.** A retained row's event is
+   admitted (sealed) on the first run; the medication projection sees no clear payload and writes
+   nothing; when the key lands on a later run the `event_log` INSERT is `ON CONFLICT DO NOTHING`, so
+   the `AFTER INSERT` projection trigger never fires again. Three reviewers found it independently,
+   and arm 1 of `requeue_retains_unlanded_custody.rs` now *measures* it: after the second run the
+   body opens and `medication_statement` is 0. **Kept the admission** (the release suite's arms 2, 3
+   and 5 pin it deliberately: a sealed stub and its overlays in the chart beat nothing), and made the
+   gap visible instead — `requeue` reads `cairn_custody_state` before and after the door, reports
+   `reproject_owed` with a line naming `cairn-node reproject`, and exits 3. Arm 1 then runs the heal
+   and asserts the record reaches the chart. The structural fix — the door re-projecting custody that
+   arrives late — is a design choice with privilege and heal-safety questions, filed as **#584**.
+2. **The "door withheld" message sent a restored-node operator to a command that can foreclose the
+   real key.** It named `cairn-node establish-unwrap-key`, which `cairn-node`'s own warning says never
+   to run on a restored node without the real key file in place; and it named one cause for a state
+   with two (`db/020` step 7, a DEK that does not open this event's body, is reachable with a
+   registered key). Split into `NoKeyRegistered` — naming WHICH key opened the DEK (the file, or a
+   derivation from which signing key) and repeating the hazard — and `DekDidNotOpenBody`, decided by
+   whether `node_unwrap_key` holds a row. Arm 6 is new and pins the second.
+
+**Important, all fixed.**
+
+- **Exit code** (the plan's flagged decision): `cairn-node restore` already exits non-zero when it
+  pens records ("this exit code says the restore is INCOMPLETE"), and `requeue` is the command that
+  finishes that restore; restore-penned rows pin no floor, so nothing else ever alarms. A run that
+  leaves rows held (for custody, or refused by the door) or a chart owed a heal now exits
+  **3 (INCOMPLETE)**, distinct from 1 (failed).
+- **`pull`'s auto-release deleted pen rows without asking.** A peer re-serving a restore-penned event
+  without custody would delete its key. The rule now lives in the database as well:
+  `cairn_release_pen_row` (db/052) refuses a keyed row whose custody has not landed, both `pull` and
+  `requeue` release through it, and `crates/cairn-node/tests/pen_rows_leave_through_one_door.rs` fails
+  if anything else deletes pen rows.
+- **The acked-row ruling cited a precedent that does not exist.** `do_pull` never withholds an acked
+  row from the door — its `skipped_acked` counts acked rows the door refused *again*. The ruling
+  stands on its own argument now, stated in `requeue.rs`, and the comments claiming parity were
+  corrected in three files.
+- **Shredded releases counted as `released_with_custody`.** Split into `released_shredded`, via the
+  named state (`absent | shredded | held | plaintext | withheld`). Arm 5 is new.
+- **The human summary line omitted `vanished`**, and read counts by JSON string key. `do_requeue` now
+  returns a typed `RequeueReport`; the line is a pure, unit-tested `summary_line` that destructures
+  every field.
+- **A vacuous assertion**: `requeue_releases_custody.rs` arm 4 checked for the absence of a message
+  nothing printed any more. Replaced with the count and the line that would actually appear.
+- **The retained-row UPDATE ignored its row count**, so a row removed mid-run was reported "KEPT".
+  Zero rows now counts as vanished and says the key went with it. And a release the database guard
+  refuses is reported as kept by the guard, not as vanished — found by running mutation 2, which the
+  floor now catches before the row can go.
+
+**Smaller fixes.** A `Damaged` row is no longer promised that a rerun helps; `DidNotOpen` names
+length-preserving corruption as a possible cause; every SQL remedy prints the FULL digest (a prefix
+matches no `bytea` row, so an ack silently did nothing); the custody check is keyed on the address
+derived from the signed bytes, not the pen's own digest; plaintext events are settled (a DEK beside
+one opens nothing); the custody doors run with invoker rights (the `SECURITY DEFINER` justification
+was false — `cairn_node` already reads all three tables) and the SQL mirror now runs them AS
+`cairn_node`; the mirror's arm-4 anti-vacuity comment named the wrong mutation; the step-7/step-9
+attribution of `db/020`'s arms was corrected; `restore_inherits_custody.rs`'s freshness truncate
+became one helper every restore-applying test in that file calls (#583's order hazard, not only at the
+two sites that failed); a database fault during the custody read is now tested end to end (arm 7 —
+which, a second review pointed out, several layers catch, so it pins the property rather than killing
+any one Rust-side mutation).
+
+**Filed rather than fixed.** **#584** — custody that lands after admission never re-projects
+(structural; the design options are in the issue). **#585** — nothing reads Postgres WARNING notices,
+so `db/020`'s admit-without-custody arms stay invisible to every caller but the ones that now ask.
+
+**Considered and left.** Acked rows still get one SKIPPED line each per run rather than a single
+summary: the per-row line carries the full digest the un-ack statement needs. The type-design
+review's larger extraction (a per-row function returning an outcome, recorded once) was not taken;
+the pure `keyed_row_verdict` / `open_pen_key` / `chart_rebuild_owed` split captured the testability it
+was after, and the exhaustive destructuring in `accounted_for` / `metrics` / `summary_line` makes a
+forgotten field a compile error.
+
+### A second review, of the review's fixes
+
+Two agents (code, comments) over the fix diff alone. No path that loses a key or miscounts; these
+were real and all fixed:
+
+- **The new source guard scanned almost none of `cairn-node/src/main.rs`.** It stopped at a file's
+  first `#[cfg(test)] mod`, which there is line ~253 of ~6 500. It now skips only gated module bodies
+  and asserts, as positive controls, that `async fn main`, `do_pull` and `do_requeue` are in what it
+  scans. The two older guards it was copied from share the gap: **#586**.
+- **`cairn_release_pen_row` trusted the digest a row is filed under.** It now derives the address from
+  the row's own `signed_bytes`, as db/001's CHECK does, so the Rust check and the floor agree about a
+  mis-keyed row. SQL arm 6b pins it, and the trust-the-digest mutation fails it.
+- **The no-key remedy could not be followed for a derived key** ("put that same key there" — there is
+  no file). `KeySource` now carries which source `resolve` used, and each gets its own remedy.
+- **An unknown custody-state word was framed as "this node's own DATABASE failed".** A typed
+  `RequeueStop` now gives it its own headline and remedy (upgrade cairn-sync).
+- **A chart owed a heal is reported by one run only** — once the row leaves the pen, the next requeue
+  exits 0. Every message that names the heal now says so; a durable fix is added to **#584**'s options.
+- Several mutation-kill claims in the test headers predated the database guard (which now keeps the
+  row a Rust-side break would release, changing which assertion fails); they were rewritten to say
+  which assertion kills each one, and arm 7 no longer claims a kill it cannot make.
+- Smaller: pull's comment wrongly said a re-offer enriches a pen row with a DEK (only a restore does);
+  "never enter the record" survived in two places; the chart wording implied stale rows where the
+  projection writes none; the step-7/step-9 inseparability without a registered key is documented.
+
+**Filed:** **#586** (the two older guards' scan scope) and **#587** (`cairn-sync` does not replay schema, so a
+sync-only database loaded by an older build meets the new functions as a raw 42883 rather than "run
+`cairn-sync init`"; fails safe).
+
+**Considered and left:** a retained row whose UPDATE finds it gone is counted `vanished` and does not
+make the run incomplete, though its line says the key may have gone with it — reachable only by a
+hand DELETE mid-run; and pull still keeps a guard-refused row silently, because `Ok(false)` there
+cannot be told from "no pen row" without a query per applied event.

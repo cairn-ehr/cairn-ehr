@@ -134,18 +134,24 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
     (
         "db/052_restore_doors.sql",
-        "the custody POST-CONDITION, `cairn_custody_landed` — same db/005 / db/020 family, \
-         and it MOVED HERE FROM `crates/cairn-node/src/restore/clinical.rs` in #578 because a \
-         second caller appeared (`cairn-sync`'s `requeue`, which cannot call cairn-node's \
-         Rust: higher layer, different Postgres client). That move is this guard's whole \
-         point made concrete — a forked copy that dropped the shred arm would look correct \
-         and hold a record forever. What it decides: db/020 has two LENIENT arms that admit a \
-         sealed record WITHOUT custody and return OK, so no caller may read the door's return \
-         as proof the record came back; it asks the database instead. A shredded target \
-         legitimately has no custody — penning or retaining it would hold a record whose key \
-         was destroyed on purpose — so this decides about CREATION, never about whether an \
-         existing key travels. `event_custody_surviving` cannot answer it: that view is empty \
-         for BOTH the defect and the shred, and telling those two apart is the entire question",
+        "the custody POST-CONDITION, `cairn_custody_state` (and `cairn_custody_landed` / \
+         `cairn_release_pen_row`, stated over it) — same db/005 / db/020 family. It MOVED HERE \
+         FROM `crates/cairn-node/src/restore/clinical.rs` in #578 because more callers appeared \
+         (`cairn-sync`'s `requeue` and `pull`, which cannot call cairn-node's Rust: higher layer, \
+         different Postgres client). What it decides: db/020 admits a sealed record WITHOUT \
+         custody and returns OK on several paths, so no caller may read the door's return as \
+         proof the record came back; it asks the database instead, and a pen row holding a key \
+         is released only when custody is settled. A shredded target legitimately has no custody \
+         — penning or retaining it would hold a record, and a copy of its key, whose key was \
+         destroyed on purpose — so this decides about CREATION and RELEASE, never about whether \
+         an existing key travels. `event_custody_surviving` cannot answer it: that view is empty \
+         for BOTH the defect and the shred, and telling those two apart is the entire question. \
+         NOTE WHAT THIS GUARD DOES NOT CATCH: a forked copy that simply omits the shred arm never \
+         names `erasure_shred_log`, so it would not appear here at all. For THIS function and the \
+         requeue path it is caught behaviourally, by `db/tests/052_restore_doors_test.sql` (arm \
+         2) and `crates/cairn-sync/tests/requeue_retains_unlanded_custody.rs` (the \
+         shredded-record arm); a fork anywhere else — say, a caller re-inlining the question \
+         instead of calling the door — has no behavioural net, and relies on review",
     ),
 ];
 

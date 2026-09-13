@@ -288,6 +288,27 @@ fn the_custody_destination_writes_at_the_restored_nodes_own_posture() {
 // The whole restore-side loop, against a real database
 // ---------------------------------------------------------------------------------------
 
+/// Make this database a restore target: no unwrap key registered, and no enrolled node.
+///
+/// ⚠️ `local_node` IS PART OF "FRESH", AND LEAVING IT OUT MADE THIS FILE ORDER-DEPENDENT (#583).
+/// `restore_actor_registry`'s FIRST fence is `EXISTS (SELECT 1 FROM local_node)` — "a live node is
+/// never a restore target" — so a database carrying another suite's enrolled node fails a restore
+/// here with a diagnosis about THIS test's fixture that has nothing to do with it.
+/// `restore_cli_surface` drives a real `cairn-node` restore and legitimately leaves a `local_node`
+/// row behind, and a suite sorting just before this one is what exposed it.
+///
+/// Every test here that applies an export calls this — including the ones whose EXPECTED refusal
+/// (a singleton collision, a trial unwrap) happens to fire before that fence today. Without it they
+/// would pass only because of the fence order inside `apply_local_state`, and a freshness check
+/// moved earlier would silently change what they test. Truncating here rather than cleaning up in
+/// the predecessor is deliberate: a test establishes its own preconditions, and a cleanup at the
+/// producer would not run when one of its own tests failed early.
+async fn make_fresh_restore_target(c: &tokio_postgres::Client) {
+    c.batch_execute("TRUNCATE node_unwrap_key, local_node CASCADE")
+        .await
+        .expect("a restore target database is fresh");
+}
+
 /// Stage the database exactly as the dying node left it: an independent unwrap key
 /// registered, and one real wrapped custody row. Returns the dead node's keystore path and
 /// the secret an operator would have loaded from it.
@@ -397,19 +418,9 @@ async fn a_restore_installs_and_registers_the_inherited_unwrap_key() {
         "and so must the custody row it opens"
     );
 
-    // The restore target: a fresh database (no unwrap key registered) and a key path that
-    // does not exist yet, because `restore` has just minted the signing key beside it.
-    // ⚠️ `local_node` IS PART OF "FRESH", AND LEAVING IT OUT MADE THIS FILE ORDER-DEPENDENT.
-    // `restore_actor_registry`'s FIRST fence is `EXISTS (SELECT 1 FROM local_node)` — "a live
-    // node is never a restore target" — so a database carrying another suite's enrolled node
-    // fails every restore here, with a diagnosis about THIS test's fixture that is nothing to
-    // do with it. `restore_cli_surface` drives a real `cairn-node` restore and legitimately
-    // leaves a `local_node` row behind; cargo runs it immediately before this file. Truncating
-    // it here rather than there is deliberate: a test should establish its own preconditions,
-    // not depend on every possible predecessor cleaning up after itself.
-    c.batch_execute("TRUNCATE node_unwrap_key, local_node CASCADE")
-        .await
-        .expect("a restore target database is fresh");
+    // The restore target: a fresh database and a key path that does not exist yet, because
+    // `restore` has just minted the signing key beside it.
+    make_fresh_restore_target(&c).await;
     let new_key = dir.path().join("restored-node.key");
     let new_unwrap = cairn_node::keystore::unwrap_key_path_for(&new_key);
     assert!(!new_unwrap.exists(), "precondition: nothing installed yet");
@@ -572,6 +583,7 @@ async fn apply_local_state_still_refuses_a_slot_this_build_cannot_apply() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let dir = tempdir().unwrap();
+    make_fresh_restore_target(&c).await;
     let new_unwrap =
         cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
 
@@ -632,7 +644,7 @@ async fn a_differing_registration_refuses_the_restore_legibly_and_keeps_the_file
     // The hazard state: a DIFFERENT key already registered in the restore target. Generated,
     // so it is independent of the dead node's by construction (house rule 6 — the generator,
     // never a literal).
-    c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
+    make_fresh_restore_target(&c).await;
     let interloper = cairn_event::seal::generate_unwrap_secret().unwrap();
     let interloper_pub = cairn_event::seal::unwrap_public(&interloper);
     c.execute(
@@ -731,7 +743,7 @@ async fn a_secret_that_opens_no_carried_custody_is_refused_before_installing() {
     let public_half = cairn_event::seal::unwrap_public(&dead_secret);
     bundle.set_unwrap_secret(Some(Secret32::from_bytes(*public_half.as_bytes())));
 
-    c.batch_execute("TRUNCATE node_unwrap_key").await.unwrap();
+    make_fresh_restore_target(&c).await;
     let new_unwrap =
         cairn_node::keystore::unwrap_key_path_for(&dir.path().join("restored-node.key"));
 
@@ -783,8 +795,8 @@ async fn a_bundle_with_no_custody_rows_still_restores() {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let dir = tempdir().unwrap();
 
-    // `local_node` for the same reason as the site above — see its note.
-    c.batch_execute("TRUNCATE node_unwrap_key, event_dek, erasure_shred_log, local_node CASCADE")
+    make_fresh_restore_target(&c).await;
+    c.batch_execute("TRUNCATE event_dek, erasure_shred_log CASCADE")
         .await
         .unwrap();
     let dead_key = dir.path().join("dead-node.key.unwrap");

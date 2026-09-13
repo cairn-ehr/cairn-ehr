@@ -67,6 +67,9 @@ pub struct DeadNodeRecord {
     pub digest: Vec<u8>,
     pub dek_wrapped: Vec<u8>,
     pub twin: String,
+    /// The event's id as text — what `erasure_shred_log.target_event_id` keys on, so a suite can
+    /// stage "this record was shredded" without decoding the signed bytes.
+    pub event_id: String,
 }
 
 /// Truncate everything this suite touches, so each run starts from a genuinely empty node.
@@ -208,7 +211,7 @@ pub async fn author_sealed_record(c: &mut Client, sk: &SigningKey, kid: &str) ->
 
     let row = c
         .query_one(
-            "SELECT e.signed_bytes, e.content_address, d.dek_wrapped, k.twin \
+            "SELECT e.signed_bytes, e.content_address, d.dek_wrapped, k.twin, e.event_id::text \
                FROM event_log e \
                JOIN event_dek d ON d.event_id = e.event_id \
                JOIN event_clear k ON k.event_id = e.event_id \
@@ -223,6 +226,7 @@ pub async fn author_sealed_record(c: &mut Client, sk: &SigningKey, kid: &str) ->
         digest: row.get(1),
         dek_wrapped: row.get(2),
         twin: row.get(3),
+        event_id: row.get(4),
     };
     assert!(
         record.twin.contains("amoxicillin"),
@@ -257,7 +261,8 @@ pub async fn wipe_clinical_tier(c: &Client) {
 ///   * `Some(other)` pens a DEK this node cannot open — the foreign-medium arm — without having to
 ///     fake the rest of the row;
 ///   * `None` pens the KEYLESS row an ordinary `pull` creates for a plaintext event, which is the
-///     modal production shape and the one input pair `do_requeue`'s `_` arm absorbs silently.
+///     modal production shape — a row with no custody to lose, which `do_requeue` releases without
+///     ever asking about custody.
 pub async fn pen(c: &Client, record: &DeadNodeRecord, dek: Option<&[u8]>) {
     // ⚠️ THE DOOR'S BOOLEAN IS `acked`, NOT "was it penned". A fresh row comes back FALSE, a
     // re-offer of an already-acked one TRUE, and a pen it genuinely refuses RAISEs rather than
@@ -342,20 +347,45 @@ pub async fn twin_after_release(c: &Client, record: &DeadNodeRecord) -> Option<S
     .map(|r| r.get(0))
 }
 
-/// Run the shipped binary's `requeue` verb and return (success, stdout, stderr).
+/// `requeue`'s exit status for a run that finished its loop but left work — rows still held, or a
+/// released record whose chart needs `cairn-node reproject` (#578 review).
+///
+/// A COPY of `requeue::EXIT_INCOMPLETE` in `crates/cairn-sync/src/requeue.rs`, and it has to be: that
+/// module lives in a binary-only crate an integration test cannot import. The value is part of the
+/// command's contract with every script that runs it, which is exactly why a suite pins it from
+/// outside rather than reading it back from the code under test.
+pub const EXIT_INCOMPLETE: i32 = 3;
+
+/// Run the shipped binary's `requeue` verb and return (exit status, stdout, stderr).
+///
+/// The STATUS, not a success flag: since #578's review a requeue has three endings a script must
+/// tell apart — complete (0), incomplete ([`EXIT_INCOMPLETE`]), failed (1) — and a boolean folds two
+/// of them together. A process killed by a signal has no status and reports `-1`.
 ///
 /// `--metrics` so the counts come back as the JSON object a monitor would parse, which is also the
 /// only place `released` / `still_quarantined` are stated machine-readably.
-pub fn run_requeue(conn: &str, key_path: &str) -> (bool, String, String) {
+pub fn run_requeue(conn: &str, key_path: &str) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_cairn-sync"))
         .args(["requeue", "--conn", conn, "--key", key_path, "--metrics"])
         .output()
         .expect("run the cairn-sync binary");
     (
-        out.status.success(),
+        out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// How many rows `medication_statement` holds — the clinician's medication list.
+///
+/// The twin says the BODY opens; this says the record reached the CHART. They are different claims:
+/// projections run from an `AFTER INSERT` trigger on `event_log`, so custody that lands for an event
+/// already in the log opens the body and leaves this at zero (#578 review, critical 1).
+pub async fn medication_rows(c: &Client) -> i64 {
+    c.query_one("SELECT count(*) FROM medication_statement", &[])
+        .await
+        .expect("count the medication list")
+        .get(0)
 }
 
 /// Parse the `--metrics` object off stdout. A run that printed nothing parseable is itself a

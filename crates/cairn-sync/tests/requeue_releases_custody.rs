@@ -37,33 +37,35 @@
 //! double-wrap leaves no `event_dek` row AND no `event_clear` row. The instruction is still the
 //! right one, for the better reason above.
 //!
-//! # The four arms, and why all four are here
+//! # The four input arms, and why all four are here
 //!
-//! `do_requeue`'s custody decision produces three OUTCOMES from four INPUT PAIRS, and the
-//! difference matters: the match at `main.rs`'s `let dek = match (&unwrap_secret, &penned_dek)`
-//! has a `_` arm that absorbs three distinct pairs into one silent `None`. Counting outcomes and
-//! calling the job done is how the modal pair goes untested, so the arms here are indexed by
-//! INPUT:
+//! `do_requeue`'s custody decision starts from two inputs — does this run hold a custody key, and
+//! does the pen row carry a DEK — and the arms here are indexed by that INPUT pair rather than by
+//! outcome, because counting outcomes and calling the job done is how the modal pair went untested
+//! before this file existed:
 //!
-//! 1. `(Some, Some)` → opens. **Custody resolves and the DEK opens** — the body comes back.
-//! 2. `(None, Some)` → `_`. **No custody resolves at all** — the event is applied and the pen row
-//!    is KEPT, with its key.
-//! 3. `(Some, Some)` → fails. **This key does not open THAT DEK** — the event is applied, the row
+//! 1. key, DEK → opens. **Custody resolves and the DEK opens** — the body comes back.
+//! 2. no key, DEK. **No custody resolves at all** — the event is applied and the pen row is KEPT,
+//!    with its key.
+//! 3. key, DEK → does not open. **This key does not open THAT DEK** — the event is applied, the row
 //!    is KEPT, and the reason is named.
-//! 4. `(Some, None)` → `_`. **A keyless pen row while custody resolves** — the ordinary, non-DR
-//!    shape (`dek_wrapped` is nullable and every plaintext pull row has it NULL). Releases, and
-//!    must raise NO custody alarm.
+//! 4. key, no DEK. **A keyless pen row while custody resolves** — the ordinary, non-DR shape
+//!    (`dek_wrapped` is nullable and every plaintext pull row has it NULL). Releases, and must raise
+//!    NO custody alarm.
+//!
+//! Arm 5 is not an input pair: it is the plumbing guard that `requeue` never MINTS a key file.
 //!
 //! ⚠️ **ARMS 2, 3 AND 5 WERE INVERTED BY #578, AND THEY SAY SO IN PLACE.** All three used to assert
 //! that the row was RELEASED when custody could not be recovered, which is how a requeue came to
 //! destroy the last copy of a clinical DEK at exit 0. The rule now is that a pen row carrying a
-//! wrapped DEK is released only when custody actually landed (`crates/cairn-sync/src/requeue.rs`),
-//! and the retention path has its own suite in `requeue_retains_unlanded_custody.rs`. Read the
-//! inverted assertions there and here as one change, not two behaviours.
+//! wrapped DEK is released only when custody for its event is settled
+//! (`crates/cairn-sync/src/requeue.rs`), and the retention path has its own suite in
+//! `requeue_retains_unlanded_custody.rs`. Read the inverted assertions there and here as one
+//! change, not two behaviours. All three now also expect exit status [`EXIT_INCOMPLETE`]: a run
+//! that kept a row has left work, and a script must be able to see it.
 //!
-//! The remaining pair, `(None, None)`, is the trivial composition of 2 and 4 and is left untested
-//! deliberately: it reaches the same `_` arm with neither input present and has no behaviour of
-//! its own.
+//! The remaining pair, no key and no DEK, is the trivial composition of 2 and 4 and is left untested
+//! deliberately: a keyless row never consults the key, so it has no behaviour of its own.
 //!
 //! Arm 2 is the anti-vacuity twin of arm 1: without it, a suite that never opened anything at all
 //! would still pass arm 1's shape. Arm 4 is the FALSE-POSITIVE twin of arm 3 — arm 3 proves the
@@ -83,12 +85,25 @@
 //!   that is #517's business, not this file's.
 //! * **Every arm pens exactly ONE record.** `do_requeue` computes `dek` inside its loop, so
 //!   degradation is per-row today; nothing here would notice it being hoisted above the loop.
+//! * **The chart.** These arms assert the body opens (the twin). Whether a released record also
+//!   reaches `medication_statement` — it does not, when its key lands on an event already in the
+//!   log — is `requeue_retains_unlanded_custody.rs` arm 1's business.
 //!
 //! # Mutation results — why this file is trusted
 //!
 //! A test written against behaviour that already works proves nothing until a deliberate break has
-//! been shown to make it fail. Every mutation below was applied to `main.rs` and RUN; every one is
-//! killed, and mutation 4 is the reason this section exists at all.
+//! been shown to make it fail. Every mutation below was applied to `main.rs` and RUN against the
+//! code as it stood when #568 landed; every one was killed, and mutation 4 is the reason this
+//! section exists at all.
+//!
+//! ⚠️ **The table is a record of that run, not a live claim about the code today**, and two rows
+//! have since changed meaning. Row 6 described a match with a `_` arm that no longer exists (#578
+//! replaced it with `requeue::open_pen_key`, which a keyless row never reaches), so its mutation
+//! cannot be expressed any more. And #578 changed what arms 2, 3 and 5 assert, so some of rows 1–3's
+//! "ok" cells for those arms may no longer hold. The database's release guard (PR #582 review) also
+//! changed what a Rust-side break can observably do — it keeps a keyed row the Rust code would have
+//! released — so do not read any cell here as current. The table has not been re-run cell by cell;
+//! `requeue_retains_unlanded_custody.rs` carries the mutation list for the rule as it stands.
 //!
 //! | # | mutation in `main.rs` | 1 opens | 2 unresolvable | 3 foreign | 4 keyless | 5 minting |
 //! |---|-----------------------|---------|----------------|-----------|-----------|-----------|
@@ -167,10 +182,10 @@ async fn a_penned_sealed_record_releases_with_its_custody_and_the_body_opens() {
     let (_dir, key_path, sk, record) = dead_node_with_a_penned_record(&mut c).await;
     pen(&c, &record, Some(&record.dek_wrapped)).await;
 
-    let (ok, stdout, stderr) = run_requeue(&base, &key_path);
-    assert!(
-        ok,
-        "requeue must succeed\nstdout: {stdout}\nstderr: {stderr}"
+    let (code, stdout, stderr) = run_requeue(&base, &key_path);
+    assert_eq!(
+        code, 0,
+        "requeue must complete\nstdout: {stdout}\nstderr: {stderr}"
     );
     let m = metrics(&stdout, &stderr);
     assert_eq!(m["released"], 1, "the penned record must be released: {m}");
@@ -213,8 +228,8 @@ async fn a_penned_sealed_record_releases_with_its_custody_and_the_body_opens() {
 /// `node_unwrap_key` registered, so `resolve_at_startup` refuses and `cmd_requeue` degrades to
 /// `None` rather than aborting. That degradation is deliberate and unlike `cmd_pull` (#554 review
 /// finding 3): `requeue` is the recovery command a restore's own output points operators at, and a
-/// recovery command that aborts before releasing anything is worse than one that releases without
-/// custody.
+/// recovery command that aborts before releasing anything is worse than one that releases what it
+/// safely can.
 ///
 /// ⚠️ **INVERTED BY #578, NOT DELETED.** This test used to assert `released: 1` and an empty pen:
 /// the event came back sealed and the pen row — the only copy of its key — was deleted on the way.
@@ -241,11 +256,11 @@ async fn without_resolvable_custody_the_record_is_kept_rather_than_released() {
     let (stranger_sk, _kid) = cairn_event::generate_key().unwrap();
     let stranger_path = write_key_file(dir.path(), "stranger.key", &stranger_sk);
 
-    let (ok, stdout, stderr) = run_requeue(&base, &stranger_path);
-    assert!(
-        ok,
-        "a recovery command must still recover the EVENT when it cannot recover the KEY\n\
-         stdout: {stdout}\nstderr: {stderr}"
+    let (code, stdout, stderr) = run_requeue(&base, &stranger_path);
+    assert_eq!(
+        code, EXIT_INCOMPLETE,
+        "a recovery command must still recover the EVENT when it cannot recover the KEY — and say it \
+         left work, rather than fail or claim to be done\nstdout: {stdout}\nstderr: {stderr}"
     );
     let m = metrics(&stdout, &stderr);
     assert_eq!(
@@ -274,9 +289,8 @@ async fn without_resolvable_custody_the_record_is_kept_rather_than_released() {
         "with no custody the body must stay SEALED — if this reads back, arm 1 is passing for \
          some reason other than the custody arm and the whole file is vacuous"
     );
-    // The RESOLUTION failed, which is a different arm from a DEK that would not open (arm 3).
-    // `"WITHOUT custody"` alone cannot tell them apart — it appears in both messages — so this
-    // asserts the fragment unique to `cmd_requeue`'s resolution failure.
+    // The RESOLUTION failed, which is a different arm from a DEK that would not open (arm 3), so
+    // this asserts the fragment unique to `cmd_requeue`'s resolution failure.
     assert!(
         stderr.contains("custody key could not be resolved"),
         "the operator must be told they did not get custody, and WHY, or they will read a clean \
@@ -290,9 +304,10 @@ async fn without_resolvable_custody_the_record_is_kept_rather_than_released() {
 
 /// **A foreign medium: the pen holds a DEK wrapped for somebody else's node.**
 ///
-/// The only arm that reaches `do_requeue`'s unwrap-failure branch. Arms 1 and 2 pass a good secret
-/// and no secret respectively; here the secret is this node's own and correct, and it simply cannot
-/// open this key.
+/// The only arm in THIS file whose DEK fails to unwrap under a resolved key. Arms 1 and 2 pass a good
+/// secret and no secret respectively; here the secret is this node's own and correct, and it simply
+/// cannot open this key. (The other way an unwrap fails — a wrong-length, damaged row — is
+/// `requeue_retains_unlanded_custody.rs` arm 3.)
 ///
 /// ⚠️ **INVERTED BY #578, NOT DELETED.** This used to assert the row was released, on the reasoning
 /// that a key belonging to another node is worth nothing here. That reasoning does not survive
@@ -321,10 +336,10 @@ async fn a_penned_dek_from_another_node_is_kept_until_a_human_decides_otherwise(
             .expect("re-wrap for a stranger");
     pen(&c, &record, Some(&foreign)).await;
 
-    let (ok, stdout, stderr) = run_requeue(&base, &key_path);
-    assert!(
-        ok,
-        "a key this node cannot open is not a reason to lose the record\n\
+    let (code, stdout, stderr) = run_requeue(&base, &key_path);
+    assert_eq!(
+        code, EXIT_INCOMPLETE,
+        "a key this node cannot open is not a reason to lose the record, nor to call the run done\n\
          stdout: {stdout}\nstderr: {stderr}"
     );
     let m = metrics(&stdout, &stderr);
@@ -358,7 +373,7 @@ async fn a_penned_dek_from_another_node_is_kept_until_a_human_decides_otherwise(
 // Arm 4 — a KEYLESS pen row while custody resolves: the quiet, modal case
 // ---------------------------------------------------------------------------
 
-/// **The input pair `do_requeue`'s `_` arm absorbs in silence, and the one that is NOT a disaster.**
+/// **The input pair that is NOT a disaster: a working key over a row with no DEK.**
 ///
 /// `sync_quarantine.dek_wrapped` is nullable (`db/052`), and every pen row an ordinary `pull`
 /// creates for a PLAINTEXT event has it NULL. So `(Some(secret), None)` — a working custody key
@@ -371,11 +386,14 @@ async fn a_penned_dek_from_another_node_is_kept_until_a_human_decides_otherwise(
 /// custody warning is printed**, because nothing went wrong. An operator requeueing an ordinary
 /// pen must not be told their custody failed.
 ///
-/// Watched failing before it was trusted (mutation 6): collapsing the match to
-/// `(Some(secret), dek) => unwrap_dek(dek.as_deref().unwrap_or(&[]), secret)` makes every keyless
-/// row report a custody failure, and this test fails on the "no false alarm" assertion. The
-/// `.expect()` variant of the same slip panics mid-loop and discards the partial-completion report
-/// #471 exists to preserve; that fails here too, on `assert!(ok)`.
+/// Watched failing before it was trusted (mutation 6, against #568's code): collapsing the match so
+/// that a keyless row was unwrapped as an empty blob made every keyless row report a custody
+/// failure, and this test failed on the "no false alarm" assertion.
+///
+/// ⚠️ Since #578 that assertion had quietly stopped being able to fail: the message it looked for
+/// had been reworded, so `!stderr.contains(<the old wording>)` was true of every run (#578 review).
+/// It now asserts the retention itself did not happen — the count and the line — which is the alarm
+/// an operator would actually see.
 #[tokio::test]
 async fn a_keyless_pen_row_releases_quietly_and_raises_no_custody_alarm() {
     let Some(base) = cs() else {
@@ -388,12 +406,13 @@ async fn a_keyless_pen_row_releases_quietly_and_raises_no_custody_alarm() {
     // The node's own key resolves; the PEN simply carries no DEK.
     pen(&c, &record, None).await;
 
-    let (ok, stdout, stderr) = run_requeue(&base, &key_path);
-    assert!(
-        ok,
+    let (code, stdout, stderr) = run_requeue(&base, &key_path);
+    assert_eq!(
+        code, 0,
         "an ordinary keyless pen row is not a failure\nstdout: {stdout}\nstderr: {stderr}"
     );
-    assert_eq!(metrics(&stdout, &stderr)["released"], 1);
+    let m = metrics(&stdout, &stderr);
+    assert_eq!(m["released"], 1);
     assert!(
         event_survived(&c, &record).await,
         "the event must be recovered\nstderr: {stderr}"
@@ -407,11 +426,16 @@ async fn a_keyless_pen_row_releases_quietly_and_raises_no_custody_alarm() {
 
     // THE ASSERTION. A keyless row is not a custody failure, and reporting one here would train
     // operators to ignore the message on the run where it is real.
+    assert_eq!(
+        m["custody_retained"], 0,
+        "FALSE ALARM: a pen row that never carried a DEK was counted as kept for custody: {m}"
+    );
     assert!(
-        !stderr.contains("did not open with this node's custody key"),
-        "FALSE ALARM: a pen row that never carried a DEK was reported as one that failed to \
-         open. An operator who sees this on every ordinary requeue stops reading it — and the \
-         run where custody genuinely was lost is the one it then hides.\nstderr: {stderr}"
+        !stderr.contains("KEPT in the pen")
+            && !stderr.contains("did not open with the custody key"),
+        "FALSE ALARM: a pen row that never carried a DEK was reported as one whose key failed. An \
+         operator who sees this on every ordinary requeue stops reading it — and the run where \
+         custody genuinely was lost is the one it then hides.\nstderr: {stderr}"
     );
     assert!(
         !stderr.contains("custody key could not be resolved"),
@@ -457,10 +481,11 @@ async fn requeue_refuses_a_missing_key_file_rather_than_minting_one() {
     assert!(!absent.exists(), "the fixture path must start absent");
     let absent_path = absent.to_str().unwrap().to_string();
 
-    let (ok, stdout, stderr) = run_requeue(&base, &absent_path);
-    assert!(
-        ok,
-        "the recovery command still recovers the event\nstdout: {stdout}\nstderr: {stderr}"
+    let (code, stdout, stderr) = run_requeue(&base, &absent_path);
+    assert_eq!(
+        code, EXIT_INCOMPLETE,
+        "the recovery command still recovers the event, and says it left the key's row behind\n\
+         stdout: {stdout}\nstderr: {stderr}"
     );
     assert_eq!(metrics(&stdout, &stderr)["custody_retained"], 1);
     assert!(

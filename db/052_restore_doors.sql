@@ -12,7 +12,9 @@
 --      second crate, forking the quota and dedupe logic across two implementations of a
 --      safety floor. ADR-0001 says where it goes instead: the database.
 --
--- Plus one additive column on the pen, so a restore-penned sealed event keeps its key.
+-- Plus one additive column on the pen, so a restore-penned sealed event keeps its key — and,
+-- since #578, the custody doors (section 4) that decide when a pen row holding that key may be
+-- let go: `cairn_custody_state`, `cairn_custody_landed`, `cairn_release_pen_row`.
 --
 -- ⚠️ PRIVILEGE. `restore_actor_registry` writes the trust anchor every clinical apply door
 -- gates on, and it deliberately bypasses `enroll_actor`'s collision guards (see its own doc
@@ -231,9 +233,8 @@ COMMENT ON COLUMN sync_quarantine.dek_wrapped IS
 -- ADR-0001's direction (fat Postgres, thin daemons) applied to a floor that is already about
 -- refusing things safely.
 --
--- Returns TRUE if the bytes are already ACKED — an operator's recorded decision that they
--- will never enter the record — so the caller can distinguish "penned" from "penned and
--- already excluded".
+-- Returns TRUE if the bytes are already ACKED — an operator's recorded decision to exclude
+-- them — so the caller can distinguish "penned" from "penned and already excluded".
 --
 -- THE QUOTA IS CALLER-SUPPLIED POLICY, and NULL on either parameter means UNBOUNDED. That is
 -- a deliberate carve-out, not a loosening, and it is what the restore path passes:
@@ -353,71 +354,155 @@ GRANT EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEX
                                                  TEXT, BYTEA, BIGINT, BIGINT) TO cairn_node;
 
 -- ---------------------------------------------------------------------------
--- 4. Did the custody a caller presented actually land? (issue #578)
+-- 4. Custody: did it land, and may a pen row holding a key be let go? (issue #578)
 -- ---------------------------------------------------------------------------
 
--- TRUE when `p_content_address` names an event whose custody question is SETTLED here:
--- either this node holds a wrapped DEK for it, or the event has been shredded and never
--- will.
+-- WHY THESE ARE DOORS AND NOT A LINE OF SQL IN EACH CALLER. `apply_remote_event` (db/020)
+-- returns normally — admitting a sealed event WITHOUT custody: no `event_dek`, no
+-- `event_clear`, no clear twin, and so no projection — on more paths than its OK suggests:
 --
--- WHY THIS IS A DOOR AND NOT A LINE OF SQL IN EACH CALLER. `apply_remote_event` returns
--- normally on TWO lenient arms — a presented DEK that does not open the sealed body, and an
--- unregistered `node_unwrap_key` — both of which skip step 9 entirely (no `event_dek`, no
--- `event_clear`, no twin, no projection) after a `RAISE WARNING` that nothing in this tree
--- reads. So a caller that trusts the door's OK cannot tell a recovered record from an
--- unopenable one. TWO callers must ask this, and neither can call the other's Rust —
--- `cairn-node` is the higher layer, and the two use different Postgres clients:
+--   * step 7: a DEK was presented and did NOT open the sealed body (`RAISE WARNING`);
+--   * step 9: a DEK opened it but no `node_unwrap_key` is registered to re-wrap it to
+--     (`RAISE WARNING`);
+--   * no DEK was presented at all (`p_dek` NULL) — silently, no warning;
+--   * the target is already shredded (step 9's anti-resurrection check) — silently.
 --
---   * `cairn-node`'s restore (`restore::clinical`) has asked it since slice 2d, inline, and
---     pens the record as `CustodyDidNotLand` when the answer is FALSE.
---   * `cairn-sync`'s `requeue` never asked at all: it deleted the pen row on the door's OK,
---     and on a restored solo node that row was the LAST copy of the key (#578).
+-- Nothing in this tree reads a connection's WARNING stream, so a caller that trusts the
+-- door's OK cannot tell a recovered record from an unopenable one. THREE call sites must
+-- ask, in two crates that cannot call each other's Rust (`cairn-node` is the higher layer,
+-- and the two use different Postgres clients):
 --
--- ⚠️ A LOGGED SHRED COUNTS AS LANDED, AND THAT IS NOT A LOOPHOLE. db/020 step 9 refuses
--- custody outright for an already-shredded target (`NOT EXISTS (erasure_shred_log …)`),
--- which is ADR-0005's anti-resurrection rule and is arrival-order independent by design:
--- set-union may re-deliver the row forever, custody never comes back. Such a record stands
--- EXACTLY as it stood on the dead node, so a caller that read this as "not landed" would
--- hold it forever waiting for a key that was destroyed on purpose.
+--   * `cairn-node`'s restore (`restore::clinical`) — before it counts a record as applied,
+--     and pens it as `CustodyDidNotLand` when the answer is no. (It asked inline until #578.)
+--   * `cairn-sync`'s `requeue` — before it deletes a pen row. It never asked, and on a
+--     restored solo node the row it deleted was the LAST copy of the key (#578).
+--   * `cairn-sync`'s `pull` auto-release — which also deleted a pen row on the door's OK, and
+--     could delete a restore-penned row's key when a peer re-served that event without
+--     custody (#578 review).
 --
--- STABLE, not VOLATILE: it reads and never writes, so a caller may be planned freely around
--- it. SECURITY DEFINER for the same reason the doors beside it are — the three tables it
--- reads carry the clinical plane's custody state, and a caller needs the ANSWER, never
--- SELECT on `event_dek`.
+-- ⚠️ THREE STATES ARE SETTLED, AND TWO OF THEM HOLD NO KEY. That is not a loophole:
 --
--- ⚠️ `pg_temp` LAST IS LOAD-BEARING, NOT HOUSE STYLE (#426). Postgres searches the session's
--- TEMPORARY schema FIRST for relation names unless the path names `pg_temp` explicitly, and
--- PUBLIC holds `TEMPORARY` by default. Without it, any caller could `CREATE TEMP TABLE
--- event_dek (…)` and make this definer body answer from their own decoy — which for THIS
--- function means dictating whether `requeue` deletes a pen row holding the last copy of a
--- clinical key, in either direction. Pinned over the whole catalogue by
--- `crates/cairn-node/tests/search_path_pg_temp.rs`, which is what caught it here.
+--   * `shredded` — db/020 step 9 refuses custody outright for an already-shredded target,
+--     ADR-0005's anti-resurrection rule, arrival-order independent by design: set-union may
+--     re-deliver the row forever and custody never comes back. A caller that read this as
+--     "not landed" would hold the record forever waiting for a key destroyed on purpose — and
+--     would keep a copy of that key in the pen while it waited.
+--   * `plaintext` — the event has no sealed body, so there is nothing a DEK could open. A
+--     DEK riding beside one is meaningless, and holding its pen row strands a readable record.
+--
+-- INVOKER RIGHTS, deliberately — unlike `cairn_quarantine_event` above, which writes. These
+-- read `event_log`, `event_dek` and `erasure_shred_log`, all of which `cairn_node` may
+-- already SELECT (db/020, db/037), and the release deletes from `sync_quarantine`, which it
+-- may already DELETE (db/021). `SECURITY DEFINER` would buy no privilege anyone lacks, and it
+-- is the only thing that makes a hijacked `search_path` dangerous. The mirror
+-- (`db/tests/052_restore_doors_test.sql`, arm 9) runs every question AS `cairn_node`, so a
+-- grant that goes missing is a failing test rather than a production `requeue` that stops at
+-- its first keyed row.
+--
+-- `pg_temp` is still pinned last (#426): an invoker can only fool itself with a temp-table
+-- decoy, but a pinned path is what `crates/cairn-node/tests/search_path_pg_temp.rs` asks of
+-- every function that sets one, and it keeps these answers identical in every session.
+
+-- The custody state of the event at `p_content_address`, one of:
+--   'absent'    — no such event in this node's log;
+--   'shredded'  — erasure is logged for it (settled: the key was destroyed on purpose);
+--   'held'      — this node holds a wrapped DEK for it (settled: custody landed);
+--   'plaintext' — not a sealed event (settled: there is no body to open);
+--   'withheld'  — a sealed event holding neither a DEK nor a shred: the #578 state.
+--
+-- A NAMED state, not a boolean, because callers do more than decide: `requeue` counts a
+-- shredded release apart from a recovered one (a monitor must not read three destroyed keys as
+-- three recovered charts), and it tells a record whose custody arrived AFTER its event was
+-- admitted — whose chart projections were built blind and need a heal — by comparing this
+-- state before and after the door.
+--
+-- Precedence: `shredded` before `held`, so a logged shred is reported as what it is even if a
+-- custody row survived it; `plaintext` after both, since neither can apply to one.
+CREATE OR REPLACE FUNCTION cairn_custody_state(p_content_address BYTEA)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT CASE
+        WHEN el.event_id IS NULL THEN 'absent'
+        WHEN EXISTS (SELECT 1 FROM erasure_shred_log s
+                      WHERE s.target_event_id = el.event_id) THEN 'shredded'
+        WHEN EXISTS (SELECT 1 FROM event_dek d
+                      WHERE d.event_id = el.event_id) THEN 'held'
+        WHEN NOT el.sealed THEN 'plaintext'
+        ELSE 'withheld'
+    END
+    FROM (SELECT 1) AS one
+    LEFT JOIN event_log el ON el.content_address = p_content_address;
+$$;
+
+COMMENT ON FUNCTION cairn_custody_state(BYTEA) IS
+    'The custody state of an event: absent | shredded | held | plaintext | withheld. The first '
+    'is unknown, the middle three are SETTLED, withheld is a sealed event this node cannot open. '
+    'Shared by cairn-node''s restore and cairn-sync''s requeue and pull (issue #578).';
+
+-- Is custody SETTLED for this event — safe to stop holding a key for it?
+--
+-- The single predicate every caller shares, stated over `cairn_custody_state` so the two can
+-- never disagree about which states count.
 CREATE OR REPLACE FUNCTION cairn_custody_landed(p_content_address BYTEA)
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
-SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM event_log el
-         WHERE el.content_address = p_content_address
-           AND (EXISTS (SELECT 1 FROM event_dek d
-                         WHERE d.event_id = el.event_id)
-             OR EXISTS (SELECT 1 FROM erasure_shred_log s
-                         WHERE s.target_event_id = el.event_id))
-    );
+    SELECT cairn_custody_state(p_content_address) IN ('held', 'shredded', 'plaintext');
 $$;
 
 COMMENT ON FUNCTION cairn_custody_landed(BYTEA) IS
-    'Did the custody presented for this event actually land? TRUE for an event_dek row or a '
-    'logged shred (ADR-0005: the key was destroyed on purpose), FALSE for a sealed event '
-    'holding neither. The shared answer for cairn-node''s restore and cairn-sync''s requeue '
-    '(issue #578).';
+    'Is custody settled for this event? TRUE when held, shredded (ADR-0005: the key was '
+    'destroyed on purpose) or plaintext (nothing to open); FALSE when withheld or absent.';
 
--- Read-only, but it reads custody state, so it follows the file's posture rather than the
+-- Release (DELETE) a pen row whose event this node now stands holding — UNLESS the row carries
+-- a wrapped DEK and custody for its event is not settled. Returns whether a row was deleted.
+--
+-- THE RULE, IN THE DATABASE. `requeue` decides this in Rust first, because it has to explain
+-- every retention to an operator; this is the floor under that decision and the whole of the
+-- decision for `pull`, whose auto-release never asked. A keyed row whose custody did not land
+-- stays, whoever asks: that row may be the only copy of the key in the world.
+--
+-- CUSTODY IS ASKED ABOUT THE EVENT THE ROW'S BYTES ADDRESS, derived here exactly as db/001's
+-- CHECK derives `content_address` — never about `p_digest`. The pen door stores whatever digest
+-- its caller supplies, so a row filed under one address can hold another event's bytes and key;
+-- trusting the filing address would release that key the moment the WRONG event's custody landed.
+-- A floor exists precisely for the caller that did not check.
+--
+-- FALSE covers two situations a caller should not confuse, and `requeue` does not: the row was
+-- already gone (a concurrent pull or requeue took it — ordinary in a recovery session), or it
+-- was kept by the guard. `requeue` tells them apart by looking.
+CREATE OR REPLACE FUNCTION cairn_release_pen_row(p_digest BYTEA)
+RETURNS BOOLEAN
+LANGUAGE sql
+VOLATILE
+SET search_path = public, pg_temp
+AS $$
+    WITH released AS (
+        DELETE FROM sync_quarantine q
+         WHERE q.content_digest = p_digest
+           AND (q.dek_wrapped IS NULL
+                OR cairn_custody_landed('\x1220'::bytea || digest(q.signed_bytes, 'sha256')))
+        RETURNING 1
+    )
+    SELECT EXISTS (SELECT 1 FROM released);
+$$;
+
+COMMENT ON FUNCTION cairn_release_pen_row(BYTEA) IS
+    'Delete a pen row, unless it carries a wrapped DEK whose custody has not landed. TRUE when a '
+    'row was deleted. Used by cairn-sync requeue and pull (issue #578).';
+
+-- They read and delete custody state, so they follow the file's posture rather than the
 -- default: PUBLIC gets nothing and the node role gets the answer.
+REVOKE EXECUTE ON FUNCTION cairn_custody_state(BYTEA) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_custody_state(BYTEA) TO cairn_node;
 REVOKE EXECUTE ON FUNCTION cairn_custody_landed(BYTEA) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_custody_landed(BYTEA) TO cairn_node;
+REVOKE EXECUTE ON FUNCTION cairn_release_pen_row(BYTEA) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_release_pen_row(BYTEA) TO cairn_node;
 
 COMMIT;
