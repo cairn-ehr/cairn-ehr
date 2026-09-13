@@ -256,6 +256,10 @@ fn a_clean_medium_is_sound() {
 ///
 /// Every arm asserts `gated > 0` FIRST — the positive control. A mutation that retracted nothing
 /// would satisfy "not (sound and gated)" vacuously and prove nothing.
+///
+/// Each arm breaks exactly ONE thing, so the fault under test is the only fault that can make
+/// the medium unsound. `SelfIdUnbound` and `UnknownPlane` are not arms because they do not
+/// retract `verified_through`, so they hold nothing back.
 #[test]
 fn a_medium_that_gates_records_out_is_never_sound() {
     type M = crate::container::MediumV3;
@@ -268,7 +272,13 @@ fn a_medium_that_gates_records_out_is_never_sound() {
             m.segments[1].index = 9
         }),
         ("an empty segment", |m: &mut M| {
-            m.segments[1].records.clear()
+            m.segments[1].records.clear();
+            // Re-chain segment 2 onto the emptied segment. Clearing the records changes
+            // segment 1's commitment, so without this segment 2 ALSO reports `ChainBroken`,
+            // and a mutation that stopped pushing `EmptySegment` would still leave the medium
+            // unsound through that cascade — this arm would pass for the wrong reason.
+            m.segments[2].prev_commitment =
+                crate::attest::segment_commitment(&m.segments[1].records);
         }),
         ("an attestation that does not verify", |m: &mut M| {
             m.segments[1].attestation = Some(testkit::bytes(9, 64))

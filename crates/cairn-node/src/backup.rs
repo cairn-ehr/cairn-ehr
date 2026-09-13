@@ -2061,6 +2061,31 @@ mod tests {
         );
     }
 
+    /// **A LONG POSITION LIST IS CUT AT TEN, AND SAYS HOW MANY IT CUT.** Both straddled-duplicate
+    /// messages (`restore`'s notice and `verify-backup`'s advisory) go through
+    /// `describe_positions`, so a medium with thousands of straddled positions must still print
+    /// a readable line — without pretending the ten it shows are all there are.
+    #[test]
+    fn describe_positions_lists_ten_then_counts_the_rest() {
+        let twelve: Vec<i64> = (1..=12).collect();
+        assert_eq!(
+            describe_positions(&twelve),
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10 (and 2 more)",
+            "the first ten are named and the two past them are counted, never dropped silently"
+        );
+    }
+
+    /// The boundary of the cut above: exactly ten fits, so there is nothing "more" to admit to.
+    #[test]
+    fn describe_positions_adds_no_suffix_at_exactly_ten() {
+        let ten: Vec<i64> = (1..=10).collect();
+        assert_eq!(
+            describe_positions(&ten),
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10",
+            "ten positions are the whole list — a suffix here would claim positions that do not exist"
+        );
+    }
+
     /// **A COLLAPSED DUPLICATE IS NOT A TAMPERING FINDING** (PR #566 review, important 1).
     ///
     /// A clinic whose nightly capture was once interrupted and re-run carries byte-identical
