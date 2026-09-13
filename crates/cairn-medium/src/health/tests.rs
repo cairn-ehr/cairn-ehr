@@ -267,7 +267,9 @@ fn a_medium_that_gates_records_out_is_never_sound() {
         ("a segment lying about its index", |m: &mut M| {
             m.segments[1].index = 9
         }),
-        ("an empty segment", |m: &mut M| m.segments[1].records.clear()),
+        ("an empty segment", |m: &mut M| {
+            m.segments[1].records.clear()
+        }),
         ("an attestation that does not verify", |m: &mut M| {
             m.segments[1].attestation = Some(testkit::bytes(9, 64))
         }),
@@ -275,7 +277,11 @@ fn a_medium_that_gates_records_out_is_never_sound() {
 
     let clean = testkit::unsigned_chain_of(4);
     let h = assess(&clean);
-    assert!(h.sound(), "the fixture must start sound: {:?}", h.chain.faults);
+    assert!(
+        h.sound(),
+        "the fixture must start sound: {:?}",
+        h.chain.faults
+    );
     assert_eq!(gated_out(&clean, &h), 0, "and hold nothing back");
 
     for (what, break_it) in breaks {
