@@ -211,7 +211,7 @@ pub struct LocalState {
     /// wrapped ciphertext of something signature-verified elsewhere (`episode_deks` opens
     /// bodies that were verified on apply). These rows are neither: they are the ONE part of
     /// a restore whose authenticity rests solely on "the container decrypted", not on
-    /// verify-on-apply. Since slice 2d `apply_local_state` DOES insert them. That is
+    /// verify-on-apply. Since slice 2d, `apply_local_state` DOES insert them. That is
     /// accepted deliberately in ADR-0067 decision 1, and `restore` says so to the operator —
     /// the precondition this comment used to rest on ("does not yet insert them") no longer
     /// holds, and the acceptance replaced it.

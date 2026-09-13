@@ -146,8 +146,9 @@ async fn a_broken_clinical_chain_link_fails_before_any_clinical_all_clear() {
     );
     // UNSOUND, not SHORT. Both would be true of this file: the break gates the clinical records
     // out, so the trusted set is empty while the sidecar recorded a clinical watermark for this
-    // path. Soundness is checked first because its remedy ("locate another copy") is the right
-    // one for a damaged medium; "run backup again" would append to a broken chain.
+    // path. Soundness is checked first because UNSOUND's remedy (locate another copy, or write a
+    // NEW medium) is the right one for a damaged medium. SHORT's remedy, "run `backup --to` this
+    // path again", would not even work here: `backup` itself refuses to append to an unsound file.
     assert!(stderr.contains("backup UNSOUND"), "{stderr}");
     assert!(!stderr.contains("backup SHORT"), "{stderr}");
     assert!(

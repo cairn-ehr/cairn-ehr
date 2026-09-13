@@ -21,13 +21,12 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Fixtures for the DB-gated tests below. Deliberately the same SHAPE as
-// `backup_carries_both_planes.rs`'s `clinic()`; shared via `#[path]` with
-// `verify_backup_clinical_plane.rs`, but still not with `backup_carries_both_planes.rs`
-// (integration-test binaries in this crate cannot `use` another test binary's private
-// helpers) — but this one writes the node's signing key to a FILE, because the tests below
-// spawn the real `cairn-node` binary rather than calling `backup::backup_to` as a library
-// function.
+// Fixtures for DB-gated tests that drive the CLI. This file holds no tests itself: it is
+// included by `#[path]` into BOTH `verify_backup_scope.rs` and `verify_backup_clinical_plane.rs`.
+// Deliberately the same SHAPE as `backup_carries_both_planes.rs`'s `clinic()`, which does not
+// include it — but this one writes the node's signing key to a FILE, because the including
+// suites spawn the real `cairn-node` binary rather than calling `backup::backup_to` as a
+// library function.
 // ---------------------------------------------------------------------------
 
 pub fn cs() -> Option<String> {
@@ -56,11 +55,11 @@ impl Clinic {
 
     /// A `Command` for the freshly-built `cairn-node` binary, pointed at this fixture's
     /// database and key, with stdin nailed to `/dev/null`. That last part matters: an
-    /// unattended run is exactly what several tests below simulate, and `resolve_passphrase`
-    /// falls back to an interactive prompt when neither `--passphrase` nor
+    /// unattended run is exactly what several tests in the including suites simulate, and
+    /// `resolve_passphrase` falls back to an interactive prompt when neither `--passphrase` nor
     /// `CAIRN_KEY_PASSPHRASE` supplies one — `rpassword::prompt_password` already fails fast
     /// on a non-tty (pinned elsewhere in this crate), and `Stdio::null()` guarantees that is
-    /// what it always sees here, in every environment this suite ever runs in.
+    /// what it always sees here, in every environment those suites ever run in.
     pub fn cli(&self) -> std::process::Command {
         let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_cairn-node"));
         cmd.args(["--conn", &self.base, "--key"])
@@ -79,7 +78,7 @@ pub async fn establish_clinic() -> Option<Clinic> {
     let c = db::connect_and_load_schema(&base).await.unwrap();
     db::reset_node_federation_tables(&c).await.unwrap();
     // The same truncation list `common::medication_setup` uses, minus the medication
-    // projection tables this suite never touches — this file only needs `event_log` rows to
+    // projection tables the including suites never touch — they only need `event_log` rows to
     // exist, never their medication-specific shadow.
     c.batch_execute(
         "TRUNCATE event_log, actor_event, patient_chart, \
@@ -231,8 +230,8 @@ pub async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str
     signed.signed_bytes
 }
 
-/// The CAIRNB3 image, or a panic naming what was found instead. Every test in this file
-/// backs up through `backup_to`/the `backup` CLI arm, so a `Legacy` here is a broken writer.
+/// The CAIRNB3 image, or a panic naming what was found instead. Every suite that includes this
+/// file backs up through `backup_to`/the `backup` CLI arm, so a `Legacy` here is a broken writer.
 pub fn as_v3(image: &MediumImage) -> &MediumV3 {
     match image {
         MediumImage::V3(m) => m,

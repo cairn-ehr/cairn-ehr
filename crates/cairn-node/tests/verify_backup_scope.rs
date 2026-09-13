@@ -34,9 +34,15 @@ use cairn_node::backup::{self, kit_verdict, KitVerdict};
 // a signing key that must live in a FILE on disk, which `medication_setup`'s in-memory-only
 // keypair cannot provide — see `clinic_kit::establish_clinic` (tests/common/clinic_kit.rs)
 // for the from-scratch equivalent.
+mod common;
+
+// The solo-clinic CLI fixture (a live database plus a signing key in a FILE), shared by
+// `#[path]` with `verify_backup_clinical_plane.rs`. It calls `common::submit_registration`, so
+// this binary must declare `mod common;` above as well. Kept apart from it by the blank line so
+// rustfmt's module reordering cannot slide one item under the other's comment.
 #[path = "common/clinic_kit.rs"]
 mod clinic_kit;
-mod common;
+
 use clinic_kit::{
     author_sealed_clinical_event, clinical_records, establish_clinic, write_existing_escrow,
 };
