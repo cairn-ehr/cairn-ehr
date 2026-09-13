@@ -32,10 +32,11 @@ use cairn_node::backup::{self, kit_verdict, KitVerdict};
 // Shared scaffolding (`submit_registration` — #345 needs the first event on a chart to be
 // its registration). Not `medication_setup`: this suite drives the real CLI binary against
 // a signing key that must live in a FILE on disk, which `medication_setup`'s in-memory-only
-// keypair cannot provide — see `establish_clinic` below for the from-scratch equivalent.
-mod common;
+// keypair cannot provide — see `clinic_kit::establish_clinic` (tests/common/clinic_kit.rs)
+// for the from-scratch equivalent.
 #[path = "common/clinic_kit.rs"]
 mod clinic_kit;
+mod common;
 use clinic_kit::{
     author_sealed_clinical_event, clinical_records, establish_clinic, write_existing_escrow,
 };
@@ -418,6 +419,20 @@ async fn verify_backup_is_restorable_then_refuses_once_the_export_falls_behind()
         v1.status.success(),
         "a fresh, fully-covered kit must verify; stderr:\n{}",
         String::from_utf8_lossy(&v1.stderr)
+    );
+
+    // #567: the clinical half of the claim, cross-checked against the database's own count —
+    // never a hardcoded number (a registration rides event_log beside the medication assert).
+    let in_db: i64 = cl
+        .db
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let stdout1 = String::from_utf8_lossy(&v1.stdout);
+    assert!(
+        stdout1.contains(&format!("clinical-plane records OK: {in_db} verified")),
+        "a sound kit states what the clinical half of a restore would bring back: {stdout1}"
     );
 
     // A second clinical event lands, and this run's backup cannot seal a fresh export — a
