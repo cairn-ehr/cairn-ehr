@@ -3533,7 +3533,9 @@ async fn main() -> anyhow::Result<()> {
                         "  those {} record(s) are HELD in the quarantine pen with their \
                          custody ({} KiB): inspect with `cairn-sync quarantine`, and once \
                          the cause is fixed `cairn-sync requeue` completes the restore \
-                         without redoing it",
+                         without redoing it — exiting 3, and naming the step, for any record \
+                         it could not finish (read that run's output: a chart heal it names is \
+                         not repeated by a later run)",
                         clinical.penned(),
                         clinical.penned_bytes / 1024
                     );

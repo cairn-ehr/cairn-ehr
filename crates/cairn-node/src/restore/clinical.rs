@@ -103,8 +103,8 @@ pub struct ClinicalRestoreReport {
     pub penned_bytes: usize,
     /// Of the penned records, how many the pen reports were ALREADY ACKED.
     ///
-    /// An ack is an operator's recorded decision that those bytes will never enter the
-    /// record, and `do_requeue` skips them. Counted apart because every other penned record
+    /// An ack is an operator's recorded decision to exclude those bytes, and `do_requeue` does not
+    /// put them through the door. Counted apart because every other penned record
     /// carries the promise that `cairn-sync requeue` completes the restore, and for these it
     /// does not — a false remedy written into `sync_quarantine.reason`, read weeks later.
     pub penned_but_acked: usize,
@@ -159,7 +159,10 @@ pub fn pen_reason(cause: &RefusalCause) -> String {
              unwrap key is not registered. Admitted-without-custody is right for a peer that \
              will re-deliver the key; a restore has no second delivery, so the record is held \
              here instead. The bytes AND the key are kept: fix the cause, then `cairn-sync \
-             requeue` to complete the restore without redoing it."
+             requeue` to land the key without redoing the restore. Because this record is \
+             already in the log, its projection ran without the key and wrote no chart entry; \
+             the requeue run that lands the key names the `cairn-node reproject` heal that adds \
+             it — and only that run says so."
         ),
     }
 }
@@ -350,9 +353,10 @@ pub async fn apply_clinical_plane(
             Ok(_) => {
                 // Step 4 — DID THE CUSTODY LAND? A door that returned OK is not yet a record
                 // that came back. db/020 has two LENIENT arms that RAISE WARNING and admit
-                // WITHOUT custody: a presented DEK that does not open the sealed body, and an
-                // unregistered node unwrap key. Both skip db/020's step 9 entirely — no
-                // `event_dek`, no `event_clear`, no twin, no projection — and return normally.
+                // WITHOUT custody: a presented DEK that does not open the sealed body (its step 7),
+                // and an unregistered node unwrap key (its step 9). Neither writes custody — no
+                // `event_dek`, no `event_clear`, no clear twin, no projection — and both return
+                // normally.
                 //
                 // That is right for a PULLER, which sees the DEK again next cycle. For a
                 // restore there is no next cycle, and the WARNING is invisible: nothing in
@@ -402,25 +406,20 @@ pub async fn apply_clinical_plane(
 /// Asked of the DATABASE rather than inferred from the door's return, because the door
 /// returns `OK` on both of db/020's lenient arms — see [`apply_clinical_plane`]'s step 4.
 ///
-/// **A logged shred counts as landed, and that is not a loophole.** db/020's step 9 refuses
-/// custody outright for an already-shredded target (`NOT EXISTS (erasure_shred_log …)`), which
-/// is ADR-0005's anti-resurrection rule and is arrival-order independent by design: set-union
-/// may re-deliver the row forever, custody never comes back. Such a record restored EXACTLY as
-/// it stands on the dead node, so penning it would hold a record whose key was destroyed on
-/// purpose — the same mistake as keying the no-export path on sealedness rather than custody.
+/// **The predicate itself lives in `db/052_restore_doors.sql`, not here (#578).** It used to be
+/// inlined at this call site, which was fine while this restore was the only caller. It is not:
+/// `cairn-sync`'s `requeue` and `pull` must ask the identical question before they delete a pen
+/// row, and they cannot call this function — `cairn-node` is the higher layer and the two crates
+/// use different Postgres clients. The door's own comment carries the reasoning that must not
+/// fork, in particular that **a logged shred counts as landed** (ADR-0005's anti-resurrection rule:
+/// the key was destroyed on purpose, so waiting for it is waiting forever) and so does a plaintext
+/// event (there is no body a DEK could open, so a record carrying one is not refused for it).
+///
+/// What stays here is the ERROR wording, which is this caller's and not the door's: a restore
+/// that cannot verify custody stops rather than reporting custody it did not confirm.
 async fn custody_landed(db: &Client, content_address: &[u8]) -> anyhow::Result<bool> {
     let landed: bool = db
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM event_log el
-                  WHERE el.content_address = $1
-                    AND (EXISTS (SELECT 1 FROM event_dek d
-                                  WHERE d.event_id = el.event_id)
-                      OR EXISTS (SELECT 1 FROM erasure_shred_log s
-                                  WHERE s.target_event_id = el.event_id))
-             )",
-            &[&content_address],
-        )
+        .query_one("SELECT cairn_custody_landed($1)", &[&content_address])
         .await
         .map_err(|e| {
             anyhow::anyhow!(
@@ -456,9 +455,15 @@ async fn pen(
     let digest = cairn_event::event_address(&record.signed_bytes);
     let reason = pen_reason(&cause);
     // The door's RETURN is read, not discarded: db/052 documents it as TRUE when the bytes
-    // are already ACKED — an operator's recorded decision that they will never enter the
-    // record. `do_requeue` skips those, so counting them with the rest would attach the pen's
-    // standard "requeue completes the restore" promise to rows requeue will not touch.
+    // are already ACKED — an operator's recorded decision to exclude them. `do_requeue` does not
+    // put an acked row through the door (issue #581), so counting them with the rest would attach
+    // the pen's standard "requeue completes the restore" promise to rows requeue will not touch.
+    //
+    // ⚠️ Until #581 that rationale described a behaviour that existed nowhere: `do_requeue` had no
+    // `acked` check at all. It was made true rather than weakened, because `db/021` is explicit that
+    // `acked` records "a recorded human decision, never an automatic one". Note it is NOT `do_pull`'s
+    // behaviour — pull re-offers acked bytes and only silences their refusals — and that difference
+    // is deliberate; `requeue.rs` in `cairn-sync` carries the argument.
     let already_acked: bool = db
         .query_one(
             "SELECT cairn_quarantine_event($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)",
