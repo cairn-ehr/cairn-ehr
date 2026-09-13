@@ -30,6 +30,9 @@ pub use crate::medium::{
 use crate::capture;
 use crate::medium::{MediumImage, Plane};
 
+/// What `verify-backup` says about a medium's clinical plane, and when it refuses (#567).
+pub mod clinical_verdict;
+
 // ---------------------------------------------------------------------------
 // Reading a medium of EITHER revision (Erratum E2, #500 slice 2c design doc §4).
 //
@@ -152,6 +155,37 @@ pub fn clinical_plane_accounting(
     })
 }
 
+/// PURE. Every `source_seq` at which `records` holds two or more records, ascending, each once.
+///
+/// Only meaningful on the TRUSTED set from [`clinical_plane_accounting`], where wholly identical
+/// re-capture duplicates are already collapsed — so a repeated position here is always two
+/// DIFFERENT records. Shared by `restore`'s [`straddled_duplicate_notice`] and `verify-backup`'s
+/// advisory (`clinical_verdict`), which word the same finding for different moments: after an
+/// apply, and before anything has been applied.
+pub fn straddled_positions(records: &[cairn_medium::MediumRecord]) -> Vec<i64> {
+    let mut seqs: Vec<i64> = records.iter().map(|r| r.source_seq).collect();
+    seqs.sort_unstable();
+    let mut repeated: Vec<i64> = Vec::new();
+    for pair in seqs.windows(2) {
+        if pair[0] == pair[1] && repeated.last() != Some(&pair[0]) {
+            repeated.push(pair[0]);
+        }
+    }
+    repeated
+}
+
+/// PURE. The first ten positions, comma-separated, then `" (and N more)"` if there are more —
+/// so an operator message stays readable on a medium with thousands of them.
+pub fn describe_positions(positions: &[i64]) -> String {
+    let shown: Vec<String> = positions.iter().take(10).map(|s| s.to_string()).collect();
+    let more = if positions.len() > 10 {
+        format!(" (and {} more)", positions.len() - 10)
+    } else {
+        String::new()
+    };
+    format!("{}{more}", shown.join(", "))
+}
+
 /// The warning an operator must see when a medium's clinical plane still holds two DIFFERENT
 /// records at one `source_seq`. **Pure.** `None` when every seq is unique.
 ///
@@ -169,32 +203,19 @@ pub fn clinical_plane_accounting(
 /// resurrection case is already closed at the door), but so is saying nothing: the operator is
 /// the only one who can tell which capture was the right one.
 pub fn straddled_duplicate_notice(records: &[cairn_medium::MediumRecord]) -> Option<String> {
-    let mut seqs: Vec<i64> = records.iter().map(|r| r.source_seq).collect();
-    seqs.sort_unstable();
-    let mut repeated: Vec<i64> = Vec::new();
-    for pair in seqs.windows(2) {
-        if pair[0] == pair[1] && repeated.last() != Some(&pair[0]) {
-            repeated.push(pair[0]);
-        }
-    }
+    let repeated = straddled_positions(records);
     if repeated.is_empty() {
         return None;
     }
-    let shown: Vec<String> = repeated.iter().take(10).map(|s| s.to_string()).collect();
-    let more = if repeated.len() > 10 {
-        format!(" (and {} more)", repeated.len() - 10)
-    } else {
-        String::new()
-    };
     Some(format!(
         "WARNING: this medium holds two or more DIFFERENT records at the same source \
-         position(s): {}{more}. A byte-identical re-capture is collapsed silently and is \
+         position(s): {}. A byte-identical re-capture is collapsed silently and is \
          expected; these differ — typically a capture that straddled an unwrap-key rotation \
          or a crypto-shred, so the copies disagree about CUSTODY. All of them were applied \
          (the apply door is idempotent and refuses custody for an already-shredded target, so \
          nothing erased can come back). Review these positions: only you can tell which \
          capture reflects what the dead node actually held.",
-        shown.join(", ")
+        describe_positions(&repeated)
     ))
 }
 
