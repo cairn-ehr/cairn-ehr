@@ -402,6 +402,15 @@ What generalises:
 - **⇒ OPERATORS: `verify-backup` AFTER `backup`.** Under the new rule a `verify-backup && backup`
   cron stops backing up after a same-mount-point rotation (the drive that missed the last backup
   reads SHORT until its own next backup). This belongs in operator docs when those exist.
+- **Gate this time:** every suite the change reaches was run locally by the task implementers
+  against PG18 (`verify_backup_clinical_plane`, `verify_backup_scope`, `backup_health_v2`,
+  `reads_both_medium_revisions`, `backup_carries_both_planes`, `dr_clinical_guarantee_gap`,
+  `medium_point_in_time`, both libs, the source guards), with no self-skips. **The full local sweep
+  was started and STOPPED:** 12 binaries / 708 tests passed, then one freshly linked binary sat 3 h 45 m
+  in macOS Gatekeeper assessment (`syspolicyd` at ~53 % CPU, the test at 0 %) while other projects
+  were also linking. **CI's full `clippy + cargo test (cairn_pgx floor)` passed on the PR head** and is
+  the full gate for this branch. ⚠️ A killed sweep can leave `cairn_test` state behind (#583):
+  truncate `local_node` before trusting the next local red.
 
 ### 2026-09-13 — the PR #582 review, fixed, then merged
 
