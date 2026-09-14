@@ -35,7 +35,8 @@ use crate::medium::{MediumImage, Plane};
 // A plain comment, NOT a `///` doc comment, and that is load-bearing: rustdoc joins an outer
 // doc on a `mod` declaration with the file's own `//!` docs and then resolves EVERY intra-doc
 // link in the joined text from THIS (parent) module, so `clinical_verdict.rs`'s links to its
-// own items (such as `shortfall`) fail `RUSTDOCFLAGS=-D warnings`. Its docs live in its file.
+// own items (such as `clinical_plane_verdict`) fail `RUSTDOCFLAGS=-D warnings`. Its docs live
+// in its file.
 pub mod clinical_verdict;
 
 // ---------------------------------------------------------------------------
@@ -523,6 +524,24 @@ fn v3_claimed_node(image: &MediumImage) -> Option<(String, MarkerSource)> {
 // degrading to "never / running without a net" when absent or unreadable).
 // ---------------------------------------------------------------------------
 
+/// The sidecar shape this build WRITES. Whether a sidecar RECORDED per-plane counts is a
+/// different question with a fixed answer — see [`FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`]; a
+/// sidecar below that records no plane scope at all (v1 had a single `event_count`), and
+/// `describe_health` must say so rather than render the serde defaults as facts.
+pub const SUPPORTED_HEALTH_VERSION: u8 = 2;
+
+/// The first sidecar shape that RECORDED per-plane counts (`node_events`, `clinical_events`) —
+/// a fixed historical fact, where [`SUPPORTED_HEALTH_VERSION`] is whatever this build writes.
+///
+/// Kept as its own constant because the two used to be one (PR #588 review): gating "does this
+/// sidecar carry counts?" on the WRITTEN version meant that the day a build writes v3, every v2
+/// sidecar — which did record its counts — would be read as count-less. `describe_health` would
+/// then hide real counts, and `verify-backup`'s record-count axis would silently stop firing.
+pub const FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS: u8 = 2;
+
+// A build cannot write a sidecar older than the shape its own readers trust for counts.
+const _: () = assert!(FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS <= SUPPORTED_HEALTH_VERSION);
+
 /// A record of the last successful backup. Written only AFTER the medium is durable and
 /// self-verified, so it can never over-claim a backup the node does not actually hold.
 ///
@@ -546,20 +565,14 @@ fn v3_claimed_node(image: &MediumImage) -> Option<(String, MarkerSource)> {
 /// here would cry wolf on every healthy node. The durable record and the honest surface for
 /// those two fields are [#549](https://github.com/cairn-ehr/cairn-ehr/issues/549), not this
 /// task.
-/// The sidecar shape this build WRITES, and the floor at which it trusts the per-plane
-/// counts. A sidecar below this records no plane scope at all (v1 had a single
-/// `event_count`), and `describe_health` must say so rather than render the serde defaults
-/// as facts — see [`describe_health`].
-pub const SUPPORTED_HEALTH_VERSION: u8 = 2;
-
 // `Eq` is deliberately absent: `extra` holds `serde_json::Value`, which is `PartialEq` but
 // not `Eq` (floats). Nothing needs a total equality here, and preserving a newer build's
 // fields is worth more than the marker trait.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupHealth {
     /// Which sidecar shape wrote this. READ, not decorative: `describe_health` refuses to
-    /// present v1's absent per-plane counts as zeros. Compare against
-    /// [`SUPPORTED_HEALTH_VERSION`].
+    /// present v1's absent per-plane counts as zeros, and `verify-backup` refuses to treat them
+    /// as evidence. Compare against [`FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`].
     pub version: u8,
     /// Unix seconds at which the backup completed (operational wall-clock, not the HLC).
     pub last_backup_unix: i64,
@@ -812,7 +825,7 @@ pub fn describe_health(now_unix: i64, health: &Option<BackupHealth>) -> String {
         // multi-megabyte medium holds nothing — and it appeared exactly in the window between
         // upgrading the binary and the first successful new `backup`, i.e. the window where
         // `backup` is most likely to be failing and the line most likely to be read.
-        Some(h) if h.version < SUPPORTED_HEALTH_VERSION => format!(
+        Some(h) if h.version < FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS => format!(
             "{} ago (per-plane counts not recorded by the `backup` that wrote this sidecar — \
              run `backup` to refresh, {} bytes -> {})",
             humanize_ago(now_unix - h.last_backup_unix),
@@ -2063,6 +2076,29 @@ mod tests {
         assert!(
             notice.contains("custody"),
             "and the likely cause, which is what makes it actionable: {notice}"
+        );
+    }
+
+    /// **EACH REPEATED POSITION IS NAMED ONCE, IN ORDER** (PR #588 review). Three records at one
+    /// seq are one straddled position, not two: without the `repeated.last()` guard this would
+    /// print `9, 9` and inflate `describe_positions`'s "(and N more)" count. Input order is
+    /// capture order, which need not be seq order, so the output must be sorted.
+    #[test]
+    fn straddled_positions_names_each_repeated_seq_once_ascending() {
+        // `straddled_positions` reads `source_seq` alone, so every other field stays empty.
+        let at = |source_seq: i64| cairn_medium::MediumRecord {
+            signed_bytes: Vec::new(),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq,
+        };
+        let records: Vec<_> = [9, 3, 9, 4, 3, 9].into_iter().map(at).collect();
+        assert_eq!(straddled_positions(&records), vec![3, 9]);
+        assert_eq!(
+            straddled_positions(&[at(1), at(2)]),
+            Vec::<i64>::new(),
+            "no repeated seq, nothing to name"
         );
     }
 

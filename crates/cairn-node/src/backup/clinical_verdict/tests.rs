@@ -91,7 +91,11 @@ fn health_for(
     }
 }
 
-const V2: u8 = super::super::SUPPORTED_HEALTH_VERSION;
+/// The first sidecar shape that recorded per-plane counts, as a LITERAL (PR #588 review). It used
+/// to alias `SUPPORTED_HEALTH_VERSION` — the shape this build WRITES — so bumping that constant
+/// would have moved this one with it, and the tests pinning "a v2 sidecar's count is evidence"
+/// would have silently started testing v3 while real v2 sidecars lost their count evidence.
+const V2: u8 = 2;
 
 // --- the shortfall rule: the newest-seq axis ---------------------------------------------
 
@@ -258,6 +262,21 @@ fn a_straddled_duplicate_is_advisory_and_never_refuses() {
     assert_eq!(v.refusal, None, "a straddle is not a restorability failure");
 }
 
+/// PR #588 review: `restore`'s own untrusted-records notice tells an operator to run
+/// `verify-backup` against ANOTHER drive, which happens on the rescue machine — one that never
+/// held these records. The advisory must name the node that WROTE the medium, which is true on
+/// the original node and on a rescue machine alike.
+#[test]
+fn the_straddle_advisory_names_the_writing_node_not_the_verifying_one() {
+    let acc = plane(vec![rec(7, Some(4)), rec(7, None)], 0);
+    let advisory = verdict(&acc, false, None).advisory.expect("a straddle");
+    assert!(
+        advisory.contains("what the node that wrote this medium actually held"),
+        "{advisory}"
+    );
+    assert!(!advisory.contains("this node actually held"), "{advisory}");
+}
+
 #[test]
 fn an_empty_plane_without_evidence_says_empty_and_does_not_refuse() {
     let acc = plane(vec![], 0);
@@ -325,6 +344,38 @@ fn a_plane_behind_evidence_refuses_naming_both_seqs() {
     );
 }
 
+/// PR #588 review: the plane line prints on STDOUT and the refusal on STDERR, so a cron job that
+/// logs only stdout used to record `clinical-plane records OK` for a medium this command was
+/// about to fail as SHORT. Over a short plane the line must not say OK — on either axis — while
+/// still stating what the medium holds.
+#[test]
+fn the_plane_line_never_says_ok_over_a_short_medium() {
+    let acc = plane(vec![rec(1, None), rec(30, None)], 1);
+    let seq_short = verdict(&acc, false, recorded_seq_only(Some(40)));
+    assert!(seq_short.refusal.is_some(), "positive control: 30 < 40");
+    assert_eq!(
+        seq_short.summary,
+        "clinical-plane records SHORT: 2 verified, newest seq 30, 1 byte-identical \
+         re-capture(s) collapsed — less than this node's last backup to this path recorded \
+         (see `backup SHORT`)"
+    );
+
+    let count_short = verdict(&acc, false, recorded(Some(30), 9));
+    assert!(count_short.refusal.is_some(), "positive control: 3 < 9");
+    assert!(
+        count_short
+            .summary
+            .starts_with("clinical-plane records SHORT: 2 verified, newest seq 30"),
+        "{}",
+        count_short.summary
+    );
+    assert!(
+        !count_short.summary.contains("OK"),
+        "{}",
+        count_short.summary
+    );
+}
+
 /// Review M3: the evidence is about a PATH, and in a rotation it was a different drive — so
 /// the message must never say "this medium" recorded anything. And "through seq N" implied no
 /// gaps below N, which is exactly the claim the count axis exists to stop relying on.
@@ -365,6 +416,10 @@ fn a_plane_level_with_evidence_does_not_refuse() {
 /// The below-watermark backfill, as the operator reads it: the newest seq matches, so the
 /// refusal must name the COUNTS — and must not claim a certain loss, because the missing
 /// records could all have been byte-identical re-captures a restore collapses anyway.
+///
+/// The exception is ONLY a byte-identical re-capture (PR #588 review). A missing copy that
+/// differs in custody — the re-wrap after an unwrap-key rotation — is custody a restore does not
+/// bring back, so excusing it too would promise more than the medium can deliver.
 #[test]
 fn the_same_newest_seq_with_fewer_records_refuses_naming_the_counts() {
     let acc = plane(vec![rec(1, None), rec(2, None), rec(100, None)], 0);
@@ -381,8 +436,19 @@ fn the_same_newest_seq_with_fewer_records_refuses_naming_the_counts() {
         "the seq axis is level, so it is not reported as short: {refusal}"
     );
     assert!(
-        refusal.contains("unless every missing record was a re-capture (byte-identical or with different custody)"),
+        refusal.contains(
+            "would not bring back everything this node last captured, unless every missing \
+             record was a byte-identical re-capture of one still present"
+        ),
         "a count shortfall alone is not a certain loss: {refusal}"
+    );
+    assert!(
+        !refusal.contains("different custody"),
+        "a missing custody variant is not excused: {refusal}"
+    );
+    assert!(
+        refusal.contains("until then it may not restore everything"),
+        "the rotation hint is hedged the same way: {refusal}"
     );
     assert!(
         refusal.contains("run `backup --to`"),
@@ -429,13 +495,26 @@ fn both_axes_short_is_one_refusal_naming_both() {
         !refusal.contains("unless every missing record"),
         "with the newest event missing, the loss is certain: {refusal}"
     );
+    assert!(
+        refusal.contains("until then it really would restore less"),
+        "and the rotation hint says so: {refusal}"
+    );
 }
 
-/// Facts no sound medium can produce — raw records present, none verified — still get a TRUE
+/// Facts no SOUND medium can produce — raw records present, none verified — still get a TRUE
 /// sentence: "no clinical records at all" would be false over three raw records.
+///
+/// Built as the accounting really reports it, three records GATED OUT (PR #588 review): an
+/// earlier version passed a raw count of 3 beside an accounting summing to 0, facts the
+/// derivation cannot produce and the consistency check below now refuses.
 #[test]
 fn raw_records_with_none_verified_are_not_called_none_at_all() {
-    let refusal = verdict_with_raw(&plane(vec![], 0), 3, false, recorded_seq_only(Some(40)))
+    let all_gated = PlaneRecords {
+        records: vec![],
+        gated_out: 3,
+        collapsed: 0,
+    };
+    let refusal = verdict(&all_gated, false, recorded_seq_only(Some(40)))
         .refusal
         .expect("no verified seq against a recorded one");
     assert!(!refusal.contains("at all"), "{refusal}");
@@ -443,6 +522,28 @@ fn raw_records_with_none_verified_are_not_called_none_at_all() {
         refusal.contains("none of this medium's 3 clinical record(s) is verified"),
         "{refusal}"
     );
+}
+
+/// The raw count and the accounting must describe ONE medium (PR #588 review). The accounting's
+/// three fields sum to the plane's raw record count, so a caller that passed anything else — the
+/// trusted `records.len()`, say, the design's since-corrected first idea — would compare the
+/// sidecar's raw count against a smaller number and fail every clinic that ever collapsed a
+/// re-capture. Debug builds, which every test run uses, refuse such facts outright.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "describe different media")]
+fn a_raw_count_that_disagrees_with_the_accounting_is_refused() {
+    let acc = plane(vec![rec(1, None), rec(2, None)], 1);
+    verdict_with_raw(&acc, 2, false, None);
+}
+
+/// A legacy medium predates the clinical plane, so a raw clinical count on one is a caller bug.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a legacy medium has no clinical plane")]
+fn clinical_records_on_a_legacy_medium_are_refused() {
+    let acc = plane(vec![rec(1, None)], 0);
+    verdict(&acc, true, None);
 }
 
 // --- the evidence adapter ------------------------------------------------------------
@@ -494,5 +595,19 @@ fn a_pre_v2_sidecar_gives_no_count_evidence() {
     assert_eq!(
         last_backup_evidence_for(Some(&v1), medium),
         recorded_seq_only(None)
+    );
+}
+
+/// A sidecar NEWER than this build is trusted to have recorded its counts (PR #588 review) — on
+/// the assumption, stated at `evidence_in`, that the sidecar keeps evolving additively so a v3
+/// still carries `clinical_events`. Reading `>=` as `==` would silently switch the count axis off
+/// the day a newer build first writes one beside this binary.
+#[test]
+fn a_sidecar_newer_than_this_build_still_gives_count_evidence() {
+    let medium = Path::new("/nonexistent-567/cairn.medium");
+    let v3 = health_for("/nonexistent-567/cairn.medium", V2 + 1, Some(40), 7);
+    assert_eq!(
+        last_backup_evidence_for(Some(&v3), medium),
+        recorded(Some(40), 7)
     );
 }

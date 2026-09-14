@@ -16,8 +16,12 @@
 //!   a custody change). It never changes the exit code — as in `restore`;
 //! - a **refusal**, `backup SHORT`, ONLY ON EVIDENCE: this node's own `backup-status.json`
 //!   describes this path, and the medium holds less than that backup recorded — an older newest
-//!   clinical seq, or fewer clinical records ([`shortfall`]). Maintainer decision, 2026-09-13;
-//!   the record-count axis was added by the branch's final review, 2026-09-14.
+//!   clinical seq, or fewer clinical records (`shortfall`). Maintainer decision, 2026-09-13; the
+//!   record-count axis was added by PR #588's final review, 2026-09-14.
+//!
+//! Over a short medium the summary line says `SHORT`, never `OK`: it goes to stdout and the
+//! refusal to stderr, and a cron job that keeps only stdout must not log an all-clear for a
+//! medium this command fails (PR #588 review).
 //!
 //! # What it deliberately does not do
 //!
@@ -64,15 +68,16 @@ pub struct LastBackupEvidence {
     pub newest_seq: Option<i64>,
     /// How many clinical records that backup's medium held, counted raw (the sidecar's
     /// `clinical_events`). `None` for a sidecar older than
-    /// [`super::SUPPORTED_HEALTH_VERSION`]: those never recorded a count, and serde defaults
-    /// the field to 0 — a 0 nobody wrote is a claim, not a fact.
+    /// [`super::FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`]: those never recorded a count, and serde
+    /// defaults the field to 0 — a 0 nobody wrote is a claim, not a fact.
     pub clinical_records: Option<u64>,
 }
 
-/// Which way(s) a medium falls short of the evidence. [`shortfall`] only ever returns one with
-/// at least one field set.
+/// Which way(s) a medium falls short of the evidence. `shortfall` only ever returns one with at
+/// least one field set — and both are private so that rule stays beside its one constructor and
+/// its one reader, `short_refusal`, which would otherwise print a `backup SHORT` naming nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Shortfall {
+struct Shortfall {
     /// `Some(recorded)` when the medium's newest clinical seq is absent or below `recorded`.
     pub newest_seq: Option<i64>,
     /// `Some(recorded)` when the medium holds fewer raw clinical records than `recorded`.
@@ -91,13 +96,29 @@ pub struct ClinicalPlaneVerdict {
 }
 
 /// PURE. Decide everything `verify-backup` says about the clinical plane. See the module docs.
+///
+/// Debug builds first check that the facts describe ONE medium (PR #588 review). The
+/// accounting's three fields sum to the plane's raw record count, so a caller passing any other
+/// number as `medium_clinical_records` — the trusted `records.len()`, say — has mixed two
+/// derivations, and the count axis would then fail every clinic that ever collapsed a
+/// re-capture. Every test run is a debug build, so the mistake cannot reach a release unseen.
 pub fn clinical_plane_verdict(facts: &ClinicalPlaneFacts<'_>) -> ClinicalPlaneVerdict {
-    let newest = newest_seq(facts.accounting);
+    let acc = facts.accounting;
+    debug_assert_eq!(
+        facts.medium_clinical_records,
+        acc.records.len() + acc.gated_out + acc.collapsed,
+        "the raw clinical count and the accounting describe different media"
+    );
+    debug_assert!(
+        !facts.legacy || facts.medium_clinical_records == 0,
+        "a legacy medium has no clinical plane, yet clinical records were counted on one"
+    );
+    let newest = newest_seq(acc);
+    let short = shortfall(newest, facts.medium_clinical_records, facts.evidence);
     ClinicalPlaneVerdict {
-        summary: summary_line(facts, newest),
-        advisory: straddled_advisory(facts.accounting),
-        refusal: shortfall(newest, facts.medium_clinical_records, facts.evidence)
-            .map(|short| short_refusal(&short, newest, facts.medium_clinical_records)),
+        summary: summary_line(facts, newest, short.is_some()),
+        advisory: straddled_advisory(acc),
+        refusal: short.map(|short| short_refusal(&short, newest, facts.medium_clinical_records)),
     }
 }
 
@@ -114,10 +135,12 @@ pub fn clinical_plane_verdict(facts: &ClinicalPlaneFacts<'_>) -> ClinicalPlaneVe
 /// over the file under test — so duplicates need no reconciliation. The count axis is only
 /// consulted when the sidecar recorded one (v2 and newer); the seq axis stays for every sidecar.
 ///
-/// Level is complete on each axis. AHEAD is also fine on each: a backup can write the medium
-/// durably and then fail to write its sidecar, which leaves the medium holding more than the
-/// sidecar says. The axes are independent — ahead on one never excuses short on the other.
-pub fn shortfall(
+/// Level is not a shortfall on either axis — which is all it is: holding what the last backup
+/// recorded says nothing about records that backup never captured. AHEAD is not a shortfall
+/// either: a backup can write the medium durably and then fail to write its sidecar, which
+/// leaves the medium holding more than the sidecar says. The axes are independent — ahead on one
+/// never excuses short on the other.
+fn shortfall(
     medium_newest: Option<i64>,
     medium_records: usize,
     evidence: Option<LastBackupEvidence>,
@@ -165,12 +188,16 @@ pub fn last_backup_evidence_for(
 }
 
 /// PURE. The two facts one sidecar recorded, with the version rule applied: a sidecar older
-/// than v2 recorded no per-plane count, so its serde-default 0 is not passed on as evidence
-/// (the same rule `describe_health` applies before rendering one).
+/// than [`super::FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`] recorded no per-plane count, so its
+/// serde-default 0 is not passed on as evidence (the same rule `describe_health` applies before
+/// rendering one). A NEWER sidecar's count is trusted too, which ASSUMES the sidecar keeps evolving
+/// additively (principle 11). Nothing enforces that, and v2 itself replaced v1's `event_count`: a
+/// future shape that renamed or redefined `clinical_events` would read as a serde-default 0 here
+/// and silently switch the count axis off, so such a change must revisit this gate.
 fn evidence_in(health: &BackupHealth) -> LastBackupEvidence {
     LastBackupEvidence {
         newest_seq: health.clinical_watermark,
-        clinical_records: (health.version >= super::SUPPORTED_HEALTH_VERSION)
+        clinical_records: (health.version >= super::FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS)
             .then_some(health.clinical_events),
     }
 }
@@ -181,15 +208,29 @@ fn newest_seq(accounting: &PlaneRecords) -> Option<i64> {
     accounting.records.iter().map(|r| r.source_seq).max()
 }
 
-fn summary_line(facts: &ClinicalPlaneFacts<'_>, newest: Option<i64>) -> String {
+/// The one stdout line about the clinical plane. `short` is whether this medium is about to be
+/// refused as `backup SHORT`: the line then says so instead of `OK`, because it and the refusal
+/// go to different streams and may be read apart. The EMPTY and NONE lines claim no all-clear,
+/// so they read the same either way.
+fn summary_line(facts: &ClinicalPlaneFacts<'_>, newest: Option<i64>, short: bool) -> String {
     match newest {
         Some(seq) => {
             let collapsed = match facts.accounting.collapsed {
                 0 => String::new(),
                 k => format!(", {k} byte-identical re-capture(s) collapsed"),
             };
+            let (verdict, qualifier) = if short {
+                (
+                    "SHORT",
+                    " — less than this node's last backup to this path recorded \
+                     (see `backup SHORT`)",
+                )
+            } else {
+                ("OK", "")
+            };
             format!(
-                "clinical-plane records OK: {} verified, newest seq {seq}{collapsed}",
+                "clinical-plane records {verdict}: {} verified, newest seq \
+                 {seq}{collapsed}{qualifier}",
                 facts.accounting.records.len()
             )
         }
@@ -205,6 +246,10 @@ fn summary_line(facts: &ClinicalPlaneFacts<'_>, newest: Option<i64>) -> String {
 
 /// The straddled-duplicate finding, worded for a check that has applied nothing. `restore`'s
 /// [`super::straddled_duplicate_notice`] says the copies "were applied", which would be false here.
+///
+/// It names "the node that wrote this medium", never "this node": `restore`'s untrusted-records
+/// notice sends an operator to run `verify-backup` against another drive, and that happens on a
+/// rescue machine which never held these records (PR #588 review).
 fn straddled_advisory(accounting: &PlaneRecords) -> Option<String> {
     let repeated = super::straddled_positions(&accounting.records);
     if repeated.is_empty() {
@@ -217,7 +262,8 @@ fn straddled_advisory(accounting: &PlaneRecords) -> Option<String> {
          crypto-shred, so the copies disagree about CUSTODY. A restore would apply all of them \
          (the apply door is idempotent and refuses custody for an already-shredded target, so \
          nothing erased can come back). This does not fail the check, but review these \
-         positions: only you can tell which capture reflects what this node actually held.",
+         positions: only you can tell which capture reflects what the node that wrote this \
+         medium actually held.",
         super::describe_positions(&repeated)
     ))
 }
@@ -232,9 +278,12 @@ fn straddled_advisory(accounting: &PlaneRecords) -> Option<String> {
 /// - **"newest clinical seq N"**, never "through seq N": the latter implies no gaps below N,
 ///   which is exactly what a below-watermark backfill makes false.
 /// - **A certain loss only when the newest seq is short.** Then the newest recorded event is not
-///   on this medium. On the count axis alone the missing records could all have been re-captures
-///   (byte-identical or with different custody) of records still present, which a restore
-///   collapses or applies regardless.
+///   on this medium. On the count axis alone the missing records could all have been
+///   byte-identical re-captures of records still present, which a restore collapses anyway —
+///   so that case says a restore "would not bring back everything", *unless* that is so.
+/// - **Only a byte-identical re-capture is excused** (PR #588 review). A missing copy that
+///   differs in CUSTODY — the re-wrap an unwrap-key rotation writes — is custody this medium
+///   cannot hand a restore, so excusing it would promise more than the file holds.
 fn short_refusal(short: &Shortfall, newest: Option<i64>, medium_records: usize) -> String {
     let mut findings = Vec::new();
     if let Some(recorded) = short.newest_seq {
@@ -252,14 +301,13 @@ fn short_refusal(short: &Shortfall, newest: Option<i64>, medium_records: usize) 
     let consequence = if short.newest_seq.is_some() {
         "a restore from it would bring back less than this node last captured"
     } else {
-        "a restore from it would bring back less than this node last captured, unless every \
-         missing record was a re-capture (byte-identical or with different custody) of one \
-         still present"
+        "a restore from it would not bring back everything this node last captured, unless \
+         every missing record was a byte-identical re-capture of one still present"
     };
     let rotation_suffix = if short.newest_seq.is_some() {
         " — and until then it really would restore less"
     } else {
-        " — and until then it may restore less"
+        " — and until then it may not restore everything"
     };
     format!(
         "backup SHORT: this medium holds less than this node's last backup to this path \
