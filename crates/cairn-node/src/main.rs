@@ -1435,9 +1435,16 @@ enum Cmd {
         #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
         passphrase: Option<String>,
     },
-    /// Verify a backup medium WITHOUT applying it: every event's signature must check.
-    /// Pure/offline — needs no DB and no key. Exits non-zero on any tamper/bit-rot, so a
-    /// cron job can detect a rotted backup.
+    /// Verify a backup medium WITHOUT applying it: every record's signature and the chain must
+    /// check. Exits non-zero on any tamper/bit-rot, so a cron job can detect a rotted backup.
+    ///
+    /// Offline: never connects to a DB (`--conn`/`CAIRN_CONN` must still be given, and is
+    /// ignored), and reads no key MATERIAL. It does read `backup-status.json`
+    /// beside the `--key` path (default `node.key` in the working directory) — the evidence
+    /// for the export-coverage check and for `backup SHORT`. Run it from cron with the same
+    /// `cairn-node --key <path>` that `backup` uses. Without that file this command has no
+    /// evidence to compare against, and it cannot tell a wrong `--key` path from a node that
+    /// has never run `backup`.
     VerifyBackup {
         /// Path of the backup medium to verify.
         #[arg(long)]
@@ -2641,23 +2648,35 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::VerifyBackup { from } => {
-            // Offline, no DB, no key: read the medium and check every signature. A
-            // tampered/bit-rotted event fails the SAME check that catches a hostile peer.
+            // Offline, no DB, no key material: read the medium and check every signature. A
+            // tampered/bit-rotted event fails the SAME check that catches a hostile peer. (The
+            // one thing read from beside `--key` is its plaintext `backup-status.json` sidecar;
+            // see the variant's help.)
             //
             // Reads via `parse_any` + `node_plane_events` (Erratum E2, #500 slice 2c): once
             // `backup` starts writing CAIRNB3, this command must keep reading it rather than
             // refuse a perfectly good medium as "not a backup medium" — the exact regression
-            // this task exists to prevent. The COUNT printed at the end stays scoped to the
-            // NODE (federation) plane; see `node_plane_events`'s doc.
+            // this task exists to prevent. The federation-plane COUNT (`federation-plane events
+            // OK: N/N`) stays scoped to the NODE (federation) plane; see `node_plane_events`'s
+            // doc. The clinical line printed after it is `clinical_verdict`'s.
             //
-            // ⚠️ THAT SCOPING IS NOW A KNOWN GAP, not a safety property. It used to be one:
-            // while `restore` applied the federation plane alone, a count scoped the same way
-            // could never claim more than a restore could recover. Since #554 slice 2d
-            // `restore` applies BOTH planes, so this command's "OK" now says nothing about
-            // the half a clinic actually depends on — and `untrusted_clinical_notice`, which
-            // names records a restore will not be able to trust, is wired into `restore`
-            // only. An operator can therefore verify green and still restore a medium whose
-            // clinical plane is partly untrusted. Tracked as its own slice (#567).
+            // THE CLINICAL PLANE IS ASKED ABOUT EXPLICITLY (#567). Since #554 slice 2d `restore`
+            // applies both planes, so a green here that described only the federation plane
+            // said nothing about the half a solo clinic depends on. After the federation line
+            // below, `clinical_verdict` prints what the clinical half of a restore would bring
+            // back, and fails `backup SHORT` ONLY ON EVIDENCE — this node's own sidecar
+            // describes this path and records a newer clinical seq, or more clinical records,
+            // than the medium holds (maintainer decision, 2026-09-13; the record-count axis from
+            // PR #588's final review, 2026-09-14). Three things it deliberately does NOT do:
+            //   - warn about records past the last verified chain link. Such a medium is not
+            //     sound, so `refuse_unsound_medium` below has already failed it; `cairn-medium`'s
+            //     `a_medium_that_gates_records_out_is_never_sound` pins why, and says to wire
+            //     `untrusted_clinical_notice` here if that ever stops holding;
+            //   - report holes in the `source_seq` run — burned IDENTITY values make them routine
+            //     on a federating node (#549);
+            //   - say whether the clinical segments were captured WITHOUT a signing key. ADR-0068
+            //     routes that residual here: an unsigned medium is the weaker artifact, whose
+            //     omissions nothing on the medium can reveal (#590).
             //
             // INTEGRITY is a different question and is NOT so scoped — `refuse_unsound_medium`
             // below runs `medium::assess`, which verifies every record on the medium, clinical
@@ -2667,6 +2686,13 @@ async fn main() -> anyhow::Result<()> {
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let image = cairn_node::medium::parse_any(&bytes)?;
+            // The parsed image owns copies of everything it needs, so the raw file is dead
+            // weight from here on. Dropping it saves ONE medium-sized allocation — it does not
+            // make this arm cheap: the node-plane events and the clinical accounting below each
+            // clone their plane, and `assess` clones record bytes while it verifies, so the peak
+            // is still roughly three mediums. On a cron path a Pi/Android node legitimately
+            // runs, one fewer is still worth having (#552).
+            drop(bytes);
             // #500 slice 2c review, Important 1: a torn CAIRNB3 tail must fail this check
             // exactly as a truncated CAIRNB1/B2 frame already does (`parse_container` bails
             // with `Damaged` at parse time). Checked BEFORE any "OK" can be printed — a
@@ -2781,6 +2807,35 @@ async fn main() -> anyhow::Result<()> {
                 "federation-plane events OK: {}/{} verified",
                 report.intact, report.total
             );
+            // #567 — the clinical plane. The sidecar is read ONCE, here, and shared with the
+            // kit verdict further down. Checked BEFORE the export: over a short medium the
+            // export looks AHEAD and `kit_verdict` would call the kit restorable, so the
+            // shortfall is the more fundamental finding and its remedy comes first.
+            let health_path = cairn_node::backup::health_path_for(&cli.key);
+            let health = cairn_node::backup::read_health(&health_path);
+            let clinical_plane = cairn_node::backup::clinical_plane_accounting(&image)?;
+            let clinical = cairn_node::backup::clinical_verdict::clinical_plane_verdict(
+                &cairn_node::backup::clinical_verdict::ClinicalPlaneFacts {
+                    accounting: &clinical_plane,
+                    // The RAW count `plane_counts` already took above — the same arithmetic
+                    // `backup` recorded as the sidecar's `clinical_events`, so the two compare
+                    // directly. Reused rather than recounted, so the INCOMPLETE message above
+                    // and this comparison can never disagree about what the medium holds.
+                    medium_clinical_records: counts.clinical,
+                    legacy: matches!(image, cairn_node::medium::MediumImage::Legacy(_)),
+                    evidence: cairn_node::backup::clinical_verdict::last_backup_evidence_for(
+                        health.as_ref(),
+                        &from,
+                    ),
+                },
+            );
+            println!("{}", clinical.summary);
+            if let Some(advisory) = &clinical.advisory {
+                eprintln!("{advisory}");
+            }
+            if let Some(refusal) = clinical.refusal {
+                anyhow::bail!("{refusal}");
+            }
             // A WARNING about unrecognised planes used to sit here (#500 slice 2c review,
             // Important 4). It has moved UP, into `refuse_unsound_medium`'s first arm, and
             // became a refusal — because it is now unreachable from here: an unknown plane
@@ -2812,15 +2867,14 @@ async fn main() -> anyhow::Result<()> {
             // DIFFERENT backup run than the file actually under test. `export_seq` has no
             // other honest source: the export is SEALED, so what it covers can only be read
             // from the plaintext `backup-status.json` `backup` itself writes beside the
-            // signing key. That is the one place this command reads `cli.key` — only its
-            // PATH, as a naming anchor, never any cryptographic material — so the doc above
-            // ("no key") still holds in the security sense it was making.
+            // signing key. This command uses `cli.key` only for that: its PATH locates the
+            // sidecar, which is read once, above, and shared with the clinical-plane check —
+            // never any cryptographic material, which is exactly what the variant's help says
+            // ("reads no key MATERIAL").
             //
             // ONE verdict, ONE match, below — every non-`Restorable` outcome (including the
             // path-mismatch case fix round 1 adds next) shares the same exit-code policy,
             // rather than an early `bail!` for one case and a `match` for the rest.
-            let health_path = cairn_node::backup::health_path_for(&cli.key);
-            let health = cairn_node::backup::read_health(&health_path);
             let medium_seq = cairn_node::backup::clinical_watermark_of(&image);
             let verdict = match &health {
                 // #500 slice 2c Task 12 fix round 1, Important 1 — REFINED in fix round 2
@@ -2877,7 +2931,7 @@ async fn main() -> anyhow::Result<()> {
             // coverage at all (this command then falls back to `ExportMissing`/`Restorable`
             // on `export_seq = None`, which is honest but uninformative). Giving the kit a
             // self-describing coverage figure — a plaintext field in the `CAIRNL1` framing,
-            // or a plaintext sibling — is a format decision for slice 2e, not this task.
+            // or a plaintext sibling — is a format decision tracked by #551.
             match verdict {
                 cairn_node::backup::KitVerdict::Restorable => {}
                 // Behind, not absent: an export exists and has worked before — the fix is

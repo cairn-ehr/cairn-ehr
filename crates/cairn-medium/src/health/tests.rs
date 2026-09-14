@@ -235,3 +235,113 @@ fn a_clean_medium_is_sound() {
     assert_eq!(h.records_in_unknown_planes, 0);
     assert_eq!((h.chain.signed_valid, h.chain.unsigned), (3, 0));
 }
+
+/// **A medium that holds records back from a restore is never SOUND** (#567).
+///
+/// `cairn-node verify-backup` deliberately does NOT print `untrusted_clinical_notice` — the
+/// warning `restore` prints when records sit past the last verified chain link — and this
+/// invariant is the whole reason: every fault that stops `verified_through` advancing ALSO lands
+/// in `faults`, so `sound()` is false and `verify-backup` has already refused the medium as
+/// UNSOUND before it could print any clinical all-clear.
+///
+/// **If this test fails**, some fault now retracts `verified_through` without failing `sound()`,
+/// and `verify-backup` would print `clinical-plane records OK` over a medium whose tail a
+/// restore will not trust. Do not weaken this test: wire `untrusted_clinical_notice` into the
+/// `Cmd::VerifyBackup` arm of `crates/cairn-node/src/main.rs`.
+///
+/// The fixture is UNSIGNED on purpose. On a signed segment, mangling `prev_commitment` also
+/// invalidates the attestation, so a `ChainBroken` that stopped failing `sound()` would still be
+/// caught by `AttestationInvalid` and this arm would pass for the wrong reason (see
+/// `chain/tests.rs`, `a_chain_break_is_located_not_merely_counted`, I8).
+///
+/// Every arm asserts `gated > 0` FIRST — the positive control. A mutation that retracted nothing
+/// would satisfy "not (sound and gated)" vacuously and prove nothing.
+///
+/// Each arm breaks exactly ONE thing, so the fault under test is the only fault that can make
+/// the medium unsound. `SelfIdUnbound` and `UnknownPlane` are not arms because they do not
+/// retract `verified_through`, so they hold nothing back.
+///
+/// **The arms are today's complete list.** `chain::chain_report` retracts `verified_through`
+/// exactly where it sets `ok = false`, and each of those four places also pushes a fault. A NEW
+/// `ok = false` path added there must add an arm here, or this pin cannot see it.
+///
+/// Each arm runs at the FIRST, a MIDDLE and the LAST position (PR #588 review), so a future
+/// retraction that fired only at one end of the chain could not slip past an arm that only ever
+/// broke segment 1. An emptied segment is the exception: emptied LAST, it holds no records and
+/// nothing follows it, so it holds nothing back — it runs only where a segment follows.
+#[test]
+fn a_medium_that_gates_records_out_is_never_sound() {
+    type M = crate::container::MediumV3;
+    type Break = fn(&mut M, usize);
+    const SEGMENTS: usize = 4;
+    const EVERY_POSITION: &[usize] = &[0, 1, SEGMENTS - 1];
+    const WITH_A_SUCCESSOR: &[usize] = &[0, 1, SEGMENTS - 2];
+    let breaks: [(&str, Break, &[usize]); 4] = [
+        (
+            "a broken chain link",
+            |m: &mut M, at| m.segments[at].prev_commitment = "deadbeef".into(),
+            EVERY_POSITION,
+        ),
+        (
+            "a segment lying about its index",
+            |m: &mut M, at| m.segments[at].index = 9,
+            EVERY_POSITION,
+        ),
+        (
+            "an empty segment",
+            |m: &mut M, at| {
+                m.segments[at].records.clear();
+                // Re-chain the next segment onto the emptied one. Clearing the records changes
+                // this segment's commitment, so without this the next segment ALSO reports
+                // `ChainBroken`, and a mutation that stopped pushing `EmptySegment` would still
+                // leave the medium unsound through that cascade — this arm would pass for the
+                // wrong reason.
+                m.segments[at + 1].prev_commitment =
+                    crate::attest::segment_commitment(&m.segments[at].records);
+            },
+            WITH_A_SUCCESSOR,
+        ),
+        (
+            "an attestation that does not verify",
+            |m: &mut M, at| m.segments[at].attestation = Some(testkit::bytes(9, 64)),
+            EVERY_POSITION,
+        ),
+    ];
+
+    let clean = testkit::unsigned_chain_of(SEGMENTS);
+    let h = assess(&clean);
+    assert!(
+        h.sound(),
+        "the fixture must start sound: {:?}",
+        h.chain.faults
+    );
+    assert_eq!(gated_out(&clean, &h), 0, "and hold nothing back");
+
+    for (what, break_it, positions) in breaks {
+        for &at in positions {
+            let mut m = testkit::unsigned_chain_of(SEGMENTS);
+            break_it(&mut m, at);
+            let h = assess(&m);
+            let gated = gated_out(&m, &h);
+            assert!(
+                gated > 0,
+                "{what} at position {at}: the fixture must actually hold records back, or this \
+                 arm proves nothing"
+            );
+            assert!(
+                !h.sound(),
+                "{what} at position {at}: {gated} record(s) are held back from a restore, yet \
+                 the medium reports SOUND — `verify-backup` would print a clinical all-clear \
+                 over them. Wire `untrusted_clinical_notice` into it; do not weaken this test."
+            );
+        }
+    }
+}
+
+/// Records held back by the trust gate, across both planes this build routes.
+fn gated_out(m: &crate::container::MediumV3, h: &MediumHealth) -> usize {
+    [crate::segment::Plane::Node, crate::segment::Plane::Clinical]
+        .into_iter()
+        .map(|plane| crate::chain::plane_records_with_accounting(m, &h.chain, plane).gated_out)
+        .sum()
+}

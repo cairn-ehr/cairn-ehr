@@ -30,6 +30,15 @@ pub use crate::medium::{
 use crate::capture;
 use crate::medium::{MediumImage, Plane};
 
+// What `verify-backup` says about a medium's clinical plane, and when it refuses (#567).
+//
+// A plain comment, NOT a `///` doc comment, and that is load-bearing: rustdoc joins an outer
+// doc on a `mod` declaration with the file's own `//!` docs and then resolves EVERY intra-doc
+// link in the joined text from THIS (parent) module, so `clinical_verdict.rs`'s links to its
+// own items (such as `clinical_plane_verdict`) fail `RUSTDOCFLAGS=-D warnings`. Its docs live
+// in its file.
+pub mod clinical_verdict;
+
 // ---------------------------------------------------------------------------
 // Reading a medium of EITHER revision (Erratum E2, #500 slice 2c design doc §4).
 //
@@ -152,6 +161,37 @@ pub fn clinical_plane_accounting(
     })
 }
 
+/// PURE. Every `source_seq` at which `records` holds two or more records, ascending, each once.
+///
+/// Only meaningful on the TRUSTED set from [`clinical_plane_accounting`], where wholly identical
+/// re-capture duplicates are already collapsed — so a repeated position here is always two
+/// DIFFERENT records. Shared by `restore`'s [`straddled_duplicate_notice`] and `verify-backup`'s
+/// advisory (`clinical_verdict`), which word the same finding for different moments: after an
+/// apply, and before anything has been applied.
+pub fn straddled_positions(records: &[cairn_medium::MediumRecord]) -> Vec<i64> {
+    let mut seqs: Vec<i64> = records.iter().map(|r| r.source_seq).collect();
+    seqs.sort_unstable();
+    let mut repeated: Vec<i64> = Vec::new();
+    for pair in seqs.windows(2) {
+        if pair[0] == pair[1] && repeated.last() != Some(&pair[0]) {
+            repeated.push(pair[0]);
+        }
+    }
+    repeated
+}
+
+/// PURE. The first ten positions, comma-separated, then `" (and N more)"` if there are more —
+/// so an operator message stays readable on a medium with thousands of them.
+pub fn describe_positions(positions: &[i64]) -> String {
+    let shown: Vec<String> = positions.iter().take(10).map(|s| s.to_string()).collect();
+    let more = if positions.len() > 10 {
+        format!(" (and {} more)", positions.len() - 10)
+    } else {
+        String::new()
+    };
+    format!("{}{more}", shown.join(", "))
+}
+
 /// The warning an operator must see when a medium's clinical plane still holds two DIFFERENT
 /// records at one `source_seq`. **Pure.** `None` when every seq is unique.
 ///
@@ -169,32 +209,19 @@ pub fn clinical_plane_accounting(
 /// resurrection case is already closed at the door), but so is saying nothing: the operator is
 /// the only one who can tell which capture was the right one.
 pub fn straddled_duplicate_notice(records: &[cairn_medium::MediumRecord]) -> Option<String> {
-    let mut seqs: Vec<i64> = records.iter().map(|r| r.source_seq).collect();
-    seqs.sort_unstable();
-    let mut repeated: Vec<i64> = Vec::new();
-    for pair in seqs.windows(2) {
-        if pair[0] == pair[1] && repeated.last() != Some(&pair[0]) {
-            repeated.push(pair[0]);
-        }
-    }
+    let repeated = straddled_positions(records);
     if repeated.is_empty() {
         return None;
     }
-    let shown: Vec<String> = repeated.iter().take(10).map(|s| s.to_string()).collect();
-    let more = if repeated.len() > 10 {
-        format!(" (and {} more)", repeated.len() - 10)
-    } else {
-        String::new()
-    };
     Some(format!(
         "WARNING: this medium holds two or more DIFFERENT records at the same source \
-         position(s): {}{more}. A byte-identical re-capture is collapsed silently and is \
+         position(s): {}. A byte-identical re-capture is collapsed silently and is \
          expected; these differ — typically a capture that straddled an unwrap-key rotation \
          or a crypto-shred, so the copies disagree about CUSTODY. All of them were applied \
          (the apply door is idempotent and refuses custody for an already-shredded target, so \
          nothing erased can come back). Review these positions: only you can tell which \
          capture reflects what the dead node actually held.",
-        shown.join(", ")
+        describe_positions(&repeated)
     ))
 }
 
@@ -497,6 +524,24 @@ fn v3_claimed_node(image: &MediumImage) -> Option<(String, MarkerSource)> {
 // degrading to "never / running without a net" when absent or unreadable).
 // ---------------------------------------------------------------------------
 
+/// The sidecar shape this build WRITES. Whether a sidecar RECORDED per-plane counts is a
+/// different question with a fixed answer — see [`FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`]; a
+/// sidecar below that records no plane scope at all (v1 had a single `event_count`), and
+/// `describe_health` must say so rather than render the serde defaults as facts.
+pub const SUPPORTED_HEALTH_VERSION: u8 = 2;
+
+/// The first sidecar shape that RECORDED per-plane counts (`node_events`, `clinical_events`) —
+/// a fixed historical fact, where [`SUPPORTED_HEALTH_VERSION`] is whatever this build writes.
+///
+/// Kept as its own constant because the two used to be one (PR #588 review): gating "does this
+/// sidecar carry counts?" on the WRITTEN version meant that the day a build writes v3, every v2
+/// sidecar — which did record its counts — would be read as count-less. `describe_health` would
+/// then hide real counts, and `verify-backup`'s record-count axis would silently stop firing.
+pub const FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS: u8 = 2;
+
+// A build cannot write a sidecar older than the shape its own readers trust for counts.
+const _: () = assert!(FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS <= SUPPORTED_HEALTH_VERSION);
+
 /// A record of the last successful backup. Written only AFTER the medium is durable and
 /// self-verified, so it can never over-claim a backup the node does not actually hold.
 ///
@@ -520,20 +565,14 @@ fn v3_claimed_node(image: &MediumImage) -> Option<(String, MarkerSource)> {
 /// here would cry wolf on every healthy node. The durable record and the honest surface for
 /// those two fields are [#549](https://github.com/cairn-ehr/cairn-ehr/issues/549), not this
 /// task.
-/// The sidecar shape this build WRITES, and the floor at which it trusts the per-plane
-/// counts. A sidecar below this records no plane scope at all (v1 had a single
-/// `event_count`), and `describe_health` must say so rather than render the serde defaults
-/// as facts — see [`describe_health`].
-pub const SUPPORTED_HEALTH_VERSION: u8 = 2;
-
 // `Eq` is deliberately absent: `extra` holds `serde_json::Value`, which is `PartialEq` but
 // not `Eq` (floats). Nothing needs a total equality here, and preserving a newer build's
 // fields is worth more than the marker trait.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupHealth {
     /// Which sidecar shape wrote this. READ, not decorative: `describe_health` refuses to
-    /// present v1's absent per-plane counts as zeros. Compare against
-    /// [`SUPPORTED_HEALTH_VERSION`].
+    /// present v1's absent per-plane counts as zeros, and `verify-backup` refuses to treat them
+    /// as evidence. Compare against [`FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`].
     pub version: u8,
     /// Unix seconds at which the backup completed (operational wall-clock, not the HLC).
     pub last_backup_unix: i64,
@@ -786,7 +825,7 @@ pub fn describe_health(now_unix: i64, health: &Option<BackupHealth>) -> String {
         // multi-megabyte medium holds nothing — and it appeared exactly in the window between
         // upgrading the binary and the first successful new `backup`, i.e. the window where
         // `backup` is most likely to be failing and the line most likely to be read.
-        Some(h) if h.version < SUPPORTED_HEALTH_VERSION => format!(
+        Some(h) if h.version < FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS => format!(
             "{} ago (per-plane counts not recorded by the `backup` that wrote this sidecar — \
              run `backup` to refresh, {} bytes -> {})",
             humanize_ago(now_unix - h.last_backup_unix),
@@ -2037,6 +2076,54 @@ mod tests {
         assert!(
             notice.contains("custody"),
             "and the likely cause, which is what makes it actionable: {notice}"
+        );
+    }
+
+    /// **EACH REPEATED POSITION IS NAMED ONCE, IN ORDER** (PR #588 review). Three records at one
+    /// seq are one straddled position, not two: without the `repeated.last()` guard this would
+    /// print `9, 9` and inflate `describe_positions`'s "(and N more)" count. Input order is
+    /// capture order, which need not be seq order, so the output must be sorted.
+    #[test]
+    fn straddled_positions_names_each_repeated_seq_once_ascending() {
+        // `straddled_positions` reads `source_seq` alone, so every other field stays empty.
+        let at = |source_seq: i64| cairn_medium::MediumRecord {
+            signed_bytes: Vec::new(),
+            attestation: None,
+            attester_key: None,
+            dek_wrapped: None,
+            source_seq,
+        };
+        let records: Vec<_> = [9, 3, 9, 4, 3, 9].into_iter().map(at).collect();
+        assert_eq!(straddled_positions(&records), vec![3, 9]);
+        assert_eq!(
+            straddled_positions(&[at(1), at(2)]),
+            Vec::<i64>::new(),
+            "no repeated seq, nothing to name"
+        );
+    }
+
+    /// **A LONG POSITION LIST IS CUT AT TEN, AND SAYS HOW MANY IT CUT.** Both straddled-duplicate
+    /// messages (`restore`'s notice and `verify-backup`'s advisory) go through
+    /// `describe_positions`, so a medium with thousands of straddled positions must still print
+    /// a readable line — without pretending the ten it shows are all there are.
+    #[test]
+    fn describe_positions_lists_ten_then_counts_the_rest() {
+        let twelve: Vec<i64> = (1..=12).collect();
+        assert_eq!(
+            describe_positions(&twelve),
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10 (and 2 more)",
+            "the first ten are named and the two past them are counted, never dropped silently"
+        );
+    }
+
+    /// The boundary of the cut above: exactly ten fits, so there is nothing "more" to admit to.
+    #[test]
+    fn describe_positions_adds_no_suffix_at_exactly_ten() {
+        let ten: Vec<i64> = (1..=10).collect();
+        assert_eq!(
+            describe_positions(&ten),
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10",
+            "ten positions are the whole list — a suffix here would claim positions that do not exist"
         );
     }
 
