@@ -37,8 +37,8 @@
 //! erasure takes to complete across all copies. That number is the clinic's policy call, not
 //! Cairn's: founding principle 9 (mechanism, never policy) and ADR-0005's *deletion is
 //! best-effort and declared, never guaranteed*. Cairn's obligations are to make the residue
-//! legible and to say this plainly; `docs/spec/security.md` states it in as many words (the
-//! *Erasure survives DR* bullet); no ADR does.
+//! legible and to say this plainly: ADR-0067's decision 2 records the rotation sentence in as
+//! many words, and `docs/spec/security.md`'s *Erasure survives DR* bullet states it for readers.
 //!
 //! # Why this is a separate file
 //!

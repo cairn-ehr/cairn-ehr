@@ -2667,7 +2667,7 @@ async fn main() -> anyhow::Result<()> {
             // back, and fails `backup SHORT` ONLY ON EVIDENCE — this node's own sidecar
             // describes this path and records a newer clinical seq, or more clinical records,
             // than the medium holds (maintainer decision, 2026-09-13; the record-count axis from
-            // the final review, 2026-09-14). Three things it deliberately does NOT do:
+            // PR #588's final review, 2026-09-14). Three things it deliberately does NOT do:
             //   - warn about records past the last verified chain link. Such a medium is not
             //     sound, so `refuse_unsound_medium` below has already failed it; `cairn-medium`'s
             //     `a_medium_that_gates_records_out_is_never_sound` pins why, and says to wire
@@ -2686,9 +2686,12 @@ async fn main() -> anyhow::Result<()> {
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("reading backup medium {}", from.display()))?;
             let image = cairn_node::medium::parse_any(&bytes)?;
-            // The parsed image owns copies of everything it needs, and the clinical accounting
-            // below clones that plane again, so holding the raw file too would keep ~3x the
-            // medium in memory on a cron path a Pi/Android node legitimately runs (#552).
+            // The parsed image owns copies of everything it needs, so the raw file is dead
+            // weight from here on. Dropping it saves ONE medium-sized allocation — it does not
+            // make this arm cheap: the node-plane events and the clinical accounting below each
+            // clone their plane, and `assess` clones record bytes while it verifies, so the peak
+            // is still roughly three mediums. On a cron path a Pi/Android node legitimately
+            // runs, one fewer is still worth having (#552).
             drop(bytes);
             // #500 slice 2c review, Important 1: a torn CAIRNB3 tail must fail this check
             // exactly as a truncated CAIRNB1/B2 frame already does (`parse_container` bails
@@ -2864,10 +2867,10 @@ async fn main() -> anyhow::Result<()> {
             // DIFFERENT backup run than the file actually under test. `export_seq` has no
             // other honest source: the export is SEALED, so what it covers can only be read
             // from the plaintext `backup-status.json` `backup` itself writes beside the
-            // signing key. That is the one place this command reads `cli.key` (read once,
-            // above, where the clinical-plane check shares it) — only its PATH, as a naming
-            // anchor, never any cryptographic material — which is exactly what the variant's
-            // help now says ("reads no key MATERIAL").
+            // signing key. This command uses `cli.key` only for that: its PATH locates the
+            // sidecar, which is read once, above, and shared with the clinical-plane check —
+            // never any cryptographic material, which is exactly what the variant's help says
+            // ("reads no key MATERIAL").
             //
             // ONE verdict, ONE match, below — every non-`Restorable` outcome (including the
             // path-mismatch case fix round 1 adds next) shares the same exit-code policy,

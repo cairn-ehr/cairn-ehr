@@ -103,8 +103,9 @@ watermark is below the sidecar's is also not what the last backup wrote.
 
 ## 3. The decision
 
-**`verify-backup` fails on a clinical-plane shortfall only when it has evidence; everything the bytes
-cannot settle is reported loudly and exits 0.**
+**`verify-backup` fails on a clinical-plane shortfall only when it has evidence; what the bytes cannot
+settle it states plainly and never fails on.** (Corrected 2026-09-14: this first said such cases
+"exit 0", but the kit checks that follow can still fail the command — see §4's note.)
 
 The **evidence rule**, stated once (two axes since the final review's correction — see below):
 
@@ -113,7 +114,8 @@ The **evidence rule**, stated once (two axes since the final review's correction
 >
 > 1. **newest seq:** it records `clinical_watermark = Some(s)`, and the medium's own newest trusted
 >    clinical seq is `None` or strictly less than `s`; OR
-> 2. **record count:** it is a v2-or-newer sidecar (`version >= SUPPORTED_HEALTH_VERSION`) recording
+> 2. **record count:** it is a v2-or-newer sidecar (`version >= FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS`,
+>    corrected 2026-09-14 — see §4's note) recording
 >    `clinical_events = n`, and the medium's RAW clinical record count
 >    (`plane_counts(&image).clinical`) is strictly less than `n`.
 
@@ -122,7 +124,8 @@ Otherwise it prints what the clinical plane holds and continues.
 
 **Cases the rule deliberately does not fail:**
 
-- **No sidecar.** No evidence, so a note and exit 0.
+- **No sidecar.** No evidence, so no refusal here: the plane line prints and the command continues
+  (corrected 2026-09-14, see §4's note — no separate "no evidence" note is printed).
 - **A sidecar with `clinical_watermark = None`** (serde default, or a fresh clinic): no newest-seq
   evidence, and a recorded count of 0 can never be undercut. This covers a fresh clinic.
 - **A v1 sidecar.** It recorded no per-plane counts; serde defaults `clinical_events` to 0, which is a
@@ -158,21 +161,27 @@ Otherwise it prints what the clinical plane holds and continues.
 >
 > One wording consequence: on the count axis ALONE the refusal does not claim a certain loss. The
 > missing records could all have been byte-identical re-captures of records still present, which a
-> restore collapses anyway, so the message says a restore brings back less *unless* that is so. With
+> restore collapses anyway, so the message says a restore brings back less *unless* that is so
+(reworded 2026-09-14 to "would not bring back everything", see §4's note). With
 > the newest seq short, the newest recorded event is absent and the loss is certain.
 
 ### 3.1 The consequence to state plainly: same-mount-point rotation
 
 Two drives rotated through **one mount point** share a path, so the sidecar describes both. The drive
 that did not receive the latest backup verifies `backup SHORT` until its own next backup catches it
-up. That red is **true**: if the node died at that moment, that drive would restore less than the
-node's last backup captured. It is also consistent with today's behaviour for drives at **different**
+up. That red is **true**: if the node died at that moment, that drive would not restore everything
+the node's last backup captured — certainly when its newest seq is short, and on the count axis alone
+unless every missing record was a byte-identical re-capture (corrected 2026-09-14). It is also consistent with today's behaviour for drives at **different**
 paths, which already fail `COVERAGE-UNKNOWN` whenever the medium carries clinical content.
 
 It narrows [#551](https://github.com/cairn-ehr/cairn-ehr/issues/551)'s same-path false green (a
 behind drive no longer reads `Restorable`) and **does not close it**. The coverage figure still lives
-in a node-global file, and a kit copied to another machine carries no evidence at all. That machine
-gets the honest note and exit 0. A comment on #551 says so.
+in a node-global file, and a kit carries no evidence of its own. A machine verifying a kit it did not
+write consults only ITS OWN sidecar. One naming a different path is not evidence, so a medium with
+clinical content still fails the existing kit checks (`INCOMPLETE` or `COVERAGE-UNKNOWN`) and only an
+empty clinical plane exits 0. One naming the SAME path — a shared mount point — is trusted without
+proof that it describes this medium, so it can produce a `backup SHORT`, or a green, from that
+machine's own history (corrected 2026-09-14, see §4's note). A comment on #551 says so.
 
 ---
 
@@ -186,7 +195,33 @@ After `federation-plane events OK: N/N verified`, and before the local-state exp
 | …and two *different* records share a `source_seq` | the same line | a straddled-duplicate advisory worded for a check that has applied nothing (exit unaffected, as in `restore`) | continues |
 | CAIRNB3, clinical plane empty, no evidence | `clinical plane: EMPTY — this medium would restore NO patient data. If this node holds charts, they are NOT on this medium.` | — | continues |
 | CAIRNB1/CAIRNB2 (legacy), no evidence | `clinical plane: NONE — this CAIRNB1/CAIRNB2 medium predates the clinical plane and carries no patient data at all.` | — | continues |
-| any of the above with evidence of a shortfall — a newest clinical seq below the recorded one, or fewer raw clinical records than recorded (§3; corrected 2026-09-14) | the plane line first, then the refusal | `backup SHORT: …` naming the axis, or both | **1** |
+| any of the above with evidence of a shortfall — a newest clinical seq below the recorded one, or fewer raw clinical records than recorded (§3; corrected 2026-09-14) | the plane line first, then the refusal; with records present the line reads ``clinical-plane records SHORT: N verified, newest seq S — less than this node's last backup to this path recorded (see `backup SHORT`)`` (with `, K byte-identical re-capture(s) collapsed` after `S` when K > 0), never `OK` (corrected 2026-09-14) | `backup SHORT: …` naming the axis, or both | **1** |
+
+> [!NOTE]
+> **Corrections made by the PR #588 review, 2026-09-14.**
+>
+> - **The plane line never says `OK` over a short medium.** This table first printed
+>   `clinical-plane records OK` before the refusal. The line goes to stdout and the refusal to stderr,
+>   so a cron job that keeps only stdout logged an all-clear for a medium the command failed.
+> - **No "no evidence" note exists, and none was ever built.** §3 and §3.1 said a missing sidecar
+>   gets "a note and exit 0". This table never specified one, and the code followed the table. The
+>   exit-0 half was also wrong for a medium with clinical content: without matching evidence the
+>   existing kit checks still fail it (`INCOMPLETE`, or `COVERAGE-UNKNOWN` for another path). Both
+>   sections now say what the command does.
+> - **The count-only hedge excuses only a byte-identical re-capture.** The refusal first said a
+>   restore loses nothing if every missing record was a re-capture "byte-identical or with different
+>   custody". A missing custody variant — the re-wrap an unwrap-key rotation writes — is custody the
+>   medium cannot hand a restore, so the message now says a restore "would not bring back
+>   everything", unless every missing record was byte-identical.
+> - **The straddle advisory names the node that WROTE the medium.** `restore` sends operators to run
+>   this command against another drive, on a rescue machine that never held those records, so
+>   "what this node actually held" would be false there.
+> - **The count axis is gated on `FIRST_HEALTH_VERSION_WITH_PLANE_COUNTS` (2), not
+>   `SUPPORTED_HEALTH_VERSION`.** The latter is the shape this build WRITES; gating on it would have
+>   read every v2 sidecar as count-less the day a build first wrote v3.
+> - **A kit verified on another machine is not evidence-free.** §3.1 first said such a kit "carries no
+>   evidence at all". The verifying machine consults its own sidecar, and one naming the same path is
+>   accepted — so a SHORT or a green there comes from that machine's history, not the kit's.
 
 The `SHORT` text says what **this node's last backup to this path** recorded — *this path*, not *this
 medium*: in a rotation it was a different drive — and what the file holds, for each axis that fell

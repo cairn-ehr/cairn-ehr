@@ -205,12 +205,14 @@ The spec designed *deliberate* key-death as a first-class audited operation ([§
 >   the clinical plane a restore would apply, and fails a medium whose newest clinical record, or
 >   clinical record count, falls short of what this node's own last backup recorded for that path.
 >   What it does **not** do: report holes in the `source_seq` run
->   ([#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)); use evidence from another machine's
->   sidecar unless it names the same path (a shared mount point, say)
->   ([#551](https://github.com/cairn-ehr/cairn-ehr/issues/551)); fail an EMPTY drive at a DIFFERENT
->   path, which still reads green even when this node has charts, because the evidence is about a
->   path and this command does not bind a medium to its node
->   ([#551](https://github.com/cairn-ehr/cairn-ehr/issues/551)); or say whether the clinical segments
+>   ([#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)); bind its evidence to the medium
+>   itself — the kit carries none of its own: the evidence is whichever `backup-status.json` sits
+>   beside the verifying machine's `--key`, matched to the medium by PATH alone, so a sidecar naming
+>   the same path (a shared mount point, say) is trusted without proof that it describes this medium,
+>   even on a machine that never wrote it
+>   ([#551](https://github.com/cairn-ehr/cairn-ehr/issues/551)); fail a medium whose **clinical plane**
+>   is empty at a path this node's sidecar does not name, which still reads green even when this
+>   node has charts ([#551](https://github.com/cairn-ehr/cairn-ehr/issues/551)); or say whether the clinical segments
 >   were captured without a signing key, the weaker artifact whose omissions a medium cannot reveal
 >   ([#590](https://github.com/cairn-ehr/cairn-ehr/issues/590), ADR-0068's residual).
 >
