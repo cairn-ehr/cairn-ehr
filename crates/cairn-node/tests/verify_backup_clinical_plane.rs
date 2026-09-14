@@ -1,7 +1,7 @@
 //! `verify-backup` asks about the CLINICAL plane (#567), driven through the real binary.
 //!
 //! Before #567 this command printed one line about the federation plane and nothing about the
-//! clinical plane a restore now applies. These tests pin the four things the design
+//! clinical plane a restore now applies. These tests pin what the design
 //! (`docs/superpowers/specs/2026-09-13-verify-backup-clinical-plane-design.md`) decided:
 //!
 //! 1. an older copy put back at the path the nightly backup writes to fails `backup SHORT` —
@@ -10,7 +10,11 @@
 //!    any clinical all-clear is printed (the reason `untrusted_clinical_notice` is not wired);
 //! 3. a sidecar about ANOTHER path is not evidence, even when it records clinical events;
 //! 4. two DIFFERENT records at one `source_seq` are printed as an advisory on stderr via the
-//!    binary, never as a `backup SHORT` refusal.
+//!    binary, never as a `backup SHORT` refusal — and the command still exits 0 over them;
+//! 5. the record-count axis compares RAW counts through the binary: a byte-identical re-capture
+//!    stays green, and a copy put back without it fails SHORT on the count alone (PR #588
+//!    review — the pure tests take the raw count as an input, so only this sees the arm pass the
+//!    wrong one).
 //!
 //! The pure policy is unit-tested in `src/backup/clinical_verdict/tests.rs`; these prove the
 //! arm gathers the right facts and acts on the verdict.
@@ -21,10 +25,13 @@ mod common;
 mod clinic_kit;
 
 use cairn_medium::{
-    assess, parse_any, segment_commitment, serialize_v3, MediumImage, Plane, Segment,
+    assess, parse_any, segment_commitment, serialize_v3, MediumImage, MediumRecord, Plane, Segment,
 };
 use cairn_node::backup;
-use clinic_kit::{author_sealed_clinical_event, establish_clinic, Clinic};
+use clinic_kit::{author_sealed_clinical_event, establish_clinic, write_existing_escrow, Clinic};
+
+/// The operator passphrase every restorable-kit test in this file seals its export under.
+const OP_PASS: &str = "op-pass";
 
 /// Run a `cairn-node` command that must succeed, panicking with its stderr if it does not.
 fn run_ok(cmd: &mut std::process::Command, what: &str) -> std::process::Output {
@@ -47,6 +54,61 @@ fn verify(cl: &Clinic, medium: &std::path::Path) -> std::process::Output {
 
 fn backup_to(cl: &Clinic, medium: &std::path::Path, what: &str) {
     run_ok(cl.cli().args(["backup", "--to"]).arg(medium), what);
+}
+
+/// A backup that ALSO seals a current local-state export beside the medium, so the kit verdict
+/// after the clinical line is `Restorable` and a test can assert `verify-backup` exits 0. The
+/// clinic must already carry an escrow (`write_existing_escrow`). Without this, every medium
+/// with clinical content fails `backup INCOMPLETE` for a reason unrelated to the clinical plane,
+/// and a test could not tell "the clinical verdict passed" from "something failed later".
+fn backup_with_kit(cl: &Clinic, medium: &std::path::Path, what: &str) {
+    let out = run_ok(
+        cl.cli()
+            .args(["backup", "--to"])
+            .arg(medium)
+            .args(["--passphrase", OP_PASS]),
+        what,
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("local-state exported"),
+        "{what}: the export must actually have been written this run: stdout:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// Append `record` to the medium at `path` as a correctly chained UNSIGNED clinical segment —
+/// the next index, linked to the last segment's records, naming the same node — so the medium
+/// stays SOUND and `verify-backup` reaches the clinical verdict at all. An unsigned segment is
+/// what a capture taken without the signing key writes, so nothing else about the file changes.
+fn append_unsigned_clinical_segment(path: &std::path::Path, record: MediumRecord) {
+    let MediumImage::V3(mut m) = parse_any(&std::fs::read(path).unwrap()).unwrap() else {
+        panic!("backup writes CAIRNB3")
+    };
+    let last = m.segments.last().expect("the backup wrote segments");
+    let appended = Segment {
+        plane: Plane::Clinical,
+        index: u32::try_from(m.segments.len()).unwrap(),
+        prev_commitment: segment_commitment(&last.records),
+        self_node_id_hex: last.self_node_id_hex.clone(),
+        attestation: None,
+        records: vec![record],
+    };
+    m.segments.push(appended);
+    std::fs::write(path, serialize_v3(&m.segments).unwrap()).unwrap();
+}
+
+/// The sealed chart's clinical record on the medium at `path` — the one carrying a wrapped DEK.
+fn sealed_clinical_record(path: &std::path::Path) -> MediumRecord {
+    let MediumImage::V3(m) = parse_any(&std::fs::read(path).unwrap()).unwrap() else {
+        panic!("backup writes CAIRNB3")
+    };
+    m.segments
+        .iter()
+        .filter(|s| s.plane == Plane::Clinical)
+        .flat_map(|s| s.records.iter())
+        .find(|r| r.dek_wrapped.is_some())
+        .cloned()
+        .expect("the sealed chart's record carries its wrapped DEK")
 }
 
 /// The failure #567 exists for. Night 1 backs up a node with no charts; the file is copied
@@ -209,6 +271,10 @@ async fn a_sidecar_about_another_path_is_not_evidence_even_with_charts() {
 /// the SAME signed event at the SAME `source_seq`, appended again with different custody bytes,
 /// as a correctly chained UNSIGNED segment. Its raw clinical count grows by one and its newest
 /// seq does not move, so this node's own sidecar gives no evidence of a shortfall either way.
+///
+/// The kit is RESTORABLE (PR #588 review), so the exit code is asserted: a straddle must never
+/// fail the check. Without a current export beside the medium the command failed anyway, and
+/// the arm turning its `eprintln!` into a `bail!` would have passed every assertion here.
 #[tokio::test]
 async fn a_straddled_duplicate_is_an_advisory_and_never_short() {
     let Some(cl) = establish_clinic().await else {
@@ -216,19 +282,10 @@ async fn a_straddled_duplicate_is_an_advisory_and_never_short() {
         return;
     };
     author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
-    backup_to(&cl, &cl.medium(), "the backup");
+    write_existing_escrow(&cl.key(), &cl.sk, OP_PASS, "REC-CODE");
+    backup_with_kit(&cl, &cl.medium(), "the backup");
 
-    let MediumImage::V3(mut m) = parse_any(&std::fs::read(cl.medium()).unwrap()).unwrap() else {
-        panic!("backup writes CAIRNB3")
-    };
-    let original = m
-        .segments
-        .iter()
-        .filter(|s| s.plane == Plane::Clinical)
-        .flat_map(|s| s.records.iter())
-        .find(|r| r.dek_wrapped.is_some())
-        .cloned()
-        .expect("the sealed chart's record carries its wrapped DEK");
+    let original = sealed_clinical_record(&cl.medium());
     let mut rewrapped = original.clone();
     // Different custody bytes of the same length, DERIVED from the captured ones — never a
     // literal (house rule 6: a byte literal in a custody field trips CodeQL).
@@ -241,19 +298,7 @@ async fn a_straddled_duplicate_is_an_advisory_and_never_short() {
         "the copy must DIFFER, or it would collapse"
     );
 
-    // Chain it correctly — the next index, linked to the last segment's records, naming the
-    // same node — so the medium stays SOUND and the arm reaches the clinical verdict at all.
-    let last = m.segments.last().expect("the backup wrote segments");
-    let appended = Segment {
-        plane: Plane::Clinical,
-        index: u32::try_from(m.segments.len()).unwrap(),
-        prev_commitment: segment_commitment(&last.records),
-        self_node_id_hex: last.self_node_id_hex.clone(),
-        attestation: None,
-        records: vec![rewrapped],
-    };
-    m.segments.push(appended);
-    std::fs::write(cl.medium(), serialize_v3(&m.segments).unwrap()).unwrap();
+    append_unsigned_clinical_segment(&cl.medium(), rewrapped);
 
     // Positive controls: the doctored medium is sound, and the straddle is really on it. Without
     // these, a missing advisory could mean "the arm bailed earlier", not "the arm stayed silent".
@@ -280,12 +325,107 @@ async fn a_straddled_duplicate_is_an_advisory_and_never_short() {
         stderr.contains("WARNING: this medium holds two or more DIFFERENT records"),
         "the straddle is named for the operator: {stderr}"
     );
-    // The exit code is not asserted: with no export beside the medium, the kit verdict fails the
-    // command for a reason that predates #567 and has nothing to do with the straddle. What
-    // matters is that the failure, if any, is not one this medium does not deserve.
+    assert!(
+        v.status.success(),
+        "an advisory never changes the exit code, over a kit that is otherwise restorable; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(
         !stderr.contains("backup SHORT"),
         "the raw count grew and the newest seq did not move: {stderr}"
     );
     assert!(!stderr.contains("backup UNSOUND"), "{stderr}");
+}
+
+/// The record-count axis, end to end. A clinic whose nightly capture was once interrupted and
+/// re-run carries a BYTE-IDENTICAL re-capture: its raw clinical count, which `backup` records,
+/// exceeds its trusted count, from which the duplicate is collapsed.
+///
+/// 1. That medium must verify GREEN. If the arm handed the verdict the TRUSTED count instead of
+///    the raw one, it would compare it against the sidecar's larger raw count and fail this
+///    clinic every night, with a remedy ("run `backup` again") that could never clear it.
+/// 2. A copy from BEFORE the re-capture, put back at the same path, must fail SHORT on the count
+///    alone: its newest seq is level with the evidence, so only the count sees it.
+#[tokio::test]
+async fn a_collapsed_re_capture_stays_green_and_a_copy_without_it_is_short_on_the_count() {
+    let Some(cl) = establish_clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+    write_existing_escrow(&cl.key(), &cl.sk, OP_PASS, "REC-CODE");
+    backup_with_kit(&cl, &cl.medium(), "night 1's backup");
+    let before_recapture = cl.dir.path().join("before-recapture.medium");
+    std::fs::copy(cl.medium(), &before_recapture).unwrap();
+
+    append_unsigned_clinical_segment(&cl.medium(), sealed_clinical_record(&cl.medium()));
+    // Night 2 captures nothing new, but it re-records the sidecar from the medium as it now is:
+    // one more RAW clinical record, the same newest seq.
+    backup_with_kit(&cl, &cl.medium(), "night 2's backup");
+
+    // Positive controls. Without them a green could mean "the duplicate never landed" or "the
+    // sidecar never recorded it", not "the raw count was compared".
+    let recaptured = parse_any(&std::fs::read(cl.medium()).unwrap()).unwrap();
+    let accounting = backup::clinical_plane_accounting(&recaptured).unwrap();
+    assert_eq!(accounting.collapsed, 1, "the re-capture is on the medium");
+    assert!(
+        backup::straddled_positions(&accounting.records).is_empty(),
+        "and it is byte-identical, so nothing straddles"
+    );
+    let raw = backup::plane_counts(&recaptured).clinical;
+    assert_eq!(
+        raw,
+        accounting.records.len() + 1,
+        "raw exceeds trusted by one"
+    );
+    let health = backup::read_health(&backup::health_path_for(&cl.key())).expect("sidecar");
+    assert_eq!(
+        health.clinical_events, raw as u64,
+        "night 2's sidecar records the RAW count"
+    );
+    let earlier = parse_any(&std::fs::read(&before_recapture).unwrap()).unwrap();
+    assert_eq!(
+        backup::clinical_watermark_of(&earlier),
+        health.clinical_watermark,
+        "the earlier copy is level with the evidence on the newest seq"
+    );
+
+    let green = verify(&cl, &cl.medium());
+    let stdout = String::from_utf8_lossy(&green.stdout);
+    let stderr = String::from_utf8_lossy(&green.stderr);
+    assert!(
+        green.status.success(),
+        "a collapsed re-capture is expected data, never a shortfall; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("clinical-plane records OK")
+            && stdout.contains("1 byte-identical re-capture(s) collapsed"),
+        "{stdout}"
+    );
+
+    std::fs::copy(&before_recapture, cl.medium()).unwrap();
+    let short = verify(&cl, &cl.medium());
+    let stdout = String::from_utf8_lossy(&short.stdout);
+    let stderr = String::from_utf8_lossy(&short.stderr);
+    assert!(
+        !short.status.success(),
+        "one raw record fewer than this path's last backup recorded; stdout:\n{stdout}"
+    );
+    assert!(stderr.contains("backup SHORT"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "That backup recorded {raw} clinical record(s); this medium holds {}.",
+            raw - 1
+        )),
+        "the refusal names both counts: {stderr}"
+    );
+    assert!(
+        !stderr.contains("newest clinical seq"),
+        "the newest seq is level, so only the count is reported short: {stderr}"
+    );
+    assert!(
+        stdout.contains("clinical-plane records SHORT") && !stdout.contains("records OK"),
+        "the stdout line agrees with the refusal: {stdout}"
+    );
 }
