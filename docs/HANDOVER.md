@@ -32,6 +32,13 @@
 > `crates/cairn-node/results/2026-09-10-macos-m3max.md`. ADR-0069 changed how a secret arrives,
 > not what a restore costs.
 
+> [!WARNING]
+> **⇒ CI's `cargo-deny` IS RED ON EVERY BRANCH SINCE 2026-09-15 — [#600](https://github.com/cairn-ehr/cairn-ehr/issues/600).**
+> A new upstream advisory, RUSTSEC-2026-0285, hits `rustls` < 0.23.45, which is the mTLS sync transport. It is
+> NOT caused by any open PR; `main` was green the day before. The fix is `cargo update -p rustls` in BOTH
+> `Cargo.lock` and `cairn-gui/Cargo.lock`, then `cargo deny check` in each. Every open PR stays red on that
+> check until it lands and the PR is merged up.
+
 > [!IMPORTANT]
 > **⇒ #527/#562's TRIAGE NOTE IS FALSE, AND ADR-0069 CORRECTS IT RATHER THAN BREAKING IT.**
 > The note reads *"no cron-run command reaches `print_recovery_code`"*. It was **already untrue
