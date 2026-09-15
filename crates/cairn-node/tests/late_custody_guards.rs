@@ -18,6 +18,11 @@
 //! `--` line comments are stripped before matching, so prose naming a function neither satisfies
 //! nor trips a rule. The pure predicates are exercised without a database below, so this file
 //! proves something even where `$CAIRN_TEST_PG` is unset.
+//!
+//! The comment stripper is per-line and literal-blind: a `--` inside a string literal truncates
+//! the rest of its line, so a custody read or a late-custody call written AFTER such a literal on
+//! the same line would be missed. No call site today shares a line with a `--`; keep each of
+//! these calls on its own line.
 
 use cairn_node::db;
 
@@ -25,7 +30,9 @@ fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
 }
 
-/// The body with every `--` line comment removed. **Pure.**
+/// The body with every `--` line comment removed. **Pure, and literal-blind**: it truncates a
+/// line at its first `--` with no awareness of string or dollar-quoted literals, so a `--`
+/// inside a literal would hide the rest of that line rather than being recognised as data.
 fn without_line_comments(body: &str) -> String {
     body.lines()
         .map(|line| match line.find("--") {
@@ -128,7 +135,8 @@ async fn every_custody_reading_applier_is_heal_safe() {
     );
 }
 
-/// Rule 2, over every PL/pgSQL function in the schema.
+/// Rule 2, over every PL/pgSQL and SQL-language function in the schema (C and internal
+/// functions have no SQL body to read).
 #[tokio::test]
 async fn every_custody_writer_projects_a_late_key() {
     let Some(base) = cs() else {
@@ -142,7 +150,7 @@ async fn every_custody_writer_projects_a_late_key() {
             "SELECT p.proname, p.prosrc FROM pg_proc p \
                JOIN pg_namespace n ON n.oid = p.pronamespace \
                JOIN pg_language l ON l.oid = p.prolang \
-              WHERE n.nspname = 'public' AND l.lanname = 'plpgsql'",
+              WHERE n.nspname = 'public' AND l.lanname IN ('plpgsql', 'sql')",
             &[],
         )
         .await
