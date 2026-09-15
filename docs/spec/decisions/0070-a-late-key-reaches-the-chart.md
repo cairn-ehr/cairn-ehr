@@ -130,9 +130,10 @@ the appliers' grant posture, `EXECUTE` revoked from `PUBLIC`, because they write
 
 Enforced by a catalog guard, `crates/cairn-node/tests/late_custody_guards.rs`: every registered applier
 whose body mentions `cairn_clear_payload` or `event_clear` is registered `heal_safe = TRUE`. With that
-invariant a late key can never leave a debt a door did not pay, so `requeue`'s `reproject_owed` — its
-field, its message and its exit-3 arm — is **retired, not narrowed**. A signal that is zero by construction
-reads as a measurement; deleting it is the honest form.
+invariant, **on every sequential path**, a late key can never leave a debt a door did not pay, so
+`requeue`'s `reproject_owed` — its field, its message and its exit-3 arm — is **retired, not narrowed**. A
+signal that is zero by construction on every sequential path reads as a measurement; deleting it is the
+honest form. Two cross-transaction races escape it, and are named as residuals under Consequences.
 
 ### 4. The healed state is arrival at custody time
 
@@ -198,11 +199,30 @@ Slice 61) and gains no query.
   such function is a decision, not a drift — without the call it would reopen #584 through its own entrance.
   The shred's `DELETE FROM event_clear` (`cairn_execute_shred`, `db/037`) is outside the rule: it removes
   custody, so it owes no projection.
-- **The guard has a residual.** Both of its rules read a function's own body (`pg_proc.prosrc`), so a
+- **The guard has residuals.** Both of its rules read a function's own body (`pg_proc.prosrc`), so a
   custody read reached only through a helper the applier calls is invisible. Every custody reader today
   calls `cairn_clear_payload` directly, and a positive control asserts the guard sees them, so it cannot
-  pass vacuously. Its comment stripper is per-line and literal-blind: a call written after a `--` inside a
-  string literal on the same line would be missed.
+  pass vacuously. The second rule matches literal text: it recognises `INSERT INTO event_clear` and
+  `INSERT INTO public.event_clear`, but not a `MERGE INTO event_clear` or a write run through a dynamic
+  `EXECUTE format(...)`. None exists today; a new one must be reviewed by hand for the late-custody call.
+  Its comment stripper removes `--` and `/* ... */` comments but is literal-blind: a call written after a
+  comment marker inside a string literal would be missed.
+- **Residual: a late key racing re-adjudication can leave a promoted record off the chart**
+  ([#603](https://github.com/cairn-ehr/cairn-ehr/issues/603), filed, not fixed here). Decision 3 holds on
+  every sequential path; this is one of two concurrent interleavings under READ COMMITTED that escape it,
+  found by reasoning in the final review and not reproduced. A late key lands on a deferred event while
+  connect-time `cairn_readjudicate_deferred` promotes it. `cairn_project_late_custody` still sees the
+  `event_deferred` marker, because the re-adjudication's delete is uncommitted, so it skips the row; gate 4
+  cannot see the late key's uncommitted clear view, so its appliers project nothing and it promotes. Both
+  commit with custody held and the chart empty, and `requeue` then exits 0 — where, before this decision,
+  it would have reported `reproject_owed`.
+- **Residual: a shred racing a late key can resurrect custody, and since this decision the projection
+  too** ([#604](https://github.com/cairn-ehr/cairn-ehr/issues/604), filed, not fixed here). Step 9's
+  anti-resurrection check (`NOT EXISTS` over `erasure_shred_log`) takes no lock. A key landing
+  concurrently with `cairn_execute_shred` sees no shred-log row yet and writes custody; the shred cannot
+  see those uncommitted rows, so it scrubs nothing of them; and the late-custody call rebuilds the chart
+  from the body the shred meant to destroy. The race predates
+  this decision; this decision widens what it brings back.
 - **Charts already missing a record on an existing database are not healed by upgrading.** There is no
   migration and no `SCHEMA_GENERATION` bump, so the loader's generation-change heal does not run;
   `cairn-node reproject` still heals such a chart. Under the pre-clinical posture no deployment holds one.
@@ -213,7 +233,8 @@ Slice 61) and gains no query.
   affects a late landing, and is neither widened nor narrowed here.
 - **How we would know the bet failed:** `late_custody_guards.rs` fails — an applier reads custody without
   being heal-safe, or a function that inserts into `event_clear` does not call
-  `cairn_project_late_custody` — or a chart is found empty after `requeue` exits 0.
+  `cairn_project_late_custody` — or a chart is found empty after `requeue` exits 0 by any path other than
+  the #603 race.
 
 The design and the implementation plan are
 `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-design.md` and

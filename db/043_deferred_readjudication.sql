@@ -232,8 +232,8 @@ BEGIN
             -- unqualified. A type whose apply fns are ALL heal_safe = false (note.added
             -- today, registered that way in db/005 because note_count is a counter, and
             -- replaying it can only increment again, never prove itself) makes
-            -- cairn_projection_dispatch_heal_safe run zero appliers, so it promotes on ZERO proof. That is correct, not a
-            -- gap: heal_safe = false exists precisely so cairn_reproject's heal (db/039) never
+            -- cairn_projection_dispatch_heal_safe run zero appliers, so it promotes on ZERO
+            -- proof. That is correct, not a gap: heal_safe = false exists precisely so cairn_reproject's heal (db/039) never
             -- re-runs that fn over a live row either, and gate 4 applies the identical rule.
             -- For a heal-safe fn, the invariant holds even for a stricter one written years
             -- from now, which gate 0 alone would not cover.

@@ -110,7 +110,8 @@ ADR so nobody reads the heal as time travel.
 2. **One expression, called from both doors.** The "run this row's heal-safe fns" loop exists once in
    SQL and is shared with db/043's gate 4, which today carries its own copy.
 3. **A projection that reads custody must be heal-safe** — enforced by a catalog guard. With that
-   invariant, a late key can never leave a debt a door did not pay, so `requeue`'s `reproject_owed`
+   invariant, on every sequential path, a late key can never leave a debt a door did not pay (two
+   cross-transaction races, #603 and #604, are ADR-0070's named residuals), so `requeue`'s `reproject_owed`
    (its field, its message, its exit-3 arm) is **retired**, not narrowed. A signal that is zero by
    construction reads as a measurement; deleting it is the honest form.
 4. **The healed state is arrival at custody time** (§2.4), which is what set-union already guarantees
@@ -167,8 +168,9 @@ landing, and then runs exactly the fns a first arrival would have.
 
 ### 4.3 Guards (Rust, `crates/cairn-node/tests/`)
 
-(Built as ONE catalogue guard, `late_custody_guards.rs`, reading `pg_proc.prosrc` for both rules —
-the plan's *Deviations* section says why.)
+(**As built:** the two guard files named below, `late_custody_reads_are_heal_safe.rs` and
+`event_clear_writers_project_late_custody.rs`, became ONE catalogue guard, `late_custody_guards.rs`,
+reading `pg_proc.prosrc` for both rules — the plan's *Deviations* section says why.)
 
 - **`late_custody_reads_are_heal_safe.rs`** (catalog, DB-gated): every `apply_fn` in
   `cairn_projection_apply` whose `pg_proc.prosrc` mentions `cairn_clear_payload` or `event_clear` has
@@ -259,6 +261,10 @@ Each must turn a named test red **at the assertion that names its claim** (the #
 | call on `v_rows = 0` without `v_clear_written` | 5.1.2 |
 | set a medication applier `heal_safe = false` | `late_custody_reads_are_heal_safe.rs` |
 | add a third `INSERT INTO event_clear` without the call | `event_clear_writers_project_late_custody.rs` |
+
+(**As built:** the last two rows' guard files are one, `late_custody_guards.rs`, reading the catalogue
+for both rules — see §4.3. The plan's review ledger records each mutation against the tests that
+actually exist.)
 
 ## 6. What is still broken when this merges
 

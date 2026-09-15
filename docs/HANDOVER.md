@@ -15,7 +15,7 @@
 > not healed by upgrading** — `cairn-node reproject` still heals it (pre-clinical: none exists).
 >
 > **⇒ WHAT IS NEXT ON THE DR PATH: ONE DECIDED ITEM TO BUILD, ONE DEFERRED DECISION, A NEW DECISION
-> ISSUE, AND NAMED OPERATIONAL GAPS — NO TEST DEBT.**
+> ISSUE, TWO FILED CROSS-TRANSACTION RACES, AND NAMED OPERATIONAL GAPS — NO TEST DEBT.**
 >
 > - **#594 — DECIDED 2026-09-15, NOT BUILT, and the natural next DR item:** `restore` exits **3**
 >   whenever any medium record was not restored — chain break, unknown plane AND torn tail — after
@@ -26,6 +26,12 @@
 > - **#602 — NEW, a decision issue:** any client can set `cairn.remote_apply` before calling
 >   `submit_event`, turning the strict door's refusals into the lenient door's flags. Pre-existing — a
 >   principle-12 weakness found in #584's review; ADR-0070 neither widens nor narrows it.
+> - **#603 and #604 — NEW, two cross-transaction races from #584's final review (reasoned, not
+>   reproduced; ADR-0070 names both as residuals, its decision 3 holding on every sequential path):**
+>   **#603** — a late key racing connect-time re-adjudication of a deferred event can leave the
+>   promoted record off the chart, and `requeue` then exits 0 · **#604** — a shred racing a late key
+>   can resurrect custody, and since ADR-0070 the projection too (step 9's anti-resurrection check takes
+>   no lock; pre-existing, widened). Each fix is a locking decision with a deadlock shape to test first.
 > - **Operational gaps (PR #595's review residuals):** **#596** (a crashed restore says "restore
 >   again", but the retry is refused until the leftover `<key>.unwrap` is moved) · **#597** (the
 >   straddled-duplicate notice says "All of them were applied" before anything was) · **#598**
@@ -211,15 +217,17 @@
 >    projection trigger is `AFTER INSERT` and a re-apply inserts nothing; `requeue` reported it by one
 >    run only and `restore` not at all. **The door now projects a late key, and `reproject_owed` is
 >    gone. Do not remove the `cairn_project_late_custody` calls or move them:** in both doors they sit
->    AFTER the substitution guard (defence in depth — no test can see that order, mutation M6 survived
->    by design, so a green suite does not license moving it), and in `db/020` BEFORE the
+>    AFTER the substitution guard (a rival body must never reach an applier — pinned since the final
+>    fix wave by `late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier`, a raising
+>    probe that kills mutation M6), and in `db/020` BEFORE the
 >    `cairn.remote_apply` clear (after it, three projection guards RAISE and the key could never land).
 >    Its pins now assert the heal: `restore_one_event_id_one_body.rs::a_keyless_copy_first_still_reaches_the_chart`,
 >    and `requeue_retains_unlanded_custody.rs` arm 1, which asserts the chart right after release and
 >    exit 0. (#597's notice is still misleading; it no longer hides an empty chart.)
 > 10. **⇒ WHEN `late_custody_guards.rs` FIRES, THE GUARD IS RIGHT (#584, 2026-09-15/16).** Two rules
 >     over the catalogue (`pg_proc`, what actually runs), each the reason a late key can never leave a
->     debt: **every function that `INSERT INTO event_clear` calls `cairn_project_late_custody`** — the
+>     debt on a sequential path (#603/#604 are the concurrent exceptions): **every PL/pgSQL or SQL
+>     function that `INSERT`s into `event_clear` calls `cairn_project_late_custody`** — the
 >     writer set is pinned by name, today exactly `apply_remote_event` and `submit_event` (the shred's
 >     `DELETE FROM event_clear` is outside the rule: removing custody owes no projection); and **every
 >     registered applier that reads custody** (`cairn_clear_payload` or `event_clear` in its own body)
@@ -228,7 +236,9 @@
 >     silently owes a rebuild — the debt `reproject_owed` used to report, and nothing reports it now);
 >     flipping one to `TRUE` that is not idempotent just to turn the guard green; exempting a writer.
 >     Make the applier idempotent; give a new writer the call — a third writer is a DECISION.
->     Residual: a custody read hidden in a helper the applier calls is invisible to the guard.
+>     Residuals: a custody read hidden in a helper the applier calls is invisible to the guard, and a
+>     `MERGE INTO event_clear` or a dynamic `EXECUTE format(...)` write is not recognised (none exists;
+>     review a new one by hand).
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
@@ -303,7 +313,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-15/16 (**#584 built — a late key reaches the chart.** **ADR-0070**, spec **v0.72**, no migration file, `SCHEMA_GENERATION` still 52; ten mutations run, M6 surviving by design; the maintainer's decisions on **#594** (exit 3, not built) and **#575** (re-deferred) recorded; filed **#602**; PR **#601**) · 2026-09-15 (**PR #595's review round** — the kit's wipe truncates `node_unwrap_key` and the medication projections, test 7 crosses the byte cap, five more mutations killed; filed **#596–#599**; **#600**, the `rustls` → 0.23.45 lockfile bump) · 2026-09-14 (**#593** — slice 2d's last six design tests, test-only, eight mutations killed; filed #594; PR #595) · earlier, one line each: 09-13/14 **#567** (`verify-backup`'s clinical plane, PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.72** ([ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-15/16 (**#584 built — a late key reaches the chart.** **ADR-0070**, spec **v0.72**, no migration file, `SCHEMA_GENERATION` still 52; ten mutations run, M6 killed in the final fix wave by a raising probe; filed **#603** and **#604**, two cross-transaction races ADR-0070 names as residuals; the maintainer's decisions on **#594** (exit 3, not built) and **#575** (re-deferred) recorded; filed **#602**; PR **#601**) · 2026-09-15 (**PR #595's review round** — the kit's wipe truncates `node_unwrap_key` and the medication projections, test 7 crosses the byte cap, five more mutations killed; filed **#596–#599**; **#600**, the `rustls` → 0.23.45 lockfile bump) · 2026-09-14 (**#593** — slice 2d's last six design tests, test-only, eight mutations killed; filed #594; PR #595) · earlier, one line each: 09-13/14 **#567** (`verify-backup`'s clinical plane, PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.72** ([ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -353,11 +363,13 @@ durable rules are traps 9 (retired) and 10. What generalises past the slice:
 - **⇒ A BACKGROUND WRAPPER `cmd; echo exit=$?` REPORTS THE ECHO'S EXIT STATUS TO THE HARNESS.** The
   notification said exit 0 over a run whose log said `exit=101`. Read the logged exit, never the
   notification.
-- **⇒ A MUTATION OF STATEMENT ORDER INSIDE ONE TRANSACTION CAN BE UNOBSERVABLE.** M6 (the late-custody
-  call moved above the substitution guard) survived: no medication applier raises on a rival body, and
-  the guard's RAISE rolls back whatever the appliers wrote. It is recorded as defence in depth in the
-  ADR and the SQL comment rather than forced into a test; the other nine died at the assertion naming
-  their claim.
+- **⇒ A MUTATION OF STATEMENT ORDER INSIDE ONE TRANSACTION LOOKS UNOBSERVABLE UNTIL A PROBE RAISES.** M6
+  (the late-custody call moved above the substitution guard) survived Task 7: no medication applier
+  raises on a rival body, and the guard's RAISE rolls back whatever the appliers wrote. The final fix
+  wave killed it cheaply — a test-scoped heal-safe applier that RAISEs (`install_raising_probe`), so an
+  applier running first replaces "substitution refused" with the probe's message
+  (`a_rival_body_never_reaches_an_applier`). **Before recording a survivor as "unobservable", ask
+  whether a raising probe observes it.**
 - **Gate:** a full workspace run at code-complete (173 binaries, 2110 passed) failed only
   `paper_parity_plan_section` — the labels above, fixed in the plan. What re-ran after that is in PR #601.
 
@@ -504,7 +516,8 @@ workspace); `poc/` is frozen historical spikes.
 - **⇒ DR — the whole 2a→2d chain has landed, the §1.2 measurement (#512's time half) and the
   non-interactive recovery code (#572/#570) too; since #593 all 23 design tests are written, and #584
   (a late key reaches the chart, PR #601) is built. What remains: **#594** (decided, not built — the
-  next DR item), **#575** (a deferred decision), **#602** (a new decision issue) and the operational
+  next DR item), **#575** (a deferred decision), **#602** (a new decision issue), **#603**/**#604**
+  (two cross-transaction races ADR-0070 names as residuals) and the operational
   gaps **#596**–**#599** — see ⇒ NEXT. Two things a reader is led to
   expect and will not find: **2d does NOT drive `cairn-sync`'s puller through `MediumTransport`** (a
   serving abstraction; the pure `within(verified_through) → sort by source_seq` derivation lives in
@@ -514,7 +527,7 @@ workspace); `poc/` is frozen historical spikes.
   **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module), **#531**/**#329** (decompose
   `cairn-sync/src/main.rs` — a maintainer decision on which to keep), **#532**, **#534**, **#535**,
   **#536**, **#537**, **#538**, **#556**–**#563**, **#569**, **#575**, **#589**, **#590**, **#591**, **#592**,
-  **#594**, **#602**.
+  **#594**, **#602**, **#603**, **#604**.
   (Ranges silently absorb issues that leave them: re-check each against GitHub before trusting it.)
 - **§5.9 parts C/D** (#232) — see ⇒ NEXT. Related: **#235** (shred authorization hooks), **#236** (FTS/RAG
   must build on `event_clear`).
