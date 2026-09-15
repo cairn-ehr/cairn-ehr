@@ -2146,7 +2146,7 @@ async fn a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair() {
 /// ZERO: the re-apply filled `event_dek`/`event_clear`, but its `event_log` insert was a no-op and
 /// the projection dispatcher is an `AFTER INSERT` trigger, so the line had to name a second step,
 /// `cairn_reproject()`. ADR-0070 moved that step into the door: an apply that makes a body readable
-/// for an event already in the log runs the event's heal-safe projections itself. The middle
+/// for an event already in the log runs the event's heal-safe projections itself. The final
 /// assertion is now the whole recovery.
 #[tokio::test]
 async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {

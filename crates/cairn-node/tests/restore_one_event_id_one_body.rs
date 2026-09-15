@@ -127,11 +127,11 @@ async fn restore_ready(
 /// resurrect a key an erasure destroyed. It fails at the first assertion below, which is the
 /// derivation half of this test's claim.
 ///
-/// Two assertions guard the copy order. The premise check fires first, and legibly, if the
+/// One assertion guards the copy order: the premise check, which fires first and legibly if the
 /// derivation's tie-break ever hands the keyless copy over first (a mutation that did so reddened
-/// it). Since #584 the chart no longer tells the two orders apart — both project — so the premise
-/// check is the ONLY guard of the copy order; the final assertion still pins that the keyed-first
-/// order projects.
+/// it). Since #584 the chart no longer tells the two orders apart — both project — so the final
+/// assertion no longer guards the copy order at all; it only pins that the keyed-first order
+/// projects.
 #[tokio::test]
 async fn a_second_copy_without_its_key_at_the_same_position_changes_nothing() {
     let Some(base) = cs() else {
@@ -320,7 +320,7 @@ async fn a_keyless_copy_first_still_reaches_the_chart() {
     assert_eq!(copies.len(), 2, "both copies reach the restore");
     assert!(
         copies[0].dek_wrapped.is_none() && copies[1].dek_wrapped.is_some(),
-        "premise: this pin is the KEYLESS-first order, or it is not trap 9's entrance at all"
+        "premise: this test is the KEYLESS-first order"
     );
 
     let report = apply_clinical_plane(&c, &records, Some(&secret))
@@ -330,8 +330,7 @@ async fn a_keyless_copy_first_still_reaches_the_chart() {
     assert_eq!(
         (report.penned(), report.already_present),
         (0, 1),
-        "the report is indistinguishable from the keyed-first order — which is why nothing in a \
-         restore's output flags this: {report:?}"
+        "the report is the same in both orders, and since #584 so is the chart: {report:?}"
     );
     assert_eq!(
         twin_of(&c, &chart.event_id).await.as_deref(),

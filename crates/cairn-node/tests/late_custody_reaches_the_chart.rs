@@ -20,8 +20,10 @@
 //!    projects nothing.
 //! 6. The strict door has the same entrance and the same fix.
 //!
-//! Tests 3, 4 and 5 pass against the pre-#584 door too — they pin placement rules the fix must not
-//! break, and each is proven by a named mutation in the plan (Task 7).
+//! Tests 4 and 5 pass against the pre-#584 door too — they pin placement rules the fix must not
+//! break, and each is proven by a named mutation in the plan (Task 7). Test 3 fails against the
+//! pre-#584 door (nothing projects, so nothing flags) and also pins the marker-clear placement via
+//! its mutation.
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 
@@ -67,6 +69,11 @@ async fn a_key_arriving_after_its_event_brings_the_record_to_the_chart() {
         statement_rows(&c, e.medication_id).await,
         0,
         "premise: nothing projected"
+    );
+    assert_eq!(
+        dose_seed_rows(&c, e.medication_id).await,
+        0,
+        "premise: the dose seed is custody-gated too, so 1 below proves the landing ran it"
     );
 
     apply_with_key(&c, &e).await.expect("the key is admitted");

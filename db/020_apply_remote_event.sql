@@ -380,9 +380,13 @@ BEGIN
     -- marker now means, so a future reader extending either function should know the
     -- two are now coupled.
     --
-    -- Still cleared at the SAME place as before (right after the INSERT, below) — a
-    -- later submit_event in the same transaction (outside a reproject) keeps its veto,
-    -- unchanged.
+    -- Cleared once both consumers of the 'on' window have run: this INSERT's AFTER-ROW
+    -- projection triggers, AND (since #584) the late-custody call that follows the
+    -- substitution guard further down. The clear now sits AFTER that call, not
+    -- immediately after the INSERT as it once did — everything from there on (the
+    -- event_deferred marker, the attachment learner, shred execution, the HLC merge)
+    -- runs with the marker OFF, exactly as a later submit_event in the same transaction
+    -- (outside a reproject) still sees its veto, unchanged.
     PERFORM set_config('cairn.remote_apply', 'on', true);
 
     -- 8. Plaintext twin + per-type structural floor, via the SAME cairn_event_twin hook
@@ -401,9 +405,8 @@ BEGIN
     -- 9. Custody + operational clear view — BEFORE the log INSERT so the AFTER INSERT projection
     --     triggers can already read the shadow (same txn). If the event is ALREADY in the log,
     --     the late-custody call after the INSERT does the projecting instead (#584).
-    --     ANTI-RESURRECTION:
-    --     an already-shredded target gets NEITHER — set-union may re-deliver the row
-    --     forever, but custody never comes back (arrival-order independence). The
+    --     ANTI-RESURRECTION: an already-shredded target gets NEITHER — set-union may re-deliver
+    --     the row forever, but custody never comes back (arrival-order independence). The
     --     unwrap-key-missing case is downgraded to a WARNING + skip (NOT the strict
     --     door's RAISE): a pulling node that never registered its unwrap key must still
     --     ADMIT the event, just without shred capability, rather than lose it.
@@ -426,7 +429,11 @@ BEGIN
     -- cairn.remote_apply was already raised above (before step 8), so it is already
     -- 'on' here — no second set_config needed. It stays 'on' through this INSERT's
     -- AFTER-ROW projection triggers (clamp-and-flag instead of vetoing, A5b; db/018/
-    -- db/031/db/033 read it there) and is cleared immediately below.
+    -- db/031/db/033 read it there) AND, since #584, through the late-custody call
+    -- further down (same reason: a heal-safe applier re-running there must clamp-and-flag
+    -- exactly as a first arrival does). It is cleared right after that call, not here —
+    -- everything later in the function (the event_deferred marker, the attachment
+    -- learner, shred execution, the HLC merge) runs with it off.
     --
     -- The §5.9 safety signal is stored verbatim and NEVER checked here (ADR-0063): see
     -- db/049 section 4 for why this door is deliberately lenient where db/005 is strict.
