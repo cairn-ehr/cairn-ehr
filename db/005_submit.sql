@@ -297,6 +297,78 @@ CREATE TRIGGER cairn_projection_dispatch_trg
     AFTER INSERT ON event_log
     FOR EACH ROW EXECUTE FUNCTION cairn_projection_dispatch();
 
+-- #584 / ADR-0070 — run ONE stored event's HEAL-SAFE registered apply fns.
+--
+-- The trigger above runs every registered applier on a FRESH insert. This runs only the
+-- heal_safe ones, over a row that is ALREADY in the log, which is the situation two callers are
+-- in:
+--   * db/043's gate 4, proving a promoted deferred event can project before its marker goes;
+--   * cairn_project_late_custody below, when an event's key arrives after the event did.
+-- heal_safe = false marks a counter-shaped applier (note.added's note_count): running it over a
+-- live row would count again, so neither caller may run it. Same rule as cairn_reproject's heal
+-- mode (db/039), spelled once here so the two callers cannot drift.
+--
+-- NO eligibility filter inside, deliberately: gate 4 must run on a row whose event_deferred marker
+-- is still present (that is its proof). The late-custody caller filters before calling.
+--
+-- search_path pinned for the %I EXECUTE, exactly like cairn_projection_dispatch (#426).
+CREATE OR REPLACE FUNCTION cairn_projection_dispatch_heal_safe(e event_log)
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_fn text;
+BEGIN
+    FOR v_fn IN
+        SELECT apply_fn FROM cairn_projection_apply
+        WHERE event_type = e.event_type AND heal_safe
+        ORDER BY run_order, apply_fn
+    LOOP
+        EXECUTE format('SELECT %I($1)', v_fn) USING e;
+    END LOOP;
+END;
+$$;
+-- It writes projections, so it takes the appliers' posture (#382): callers are the SECURITY
+-- DEFINER doors and the owner-only re-adjudication, which already run as the owner.
+REVOKE EXECUTE ON FUNCTION cairn_projection_dispatch_heal_safe(event_log) FROM PUBLIC;
+
+-- #584 / ADR-0070 — custody arrived for an event already in the log: bring it to the chart.
+--
+-- WHY THIS EXISTS. Both doors write custody (event_dek, event_clear) BEFORE their event_log INSERT
+-- so the trigger above can read the clear view. When the key comes LATER — a peer served the bytes
+-- before admitting us, a restore met the keyless copy first, a requeue landed a penned key — the
+-- second apply writes event_clear, its INSERT hits ON CONFLICT DO NOTHING, and the trigger never
+-- fires again: the body opens and the medication list stays empty. The door is the only place that
+-- KNOWS custody just landed, so the doors call this.
+--
+-- WHAT IT DOES. Loads the row as FIRST admitted (with the attestation columns that admission
+-- stored — never a row rebuilt from the caller's arguments) and runs its heal-safe appliers.
+-- Skips a row that is not cairn_replay_eligible: an event_deferred marker means its
+-- classification-gated checks have not passed, and only cairn_readjudicate_deferred (db/043) may
+-- grant it power.
+--
+-- WHAT THE RESULT MEANS. The chart equals "the event arrived when its key landed", not "at its
+-- first admission" — the arrival-order independence every projection already has (ADR-0070 §4).
+--
+-- A custody-reading applier must be heal_safe, or this would skip it and leave the chart owed a
+-- rebuild; crates/cairn-node/tests/late_custody_guards.rs enforces that over the catalog.
+CREATE OR REPLACE FUNCTION cairn_project_late_custody(p_event_id uuid)
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_row event_log;
+BEGIN
+    SELECT * INTO v_row FROM event_log WHERE event_id = p_event_id;
+    IF NOT FOUND THEN
+        RETURN; -- defensive: both doors call this only after their own INSERT
+    END IF;
+    IF NOT cairn_replay_eligible(v_row) THEN
+        RETURN;
+    END IF;
+    PERFORM cairn_projection_dispatch_heal_safe(v_row);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
+
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
 -- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.

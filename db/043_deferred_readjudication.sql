@@ -79,7 +79,6 @@ DECLARE
     v_target   uuid;
     v_err      text;
     v_clear    jsonb;
-    v_apply_fn text;
     -- type → count of events promoted this run. A jsonb accumulator rather than a temp
     -- table: the deferred set is tiny by construction (empty on a healthy node), and this
     -- keeps the function free of any object a concurrent caller could collide on.
@@ -247,13 +246,10 @@ BEGIN
             --
             -- heal_safe mirrors heal mode (db/039): a fn that only converges under a
             -- TRUNCATE cannot prove anything by running over live rows.
-            FOR v_apply_fn IN
-                SELECT apply_fn FROM cairn_projection_apply
-                 WHERE event_type = r.event_type AND heal_safe
-                 ORDER BY run_order, apply_fn
-            LOOP
-                EXECUTE format('SELECT %I($1)', v_apply_fn) USING r.el_row;
-            END LOOP;
+            -- The loop that used to live here is cairn_projection_dispatch_heal_safe (db/005),
+            -- shared with the late-custody path (#584) so the two cannot drift on which appliers
+            -- may run again over a live row.
+            PERFORM cairn_projection_dispatch_heal_safe(r.el_row);
         EXCEPTION WHEN OTHERS THEN
             v_err := SQLERRM;
         END;
