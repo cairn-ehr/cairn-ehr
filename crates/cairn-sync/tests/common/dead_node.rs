@@ -347,8 +347,8 @@ pub async fn twin_after_release(c: &Client, record: &DeadNodeRecord) -> Option<S
     .map(|r| r.get(0))
 }
 
-/// `requeue`'s exit status for a run that finished its loop but left work — rows still held, or a
-/// released record whose chart needs `cairn-node reproject` (#578 review).
+/// `requeue`'s exit status for a run that finished its loop but left work — rows still held in the
+/// pen (#578 review; the chart-heal cause retired with ADR-0070).
 ///
 /// A COPY of `requeue::EXIT_INCOMPLETE` in `crates/cairn-sync/src/requeue.rs`, and it has to be: that
 /// module lives in a binary-only crate an integration test cannot import. The value is part of the

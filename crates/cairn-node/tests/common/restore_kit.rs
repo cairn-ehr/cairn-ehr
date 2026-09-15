@@ -225,8 +225,9 @@ pub async fn in_pen(c: &Client, signed_bytes: &[u8]) -> bool {
 /// How many `medication_statement` rows `patient`'s chart shows.
 ///
 /// A readable body in `event_clear` is not yet a chart: the projection runs in the AFTER INSERT
-/// trigger on `event_log`, and a sealed event admitted WITHOUT its body leaves the chart empty
-/// even once custody lands later (#584, HANDOVER trap 9). This is the number a clinician sees.
+/// trigger on `event_log`, and until #584 a sealed event admitted WITHOUT its body left the chart
+/// empty even once custody landed later — the door now projects that landing (ADR-0070). This is
+/// the number a clinician sees.
 pub async fn medication_rows(c: &Client, patient: Uuid) -> i64 {
     c.query_one(
         "SELECT count(*) FROM medication_statement WHERE patient_id = $1::text::uuid",
