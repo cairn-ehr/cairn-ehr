@@ -2141,8 +2141,9 @@ fn load_schema_under_lock(client: &mut postgres::Client) -> R<()> {
     // cleanly" (unqualified, that is false: a type whose apply fns are ALL heal_safe = false,
     // e.g. note.added today, promotes on ZERO apply-fn runs by design, since a counter fn
     // cannot prove itself by replaying). The real reason: db/043's gate 4 selects its apply
-    // fns with `WHERE event_type = ... AND heal_safe` (the `FOR v_apply_fn` loop inside
-    // cairn_readjudicate_deferred), which is IDENTICAL to the heal filter cairn_reproject
+    // fns with `WHERE event_type = ... AND heal_safe` (inside
+    // `cairn_projection_dispatch_heal_safe` (db/005), which cairn_readjudicate_deferred's
+    // gate 4 calls), which is IDENTICAL to the heal filter cairn_reproject
     // (db/039) uses for its own per-type apply-fn aggregation (`FILTER (WHERE p_rebuild OR
     // r.heal_safe)`, with `p_rebuild = false` on this connect path). So the heal below can
     // never invoke an apply fn that gate 4 did not already run to completion on that exact
@@ -5605,7 +5606,7 @@ fn decide_custody(kid: &str, requester_pub: PublicKey32, lookup: TrustLookup) ->
     // The recovery clause is shared, and emitted ONLY for the causes the puller can
     // actually act on (`puller_can_recover`) — a typed property, not a grep over this
     // prose. Keeping it out of the per-cause text leaves each line about its CAUSE and
-    // stops six copies of the same two-step instruction drifting apart.
+    // stops six copies of the same recovery instruction drifting apart.
     let recovery = if lookup.puller_can_recover() {
         " Once that is done the puller recovers the bodies it already replicated with \
          `cairn-sync pull --full` (an incremental pull cannot reach events below its \
@@ -7931,12 +7932,18 @@ mod tests {
     }
 
     #[test]
-    fn a_recoverable_withhold_names_both_repair_steps_and_the_others_name_neither() {
-        // The remedy is TWO steps, and naming only the first is what a review measured
-        // as a lie: `pull --full` alone took custody from (0,0) to (1,1) and left the
-        // medication projection at ZERO, because the re-apply inserts no event_log row
-        // and the projection dispatcher is an AFTER INSERT trigger. An operator who
-        // followed the printed line still saw an empty chart.
+    fn a_recoverable_withhold_names_the_full_sweep_and_the_others_name_nothing() {
+        // Since ADR-0070 (#584) the remedy is ONE step: `cairn-sync pull --full`. The
+        // re-offer carries the key, and the apply door that lands it projects the record
+        // itself — so the line must name the full sweep and must NOT send the operator on
+        // to a second step (`cairn_reproject`) that would now change nothing.
+        //
+        // History, so the negative assertion below does not look arbitrary: before
+        // ADR-0070 the remedy really was two steps. `pull --full` alone took custody from
+        // (0,0) to (1,1) and left the medication projection at ZERO, because the re-apply
+        // inserts no event_log row and the projection dispatcher is an AFTER INSERT
+        // trigger. The door now closes that gap, and this test keeps the printed remedy
+        // honest about it.
         //
         // Both directions are asserted, and the classifier is the TYPED property
         // (`puller_can_recover`), never a substring of the message: the previous

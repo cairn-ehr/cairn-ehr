@@ -380,9 +380,10 @@ BEGIN
     -- marker now means, so a future reader extending either function should know the
     -- two are now coupled.
     --
-    -- Cleared once both consumers of the 'on' window have run: this INSERT's AFTER-ROW
-    -- projection triggers, AND (since #584) the late-custody call that follows the
-    -- substitution guard further down. The clear now sits AFTER that call, not
+    -- Cleared once all three readers of the 'on' window have run: step 8's per-type
+    -- check_fns (immediately below), this INSERT's AFTER-ROW projection triggers, AND
+    -- (since #584) the late-custody call that follows the substitution guard further
+    -- down. The clear now sits AFTER that call, not
     -- immediately after the INSERT as it once did — everything from there on (the
     -- event_deferred marker, the attachment learner, shred execution, the HLC merge)
     -- runs with the marker OFF, exactly as a later submit_event in the same transaction
