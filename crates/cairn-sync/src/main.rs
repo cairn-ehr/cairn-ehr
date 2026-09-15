@@ -4216,18 +4216,19 @@ fn apply_page(
 ///
 /// # A row that carries a key (#578)
 ///
-/// Each keyed row goes through four steps, and the order is the design:
+/// Each keyed row goes through three steps, and the order is the design:
 ///
 /// 1. **Open the pen row's own key** ([`requeue::open_pen_key`]) — or learn why it would not.
-/// 2. **Read the event's custody state BEFORE the door.** Only this can tell a record whose key is
-///    arriving late (its chart was built blind) from one entering the log for the first time.
-/// 3. **Apply**, then read the custody state AFTER the door. The door's `Ok` is NOT the claim that
+/// 2. **Apply**, then read the custody state AFTER the door. The door's `Ok` is NOT the claim that
 ///    the record came back: `db/020` admits a sealed event without custody on four paths, two of
 ///    them silent (see `db/052`'s section 4).
-/// 4. **Decide** with [`requeue::keyed_row_verdict`], and release through
+/// 3. **Decide** with [`requeue::keyed_row_verdict`], and release through
 ///    `cairn_release_pen_row`, which enforces the same rule in the database.
 ///
-/// A keyless row skips 1, 2 and 4's verdict: it has no custody to lose.
+/// There is no pre-door read: since ADR-0070 the door itself projects a key that lands late, so
+/// nothing needs to know what custody was before.
+///
+/// A keyless row skips 1 and 3's verdict: it has no custody to lose.
 fn do_requeue(
     client: &mut postgres::Client,
     // This node's custody key and where it came from, so a penned SEALED event can be released
@@ -4392,7 +4393,7 @@ fn do_requeue(
         ) {
             Ok(_) => {
                 applied_addresses.push(address.clone());
-                // STEP 3 and STEP 4. A keyless row has no custody to decide about.
+                // STEP 2 and STEP 3. A keyless row has no custody to decide about.
                 let released_how = match keyed {
                     None => None,
                     Some(pen) => {
@@ -4793,13 +4794,13 @@ fn cmd_requeue(conn: &str, metrics: bool, key_path: &str, unwrap_key_path: Optio
                 // hides in the one an operator actually reads.
                 println!("{}", report.counts.summary_line(report.examined));
             }
-            // INCOMPLETE is not FAILED, and not success either (#578 review). A run that kept rows,
-            // left rows the door still refuses, or landed custody for a record whose chart still
-            // needs a heal did everything it safely could — so it is not an `Err`, which `main`'s
-            // `Termination` would report as exit 1 alongside a database fault. But a cron wrapper
-            // that drops stderr and ignores the JSON has only the exit status, and exit 0 would
-            // tell it the pen is empty. So: the report first, on its usual channel, then a
-            // distinct status. `process::exit` skips destructors, so stdout is flushed by hand.
+            // INCOMPLETE is not FAILED, and not success either (#578 review). A run that kept rows
+            // or left rows the door still refuses did everything it safely could — so it is not an
+            // `Err`, which `main`'s `Termination` would report as exit 1 alongside a database
+            // fault. But a cron wrapper that drops stderr and ignores the JSON has only the exit
+            // status, and exit 0 would tell it the pen is empty. So: the report first, on its
+            // usual channel, then a distinct status. `process::exit` skips destructors, so stdout
+            // is flushed by hand.
             if let Some(notice) = report.counts.incomplete_notice() {
                 eprintln!("{notice}");
                 io::stdout().flush()?;

@@ -967,7 +967,7 @@ mod tests {
         }
     }
 
-    /// The five partitioning outcomes add up, and the three subsets do not join them.
+    /// The five partitioning outcomes add up, and the two subsets do not join them.
     #[test]
     fn the_outcomes_partition_and_the_subsets_stay_out() {
         assert_eq!(sample_counts().accounted_for(), 11 + 5 + 13 + 17 + 19);
