@@ -1582,7 +1582,7 @@ The PR body names what changed per layer, the four entrances before/after, the m
 
 **Paper counterpart:** a page that reached the ward before the chart it belongs in — held at the nurses' station, then filed once the chart turns up. Recovery is **N = 1** act (file the page).
 
-**Architecture-forced, before → after** (the acts on the recovery path once the underlying fault — an unregistered key, an unadmitted peer — is fixed; that repair is a provisioning act with no paper counterpart, owned where the fault is: ADR-0066 and #512 for restore's keys, pairing for a peer):
+**Steps — architecture-forced, before → after** (the acts on the recovery path once the underlying fault — an unregistered key, an unadmitted peer — is fixed; that repair is a provisioning act with no paper counterpart, owned where the fault is: ADR-0066 and #512 for restore's keys, pairing for a peer):
 
 | Entrance | Before | After |
 |---|---|---|
@@ -1591,7 +1591,7 @@ The PR body names what changed per layer, the four entrances before/after, the m
 | `restore`, keyless copy first | the record silently missing | **M = 0** extra |
 | `submit_event` re-submit | the record silently missing | **M = 0** extra |
 
-**UI bundling target K = 1.** `M = N` on every entrance; the slice removes an act rather than adding one. **Time budget:** a late landing costs the same registered appliers a first arrival runs, once, plus one `GET DIAGNOSTICS` per sealed write; no new runnable surface is exposed, so no measurement is owed by this slice (the ordinary sealed-write cost is measured: median 222 ms node-tier, Slice 61).
+**UI bundling target K = 1.** `M = N` on every entrance; the slice removes an act rather than adding one. **Time + cognitive load:** a late landing costs the same registered appliers a first arrival runs, once, plus one `GET DIAGNOSTICS` per sealed write; no new runnable surface is exposed, so no measurement is owed by this slice (the ordinary sealed-write cost is measured: median 222 ms node-tier, Slice 61). Cognitive load falls too: an operator no longer has to know that a released record may still be missing from the chart, or which owner-privileged command brings it back.
 
 ---
 
@@ -1606,3 +1606,21 @@ The PR body names what changed per layer, the four entrances before/after, the m
 ## Review ledger
 
 (Filled during execution: each task review, each mutation result from Task 7, each final-review finding and its disposition.)
+
+### Task 7 — mutation proofs
+
+| Mutation | Test(s) that failed | Assertion that fired (short quote) | Verdict (killed/survived) |
+|---|---|---|---|
+| M1 | `a_key_arriving_after_its_event_brings_the_record_to_the_chart`; `a_contradiction_revealed_by_a_late_key_is_flagged_not_refused`; `a_late_key_runs_the_heal_safe_appliers_once_and_never_again`; `a_keyless_copy_first_still_reaches_the_chart` | "THE ASSERTION THAT MATTERS: the record is on the medication list, with no reproject" (left: 0, right: 1) | killed |
+| M2 | `the_strict_door_brings_a_late_key_to_the_chart_too`; `late_custody_guards::every_custody_writer_projects_a_late_key` | "the strict door projects a late key exactly as the lenient one does" (left: 0, right: 1); "submit_event writes event_clear but never calls cairn_project_late_custody" | killed |
+| M3 | `heal_safe_dispatch::late_custody_projection_skips_a_deferred_row`; `a_deferred_event_gains_its_key_but_not_its_chart_until_promoted` | "a deferred row must not project through the late-custody path" (left: 1, right: 0); "a deferred event has not passed its gates: the late key must not project it" (left: 1, right: 0) | killed |
+| M4 | `heal_safe_dispatch::the_dispatch_runs_only_heal_safe_appliers`; `a_late_key_runs_the_heal_safe_appliers_once_and_never_again` | "a heal_safe = false applier is never re-run over a live row — that is what the flag means" (left: 2, right: 1); "the landing re-runs the heal-safe applier and NOT the counter-shaped one" (left: (2,2), right: (2,1)) | killed |
+| M5 | `a_contradiction_revealed_by_a_late_key_is_flagged_not_refused` | "the key must land — a refusal here strands it forever: Some(\"medication thread ...\")" (`landed.is_ok()`) | killed |
+| M6 | none | n/a — `a_rival_body_carrying_its_own_key_is_refused_and_projects_nothing` passed unchanged | survived (as predicted: lenient appliers do not raise and the RAISE rolls the projection back, so the placement rule relative to the substitution guard is a legibility rule, not one this behavioural test can observe) |
+| M7 | `a_late_key_runs_the_heal_safe_appliers_once_and_never_again` | "custody already held: nothing new landed, so nothing runs — the trigger for the heal is 'this call wrote event_clear', never 'the INSERT was a no-op'" (left: (3,1), right: (2,1)) | killed |
+| M8 | `late_custody_guards::every_custody_reading_applier_is_heal_safe` | "these appliers read custody but are registered heal_safe = false, ... [(\"clinical.medication.asserted\", \"medication_statement_apply\", false)]" | killed |
+| M9 | `late_custody_guards::every_custody_writer_projects_a_late_key` | "the custody writers are the two doors. A third is a DECISION" (left: [apply_remote_event, cairn_readjudicate_deferred, submit_event], right: [apply_remote_event, submit_event]) | killed |
+| M10 | `cairn-sync::requeue_retains_unlanded_custody::an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_chart`; `cairn-sync::clinical_pull::an_admitted_peer_recovers_the_bodies_it_pulled_without_custody` | "the recovered record is on the chart as soon as its key lands" (left: 0, right: 1); "...and the chart has it, with no reproject: the door projects custody that lands after its event (#584, ADR-0070)" (left: 0, right: 1) | killed |
+
+Full per-mutation evidence (edited lines, commands, panic text, undo confirmation) is in
+`.superpowers/sdd/2026-09-15-late-custody-reaches-the-chart-584/task-7-report.md`.
