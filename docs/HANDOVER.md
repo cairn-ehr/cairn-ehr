@@ -217,9 +217,11 @@
 >    projection trigger is `AFTER INSERT` and a re-apply inserts nothing; `requeue` reported it by one
 >    run only and `restore` not at all. **The door now projects a late key, and `reproject_owed` is
 >    gone. Do not remove the `cairn_project_late_custody` calls or move them:** in both doors they sit
->    AFTER the substitution guard (a rival body must never reach an applier — pinned since the final
->    fix wave by `late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier`, a raising
->    probe that kills mutation M6), and in `db/020` BEFORE the
+>    AFTER the substitution guard (a rival body must never reach an applier). **Only `db/020`'s placement
+>    is test-pinned** — by `late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier`, a
+>    raising probe that kills mutation M6 through `apply_remote_event`; `submit_event`'s identical
+>    placement (db/005) holds by construction and moving it above its guard would survive every test
+>    (a strict-door twin of that test is the cheap pin). And in `db/020` the call sits BEFORE the
 >    `cairn.remote_apply` clear (after it, three projection guards RAISE and the key could never land).
 >    Its pins now assert the heal: `restore_one_event_id_one_body.rs::a_keyless_copy_first_still_reaches_the_chart`,
 >    and `requeue_retains_unlanded_custody.rs` arm 1, which asserts the chart right after release and
