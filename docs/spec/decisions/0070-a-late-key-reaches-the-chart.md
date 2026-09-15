@@ -70,9 +70,9 @@ applier registered in `cairn_projection_apply`, and the load-bearing claims were
 
 ### Rejected alternatives
 
-- **An `AFTER INSERT` trigger on `event_clear`.** It would cover every custody writer automatically, but it
-  fires inside step 9, before the substitution guard, so both doors would first have to move their guards
-  ahead of their custody writes.
+- **An `AFTER INSERT` trigger on `event_clear`.** It would cover every `event_clear` insert automatically,
+  but it fires inside step 9, before the substitution guard, so both doors would first have to move their
+  guards ahead of their custody writes.
 - **A call in `apply_remote_event` (`db/020`) only.** It leaves entrance 4 open.
 - **A durable ledger of owed projections.** Machinery for a case the audit's second finding shows cannot
   occur.
@@ -99,13 +99,16 @@ load-bearing:
   `event_id`. The guard's later RAISE rolls that back, but the refusal a caller reads could become whatever
   an applier raised first instead of `substitution refused` — the reason `restore` pens and tests assert.
 - **In the door's own posture.** At `apply_remote_event` the call runs while `cairn.remote_apply` is still
-  `on`; the substitution guard moved above the marker clear to make room for it. After the clear, three
-  projection guards RAISE where a first arrival would clamp and flag — `cairn_guard_medication_patient`
-  (`db/031`), and the local reconciliation refusal and the oversize-group check (`db/033`) — so a late key
-  would be refused and could never land. At `submit_event` the marker is off and stays off: a late landing
-  there is judged in the strict posture, exactly as a first arrival there would be.
+  `on`; the substitution guard moved above the marker clear to make room for it. Three projection checks
+  read that marker, and each admits a first arrival on the remote path: `cairn_guard_medication_patient`
+  (`db/031`) writes a `medication_patient_conflict_flag`, the oversize-group check (`db/033`) writes a
+  `medication_projection_flag`, and the cross-patient reconciliation refusal (`db/033`) is skipped, its
+  contradiction surfaced at read time by the `medication_group_cross_patient` view. After the clear, all
+  three RAISE, so a late key dispatched there would be refused and could never land. At `submit_event` the
+  marker is off and stays off: a late landing there is judged in the strict posture, exactly as a first
+  arrival there would be.
 - **Only when replay-eligible.** A row carrying an `event_deferred` marker — admitted uninterpreted, or
-  failed re-adjudication, whose marker is permanent — must never project
+  failed re-adjudication, whose marker stays until a later pass promotes the event — must never project
   ([ADR-0056](0056-unknown-event-types-admitted-uninterpreted.md) decision 4, through ADR-0057 decision 3's
   `cairn_replay_eligible` seam).
 
@@ -119,9 +122,9 @@ The *"run this row's heal-safe appliers"* loop exists **once** in SQL, beside th
 copy, now calls it too. It holds **no** eligibility filter, deliberately: gate 4 runs appliers over a row
 whose marker is still present, as its proof that promotion is safe. The filter lives in
 `cairn_project_late_custody(uuid)`, which loads the stored row, returns unless the row exists and is
-replay-eligible, and dispatches. Both doors call that one function. Both functions are plain PL/pgSQL with
-`search_path` pinned and `EXECUTE` revoked from `PUBLIC` — the dispatcher's posture, since every caller
-already runs as the owner.
+replay-eligible, and dispatches. Both doors call that one function. Both functions take the dispatcher's
+shape — non-definer PL/pgSQL with `search_path` pinned, since every caller already runs as the owner — and
+the appliers' grant posture, `EXECUTE` revoked from `PUBLIC`, because they write projections.
 
 ### 3. A projection that reads custody must be heal-safe
 
@@ -190,9 +193,11 @@ Slice 61) and gains no query.
   cross-patient contradiction and is flagged in either order); and the reconciliation oversize clamp,
   measured at apply time. **Each is the same residue the ordinary out-of-order case already has**, none is
   widened here, and none is filed. The heal is not time travel.
-- **A second invariant is pinned beside decision 3:** the functions that write `event_clear` are exactly
-  the two doors, and each calls `cairn_project_late_custody`. A third custody writer is a decision, not a
-  drift — without the call it would reopen #584 through its own entrance.
+- **A second invariant is pinned beside decision 3:** the PL/pgSQL and SQL functions that
+  `INSERT INTO event_clear` are exactly the two doors, and each calls `cairn_project_late_custody`. A third
+  such function is a decision, not a drift — without the call it would reopen #584 through its own entrance.
+  The shred's `DELETE FROM event_clear` (`cairn_execute_shred`, `db/037`) is outside the rule: it removes
+  custody, so it owes no projection.
 - **The guard has a residual.** Both of its rules read a function's own body (`pg_proc.prosrc`), so a
   custody read reached only through a helper the applier calls is invisible. Every custody reader today
   calls `cairn_clear_payload` directly, and a positive control asserts the guard sees them, so it cannot
@@ -207,8 +212,8 @@ Slice 61) and gains no query.
   calling `submit_event`. It predates this decision, affects a first arrival at that door exactly as it
   affects a late landing, and is neither widened nor narrowed here.
 - **How we would know the bet failed:** `late_custody_guards.rs` fails — an applier reads custody without
-  being heal-safe, or an `event_clear` writer does not call `cairn_project_late_custody` — or a chart is
-  found empty after `requeue` exits 0.
+  being heal-safe, or a function that inserts into `event_clear` does not call
+  `cairn_project_late_custody` — or a chart is found empty after `requeue` exits 0.
 
 The design and the implementation plan are
 `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-design.md` and
