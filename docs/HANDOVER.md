@@ -13,8 +13,11 @@
 > (#512's time half, PR #573) and the non-interactive path
 > ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md), PR #574).
 >
-> **What "closed" does and does not mean.** A record a restore cannot apply is **quarantined with
-> its custody**, not dropped, and the restore exits **non-zero** saying so. The actor registry
+> **What "closed" does and does not mean.** A record a restore is entitled to apply but cannot is
+> **quarantined with its custody**, not dropped, and the restore exits **non-zero** saying so. A
+> record it is NOT entitled to apply — past a mid-file chain break, or in a plane this build cannot
+> route — stays on the medium, is named in the summary, and today leaves the exit at **0**: that
+> asymmetry is the decision **#594**. The actor registry
 > re-enters on the export container's AEAD alone — the one part of a restore that is **not**
 > verify-on-apply, accepted deliberately and printed to the operator. And **rows and custody
 > coming back is not the same claim as a body opening**: the tests to cite are
@@ -52,11 +55,17 @@
 > `verify-backup && backup` cron stops backing up after every same-mount-point rotation, because the
 > drive that missed the latest backup reads SHORT until its own next backup catches it up.
 >
-> **⇒ WHAT IS NEXT ON THE DR PATH: TWO MAINTAINER DECISIONS, NO TEST DEBT.** Every one of slice 2d's
-> 23 design tests is now written — the last six by **#593** (2026-09-14, see below). What is left is
-> **#575** (the minted recovery code reaches stderr — three options in the issue; the maintainer
-> deferred it on 2026-09-14) and **#594** (new — `restore` exits 0 when records past a chain break or
-> in an unknown plane were not restored, while a pen exits non-zero). Nothing on the path is a slice
+> **⇒ WHAT IS NEXT ON THE DR PATH: TWO MAINTAINER DECISIONS AND NAMED OPERATIONAL GAPS, NO TEST
+> DEBT.** Every one of slice 2d's 23 design tests is now written — the last six by **#593**
+> (2026-09-14, see below). The decisions: **#575** (the minted recovery code reaches stderr — three
+> options in the issue; the maintainer deferred it on 2026-09-14) and **#594** (`restore` exits 0 when
+> records past a chain break or in an unknown plane were not restored, while a pen exits non-zero).
+> The gaps: **#584** — `restore` can bring back a readable body into an EMPTY chart at exit 0 (trap 9's
+> second entrance, now pinned by a test that passes today and must be inverted when #584 lands) — and
+> PR #595's review residuals **#596** (a crashed restore says "restore again", but the retry is refused
+> until the leftover `<key>.unwrap` is moved) · **#597** (the straddled-duplicate notice says "All of
+> them were applied" before anything was) · **#598** (`restore_reads_the_clinical_plane.rs` still has
+> private fixtures) · **#599** (the §6.2 disk-cost note and a CAIRNB1 medium have no CLI test). Nothing on the path is a slice
 > any more. The other build candidates are further down.
 >
 > **The pen-release rule (#578, PR #582) — do not undo.** `db/020` returns `Ok` while admitting a
@@ -76,8 +85,8 @@
 > (7, at 10 001 records), `restore_one_event_id_one_body.rs` (16), `restore_cli_applies_nothing_untrusted.rs`
 > (14, 17), `restore_cli_survives_its_own_failure.rs` (19, 22); shared fixtures in
 > `tests/common/restore_kit.rs`. **A retry after a crashed restore must move the `<key>.unwrap` that
-> attempt installed aside first** — the pre-flight refuses otherwise, and says so; test 19 follows
-> that remedy.
+> attempt installed aside first** — the pre-flight refuses otherwise, and says so, though the crash
+> message itself does not (**#596**); test 19 pins that refusal and then follows its remedy.
 >
 > **⇒ `M > N` STILL STANDS AND #512 STAYS OPEN.** The third act is the **recovery code**, a second
 > secret asked for after the node plane is applied (ADR-0068 deleted the provenance confirmation
@@ -101,7 +110,8 @@
 > source guards stop scanning at a file's first test module) · **#587** (new — `cairn-sync`
 > pull/requeue on a sync-only DB loaded by an older build fail with a raw 42883, not "run init") ·
 > **#589**, **#590**, **#591**, **#592** (the #567 residuals named in ⇒ NEXT above) · **#594** (new —
-> `restore`'s exit code for records it could not restore; a decision, see ⇒ NEXT) ·
+> `restore`'s exit code for records it could not restore; a decision, see ⇒ NEXT) · **#596**,
+> **#597**, **#598**, **#599** (new — PR #595's review residuals, named in ⇒ NEXT above) ·
 > **#556**–**#563** (the 2b/2c review wave; see ROADMAP).
 >
 > **Never cite ADR-0026 decision 1's promise 2** — *"node-default data-at-rest keys survive"* — as
@@ -225,12 +235,16 @@
 >    `requeue_retains_unlanded_custody.rs::an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_chart`,
 >    which asserts the chart is 0 before the heal and 1 after. If #584 makes the door re-project,
 >    retire the heal step there — the test's own premise assertion will say when. **`restore` reaches
->    the same state WITH NO SIGNAL AT ALL** (reproduced 2026-09-14, recorded on #584): two copies of
->    one event at one `source_seq`, the keyless copy first — body opens, chart empty, exit 0.
+>    the same state with NO SIGNAL THAT NAMES IT** (recorded on #584): two copies of one event at one
+>    `source_seq`, the keyless copy first — body opens, chart empty, exit 0. The only output is
+>    `straddled_duplicate_notice`'s WARNING, which reads identically in the harmless order, says "All
+>    of them were applied", and never mentions a chart (**#597**). Pinned by
+>    `restore_one_event_id_one_body.rs::a_keyless_copy_first_leaves_the_chart_unprojected_until_584`,
+>    which asserts the chart is EMPTY today and says to invert that assertion when #584 lands.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
-the next §5.9 BUILD — behind #500's slice 2d, which outranks it.** Read **ADR-0062/0063/0064/0065** (`spec/decisions/`) before
+the next §5.9 BUILD — #500's slice 2d, which outranked it, has merged.** Read **ADR-0062/0063/0064/0065** (`spec/decisions/`) before
 touching any of it; do not re-derive their decisions. The authority floor is ONE predicate `cairn_claim_authority`
 (db/005) at exactly ONE site (db/048's `NOT EXISTS`), so display coarsening, safety-rung emission and part C's dial
 all inherit it — it gives **#245** its first SQL counterpart, not its mirror. Operator-surface §1.2 budget MET and
@@ -280,7 +294,7 @@ test (cairn-gui)", "cargo doc (API surface)"), matching job names exactly, per `
 ⇒ NEXT. **If a measurement falls outside its budget, that is the finding — file an
 issue, never adjust the budget.**
 
-**Other build candidates** (after #500; nothing blocks a choice): the **registration/search UI slice**
+**Other build candidates** (#500 is done; nothing blocks a choice): the **registration/search UI slice**
 (the wrong-chart affordance paper has and the med-list window does not; per Slice 63 must **open** a
 chart, never *retarget* one) · the **drugref term→anchor lookup** (the §9 advisory tier; closes the
 coded↔uncoded case ADR-0059 decision 5 leaves open, needs a connection-model decision first,
@@ -305,7 +319,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-14 (**#593 — slice 2d's last six design tests (7, 14, 16, 17, 19, 22), each proven by a named mutation.** Test-only: four new suites, the restore fixtures moved to `tests/common/restore_kit.rs`, no production code touched. Eight mutations run, all killed. Filed **#594** (restore's exit code for records it did not restore); reproduced a second entrance to trap 9 through `restore` and recorded it on **#584**. Maintainer deferred **#575**. **No ADR, no spec bump, no migration, no SCHEMA bump.** PR **#595**.) · before that: 2026-09-13/14 (**#567 — `verify-backup` asks the clinical-plane question**; `backup SHORT` only on evidence; opened #589–#592; PR #588 merged) · 2026-09-13 (**the PR #582 review** — `cairn_custody_state` + `cairn_release_pen_row`, exit 3 = INCOMPLETE, `reproject_owed`; opened #584–#587) · 2026-09-12 (**`requeue` never counts a release it did not get**, closed #578–#581, full local gate GREEN, opened #583; **`requeue` releases custody**, closed #568, PR #577; **CodeQL advanced setup + model pack**, 44 → 3, PR #576) · 2026-09-11 (**non-interactive recovery code**, closes #572/#570, **ADR-0069**, spec **v0.71**, opens #575, PR #574) · 2026-09-10 (**§1.2 budget measured** — 116.7 s against 600 s — plus **ADR-0068**; closed #571, opened #572, confirmed #552; and **DR slice 2d**, closed #554, **ADR-0067**, `db/052`) · 2026-09-07 (**#523**, and 2c found un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**closing-keyword guard**; **#511**) · 2026-09-02 (**DR slice 2b**; **#527**) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-15 (**PR #595's review round**, fixed in the same PR: the kit's wipe now truncates `node_unwrap_key` and the medication projections, trap 9's restore entrance is pinned by a test, test 7 crosses the byte cap, a quota-mirror source guard, five more mutations killed; filed **#596–#599**) · 2026-09-14 (**#593 — slice 2d's last six design tests (7, 14, 16, 17, 19, 22), each proven by a named mutation.** Test-only: four new suites, the restore fixtures moved to `tests/common/restore_kit.rs`, no production code touched. Eight mutations run, all killed. Filed **#594** (restore's exit code for records it did not restore); reproduced a second entrance to trap 9 through `restore` and recorded it on **#584**. Maintainer deferred **#575**. **No ADR, no spec bump, no migration, no SCHEMA bump.** PR **#595**.) · before that: 2026-09-13/14 (**#567 — `verify-backup` asks the clinical-plane question**; `backup SHORT` only on evidence; opened #589–#592; PR #588 merged) · 2026-09-13 (**the PR #582 review** — `cairn_custody_state` + `cairn_release_pen_row`, exit 3 = INCOMPLETE, `reproject_owed`; opened #584–#587) · 2026-09-12 (**`requeue` never counts a release it did not get**, closed #578–#581, full local gate GREEN, opened #583; **`requeue` releases custody**, closed #568, PR #577; **CodeQL advanced setup + model pack**, 44 → 3, PR #576) · 2026-09-11 (**non-interactive recovery code**, closes #572/#570, **ADR-0069**, spec **v0.71**, opens #575, PR #574) · 2026-09-10 (**§1.2 budget measured** — 116.7 s against 600 s — plus **ADR-0068**; closed #571, opened #572, confirmed #552; and **DR slice 2d**, closed #554, **ADR-0067**, `db/052`) · 2026-09-07 (**#523**, and 2c found un-PR'd) · 2026-09-06 (**DR slice 2c**) · 2026-09-04 (**closing-keyword guard**; **#511**) · 2026-09-02 (**DR slice 2b**; **#527**) · 2026-09-01/08-31 (**DR slice 2a**) · 2026-08-30 (**#503**) · 2026-08-24 (**DR slice 1**: #495 CLOSED). Earlier: see *Recent sessions* below. · **Spec/ADRs:** **v0.71** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -345,13 +359,28 @@ changed.** What generalises:
 - **⇒ WITHOUT db/020's SUBSTITUTION GUARD, NOTHING ELSE CATCHES A KEYLESS FORGERY.** With the guard
   removed, a rival body under an existing `event_id` carrying no DEK was reported `applied`: the door's
   `ON CONFLICT DO NOTHING` swallows it and the restore's newness probe counts it new. (A rival WITH a DEK
-  would surface as `CustodyDidNotLand`.) The guard is load-bearing on its own for that shape.
-- **⇒ TRAP 9 HAS A SECOND ENTRANCE, THROUGH `restore`** (reproduced with a throwaway probe, recorded on
-  #584): two copies of one event at one `source_seq`, the keyless copy first → the body opens,
-  `medication_statement` is EMPTY, the report is identical to the correct order, exit 0.
-- **⇒ A RE-RESTORE AFTER A CRASH NEEDS ONE `mv` THE CRASH MESSAGE DOES NOT MENTION.** The failed attempt
-  installed `<key>.unwrap`; the retry's pre-flight refuses to run over it and names the remedy, so the
-  operator learns it one invocation late. Minor; not filed.
+  would surface as `CustodyDidNotLand` — inferred from the code, not run.) The guard is load-bearing on
+  its own for that shape.
+- **⇒ TRAP 9 HAS A SECOND ENTRANCE, THROUGH `restore`** (recorded on #584): two copies of one event at
+  one `source_seq`, the keyless copy first → the body opens, `medication_statement` is EMPTY, the report
+  is identical to the correct order, exit 0. Now PINNED by
+  `restore_one_event_id_one_body.rs::a_keyless_copy_first_leaves_the_chart_unprojected_until_584`
+  (asserts 0 today; invert it when #584 lands).
+- **⇒ A RE-RESTORE AFTER A CRASH NEEDS ONE `mv` THE CRASH MESSAGE DOES NOT MENTION — filed as #596.**
+  The failed attempt installed `<key>.unwrap`; the retry's pre-flight refuses to run over it and names
+  the remedy, so the operator learns it one invocation late. Test 19 pins the refusal, then the `mv`.
+- **⇒ THE REVIEW FOUND THE SHARED WIPE LEAVING `node_unwrap_key` REGISTERED — the `actor_event` lesson
+  again, in the same function.** `medication_setup` registers the dead node's key, no FK reaches the
+  table, and db/020 then wraps custody to the leftover row. **Measured, not argued:** with a restore
+  whose unwrap-key registration was made a no-op, the headline CLI test and all of test 16 PASSED against
+  the old wipe and went red against the fixed one. A fixture that models "a fresh machine" must be
+  checked table by table against what a fresh machine lacks — `CASCADE` reaches only what has a foreign
+  key. (The medication projection tables had the same gap; #598 tracks the older suite that still has it.)
+- **⇒ A COUNT ASSERTION CAN BE VACUOUS BY FIXTURE SIZE.** Test 7 penned 10 001 small records, so it
+  crossed the row cap and never the 64 MiB byte cap: `pen()` bounded by bytes alone passed. Padded, the
+  same run crosses both, and the mutation now dies. Also: a gate test whose fixture numbers records in
+  capture order cannot tell "past the break" from "above the watermark" (test 14 needed a low-seq record
+  past the break to kill that mutation).
 - **Exit codes are #594**: records past a chain break or in an unknown plane leave `restore` at exit 0
   while a pen exits non-zero. Tests 14/17b do not assert exit status, so either decision lands clean.
 - **Fault injection without residue:** a `cairn_test_*` trigger scoped to one `event_id`, dropped BEFORE
@@ -361,7 +390,9 @@ changed.** What generalises:
 - **Gate this time:** the 4 new suites, the refactored `restore_cli_surface`, 7 restore/verify
   neighbours and 14 source guards that scan test files — 26 binaries, all exit 0 against PG18 — plus
   `cargo fmt --check` and clippy `-D warnings` on the touched targets. **No full local sweep** (test-only
-  change); CI's full job is the gate.
+  change); CI's full job is the gate. **After the review round:** the 5 restore suites and 6 source
+  guards re-run green, five further mutations run and killed (registration no-op, byte quota,
+  empty-plane note, a `source_seq` gate, a keyless-first tie-break), clippy `-D warnings` clean.
 
 ### 2026-09-12 → 09-13/14 — requeue custody, the CodeQL model pack, `verify-backup`'s clinical plane (condensed)
 

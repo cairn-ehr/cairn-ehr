@@ -38,9 +38,14 @@ standing (#512) is unchanged; no workflow step is added, removed or reordered.
   suites (`attachment_reference_shape.rs`'s pattern).
 - Commits use `test(#593):` (the parenthesis breaks GitHub's closing-keyword adjacency).
 - `cargo fmt --check` and `RUSTDOCFLAGS=-D warnings cargo doc` in every commit step, not only the
-  final gate (the #567 lesson).
+  final gate (the #567 lesson). *(As built: every change is under `tests/`, which `cargo doc` does
+  not document, so the doc gate had nothing to check; clippy `-D warnings` on the touched test
+  targets stood in for it.)*
 
 ## The tests, and the mutation each must kill
+
+*This section is the plan as accepted. What was built differs in four places, and the review of
+PR #595 changed more; both are recorded in "As built" at the end rather than edited in here.*
 
 **Test 7 — the pen is not capped, at volume.** 10 001 records that each carry custody, applied with
 no custody key installed, must ALL be penned under `(restore)` with their `dek_wrapped` intact, and
@@ -79,3 +84,46 @@ carries one record whose `dek_wrapped` will not open and one record signed by an
 restore exits non-zero, prints BOTH reason lines with a count of 1 each, and still prints
 `new node` / `supersedes` / `re-peer with` before exiting. *Mutations:* the pen bail moved above
 the summary; the per-reason loop deleted.
+
+## As built
+
+**Differences from the plan above, made while writing the tests:**
+
+- **Test 14 uses THREE captures, not two.** Chart C in a third capture hangs from B's broken segment
+  with its own link intact. That is what makes the test pin "trust stops at the first break" rather
+  than "the broken segment is skipped".
+- **Test 19's retry needs one `mv`.** Attempt 1 installs the dead node's `<key>.unwrap` before the
+  clinical apply, and the retry's pre-flight refuses to run over an existing unwrap key. "The SAME
+  restore … completes" is true only after that file is moved aside. Filed as **#596** in review.
+- **Test 22's bail mutation had to move.** Placed above the WHOLE summary, it failed at the
+  reason-line assertion, not at the next-step lines it was meant to prove. The placement that proves
+  the next steps is between the per-reason loop and the `new node` lines.
+- **Test 16's collapse mutation lives in `plane_records_with_accounting`'s `records.dedup()`.** The
+  plan names `plane_records`, which is only a projection of it; a mutation applied there literally
+  would not reach the path this test drives.
+- **Findings while writing:** **#594** (exit status for records a restore did not apply), and trap
+  9's second entrance through `restore`, recorded on **#584**.
+
+**What PR #595's review changed** (five review passes; every finding fixed here or filed):
+
+- **The kit's wipe left `node_unwrap_key` registered** (and the medication projection tables), so
+  "the body opens" passed in five suites even against a restore that had stopped registering custody.
+  The wipe now truncates both; a mutation that makes the registration a no-op turns the kit suites
+  red, where the old wipe let them pass.
+- **Test 16a asserts the copy ORDER and the CHART**, not only that the body opens, and a new test
+  pins trap 9's keyless-first order: a green PIN of today's empty chart, to be inverted when #584
+  lands.
+- **Test 7 crosses the byte cap as well as the row cap** (each twin padded, the total asserted), checks
+  each pen row holds its OWN key, and a new source guard keeps `ORDINARY_QUOTA_*` equal to cairn-sync's
+  real quota.
+- **Test 14** adds a record past the break with a LOW `source_seq`, so a gate keyed on the sequence
+  instead of the file position is caught, and proves C's own link is intact.
+- **Test 17** gains a positive test for the CAIRNB3 empty-plane note (17a's negative check had no
+  teeth against a rewording); 17b also checks the pen.
+- **Test 19** matches the injected fault's message and SQLSTATE (the phrase "LOCAL fault" is printed
+  by four steps), proves the crash was mid-apply, pins the pre-flight refusal before the `mv`, and
+  checks the retry resumed.
+- **Test 22** uses unequal counts (door 2, unwrap 1), whole-line matches and the full clinical line.
+- **Filed:** #596 (crash message omits the leftover key), #597 (the straddled-duplicate notice claims
+  every copy was applied), #598 (`restore_reads_the_clinical_plane.rs`'s private fixtures), #599 (the
+  §6.2 disk-cost note and CAIRNB1 have no CLI test).
