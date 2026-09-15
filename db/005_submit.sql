@@ -1006,6 +1006,9 @@ DECLARE
     v_inner        JSONB;             -- {payload, plaintext_twin} recovered by cairn_unseal_body
     v_pub          BYTEA;             -- this node's X25519 unwrap-key public half
     v_twin_stub    TEXT;              -- the outer, signed mechanical stub twin (principle 11)
+    -- #584 / ADR-0070: rows THIS call wrote into event_clear, and rows its event_log INSERT wrote.
+    v_clear_rows   INTEGER := 0;
+    v_log_rows     INTEGER;
 BEGIN
     -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
     --    so an event too large to replicate or back up can never be admitted (it would
@@ -1213,7 +1216,8 @@ BEGIN
         -- (submit refusals are safe — nothing has accepted the event). The apply door cannot
         -- mirror this RAISE — a refusal there would freeze the seq watermark on a verifiable
         -- event — so it stays lenient and the non-clinical projection triggers are made
-        -- seal-robust instead (they RETURN NULL on a sealed row; db/002/010-014/018/023-025).
+        -- seal-robust instead (they RETURN on a sealed row — db/002/010-014/018/023-025/045 — or,
+        -- for db/048's sensitivity assertion, project a deliberately unreadable MAX-grade row).
         IF v_type NOT LIKE 'clinical.%' THEN
             RAISE EXCEPTION 'submit_event: % is not a clinical body — only clinical.* bodies are born-sealed; demographic/identity/patient/node/erasure bodies are plaintext by necessity and must never be sealed (ADR-0052 §2)', v_type;
         END IF;
@@ -1469,6 +1473,7 @@ BEGIN
         INSERT INTO event_clear (event_id, body, twin)
         VALUES (v_event_id, b_clear -> 'payload', v_twin)
         ON CONFLICT (event_id) DO NOTHING;
+        GET DIAGNOSTICS v_clear_rows = ROW_COUNT;
     END IF;
 
     INSERT INTO event_log
@@ -1491,14 +1496,24 @@ BEGIN
         v_att, v_att_key, v_actor_id, v_sealed,
         v_grade, b -> 'safety')
     ON CONFLICT (event_id) DO NOTHING;
+    GET DIAGNOSTICS v_log_rows = ROW_COUNT;
 
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).
     -- But a DIFFERENT event reusing this event_id (substitution) must not pass
     -- silently: compare the stored content-address to what we just verified.
-    IF NOT FOUND THEN
+    IF v_log_rows = 0 THEN
         IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
             RAISE EXCEPTION 'submit_event: event_id % already exists with different content (substitution refused)', v_event_id;
         END IF;
+    END IF;
+
+    -- #584 / ADR-0070 — CUSTODY ARRIVED LATE at the strict door: a re-submit of an event this node
+    -- already holds without its key, now with the key. Same shape and same remedy as db/020's
+    -- late-custody call; see the comment there. After the substitution guard, so a rival body
+    -- never reaches an applier. No remote-apply marker here: a late landing at the strict door is
+    -- judged in the strict posture, as a first arrival here would be.
+    IF v_log_rows = 0 AND v_clear_rows > 0 THEN
+        PERFORM cairn_project_late_custody(v_event_id);
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy).

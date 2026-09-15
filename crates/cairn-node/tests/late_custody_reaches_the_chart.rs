@@ -304,3 +304,45 @@ async fn a_rival_body_carrying_its_own_key_is_refused_and_projects_nothing() {
     );
     assert_eq!(statement_rows(&c, original.medication_id).await, 0);
 }
+
+/// The STRICT door has the same step 9 and the same no-op INSERT, so a local re-submit of an event
+/// this node holds without its key — with the key — is the same late landing, and gets the same fix.
+/// Judged in the strict posture (no `cairn.remote_apply` marker), as a first arrival there would be.
+#[tokio::test]
+async fn the_strict_door_brings_a_late_key_to_the_chart_too() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+
+    let e = sealed_assert(
+        &keys,
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        "amoxicillin",
+        WALL,
+    );
+    apply_without_key(&c, &e)
+        .await
+        .expect("admitted without custody");
+    let submitted = submit_with_key(&c, &e).await;
+    assert!(
+        submitted.is_ok(),
+        "the strict door admits the same bytes with their key: {:?}",
+        submitted.as_ref().err().map(db_msg)
+    );
+    assert_eq!(
+        clear_twin(&c, e.event_id).await.as_deref(),
+        Some(e.twin.as_str())
+    );
+    assert_eq!(
+        statement_rows(&c, e.medication_id).await,
+        1,
+        "the strict door projects a late key exactly as the lenient one does"
+    );
+}
