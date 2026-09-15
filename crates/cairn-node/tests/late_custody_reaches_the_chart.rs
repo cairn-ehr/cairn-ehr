@@ -18,12 +18,16 @@
 //! 4. A deferred event gains its key but not its chart, until re-adjudication promotes it.
 //! 5. A rival body under an existing id, carrying its own key, is refused as a substitution and
 //!    projects nothing.
-//! 6. The strict door has the same entrance and the same fix.
+//! 6. A rival body never reaches an applier at all: a raising probe proves the substitution guard
+//!    refuses it BEFORE the late-custody call could run one (placement rule 1).
+//! 7. The strict door has the same entrance and the same fix.
 //!
-//! Tests 4 and 5 pass against the pre-#584 door too — they pin placement rules the fix must not
-//! break, and each is proven by a named mutation in the plan (Task 7). Test 3 fails against the
-//! pre-#584 door (nothing projects, so nothing flags) and also pins the marker-clear placement via
-//! its mutation.
+//! Tests 4, 5 and 6 pass against the pre-#584 door too — they pin rules the fix must not break,
+//! proven by the named mutations in the plan's review ledger: test 4 by M3, test 6 by M6 (killed in
+//! the final fix wave). Test 5 on its own cannot see where the late-custody call sits relative to
+//! the substitution guard — M6 survived it, because the refusal's rollback erases whatever the
+//! rival's appliers wrote — which is why test 6 exists. Test 3 fails against the pre-#584 door
+//! (nothing projects, so nothing flags) and also pins the marker-clear placement via its mutation.
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 
@@ -303,6 +307,60 @@ async fn a_rival_body_carrying_its_own_key_is_refused_and_projects_nothing() {
         "the rival is on no chart"
     );
     assert_eq!(statement_rows(&c, original.medication_id).await, 0);
+}
+
+/// A rival body never reaches an applier AT ALL — not even one whose work the refusal would later
+/// roll back. Pins placement rule 1: the late-custody call comes AFTER the substitution guard.
+///
+/// The test above cannot see that rule. With the call moved before the guard, the rival's appliers
+/// run, the guard then raises, and the transaction's rollback erases every projection they wrote —
+/// so "refused, and on no chart" still holds and the refusal still reads "substitution refused".
+/// Here a RAISING probe applier is registered instead: if any applier runs over the row, the probe
+/// raises first and its message replaces the door's. With the call placed before the guard, this
+/// test fails on exactly that (mutation M6 in the plan's review ledger).
+#[tokio::test]
+async fn a_rival_body_never_reaches_an_applier() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+
+    let (patient, event_id) = (Uuid::now_v7(), Uuid::now_v7());
+    let original = sealed_assert(
+        &keys,
+        patient,
+        Uuid::now_v7(),
+        event_id,
+        "amoxicillin",
+        WALL,
+    );
+    apply_without_key(&c, &original)
+        .await
+        .expect("admitted without custody");
+    let rival = sealed_assert(&keys, patient, Uuid::now_v7(), event_id, "warfarin", WALL);
+
+    // Installed only NOW, after the keyless admission: the AFTER INSERT trigger runs every
+    // registered applier on a fresh insert, so the probe would have raised there instead.
+    install_raising_probe(&c, "clinical.medication.asserted").await;
+    let outcome = apply_with_key(&c, &rival).await;
+    remove_probe(&c).await; // BEFORE asserting: no residue in a pinned-count registry
+
+    let err = outcome.expect_err("a second body under one event id is a substitution");
+    assert!(
+        db_msg(&err).contains("substitution refused"),
+        "the door refuses the rival as a substitution: {}",
+        db_msg(&err)
+    );
+    assert!(
+        !db_msg(&err).contains("cairn_test probe"),
+        "an applier ran over the rival before the substitution guard refused it — the \
+         late-custody call must come AFTER the guard (ADR-0070 placement rule 1): {}",
+        db_msg(&err)
+    );
 }
 
 /// The STRICT door has the same step 9 and the same no-op INSERT, so a local re-submit of an event

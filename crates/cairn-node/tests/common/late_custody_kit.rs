@@ -209,9 +209,11 @@ pub async fn conflict_flags(c: &Client, medication_id: Uuid) -> i64 {
     .await
 }
 
-/// Remove the counting appliers, if present. Called at test START (a predecessor that panicked
-/// may have left them — the #583 reset-at-start rule) and BEFORE asserting, so a failed assertion
-/// never leaves two extra rows in a registry `projection_registry.rs` pins at an exact count.
+/// Remove the probe appliers, if present — the counting pair from [`install_probe`] or the raising
+/// one from [`install_raising_probe`], which reuses the same names so this one function cleans
+/// either. Called at test START (a predecessor that panicked may have left them — the #583
+/// reset-at-start rule) and BEFORE asserting, so a failed assertion never leaves extra rows in a
+/// registry `projection_registry.rs` pins at an exact count.
 pub async fn remove_probe(c: &Client) {
     c.batch_execute(
         "DELETE FROM cairn_projection_apply \
@@ -245,6 +247,39 @@ pub async fn install_probe(c: &Client, event_type: &str) {
            (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES \
            ($1, 'cairn_test_late_custody_safe',   ARRAY['cairn_test_late_custody_runs'], 900, TRUE), \
            ($1, 'cairn_test_late_custody_unsafe', ARRAY['cairn_test_late_custody_runs'], 900, FALSE)",
+        &[&event_type],
+    )
+    .await
+    .unwrap();
+}
+
+/// Register ONE heal-safe applier for `event_type` that raises the moment it runs. Fault injection
+/// without residue — see [`remove_probe`], which cleans it.
+///
+/// It answers "did ANY applier run over this row?" by failing loudly if one did: the error text
+/// `cairn_test probe: an applier ran over this row` then replaces whatever the door would otherwise
+/// have said. A test that expects some OTHER refusal (e.g. "substitution refused") therefore proves
+/// the refusal came first.
+///
+/// Heal-safe (`heal_safe = TRUE`) so the late-custody dispatch, which runs only heal-safe appliers,
+/// would reach it. It reuses [`install_probe`]'s names (`cairn_test_late_custody_safe`, and the
+/// `cairn_test_late_custody_runs` table it never writes) for two reasons: `remove_probe` already
+/// drops exactly those, and the registry's `projection_tables` check needs the named table to
+/// exist. Install it AFTER any admission the test needs to succeed: the `AFTER INSERT` trigger
+/// runs every registered applier on a fresh insert, so it would raise there too.
+pub async fn install_raising_probe(c: &Client, event_type: &str) {
+    remove_probe(c).await;
+    c.batch_execute(
+        "CREATE TABLE cairn_test_late_custody_runs (applier text NOT NULL, event_id uuid NOT NULL); \
+         CREATE FUNCTION cairn_test_late_custody_safe(e event_log) RETURNS void LANGUAGE plpgsql AS \
+           $$ BEGIN RAISE EXCEPTION 'cairn_test probe: an applier ran over this row'; END $$;",
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "INSERT INTO cairn_projection_apply \
+           (event_type, apply_fn, projection_tables, run_order, heal_safe) VALUES \
+           ($1, 'cairn_test_late_custody_safe', ARRAY['cairn_test_late_custody_runs'], 900, TRUE)",
         &[&event_type],
     )
     .await

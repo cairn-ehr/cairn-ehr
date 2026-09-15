@@ -49,8 +49,9 @@ async fn the_dispatch_runs_only_heal_safe_appliers() {
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let keys = fresh_node(&c).await;
-    install_probe(&c, "clinical.medication.asserted").await;
 
+    // Build the event BEFORE installing the probe: from `install_probe` to `remove_probe` nothing
+    // may panic, or the probe's registry rows outlive this test and break a pinned count elsewhere.
     let e = sealed_assert(
         &keys,
         Uuid::now_v7(),
@@ -59,6 +60,7 @@ async fn the_dispatch_runs_only_heal_safe_appliers() {
         "amoxicillin",
         WALL,
     );
+    install_probe(&c, "clinical.medication.asserted").await;
     let admitted = apply_without_key(&c, &e).await;
     let dispatched = c
         .execute(
@@ -154,9 +156,20 @@ async fn late_custody_projection_skips_a_deferred_row() {
     )
     .await
     .expect("the helper runs");
+    let projected = statement_rows(&c, e.medication_id).await;
+
+    // Remove the marker BEFORE asserting. Left behind, it would outlive this test: the next
+    // suite's `connect_and_load_schema` runs connect-time re-adjudication, which would pick this
+    // row up and could promote it — projecting a stray medication into whatever that suite counts.
+    c.execute(
+        "DELETE FROM event_deferred WHERE event_id = $1::text::uuid",
+        &[&e.event_id.to_string()],
+    )
+    .await
+    .expect("remove the hand-written deferred marker");
+
     assert_eq!(
-        statement_rows(&c, e.medication_id).await,
-        0,
+        projected, 0,
         "a deferred row must not project through the late-custody path"
     );
 }

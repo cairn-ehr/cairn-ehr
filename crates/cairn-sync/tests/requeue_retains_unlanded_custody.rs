@@ -544,9 +544,9 @@ async fn a_dek_that_does_not_open_the_body_is_not_blamed_on_registration() {
 /// db/020_apply_remote_event.sql db/005_submit.sql` finds nothing), so the door admits the event
 /// exactly as it would in any other run, and requeue's own POST-apply custody read is the first —
 /// and only — statement that reaches the faulty function. (An earlier version of this arm locked
-/// `event_dek` instead; once #584 removed the pre-door read, that lock was met by the door's own
-/// custody-projection write before requeue's own read ever ran, so it stopped testing what its name
-/// claimed — the controller's review, ADR-0070.) Restored — not merely rolled back — before
+/// `event_dek` instead; once #584 removed the pre-door read, that lock was met by the door's step-9
+/// custody write (`INSERT INTO event_dek`) before requeue's own read ever ran, so it stopped
+/// testing what its name claimed — the controller's review, ADR-0070.) Restored — not merely rolled back — before
 /// asserting: `db::connect_and_load_schema` replays every `db/*.sql`, db/052 included, so the real
 /// `cairn_custody_state` is back in place before the next test in this process runs, the same
 /// reason `a_requeue_interrupted_mid_loop_still_reports_what_it_released` gives for preferring
@@ -564,7 +564,7 @@ async fn a_custody_read_that_fails_stops_the_run_and_keeps_the_key() {
     pen(&c, &record, Some(&record.dek_wrapped)).await;
 
     // The fault: a same-signature stand-in that always raises. Neither `apply_remote_event`
-    // (db/020) nor `cairn_submit_event` (db/005) call `cairn_custody_state` — see this fn's doc —
+    // (db/020) nor `submit_event` (db/005) call `cairn_custody_state` — see this fn's doc —
     // so the door's admission below is unaffected, and requeue's own post-apply read is what fails.
     c.batch_execute(
         "CREATE OR REPLACE FUNCTION cairn_custody_state(p_content_address BYTEA)
