@@ -2139,19 +2139,15 @@ async fn a_revoked_peer_is_told_it_was_revoked_not_told_to_re_pair() {
     );
 }
 
-/// Issue #231 review — the withhold IS repairable, and it takes BOTH printed steps.
+/// Issue #231 review — the withhold IS repairable, and since #584 it takes ONE step.
 ///
-/// The operator line promises a remedy, so the remedy is a test. Measured during
-/// review, `pull --full` alone took custody from `(0,0)` to `(1,1)` and left the
-/// medication projection at ZERO: the re-apply fills `event_dek`/`event_clear` (its
-/// inserts are `ON CONFLICT DO NOTHING` and there is no early return for a known
-/// event), but the `event_log` insert IS a no-op, and the projection dispatcher is an
-/// `AFTER INSERT` trigger on that table — so it never fires. An operator who followed
-/// the line as first written re-swept, saw the chart still empty, and would reasonably
-/// conclude the record was lost.
-///
-/// The middle assertion is therefore the point of this test: it pins the fact the
-/// operator line has to disclose, so a future edit cannot quietly drop step 2.
+/// The operator line promises a remedy, so the remedy is a test. Measured in the #231 review,
+/// `pull --full` alone took custody from `(0,0)` to `(1,1)` and left the medication projection at
+/// ZERO: the re-apply filled `event_dek`/`event_clear`, but its `event_log` insert was a no-op and
+/// the projection dispatcher is an `AFTER INSERT` trigger, so the line had to name a second step,
+/// `cairn_reproject()`. ADR-0070 moved that step into the door: an apply that makes a body readable
+/// for an event already in the log runs the event's heal-safe projections itself. The middle
+/// assertion is now the whole recovery.
 #[tokio::test]
 async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {
     let (Some(base_a), Some(base_b)) = (cs_a(), cs_b()) else {
@@ -2263,23 +2259,10 @@ async fn an_admitted_peer_recovers_the_bodies_it_pulled_without_custody() {
     );
     assert_eq!(
         statement_count_for_med(&b, med).await,
-        0,
-        "…and the chart is STILL empty. The event_log insert is a no-op on re-apply, \
-         so the AFTER INSERT projection dispatcher never fires. This is why the \
-         operator line must name a second step — a remedy that restores the key and \
-         leaves the record unreadable reads as data loss"
-    );
-
-    // --- 3. …then the reproject the line also names ---
-    b.query("SELECT cairn_reproject()", &[])
-        .await
-        .expect("heal-mode reproject");
-    assert_eq!(
-        statement_count_for_med(&b, med).await,
         1,
-        "heal mode replays the apply fns over the now-readable events, and the chart \
-         comes back — the withhold is fully repairable, which is what makes withholding \
-         the key (never the bytes) safe"
+        "…and the chart has it, with no reproject: the door projects custody that lands after its \
+         event (#584, ADR-0070). Before that, this was 0, and an operator who followed a one-step \
+         line saw an empty chart and would reasonably have concluded the record was lost"
     );
 }
 

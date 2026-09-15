@@ -195,14 +195,13 @@ async fn an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_ch
         "the sealed body must open back to the dead node's own text"
     );
 
-    // THE REVIEW FINDING. The body opens and the chart is still empty — and a run that reported
-    // this as done would be #579's success-over-an-incomplete-recovery, one layer down.
+    // THE REVIEW FINDING, answered at the door. The body opens AND the chart has it: the event was
+    // admitted without custody on phase one, and the door projects a key that lands afterwards
+    // (#584, ADR-0070). This used to be 0, with a heal step below.
     assert_eq!(
         medication_rows(&c).await,
-        0,
-        "fixture premise: the event was admitted on phase one, so landing its key now does not \
-         re-fire the projection trigger. If this is 1, the door has started re-projecting late \
-         custody and this arm's reproject step should be retired rather than left to rot"
+        1,
+        "the recovered record is on the chart as soon as its key lands"
     );
     assert_eq!(
         m["reproject_owed"], 1,

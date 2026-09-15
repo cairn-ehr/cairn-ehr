@@ -103,6 +103,9 @@ DECLARE
     -- ADR-0056 decision 1 (issue #265): true when this node holds no classification for the
     -- event's type. The event is ADMITTED anyway — custody is total, power is deferred.
     v_deferred      BOOLEAN := false;
+    -- #584 / ADR-0070: rows THIS call wrote into event_clear (0 or 1). 1 on an event that was
+    -- already in the log means custody arrived late, and the chart is owed a projection.
+    v_clear_rows    INTEGER := 0;
 BEGIN
     -- 0. Size ceiling (A7a): an oversized event would wedge the 8 MiB-capped wire and
     --    backup paths at its seq forever; refuse before any crypto work.
@@ -395,8 +398,10 @@ BEGIN
         v_twin := cairn_event_twin(v_type, b_clear);
     END IF;
 
-    -- 9. Custody + operational clear view — BEFORE the log INSERT so the AFTER INSERT
-    --     projection triggers can already read the shadow (same txn). ANTI-RESURRECTION:
+    -- 9. Custody + operational clear view — BEFORE the log INSERT so the AFTER INSERT projection
+    --     triggers can already read the shadow (same txn). If the event is ALREADY in the log,
+    --     the late-custody call after the INSERT does the projecting instead (#584).
+    --     ANTI-RESURRECTION:
     --     an already-shredded target gets NEITHER — set-union may re-deliver the row
     --     forever, but custody never comes back (arrival-order independence). The
     --     unwrap-key-missing case is downgraded to a WARNING + skip (NOT the strict
@@ -414,6 +419,7 @@ BEGIN
             INSERT INTO event_clear (event_id, body, twin)
             VALUES (v_event_id, b_clear -> 'payload', v_twin)
             ON CONFLICT (event_id) DO NOTHING;
+            GET DIAGNOSTICS v_clear_rows = ROW_COUNT;
         END IF;
     END IF;
 
@@ -453,17 +459,35 @@ BEGIN
     -- FOUND, which would silently disable the substitution guard.
     GET DIAGNOSTICS v_rows = ROW_COUNT;
 
-    PERFORM set_config('cairn.remote_apply', '', true);
-
     -- Idempotent re-apply of the SAME event is a silent no-op (set-union). A
     -- DIFFERENT event reusing this event_id is a substitution — two nodes holding
     -- different bytes under one event_id would diverge forever with no alarm, so it
     -- must RAISE (review H3; identical to the submit_event guard).
+    --
+    -- This guard sits ABOVE the marker clear below since #584, so the late-custody call can
+    -- follow it while cairn.remote_apply is still 'on'. Moving it changed nothing it checks: the
+    -- marker is transaction-local, and a RAISE aborts the transaction either way.
     IF v_rows = 0 THEN
         IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
             RAISE EXCEPTION 'apply_remote_event: event_id % already exists with different content (substitution refused)', v_event_id;
         END IF;
     END IF;
+
+    -- #584 / ADR-0070 — CUSTODY ARRIVED LATE: this call made the body readable (step 9 wrote
+    -- event_clear) for an event that was already in the log (the INSERT above was a no-op), so the
+    -- AFTER INSERT dispatcher did not run and will not. Run the event's heal-safe appliers now.
+    -- Three placement rules, each load-bearing (design §2.3):
+    --   * AFTER the substitution guard, so a rival body filed under this id never reaches an
+    --     applier — the refusal a caller reads stays "substitution refused";
+    --   * BEFORE the marker clear, so projection guards clamp-and-flag here exactly as they do
+    --     for a first arrival (db/031's patient guard and db/033's two checks RAISE otherwise, and
+    --     the key could never land);
+    --   * the helper itself skips a deferred row (cairn_replay_eligible).
+    IF v_rows = 0 AND v_clear_rows > 0 THEN
+        PERFORM cairn_project_late_custody(v_event_id);
+    END IF;
+
+    PERFORM set_config('cairn.remote_apply', '', true);
 
     -- Record the deferred state EXPLICITLY (ADR-0056 decision 4's corollary): a node records
     -- that an event was admitted uninterpreted, and that MARKER — not the absence of an
