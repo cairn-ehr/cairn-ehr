@@ -75,11 +75,13 @@ decision 3 below.
    apply fn raised first instead of `substitution refused` — the reason `restore` pens and tests assert.
 2. **While `cairn.remote_apply` is still `on` (lenient door).** db/020 clears the marker right after
    its INSERT. Dispatching after that line reaches three RAISE arms — `cairn_guard_medication_patient`
-   (db/031), the local reconciliation refusal and the oversize-group check (db/033) — so a late key
+   (db/031), the cross-patient reconciliation refusal and the oversize-group check (db/033), which
+   flag or skip while the marker is on (ADR-0070 decision 1 names what each does) — so a late key
    would be REFUSED and could never land. At the strict door the marker is off, and stays off: a late
    landing there is judged in the strict posture, exactly as a first arrival there would be.
 3. **Only when `cairn_replay_eligible`.** A row carrying an `event_deferred` marker (admitted
-   uninterpreted, or failed re-adjudication — whose marker is permanent) must never project;
+   uninterpreted, or failed re-adjudication — whose marker stays until a later pass promotes the
+   event; db/043 retries such rows every pass) must never project;
    `cairn_reproject` already filters on this seam. (db/043's gate 4 deliberately runs apply fns on a
    STILL-marked row as its promotion proof — so the eligibility filter belongs at the door call, never
    inside the shared dispatch.)
@@ -114,7 +116,7 @@ ADR so nobody reads the heal as time travel.
 4. **The healed state is arrival at custody time** (§2.4), which is what set-union already guarantees
    for these projections; nothing stronger is promised.
 
-**Rejected:** an `AFTER INSERT` trigger on `event_clear` (automatic for every writer, but it fires
+**Rejected:** an `AFTER INSERT` trigger on `event_clear` (automatic for every insert, but it fires
 inside step 9, before the substitution guard, so both doors' guards would have to move ahead of their
 custody writes first); db/020 inline only (leaves entrance 4 open); a durable debt ledger (machinery
 for a case §2.2 shows cannot occur); a narrow owner-granted heal door called by callers (option (b) —
@@ -165,6 +167,9 @@ landing, and then runs exactly the fns a first arrival would have.
 
 ### 4.3 Guards (Rust, `crates/cairn-node/tests/`)
 
+(Built as ONE catalogue guard, `late_custody_guards.rs`, reading `pg_proc.prosrc` for both rules —
+the plan's *Deviations* section says why.)
+
 - **`late_custody_reads_are_heal_safe.rs`** (catalog, DB-gated): every `apply_fn` in
   `cairn_projection_apply` whose `pg_proc.prosrc` mentions `cairn_clear_payload` or `event_clear` has
   `heal_safe = TRUE` on every row naming it. **Positive control:** the set of custody-reading appliers
@@ -173,7 +178,8 @@ landing, and then runs exactly the fns a first arrival would have.
   not seen; the header says so.
 - **`event_clear_writers_project_late_custody.rs`** (source, no DB): every `INSERT INTO event_clear` in
   the shipping `db/*.sql` sits in a function body that also calls `cairn_project_late_custody`, and the
-  count of writers is pinned (2) so a third is a decision, not a drift. Scans whole files — no stopping
+  count of INSERT writers is pinned (2) so a third is a decision, not a drift. (The rule is about
+  INSERT writers only: the shred's `DELETE FROM event_clear` removes custody and owes no projection.) Scans whole files — no stopping
   at a first test module (#586).
 - Existing guards the new functions must satisfy (not new work, but checked): `search_path_pg_temp.rs`
   (its pinned floors may need +2), `floor_execute_grants.rs`, `db_gate_actually_ran.rs`.
@@ -270,11 +276,15 @@ Each must turn a named test red **at the assertion that names its claim** (the #
 
 ADR-0070 + `decisions/README.md` row · `docs/spec/index.md` → **0.72** · `language-substrate.md`'s
 *"`AFTER INSERT` only"* bullet (custody arrival is now a second, decided maintenance path) · HANDOVER
-(trap 9 retires into history; a new trap: *every `event_clear` writer calls the helper, and a
-custody-reading applier is heal-safe*) · ROADMAP (#584 closed; the Slice 66 *"repair is TWO steps"*
+(trap 9 retires into history; a new trap: *every function that inserts into `event_clear` calls the
+helper, and a custody-reading applier is heal-safe*) · ROADMAP (#584 closed; the Slice 66 *"repair is TWO steps"*
 line) · the implementation plan with its review ledger.
 
 ## Paper-parity benchmark (§1.2)
+
+(A plan copying this section must carry the literal labels **Paper counterpart**, **Steps** and
+**Time + cognitive load** — `paper_parity_plan_section.rs` requires them. The labels below were copied
+into the plan unchanged and failed the gate until relabelled.)
 
 **Paper counterpart:** a page that reached the ward before the chart it belongs in — held at the
 nurses' station, then filed once the chart turns up. Recovery is **N = 1** act (file the page).
