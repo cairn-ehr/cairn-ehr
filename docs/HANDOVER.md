@@ -32,14 +32,7 @@
 > `crates/cairn-node/results/2026-09-10-macos-m3max.md`. ADR-0069 changed how a secret arrives,
 > not what a restore costs.
 
-> [!WARNING]
-> **⇒ CI's `cargo-deny` WENT RED ON EVERY BRANCH ON 2026-09-15 — [#600](https://github.com/cairn-ehr/cairn-ehr/issues/600) — AND PR #595 CARRIES THE FIX.**
-> A new upstream advisory, RUSTSEC-2026-0285, hits `rustls` < 0.23.45, which is the mTLS sync transport; no
-> Cargo change caused it. PR #595 moves `rustls` to **0.23.45** in BOTH `Cargo.lock` and `cairn-gui/Cargo.lock`
-> (the advisory's floor is 0.23.45, so an intermediate 0.23.41–0.23.44 still fails). The bump drags
-> `rustls-webpki` 0.103.15, `aws-lc-rs` 1.18.1 and **`aws-lc-sys` 0.45** (a C build) along, and adds
-> `pkg-config` to the root tree; all three of CI's `cargo deny` steps pass. **Until #595 merges, `main` and any
-> branch cut from it stay red on that check** — merge `main` up after it lands.
+> **⇒ #600 (RUSTSEC-2026-0285, rustls → 0.23.45) is CLOSED, merged with PR #595; CI green on main 2026-09-15.**
 
 > [!IMPORTANT]
 > **⇒ #527/#562's TRIAGE NOTE IS FALSE, AND ADR-0069 CORRECTS IT RATHER THAN BREAKING IT.**
@@ -64,11 +57,12 @@
 > `verify-backup && backup` cron stops backing up after every same-mount-point rotation, because the
 > drive that missed the latest backup reads SHORT until its own next backup catches it up.
 >
-> **⇒ WHAT IS NEXT ON THE DR PATH: TWO MAINTAINER DECISIONS AND NAMED OPERATIONAL GAPS, NO TEST
+> **⇒ WHAT IS NEXT ON THE DR PATH: NAMED OPERATIONAL GAPS, NO TEST
 > DEBT.** Every one of slice 2d's 23 design tests is now written — the last six by **#593**
-> (2026-09-14, see below). The decisions: **#575** (the minted recovery code reaches stderr — three
-> options in the issue; the maintainer deferred it on 2026-09-14) and **#594** (`restore` exits 0 when
-> records past a chain break or in an unknown plane were not restored, while a pen exits non-zero).
+> (2026-09-14, see below). #594 DECIDED (2026-09-15): restore exits 3 whenever any medium record was
+> not restored — chain break, unknown plane, AND torn tail — after the full summary; not yet built.
+> #575 re-deferred. #584 IN PROGRESS on feat/584-late-custody-reaches-the-chart: option (a) narrowed,
+> ADR-0070.
 > The gaps: **#584** — `restore` can bring back a readable body into an EMPTY chart at exit 0 (trap 9's
 > second entrance, now pinned by a test that passes today and must be inverted when #584 lands) — and
 > PR #595's review residuals **#596** (a crashed restore says "restore again", but the retry is refused
