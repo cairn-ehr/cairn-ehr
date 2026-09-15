@@ -514,13 +514,11 @@ fn requeue_interrupted_message(
 ) -> String {
     // EVERY FIELD NAMED, so an outcome added later fails to compile here instead of going
     // unmentioned in the one sentence an operator reads after a failure. The two subsets that
-    // say only HOW a release happened are named and discarded; `reproject_owed` is not, because
-    // it is work the operator still has to do.
+    // say only HOW a release happened are named and discarded.
     let requeue::RequeueCounts {
         released,
         released_with_custody: _,
         released_shredded: _,
-        reproject_owed,
         custody_retained,
         skipped_acked,
         still_quarantined,
@@ -549,8 +547,7 @@ fn requeue_interrupted_message(
     };
     format!(
         "requeue: {headline}. Work already done is NOT lost: {released} released \
-         (durable in event_log, their pen rows gone; {reproject_owed} of them still need \
-         `cairn-node reproject` to reach the chart), {custody_retained} kept for custody \
+         (durable in event_log, their pen rows gone), {custody_retained} kept for custody \
          (applied, but the key did not land, so the row and its key are both still held), \
          {skipped_acked} skipped (a human acked them), {still_quarantined} still held, \
          {vanished} vanished before release. The row at {at} is counted in none of those \
@@ -4369,9 +4366,9 @@ fn do_requeue(
         // address from the row's bytes the same way, so this check and the database's agree about
         // a mis-keyed row — neither releases a key because the address it is FILED under landed.
         let address = cairn_event::event_address(&signed);
-        // STEP 1 and STEP 2, for a keyed row only: open its key, and read custody BEFORE the door.
+        // STEP 1, for a keyed row only: open its key.
         let mut dek: Option<Secret32> = None;
-        let keyed: Option<(requeue::PenKey, requeue::CustodyState)> = match &penned_dek {
+        let keyed: Option<requeue::PenKey> = match &penned_dek {
             None => None,
             Some(wrapped) => {
                 let pen = match requeue::open_pen_key(wrapped, custody_key.map(|k| k.secret)) {
@@ -4381,9 +4378,7 @@ fn do_requeue(
                     }
                     Err(fault) => requeue::PenKey::Unopened(fault),
                 };
-                let before = custody_state(client, &address)
-                    .map_err(|stop| stopped(digest, &counts, stop))?;
-                Some((pen, before))
+                Some(pen)
             }
         };
         match apply_signed(
@@ -4400,7 +4395,7 @@ fn do_requeue(
                 // STEP 3 and STEP 4. A keyless row has no custody to decide about.
                 let released_how = match keyed {
                     None => None,
-                    Some((pen, before)) => {
+                    Some(pen) => {
                         let after = custody_state(client, &address)
                             .map_err(|stop| stopped(digest, &counts, stop))?;
                         let decided: Result<requeue::Released, requeue::CustodyGap> =
@@ -4427,7 +4422,7 @@ fn do_requeue(
                                 }
                             };
                         match decided {
-                            Ok(how) => Some((pen, before, how)),
+                            Ok(how) => Some((pen, how)),
                             Err(gap) => {
                                 // KEPT. The event IS in the log — the door admitted it — but its
                                 // body cannot be opened here, so the row stays and keeps the key.
@@ -4505,7 +4500,7 @@ fn do_requeue(
                     continue;
                 }
                 counts.released += 1;
-                if let Some((pen, before, how)) = released_how {
+                if let Some((pen, how)) = released_how {
                     match how {
                         requeue::Released::WithCustody => counts.released_with_custody += 1,
                         requeue::Released::Shredded => counts.released_shredded += 1,
@@ -4513,10 +4508,6 @@ fn do_requeue(
                     }
                     if let requeue::PenKey::Unopened(requeue::PenKeyFault::Dek(fault)) = pen {
                         eprintln!("{}", requeue::released_despite_pen_key_note(digest, fault));
-                    }
-                    if requeue::chart_rebuild_owed(before, how) {
-                        counts.reproject_owed += 1;
-                        eprintln!("{}", requeue::chart_rebuild_message(digest));
                     }
                 }
                 eprintln!(
@@ -5591,29 +5582,20 @@ enum CustodyAdmission {
 /// because blaming the puller for this node's un-provisioned state sends the operator
 /// hunting the wrong problem.
 ///
-/// **Why the recovery clause names TWO steps, not "pull again".** Withheld custody is
-/// repairable, but only by a remedy in two parts, and naming half of it is what makes
-/// a safety refusal worse than useless:
+/// **Why the recovery clause names `pull --full`, not "pull again".** `apply_remote_event` has no
+/// early return for an event already in the log, and its custody insert is `ON CONFLICT (event_id)
+/// DO NOTHING`, so a re-offer that *does* carry a DEK fills in the missing `event_dek` /
+/// `event_clear` rows. But an incremental pull only asks for `seq > cursor`, and by the time the
+/// operator reads this line the cursor is already past the custody-less events. Only the full sweep
+/// (`after_seq = 0`) re-offers them. (The periodic `FULL_SWEEP_EVERY` sweep gets there eventually;
+/// `--full` is the same thing on demand.)
 ///
-/// 1. `pull --full`. `apply_remote_event` has no early return for an event already in
-///    the log, and its custody insert is `ON CONFLICT (event_id) DO NOTHING`, so a
-///    re-offer that *does* carry a DEK fills in the missing `event_dek` / `event_clear`
-///    rows. But an incremental pull only asks for `seq > cursor`, and by the time the
-///    operator reads this line the cursor is already past the custody-less events. Only
-///    the full sweep (`after_seq = 0`) re-offers them. (The periodic `FULL_SWEEP_EVERY`
-///    sweep gets there eventually; `--full` is the same thing on demand.)
-/// 2. `cairn_reproject`. The sweep restores custody and NOT the chart: the projection
-///    dispatcher is an `AFTER INSERT` trigger on `event_log` (db/005), and the re-apply
-///    inserts no row (`ON CONFLICT DO NOTHING`, db/020), so it never fires. The
-///    projections were built when the events first applied — without a clear view — and
-///    a re-apply does not rebuild them. Heal mode (`p_rebuild` false, the default)
-///    replays the apply fns over the now-readable events without truncating anything.
-///
-/// Step 2 is the review finding that made this clause honest: measured, `pull --full`
-/// alone took custody from `(0,0)` to `(1,1)` and left `medication_statement` at zero —
-/// the clinician's chart still empty after following the printed instruction, which is
-/// the Slice 61 failure one layer down. `an_admitted_peer_recovers_the_bodies_it_pulled_without_custody`
-/// pins both steps, including the fact that step 1 alone is not enough.
+/// **It used to name a second step**, `cairn_reproject()`: the #231 review measured `pull --full`
+/// alone taking custody from `(0,0)` to `(1,1)` while the chart stayed empty, because the
+/// projection dispatcher is an `AFTER INSERT` trigger and the re-apply inserts nothing. ADR-0070
+/// (#584) moved that step into the door — an apply that makes a body readable for an event already
+/// in the log runs the event's heal-safe projections itself — and
+/// `an_admitted_peer_recovers_the_bodies_it_pulled_without_custody` pins the one-step recovery.
 ///
 /// The one arm with no repair path is a SHRED: `db/020` step 9 refuses custody for a
 /// target in `erasure_shred_log` however often it is re-delivered. That is deliberate
@@ -5624,11 +5606,10 @@ fn decide_custody(kid: &str, requester_pub: PublicKey32, lookup: TrustLookup) ->
     // prose. Keeping it out of the per-cause text leaves each line about its CAUSE and
     // stops six copies of the same two-step instruction drifting apart.
     let recovery = if lookup.puller_can_recover() {
-        " Once that is done the puller recovers the bodies it already replicated in TWO \
-         steps: `cairn-sync pull --full` (an incremental pull cannot reach events below \
-         its cursor), THEN `SELECT cairn_reproject()` on the puller as its DB owner — \
-         the sweep restores custody but NOT the projections, which were built without a \
-         clear view and are not rebuilt by a re-apply."
+        " Once that is done the puller recovers the bodies it already replicated with \
+         `cairn-sync pull --full` (an incremental pull cannot reach events below its \
+         cursor). The re-offer carries the key, and the apply door brings each record to \
+         the chart as its key lands."
     } else {
         ""
     };
@@ -6217,8 +6198,7 @@ USAGE (all take --conn <postgres-uri>):
               (--key/--unwrap-key: this node's custody, so a penned SEALED event is released
                WITH its DEK. A row whose custody cannot be made to land is KEPT in the pen,
                with its key, and reported as custody_retained — fix the cause and re-run.)
-              (exit 3 = INCOMPLETE: rows are still held, or a released record's chart needs
-               `cairn-node reproject`; exit 1 = the run itself failed)
+              (exit 3 = INCOMPLETE: rows are still held in the pen; exit 1 = the run itself failed)
   blobd       --conn URI (--peer HOST:PORT | --blob-peer HOST:PORT ...) [--window N] [--budget-ms N] [--metrics]
   serve       --conn URI --listen HOST:PORT [--corrupt] [--key PATH] [--unwrap-key PATH]
               (--key: this node's signing key; --unwrap-key: its custody key, default <key>.unwrap — ADR-0066)
@@ -7978,10 +7958,10 @@ mod tests {
                      {operator_line}"
                 );
                 assert!(
-                    operator_line.contains("cairn_reproject"),
-                    "{lookup:?}: the sweep restores CUSTODY, not the chart. A line that \
-                     stops at `pull --full` sends the operator away believing the \
-                     record is lost: {operator_line}"
+                    !operator_line.contains("cairn_reproject"),
+                    "{lookup:?}: since ADR-0070 the full sweep brings the record to the chart \
+                     by itself; a second step would send the operator to run something that \
+                     changes nothing: {operator_line}"
                 );
             } else {
                 terminal += 1;
@@ -11060,7 +11040,6 @@ mod quarantine_tests {
             released: 4,
             released_with_custody: 3,
             released_shredded: 1,
-            reproject_owed: 7,
             custody_retained: 2,
             skipped_acked: 5,
             still_quarantined: 8,
@@ -11120,9 +11099,8 @@ mod quarantine_tests {
             "…and the two outcomes that were there before custody was: {msg}"
         );
         assert!(
-            msg.contains("7 of them still need `cairn-node reproject`"),
-            "a released record whose chart still needs a heal is work the operator has left, and \
-             an interrupted run must not hide it: {msg}"
+            !msg.contains("reproject"),
+            "ADR-0070: a released record owes no heal: {msg}"
         );
         assert!(
             msg.contains("counted in none of those five"),

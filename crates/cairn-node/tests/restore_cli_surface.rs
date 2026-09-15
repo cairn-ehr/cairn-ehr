@@ -137,7 +137,8 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
     );
     // …and the patient's MEDICATION LIST shows the restored event. `patient_chart` alone is
     // filled by the registration, so it would stay green over a medication projection that
-    // no-opped — trap 9's class (#584), where the body opens and the list is empty.
+    // no-opped — the class #584 closed at the door (ADR-0070), where the body opened and the
+    // list stayed empty.
     assert_eq!(
         medication_rows(&c, patient).await,
         1,

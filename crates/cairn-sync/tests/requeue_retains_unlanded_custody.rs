@@ -41,13 +41,14 @@
 //!   twin, and so passed while the recovery it described left the medication list EMPTY: a retained
 //!   row's event was admitted without custody on the first run, the projection saw no clear payload
 //!   and wrote nothing, and on the second run the key landed on an event already in the log — whose
-//!   `AFTER INSERT` projection trigger never fires again. Arm 1 now walks that whole road, including
-//!   the `cairn-node reproject` step the run names.
+//!   `AFTER INSERT` projection trigger never fires again. Since ADR-0070 (#584) the door projects a
+//!   key that lands on an already-admitted event, so arm 1 asserts the chart straight after the
+//!   release, with no heal step.
 //!
 //! # Exit status
 //!
 //! Every run asserts its status, not a success flag: 0 is complete, [`EXIT_INCOMPLETE`] is a run
-//! that finished and left work (rows still held, or a chart still to heal), 1 is a run that failed.
+//! that finished and left work (rows still held), 1 is a run that failed.
 //! A cron wrapper that drops stderr and ignores JSON has only this.
 //!
 //! # Mutations run against these tests
@@ -74,8 +75,8 @@
 //!    overridden.
 //! 5. **Blame every withheld DEK on a missing registration** (the pre-review single cause) → arm 6
 //!    names the ceremony on a node where a key IS registered.
-//! 6. **Stop reporting a chart that still needs a heal** (`chart_rebuild_owed` always false) → arm 1
-//!    phase two, on `reproject_owed`.
+//! 6. **Stop the door projecting a late key** (delete db/020's late-custody call) → arm 1 phase two,
+//!    on the chart assertion. (Recorded in ADR-0070's plan, Task 7.)
 //!
 //! Arm 7 (a custody read that fails) is deliberately NOT listed: it pins an end-to-end property that
 //! more than one layer enforces, so no single Rust-side break is observable there — see its doc.
@@ -203,36 +204,20 @@ async fn an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_ch
         1,
         "the recovered record is on the chart as soon as its key lands"
     );
-    assert_eq!(
-        m["reproject_owed"], 1,
-        "the run must say the chart is owed a heal: {m}"
-    );
-    assert_eq!(
-        code, EXIT_INCOMPLETE,
-        "a medication list the clinician cannot see is not a completed recovery\nstderr: {stderr}"
-    );
-    let heal = stderr_line_with(&stderr, "cairn-node reproject");
     assert!(
-        heal.contains(&hex::encode(&record.digest)[..16]),
-        "the heal instruction must name the record: {heal}"
+        m.get("reproject_owed").is_none(),
+        "the heal signal is retired: the door projected the late key (ADR-0070): {m}"
     );
-
-    // --- Phase three: the operator runs the heal the line names. ---
-    // `cairn-node reproject` is a thin CLI over this owner-only function in heal mode; the test
-    // connection is the owner, which is the privilege the line tells the operator to use.
-    c.query("SELECT * FROM cairn_reproject('', false, 'test')", &[])
-        .await
-        .expect("heal-mode reproject");
     assert_eq!(
-        medication_rows(&c).await,
-        1,
-        "THE ASSERTION THAT MATTERS: after the step the run named, the record is on the chart"
+        code, 0,
+        "every row released with its key and its chart: a COMPLETE recovery\nstderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("reproject"),
+        "no heal instruction for a record that needs none\nstderr: {stderr}"
     );
 
-    // An empty pen now reads as complete. Note what that exit 0 does NOT prove: it would be the
-    // same without the heal above, because once the row has left the pen nothing remembers the
-    // chart was owed one (#584). The chart assertion above is the proof; this only pins that a
-    // finished recovery is not reported as work left.
+    // An empty pen stays a complete run.
     let (code, stdout, stderr) = run_requeue(&base, &key_path);
     assert_eq!(code, 0, "an empty pen is a complete run\nstderr: {stderr}");
     assert_eq!(metrics(&stdout, &stderr)["examined"], 0);
