@@ -22,230 +22,28 @@
 //! The defect surfaces months later when a clinician opens a chart. **A test that counted rows
 //! would have shipped it.**
 //!
-//! # How the fixture is built, and why the export is assembled through the LIBRARY
+//! # Why the export is assembled through the LIBRARY
 //!
-//! The source node's medium and its `CAIRNL1` export sibling are built by calling the same
-//! functions the `backup` command calls (`backup::backup_to`, `read_local_state`,
+//! The fixtures (`tests/common/restore_kit.rs` since #593, which needed the same dead clinic in
+//! four more suites) build the source node's medium and its `CAIRNL1` export sibling by calling
+//! the same functions the `backup` command calls (`backup::backup_to`, `read_local_state`,
 //! `build_export_container`), rather than by spawning `backup` itself. Two reasons: `backup`'s
 //! own CLI arm is already covered by `cli_localstate.rs`, and assembling the export directly is
 //! what lets the recovery code be **derived at runtime** (house rule 6a) instead of parsed back
 //! out of a `init`/`seal-key` banner. The subject of this file is `restore`, and that is the
 //! only command spawned.
 
-use cairn_event::seal::{seal_event_payload, seal_stub_twin, Secret32};
-use cairn_event::{sign, EventBody, SigningKey};
-use cairn_node::{backup, db, identity, localstate};
-use std::process::Command;
-use tokio_postgres::Client;
-use uuid::Uuid;
+use cairn_node::{db, localstate};
 
 mod common;
 
-fn cs() -> Option<String> {
-    std::env::var("CAIRN_TEST_PG").ok()
-}
-
-/// A `Command` for the freshly-built `cairn-node` binary under test.
-fn cairn_node() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_cairn-node"))
-}
-
-/// The operator passphrase for this fixture's local-state escrow.
-///
-/// Derived at runtime rather than written as a literal (house rule 6a): a literal in a crypto
-/// context trips CodeQL's `rust/hard-coded-cryptographic-value` as a recurring critical false
-/// positive that blocks the scan until a human dismisses it (#146).
-fn an_op_passphrase(lineage: u8) -> String {
-    (0..24u8)
-        .map(|i| (b'a' + ((i.wrapping_mul(5).wrapping_add(lineage)) % 26)) as char)
-        .collect()
-}
-
-/// A recovery code for this fixture, derived at runtime for the same reason as above.
-///
-/// `normalize_recovery_code` strips spacing and case before the unwrap, so the exact alphabet
-/// does not matter here — only that the same string goes into the seal and comes back out of
-/// the file.
-fn a_recovery_code(lineage: u8) -> String {
-    let alphabet: Vec<char> = ('A'..='Z').chain('2'..='7').collect();
-    (0..32usize)
-        .map(|i| alphabet[(i * 7 + lineage as usize) % alphabet.len()])
-        .collect()
-}
-
-/// A provisioned solo clinic: node identity, an enrolled device and human actor, and a
-/// registered unwrap key derived from the device key. Mirrors
-/// `restore_reads_the_clinical_plane.rs::provisioned_clinic`.
-async fn provisioned_clinic(c: &Client) -> (SigningKey, String) {
-    db::reset_node_federation_tables(c).await.unwrap();
-    let (sk, kid, _sk_human, _kid_human) = common::medication_setup(c).await;
-    identity::provision(c, &sk, &kid, "solo-clinic", "127.0.0.1:7941")
-        .await
-        .unwrap();
-    (sk, kid)
-}
-
-/// This node's registered unwrap SECRET, as a restore inherits it.
-///
-/// The fixture registers a key derived from the device signing key (`medication_setup`), so
-/// this reproduces the same derivation rather than reading a keystore file the test never
-/// wrote. **Not a widening of `derive_unwrap_secret`'s allow-list** — that guard sweeps
-/// PRODUCTION trees only, and this is a test reconstructing what the fixture already did.
-fn fixture_unwrap_secret(sk: &SigningKey) -> Secret32 {
-    cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()))
-}
-
-/// Submit ONE real born-sealed clinical event through the STRICT door, and return its id and
-/// the twin text a restore must be able to read back in clear.
-///
-/// A production-door body, never a hand-built row: the `event_dek` custody this test reads has
-/// to be what the real writer produces, or the restore is being tested against a fixture rather
-/// than against the system.
-async fn author_sealed_clinical_event(c: &Client, sk: &SigningKey, kid: &str) -> (String, String) {
-    let patient = Uuid::now_v7();
-    common::submit_registration(c, sk, kid, patient, 0).await;
-
-    let hlc = db::next_hlc(c, "test-node").await.unwrap();
-    let event_id = Uuid::now_v7().to_string();
-    let payload = serde_json::json!({
-        "medication_id": Uuid::now_v7().to_string(),
-        "substance": {"term": "amoxicillin"},
-        "info_source": "patient",
-    });
-    // A real twin string, so finding it on the far side proves the body was UNSEALED rather
-    // than merely that a row exists.
-    let twin = format!("amoxicillin — asserted for {patient}");
-    let (container, dek) = seal_event_payload(&payload, &twin, &event_id).unwrap();
-    let body = EventBody {
-        event_id: event_id.clone(),
-        patient_id: patient.to_string(),
-        event_type: "clinical.medication.asserted".into(),
-        schema_version: "clinical.medication/1".into(),
-        hlc,
-        t_effective: None,
-        signer_key_id: kid.into(),
-        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-        payload: container,
-        attachments: vec![],
-        plaintext_twin: Some(seal_stub_twin("clinical.medication.asserted")),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-        safety: None,
-    };
-    let signed = sign(&body, sk).unwrap();
-    c.execute(
-        "SELECT submit_event($1, NULL, NULL, $2)",
-        &[&signed.signed_bytes, &dek.as_bytes().as_slice()],
-    )
-    .await
-    .expect("a sealed body with its DEK is admitted");
-
-    // ANTI-VACUITY: the clear view really exists on the SOURCE node, so "it came back" below is
-    // a statement about the restore rather than about a body that was never readable.
-    let before: String = c
-        .query_one(
-            "SELECT twin FROM event_clear WHERE event_id = $1::text::uuid",
-            &[&event_id],
-        )
-        .await
-        .expect("the strict door writes a clear view for a sealed body")
-        .get(0);
-    assert_eq!(before, twin, "the source node can read its own chart");
-
-    (event_id, twin)
-}
-
-/// Whether the export carries the node's unwrap SECRET, or only its custody rows and registry.
-///
-/// [`Self::Missing`] is not a contrived fixture: it is exactly what
-/// `seal_and_write_local_state_export` writes when the keystore's `.unwrap` file cannot be
-/// loaded — it warns and carries on, because the export is optional and the medium is the
-/// load-bearing copy. A restore from such an export installs the actor registry but no custody
-/// key, so every record carrying one is PENNED with its key rather than admitted.
-#[derive(Clone, Copy)]
-enum ExportCustody {
-    Carried,
-    Missing,
-}
-
-/// Write a medium AND its sealed `CAIRNL1` export sibling, exactly as the `backup` command
-/// does, and return the medium's path.
-///
-/// The export is what carries the dead node's unwrap secret and its actor registry, so a
-/// restore without one recovers rows it can never open. Building it here through
-/// `read_local_state` + `build_export_container` — the two functions
-/// `seal_and_write_local_state_export` itself calls — keeps this fixture honest while letting
-/// the recovery code be a value this test chose rather than one scraped from a banner.
-async fn medium_with_export(
-    c: &Client,
-    sk: &SigningKey,
-    kid: &str,
-    dir: &std::path::Path,
-    op: &str,
-    code: &str,
-    custody: ExportCustody,
-) -> std::path::PathBuf {
-    let medium_path = dir.join("cairn.medium");
-    let health_path = dir.join("backup-status.json");
-    backup::backup_to(c, &medium_path, &health_path, 0, Some((sk, kid)))
-        .await
-        .expect("the backup ceremony succeeds");
-
-    let unwrap_secret = fixture_unwrap_secret(sk);
-    let carried = match custody {
-        ExportCustody::Carried => Some(&unwrap_secret),
-        ExportCustody::Missing => None,
-    };
-    let bundle = localstate::read_local_state(c, carried)
-        .await
-        .expect("reading this node's local state");
-    let wraps = localstate::establish_lsk(op, code).expect("establishing the LSK escrow");
-    let container = localstate::build_export_container(&wraps, op, &bundle)
-        .expect("sealing the local-state export");
-    let export_path = localstate::localstate_path_for(&medium_path);
-    std::fs::write(&export_path, &container).unwrap();
-
-    // ANTI-VACUITY. If the export is not really beside the medium, `restore` never enters the
-    // recovery-code path at all and every assertion below is about a code nothing consumed.
-    assert!(
-        export_path.exists(),
-        "the fixture must place a CAIRNL1 export beside the medium, or the recovery code is \
-         never read and this file tests nothing"
-    );
-    medium_path
-}
-
-/// Put the database in the state a disaster-recovery machine is in: no clinical tier, no
-/// federation identity, and **no actor registry**.
-///
-/// ⚠️ **The registry is the half that is easy to forget, and forgetting it makes this whole
-/// file weaker than it looks.** `actor_event` survives a clinical-tier truncate, so a wipe that
-/// omitted it left the enrolled signers from `medication_setup` in place — and the apply door
-/// would then have accepted every record on its own, whether or not the export's registry ever
-/// arrived. Every assertion here about custody or the registry travelling would still have
-/// passed, while proving strictly less than it claimed. A real replacement machine has an empty
-/// `actor_event`, which is exactly why `restore_actor_registry` (db/052) exists at all.
-///
-/// `actor_event` is append-only (db/004 refuses DELETE by trigger), so this disables that
-/// trigger for the duration. A test-fixture act, never something a node does — the door's own
-/// fence is what protects a real registry, and it is pinned in the SQL mirror.
-async fn wipe_to_a_fresh_dr_machine(c: &Client) {
-    c.batch_execute(
-        "TRUNCATE event_log, event_dek, event_clear, erasure_shred_log, patient_chart CASCADE",
-    )
-    .await
-    .expect("wiping the clinical tier, as a fresh DR machine would have it");
-    c.batch_execute("DELETE FROM sync_quarantine")
-        .await
-        .unwrap();
-    c.batch_execute(
-        "ALTER TABLE actor_event DISABLE TRIGGER actor_event_no_update;
-         DELETE FROM actor_event;
-         ALTER TABLE actor_event ENABLE TRIGGER actor_event_no_update;",
-    )
-    .await
-    .expect("clearing the actor registry, as a fresh DR machine has it");
-    db::reset_node_federation_tables(c).await.unwrap();
-}
+#[path = "common/restore_kit.rs"]
+mod restore_kit;
+use restore_kit::{
+    a_recovery_code, an_op_passphrase, author_sealed_clinical_event, capture, cs, medication_rows,
+    medium_with_export, old_recovery_code_file, provisioned_clinic, restore_cli, twin_of,
+    wipe_to_a_fresh_dr_machine, Authored, ExportCustody,
+};
 
 // ---------------------------------------------------------------------------
 
@@ -272,7 +70,12 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
     let dir = tempfile::tempdir().unwrap();
 
     let (sk, kid) = provisioned_clinic(&c).await;
-    let (event_id, twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    let Authored {
+        event_id,
+        twin,
+        patient,
+        ..
+    } = author_sealed_clinical_event(&c, &sk, &kid).await;
     let medium = medium_with_export(
         &c,
         &sk,
@@ -286,22 +89,12 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
 
     wipe_to_a_fresh_dr_machine(&c).await;
 
-    let code_file = dir.path().join("old-recovery-code");
-    std::fs::write(&code_file, &code).unwrap();
+    let code_file = old_recovery_code_file(dir.path(), &code);
     let new_key = dir.path().join("restored.key");
 
     // NO PSEUDO-TERMINAL. stdout and stderr are pipes, which is exactly the shape that used to
     // recover zero patients.
-    let out = cairn_node()
-        .args(["--conn", &base, "--key"])
-        .arg(&new_key)
-        .args(["restore", "--from"])
-        .arg(&medium)
-        .args(["--old-recovery-code-file"])
-        .arg(&code_file)
-        .args(["--insecure-plaintext"])
-        .output()
-        .unwrap();
+    let out = restore_cli(&base, &new_key, &medium, Some(&code_file));
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -321,20 +114,12 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
     );
 
     // THE ASSERTION THAT MATTERS. Not "a row exists" — the body OPENS.
-    let restored_twin: String = c
-        .query_one(
-            "SELECT twin FROM event_clear WHERE event_id = $1::text::uuid",
-            &[&event_id],
-        )
-        .await
-        .expect(
-            "a restored node must be able to READ the chart, not merely hold ciphertext — a \
-             double-wrapped DEK row is present, well-formed and exactly the right length",
-        )
-        .get(0);
     assert_eq!(
-        restored_twin, twin,
-        "the restored body must decrypt to what the dead node held"
+        twin_of(&c, &event_id).await.as_deref(),
+        Some(twin.as_str()),
+        "a restored node must be able to READ the chart, not merely hold ciphertext — a \
+         double-wrapped DEK row is present, well-formed and exactly the right length — and the \
+         restored body must decrypt to what the dead node held"
     );
 
     // AND THE CLINICIAN CAN FIND IT. `event_clear` holding a readable body is not yet a chart:
@@ -349,6 +134,14 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
     assert!(
         charted > 0,
         "a restored node must have PATIENTS, not merely rows; stdout:\n{stdout}"
+    );
+    // …and the patient's MEDICATION LIST shows the restored event. `patient_chart` alone is
+    // filled by the registration, so it would stay green over a medication projection that
+    // no-opped — trap 9's class (#584), where the body opens and the list is empty.
+    assert_eq!(
+        medication_rows(&c, patient).await,
+        1,
+        "the restored medication must be on the chart, not merely decryptable; stdout:\n{stdout}"
     );
 }
 
@@ -376,7 +169,7 @@ async fn a_wrong_code_in_a_file_degrades_honestly_and_counts_one_attempt() {
     let dir = tempfile::tempdir().unwrap();
 
     let (sk, kid) = provisioned_clinic(&c).await;
-    let (_event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    author_sealed_clinical_event(&c, &sk, &kid).await;
     let medium = medium_with_export(
         &c,
         &sk,
@@ -392,20 +185,10 @@ async fn a_wrong_code_in_a_file_degrades_honestly_and_counts_one_attempt() {
 
     // A DIFFERENT lineage, so the code is well-formed but wrong — the operator-error case,
     // not a malformed-input case.
-    let code_file = dir.path().join("old-recovery-code");
-    std::fs::write(&code_file, a_recovery_code(9)).unwrap();
+    let code_file = old_recovery_code_file(dir.path(), &a_recovery_code(9));
     let new_key = dir.path().join("restored.key");
 
-    let out = cairn_node()
-        .args(["--conn", &base, "--key"])
-        .arg(&new_key)
-        .args(["restore", "--from"])
-        .arg(&medium)
-        .args(["--old-recovery-code-file"])
-        .arg(&code_file)
-        .args(["--insecure-plaintext"])
-        .output()
-        .unwrap();
+    let out = restore_cli(&base, &new_key, &medium, Some(&code_file));
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -450,17 +233,8 @@ async fn a_supplied_code_with_no_export_warns_that_it_is_inert() {
     let dir = tempfile::tempdir().unwrap();
     let (sk, kid) = provisioned_clinic(&c).await;
 
-    // A medium with NO export sibling: `backup_to` alone, and nothing beside it.
-    let medium = dir.path().join("cairn.medium");
-    backup::backup_to(
-        &c,
-        &medium,
-        &dir.path().join("backup-status.json"),
-        0,
-        Some((&sk, kid.as_str())),
-    )
-    .await
-    .unwrap();
+    // A medium with NO export sibling: a capture alone, and nothing beside it.
+    let medium = capture(&c, &sk, &kid, dir.path()).await;
     assert!(
         !localstate::localstate_path_for(&medium).exists(),
         "this fixture needs a medium with NO export sibling"
@@ -468,20 +242,10 @@ async fn a_supplied_code_with_no_export_warns_that_it_is_inert() {
 
     wipe_to_a_fresh_dr_machine(&c).await;
 
-    let code_file = dir.path().join("old-recovery-code");
-    std::fs::write(&code_file, a_recovery_code(3)).unwrap();
+    let code_file = old_recovery_code_file(dir.path(), &a_recovery_code(3));
     let new_key = dir.path().join("restored.key");
 
-    let out = cairn_node()
-        .args(["--conn", &base, "--key"])
-        .arg(&new_key)
-        .args(["restore", "--from"])
-        .arg(&medium)
-        .args(["--old-recovery-code-file"])
-        .arg(&code_file)
-        .args(["--insecure-plaintext"])
-        .output()
-        .unwrap();
+    let out = restore_cli(&base, &new_key, &medium, Some(&code_file));
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -523,7 +287,7 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
     let dir = tempfile::tempdir().unwrap();
 
     let (sk, kid) = provisioned_clinic(&c).await;
-    let (event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    let Authored { event_id, .. } = author_sealed_clinical_event(&c, &sk, &kid).await;
     let medium = medium_with_export(
         &c,
         &sk,
@@ -540,14 +304,7 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
 
     // The same medium, the same export, the same piped streams — and NO flag. The correct
     // code is not even offered, because there is no way to offer it.
-    let out = cairn_node()
-        .args(["--conn", &base, "--key"])
-        .arg(&new_key)
-        .args(["restore", "--from"])
-        .arg(&medium)
-        .args(["--insecure-plaintext"])
-        .output()
-        .unwrap();
+    let out = restore_cli(&base, &new_key, &medium, None);
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -559,18 +316,11 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
     );
     // The custody never arrived, so the body cannot open. This is the contrast that makes the
     // headline test meaningful: same inputs, same pipes, one flag apart.
-    let readable: i64 = c
-        .query_one(
-            "SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid",
-            &[&event_id],
-        )
-        .await
-        .unwrap()
-        .get(0);
     assert_eq!(
-        readable, 0,
+        twin_of(&c, &event_id).await,
+        None,
         "without the recovery code the export never opened, so no sealed body can be read — \
-         if this is ever non-zero, the headline test is not proving what it claims"
+         if this is ever readable, the headline test is not proving what it claims"
     );
 }
 
@@ -599,31 +349,15 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
 
     let dir = tempfile::tempdir().unwrap();
     let (sk, kid) = provisioned_clinic(&c).await;
-    let (event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    let Authored { event_id, .. } = author_sealed_clinical_event(&c, &sk, &kid).await;
 
     // Charts on the medium, and NO export sibling — so no actor registry travels.
-    let medium = dir.path().join("cairn.medium");
-    backup::backup_to(
-        &c,
-        &medium,
-        &dir.path().join("backup-status.json"),
-        0,
-        Some((&sk, kid.as_str())),
-    )
-    .await
-    .unwrap();
+    let medium = capture(&c, &sk, &kid, dir.path()).await;
 
     wipe_to_a_fresh_dr_machine(&c).await;
     let new_key = dir.path().join("restored.key");
 
-    let out = cairn_node()
-        .args(["--conn", &base, "--key"])
-        .arg(&new_key)
-        .args(["restore", "--from"])
-        .arg(&medium)
-        .args(["--insecure-plaintext"])
-        .output()
-        .unwrap();
+    let out = restore_cli(&base, &new_key, &medium, None);
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -641,7 +375,7 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
         "the operator must be warned that no registry travelled; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("requeue` will NOT fix this") || stderr.contains("will NOT fix this"),
+        stderr.contains("`cairn-sync requeue` will NOT fix this"),
         "the warning must say requeue cannot fix this — finalize_identity closes the registry \
          door permanently, so the custody remedy would be a false promise; stderr:\n{stderr}"
     );
@@ -652,18 +386,15 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
          two have opposite remedies; stdout:\n{stdout}"
     );
     // The charts really are still unrecovered, so the non-zero exit is telling the truth.
-    let readable: i64 = c
-        .query_one(
-            "SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid",
-            &[&event_id],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(readable, 0, "no chart can have been recovered here");
+    assert_eq!(
+        twin_of(&c, &event_id).await,
+        None,
+        "no chart can have been recovered here"
+    );
 }
 
-/// **#570 item 1, the pen bail — and the AEAD caveat's reachability (#570 item 2).**
+/// **#570 item 1, the pen bail — and the AEAD caveat's reachability (#570 item 2). This is DR
+/// slice 2d's design test 23** ("the AEAD caveat is printed at restore time").
 ///
 /// An export written by a node whose `.unwrap` keystore file could not be loaded carries the
 /// actor registry and the custody ROWS, but no key to open them. That is not a contrived
@@ -687,7 +418,7 @@ async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
     let dir = tempfile::tempdir().unwrap();
 
     let (sk, kid) = provisioned_clinic(&c).await;
-    let (event_id, _twin) = author_sealed_clinical_event(&c, &sk, &kid).await;
+    let Authored { event_id, .. } = author_sealed_clinical_event(&c, &sk, &kid).await;
     let medium = medium_with_export(
         &c,
         &sk,
@@ -700,20 +431,10 @@ async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
     .await;
 
     wipe_to_a_fresh_dr_machine(&c).await;
-    let code_file = dir.path().join("old-recovery-code");
-    std::fs::write(&code_file, &code).unwrap();
+    let code_file = old_recovery_code_file(dir.path(), &code);
     let new_key = dir.path().join("restored.key");
 
-    let out = cairn_node()
-        .args(["--conn", &base, "--key"])
-        .arg(&new_key)
-        .args(["restore", "--from"])
-        .arg(&medium)
-        .args(["--old-recovery-code-file"])
-        .arg(&code_file)
-        .args(["--insecure-plaintext"])
-        .output()
-        .unwrap();
+    let out = restore_cli(&base, &new_key, &medium, Some(&code_file));
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -737,16 +458,9 @@ async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
         "the operator must be told the records are held WITH their key; stdout:\n{stdout}"
     );
     // The body is not readable yet, and that is correct — it is penned, not lost.
-    let readable: i64 = c
-        .query_one(
-            "SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid",
-            &[&event_id],
-        )
-        .await
-        .unwrap()
-        .get(0);
     assert_eq!(
-        readable, 0,
+        twin_of(&c, &event_id).await,
+        None,
         "a penned record is held, not admitted — if this is readable the pen did not engage"
     );
 }
