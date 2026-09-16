@@ -62,11 +62,17 @@ use cairn_event::seal::WRAPPED_DEK_LEN;
 /// not have. It has the vocabulary now, and the two commands are used together: `restore` fills the
 /// pen and `requeue` empties it, so a script driving one recovery reads this number from both.
 ///
-/// It is a second literal rather than a compile-time alias only because `cairn-sync` is a
-/// **binary-only** crate whose `cairn-node` dependency is a **dev**-dependency: aliasing it in
-/// production code would pull the whole node crate into this binary's build graph to import an
-/// integer. `exit_incomplete_matches_cairn_nodes_restore` below closes the gap where the
-/// dependency already exists — if either number moves, that test fails and names the other.
+/// It is a second definition rather than an alias of `cairn-node`'s because `cairn-sync` is a
+/// **binary-only** crate whose `cairn-node` dependency is a **dev**-dependency: importing it in
+/// production code would pull the whole node crate into this binary's build graph for an integer.
+/// `exit_incomplete_matches_cairn_nodes_restore` below closes the gap where the dependency already
+/// exists — if either number moves, that test fails and names the other.
+///
+/// ⚠️ That rules out the alias, not a shared home: both crates depend in production on
+/// `cairn-event` and `cairn-keystore`, so one definition in either would need no new crate and no
+/// new edge. Rejected on **§9 blast-radius** grounds — `cairn-event` is the safety-critical core
+/// kept deliberately small, and a CLI exit status is not an event concept. See
+/// `cairn_node::restore::completeness::EXIT_INCOMPLETE`'s doc for the full argument.
 pub const EXIT_INCOMPLETE: i32 = 3;
 
 /// The custody state of an event, as `cairn_custody_state` (`db/052`) names it.

@@ -404,7 +404,7 @@ def restore_with_code_file(
     **What did NOT go away with the pty.** The exit status is still returned and
     still checked by the caller, and the caller still refuses to record a timing for
     an incomplete restore. Neither had anything to do with the terminal: `restore`
-    deliberately prints its whole summary and only THEN fails, so a refused
+    deliberately prints its whole summary and only THEN reports, so a refused
     local-state bundle arrives as a clean-looking clinical line followed by a
     non-zero exit — and a restore that applies nothing is FAST, so a rig that timed
     it would write a flattering wrong number into a dated file that outlives the run.
@@ -515,12 +515,19 @@ def measure_one(args: argparse.Namespace, patients: int) -> Measurement:
         restore_env, recovery_code, str(Path(args.workdir) / f"old-recovery-code-{patients}"),
     )
     # The exit status is checked FIRST, and it is strictly broader than the
-    # summary. `restore` deliberately prints its whole report and only THEN
-    # fails ("Only NOW may the process fail", main.rs) — so a refused local-state
-    # bundle, which means the dead node's custody was NOT installed, arrives as a
-    # clean-looking clinical line followed by a non-zero exit. Reading only the
-    # summary would record a passing time for the degraded, custody-less path this
-    # rig provisions a sealed node specifically to avoid measuring.
+    # summary. `restore` deliberately prints its whole report and only THEN reports
+    # its verdict ("Only NOW may the process report anything but success", main.rs)
+    # — so a refused local-state bundle, which means the dead node's custody was NOT
+    # installed, arrives as a clean-looking clinical line followed by a non-zero
+    # exit. Reading only the summary would record a passing time for the degraded,
+    # custody-less path this rig provisions a sealed node specifically to avoid
+    # measuring.
+    #
+    # SINCE #594/ADR-0071 non-zero is no longer only failure: 3 means INCOMPLETE —
+    # the ceremony finished and records did not come back. This rig refuses BOTH,
+    # and deliberately: it provisions a clean medium, so a 3 means the rig's own
+    # fixture is wrong, and timing an incomplete recovery is exactly the flattering
+    # wrong number the check exists to prevent.
     if code != 0:
         raise RigError(
             f"the restore exited {code}. Its summary line is printed before it "

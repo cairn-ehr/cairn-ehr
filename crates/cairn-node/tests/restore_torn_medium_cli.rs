@@ -1,19 +1,21 @@
 //! #500 slice 2c review round 3 (testing gap): the round-2 ruling — `restore` must NOT
 //! refuse a torn CAIRNB3 medium, unlike `verify-backup` — has NO test that drives it
-//! through `main.rs` itself.
-//!
-//! **#594/ADR-0071 (2026-09-16) reversed ONE assertion in this file: the exit status, 0 → 3.**
-//! The round-2 ruling stands in full — refusing a torn medium would convert a partial loss into a
-//! total one, and nothing here refuses. But *not refusing* and *reporting success* are different
-//! claims, and this file had been making the second on the strength of the first. A torn tail
-//! means records are gone from this copy; the command now says so with a status a cron drill can
-//! read, after recovering everything it can. See the assertion's own comment below. Every existing test calls `cairn_node::restore`'s library
+//! through `main.rs` itself. Every existing test calls `cairn_node::restore`'s library
 //! functions directly, so re-adding `anyhow::bail!("refusing to restore a torn medium")`
 //! to the `Cmd::Restore` arm would pass the entire suite today. This file closes that gap
 //! the way `tests/cli_localstate.rs` already does for two other `main.rs`-only fixes:
 //! spawn the real `cairn-node` binary (`CARGO_BIN_EXE_cairn-node`, no extra test
 //! dependency) so the orchestration in `main.rs` — not just its ingredients — is what
 //! gets exercised.
+//!
+//! **#594/ADR-0071 (2026-09-16) reversed ONE assertion in this file: the exit status, 0 → 3.**
+//! The round-2 ruling stands in full — refusing a torn medium would convert a partial loss into a
+//! total one, and nothing here refuses. But *not refusing* and *reporting success* are different
+//! claims, and this file had been making the second on the strength of the first. A torn tail
+//! means records are gone from this copy; the command now says so with a status a cron drill can
+//! read, after recovering everything it can. Every other assertion below is unchanged — the
+//! prefix still restores and the warnings still print — which is what shows the ruling survived.
+//! See the assertion's own comment below.
 
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use cairn_medium::{
@@ -117,9 +119,14 @@ fn torn_v3_medium() -> Vec<u8> {
 }
 
 /// THE test that pins the round-2 ruling itself, not merely its ingredients: `restore`
-/// run as a real process against a torn CAIRNB3 medium must exit ZERO, apply the
-/// COMPLETE prefix (here: exactly the one genesis event before the tear), and print a
-/// loud warning naming the tear — never silently, and never by refusing.
+/// run as a real process against a torn CAIRNB3 medium must apply the COMPLETE prefix
+/// (here: exactly the one genesis event before the tear) and print a loud warning naming
+/// the tear — never silently, and never by refusing.
+///
+/// Since #594/ADR-0071 it must also exit **3 (INCOMPLETE)**, where this comment used to say
+/// ZERO. That is the one reversal (see the file header): the prefix is still recovered and the
+/// medium is still not refused; what changed is that the command now REPORTS the loss instead of
+/// reading as a clean recovery to the only channel a cron drill has.
 #[tokio::test]
 async fn restore_recovers_the_prefix_of_a_torn_medium_and_warns() {
     let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {

@@ -10,9 +10,15 @@
 > record the medium carried is not in this node's log when it finishes. **Five causes, one status:**
 > a torn tail · records past a mid-file chain break · records in a plane this build cannot route
 > (all three were silent at exit **0**) · records **penned** · **no actor registry** (both were exit
-> **1**, apologising in words for a vocabulary the command lacked). **Exit 1 narrows to FAILED —
+> **1** for a state that was not failure — one apologising in as many words, the other offering a
+> remedy under a status that said the run had failed). **Exit 1 narrows to FAILED —
 > the ceremony was BLOCKED** — and is checked FIRST. No migration, no `SCHEMA_GENERATION` bump (still
 > **52**), no new flag, no new dependency. Guarded by trap 11.
+> **Three review rounds; round 3 ran five specialised reviewers and found no mechanism defect, but a
+> third instance of the PR's own recurring pattern** — `--help`'s exit-0 line, *written by round 2's
+> fix*, excluded exactly the records that cause a 3. It also caught a factual error in ADR-0071
+> **before it became immutable**, and filed **#614–#617**. **#614 and #615 are the two that still let
+> a restore lose a record at exit 0.**
 >
 > **⇒ #584 IS ALSO BUILT AND MERGED** (2026-09-15/16, [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md),
 > spec v0.72, PR [#601](https://github.com/cairn-ehr/cairn-ehr/pull/601)). When a write door newly
@@ -37,6 +43,21 @@
 >   an empty clinical plane beside a degraded export exits **0** having installed no custody key, and
 >   that node refuses its first sealed write. Correct by ADR-0071's rule; still not what a drill
 >   wrapper reading 0 believes. Pre-existing; the ADR publishes the contract that makes it matter).
+> - **#614 and #615 — the two that CONTINUE #594 rather than tidy up after it** (both NEW, both
+>   pre-existing, both filed by PR #612's round 3; `db/` untouched by that PR). **#614**: a clinical
+>   event whose *event type* this build cannot classify is admitted **deferred**, counted `applied`,
+>   and exits **0** in silence — the same cause and the same remedy as the unroutable-*plane* case
+>   ADR-0071 gives a 3, decided the other way, and by ADR-0012's lights it is the type case that will
+>   actually happen on a DR box one release behind. Exit 0 is correct by the rule; the silence is not.
+>   **#615**: the node plane has **no completeness accounting at all** — `apply_medium` returns the
+>   count it was *offered* — and `restore_node_event` lacks the substitution guard `submit_event`
+>   (db/005) and `apply_remote_event` (db/020) both carry, so a node event can be dropped silently on
+>   a medium db/009's own comments call attacker-appendable.
+> - **#616 and #617 — two smaller restore-path items** from the same round: a `finalize_identity`
+>   failure destroys the WHOLE summary on a database that can never be restored into again (the exact
+>   loss ADR-0071's verdict block exists to prevent, one arm over), and the duplicated
+>   `registry_present` probe whose error reaches the operator naked while its twin wraps the identical
+>   query in a legible diagnosis.
 > - **#603 and #604 — two cross-transaction races** (reasoned, not reproduced; ADR-0070 names both as
 >   residuals, its decision 3 holding on every sequential path): **#603** a late key racing
 >   connect-time re-adjudication can leave the promoted record off the chart, and `requeue` then exits
@@ -287,10 +308,22 @@
 >     ⚠️ **The precedence has exactly ONE test**:
 >     `restore_cli_surface.rs::without_the_flag_a_piped_restore_still_inherits_no_custody`, the only
 >     scenario carrying both verdicts at once. If it is ever weakened to `!success()`, the order
->     becomes unpinned. `restore_exit_vocabulary.rs` pins the VALUE 3 and
->     `cairn_sync::requeue::tests::exit_incomplete_matches_cairn_nodes_restore` pins that the two
->     binaries AGREE — neither alone is sufficient (both could be changed to 7 together).
->     Residual: **#611**, the FAILED path's message is a raw errno.
+>     becomes unpinned — and since round 3 it also asserts that the run HAS an incomplete cause
+>     ("NO actor registry"), because a `Some(1)` alone is compatible with a clean restore and would
+>     have pinned nothing after any fixture simplification. `restore_exit_vocabulary.rs` pins the
+>     VALUE 3 and `cairn_sync::requeue::tests::exit_incomplete_matches_cairn_nodes_restore` pins that
+>     the two binaries AGREE — neither alone is sufficient (both could be changed to 7 together).
+>     ⚠️ **`!status.success()` IS NO LONGER AN ASSERTION.** Before #594 it meant "failed"; now 3 is
+>     non-zero too, so it passes under either verdict. Two tests silently lost their teeth this way
+>     and now assert `Some(1)` — a mid-apply database fault and the pre-flight leftover-key refusal,
+>     both ADR-named exit-1 causes that had nothing pinning their number. **Write `Some(n)`.**
+>     ⚠️ **An ACKED pen row is counted in `penned` and `requeue` will NOT clear it** (`is_incomplete`
+>     excludes `skipped_acked`), so an all-acked pen reports 3 while requeue exits 0: the drill cannot
+>     go green. Counting them is right; the verdict's TEXT names the exception. Do not "fix" it by
+>     subtracting acked rows — that lets a restore claim a completeness no human granted.
+>     Residuals: **#611**, the FAILED path's message is a raw errno; **#614/#615**, the two states
+>     that still reach exit 0 having left a record behind; **#616**, not every exit 1 is this
+>     precedence (a DB fault is a `?` far above the verdict site, and it takes the summary with it).
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
@@ -365,7 +398,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-16 (**#594 built — a restore that left records behind exits INCOMPLETE.** **ADR-0071**, spec **v0.73**, no migration, `SCHEMA_GENERATION` still 52; five causes collapse onto one status and exit 1 narrows to *the ceremony was BLOCKED*; nine mutations run, eight killed and M9 recorded as a reasoned survivor; filed **#611**; PR **[#612](https://github.com/cairn-ehr/cairn-ehr/pull/612)**) · 2026-09-15/16 (**#584 built — a late key reaches the chart.** **ADR-0070**, spec **v0.72**, no migration file, `SCHEMA_GENERATION` still 52; ten mutations run, M6 killed in the final fix wave by a raising probe; filed **#603** and **#604**, two cross-transaction races ADR-0070 names as residuals; the maintainer's decisions on **#594** (exit 3, not built) and **#575** (re-deferred) recorded; filed **#602**; PR **#601**) · 2026-09-15 (**PR #595's review round** — the kit's wipe truncates `node_unwrap_key` and the medication projections, test 7 crosses the byte cap, five more mutations killed; filed **#596–#599**; **#600**, the `rustls` → 0.23.45 lockfile bump) · 2026-09-14 (**#593** — slice 2d's last six design tests, test-only, eight mutations killed; filed #594; PR #595) · earlier, one line each: 09-13/14 **#567** (`verify-backup`'s clinical plane, PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.73** ([ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md), which reverses 2c round 2's exit-0-on-a-torn-medium pin and nothing else; [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-16 (**#594 built — a restore that left records behind exits INCOMPLETE.** **ADR-0071**, spec **v0.73**, no migration, `SCHEMA_GENERATION` still 52; five causes collapse onto one status and exit 1 narrows to *the ceremony was BLOCKED*; nine mutations run, eight killed and M9 recorded as a reasoned survivor; **three review rounds**, the third running five specialised reviewers and finding no mechanism defect but a third recurrence of the PR's own pattern — round 2's fix wrote the round-3 `--help` contradiction — plus a factual error in ADR-0071 caught *before* it became immutable; filed **#611**, **#613**, **#614–#617**; PR **[#612](https://github.com/cairn-ehr/cairn-ehr/pull/612)**) · 2026-09-15/16 (**#584 built — a late key reaches the chart.** **ADR-0070**, spec **v0.72**, no migration file, `SCHEMA_GENERATION` still 52; ten mutations run, M6 killed in the final fix wave by a raising probe; filed **#603** and **#604**, two cross-transaction races ADR-0070 names as residuals; the maintainer's decisions on **#594** (exit 3, not built) and **#575** (re-deferred) recorded; filed **#602**; PR **#601**) · 2026-09-15 (**PR #595's review round** — the kit's wipe truncates `node_unwrap_key` and the medication projections, test 7 crosses the byte cap, five more mutations killed; filed **#596–#599**; **#600**, the `rustls` → 0.23.45 lockfile bump) · 2026-09-14 (**#593** — slice 2d's last six design tests, test-only, eight mutations killed; filed #594; PR #595) · earlier, one line each: 09-13/14 **#567** (`verify-backup`'s clinical plane, PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.73** ([ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md), which reverses 2c round 2's exit-0-on-a-torn-medium pin and nothing else; [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **52** (`db/052`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -396,13 +429,38 @@ Plan `docs/superpowers/plans/2026-09-16-restore-exits-incomplete-594.md` (its M1
 review ledger); [ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md).
 The durable rule is trap 11. What generalises past the slice:
 
-- **⇒ WHEN YOU ADD A NEW STATUS, AUDIT THE OLD ONES FOR THE SAME STATE.** #594's text named three
+- **⇒ REVIEW THE REVIEW'S FIXES, AND THEN REVIEW THOSE.** Three rounds, and **rounds 2 and 3 each
+  found a defect introduced by the previous round's fix**. Round 3's headline: `--help`'s exit-0 line
+  read *"every record the medium carried **that this build could apply** is in the log"* — a clause
+  that excludes exactly the records causing a 3, so the shipped contract's own definition of 0 was
+  satisfied by two of the five states that produce 3. `git log -S` placed it in the round-2 commit
+  whose stated purpose was *"exit 0 over-promised"*. **A fix written under the pressure of a finding
+  is itself unreviewed code.** The cheap mechanical form: `git diff` the fix alone and re-ask the
+  original question of it. #582's lesson is not "do a second round"; it is this.
+- **⇒ AN ADR IS IMMUTABLE ONCE MERGED, SO ITS FACTS GET A ROUND OF THEIR OWN.** ADR-0071 said two
+  bails carried the same apologetic sentence; only one did (the no-registry bail offered a *remedy*
+  under a failure status — the same concession, made less directly). Caught in round 3, before merge.
+  **Check an ADR's factual claims against `git show main:<file>`, not against memory of the diff.**
+- **⇒ WHEN YOU ADD A NEW STATUS, AUDIT THE OLD ONES FOR THE SAME STATE — AND THEN AUDIT WHAT THE NEW
+  STATUS STILL CANNOT SAY.** #594's text named three
   causes. Two OTHER arms already reported the same kind of state with exit 1, and their own messages
   apologised for it in words — *"this exit code says the restore is INCOMPLETE, not that it failed"*.
   Building the issue literally would have shipped an **inverted** signal: the most recoverable outcome
   reported as FAILED, the least recoverable as INCOMPLETE. **The apology in a message is the tell.**
   `requeue.rs`'s doc had even named the gap outright ("only exit 1 to say it with") and nobody had
-  followed the sentence to its consequence.
+  followed the sentence to its consequence. The *second* half of that audit is what round 3 added:
+  publishing exit 0 as a contract makes every remaining way to reach it a defect worth naming, which
+  is how **#614** (an unclassifiable event type is admitted *deferred*, counted `applied`, exit 0 in
+  silence) and **#615** (the node plane has no completeness accounting at all) were found.
+- **⇒ `!status.success()` STOPS BEING AN ASSERTION THE MOMENT A THIRD STATUS EXISTS.** Two tests in
+  this very PR silently lost their teeth — a mid-apply database fault and a pre-flight refusal, both
+  ADR-named exit-**1** causes — because 3 is also non-zero. Nothing failed; the tests just stopped
+  discriminating. **Adding a status is a call to re-read every negative assertion about the old
+  ones.** Both now assert `Some(1)`, verified against a live database rather than reasoned.
+- **⇒ A TEST THAT PINS AN ORDER MUST ALSO PIN THAT BOTH SIDES ARE PRESENT.** The single precedence
+  test asserted `Some(1)` but never that the run *had* an incomplete cause for FAILED to outrank — so
+  a later fixture simplification would have left the order unpinned with the test still green. The
+  same shape as an anti-vacuity control, applied to a *relationship* rather than a value.
 - **⇒ A PLAN'S ASSUMPTION ABOUT A CODE PATH IS A CLAIM, AND TWO OF THIS ONE'S WERE FALSE.** (1) The
   plan called a wrong recovery code the FAILED path; `apply_local_state_export` returns `Ok(None)`
   for it — an honest degradation — so two "precedence pins" were aimed at tests that could never show

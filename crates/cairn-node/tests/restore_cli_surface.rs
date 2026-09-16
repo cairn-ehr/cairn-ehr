@@ -6,8 +6,10 @@
 //! and the two facts have the same cause: until #572 the recovery-code prompt was read through
 //! `rpassword`, which opens `/dev/tty` and fails on any non-tty. A CLI test could not drive it
 //! without allocating a pseudo-terminal, so nobody did — `restore_torn_medium_cli.rs`, the only
-//! CLI-level restore test that existed, asserts `status.success()` on a federation-only medium
-//! and therefore never enters the clinical block at all.
+//! CLI-level restore test that existed, drives a federation-only medium and therefore never
+//! enters the clinical block at all. (It asserted `status.success()` when this was written; since
+//! #594/ADR-0071 a torn medium exits 3, and that file asserts the 3. The point stands either way:
+//! it is the clinical block it never reaches.)
 //!
 //! Every test here runs with a piped stdout and stderr. That is not incidental: **a piped run
 //! is the thing under test.** If any of these ever needs a pty again, #572 has regressed.
@@ -150,7 +152,8 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
 ///
 /// Two things are pinned here. First, the degradation: local-state is OPTIONAL and the events
 /// are the load-bearing copy, so a bad code must not kill an otherwise complete restore — it
-/// warns, skips, and the process exits non-zero AFTER the summary has printed.
+/// warns, skips, and the process exits 3 (INCOMPLETE, since #594/ADR-0071 — NOT 1: a wrong code
+/// is an honest degradation, not a blocked ceremony) AFTER the summary has printed.
 ///
 /// Second, and this is the one a refactor would break: the message must say **one** attempt,
 /// not three. `unsealing_failed_cause` takes the RESOLVED count, because re-reading a file
@@ -338,6 +341,18 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
          outranks INCOMPLETE, and a ceremony that never ran is not a recovery that fell short; \
          stdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    // **ANTI-VACUITY FOR THE PRECEDENCE ITSELF (PR #612 review).** The assertion above only pins
+    // an ORDER if this run genuinely has an INCOMPLETE cause for FAILED to outrank. That was true
+    // by construction and asserted nowhere, so a later fixture simplification — a federation-only
+    // medium, say — would keep this test green on `Some(1)` while quietly leaving the workspace
+    // with NO coverage of the order at all. M7 would then survive. Pin the losing verdict too.
+    assert!(
+        stderr.contains("NO actor registry"),
+        "anti-vacuity: FAILED can only be shown to OUTRANK INCOMPLETE on a run that HAS an \
+         incomplete cause — this one must have no registry, so every clinical record is left on \
+         the medium. Without this, the `Some(1)` above is compatible with a clean restore and \
+         pins nothing; stderr:\n{stderr}"
+    );
     // The custody never arrived, so the body cannot open. This is the contrast that makes the
     // headline test meaningful: same inputs, same pipes, one flag apart.
     assert_eq!(
@@ -349,8 +364,10 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
 }
 
 /// **#570 item 1, the loudest bail: a restore that could not offer ONE record must exit
-/// non-zero.** And #570 item 2 for the "NO actor registry" warning, whose reachability a
-/// source-text grep cannot establish.
+/// 3 (INCOMPLETE).** Written as "non-zero" before #594/ADR-0071 gave the command a third
+/// status; it is the 3 that is pinned now, and 1 would be wrong — the charts are still on the
+/// medium and a second restore recovers them. And #570 item 2 for the "NO actor registry"
+/// warning, whose reachability a source-text grep cannot establish.
 ///
 /// A medium carrying charts, with no export beside it, is the most incomplete of the three
 /// outcomes: without the registry every record would be refused as authored by an unenrolled

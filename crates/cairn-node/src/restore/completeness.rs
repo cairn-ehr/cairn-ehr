@@ -20,8 +20,13 @@
 //!
 //! ## What this module decides
 //!
-//! One question, over five scalars: *is any record the medium carried still not in this node's
-//! log?* If so the run is **INCOMPLETE** ([`EXIT_INCOMPLETE`](crate::restore::completeness::EXIT_INCOMPLETE),
+//! One question, over five scalars: *is any record the medium carried still not usable in this
+//! node's log?* **"Usable", not merely "present"** — the one cause where the distinction bites is
+//! [`Unrestored::penned`](crate::restore::completeness::Unrestored::penned), whose doc names it:
+//! a record the door admitted but whose custody did not land is a row in `event_log` wrapping a
+//! sealed body nobody can open, and a restore that reported that as recovered would be making
+//! #500's claim one layer down. If so the run is
+//! **INCOMPLETE** ([`EXIT_INCOMPLETE`](crate::restore::completeness::EXIT_INCOMPLETE),
 //! the status `cairn-sync requeue` has
 //! used since #578) and [`Unrestored::notice`](crate::restore::completeness::Unrestored::notice) says
 //! which of the five causes hold, with each one's
@@ -37,12 +42,23 @@
 //! **It is not FAILED.** Exit **1** stays reserved for a run that was *blocked*: a recovery code
 //! that could not be **read at all** (no `--old-recovery-code-file` and no tty), a bundle this
 //! build cannot **decode**, recovered key material that could not be **installed**, a database
-//! fault, an interrupted ceremony. `main.rs` checks that FIRST, so FAILED outranks INCOMPLETE.
+//! fault, an interrupted ceremony.
+//!
+//! ⚠️ **Two different mechanisms produce that 1, and only one of them is a "precedence".** A
+//! database fault or a clinical apply that dies is an `?` far earlier in the arm — it never reaches
+//! either verdict, and it loses the summary this block works so hard to preserve (that loss is
+//! [#616](https://github.com/cairn-ehr/cairn-ehr/issues/616), not a property anyone chose). The
+//! *held* failure, `local_state_failure`, is the one `main.rs` deliberately checks FIRST at the
+//! verdict site, and that check is what makes FAILED outrank INCOMPLETE.
 //!
 //! ⚠️ **A wrong recovery code and a corrupt export are NOT exit 1.** `apply_local_state_export`
 //! returns `Ok(None)` for both — *an honest degradation already reported to the operator* — and the
-//! run lands on **3**, because without the export there is usually no actor registry either and the
-//! clinical plane is never offered. The line is not *"did the export work?"* but *"could this
+//! run **usually** lands on **3**, because without the export there is usually no actor registry
+//! either and the clinical plane is never offered. **Usually, not always**: on a medium carrying no
+//! clinical records at all there is nothing to leave behind, every field below is zero, and such a
+//! run exits **0** having installed no custody key — correct by this module's own rule, and filed
+//! as [#613](https://github.com/cairn-ehr/cairn-ehr/issues/613) because it is still not what a
+//! drill wrapper reading 0 believes. The line is not *"did the export work?"* but *"could this
 //! command do what it set out to do?"*: an unreadable prompt means the ceremony never ran; a wrong
 //! code means it ran and fell short. The distinction is between *"the restore did everything it safely
 //! could and work remains"* and *"the restore could not do what it set out to do"*, and it is the
@@ -55,20 +71,35 @@
 
 /// The exit status of a restore that finished its ceremony but did not finish the recovery.
 ///
-/// **There is a SECOND literal `3` for this meaning, in `cairn_sync::requeue::EXIT_INCOMPLETE`, and
-/// only a test holds the two equal.** It cannot be a compile-time alias: `cairn-sync` is a
-/// binary-only crate whose `cairn-node` dependency is a **dev**-dependency, so aliasing in its
-/// production code would pull this whole crate into that binary's build graph to import an integer.
-/// The guard is `cairn_sync::requeue::tests::exit_incomplete_matches_cairn_nodes_restore`, which
-/// fails naming the other constant. **Change one and you must change both** — the two commands are
-/// used together (`restore` fills the pen, `requeue` empties it) and a script driving one recovery
-/// reads this number from each.
+/// **There is a SECOND definition of this number, `cairn_sync::requeue::EXIT_INCOMPLETE`, and only
+/// a test holds the two equal.** `cairn-sync` cannot alias THIS constant: it is a binary-only crate
+/// whose `cairn-node` dependency is a **dev**-dependency, so importing it in production code would
+/// pull this whole crate into that binary's build graph for an integer. The guard is
+/// `cairn_sync::requeue::tests::exit_incomplete_matches_cairn_nodes_restore`, which fails naming
+/// the other constant. **Change one and you must change both.**
 ///
-/// A **third** copy exists and is deliberately NOT bound to these:
+/// ⚠️ **That is a reason the ALIAS cannot go here, not a proof no shared home exists — and the
+/// difference matters, because the next reviewer will check.** Both crates depend, in production,
+/// on `cairn-event` and `cairn-keystore`, so a single definition in either needs no new crate and
+/// no new dependency edge. It is **rejected on §9 blast-radius grounds**: `cairn-event` is the
+/// safety-critical core the project has committed to keeping small and reviewable, and a CLI exit
+/// status is not an event concept. The two-test arrangement is a deliberate trade, not a
+/// workaround — and it is genuinely two-sided: this side pins that the constants AGREE,
+/// `restore_exit_vocabulary.rs` pins that the value is **3**, so they cannot both drift to 7
+/// together.
+///
+/// A **third** definition exists and is deliberately NOT bound to these:
 /// `cairn-sync/tests/common/dead_node.rs`'s own `EXIT_INCOMPLETE`. That one is an independent
 /// oracle — a suite that read the number back out of the code under test could not catch the code
 /// changing it — so it is meant to be edited by hand, and to go red when it is not. Do not "fix" it
-/// into an import.
+/// into an import. (Its own doc still says it "has to be" a copy because the module is
+/// unimportable; since #594 that is half-stale — `cairn-node` is a dev-dependency there, so it
+/// *could* import this, and staying a copy is now the choice this paragraph describes.)
+///
+/// **The bare `3`s in the test suites are not part of that inventory.** The CLI tests assert
+/// `out.status.code() == Some(3)` as a literal on purpose: a test that imported the constant would
+/// still pass if the constant changed, which is the whole failure the third copy above guards
+/// against. They are oracles, not definitions.
 ///
 /// Distinct from `1`, which is a run that FAILED, and from `2`, which is a bad flag.
 pub const EXIT_INCOMPLETE: i32 = 3;
@@ -103,6 +134,22 @@ pub struct Unrestored {
     pub torn_tail: bool,
     /// Clinical records held in the quarantine pen with their custody. The most recoverable of the
     /// five: `cairn-sync requeue` completes the restore without redoing it.
+    ///
+    /// ⚠️ **One of the four refusal causes pens a record that IS in the log.**
+    /// `RefusalCause::CustodyDidNotLand` fires *after* the door returned `Ok` — db/020's two
+    /// lenient arms admit the event and withhold its custody — so the body is stored and no key
+    /// opens it. It belongs here anyway: a sealed body without its DEK has not "come back" in any
+    /// sense a clinic would recognise, and `requeue` is still its remedy. This is why the module
+    /// doc's question is *usable in the log*, not *present in it*.
+    ///
+    /// ⚠️ **This count INCLUDES rows an operator has already acked, and `requeue` skips those.**
+    /// `ClinicalRestoreReport::penned_but_acked` is a strict subset of `penned()` (both are
+    /// incremented by the same `pen()` call), and `do_requeue` deliberately does not put an acked
+    /// row through the door — `RequeueCounts::is_incomplete` excludes `skipped_acked`, so requeue
+    /// exits **0** having released none of them. A resumed restore over a pen whose rows were all
+    /// acked therefore reports 3 with no command that clears it. Counting them is still right —
+    /// those records genuinely are not in the record — but [`Unrestored::notice`] must not promise
+    /// `requeue` for them without the caveat, and it does not.
     pub penned: usize,
     /// No actor registry reached this node, so the apply door would have refused every clinical
     /// record as authored by an unenrolled signer and the plane was never offered at all. The
@@ -114,8 +161,15 @@ pub struct Unrestored {
 impl Unrestored {
     /// True when every record the medium carried is in this node's log.
     ///
-    /// The whole exit-status decision, in one place: a `false` here is exactly an
-    /// [`EXIT_INCOMPLETE`], and there is no second condition anywhere in `main.rs`.
+    /// The whole INCOMPLETE decision, in one place: `main.rs` adds no second condition of its own
+    /// to it, and there is no sixth cause hiding at the call site.
+    ///
+    /// ⚠️ **A `false` here is NOT "therefore exit 3" — FAILED outranks it.** `main.rs` returns
+    /// `local_state_failure` *before* it ever builds this struct, so a blocked ceremony that also
+    /// left records behind exits **1**. That is not an exception to the rule; it is the precedence
+    /// this whole slice establishes (see the module doc above), and it is pinned end to end by
+    /// `restore_cli_surface.rs::without_the_flag_a_piped_restore_still_inherits_no_custody` — the
+    /// one run that carries both verdicts at once.
     pub fn is_complete(&self) -> bool {
         self.past_chain_break == 0
             && self.unknown_plane == 0
@@ -188,7 +242,10 @@ impl Unrestored {
             out.push_str(&format!(
                 "\n  · {} clinical record(s) are HELD in the quarantine pen with their custody. \
                  Inspect them with `cairn-sync quarantine`; once the cause is fixed, `cairn-sync \
-                 requeue` completes the restore without redoing it.",
+                 requeue` completes the restore without redoing it — EXCEPT for any row already \
+                 ACKED, which `requeue` deliberately skips (it is a recorded human decision that \
+                 those bytes never enter the record). If requeue reports nothing left to do while \
+                 this count stands, that is why: un-ack them first if the decision no longer holds.",
                 self.penned
             ));
         }

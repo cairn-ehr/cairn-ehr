@@ -1088,7 +1088,12 @@ fn unsealing_failed_cause(export_path: &std::path::Path, attempts: usize) -> Str
 ///   NOT follow that the process exits 0: without the export there is usually no actor registry
 ///   either, so the clinical plane is never offered and the run ends **3 (INCOMPLETE)** under
 ///   ADR-0071 — records still on the medium, recoverable by a second restore with the right
-///   code. The distinction this arm draws is 3-not-1, not 0-not-1.
+///   code. The distinction this arm draws is **3-not-1**, not 0-not-1.
+///   ⚠️ *Usually* 3, not always: the registry only matters if there is something to admit, so a
+///   medium carrying NO clinical records leaves nothing behind, every `Unrestored` field is zero,
+///   and such a run exits **0** having installed no custody key — after which it refuses its own
+///   first sealed write. Correct by ADR-0071's rule (it is a claim about RECORDS) and filed as
+///   #613; `restore --help` states the limit rather than over-promising.
 /// - `Err` — either recovered key material we could not INSTALL, or a bundle we could not
 ///   DECODE (`from_cbor` refuses a bundle written by a newer node, and that refusal is loud
 ///   on purpose — silently dropping an unknown slot would drop key material). Both are
@@ -1454,32 +1459,42 @@ enum Cmd {
         #[arg(long)]
         from: PathBuf,
     },
-    /// Restore a node from a cold-peer backup medium into a FRESH, un-enrolled database
-    /// (ADR-0026 slice C). Verifies the medium, mints a NEW sealed keypair (the old
-    /// signing key is never backed up), rehydrates the old event history through the
-    /// self-trusting restore door, authors a new genesis, and records a supersede linking
-    /// the dead node to the new one. The node then re-peers from empty.
+    /// Restore a node from a cold-peer backup medium into a FRESH, un-enrolled
+    /// database (ADR-0026 slice C). Verifies the medium, mints a NEW sealed keypair
+    /// (the old signing key is never backed up), rehydrates the old event history
+    /// through the self-trusting restore door, authors a new genesis, and records a
+    /// supersede linking the dead node to the new one. The node then re-peers from
+    /// empty.
     ///
     /// EXIT STATUS (ADR-0071) — printed after the full summary, never instead of it:
-    ///   exit 0 = every record the medium carried that this build could apply is in the
-    ///            log. It is a statement about RECORDS, not about provisioning: a restore
-    ///            whose local-state export degraded can still exit 0 on a medium that
-    ///            carried no clinical records, having installed no custody key (#613).
-    ///   exit 3 = INCOMPLETE: the ceremony finished and records did NOT come back. Five
-    ///            causes, each named on stderr with its own remedy — a torn tail; records
-    ///            past a mid-file chain break; records in a plane this build cannot route;
-    ///            records held in the quarantine pen (`cairn-sync requeue` finishes those);
-    ///            or no actor registry, so the clinical plane was never offered. The node
-    ///            IS restored; this is not a failure.
-    ///   exit 1 = FAILED: the ceremony was BLOCKED — the recovery code could not be READ
-    ///            at all (no --old-recovery-code-file and no terminal), the export could
-    ///            not be DECODED, recovered key material could not be INSTALLED, or a
-    ///            database fault. Checked first, so it outranks 3. A WRONG recovery code
-    ///            and a CORRUPT export are not this: they degrade honestly and exit 3.
-    /// `cairn-sync requeue` uses the same 3, and is the command that finishes a restore.
+    ///   exit 0 = every record the medium carried is in this node's log and usable.
+    ///            A claim about RECORDS, not about provisioning: a restore whose
+    ///            local-state export degraded still exits 0 on a medium that carried
+    ///            no clinical records, having installed no custody key (#613).
+    ///   exit 3 = INCOMPLETE: the ceremony finished and records did NOT come back.
+    ///            Five causes, each named on stderr with its own remedy — a torn
+    ///            tail; records past a mid-file chain break; records in a plane this
+    ///            build cannot route; records held in the quarantine pen (`cairn-sync
+    ///            requeue` finishes those, except any already acked); or no actor
+    ///            registry, so the clinical plane was never offered. The node IS
+    ///            restored; this is not a failure.
+    ///   exit 1 = FAILED: the ceremony was BLOCKED — the recovery code could not be
+    ///            READ at all (no --old-recovery-code-file and no terminal), the
+    ///            export could not be DECODED, recovered key material could not be
+    ///            INSTALLED, or a database fault. Checked first, so it outranks 3.
+    ///            A WRONG recovery code and a CORRUPT export are NOT this: they
+    ///            degrade honestly and exit 3 (or 0, if the medium carried no
+    ///            clinical records to leave behind).
+    /// `cairn-sync requeue` uses the same 3 and finishes such a restore.
     // `verbatim_doc_comment` because clap otherwise reflows the EXIT STATUS block above into one
     // dense paragraph, and a status table a cron-wrapper author has to parse out of running prose
     // is one they will not read (PR #612 review, finding 3).
+    //
+    // ⚠️ IT APPLIES TO THE WHOLE DOC COMMENT, opening paragraph included — clap reflowed that
+    // paragraph before, and now prints every line EXACTLY as written, here AND in the subcommand
+    // list of `cairn-node --help`. So every line above is hand-wrapped to fit 80 columns; one
+    // over-long line wraps into a two-word orphan that breaks the status table's alignment for
+    // the cron-wrapper author this block exists to serve (PR #612 review round 3).
     #[command(verbatim_doc_comment)]
     Restore {
         /// Path of the backup medium to restore (as written by `backup`).
@@ -3681,13 +3696,19 @@ async fn main() -> anyhow::Result<()> {
             //   1. FAILED (exit 1) — the ceremony was BLOCKED: the recovery code could not be
             //      READ at all (no flag, no tty), the bundle could not be DECODED, or recovered
             //      key material could not be INSTALLED. ⚠️ NOT a wrong code and NOT a corrupt
-            //      export — `apply_local_state_export` returns `Ok(None)` for those and they
-            //      land on 3. Scripts must see this as a failure, and it OUTRANKS INCOMPLETE:
-            //      such a run also pens every sealed record, so checking the verdict first
-            //      would report a blocked ceremony as a completed-but-partial one and send the
-            //      operator to `requeue` instead of to their recovery code.
+            //      export — `apply_local_state_export` returns `Ok(None)` for those, and they
+            //      land on 3 (or on 0, if the medium carried no clinical records to leave
+            //      behind — #613). Scripts must see this as a failure, and it OUTRANKS
+            //      INCOMPLETE: such a run also pens every sealed record, so checking the
+            //      verdict first would report a blocked ceremony as a completed-but-partial
+            //      one and send the operator to `requeue` instead of to their recovery code.
             //   2. INCOMPLETE (exit 3) — the restore did everything it safely could and
-            //      records the medium carried are still not in this node's log.
+            //      records the medium carried are still not usable in this node's log.
+            //
+            // ⚠️ This ORDER is the only precedence there is. The OTHER exit-1 paths — a
+            // database fault, a clinical apply that dies — are a `?` far above here and never
+            // reach either verdict; they also lose the summary these lines exist to protect,
+            // which is #616 and not a property anyone chose.
             if let Some(e) = local_state_failure {
                 return Err(e);
             }
@@ -3698,10 +3719,11 @@ async fn main() -> anyhow::Result<()> {
             // the status can never disagree with the text above it.
             let unrestored = cairn_node::restore::completeness::Unrestored {
                 // The gated-out count, NOT the medium's clinical total and NOT a subtraction:
-                // `gated_out` is what the reader stopped short of at `verified_through`, and
-                // `untrusted_clinical_notice`'s own doc explains why `on_medium - trusted` is
-                // wrong here (it folds in the re-capture duplicates `plane_records` collapses,
-                // which are expected data, not a fault). Reading the SAME field that notice reads
+                // `gated_out` is what the reader stopped short of at `verified_through`, and the
+                // comment on `untrusted_clinical_notice`'s first body line (in the BODY, not the
+                // rustdoc — a reader who opens the docs will not find it) explains why
+                // `on_medium - trusted` is wrong here: it folds in the re-capture duplicates
+                // `plane_records` collapses, which are expected data, not a fault. Reading the SAME field that notice reads
                 // is what makes the status and the warning one cause: the notice is `Some`
                 // exactly when this is non-zero, so they cannot disagree.
                 past_chain_break: clinical_plane.gated_out,

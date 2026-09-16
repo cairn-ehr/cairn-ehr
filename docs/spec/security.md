@@ -220,10 +220,12 @@ The spec designed *deliberate* key-death as a first-class audited operation ([§
 >   **quarantined with its custody**, not dropped, and the restore exits non-zero saying so — so
 >   "delivered" means *the mechanism exists and reports honestly*, not *every medium restores completely*.
 >   Since [ADR-0071](decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md) that
->   non-zero is specifically **3 (INCOMPLETE)**, and it covers every way a record can fail to reach the
->   log — penned, past a chain break, in a plane this build cannot route, behind a torn tail, or on a
->   medium whose actor registry never arrived — so a **drill** can ask *"did the charts come back?"*
->   with no human at the terminal. **1 means the ceremony was BLOCKED**, not that the recovery fell
+>   non-zero is specifically **3 (INCOMPLETE)**, and it covers five ways a CLINICAL record can fail
+>   to reach the log — penned, past a chain break, in a plane this build cannot route, behind a torn
+>   tail, or on a medium whose actor registry never arrived — so a **drill** can ask *"did the charts
+>   come back?"* with no human at the terminal. Five, not *every*: ADR-0071's own residuals name what
+>   the status does not yet cover (a record admitted but unclassifiable, and the node plane, which has
+>   no completeness accounting at all). **1 means the ceremony was BLOCKED**, not that the recovery fell
 >   short, and outranks 3. `cairn-sync requeue`, which finishes such a restore, speaks the same
 >   vocabulary. None of this **refuses** anything: the status is taken after everything applicable has
 >   been applied, so [ADR-0068](decisions/0068-provenance-warns-never-gates-on-the-restore-path.md)

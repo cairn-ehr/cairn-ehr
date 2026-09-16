@@ -367,3 +367,93 @@ The #582 lesson held: **review the review's fixes.**
    crate whose `cairn-node` dependency is a **dev**-dependency. Held equal by a unit test inside
    `requeue.rs` instead — the earliest point both numbers are visible. The two halves are not
    redundant: that test pins that they AGREE, `restore_exit_vocabulary` pins the VALUE.
+
+### PR #612 review round 3 (2026-09-16) — five specialised reviewers, and the pattern recurred a third time
+
+Round 3 ran five reviewers in parallel (general correctness, test coverage, silent failures, comment
+accuracy, type design), each finding verified against source before being accepted. **No defect in
+the mechanism.** The five-cause partition was independently confirmed closed for clinical records
+(`records.len() + gated_out + collapsed == on_medium` by construction), and the straddled-duplicate
+path — chased specifically as a suspected silent drop — turned out to be safe: `dedup()` collapses
+only when all five `MediumRecord` fields agree, so two *differing* copies both reach the door.
+
+**The headline: `--help`'s exit-0 line contradicted its own exit-3 list, and round 2's fix put it
+there.** *"every record the medium carried **that this build could apply** is in the log"* — that
+restrictive clause excludes exactly the records that cause a 3 (an unroutable plane, a pen), so the
+shipped contract's definition of 0 was satisfied by two of the five states that produce 3. `git log
+-S` places it in commit `412e6251`, the round-2 commit whose stated purpose was *"exit 0
+over-promised."* **The fix for over-promising under-promised.** Third recurrence in one PR of the
+lesson this ledger already names — and the reason round 3 exists at all.
+
+**⇒ REVIEW THE REVIEW'S FIXES, AND THEN REVIEW THOSE.** #582's lesson is not "do a second round"; it
+is that a fix written under the pressure of a finding is itself unreviewed code. Rounds 2 and 3 each
+found a defect *introduced by the previous round's fix*. The cheap mechanical form: after fixing,
+`git diff` the fix alone and re-ask the original question of it.
+
+Fixed in round 3:
+
+1. **`--help`'s exit-0 clause** (above), and the same wrong qualifier in `restore_exit_vocabulary.rs`'s
+   header table. Every line of that doc comment is now hard-wrapped ≤ 80 columns, because
+   `verbatim_doc_comment` freezes the opening paragraph too and an over-long line wrapped into an
+   orphan that broke the status table's alignment.
+2. **`is_complete`'s doc denied the precedence rule the PR exists to establish** — *"a `false` here is
+   exactly an `EXIT_INCOMPLETE`, and there is no second condition anywhere in `main.rs`"*, 80 lines
+   below a module doc saying FAILED outranks INCOMPLETE, and contradicted by the PR's own `Some(1)`
+   test.
+3. **ADR-0071 said two bails carried the same apology; only one did.** The no-registry bail on `main`
+   read *"The node IS restored as a federation peer; recover the local-state export…"* — a remedy
+   offered under a failure status, which is the same concession made less directly, and now described
+   as that. **An ADR is immutable once merged**, so a wrong factual claim in one is worth a round of
+   its own to catch.
+4. **"A wrong code lands on 3" was unconditional in four places** while the ADR's own #613 residual
+   said it lands on 0 on a medium with no clinical records. The ADR contradicted itself within one
+   file; all four now carry the hedge.
+5. **The acked-pen false remedy.** `penned()` includes `penned_but_acked`, and `do_requeue` skips
+   acked rows (`is_incomplete` excludes `skipped_acked`), so an all-acked pen reports 3 while
+   `requeue` exits 0 having released nothing — the drill cannot go green. The caveat existed only on
+   **stdout**, while `notice()`'s own rationale is that it serves the reader who lost stdout. Fixed as
+   text, not structure: the field set stays closed at five, because acked-as-a-*cause* would
+   double-count.
+6. **`CustodyDidNotLand` pens a record that IS in the log** — it fires after the door returned `Ok`,
+   with only the DEK missing. The module's headline question is now *usable in the log*, not
+   *present in it*.
+7. **Two assertions had silently lost their discriminating power** *because of this PR*:
+   `!status.success()` distinguished failure from success until 3 became non-zero too. A database
+   fault and a pre-flight refusal are both ADR-named exit-**1** causes and neither pinned its number;
+   both now assert `Some(1)`, verified against a live database.
+8. **The single precedence pin was vacuity-prone** — it asserted `Some(1)` but never that the run HAD
+   an INCOMPLETE cause for FAILED to outrank, so a later fixture simplification would have left the
+   workspace with no coverage of the order while staying green.
+9. **`notice()`'s cause ordering** — documented as a deliberate clinical judgement ("ordered by how
+   little the operator can do about it") and pinned by nothing. Now pinned, and the pin was
+   mutation-checked: moving the `penned` branch to the front kills exactly that test and no other.
+10. **The "compile-time alias is impossible" claim over-stated** in three places. Both crates depend
+    in production on `cairn-event` and `cairn-keystore`, so a shared home exists; it is rejected on
+    **§9 blast-radius** grounds, not impossibility. Stated as the trade-off it is, because the next
+    reviewer checks the manifests and reopens a question that reads as settled-by-impossibility.
+11. **`scripts/measure_dr_restore.py` quoted a `main.rs` comment this PR deleted**, and described
+    every non-zero exit as failure. Behaviour was always correct (it raises on any non-zero, which is
+    right for a rig that provisions a clean medium); the prose now says why it refuses a 3 too.
+12. Smaller: the spliced mid-sentence in `restore_torn_medium_cli.rs`'s header; three test doc
+    comments still claiming "must exit ZERO"/"non-zero"; the `the_cause_list_is_exactly_five` comment
+    describing a `..Default::default()` spread that would *disarm* the guard it explains; ADR-0071's
+    missing "Option 2"; and `security.md`'s "covers every way a record can fail to reach the log",
+    an absolute the residuals contradict.
+
+**Filed rather than fixed — four, all pre-existing, `db/` untouched by this PR:**
+
+- **[#614](https://github.com/cairn-ehr/cairn-ehr/issues/614)** — a clinical event whose TYPE this
+  build cannot classify is admitted *deferred*, counted `applied`, and exits **0** in silence. Same
+  cause and same remedy as the unroutable-**plane** case this ADR gives 3, decided the other way —
+  and per ADR-0012 it is the type case, not the plane case, that will actually happen. Exit 0 is
+  correct by the rule; the silence is not.
+- **[#615](https://github.com/cairn-ehr/cairn-ehr/issues/615)** — `restore_node_event` lacks the
+  substitution guard `submit_event` (db/005) and `apply_remote_event` (db/020) both carry, so a node
+  event can be dropped silently on a medium db/009's own comments call attacker-appendable. The node
+  plane has no completeness accounting at all, and `applied` is a count of what was *offered*.
+- **[#616](https://github.com/cairn-ehr/cairn-ehr/issues/616)** — a `finalize_identity` failure
+  (two non-transactional statements) destroys the WHOLE summary on a database that can never be
+  restored into again. The exact loss this slice's verdict block exists to prevent, one arm over.
+- **[#617](https://github.com/cairn-ehr/cairn-ehr/issues/617)** — the duplicated `registry_present`
+  probe in `main.rs` whose error reaches the operator naked, while its twin in `clinical.rs` wraps
+  the identical query in a legible diagnosis.

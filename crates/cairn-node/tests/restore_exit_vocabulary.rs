@@ -4,7 +4,7 @@
 //!
 //! | Code | Meaning | Who reads it |
 //! |---|---|---|
-//! | **0** | Everything this build could apply is in the log | a cron drill's `&&` |
+//! | **0** | Every record the medium carried is usable in the log | a cron drill's `&&` |
 //! | **3** | The ceremony finished; records did NOT come back | a monitoring script |
 //! | **1** | The ceremony was BLOCKED (a refused local-state bundle, a database fault) | the same |
 //!
@@ -173,6 +173,66 @@ fn every_cause_is_named_when_several_hold_at_once() {
     }
 }
 
+/// **The ORDER the causes are named in, which `notice()` documents as deliberate and nothing
+/// pinned.** (PR #612 review.)
+///
+/// `notice()`'s own comment: *"Ordered by how little the operator can do about it: the two that no
+/// retry reaches come first, so the causes that matter most are not buried under the ones a
+/// command fixes."* That is a real clinical judgement — an operator skimming a verdict mid-disaster
+/// reads the top of it — and a refactor that reordered the five `push_str` branches would bury the
+/// two unrecoverable causes under the three a command fixes, silently, with every other test in
+/// this file still green.
+#[test]
+fn the_verdict_names_the_unrecoverable_causes_first() {
+    let all = Unrestored {
+        past_chain_break: 2,
+        unknown_plane: 5,
+        torn_tail: true,
+        penned: 3,
+        no_registry: true,
+    };
+    let notice = all.notice().expect("a cause must produce a notice");
+    let at = |needle: &str| {
+        notice
+            .find(needle)
+            .unwrap_or_else(|| panic!("the verdict must name {needle:?}:\n{notice}"))
+    };
+    // TORN and the chain break are the two nothing recovers; the pen is the one a single
+    // `requeue` empties. Between them sit the two that need a second restore or a newer build.
+    let order = [
+        (
+            "TORN",
+            "a torn tail — nothing recovers what is not on this copy",
+        ),
+        (
+            "last verified chain link",
+            "records past a chain break — no retry of any command reaches them",
+        ),
+        (
+            "NOT restored at all",
+            "no registry — recoverable, but only by a whole second restore",
+        ),
+        (
+            "cannot route",
+            "an unroutable plane — recoverable by a newer build",
+        ),
+        (
+            "HELD in the quarantine pen",
+            "the pen — the most recoverable of the five, so it comes LAST",
+        ),
+    ];
+    for pair in order.windows(2) {
+        let (earlier, why_earlier) = pair[0];
+        let (later, why_later) = pair[1];
+        assert!(
+            at(earlier) < at(later),
+            "the verdict must name causes by how LITTLE the operator can do about them: \
+             {why_earlier} must come before {why_later}. An operator skimming the top of this \
+             notice would otherwise meet the fixable causes first and stop.\n{notice}"
+        );
+    }
+}
+
 /// Whatever the cause, the verdict says the word a human reads and the number a script reads.
 ///
 /// Both matter and they are different readers: the operator needs to know this is not a failure
@@ -222,9 +282,10 @@ fn a_verdict_states_both_the_word_and_the_number() {
 /// of the struct is not improved into a defect.
 #[test]
 fn the_cause_list_is_exactly_five() {
-    // A struct update from `default()` touching every field compiles only while the field set is
-    // what this file believes it is; adding a sixth cause fails to compile HERE, at the test that
-    // enumerates them, rather than silently going unpinned.
+    // A FULL struct literal — deliberately NOT `..Default::default()`. The exhaustiveness is the
+    // whole mechanism: a sixth field makes this an E0063 missing-field error HERE, at the test
+    // that enumerates the causes, rather than silently going unpinned. Adding the `..` spread
+    // that would make this a "struct update" disarms the guard completely, so do not "tidy" it in.
     let all = Unrestored {
         past_chain_break: 0,
         unknown_plane: 0,

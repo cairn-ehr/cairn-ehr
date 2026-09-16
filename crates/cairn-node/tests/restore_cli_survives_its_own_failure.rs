@@ -140,9 +140,17 @@ async fn a_restore_that_crashes_mid_apply_mints_no_identity_and_restores_again_i
     remove_crash(&c).await;
     let stderr = String::from_utf8_lossy(&first.stderr);
 
-    assert!(
-        !first.status.success(),
-        "a restore whose clinical apply failed must exit non-zero; stderr:\n{stderr}"
+    // **`Some(1)`, not merely non-zero (PR #612 review).** Until #594 those were the same claim;
+    // since ADR-0071 gave the command a 3, `!success()` passes under either verdict and this
+    // assertion stopped discriminating. A database fault is an ADR-named exit-**1** cause — the
+    // ceremony was BLOCKED, nothing is recoverable by `requeue` — and until this line it was the
+    // one such cause with no test pinning its number. A regression routing it through the verdict
+    // instead of `?` would tell a cron wrapper "incomplete, run requeue" about a hard failure.
+    assert_eq!(
+        first.status.code(),
+        Some(1),
+        "a restore whose clinical apply hit a LOCAL database fault must exit 1 (FAILED), not 3 \
+         (INCOMPLETE): nothing here is finishable by `cairn-sync requeue`; stderr:\n{stderr}"
     );
     // The door's error carries the server's message and SQLSTATE (`legible_db_error`), so the
     // failure is pinned to THIS trigger. "LOCAL fault" alone is printed by four different steps of
@@ -178,10 +186,19 @@ async fn a_restore_that_crashes_mid_apply_mints_no_identity_and_restores_again_i
     );
     let refused = restore_cli(&base, &key, &medium, Some(&code_file));
     let stderr = String::from_utf8_lossy(&refused.stderr);
+    // `Some(1)` for the same reason as attempt 1 (PR #612 review): a PRE-FLIGHT refusal is the
+    // purest BLOCKED ceremony there is — it happens before a single byte is written, so there is
+    // nothing partial to be incomplete ABOUT. Reporting it as 3 would invite a wrapper to run
+    // `requeue` against a restore that never started.
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "the pre-flight refusal must exit 1 (FAILED), not 3 — nothing ran, so nothing is \
+         partially recovered; stderr:\n{stderr}"
+    );
     assert!(
-        !refused.status.success() && stderr.contains("leftover of an earlier attempt"),
-        "the pre-flight must refuse to restore over an existing unwrap key, and name the leftover \
-         case and its remedy; stderr:\n{stderr}"
+        stderr.contains("leftover of an earlier attempt"),
+        "and it must name the leftover case and its remedy; stderr:\n{stderr}"
     );
     assert_eq!(
         identities(&c).await,
