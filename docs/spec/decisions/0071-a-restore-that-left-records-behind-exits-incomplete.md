@@ -137,7 +137,8 @@ loses information the notice already carries in full.
 - A restore that exits **1** from the FAILED path prints its top-level cause through `main`'s
   `Termination`, which for an unaskable prompt reads `Error: Device not configured (os error 6)` —
   naming neither the missing `--old-recovery-code-file` nor the fact that a non-interactive run needs
-  it. Tracked separately.
+  it. This ADR makes the *status* of that run right and leaves its *text* wrong:
+  **[#611](https://github.com/cairn-ehr/cairn-ehr/issues/611)**.
 - The verdict is computed from the same variables that drove the notices, so it cannot disagree with
   them — but it **inherits whatever those variables get wrong**. `past_chain_break` reads the same
   `gated_out` that `untrusted_clinical_notice` reads, so a medium whose gated-out count were wrong
