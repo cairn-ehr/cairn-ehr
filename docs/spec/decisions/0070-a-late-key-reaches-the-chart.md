@@ -35,10 +35,11 @@ Three were named in the issue; the fourth was found while designing.
 | 3 | `cairn-node restore` applies the keyless copy of an event before its keyed copy | **none** — exit 0, and a report identical to the harmless order |
 | 4 | `submit_event` re-submits the bytes of an event already admitted without custody, with its DEK | **none** — the strict door's step 9 has the identical shape |
 
-**Entrance 3 is why the remedy lives in the doors and not in the callers.** `restore` holds no fact from
-which it could tell that a copy it applied earlier was keyless, so it has nothing to act on. A door is the
-only place that **knows**, at the moment it happens, that the custody it just wrote belongs to an event
-already in the log.
+**Entrance 3 is why the remedy lives in the doors and not in the callers.** `restore`'s pre-door probe
+answers only whether the event is in the log, never whether the copy that put it there carried a key, so
+telling a late landing apart would mean adding a custody read before the door — in `restore`, and again in
+every other caller, each agreeing on what the pair of readings means. A door is the only place that
+**knows**, at the moment it happens, that the custody it just wrote belongs to an event already in the log.
 
 ### What the audit established
 
@@ -77,7 +78,7 @@ applier registered in `cairn_projection_apply`, and the load-bearing claims were
 - **A durable ledger of owed projections.** Machinery for a case the audit's second finding shows cannot
   occur.
 - **A narrow owner-granted heal door that callers invoke.** Entrance 3 has no caller-visible signal to
-  invoke it on.
+  invoke it on unless `restore` first grows a pre-door custody read of its own.
 
 ---
 
@@ -99,8 +100,9 @@ load-bearing:
   `event_id`. The guard's later RAISE rolls that back, but the refusal a caller reads could become whatever
   an applier raised first instead of `substitution refused` — the reason `restore` pens and tests assert.
 - **In the door's own posture.** At `apply_remote_event` the call runs while `cairn.remote_apply` is still
-  `on`; the substitution guard moved above the marker clear to make room for it. Three projection checks
-  read that marker, and each admits a first arrival on the remote path: `cairn_guard_medication_patient`
+  `on`; the substitution guard moved above the marker clear to make room for it. Three medication
+  projection checks — the only readers of that marker a late key can reach, out of the eight reader
+  sites in `db/` — each admits a first arrival on the remote path: `cairn_guard_medication_patient`
   (`db/031`) writes a `medication_patient_conflict_flag`, the oversize-group check (`db/033`) writes a
   `medication_projection_flag`, and the cross-patient reconciliation refusal (`db/033`) is skipped, its
   contradiction surfaced at read time by the `medication_group_cross_patient` view. After the clear, all
@@ -130,7 +132,9 @@ the appliers' grant posture, `EXECUTE` revoked from `PUBLIC`, because they write
 
 Enforced by a catalog guard, `crates/cairn-node/tests/late_custody_guards.rs`: every registered applier
 whose body mentions `cairn_clear_payload` or `event_clear` is registered `heal_safe = TRUE`. With that
-invariant, **on every sequential path**, a late key can never leave a debt a door did not pay, so
+invariant, **on every sequential path**, a late key can never leave a debt that neither a door nor
+re-adjudication pays — a deferred event's chart is owed to gate 4 by construction, never to a heal
+command — so
 `requeue`'s `reproject_owed` — its field, its message and its exit-3 arm — is **retired, not narrowed**. A
 signal that is zero by construction on every sequential path reads as a measurement; deleting it is the
 honest form. Two cross-transaction races escape it, and are named as residuals under Consequences.
@@ -162,7 +166,7 @@ peer. That repair is a provisioning act with no paper counterpart, owned where t
 
 **UI bundling target K = 1.** `M = N` on every entrance: the decision removes an act rather than adding one.
 **Time budget:** a late landing costs what the same event's first arrival costs — the identical registered
-appliers, run once — plus one `GET DIAGNOSTICS` on every sealed write. No new runnable surface is exposed,
+appliers, run once — plus one `GET DIAGNOSTICS` per custody write. No new runnable surface is exposed,
 so no measurement is owed; the ordinary sealed-write cost is already measured (median 222 ms node-tier,
 Slice 61) and gains no query.
 
@@ -170,7 +174,11 @@ Slice 61) and gains no query.
 
 ## Consequences
 
-- **ADR-0057's single `AFTER INSERT` dispatcher gains a second, decided dispatch site.** It runs registered
+- **ADR-0057's `AFTER INSERT` dispatcher gains a decided WRITE-TIME dispatch site beside the trigger.**
+  The replay sites already existed — `cairn_reproject` feeds events through *"the identical dispatch the
+  live trigger uses"* (ADR-0057 decision 2) and re-adjudication's gate 4 runs appliers over a stored row
+  (ADR-0056) — so what is new is a dispatch inside a door's own write, not dispatch outside the trigger.
+  It runs registered
   appliers only, so *"a projection lives only in its registered apply function"* still holds: the
   late-custody path adds a moment at which appliers run, never a place where projection logic lives.
   [§9.4](../language-substrate.md#94-merge-projection-boundary-fat-postgres-thin-rust-daemon)'s

@@ -306,7 +306,11 @@ CREATE TRIGGER cairn_projection_dispatch_trg
 --   * cairn_project_late_custody below, when an event's key arrives after the event did.
 -- heal_safe = false marks a counter-shaped applier (note.added's note_count): running it over a
 -- live row would count again, so neither caller may run it. Same rule as cairn_reproject's heal
--- mode (db/039), spelled once here so the two callers cannot drift.
+-- mode (db/039), spelled once here so THESE TWO callers cannot drift. db/039 necessarily keeps its
+-- own spelling of the same filter (`FILTER (WHERE p_rebuild OR r.heal_safe)`): it aggregates
+-- per TYPE over a whole scan rather than dispatching per row, and cairn-sync's loader comment
+-- (`load_schema_under_lock`) depends on the two agreeing — so a change to this rule is a change in
+-- both places.
 --
 -- NO eligibility filter inside, deliberately: gate 4 must run on a row whose event_deferred marker
 -- is still present (that is its proof). The late-custody caller filters before calling.
@@ -347,7 +351,8 @@ REVOKE EXECUTE ON FUNCTION cairn_projection_dispatch_heal_safe(event_log) FROM P
 -- grant it power.
 --
 -- WHAT THE RESULT MEANS. The chart equals "the event arrived when its key landed", not "at its
--- first admission" — the arrival-order independence every projection already has (ADR-0070 §4).
+-- first admission" — the arrival-order independence every projection already has (ADR-0070,
+-- decision 4).
 --
 -- A custody-reading applier must be heal_safe, or this would skip it and leave the chart owed a
 -- rebuild; crates/cairn-node/tests/late_custody_guards.rs enforces that over the catalog.
@@ -1216,8 +1221,9 @@ BEGIN
         -- (submit refusals are safe — nothing has accepted the event). The apply door cannot
         -- mirror this RAISE — a refusal there would freeze the seq watermark on a verifiable
         -- event — so it stays lenient and the non-clinical projection triggers are made
-        -- seal-robust instead (they RETURN on a sealed row — db/002/010-014/018/023-025/045 — or,
-        -- for db/048's sensitivity assertion, project a deliberately unreadable MAX-grade row).
+        -- seal-robust instead: they RETURN on a sealed row (db/002/010-014/018/023-025/045, and
+        -- db/048's withdrawal) — or, for db/048's sensitivity assertion, project a deliberately
+        -- unreadable MAX-grade row.
         IF v_type NOT LIKE 'clinical.%' THEN
             RAISE EXCEPTION 'submit_event: % is not a clinical body — only clinical.* bodies are born-sealed; demographic/identity/patient/node/erasure bodies are plaintext by necessity and must never be sealed (ADR-0052 §2)', v_type;
         END IF;

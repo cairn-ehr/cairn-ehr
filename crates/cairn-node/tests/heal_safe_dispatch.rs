@@ -2,7 +2,8 @@
 //!
 //! `cairn_projection_dispatch_heal_safe(event_log)` runs ONE stored event's heal-safe registered
 //! appliers; `db/043`'s gate 4 and the late-custody path share it, so "which appliers may run
-//! again over a live row" is spelled once. `cairn_project_late_custody(uuid)` is what the two
+//! again over a live row" is spelled once for the two of them (`cairn_reproject` in `db/039`
+//! keeps its own set-based spelling of the same filter — see the note in `db/005`). `cairn_project_late_custody(uuid)` is what the two
 //! doors call: it loads the stored row and dispatches only when the row is replay-eligible.
 //!
 //! The door behaviour is `late_custody_reaches_the_chart.rs`; this file pins the helpers on their

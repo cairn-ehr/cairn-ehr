@@ -31,9 +31,13 @@
 //! (`db/052_restore_doors.sql`): this module decides so it can EXPLAIN every retention; the door
 //! is the floor under the decision, and the whole of it for `pull`'s auto-release.
 //!
-//! **What "released" promises.** A released keyed row's key has landed, and — since ADR-0070 — so
-//! has its chart: a key that lands on an event already in the log without it is projected by the
-//! apply door itself, so there is no heal step for this command to report.
+//! **What "released" promises.** That custody for the row's event is SETTLED — which is not the
+//! same as "a key landed": a [`Released::Shredded`] row's key is destroyed on purpose and a
+//! [`Released::NothingToOpen`] row never had one. When a key does land on an event already in the
+//! log without it, the apply door projects that event itself (ADR-0070), so there is no heal step
+//! for this command to report. The ONE exception is an event still carrying an `event_deferred`
+//! marker: the door lands its key and deliberately leaves its chart to re-adjudication, which
+//! projects it through the same dispatch. `cairn-node deferred` is where that state is visible.
 //!
 //! **How a row that truly is unopenable ever leaves the pen**, since the rule alone would hold it
 //! forever: `db/021`'s `acked` flag, which it describes as *"a recorded human decision, never an

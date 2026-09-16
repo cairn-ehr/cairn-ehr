@@ -1625,3 +1625,17 @@ The PR body names what changed per layer, the four entrances before/after, the m
 
 Full per-mutation evidence (edited lines, commands, panic text, undo confirmation) is in
 `.superpowers/sdd/2026-09-15-late-custody-reaches-the-chart-584/task-7-report.md`.
+
+### PR #601 review round (2026-09-16) — four further mutations
+
+The review found that the STRICT door carried two of ADR-0070 decision 1's rules with no test on
+either, and that two mutations nothing had tried would survive. Each new test below was written
+over behaviour that already worked, so each was proven by the mutation it claims to catch, run
+against a real database (`late_custody_reaches_the_chart`, 9 tests).
+
+| Mutation | Test that failed | Assertion that fired (short quote) | Verdict |
+|---|---|---|---|
+| M11 — db/005's late-custody call moved ABOVE its substitution guard (the db/020 mutation M6, applied to the strict door) | `the_strict_door_refuses_a_rival_body_before_any_applier_runs` (NEW) | "the strict door refuses the rival as a substitution: cairn_test probe: an applier ran over this row" | killed — and `a_rival_body_never_reaches_an_applier` stayed GREEN, which is the gap |
+| M12 — db/005's call wrapped in `set_config('cairn.remote_apply','on')`, the plausible "make the doors match" edit | `a_contradiction_revealed_by_a_late_key_is_refused_at_the_strict_door` (NEW) | `landed.expect_err("the strict door refuses a contradiction instead of flagging it")` — the submit succeeded | killed |
+| M13 — the `v_log_rows = 0` half of db/020's condition dropped, so any custody write projects | `a_late_key_runs_the_heal_safe_appliers_once_and_never_again` (new arm) | "A FIRST ARRIVAL CARRYING ITS KEY RUNS EACH APPLIER ONCE" (left: (4,2), right: (3,2)) | killed |
+| M14 — `install_raising_probe` registers `heal_safe = FALSE`, i.e. the probe silently stops being reachable by the late-custody dispatch | BOTH placement pins, at their new positive controls | "CONTROL: a genuine late landing must reach the probe, or the assertion above passes for the wrong reason" | killed — before this round, M14 left both pins green

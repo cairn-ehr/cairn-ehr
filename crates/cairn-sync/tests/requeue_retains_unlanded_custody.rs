@@ -537,16 +537,19 @@ async fn a_dek_that_does_not_open_the_body_is_not_blamed_on_registration() {
 ///
 /// # How the fault is forced
 ///
-/// `cairn_custody_state` (db/052) is replaced, on the test's own connection, with a stand-in that
-/// always `RAISE EXCEPTION`s `lock_not_available` (55P03) — same signature and return type as the
-/// real one, so `CREATE OR REPLACE` is legal. Since ADR-0070 removed `do_requeue`'s pre-door read,
-/// the apply door itself never calls `cairn_custody_state` (`grep -n cairn_custody_state
-/// db/020_apply_remote_event.sql db/005_submit.sql` finds nothing), so the door admits the event
-/// exactly as it would in any other run, and requeue's own POST-apply custody read is the first —
-/// and only — statement that reaches the faulty function. (An earlier version of this arm locked
-/// `event_dek` instead; once #584 removed the pre-door read, that lock was met by the door's step-9
-/// custody write (`INSERT INTO event_dek`) before requeue's own read ever ran, so it stopped
-/// testing what its name claimed — the controller's review, ADR-0070.) Restored — not merely rolled back — before
+/// `cairn_custody_state` (db/052) is replaced — database-wide, not per-connection; safe only
+/// because this suite serializes on the cross-process advisory lock and every test reloads the
+/// schema on connect — with a stand-in that always `RAISE EXCEPTION`s `lock_not_available` (55P03),
+/// same signature and return type as the real one, so `CREATE OR REPLACE` is legal. Neither door
+/// calls `cairn_custody_state` (`grep -n cairn_custody_state db/020_apply_remote_event.sql
+/// db/005_submit.sql` finds nothing), so the door admits the event exactly as it would in any other
+/// run, and requeue's own POST-apply custody read is the first statement that reaches the faulty
+/// function. It is not the only one: the release door reaches it too, through
+/// `cairn_custody_landed` — which is the point made under "What this arm does NOT prove" above.
+/// (An earlier version of this arm locked `event_dek` instead; once #584 removed requeue's pre-door
+/// read, that lock was met by the door's step-9 custody write (`INSERT INTO event_dek`) before
+/// requeue's own read ever ran, so it stopped testing what its name claimed — found in #584's
+/// review.) Restored — not merely rolled back — before
 /// asserting: `db::connect_and_load_schema` replays every `db/*.sql`, db/052 included, so the real
 /// `cairn_custody_state` is back in place before the next test in this process runs, the same
 /// reason `a_requeue_interrupted_mid_loop_still_reports_what_it_released` gives for preferring

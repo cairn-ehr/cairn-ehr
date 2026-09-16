@@ -15,7 +15,16 @@
 > not healed by upgrading** — `cairn-node reproject` still heals it (pre-clinical: none exists).
 >
 > **⇒ WHAT IS NEXT ON THE DR PATH: ONE DECIDED ITEM TO BUILD, ONE DEFERRED DECISION, A NEW DECISION
-> ISSUE, TWO FILED CROSS-TRANSACTION RACES, AND NAMED OPERATIONAL GAPS — NO TEST DEBT.**
+> ISSUE, TWO FILED CROSS-TRANSACTION RACES, AND NAMED OPERATIONAL GAPS.**
+>
+> - **#605–#609 — NEW, from PR #601's own review round (all filed, none built):** **#605** an
+>   in-place edit of a `db/` function is unprotected by the #188 downgrade guard, so an older binary
+>   at the SAME generation can replace the new floor and nothing reports it · **#606** the two
+>   medication conflict-flag tables have no product reader · **#607** `requeue` lands a DEFERRED
+>   event's key and says nothing about the chart gate 4 still owes · **#608** both substitution
+>   guards fail open on a NULL comparison (`<>`, unreachable today) · **#609** the two late-custody
+>   helpers fall outside `floor_execute_grants.rs` · **#610** a custody-reading applier that slips
+>   past the CI-time catalogue guard fails silently at runtime (trap 10's residual, now tracked).
 >
 > - **#594 — DECIDED 2026-09-15, NOT BUILT, and the natural next DR item:** `restore` exits **3**
 >   whenever any medium record was not restored — chain break, unknown plane AND torn tail — after
@@ -217,11 +226,15 @@
 >    projection trigger is `AFTER INSERT` and a re-apply inserts nothing; `requeue` reported it by one
 >    run only and `restore` not at all. **The door now projects a late key, and `reproject_owed` is
 >    gone. Do not remove the `cairn_project_late_custody` calls or move them:** in both doors they sit
->    AFTER the substitution guard (a rival body must never reach an applier). **Only `db/020`'s placement
->    is test-pinned** — by `late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier`, a
->    raising probe that kills mutation M6 through `apply_remote_event`; `submit_event`'s identical
->    placement (db/005) holds by construction and moving it above its guard would survive every test
->    (a strict-door twin of that test is the cheap pin). And in `db/020` the call sits BEFORE the
+>    AFTER the substitution guard (a rival body must never reach an applier). **BOTH doors' placements
+>    are test-pinned** — `late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier`
+>    (db/020, mutation M6) and `::the_strict_door_refuses_a_rival_body_before_any_applier_runs`
+>    (db/005; the strict twin was PR #601's own review finding, and killed the same mutation there).
+>    Each carries its OWN positive control, so a raising probe that quietly stopped being registered
+>    cannot leave them passing vacuously. The strict door's POSTURE is pinned too, by
+>    `::a_contradiction_revealed_by_a_late_key_is_refused_at_the_strict_door`: wrapping db/005's call
+>    in `cairn.remote_apply = 'on'` "to match db/020" turns a strict refusal into a flag, and now
+>    fails. And in `db/020` the call sits BEFORE the
 >    `cairn.remote_apply` clear (after it, three projection guards RAISE and the key could never land).
 >    Its pins now assert the heal: `restore_one_event_id_one_body.rs::a_keyless_copy_first_still_reaches_the_chart`,
 >    and `requeue_retains_unlanded_custody.rs` arm 1, which asserts the chart right after release and
@@ -235,7 +248,8 @@
 >     registered applier that reads custody** (`cairn_clear_payload` or `event_clear` in its own body)
 >     **is `heal_safe = TRUE`**. **The tempting wrong fixes:** registering a custody-reading applier
 >     `heal_safe = false` to stop a late landing re-running it (the door then skips it and the chart
->     silently owes a rebuild — the debt `reproject_owed` used to report, and nothing reports it now);
+>     silently owes a rebuild — the debt `reproject_owed` used to report, and nothing reports it now:
+>     **#610**, which also lists how a custody read can slip past this CI-time text match);
 >     flipping one to `TRUE` that is not idempotent just to turn the guard green; exempting a writer.
 >     Make the applier idempotent; give a new writer the call — a third writer is a DECISION.
 >     Residuals: a custody read hidden in a helper the applier calls is invisible to the guard, and a

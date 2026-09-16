@@ -246,9 +246,9 @@ BEGIN
             --
             -- heal_safe mirrors heal mode (db/039): a fn that only converges under a
             -- TRUNCATE cannot prove anything by running over live rows.
-            -- The loop that used to live here is cairn_projection_dispatch_heal_safe (db/005),
-            -- shared with the late-custody path (#584) so the two cannot drift on which appliers
-            -- may run again over a live row.
+            -- The dispatch is cairn_projection_dispatch_heal_safe (db/005), shared with the
+            -- late-custody path (#584) so the two cannot drift on which appliers may run again
+            -- over a live row.
             PERFORM cairn_projection_dispatch_heal_safe(r.el_row);
         EXCEPTION WHEN OTHERS THEN
             v_err := SQLERRM;

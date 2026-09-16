@@ -7966,16 +7966,17 @@ mod tests {
                      {operator_line}"
                 );
                 assert!(
-                    !operator_line.contains("cairn_reproject"),
+                    !operator_line.contains("reproject"),
                     "{lookup:?}: since ADR-0070 the full sweep brings the record to the chart \
                      by itself; a second step would send the operator to run something that \
-                     changes nothing: {operator_line}"
+                     changes nothing. Matched on `reproject` rather than `cairn_reproject`, so \
+                     the CLI spelling (`cairn-node reproject`) cannot creep back in either: \
+                     {operator_line}"
                 );
             } else {
                 terminal += 1;
                 assert!(
-                    !operator_line.contains("pull --full")
-                        && !operator_line.contains("cairn_reproject"),
+                    !operator_line.contains("pull --full") && !operator_line.contains("reproject"),
                     "{lookup:?}: the puller cannot fix this, so a pull/reproject \
                      instruction here would run and change nothing: {operator_line}"
                 );
