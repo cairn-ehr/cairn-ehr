@@ -197,6 +197,7 @@ nav:
       - ADR-0068 · Provenance warns, never gates, on the restore path: spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md
       - ADR-0069 · The restore takes its recovery code from a file: spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md
       - ADR-0070 · A late key reaches the chart: spec/decisions/0070-a-late-key-reaches-the-chart.md
+      - ADR-0071 · A restore that left records behind exits INCOMPLETE: spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
