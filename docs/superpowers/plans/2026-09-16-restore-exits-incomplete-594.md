@@ -274,4 +274,57 @@ not), and falls to zero for the scripted case. **`M > N` still stands for the re
 
 ## Review ledger
 
-(To be filled as tasks land.)
+### Task 5 — mutation proofs (run 2026-09-16)
+
+Every mutation applied to a clean tree, built, run, reverted, tree verified clean before the next.
+Nine mutations, **eight killed, one survivor with its reason recorded in advance**.
+
+| # | Mutation | Killed by | Note |
+|---|---|---|---|
+| M1 | `EXIT_INCOMPLETE = 1` | `restore_exit_vocabulary` (1 test) + `restore_torn_medium_cli` | — |
+| M2 | `is_complete` ignores `torn_tail` | `restore_torn_medium_cli` | leaves `…untrusted` green — specific |
+| M3 | `is_complete` ignores `past_chain_break` | `…untrusted::a_restore_applies_the_verified_prefix_and_not_one_record_past_a_chain_break` | leaves torn green |
+| M4 | `is_complete` ignores `unknown_plane` | `…untrusted::a_plane_this_build_cannot_route_is_noted_with_its_count_and_never_applied` | leaves torn green |
+| M5 | `is_complete` ignores `penned` | `restore_cli_surface` (pen) | leaves torn green |
+| M6 | `is_complete` ignores `no_registry` | `restore_cli_surface` (2 tests) | leaves torn green |
+| M7 | the verdict block moved ABOVE `local_state_failure` | `restore_cli_surface::without_the_flag_a_piped_restore_still_inherits_no_custody` | the precedence pin, and the ONLY test that sees it |
+| M8 | `past_chain_break: counts.clinical` instead of `gated_out` | `restore_cli_surface::a_scripted_restore_brings_the_clinical_record_back` | a CLEAN medium would exit 3 |
+| M9 | `stdout().flush()` (and its import) deleted | **SURVIVOR — expected, reason recorded before the run** | Rust's `Stdout` is a `LineWriter`, so every `println!` has already flushed at its newline. The call stays as the idiom's margin against a future `write!` without one. |
+
+**M3 and M4 both live in the same file and each killed exactly the test that names its claim** —
+checked by name, not by the failure count (the #593 lesson: read the panic line).
+
+### Harness defects found while running the mutations
+
+Two, both of the shape *"the mutation ran; the revert did not, and nothing said so"* — which
+silently contaminates every mutation after it. Both were caught, and the second run redone.
+
+1. **A deletion mutation cannot be reverted by swapping `""` back**: the empty string is not a
+   unique anchor, so `revert` refused and left the file mutated. The first M2–M6 run was
+   contaminated (M3 tested M2+M3, and so on) and was discarded; the harness was rewritten to swap
+   whole blocks in both directions, and every run now refuses to start on a dirty tree and fails
+   loudly if its own revert did not land.
+2. **M7's block anchor started below its leading comment**, so the revert moved the code back and
+   left the comment orphaned at the bottom of the arm. Re-anchored on the comment.
+
+The lesson worth carrying: **a mutation harness needs its own positive control.** `git diff
+--quiet` before apply and after revert is the whole of it, and without it the run reports
+confident kills for mutations that were never cleanly applied.
+
+### Findings while writing the tests (both corrections to this plan)
+
+1. **A wrong recovery code is NOT the FAILED path** — `apply_local_state_export` returns
+   `Ok(None)` for it. The plan assumed `local_state_failure`, and two "precedence pins" were
+   aimed at the wrong tests. The genuine FAILED path is a prompt that cannot be *asked* (no flag,
+   no tty): `rpassword` errors. That run also has INCOMPLETE causes, so it is the one place the
+   precedence is observable end to end — M7's only killer.
+2. **The `past_chain_break` guard the plan specified was dead logic.**
+   `untrusted_clinical_notice` returns `Some` exactly when `gated_out > 0`, so
+   `if untrusted_notice.is_some() { gated_out } else { 0 }` is just `gated_out` — and worse than
+   redundant, since it implies the notice carries a condition the status must honour. Simplified,
+   and ADR-0071's residual now states the honest version: the status inherits whatever `gated_out`
+   gets wrong and is not a second opinion on it.
+3. **`EXIT_INCOMPLETE` could not become a compile-time alias.** `cairn-sync` is a binary-only
+   crate whose `cairn-node` dependency is a **dev**-dependency. Held equal by a unit test inside
+   `requeue.rs` instead — the earliest point both numbers are visible. The two halves are not
+   redundant: that test pins that they AGREE, `restore_exit_vocabulary` pins the VALUE.
