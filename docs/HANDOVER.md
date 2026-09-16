@@ -431,6 +431,9 @@ The durable rule is trap 11. What generalises past the slice:
   `cairn-sync/tests/common/dead_node.rs` as a deliberate independent oracle — a suite that read the
   number back out of the code under test could not catch the code changing it. It is named in the
   canonical constant's doc, with *"do not fix it into an import"*, rather than bound to it.
+- **⇒ A NEW ADR NEEDS ITS `mkdocs.yml` NAV LINE IN THE SAME COMMIT.** The docs build runs `--strict`,
+  so a file absent from the nav is a WARNING that ABORTS it. No local Rust gate sees this — only CI's
+  *Check docs build*, or `uv run --with-requirements docs/requirements.txt -- mkdocs build --strict`.
 - **⇒ `--help` IS PART OF THE CONTRACT, AND CLAP ASSEMBLES IT AT RUNTIME.** An ADR written for a
   cron-wrapper author is useless if the command says nothing; assert against the SPAWNED help, since a
   source-text assertion passes while the help a human reads stays silent. `verbatim_doc_comment` keeps
