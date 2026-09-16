@@ -21,11 +21,18 @@
 //! ## What this module decides
 //!
 //! One question, over five scalars: *is any record the medium carried still not usable in this
-//! node's log?* **"Usable", not merely "present"** — the one cause where the distinction bites is
-//! [`Unrestored::penned`](crate::restore::completeness::Unrestored::penned), whose doc names it:
-//! a record the door admitted but whose custody did not land is a row in `event_log` wrapping a
-//! sealed body nobody can open, and a restore that reported that as recovered would be making
-//! #500's claim one layer down. If so the run is
+//! node's log?* **"Usable", not merely "present"** — the one *cause below* where the distinction
+//! bites is [`Unrestored::penned`](crate::restore::completeness::Unrestored::penned), whose doc
+//! names it: a record the door admitted but whose custody did not land is a row in `event_log`
+//! wrapping a sealed body nobody can open, and a restore that reported that as recovered would be
+//! making #500's claim one layer down.
+//!
+//! ⚠️ **"Usable" is bounded BY the five causes; it is not an open-ended promise.** A record this
+//! build cannot CLASSIFY is equally unusable — admitted uninterpreted, counted `applied`, yielding
+//! no projection and no chart until the node is upgraded — and it exits **0**, because no cause
+//! below covers it. That gap is real and is filed as
+//! [#614](https://github.com/cairn-ehr/cairn-ehr/issues/614); read this question as *"does any of
+//! the five hold?"*, never as *"is this recovery whole?"*. If so the run is
 //! **INCOMPLETE** ([`EXIT_INCOMPLETE`](crate::restore::completeness::EXIT_INCOMPLETE),
 //! the status `cairn-sync requeue` has
 //! used since #578) and [`Unrestored::notice`](crate::restore::completeness::Unrestored::notice) says

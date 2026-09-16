@@ -43,9 +43,18 @@ restore "has only exit 1 to say it with".
 
 ## Decision
 
-**1. `cairn-node restore` exits 3 (INCOMPLETE) whenever any record the medium carried is not in this
-node's log when the command finishes**, printed after the whole summary. There are five such causes
-and they share one status:
+**1. `cairn-node restore` exits 3 (INCOMPLETE) whenever any record the medium carried is not usable
+in this node's log when the command finishes**, printed after the whole summary. There are five such
+causes and they share one status:
+
+*"Usable", not merely "present", and the five causes are the definition of it.* One cause — a penned
+`CustodyDidNotLand` — is a record the door ADMITTED whose custody did not land: a row in `event_log`
+wrapping a sealed body nobody can open, which has not "come back" in any sense a clinic would
+recognise. Equally, the phrase is **bounded by the five and promises nothing beyond them**: a record
+this build cannot CLASSIFY is just as unusable and still exits 0 (residual
+[#614](https://github.com/cairn-ehr/cairn-ehr/issues/614)). Read the rule as *"does any of the five
+hold?"*, never as *"is this recovery whole?"* — the second is a claim no exit status in this command
+makes.
 
 | Outcome | Records left unrestored | Recoverable by | Before | After |
 |---|---|---|---|---|
