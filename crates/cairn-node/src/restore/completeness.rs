@@ -21,8 +21,10 @@
 //! ## What this module decides
 //!
 //! One question, over five scalars: *is any record the medium carried still not in this node's
-//! log?* If so the run is **INCOMPLETE** ([`EXIT_INCOMPLETE`], the status `cairn-sync requeue` has
-//! used since #578) and [`Unrestored::notice`] says which of the five causes hold, with each one's
+//! log?* If so the run is **INCOMPLETE** ([`EXIT_INCOMPLETE`](crate::restore::completeness::EXIT_INCOMPLETE),
+//! the status `cairn-sync requeue` has
+//! used since #578) and [`Unrestored::notice`](crate::restore::completeness::Unrestored::notice) says
+//! which of the five causes hold, with each one's
 //! remedy. If not, the run says nothing and exits 0.
 //!
 //! It is deliberately **pure** — no database, no I/O, no `main.rs` locals — so the rule can be read
