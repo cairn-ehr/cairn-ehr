@@ -30,7 +30,8 @@
 > not healed by upgrading** — `cairn-node reproject` still heals it (pre-clinical: none exists).
 >
 > **⇒ WHAT IS NEXT ON THE DR PATH: NO DECIDED-AND-UNBUILT ITEM REMAINS. THREE OPEN DECISIONS, TWO
-> FILED RACES, AND A REVIEW WAVE OF SMALL ITEMS — pick from these, or leave DR and take one of the
+> STATES THAT STILL REACH EXIT 0 HAVING LOST A RECORD (#614/#615), TWO FILED RACES, AND A REVIEW
+> WAVE OF SMALL ITEMS — pick from these, or leave DR and take one of the
 > *Other build candidates* below.**
 >
 > - **THREE OPEN DECISIONS, none of them a patch:** **#575** (the minted recovery code still reaches
@@ -43,21 +44,12 @@
 >   an empty clinical plane beside a degraded export exits **0** having installed no custody key, and
 >   that node refuses its first sealed write. Correct by ADR-0071's rule; still not what a drill
 >   wrapper reading 0 believes. Pre-existing; the ADR publishes the contract that makes it matter).
-> - **#614 and #615 — the two that CONTINUE #594 rather than tidy up after it** (both NEW, both
->   pre-existing, both filed by PR #612's round 3; `db/` untouched by that PR). **#614**: a clinical
->   event whose *event type* this build cannot classify is admitted **deferred**, counted `applied`,
->   and exits **0** in silence — the same cause and the same remedy as the unroutable-*plane* case
->   ADR-0071 gives a 3, decided the other way, and by ADR-0012's lights it is the type case that will
->   actually happen on a DR box one release behind. Exit 0 is correct by the rule; the silence is not.
->   **#615**: the node plane has **no completeness accounting at all** — `apply_medium` returns the
->   count it was *offered* — and `restore_node_event` lacks the substitution guard `submit_event`
->   (db/005) and `apply_remote_event` (db/020) both carry, so a node event can be dropped silently on
->   a medium db/009's own comments call attacker-appendable.
-> - **#616 and #617 — two smaller restore-path items** from the same round: a `finalize_identity`
->   failure destroys the WHOLE summary on a database that can never be restored into again (the exact
->   loss ADR-0071's verdict block exists to prevent, one arm over), and the duplicated
->   `registry_present` probe whose error reaches the operator naked while its twin wraps the identical
->   query in a legible diagnosis.
+> - **#614 and #615 CONTINUE #594 rather than tidy up after it** — they are the two states that
+>   still reach exit **0** having left a record behind: an event TYPE this build cannot classify
+>   (admitted *deferred*, counted `applied`, silent — the unroutable-*plane* cause decided the other
+>   way, and per ADR-0012 the one that will actually happen), and the node plane, which has no
+>   completeness accounting at all. **#616/#617** are smaller restore-path items from the same
+>   round. All four pre-existing, `db/` untouched by PR #612; detail in trap 11 and ROADMAP.
 > - **#603 and #604 — two cross-transaction races** (reasoned, not reproduced; ADR-0070 names both as
 >   residuals, its decision 3 holding on every sequential path): **#603** a late key racing
 >   connect-time re-adjudication can leave the promoted record off the chart, and `requeue` then exits
