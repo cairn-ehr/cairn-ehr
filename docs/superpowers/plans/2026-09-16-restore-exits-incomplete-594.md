@@ -457,3 +457,30 @@ Fixed in round 3:
 - **[#617](https://github.com/cairn-ehr/cairn-ehr/issues/617)** — the duplicated `registry_present`
   probe in `main.rs` whose error reaches the operator naked, while its twin in `clinical.rs` wraps
   the identical query in a legible diagnosis.
+
+### Round 3's own fix pass (same session) — the rule was applied to itself, and it caught one
+
+Round 3's closing lesson was *"review the review's fixes, and then review those."* Applied
+immediately to round 3's own diff — grep the absolute claims it introduced (`always`, `never`,
+`every`, `only`, `cannot`, `exactly`) and re-ask the original question of each — it found **one
+defect, of exactly the predicted shape**.
+
+Round 3 rewrote `--help`'s exit-0 line as *"…is in this node's log **and usable**"*. "Usable" was
+introduced to cover `CustodyDidNotLand` — a record the door admitted whose custody did not land, in
+the log, unopenable, rightly INCOMPLETE. But a **deferred** record is equally unusable: in the log,
+counted `applied`, no projection, no chart until the node is upgraded — and it exits **0**. That is
+**#614, filed in the same round**. Round 3 therefore published an over-claim it had itself
+documented as false three files away, in the same hour.
+
+Fixed by **bounding the word rather than dropping it**, in all three places the rule is stated
+(`--help`, the module doc, ADR-0071 decision 1): "usable" is defined BY the five causes and promises
+nothing beyond them; the exit-0 line now names both known limits (#613 provisioning, #614
+classification) instead of implying neither. Behaviour unchanged — all twelve
+`restore_exit_vocabulary` tests pass untouched.
+
+**⇒ THE CHEAP MECHANICAL FORM OF THE RULE, WHICH WORKED:** after fixing a batch of findings,
+`git diff` the fix alone, extract every **absolute** it introduced, and check each against the code —
+*including against the issues the same batch just filed*. Four rounds on one PR, and **three of them
+found a defect created by the previous round's fix**. The pattern is not bad luck; it is what
+happens when prose is rewritten under the pressure of a finding, and the counterexample is often
+something the same session already knows.

@@ -428,7 +428,13 @@ The durable rule is trap 11. What generalises past the slice:
   satisfied by two of the five states that produce 3. `git log -S` placed it in the round-2 commit
   whose stated purpose was *"exit 0 over-promised"*. **A fix written under the pressure of a finding
   is itself unreviewed code.** The cheap mechanical form: `git diff` the fix alone and re-ask the
-  original question of it. #582's lesson is not "do a second round"; it is this.
+  original question of it. #582's lesson is not "do a second round"; it is this — and **applying it
+  to round 3's own diff immediately caught a fourth instance**: round 3's new exit-0 wording ("in
+  this node's log **and usable**") was falsified by **#614, which round 3 had filed an hour
+  earlier** — a deferred record is in the log, counted, and equally unusable, and it exits 0. Three
+  of four rounds found a defect created by the previous round's fix. **The counterexample is often
+  something the same session already knows**, so check new absolutes against the issues you just
+  filed, not only against the code.
 - **⇒ AN ADR IS IMMUTABLE ONCE MERGED, SO ITS FACTS GET A ROUND OF THEIR OWN.** ADR-0071 said two
   bails carried the same apologetic sentence; only one did (the no-registry bail offered a *remedy*
   under a failure status — the same concession, made less directly). Caught in round 3, before merge.
