@@ -363,7 +363,7 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
 /// registry door — printing the custody remedy here would be a false promise to someone
 /// mid-disaster.
 #[tokio::test]
-async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_remedy() {
+async fn a_restore_that_offered_no_record_exits_incomplete_and_names_the_real_remedy() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -440,7 +440,7 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
 /// PENNED **with its key beside it** — recoverable later by `cairn-sync requeue`, which is the
 /// remedy the message must name here and must NOT have named in the test above.
 #[tokio::test]
-async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
+async fn a_penned_clinical_restore_exits_incomplete_and_prints_the_aead_caveat() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

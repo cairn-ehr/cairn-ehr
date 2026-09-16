@@ -85,11 +85,10 @@
 
 > [!IMPORTANT]
 > **⇒ #527/#562's TRIAGE NOTE IS FALSE** — *"no cron-run command reaches `print_recovery_code`"* was
-> **already untrue before ADR-0069 (2026-09-11)**: a medium with **no local-state export sibling** never
-> reaches the recovery-code prompt, so a sealed `restore` of one has always run unattended and printed
-> a fresh code to stderr (every other read in the restore arm is print-only — ADR-0068's ruling). The
-> real fix — a `--new-recovery-code-file` sink, or refusing to mint a sealed key when nothing can show
-> its code to a human — is **[#575](https://github.com/cairn-ehr/cairn-ehr/issues/575)**.
+> already untrue **before** ADR-0069: a medium with no local-state export sibling never reaches the
+> recovery-code prompt, so a sealed `restore` of one has always run unattended and printed a fresh
+> code to stderr. The real fix is **[#575](https://github.com/cairn-ehr/cairn-ehr/issues/575)** — a
+> `--new-recovery-code-file` sink, or refusing to mint a sealed key nothing can show to a human.
 
 > **⇒ #567 IS BUILT AND MERGED (2026-09-13/14, PR [#588](https://github.com/cairn-ehr/cairn-ehr/pull/588)).
 > `verify-backup` NOW ASKS THE CLINICAL-PLANE QUESTION.**
