@@ -3669,14 +3669,14 @@ async fn main() -> anyhow::Result<()> {
             // field is read from the variable that already drove this run's own notices, so
             // the status can never disagree with the text above it.
             let unrestored = cairn_node::restore::completeness::Unrestored {
-                // The gated-out count, NOT the medium's clinical total: `gated_out` is what the
-                // reader stopped short of at `verified_through`. Guarded by the same
-                // `untrusted_notice` that printed the warning, so status and text share one cause.
-                past_chain_break: if untrusted_notice.is_some() {
-                    clinical_plane.gated_out
-                } else {
-                    0
-                },
+                // The gated-out count, NOT the medium's clinical total and NOT a subtraction:
+                // `gated_out` is what the reader stopped short of at `verified_through`, and
+                // `untrusted_clinical_notice`'s own doc explains why `on_medium - trusted` is
+                // wrong here (it folds in the re-capture duplicates `plane_records` collapses,
+                // which are expected data, not a fault). Reading the SAME field that notice reads
+                // is what makes the status and the warning one cause: the notice is `Some`
+                // exactly when this is non-zero, so they cannot disagree.
+                past_chain_break: clinical_plane.gated_out,
                 unknown_plane: counts.unknown,
                 torn_tail: torn_notice.is_some(),
                 penned: clinical.penned(),
