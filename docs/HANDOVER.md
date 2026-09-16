@@ -32,7 +32,11 @@
 >   can set `cairn.remote_apply` before calling `submit_event`, turning the strict door's refusals
 >   into the lenient door's flags — pre-existing, a principle-12 weakness; ADR-0070 neither widens nor
 >   narrows it) · **#611** (NEW — should a scripted restore missing `--old-recovery-code-file` stay
->   exit 1, or become a usage error at 2? The message is wrong either way: see below).
+>   exit 1, or become a usage error at 2? The message is wrong either way: see below) · **#613**
+>   (NEW — should INCOMPLETE widen from *records left behind* to *recovery left short*? A medium with
+>   an empty clinical plane beside a degraded export exits **0** having installed no custody key, and
+>   that node refuses its first sealed write. Correct by ADR-0071's rule; still not what a drill
+>   wrapper reading 0 believes. Pre-existing; the ADR publishes the contract that makes it matter).
 > - **#603 and #604 — two cross-transaction races** (reasoned, not reproduced; ADR-0070 names both as
 >   residuals, its decision 3 holding on every sequential path): **#603** a late key racing
 >   connect-time re-adjudication can leave the promoted record off the chart, and `requeue` then exits

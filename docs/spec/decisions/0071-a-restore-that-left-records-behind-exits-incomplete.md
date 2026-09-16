@@ -139,6 +139,13 @@ loses information the notice already carries in full.
   naming neither the missing `--old-recovery-code-file` nor the fact that a non-interactive run needs
   it. This ADR makes the *status* of that run right and leaves its *text* wrong:
   **[#611](https://github.com/cairn-ehr/cairn-ehr/issues/611)**.
+- **Exit 0 is a claim about RECORDS, not about provisioning, and the two can come apart.** A medium
+  whose clinical plane is empty, beside an export that degraded honestly (a wrong code, a corrupt
+  container), exits **0** having installed no custody key — and that node then refuses its first
+  sealed write. Every step is correct by this ADR's own rule, and the run is still not what a drill
+  wrapper reading 0 believes it is. Whether INCOMPLETE should widen from *records left behind* to
+  *recovery left short* is a decision, not a patch: **[#613](https://github.com/cairn-ehr/cairn-ehr/issues/613)**.
+  `restore --help` states the limit rather than over-promising.
 - The verdict is computed from the same variables that drove the notices, so it cannot disagree with
   them — but it **inherits whatever those variables get wrong**. `past_chain_break` reads the same
   `gated_out` that `untrusted_clinical_notice` reads, so a medium whose gated-out count were wrong

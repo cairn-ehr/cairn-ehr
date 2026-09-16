@@ -260,6 +260,14 @@ fn restore_help_names_the_exit_statuses() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // `--help` is itself part of the contract: `restore --help || exit 1` is a normal thing for a
+    // wrapper's pre-flight to do, and help that prints but exits non-zero would break it while
+    // every substring assertion below still passed (PR #612 second review round).
+    assert!(
+        out.status.success(),
+        "`restore --help` must exit 0; got {:?}. Help:\n{help}",
+        out.status.code()
+    );
     assert!(
         help.contains("restore") && help.len() > 200,
         "positive control: this must be the real long help for `restore`, not an error or an \

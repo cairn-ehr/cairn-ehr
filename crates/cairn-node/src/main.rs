@@ -1461,16 +1461,21 @@ enum Cmd {
     /// the dead node to the new one. The node then re-peers from empty.
     ///
     /// EXIT STATUS (ADR-0071) — printed after the full summary, never instead of it:
-    ///   exit 0 = every record this build could apply is in the log.
+    ///   exit 0 = every record the medium carried that this build could apply is in the
+    ///            log. It is a statement about RECORDS, not about provisioning: a restore
+    ///            whose local-state export degraded can still exit 0 on a medium that
+    ///            carried no clinical records, having installed no custody key (#613).
     ///   exit 3 = INCOMPLETE: the ceremony finished and records did NOT come back. Five
     ///            causes, each named on stderr with its own remedy — a torn tail; records
     ///            past a mid-file chain break; records in a plane this build cannot route;
     ///            records held in the quarantine pen (`cairn-sync requeue` finishes those);
     ///            or no actor registry, so the clinical plane was never offered. The node
     ///            IS restored; this is not a failure.
-    ///   exit 1 = FAILED: the ceremony was BLOCKED (the local-state export could not be
-    ///            applied, no recovery code could be read, a database fault). Checked
-    ///            first, so it outranks 3.
+    ///   exit 1 = FAILED: the ceremony was BLOCKED — the recovery code could not be READ
+    ///            at all (no --old-recovery-code-file and no terminal), the export could
+    ///            not be DECODED, recovered key material could not be INSTALLED, or a
+    ///            database fault. Checked first, so it outranks 3. A WRONG recovery code
+    ///            and a CORRUPT export are not this: they degrade honestly and exit 3.
     /// `cairn-sync requeue` uses the same 3, and is the command that finishes a restore.
     // `verbatim_doc_comment` because clap otherwise reflows the EXIT STATUS block above into one
     // dense paragraph, and a status table a cron-wrapper author has to parse out of running prose
@@ -3673,12 +3678,14 @@ async fn main() -> anyhow::Result<()> {
             //
             // TWO verdicts, and the ORDER between them is the contract (#594, ADR-0071):
             //
-            //   1. FAILED (exit 1) — the ceremony was BLOCKED. A refused local-state bundle
-            //      means recovered key material was not installed (a wrong recovery code, a
-            //      missing export). Scripts must see that as a failure, and it OUTRANKS
-            //      INCOMPLETE: such a run also pens every sealed record, so checking the
-            //      verdict first would report a blocked ceremony as a completed-but-partial
-            //      one and send the operator to `requeue` instead of to their recovery code.
+            //   1. FAILED (exit 1) — the ceremony was BLOCKED: the recovery code could not be
+            //      READ at all (no flag, no tty), the bundle could not be DECODED, or recovered
+            //      key material could not be INSTALLED. ⚠️ NOT a wrong code and NOT a corrupt
+            //      export — `apply_local_state_export` returns `Ok(None)` for those and they
+            //      land on 3. Scripts must see this as a failure, and it OUTRANKS INCOMPLETE:
+            //      such a run also pens every sealed record, so checking the verdict first
+            //      would report a blocked ceremony as a completed-but-partial one and send the
+            //      operator to `requeue` instead of to their recovery code.
             //   2. INCOMPLETE (exit 3) — the restore did everything it safely could and
             //      records the medium carried are still not in this node's log.
             if let Some(e) = local_state_failure {

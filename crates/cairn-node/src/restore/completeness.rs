@@ -34,10 +34,17 @@
 //!
 //! ## What INCOMPLETE is NOT
 //!
-//! **It is not FAILED.** Exit **1** stays reserved for a run that was *blocked*: a refused
-//! local-state bundle (the dead node's key material was not installed — a wrong recovery code, a
-//! missing export), a database fault, an interrupted ceremony. `main.rs` checks that FIRST, so
-//! FAILED outranks INCOMPLETE. The distinction is between *"the restore did everything it safely
+//! **It is not FAILED.** Exit **1** stays reserved for a run that was *blocked*: a recovery code
+//! that could not be **read at all** (no `--old-recovery-code-file` and no tty), a bundle this
+//! build cannot **decode**, recovered key material that could not be **installed**, a database
+//! fault, an interrupted ceremony. `main.rs` checks that FIRST, so FAILED outranks INCOMPLETE.
+//!
+//! ⚠️ **A wrong recovery code and a corrupt export are NOT exit 1.** `apply_local_state_export`
+//! returns `Ok(None)` for both — *an honest degradation already reported to the operator* — and the
+//! run lands on **3**, because without the export there is usually no actor registry either and the
+//! clinical plane is never offered. The line is not *"did the export work?"* but *"could this
+//! command do what it set out to do?"*: an unreadable prompt means the ceremony never ran; a wrong
+//! code means it ran and fell short. The distinction is between *"the restore did everything it safely
 //! could and work remains"* and *"the restore could not do what it set out to do"*, and it is the
 //! same line `requeue` draws (see `cairn_sync::requeue::EXIT_INCOMPLETE`'s doc).
 //!
@@ -56,6 +63,12 @@
 /// fails naming the other constant. **Change one and you must change both** — the two commands are
 /// used together (`restore` fills the pen, `requeue` empties it) and a script driving one recovery
 /// reads this number from each.
+///
+/// A **third** copy exists and is deliberately NOT bound to these:
+/// `cairn-sync/tests/common/dead_node.rs`'s own `EXIT_INCOMPLETE`. That one is an independent
+/// oracle — a suite that read the number back out of the code under test could not catch the code
+/// changing it — so it is meant to be edited by hand, and to go red when it is not. Do not "fix" it
+/// into an import.
 ///
 /// Distinct from `1`, which is a run that FAILED, and from `2`, which is a bad flag.
 pub const EXIT_INCOMPLETE: i32 = 3;
