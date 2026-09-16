@@ -311,6 +311,45 @@ The lesson worth carrying: **a mutation harness needs its own positive control.*
 --quiet` before apply and after revert is the whole of it, and without it the run reports
 confident kills for mutations that were never cleanly applied.
 
+### PR #612 review round 1 (2026-09-16) — three findings, all contract text, all fixed
+
+The logic was traced clean (every `Unrestored` field back to the variable `main.rs` fills it from; no
+path leaves a record behind without a cause firing; no clean medium reporting incomplete). All three
+findings were **documentation that contradicted the code this PR had just written**:
+
+1. `apply_local_state_export`'s doc still said `Ok(None)` means *"the process still succeeds"* — three
+   screens from a test this PR added pinning `Some(3)`.
+2. `EXIT_INCOMPLETE`'s doc claimed *"the workspace's only literal 3"* and *"a compile-time alias"*.
+   Both became false **inside this PR** when the alias turned out to be impossible, and `requeue.rs`
+   contradicted them nine files away.
+3. `cairn-node restore --help` documented no exit statuses, though `cairn-sync requeue`'s usage text
+   has printed its own since #578. **ADR-0071 is written for a cron-wrapper author, and `--help` is
+   where that person looks.** Driven by a test that spawns the binary — clap assembles help at
+   runtime, so asserting against the source text would pass while the help a human reads stayed
+   silent — plus `verbatim_doc_comment`, without which clap reflows a status table into running prose.
+
+### PR #612 review round 2 (2026-09-16), over the fix diff alone — five more, all fixed
+
+The #582 lesson held: **review the review's fixes.**
+
+1. **The exit-1 cause list was wrong in THREE places**, and round 1 had fixed only the mirror-image
+   half. The module doc, `main.rs`'s inline contract comment, and the `--help` block round 1 had *just
+   added* all named "a wrong recovery code, a missing export" as exit-1 causes. Both are `Ok(None)`
+   and land on 3. **Fixing one direction of a confusion does not fix the other** — grep the claim, not
+   the file.
+2. **The "second literal 3" note undercounted.** A third copy lives in
+   `cairn-sync/tests/common/dead_node.rs` — and it is **deliberate**: an independent oracle, because a
+   suite that read the number back out of the code under test could not catch the code changing it.
+   Named as such, with *"do not fix it into an import"*, rather than bound. **A duplicate with a
+   documented reason is not drift.**
+3. **`exit 0` over-promised.** It now states its own limit (a claim about RECORDS, not provisioning).
+4. **The gap behind that limit is real and became #613**: a medium with an empty clinical plane beside
+   a degraded export exits 0 having installed no custody key, and that node refuses its first sealed
+   write. Correct by this ADR's rule; still not what a drill wrapper reading 0 believes. **Pre-existing
+   — but publishing exit 0 as a contract is what makes it matter**, so it is this slice's to file.
+5. **The new help test asserted substrings but not the status.** `restore --help || exit 1` is a normal
+   wrapper pre-flight, and help that printed while exiting non-zero would have kept the test green.
+
 ### Findings while writing the tests (both corrections to this plan)
 
 1. **A wrong recovery code is NOT the FAILED path** — `apply_local_state_export` returns

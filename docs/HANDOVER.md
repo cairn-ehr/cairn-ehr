@@ -424,6 +424,18 @@ The durable rule is trap 11. What generalises past the slice:
 - **⇒ A DELETION MUTATION CAN BE KILLED BY THE COMPILER FOR THE WRONG REASON.** M9's first form left
   an unused import, and `-D warnings` killed it — a "kill" that says nothing about stdout at all.
   Remove the import with it.
+- **⇒ FIXING ONE DIRECTION OF A CONFUSION DOES NOT FIX THE OTHER.** Review round 1 corrected a doc
+  saying `Ok(None)` still succeeds. Round 2 found the *opposite* half of the same confusion in THREE
+  places — including the `--help` block round 1 had just added — all naming a wrong recovery code as
+  an exit-1 cause. **Grep the claim, not the file.**
+- **⇒ A DUPLICATE WITH A DOCUMENTED REASON IS NOT DRIFT.** A third `EXIT_INCOMPLETE` lives in
+  `cairn-sync/tests/common/dead_node.rs` as a deliberate independent oracle — a suite that read the
+  number back out of the code under test could not catch the code changing it. It is named in the
+  canonical constant's doc, with *"do not fix it into an import"*, rather than bound to it.
+- **⇒ `--help` IS PART OF THE CONTRACT, AND CLAP ASSEMBLES IT AT RUNTIME.** An ADR written for a
+  cron-wrapper author is useless if the command says nothing; assert against the SPAWNED help, since a
+  source-text assertion passes while the help a human reads stays silent. `verbatim_doc_comment` keeps
+  a status table a table. And assert the STATUS too — `cmd --help || exit 1` is a normal pre-flight.
 
 ### 2026-09-15/16 — #584: a late key reaches the chart (condensed)
 
