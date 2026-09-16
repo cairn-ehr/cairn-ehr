@@ -16,10 +16,12 @@
 //!
 //! **Why the value 3 is pinned here rather than compared against `cairn-sync`'s constant.**
 //! `cairn-sync` depends on `cairn-node`, never the reverse, so this crate's tests cannot `use
-//! cairn_sync`. The two are kept identical by construction instead: `cairn_sync::requeue::
-//! EXIT_INCOMPLETE` is a compile-time **alias** of the constant below, so there is exactly one
-//! literal `3` in the workspace. This file pins that literal, and a change to it is a change to
-//! both binaries at once — which is the point.
+//! cairn_sync`. The equality is asserted from the *other* side instead, by
+//! `cairn_sync::requeue::tests::exit_incomplete_matches_cairn_nodes_restore` — the earliest point
+//! in the build where both numbers are visible, since `cairn-node` is a **dev**-dependency of that
+//! binary-only crate. So the two constants are held together by a test, not by the type system,
+//! and **this file is the half that pins the VALUE**: without it, both could be changed to 7
+//! together and the equality test would still pass.
 
 use cairn_node::restore::completeness::{Unrestored, EXIT_INCOMPLETE};
 
@@ -30,8 +32,8 @@ use cairn_node::restore::completeness::{Unrestored, EXIT_INCOMPLETE};
 fn incomplete_is_exit_three_for_both_binaries() {
     assert_eq!(
         EXIT_INCOMPLETE, 3,
-        "cairn-sync requeue exits 3 for INCOMPLETE and aliases THIS constant; changing it changes \
-         the contract both binaries offer a cron wrapper"
+        "cairn-sync requeue exits 3 for INCOMPLETE and is held equal to THIS constant by its own \
+         test; changing it changes the contract both binaries offer a cron wrapper"
     );
 }
 
