@@ -291,14 +291,20 @@ async fn a_restore_that_pens_records_prints_its_next_steps_and_counts_each_reaso
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
-    assert!(
-        !out.status.success(),
-        "a restore holding records in the pen is INCOMPLETE, and a script must see that; \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+    // #594/ADR-0071: 3 (INCOMPLETE), and the count now rides the VERDICT rather than an
+    // `anyhow::bail!`. The old assertion matched `"Error: 3 clinical record(s) were refused"` —
+    // the `Error:` prefix being `main`'s `Termination`, which is exactly the claim the restore's
+    // own message then had to apologise for ("this exit code says the restore is INCOMPLETE, not
+    // that it failed"). The apology is gone because the status now says it.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore holding records in the pen is INCOMPLETE (3), not FAILED (1), and a script \
+         must see that; stdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("Error: 3 clinical record(s) were refused"),
-        "and the failure names how many; stderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE") && stderr.contains("3 clinical record(s) are HELD"),
+        "and the verdict names how many, without calling the run an Error; stderr:\n{stderr}"
     );
     assert_eq!(
         twin_of(&c, &a.event_id).await.as_deref(),

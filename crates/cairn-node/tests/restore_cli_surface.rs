@@ -194,10 +194,20 @@ async fn a_wrong_code_in_a_file_degrades_honestly_and_counts_one_attempt() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
-    assert!(
-        !out.status.success(),
-        "a restore that inherited no custody must exit non-zero, so a script can see it; \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+    // #594/ADR-0071: **3 (INCOMPLETE)**, and a wrong code is NOT the FAILED path — which is
+    // worth stating, because it looks like one. `apply_local_state_export` returns `Ok(None)`
+    // for a code that does not open the bundle: "an honest degradation the helper already
+    // reported". FAILED (1) is reserved for the export that OPENED and then could not be
+    // installed. The end state here is the same one the no-registry test below pins: the node
+    // IS restored as a federation peer, the charts are still on the medium, and the remedy is a
+    // second restore into a fresh database — with the right code this time. Reporting the same
+    // state with two different codes because the cause differed is the incoherence #594's
+    // widening removed.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore that inherited no custody must exit 3 (INCOMPLETE): the charts are still on \
+         the medium and a second restore recovers them; stdout:\n{stdout}\nstderr:\n{stderr}"
     );
     // The summary still printed. Losing it would cost the operator their next step at the one
     // moment they need it.
@@ -310,10 +320,23 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
-    assert!(
-        !out.status.success(),
-        "a restore that inherited no custody must exit non-zero; stdout:\n{stdout}\n\
-         stderr:\n{stderr}"
+    // **#594/ADR-0071 PRECEDENCE PIN — and it lands on the opposite side from its sibling above.**
+    // Exit **1 (FAILED)**, not 3. With no flag and no tty, `rpassword` cannot even ASK, so
+    // `unseal_local_state_with_retries` returns `Err` and `local_state_failure` is set — unlike
+    // a WRONG code, which is `Ok(None)` and degrades honestly. The two look identical from the
+    // outside (no custody either way) and are reported differently on purpose: a wrong code is a
+    // recovery that finished short, and an unaskable prompt is a ceremony that never ran.
+    //
+    // This run ALSO has INCOMPLETE causes — no registry, every clinical record left on the
+    // medium — so it is the one place the ORDER of the two verdicts is observable end to end.
+    // Mutation M7 (the verdict block moved above the `local_state_failure` check) turns this
+    // into a 3 and nothing else in the workspace notices.
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a restore whose export could not be OPENED at all must exit 1 (FAILED), not 3: FAILED \
+         outranks INCOMPLETE, and a ceremony that never ran is not a recovery that fell short; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
     );
     // The custody never arrived, so the body cannot open. This is the contrast that makes the
     // headline test meaningful: same inputs, same pipes, one flag apart.
@@ -363,11 +386,22 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
+    // #594/ADR-0071: **3 (INCOMPLETE)**, not 1. Until #594 this was 1, and its own message said
+    // "this exit code says the restore is INCOMPLETE, not that it failed" — an apology for a
+    // vocabulary the command did not have. Now it has one: the node IS restored as a federation
+    // peer, and a second restore with the export recovers the charts. A script must be able to
+    // tell that from the blocked ceremony two tests above, which is still 1.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore that offered NOT ONE record to the door must exit 3 (INCOMPLETE) — a \
+         monitoring script reading exit 0 files an incomplete restore as clean, and one reading \
+         exit 1 files a recoverable one as a failure; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(
-        !out.status.success(),
-        "a restore that offered NOT ONE record to the door must exit non-zero — a monitoring \
-         script reading exit 0 files an incomplete restore as clean; stdout:\n{stdout}\n\
-         stderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE"),
+        "the verdict must be on stderr in words too, naming the cause — the exit status alone \
+         serves the cron wrapper, not the human reading the log it wrote; stderr:\n{stderr}"
     );
     // Reachability, which the text-grepping guard cannot establish: gate this block behind
     // `if false` and that guard stays green while this test goes red.
@@ -440,10 +474,21 @@ async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
+    // #594/ADR-0071: **3 (INCOMPLETE)**, not 1. This is the MOST recoverable of the five causes
+    // — `cairn-sync requeue` empties the pen without redoing the restore — so reporting it with
+    // the same status as a database fault was the inversion #594's widening fixed.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore holding records in the pen is INCOMPLETE (3), not FAILED (1), and a script \
+         must see the difference: requeue finishes this one; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
     assert!(
-        !out.status.success(),
-        "a restore holding records in the pen is INCOMPLETE and a script must see that; \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE") && stderr.contains("cairn-sync requeue"),
+        "the verdict must name the pen's remedy on stderr — a cron log that kept stderr and \
+         dropped stdout is otherwise told the run is incomplete and not what to run; \
+         stderr:\n{stderr}"
     );
     // THE AEAD CAVEAT. Reachable only when a registry actually restores, which is why it is
     // asserted here rather than guessed at from the source.

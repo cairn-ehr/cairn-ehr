@@ -1,6 +1,13 @@
 //! #500 slice 2c review round 3 (testing gap): the round-2 ruling — `restore` must NOT
 //! refuse a torn CAIRNB3 medium, unlike `verify-backup` — has NO test that drives it
-//! through `main.rs` itself. Every existing test calls `cairn_node::restore`'s library
+//! through `main.rs` itself.
+//!
+//! **#594/ADR-0071 (2026-09-16) reversed ONE assertion in this file: the exit status, 0 → 3.**
+//! The round-2 ruling stands in full — refusing a torn medium would convert a partial loss into a
+//! total one, and nothing here refuses. But *not refusing* and *reporting success* are different
+//! claims, and this file had been making the second on the strength of the first. A torn tail
+//! means records are gone from this copy; the command now says so with a status a cron drill can
+//! read, after recovering everything it can. See the assertion's own comment below. Every existing test calls `cairn_node::restore`'s library
 //! functions directly, so re-adding `anyhow::bail!("refusing to restore a torn medium")`
 //! to the `Cmd::Restore` arm would pass the entire suite today. This file closes that gap
 //! the way `tests/cli_localstate.rs` already does for two other `main.rs`-only fixes:
@@ -141,10 +148,23 @@ async fn restore_recovers_the_prefix_of_a_torn_medium_and_warns() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // **#594/ADR-0071 REVERSED THIS ASSERTION, and only this one.** It read `status.success()`
+    // — #500 slice 2c round 2's ruling that a torn medium must not fail the command. What that
+    // ruling was actually about is REFUSING, and the restore still refuses nothing: every
+    // assertion below this one is unchanged, the prefix restores, and the warnings still print.
+    // What changed is the report. Exit 0 said "everything came back" to the only channel a cron
+    // drill reads, over a medium whose tail is gone for good.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "restore must recover the prefix from a torn medium and report INCOMPLETE (3) — never \
+         refuse it (that would cost the prefix too), and never report 0 (that tells a drill the \
+         recovery was clean); stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(
-        out.status.success(),
-        "restore must exit 0 on a torn medium (recover the prefix, never refuse); \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE") && stderr.contains("TORN"),
+        "the verdict must name the tear as its cause, in the same word the early WARNING uses; \
+         stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("TORN"),

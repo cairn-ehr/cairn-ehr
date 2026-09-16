@@ -3645,37 +3645,52 @@ async fn main() -> anyhow::Result<()> {
             println!(
                 "re-peer with `cairn-node pair-offer` / `pair-accept` (trust resets on restore)"
             );
-            // Only NOW may the process fail: the operator has been told what happened and
-            // what to do next. A non-zero exit still stands, because a refused local-state
-            // bundle means recovered key material was not installed — that is a failure, and
-            // scripts must see it as one.
+            // Only NOW may the process report anything but success: the operator has been
+            // told what happened and what to do next, and the `new node` / `supersedes` /
+            // `re-peer with …` lines above are their next step — they must never be lost to
+            // an early exit.
+            //
+            // TWO verdicts, and the ORDER between them is the contract (#594, ADR-0071):
+            //
+            //   1. FAILED (exit 1) — the ceremony was BLOCKED. A refused local-state bundle
+            //      means recovered key material was not installed (a wrong recovery code, a
+            //      missing export). Scripts must see that as a failure, and it OUTRANKS
+            //      INCOMPLETE: such a run also pens every sealed record, so checking the
+            //      verdict first would report a blocked ceremony as a completed-but-partial
+            //      one and send the operator to `requeue` instead of to their recovery code.
+            //   2. INCOMPLETE (exit 3) — the restore did everything it safely could and
+            //      records the medium carried are still not in this node's log.
             if let Some(e) = local_state_failure {
                 return Err(e);
             }
-            // …and the same discipline for a clinical refusal: the operator has been told
-            // what happened, what is held, and what to run next, so NOW the process may fail.
-            // A restore that penned events is not a success — a script must see that — but
-            // the `new node` / `supersedes` / `re-peer with …` lines above are their next
-            // step and must never be lost to an early exit.
-            // Declining to offer the clinical plane at all is the MOST incomplete outcome
-            // of the three, so it must fail at least as loudly as a pen. It is checked
-            // first and separately: it pens nothing, so a `penned() > 0` test alone would
-            // hand a monitoring script exit 0 for a restore that recovered no charts.
-            if clinical.skipped_no_registry {
-                anyhow::bail!(
-                    "the clinical plane was NOT restored: this node has no actor registry, so \
-                     no record could be admitted (details above). The node IS restored as a \
-                     federation peer; recover the local-state export and restore again into a \
-                     freshly created database to recover the charts."
-                );
-            }
-            if clinical.penned() > 0 {
-                anyhow::bail!(
-                    "{} clinical record(s) were refused and are held in the quarantine pen \
-                     with their custody. The node IS restored (details above); this exit code \
-                     says the restore is INCOMPLETE, not that it failed.",
-                    clinical.penned()
-                );
+            // The whole of the second verdict, delegated to one pure rule so that "what counts
+            // as incomplete" is readable in one screen and falsifiable without a database
+            // (`restore::completeness`, and `tests/restore_exit_vocabulary.rs` over it). Each
+            // field is read from the variable that already drove this run's own notices, so
+            // the status can never disagree with the text above it.
+            let unrestored = cairn_node::restore::completeness::Unrestored {
+                // The gated-out count, NOT the medium's clinical total: `gated_out` is what the
+                // reader stopped short of at `verified_through`. Guarded by the same
+                // `untrusted_notice` that printed the warning, so status and text share one cause.
+                past_chain_break: if untrusted_notice.is_some() {
+                    clinical_plane.gated_out
+                } else {
+                    0
+                },
+                unknown_plane: counts.unknown,
+                torn_tail: torn_notice.is_some(),
+                penned: clinical.penned(),
+                no_registry: clinical.skipped_no_registry,
+            };
+            if let Some(notice) = unrestored.notice() {
+                eprintln!("{notice}");
+                // `process::exit` skips destructors, so stdout is flushed by hand — the same
+                // idiom, for the same reason, as `cairn-sync`'s requeue arm. An `Err` will not
+                // do here: `main`'s `Termination` reports every one of them as exit 1, which is
+                // precisely the conflation this verdict exists to end.
+                use std::io::Write as _;
+                std::io::stdout().flush()?;
+                std::process::exit(cairn_node::restore::completeness::EXIT_INCOMPLETE);
             }
         }
         Cmd::Serve { listen } => {
