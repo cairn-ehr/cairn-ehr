@@ -137,7 +137,8 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
     );
     // …and the patient's MEDICATION LIST shows the restored event. `patient_chart` alone is
     // filled by the registration, so it would stay green over a medication projection that
-    // no-opped — trap 9's class (#584), where the body opens and the list is empty.
+    // no-opped — the class #584 closed at the door (ADR-0070), where the body opened and the
+    // list stayed empty.
     assert_eq!(
         medication_rows(&c, patient).await,
         1,
@@ -457,6 +458,17 @@ async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
         stdout.contains("quarantine pen with their custody"),
         "the operator must be told the records are held WITH their key; stdout:\n{stdout}"
     );
+    // ...and must NOT be sent looking for a line that can no longer be printed. Since ADR-0070
+    // (#584) the door projects a late key itself, so `requeue` never names a chart heal; this
+    // summary used to promise one ("a chart heal it names is not repeated by a later run"),
+    // which the #601 review found still standing after the sweep that retired `reproject_owed`.
+    for gone in ["chart heal", "reproject"] {
+        assert!(
+            !stdout.contains(gone),
+            "the pen summary promises {gone:?}, which requeue no longer reports (ADR-0070); \
+             stdout:\n{stdout}"
+        );
+    }
     // The body is not readable yet, and that is correct — it is penned, not lost.
     assert_eq!(
         twin_of(&c, &event_id).await,

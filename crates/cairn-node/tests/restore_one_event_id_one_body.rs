@@ -17,9 +17,10 @@
 //!    under one id would leave two nodes holding different bytes for one event forever, with no
 //!    alarm (db/020's review H3). The restore must pen the rival with the DOOR's reason and leave
 //!    the original as what the chart reads.
-//! 3. **The same pair, KEYLESS copy first — a PIN of today's defect, not a guarantee.** The body
-//!    opens and the chart stays empty: trap 9's restore entrance (#584). See that test's doc for
-//!    the inversion #584's fix owes.
+//! 3. **The same pair, KEYLESS copy first, still reaches the chart.** The keyless copy admits the
+//!    event with no body; the keyed copy lands custody on it, and the door projects the late
+//!    landing (#584, ADR-0070). Until #584 this order left the chart empty with nothing in the
+//!    report to say so — trap 9's restore entrance.
 //!
 //! These are library-level on purpose. The CLI adds one line to these questions — the
 //! `straddled_duplicate_notice` warning on stderr, which prints for all three and whose wording is
@@ -126,12 +127,11 @@ async fn restore_ready(
 /// resurrect a key an erasure destroyed. It fails at the first assertion below, which is the
 /// derivation half of this test's claim.
 ///
-/// Two assertions guard the copy order. The premise check fires first, and legibly, if the
+/// One assertion guards the copy order: the premise check, which fires first and legibly if the
 /// derivation's tie-break ever hands the keyless copy over first (a mutation that did so reddened
-/// it). The final assertion reads the CHART, not only the body, and is the backstop: a readable
-/// `event_clear` row passes in both orders (see
-/// [`a_keyless_copy_first_leaves_the_chart_unprojected_until_584`]), and only
-/// `medication_statement` tells them apart.
+/// it). Since #584 the chart no longer tells the two orders apart — both project — so the final
+/// assertion no longer guards the copy order at all; it only pins that the keyed-first order
+/// projects.
 #[tokio::test]
 async fn a_second_copy_without_its_key_at_the_same_position_changes_nothing() {
     let Some(base) = cs() else {
@@ -168,7 +168,8 @@ async fn a_second_copy_without_its_key_at_the_same_position_changes_nothing() {
     assert!(
         copies[0].dek_wrapped.is_some() && copies[1].dek_wrapped.is_none(),
         "premise: this test is the KEYED-first order. If the derivation now hands the keyless \
-         copy first, the tie-break changed and this is trap 9's order (#584)"
+         copy first, the tie-break changed and the keyless copy now arrives first — see \
+         a_keyless_copy_first_still_reaches_the_chart"
     );
 
     let report = apply_clinical_plane(&c, &records, Some(&secret))
@@ -274,20 +275,14 @@ async fn a_different_body_under_the_same_event_id_is_refused_as_a_substitution()
     );
 }
 
-/// **PIN, NOT A GUARANTEE: trap 9's restore entrance (#584).**
+/// **Trap 9's restore entrance, closed (#584, ADR-0070).**
 ///
 /// When the keyless copy of a sealed event reaches the restore BEFORE its keyed copy, the door
-/// admits the event with no body — no custody yet, so the projection trigger on `event_log` has
-/// nothing to project. The keyed copy then lands custody on the already-admitted event, and its
-/// `event_log` INSERT is a no-op, so the projection never runs again. **The body opens and the
-/// chart is empty**, and the report is identical to the keyed-first test above, so a restore
-/// exits 0 over a chart missing a medication.
-///
-/// This asserts what is true TODAY, by the crate's pinned-count idiom
-/// (`dr_clinical_guarantee_gap.rs`'s header): no `#[ignore]`, and no permanently red test blocking
-/// every unrelated change. **When #584's fix makes a late custody landing re-project, the
-/// `medication_rows == 0` assertion goes red. Invert it to 1, delete this paragraph, and the test
-/// becomes the guarantee.**
+/// admits the event with no body. The keyed copy then lands custody on the already-admitted event,
+/// its `event_log` INSERT is a no-op — and the door, seeing it has just made the body readable for
+/// an event already in the log, runs the event's heal-safe projections. Before #584 this order
+/// left the medication list empty at exit 0 with a report identical to the keyed-first order; this
+/// test pinned that as a known defect and was inverted when the door learned to project a late key.
 ///
 /// How the order is made through the REAL derivation, which sorts stably on `source_seq`: the
 /// capture's own copy of the chart loses its DEK in place, and the keyed copy is appended in a
@@ -295,7 +290,7 @@ async fn a_different_body_under_the_same_event_id_is_refused_as_a_substitution()
 /// segment is written unsigned — which a capture taken without the signing key legitimately is —
 /// rather than left carrying a signature over bytes it no longer holds.
 #[tokio::test]
-async fn a_keyless_copy_first_leaves_the_chart_unprojected_until_584() {
+async fn a_keyless_copy_first_still_reaches_the_chart() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -325,7 +320,7 @@ async fn a_keyless_copy_first_leaves_the_chart_unprojected_until_584() {
     assert_eq!(copies.len(), 2, "both copies reach the restore");
     assert!(
         copies[0].dek_wrapped.is_none() && copies[1].dek_wrapped.is_some(),
-        "premise: this pin is the KEYLESS-first order, or it is not trap 9's entrance at all"
+        "premise: this test is the KEYLESS-first order"
     );
 
     let report = apply_clinical_plane(&c, &records, Some(&secret))
@@ -335,8 +330,7 @@ async fn a_keyless_copy_first_leaves_the_chart_unprojected_until_584() {
     assert_eq!(
         (report.penned(), report.already_present),
         (0, 1),
-        "the report is indistinguishable from the keyed-first order — which is why nothing in a \
-         restore's output flags this: {report:?}"
+        "the report is the same in both orders, and since #584 so is the chart: {report:?}"
     );
     assert_eq!(
         twin_of(&c, &chart.event_id).await.as_deref(),
@@ -345,8 +339,7 @@ async fn a_keyless_copy_first_leaves_the_chart_unprojected_until_584() {
     );
     assert_eq!(
         medication_rows(&c, chart.patient).await,
-        0,
-        "PIN (#584): the chart is EMPTY although the body opens. If this is now 1, #584 landed — \
-         invert this assertion and retire the pin wording in this test's doc"
+        1,
+        "the late key reaches the chart: the door projects custody that lands after its event (#584)"
     );
 }

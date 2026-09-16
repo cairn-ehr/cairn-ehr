@@ -11,9 +11,9 @@
 //! Every decision that can be made from values alone lives here, as a pure function with a unit
 //! test that needs no database — which matters, because the behaviour these serve is otherwise
 //! reachable only through a DB-gated suite that drives the shipped binary. `do_requeue` in
-//! `main.rs` asks the database the questions ([`CustodyState`] before and after the door, whether
-//! an unwrap key is registered) and hands the answers to [`open_pen_key`], [`keyed_row_verdict`],
-//! [`door_withheld_cause`] and [`chart_rebuild_owed`].
+//! `main.rs` asks the database the questions ([`CustodyState`] after the door, whether an unwrap
+//! key is registered) and hands the answers to [`open_pen_key`], [`keyed_row_verdict`] and
+//! [`door_withheld_cause`].
 //!
 //! **THE ONE RULE, stated once, here.**
 //!
@@ -31,11 +31,13 @@
 //! (`db/052_restore_doors.sql`): this module decides so it can EXPLAIN every retention; the door
 //! is the floor under the decision, and the whole of it for `pull`'s auto-release.
 //!
-//! **What "released" does and does not promise.** A released keyed row whose event was ALREADY in
-//! the log without custody — admitted by an earlier run, a restore, or a pull — gets its key, but
-//! not its chart: projections are dispatched by an `AFTER INSERT` trigger on `event_log`, and a
-//! re-apply inserts nothing. That is [`chart_rebuild_owed`], and the run says so and exits
-//! [`EXIT_INCOMPLETE`] rather than calling a record recovered that no clinician can yet see.
+//! **What "released" promises.** That custody for the row's event is SETTLED — which is not the
+//! same as "a key landed": a [`Released::Shredded`] row's key is destroyed on purpose and a
+//! [`Released::NothingToOpen`] row never had one. When a key does land on an event already in the
+//! log without it, the apply door projects that event itself (ADR-0070), so there is no heal step
+//! for this command to report. The ONE exception is an event still carrying an `event_deferred`
+//! marker: the door lands its key and deliberately leaves its chart to re-adjudication, which
+//! projects it through the same dispatch. `cairn-node deferred` is where that state is visible.
 //!
 //! **How a row that truly is unopenable ever leaves the pen**, since the rule alone would hold it
 //! forever: `db/021`'s `acked` flag, which it describes as *"a recorded human decision, never an
@@ -51,26 +53,17 @@ use cairn_event::seal::WRAPPED_DEK_LEN;
 /// The exit status of a requeue that finished its loop but did not finish the recovery.
 ///
 /// Distinct from `1`, which is a run that FAILED (an interrupted loop, a database fault), and from
-/// `2`, which is a bad flag. A run that retained rows, left rows the door still refuses, or landed
-/// custody for a record whose chart still needs a heal has done everything it safely could — and a
-/// script must still be able to see that the pen is not empty. `cairn-node restore` ruled the same
-/// way about the same state ("this exit code says the restore is INCOMPLETE, not that it failed") —
-/// though it has only exit 1 to say it with — and `requeue` is the command that finishes that
-/// restore.
-///
-/// ⚠️ **A chart owed a heal is reported by ONE run only.** The run that releases the row counts it;
-/// once the row has left the pen, nothing durable remembers that the record's chart still needs
-/// `cairn-node reproject`, and the next `requeue` exits 0 over an empty pen. The run's own output is
-/// the record — which is why the heal line and the INCOMPLETE notice both say so. Making the debt
-/// durable, or removing it, is #584.
+/// `2`, which is a bad flag. A run that retained rows or left rows the door still refuses has done
+/// everything it safely could — and a script must still be able to see that the pen is not empty.
+/// `cairn-node restore` ruled the same way about the same state ("this exit code says the restore
+/// is INCOMPLETE, not that it failed") — though it has only exit 1 to say it with — and `requeue`
+/// is the command that finishes that restore.
 pub const EXIT_INCOMPLETE: i32 = 3;
 
 /// The custody state of an event, as `cairn_custody_state` (`db/052`) names it.
 ///
 /// A named state rather than the boolean `cairn_custody_landed` returns, because `requeue` does
-/// more with the answer than decide: it counts a shredded release apart from a recovered one, and
-/// it compares the state before and after the door to spot a record whose key arrived after its
-/// chart was built ([`chart_rebuild_owed`]).
+/// more with the answer than decide: it counts a shredded release apart from a recovered one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustodyState {
     /// No event with this content address is in this node's log.
@@ -268,21 +261,6 @@ pub fn door_withheld_cause(unwrap_key_registered: bool) -> CustodyGap {
     } else {
         CustodyGap::NoKeyRegistered
     }
-}
-
-/// Did releasing this row land custody for an event whose chart was built without it?
-///
-/// Projections are dispatched by an `AFTER INSERT` trigger on `event_log`; a re-apply of an event
-/// already there inserts no row, so nothing re-projects when its key finally arrives. A record
-/// whose event was `Withheld` before the door and is `Held` after it therefore has a readable body
-/// and an empty chart until `cairn-node reproject` heals it — the second of the two steps
-/// `decide_custody`'s documentation in `main.rs` (the serve-side decision to withhold custody)
-/// prints for a puller that recovers custody late.
-///
-/// An event that was `Absent` before is a fresh insert, so its trigger fires with the clear view
-/// already in place, and nothing is owed.
-pub fn chart_rebuild_owed(before: CustodyState, released: Released) -> bool {
-    before == CustodyState::Withheld && released == Released::WithCustody
 }
 
 /// Where the custody key this run holds came from, as `unwrap_key::resolve` chose it.
@@ -497,27 +475,13 @@ pub fn guard_refused_release_message(digest: &[u8]) -> String {
     )
 }
 
-/// One line for a released record whose chart still has to be rebuilt ([`chart_rebuild_owed`]).
-pub fn chart_rebuild_message(digest: &[u8]) -> String {
-    format!(
-        "requeue: {} released WITH its custody — but its event was already in the log without it, \
-         so its projection ran while the body was unreadable and wrote no chart entry, and landing \
-         the key does not run it again. Run `cairn-node reproject` (with an owner-privileged \
-         --conn; heal mode deletes nothing) to bring this record into the chart. THIS RUN IS THE \
-         ONLY ONE THAT WILL SAY SO: the row has left the pen, and a later requeue cannot see that \
-         this chart is owed a heal (#584).",
-        prefix(&hex::encode(digest))
-    )
-}
-
 /// Every outcome one `requeue` run reached, counted.
 ///
 /// **Five fields PARTITION the rows examined** — `released`, `custody_retained`, `skipped_acked`,
-/// `still_quarantined`, `vanished`; see [`RequeueCounts::accounted_for`]. **Three are SUBSETS of
+/// `still_quarantined`, `vanished`; see [`RequeueCounts::accounted_for`]. **Two are SUBSETS of
 /// `released`**, not further outcomes: `released_with_custody` and `released_shredded` say how a
 /// released keyed row's custody stood (#579's question: of the rows that left the pen, how many
-/// carried a key that landed), and `reproject_owed` is the part of `released_with_custody` whose
-/// chart still needs a heal.
+/// carried a key that landed).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RequeueCounts {
     /// Rows that left the pen: the event is in the log and the row is gone.
@@ -526,8 +490,6 @@ pub struct RequeueCounts {
     pub released_with_custody: usize,
     /// Of those, keyed rows over a SHREDDED event — no key exists, on purpose.
     pub released_shredded: usize,
-    /// Of `released_with_custody`, records whose chart was built before their key arrived.
-    pub reproject_owed: usize,
     /// Keyed rows kept because custody for their event is not settled (the rule at the top).
     pub custody_retained: usize,
     /// Rows a human had already acked, left untouched.
@@ -544,7 +506,7 @@ impl RequeueCounts {
     ///
     /// Destructured with every field NAMED, so a field added later fails to compile here until
     /// someone decides whether it partitions or is a subset — rather than silently falling out of
-    /// the sum. The three subsets are named and discarded: adding a subset to its own superset
+    /// the sum. The two subsets are named and discarded: adding a subset to its own superset
     /// would double-count, the "second spelling of a count" defect the slice-2d measurement rig
     /// deleted a field to avoid.
     pub fn accounted_for(&self) -> usize {
@@ -552,7 +514,6 @@ impl RequeueCounts {
             released,
             released_with_custody: _,
             released_shredded: _,
-            reproject_owed: _,
             custody_retained,
             skipped_acked,
             still_quarantined,
@@ -562,11 +523,10 @@ impl RequeueCounts {
     }
 
     /// Did this run leave work for a human? True when rows are still held (for custody, or refused
-    /// by the door) or a released record's chart still needs a heal — the states [`EXIT_INCOMPLETE`]
-    /// reports. Acked and vanished rows are not work left: one is a human's decision, the other is
-    /// gone.
+    /// by the door) — the states [`EXIT_INCOMPLETE`] reports. Acked and vanished rows are not work
+    /// left: one is a human's decision, the other is gone.
     pub fn is_incomplete(&self) -> bool {
-        self.custody_retained > 0 || self.still_quarantined > 0 || self.reproject_owed > 0
+        self.custody_retained > 0 || self.still_quarantined > 0
     }
 
     /// The `--metrics` object, built in one place so a successful run and an interrupted one can
@@ -585,7 +545,6 @@ impl RequeueCounts {
             released,
             released_with_custody,
             released_shredded,
-            reproject_owed,
             custody_retained,
             skipped_acked,
             still_quarantined,
@@ -602,7 +561,6 @@ impl RequeueCounts {
             "released": released,
             "released_with_custody": released_with_custody,
             "released_shredded": released_shredded,
-            "reproject_owed": reproject_owed,
             "custody_retained": custody_retained,
             "skipped_acked": skipped_acked,
             "still_quarantined": still_quarantined,
@@ -618,7 +576,6 @@ impl RequeueCounts {
             released,
             released_with_custody,
             released_shredded,
-            reproject_owed,
             custody_retained,
             skipped_acked,
             still_quarantined,
@@ -626,9 +583,9 @@ impl RequeueCounts {
         } = *self;
         format!(
             "requeue: {examined} examined — {released} released ({released_with_custody} with \
-             custody, {released_shredded} shredded, {reproject_owed} needing `cairn-node \
-             reproject`), {custody_retained} kept for custody, {skipped_acked} skipped (acked), \
-             {still_quarantined} still quarantined, {vanished} vanished"
+             custody, {released_shredded} shredded), {custody_retained} kept for custody, \
+             {skipped_acked} skipped (acked), {still_quarantined} still quarantined, {vanished} \
+             vanished"
         )
     }
 
@@ -640,13 +597,11 @@ impl RequeueCounts {
         }
         Some(format!(
             "requeue: INCOMPLETE (exit {EXIT_INCOMPLETE}) — {} row(s) still held in the pen ({} kept \
-             for custody, {} still refused by the apply door) and {} released record(s) whose chart \
-             needs `cairn-node reproject`. Each is named on its own line above, with its remedy. A \
-             reproject owed is reported by this run only: a later requeue will not repeat it.",
+             for custody, {} still refused by the apply door). Each is named on its own line above, \
+             with its remedy.",
             self.custody_retained + self.still_quarantined,
             self.custody_retained,
             self.still_quarantined,
-            self.reproject_owed
         ))
     }
 }
@@ -857,30 +812,6 @@ mod tests {
         assert_eq!(door_withheld_cause(true), CustodyGap::DekDidNotOpenBody);
     }
 
-    /// Only custody arriving for an event ALREADY admitted without it leaves a chart to rebuild.
-    #[test]
-    fn only_late_custody_owes_a_chart_rebuild() {
-        assert!(chart_rebuild_owed(
-            CustodyState::Withheld,
-            Released::WithCustody
-        ));
-        for before in ALL_STATES {
-            for released in [
-                Released::WithCustody,
-                Released::Shredded,
-                Released::NothingToOpen,
-            ] {
-                let expected =
-                    before == CustodyState::Withheld && released == Released::WithCustody;
-                assert_eq!(
-                    chart_rebuild_owed(before, released),
-                    expected,
-                    "{before:?} -> {released:?}"
-                );
-            }
-        }
-    }
-
     /// Each retention cause produces its OWN sentence, and every one keeps the row and names it.
     ///
     /// The distinctness assertion is the point: two causes that rendered the same sentence would pass
@@ -1033,7 +964,6 @@ mod tests {
             released: 11,
             released_with_custody: 7,
             released_shredded: 3,
-            reproject_owed: 2,
             custody_retained: 5,
             skipped_acked: 13,
             still_quarantined: 17,
@@ -1041,7 +971,7 @@ mod tests {
         }
     }
 
-    /// The five partitioning outcomes add up, and the three subsets do not join them.
+    /// The five partitioning outcomes add up, and the two subsets do not join them.
     #[test]
     fn the_outcomes_partition_and_the_subsets_stay_out() {
         assert_eq!(sample_counts().accounted_for(), 11 + 5 + 13 + 17 + 19);
@@ -1057,7 +987,10 @@ mod tests {
         assert_eq!(m["released"], 11);
         assert_eq!(m["released_with_custody"], 7);
         assert_eq!(m["released_shredded"], 3);
-        assert_eq!(m["reproject_owed"], 2);
+        assert!(
+            m.get("reproject_owed").is_none(),
+            "retired by ADR-0070: the door projects a late key"
+        );
         assert_eq!(m["custody_retained"], 5);
         assert_eq!(m["skipped_acked"], 13);
         assert_eq!(m["still_quarantined"], 17);
@@ -1075,7 +1008,6 @@ mod tests {
             "11 released",
             "7 with custody",
             "3 shredded",
-            "2 needing `cairn-node reproject`",
             "5 kept for custody",
             "13 skipped (acked)",
             "17 still quarantined",
@@ -1083,6 +1015,7 @@ mod tests {
         ] {
             assert!(line.contains(needle), "missing {needle:?}: {line}");
         }
+        assert!(!line.contains("reproject"), "{line}");
     }
 
     /// A shredded release and a recovered one do not serialize alike — #579's failure, one notch
@@ -1130,12 +1063,6 @@ mod tests {
             },
             RequeueCounts {
                 still_quarantined: 1,
-                ..Default::default()
-            },
-            RequeueCounts {
-                released: 1,
-                released_with_custody: 1,
-                reproject_owed: 1,
                 ..Default::default()
             },
         ] {

@@ -5,7 +5,7 @@
 //! A clinic's disk is gone. A restore brought the record back but could not complete its custody,
 //! so every sealed event sits in `sync_quarantine` **with its wrapped DEK** — and the pen row is
 //! now the only copy of that key in the world. The penned reason told the operator, in these words
-//! (its wording before PR #582, which added the heal step below), what to do next:
+//! (its wording before PR #582), what to do next:
 //!
 //! > The bytes AND the key are kept: fix the cause, then `cairn-sync requeue` to complete the
 //! > restore without redoing it.
@@ -41,13 +41,14 @@
 //!   twin, and so passed while the recovery it described left the medication list EMPTY: a retained
 //!   row's event was admitted without custody on the first run, the projection saw no clear payload
 //!   and wrote nothing, and on the second run the key landed on an event already in the log — whose
-//!   `AFTER INSERT` projection trigger never fires again. Arm 1 now walks that whole road, including
-//!   the `cairn-node reproject` step the run names.
+//!   `AFTER INSERT` projection trigger never fires again. Since ADR-0070 (#584) the door projects a
+//!   key that lands on an already-admitted event, so arm 1 asserts the chart straight after the
+//!   release, with no heal step.
 //!
 //! # Exit status
 //!
 //! Every run asserts its status, not a success flag: 0 is complete, [`EXIT_INCOMPLETE`] is a run
-//! that finished and left work (rows still held, or a chart still to heal), 1 is a run that failed.
+//! that finished and left work (rows still held), 1 is a run that failed.
 //! A cron wrapper that drops stderr and ignores JSON has only this.
 //!
 //! # Mutations run against these tests
@@ -74,8 +75,8 @@
 //!    overridden.
 //! 5. **Blame every withheld DEK on a missing registration** (the pre-review single cause) → arm 6
 //!    names the ceremony on a node where a key IS registered.
-//! 6. **Stop reporting a chart that still needs a heal** (`chart_rebuild_owed` always false) → arm 1
-//!    phase two, on `reproject_owed`.
+//! 6. **Stop the door projecting a late key** (delete db/020's late-custody call) → arm 1 phase two,
+//!    on the chart assertion. (Recorded in ADR-0070's plan, Task 7.)
 //!
 //! Arm 7 (a custody read that fails) is deliberately NOT listed: it pins an end-to-end property that
 //! more than one layer enforces, so no single Rust-side break is observable there — see its doc.
@@ -102,12 +103,12 @@ use cairn_node::db;
 /// and the operator must be told which key to register AND the one way of registering it that would
 /// foreclose the real key forever.
 ///
-/// Phase two: the operator registers the key and runs `requeue` again. The row releases and the body
-/// opens — and the medication list is STILL EMPTY, because the event was admitted on phase one and a
-/// re-apply does not re-project. The run must say so and exit incomplete rather than read as done.
+/// Phase two: the operator registers the key and runs `requeue` again. The row releases WITH its
+/// key, the body opens, AND the chart has the record — the door itself projects the key onto the
+/// already-admitted event (ADR-0070, #584), so no heal step is owed. The run exits 0, with no heal
+/// instruction printed.
 ///
-/// Phase three: the operator runs the heal the line names, and the record reaches the chart. Without
-/// phase three, phase two's instruction would be a sentence nobody had checked.
+/// A further run over the now-empty pen also exits 0.
 #[tokio::test]
 async fn an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_chart() {
     let Some(base) = cs() else {
@@ -195,45 +196,29 @@ async fn an_unregistered_unwrap_key_keeps_the_pen_row_and_the_fix_reaches_the_ch
         "the sealed body must open back to the dead node's own text"
     );
 
-    // THE REVIEW FINDING. The body opens and the chart is still empty — and a run that reported
-    // this as done would be #579's success-over-an-incomplete-recovery, one layer down.
-    assert_eq!(
-        medication_rows(&c).await,
-        0,
-        "fixture premise: the event was admitted on phase one, so landing its key now does not \
-         re-fire the projection trigger. If this is 1, the door has started re-projecting late \
-         custody and this arm's reproject step should be retired rather than left to rot"
-    );
-    assert_eq!(
-        m["reproject_owed"], 1,
-        "the run must say the chart is owed a heal: {m}"
-    );
-    assert_eq!(
-        code, EXIT_INCOMPLETE,
-        "a medication list the clinician cannot see is not a completed recovery\nstderr: {stderr}"
-    );
-    let heal = stderr_line_with(&stderr, "cairn-node reproject");
-    assert!(
-        heal.contains(&hex::encode(&record.digest)[..16]),
-        "the heal instruction must name the record: {heal}"
-    );
-
-    // --- Phase three: the operator runs the heal the line names. ---
-    // `cairn-node reproject` is a thin CLI over this owner-only function in heal mode; the test
-    // connection is the owner, which is the privilege the line tells the operator to use.
-    c.query("SELECT * FROM cairn_reproject('', false, 'test')", &[])
-        .await
-        .expect("heal-mode reproject");
+    // THE REVIEW FINDING, answered at the door. The body opens AND the chart has it: the event was
+    // admitted without custody on phase one, and the door projects a key that lands afterwards
+    // (#584, ADR-0070). This used to be 0, and a separate `cairn-node reproject` heal step
+    // followed.
     assert_eq!(
         medication_rows(&c).await,
         1,
-        "THE ASSERTION THAT MATTERS: after the step the run named, the record is on the chart"
+        "the recovered record is on the chart as soon as its key lands"
+    );
+    assert!(
+        m.get("reproject_owed").is_none(),
+        "the heal signal is retired: the door projected the late key (ADR-0070): {m}"
+    );
+    assert_eq!(
+        code, 0,
+        "every row released with its key and its chart: a COMPLETE recovery\nstderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("reproject"),
+        "no heal instruction for a record that needs none\nstderr: {stderr}"
     );
 
-    // An empty pen now reads as complete. Note what that exit 0 does NOT prove: it would be the
-    // same without the heal above, because once the row has left the pen nothing remembers the
-    // chart was owed one (#584). The chart assertion above is the proof; this only pins that a
-    // finished recovery is not reported as work left.
+    // An empty pen stays a complete run.
     let (code, stdout, stderr) = run_requeue(&base, &key_path);
     assert_eq!(code, 0, "an empty pen is a complete run\nstderr: {stderr}");
     assert_eq!(metrics(&stdout, &stderr)["examined"], 0);
@@ -543,21 +528,32 @@ async fn a_dek_that_does_not_open_the_body_is_not_blamed_on_registration() {
 /// # What this arm does and does NOT prove
 ///
 /// It pins the END-TO-END property: a fault on the custody path is a failed run (exit 1) that keeps
-/// the key. It does NOT isolate `do_requeue`'s own handling of the error, and cannot: the table
-/// locked here is also written by the apply door (`db/020` step 9) and read by `cairn_release_pen_row`, so a
-/// Rust version that swallowed the error would still meet the same lock one statement later and stop
-/// the same way. Three layers ask; this arm proves that together they never trade the key for a
+/// the key. It does NOT isolate `do_requeue`'s own handling of the error, and cannot: the same
+/// function this arm breaks is also called by `cairn_release_pen_row` (via `cairn_custody_landed`),
+/// so a Rust version that swallowed `do_requeue`'s own read and pressed on regardless would still
+/// meet the same fault one statement later, inside the release door, and stop the same way. Two
+/// layers ask the same question; this arm proves that together they never trade the key for a
 /// transient fault.
 ///
 /// # How the fault is forced
 ///
-/// A second connection holds `ACCESS EXCLUSIVE` on `event_dek`, which the custody state reads, and
-/// the binary runs under a short `lock_timeout` set through the connection string's `options`.
-/// Nothing earlier in the run touches that table. (`event_dek` rather than `erasure_shred_log`, which
-/// the custody state also reads: a statement naming the shred log is inventoried by
-/// `shred_predicate_has_one_home.rs`, and a test's lock is not a decision about what travels.) A lock, not a `REVOKE`, for the reason
-/// `a_requeue_interrupted_mid_loop_still_reports_what_it_released` gives: a lock dies with its
-/// connection, so a panic here cannot poison the shared database.
+/// `cairn_custody_state` (db/052) is replaced — database-wide, not per-connection; safe only
+/// because this suite serializes on the cross-process advisory lock and every test reloads the
+/// schema on connect — with a stand-in that always `RAISE EXCEPTION`s `lock_not_available` (55P03),
+/// same signature and return type as the real one, so `CREATE OR REPLACE` is legal. Neither door
+/// calls `cairn_custody_state` (`grep -n cairn_custody_state db/020_apply_remote_event.sql
+/// db/005_submit.sql` finds nothing), so the door admits the event exactly as it would in any other
+/// run, and requeue's own POST-apply custody read is the first statement that reaches the faulty
+/// function. It is not the only one: the release door reaches it too, through
+/// `cairn_custody_landed` — which is the point made under "What this arm does NOT prove" above.
+/// (An earlier version of this arm locked `event_dek` instead; once #584 removed requeue's pre-door
+/// read, that lock was met by the door's step-9 custody write (`INSERT INTO event_dek`) before
+/// requeue's own read ever ran, so it stopped testing what its name claimed — found in #584's
+/// review.) Restored — not merely rolled back — before
+/// asserting: `db::connect_and_load_schema` replays every `db/*.sql`, db/052 included, so the real
+/// `cairn_custody_state` is back in place before the next test in this process runs, the same
+/// reason `a_requeue_interrupted_mid_loop_still_reports_what_it_released` gives for preferring
+/// self-releasing state over anything a panic could leave behind.
 #[tokio::test]
 async fn a_custody_read_that_fails_stops_the_run_and_keeps_the_key() {
     let Some(base) = cs() else {
@@ -570,27 +566,27 @@ async fn a_custody_read_that_fails_stops_the_run_and_keeps_the_key() {
     let (_dir, key_path, _sk, record) = dead_node_with_a_penned_record(&mut c).await;
     pen(&c, &record, Some(&record.dek_wrapped)).await;
 
-    let (blocker, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
-        .await
-        .expect("a second connection to hold the lock");
-    tokio::spawn(connection);
-    // The blocker gets a timeout too, so a lock someone else holds turns this into a failure
-    // rather than a hang.
-    blocker
-        .batch_execute(
-            "SET lock_timeout = '10s'; BEGIN; LOCK TABLE event_dek IN ACCESS EXCLUSIVE MODE",
-        )
-        .await
-        .expect("hold the table the custody state reads");
+    // The fault: a same-signature stand-in that always raises. Neither `apply_remote_event`
+    // (db/020) nor `submit_event` (db/005) call `cairn_custody_state` — see this fn's doc —
+    // so the door's admission below is unaffected, and requeue's own post-apply read is what fails.
+    c.batch_execute(
+        "CREATE OR REPLACE FUNCTION cairn_custody_state(p_content_address BYTEA)
+         RETURNS TEXT LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+         BEGIN
+             RAISE EXCEPTION 'cairn_test fault: custody state unavailable'
+                 USING ERRCODE = 'lock_not_available';
+         END;
+         $$;",
+    )
+    .await
+    .expect("install the faulty stand-in");
 
-    let impatient = format!("{base} options='-c lock_timeout=750ms'");
-    let (code, stdout, stderr) = run_requeue(&impatient, &key_path);
+    let (code, stdout, stderr) = run_requeue(&base, &key_path);
 
-    // Let go before asserting: a panic below must not leave the lock held for the rest of the suite.
-    blocker
-        .batch_execute("ROLLBACK")
-        .await
-        .expect("release the lock");
+    // Restore BEFORE asserting: a panic below must not leave the fault installed for whatever
+    // test in this process runs next. The fresh client this returns is also what the read at the
+    // bottom of this test uses.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
 
     assert_eq!(
         code, 1,

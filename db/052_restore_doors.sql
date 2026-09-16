@@ -412,9 +412,10 @@ GRANT EXECUTE ON FUNCTION cairn_quarantine_event(BYTEA, BYTEA, BYTEA, BYTEA, TEX
 --
 -- A NAMED state, not a boolean, because callers do more than decide: `requeue` counts a
 -- shredded release apart from a recovered one (a monitor must not read three destroyed keys as
--- three recovered charts), and it tells a record whose custody arrived AFTER its event was
--- admitted — whose chart projections were built blind and need a heal — by comparing this
--- state before and after the door.
+-- three recovered charts). `requeue` reads this state AFTER the door, to decide whether a penned
+-- row may be released. Nothing compares it before and after: a record whose custody arrived
+-- AFTER its event was admitted is brought to the chart by the door that lands the key
+-- (`cairn_project_late_custody`, ADR-0070), so no caller has a heal left to detect.
 --
 -- Precedence: `shredded` before `held`, so a logged shred is reported as what it is even if a
 -- custody row survived it; `plaintext` after both, since neither can apply to one.

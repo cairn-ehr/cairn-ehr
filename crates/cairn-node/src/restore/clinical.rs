@@ -159,10 +159,7 @@ pub fn pen_reason(cause: &RefusalCause) -> String {
              unwrap key is not registered. Admitted-without-custody is right for a peer that \
              will re-deliver the key; a restore has no second delivery, so the record is held \
              here instead. The bytes AND the key are kept: fix the cause, then `cairn-sync \
-             requeue` to land the key without redoing the restore. Because this record is \
-             already in the log, its projection ran without the key and wrote no chart entry; \
-             the requeue run that lands the key names the `cairn-node reproject` heal that adds \
-             it — and only that run says so."
+             requeue` to land the key without redoing the restore."
         ),
     }
 }

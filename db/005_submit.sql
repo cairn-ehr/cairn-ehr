@@ -297,6 +297,83 @@ CREATE TRIGGER cairn_projection_dispatch_trg
     AFTER INSERT ON event_log
     FOR EACH ROW EXECUTE FUNCTION cairn_projection_dispatch();
 
+-- #584 / ADR-0070 — run ONE stored event's HEAL-SAFE registered apply fns.
+--
+-- The trigger above runs every registered applier on a FRESH insert. This runs only the
+-- heal_safe ones, over a row that is ALREADY in the log, which is the situation two callers are
+-- in:
+--   * db/043's gate 4, proving a promoted deferred event can project before its marker goes;
+--   * cairn_project_late_custody below, when an event's key arrives after the event did.
+-- heal_safe = false marks a counter-shaped applier (note.added's note_count): running it over a
+-- live row would count again, so neither caller may run it. Same rule as cairn_reproject's heal
+-- mode (db/039), spelled once here so THESE TWO callers cannot drift. db/039 necessarily keeps its
+-- own spelling of the same filter (`FILTER (WHERE p_rebuild OR r.heal_safe)`): it aggregates
+-- per TYPE over a whole scan rather than dispatching per row, and cairn-sync's loader comment
+-- (`load_schema_under_lock`) depends on the two agreeing — so a change to this rule is a change in
+-- both places.
+--
+-- NO eligibility filter inside, deliberately: gate 4 must run on a row whose event_deferred marker
+-- is still present (that is its proof). The late-custody caller filters before calling.
+--
+-- search_path pinned for the %I EXECUTE, exactly like cairn_projection_dispatch (#426).
+CREATE OR REPLACE FUNCTION cairn_projection_dispatch_heal_safe(e event_log)
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_fn text;
+BEGIN
+    FOR v_fn IN
+        SELECT apply_fn FROM cairn_projection_apply
+        WHERE event_type = e.event_type AND heal_safe
+        ORDER BY run_order, apply_fn
+    LOOP
+        EXECUTE format('SELECT %I($1)', v_fn) USING e;
+    END LOOP;
+END;
+$$;
+-- It writes projections, so it takes the appliers' posture (#382): callers are the SECURITY
+-- DEFINER doors and the owner-only re-adjudication, which already run as the owner.
+REVOKE EXECUTE ON FUNCTION cairn_projection_dispatch_heal_safe(event_log) FROM PUBLIC;
+
+-- #584 / ADR-0070 — custody arrived for an event already in the log: bring it to the chart.
+--
+-- WHY THIS EXISTS. Both doors write custody (event_dek, event_clear) BEFORE their event_log INSERT
+-- so the trigger above can read the clear view. When the key comes LATER — a peer served the bytes
+-- before admitting us, a restore met the keyless copy first, a requeue landed a penned key — the
+-- second apply writes event_clear, its INSERT hits ON CONFLICT DO NOTHING, and the trigger never
+-- fires again: the body opens and the medication list stays empty. The door is the only place that
+-- KNOWS custody just landed, so the doors call this.
+--
+-- WHAT IT DOES. Loads the row as FIRST admitted (with the attestation columns that admission
+-- stored — never a row rebuilt from the caller's arguments) and runs its heal-safe appliers.
+-- Skips a row that is not cairn_replay_eligible: an event_deferred marker means its
+-- classification-gated checks have not passed, and only cairn_readjudicate_deferred (db/043) may
+-- grant it power.
+--
+-- WHAT THE RESULT MEANS. The chart equals "the event arrived when its key landed", not "at its
+-- first admission" — the arrival-order independence every projection already has (ADR-0070,
+-- decision 4).
+--
+-- A custody-reading applier must be heal_safe, or this would skip it and leave the chart owed a
+-- rebuild; crates/cairn-node/tests/late_custody_guards.rs enforces that over the catalog.
+CREATE OR REPLACE FUNCTION cairn_project_late_custody(p_event_id uuid)
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_row event_log;
+BEGIN
+    SELECT * INTO v_row FROM event_log WHERE event_id = p_event_id;
+    IF NOT FOUND THEN
+        RETURN; -- defensive: both doors call this only after their own INSERT
+    END IF;
+    IF NOT cairn_replay_eligible(v_row) THEN
+        RETURN;
+    END IF;
+    PERFORM cairn_projection_dispatch_heal_safe(v_row);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
+
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
 -- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.
@@ -934,6 +1011,9 @@ DECLARE
     v_inner        JSONB;             -- {payload, plaintext_twin} recovered by cairn_unseal_body
     v_pub          BYTEA;             -- this node's X25519 unwrap-key public half
     v_twin_stub    TEXT;              -- the outer, signed mechanical stub twin (principle 11)
+    -- #584 / ADR-0070: rows THIS call wrote into event_clear, and rows its event_log INSERT wrote.
+    v_clear_rows   INTEGER := 0;
+    v_log_rows     INTEGER;
 BEGIN
     -- 0. Size ceiling (review fix A7a): refuse an oversized event BEFORE the crypto work,
     --    so an event too large to replicate or back up can never be admitted (it would
@@ -1141,7 +1221,9 @@ BEGIN
         -- (submit refusals are safe — nothing has accepted the event). The apply door cannot
         -- mirror this RAISE — a refusal there would freeze the seq watermark on a verifiable
         -- event — so it stays lenient and the non-clinical projection triggers are made
-        -- seal-robust instead (they RETURN NULL on a sealed row; db/002/010-014/018/023-025).
+        -- seal-robust instead: they RETURN on a sealed row (db/002/010-014/018/023-025/045, and
+        -- db/048's withdrawal) — or, for db/048's sensitivity assertion, project a deliberately
+        -- unreadable MAX-grade row.
         IF v_type NOT LIKE 'clinical.%' THEN
             RAISE EXCEPTION 'submit_event: % is not a clinical body — only clinical.* bodies are born-sealed; demographic/identity/patient/node/erasure bodies are plaintext by necessity and must never be sealed (ADR-0052 §2)', v_type;
         END IF;
@@ -1397,6 +1479,7 @@ BEGIN
         INSERT INTO event_clear (event_id, body, twin)
         VALUES (v_event_id, b_clear -> 'payload', v_twin)
         ON CONFLICT (event_id) DO NOTHING;
+        GET DIAGNOSTICS v_clear_rows = ROW_COUNT;
     END IF;
 
     INSERT INTO event_log
@@ -1419,14 +1502,24 @@ BEGIN
         v_att, v_att_key, v_actor_id, v_sealed,
         v_grade, b -> 'safety')
     ON CONFLICT (event_id) DO NOTHING;
+    GET DIAGNOSTICS v_log_rows = ROW_COUNT;
 
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).
     -- But a DIFFERENT event reusing this event_id (substitution) must not pass
     -- silently: compare the stored content-address to what we just verified.
-    IF NOT FOUND THEN
+    IF v_log_rows = 0 THEN
         IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
             RAISE EXCEPTION 'submit_event: event_id % already exists with different content (substitution refused)', v_event_id;
         END IF;
+    END IF;
+
+    -- #584 / ADR-0070 — CUSTODY ARRIVED LATE at the strict door: a re-submit of an event this node
+    -- already holds without its key, now with the key. Same shape and same remedy as db/020's
+    -- late-custody call; see the comment there. After the substitution guard, so a rival body
+    -- never reaches an applier. No remote-apply marker here: a late landing at the strict door is
+    -- judged in the strict posture, as a first arrival here would be.
+    IF v_log_rows = 0 AND v_clear_rows > 0 THEN
+        PERFORM cairn_project_late_custody(v_event_id);
     END IF;
 
     -- Learn any attachment references, per rendition (reference-eager, byte-lazy).
