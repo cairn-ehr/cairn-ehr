@@ -21,12 +21,15 @@
 //!   records in it are validly signed clinical events, so "not applied" is a real claim: routed as
 //!   clinical, the door would have admitted them.
 //!
-//! **Exit status is deliberately NOT asserted for 14 or 17b.** Both currently exit 0, matching the
-//! torn-medium ruling (`restore_torn_medium_cli.rs`), while a restore that PENNED records or
-//! offered none exits non-zero. Whether records a restore could not apply should also fail a
-//! monitoring script is a decision, not a test finding: it is
-//! [#594](https://github.com/cairn-ehr/cairn-ehr/issues/594), and either answer can land without
-//! inverting a test here.
+//! **Exit status: both 14 and 17b now assert 3 (INCOMPLETE).** They were written silent on it
+//! because it was a decision, not a test finding —
+//! [#594](https://github.com/cairn-ehr/cairn-ehr/issues/594), settled by
+//! [ADR-0071](../../../docs/spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md).
+//! The ruling: a restore exits 3 whenever any record the medium carried is not in this node's log
+//! when it finishes, printed AFTER the whole summary. It refuses nothing to earn that status — the
+//! verified prefix still restores, which is what every other assertion in this file is for — so
+//! ADR-0068 decision 1 (*refusing converts a partial loss into a total one*) is untouched. Exit 1
+//! now means only a BLOCKED ceremony; the torn-medium pin inverted with these two.
 
 use cairn_event::{generate_key, sign, EventBody, Hlc};
 use cairn_medium::{parse_any, segment_commitment, Plane, SelfMarker};
@@ -144,7 +147,6 @@ async fn a_restore_applies_the_verified_prefix_and_not_one_record_past_a_chain_b
 
     wipe_to_a_fresh_dr_machine(&c).await;
     let code_file = old_recovery_code_file(dir.path(), &code);
-    // Exit status deliberately NOT asserted: #594 decides it (see this file's header).
     let out = restore_cli(
         &base,
         &dir.path().join("restored.key"),
@@ -153,6 +155,19 @@ async fn a_restore_applies_the_verified_prefix_and_not_one_record_past_a_chain_b
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // #594/ADR-0071 SETTLED IT: **exit 3 (INCOMPLETE)**. This is the harshest of the five causes
+    // — charts B and C are on the medium, were never offered to the door, and NO retry of any
+    // command reaches them — and until #594 it was the quietest, exiting 0 behind a loud notice a
+    // cron wrapper never reads. Nothing is refused to earn this status: the prefix below restores
+    // first, and the verdict is taken after the whole summary.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore that left records past a chain break must exit 3 (INCOMPLETE): they are \
+         unrecoverable, and exit 0 files that as a clean drill; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
 
     // THE PREFIX IS WORTH HAVING: refusing the medium would have cost chart A too.
     assert_eq!(
@@ -368,7 +383,6 @@ async fn a_plane_this_build_cannot_route_is_noted_with_its_count_and_never_appli
 
     wipe_to_a_fresh_dr_machine(&c).await;
     let code_file = old_recovery_code_file(dir.path(), &code);
-    // Exit status deliberately NOT asserted: #594 decides it (see this file's header).
     let out = restore_cli(
         &base,
         &dir.path().join("restored.key"),
@@ -377,6 +391,18 @@ async fn a_plane_this_build_cannot_route_is_noted_with_its_count_and_never_appli
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // #594/ADR-0071 SETTLED IT: **exit 3 (INCOMPLETE)**. An unroutable plane is an upgrade
+    // prompt, not damage — but the records are not in this node's log, and a drill that reads
+    // exit 0 records a recovery that did not happen. The remedy (upgrade, restore again) is the
+    // one thing that distinguishes this cause from the chain break above.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore that left records in a plane it cannot route must exit 3 (INCOMPLETE): the \
+         records did not come back, however benign the reason; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
 
     assert_eq!(
         twin_of(&c, &chart.event_id).await.as_deref(),

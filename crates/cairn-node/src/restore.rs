@@ -25,6 +25,12 @@
 /// size cap (house rule 4).
 pub mod clinical;
 
+/// Whether the restore brought everything back, and the exit status that says so (#594,
+/// ADR-0071). Kept in its own file for the same two reasons [`recovery_code`] is: `restore.rs`
+/// is already at the crate's size cap (house rule 4), and the rule's whole value is being
+/// testable without a database, a medium or a spawned binary.
+pub mod completeness;
+
 /// How the OLD node's recovery code reaches a restore that has no terminal (#572). Kept in its
 /// own file for the same two reasons `clinical` is: `restore.rs` is already at the crate's size
 /// cap (house rule 4), and these are pure functions whose whole value is being testable without

@@ -7,6 +7,15 @@
 //! spawn the real `cairn-node` binary (`CARGO_BIN_EXE_cairn-node`, no extra test
 //! dependency) so the orchestration in `main.rs` — not just its ingredients — is what
 //! gets exercised.
+//!
+//! **#594/ADR-0071 (2026-09-16) reversed ONE assertion in this file: the exit status, 0 → 3.**
+//! The round-2 ruling stands in full — refusing a torn medium would convert a partial loss into a
+//! total one, and nothing here refuses. But *not refusing* and *reporting success* are different
+//! claims, and this file had been making the second on the strength of the first. A torn tail
+//! means records are gone from this copy; the command now says so with a status a cron drill can
+//! read, after recovering everything it can. Every other assertion below is unchanged — the
+//! prefix still restores and the warnings still print — which is what shows the ruling survived.
+//! See the assertion's own comment below.
 
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use cairn_medium::{
@@ -110,9 +119,14 @@ fn torn_v3_medium() -> Vec<u8> {
 }
 
 /// THE test that pins the round-2 ruling itself, not merely its ingredients: `restore`
-/// run as a real process against a torn CAIRNB3 medium must exit ZERO, apply the
-/// COMPLETE prefix (here: exactly the one genesis event before the tear), and print a
-/// loud warning naming the tear — never silently, and never by refusing.
+/// run as a real process against a torn CAIRNB3 medium must apply the COMPLETE prefix
+/// (here: exactly the one genesis event before the tear) and print a loud warning naming
+/// the tear — never silently, and never by refusing.
+///
+/// Since #594/ADR-0071 it must also exit **3 (INCOMPLETE)**, where this comment used to say
+/// ZERO. That is the one reversal (see the file header): the prefix is still recovered and the
+/// medium is still not refused; what changed is that the command now REPORTS the loss instead of
+/// reading as a clean recovery to the only channel a cron drill has.
 #[tokio::test]
 async fn restore_recovers_the_prefix_of_a_torn_medium_and_warns() {
     let Some(base) = std::env::var("CAIRN_TEST_PG").ok() else {
@@ -141,10 +155,23 @@ async fn restore_recovers_the_prefix_of_a_torn_medium_and_warns() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // **#594/ADR-0071 REVERSED THIS ASSERTION, and only this one.** It read `status.success()`
+    // — #500 slice 2c round 2's ruling that a torn medium must not fail the command. What that
+    // ruling was actually about is REFUSING, and the restore still refuses nothing: every
+    // assertion below this one is unchanged, the prefix restores, and the warnings still print.
+    // What changed is the report. Exit 0 said "everything came back" to the only channel a cron
+    // drill reads, over a medium whose tail is gone for good.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "restore must recover the prefix from a torn medium and report INCOMPLETE (3) — never \
+         refuse it (that would cost the prefix too), and never report 0 (that tells a drill the \
+         recovery was clean); stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(
-        out.status.success(),
-        "restore must exit 0 on a torn medium (recover the prefix, never refuse); \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE") && stderr.contains("TORN"),
+        "the verdict must name the tear as its cause, in the same word the early WARNING uses; \
+         stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("TORN"),

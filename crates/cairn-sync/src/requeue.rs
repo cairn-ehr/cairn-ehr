@@ -55,9 +55,24 @@ use cairn_event::seal::WRAPPED_DEK_LEN;
 /// Distinct from `1`, which is a run that FAILED (an interrupted loop, a database fault), and from
 /// `2`, which is a bad flag. A run that retained rows or left rows the door still refuses has done
 /// everything it safely could — and a script must still be able to see that the pen is not empty.
-/// `cairn-node restore` ruled the same way about the same state ("this exit code says the restore
-/// is INCOMPLETE, not that it failed") — though it has only exit 1 to say it with — and `requeue`
-/// is the command that finishes that restore.
+///
+/// **KEPT EQUAL TO `cairn_node::restore::completeness::EXIT_INCOMPLETE` BY A TEST (#594,
+/// ADR-0071).** `cairn-node restore` ruled the same way about the same state and, until #594, had
+/// only exit 1 to say it with — its message apologising in words for a vocabulary the command did
+/// not have. It has the vocabulary now, and the two commands are used together: `restore` fills the
+/// pen and `requeue` empties it, so a script driving one recovery reads this number from both.
+///
+/// It is a second definition rather than an alias of `cairn-node`'s because `cairn-sync` is a
+/// **binary-only** crate whose `cairn-node` dependency is a **dev**-dependency: importing it in
+/// production code would pull the whole node crate into this binary's build graph for an integer.
+/// `exit_incomplete_matches_cairn_nodes_restore` below closes the gap where the dependency already
+/// exists — if either number moves, that test fails and names the other.
+///
+/// ⚠️ That rules out the alias, not a shared home: both crates depend in production on
+/// `cairn-event` and `cairn-keystore`, so one definition in either would need no new crate and no
+/// new edge. Rejected on **§9 blast-radius** grounds — `cairn-event` is the safety-critical core
+/// kept deliberately small, and a CLI exit status is not an event concept. See
+/// `cairn_node::restore::completeness::EXIT_INCOMPLETE`'s doc for the full argument.
 pub const EXIT_INCOMPLETE: i32 = 3;
 
 /// The custody state of an event, as `cairn_custody_state` (`db/052`) names it.
@@ -1070,5 +1085,26 @@ mod tests {
             let notice = left.incomplete_notice().expect("an incomplete run says so");
             assert!(notice.contains("INCOMPLETE"), "{notice}");
         }
+    }
+
+    /// #594 / ADR-0071: the two commands of one recovery must speak one exit vocabulary.
+    ///
+    /// `restore` fills the quarantine pen and exits 3; `requeue` empties it and exits 3 for what
+    /// it could not release. A cron wrapper driving a disaster drill reads the number from both,
+    /// and it has no way to learn that they disagree except by recovering the wrong thing.
+    ///
+    /// This is a TEST rather than a compile-time alias because `cairn-node` is a dev-dependency
+    /// here (see [`EXIT_INCOMPLETE`]'s own doc) — so this is the earliest point in the build where
+    /// both numbers are visible at once. It is cheap, it runs in every `cargo test`, and it fails
+    /// naming the other constant.
+    #[test]
+    fn exit_incomplete_matches_cairn_nodes_restore() {
+        assert_eq!(
+            EXIT_INCOMPLETE,
+            cairn_node::restore::completeness::EXIT_INCOMPLETE,
+            "requeue and restore must exit with the SAME status for the same state — a recovery \
+             is driven by both commands, and a script cannot be asked to learn two vocabularies \
+             for it. Change both, or neither."
+        );
     }
 }

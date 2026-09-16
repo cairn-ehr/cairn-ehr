@@ -6,8 +6,10 @@
 //! and the two facts have the same cause: until #572 the recovery-code prompt was read through
 //! `rpassword`, which opens `/dev/tty` and fails on any non-tty. A CLI test could not drive it
 //! without allocating a pseudo-terminal, so nobody did — `restore_torn_medium_cli.rs`, the only
-//! CLI-level restore test that existed, asserts `status.success()` on a federation-only medium
-//! and therefore never enters the clinical block at all.
+//! CLI-level restore test that existed, drives a federation-only medium and therefore never
+//! enters the clinical block at all. (It asserted `status.success()` when this was written; since
+//! #594/ADR-0071 a torn medium exits 3, and that file asserts the 3. The point stands either way:
+//! it is the clinical block it never reaches.)
 //!
 //! Every test here runs with a piped stdout and stderr. That is not incidental: **a piped run
 //! is the thing under test.** If any of these ever needs a pty again, #572 has regressed.
@@ -150,7 +152,8 @@ async fn a_scripted_restore_brings_the_clinical_record_back() {
 ///
 /// Two things are pinned here. First, the degradation: local-state is OPTIONAL and the events
 /// are the load-bearing copy, so a bad code must not kill an otherwise complete restore — it
-/// warns, skips, and the process exits non-zero AFTER the summary has printed.
+/// warns, skips, and the process exits 3 (INCOMPLETE, since #594/ADR-0071 — NOT 1: a wrong code
+/// is an honest degradation, not a blocked ceremony) AFTER the summary has printed.
 ///
 /// Second, and this is the one a refactor would break: the message must say **one** attempt,
 /// not three. `unsealing_failed_cause` takes the RESOLVED count, because re-reading a file
@@ -194,10 +197,20 @@ async fn a_wrong_code_in_a_file_degrades_honestly_and_counts_one_attempt() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
-    assert!(
-        !out.status.success(),
-        "a restore that inherited no custody must exit non-zero, so a script can see it; \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+    // #594/ADR-0071: **3 (INCOMPLETE)**, and a wrong code is NOT the FAILED path — which is
+    // worth stating, because it looks like one. `apply_local_state_export` returns `Ok(None)`
+    // for a code that does not open the bundle: "an honest degradation the helper already
+    // reported". FAILED (1) is reserved for the export that OPENED and then could not be
+    // installed. The end state here is the same one the no-registry test below pins: the node
+    // IS restored as a federation peer, the charts are still on the medium, and the remedy is a
+    // second restore into a fresh database — with the right code this time. Reporting the same
+    // state with two different codes because the cause differed is the incoherence #594's
+    // widening removed.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore that inherited no custody must exit 3 (INCOMPLETE): the charts are still on \
+         the medium and a second restore recovers them; stdout:\n{stdout}\nstderr:\n{stderr}"
     );
     // The summary still printed. Losing it would cost the operator their next step at the one
     // moment they need it.
@@ -310,10 +323,35 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
+    // **#594/ADR-0071 PRECEDENCE PIN — and it lands on the opposite side from its sibling above.**
+    // Exit **1 (FAILED)**, not 3. With no flag and no tty, `rpassword` cannot even ASK, so
+    // `unseal_local_state_with_retries` returns `Err` and `local_state_failure` is set — unlike
+    // a WRONG code, which is `Ok(None)` and degrades honestly. The two look identical from the
+    // outside (no custody either way) and are reported differently on purpose: a wrong code is a
+    // recovery that finished short, and an unaskable prompt is a ceremony that never ran.
+    //
+    // This run ALSO has INCOMPLETE causes — no registry, every clinical record left on the
+    // medium — so it is the one place the ORDER of the two verdicts is observable end to end.
+    // Mutation M7 (the verdict block moved above the `local_state_failure` check) turns this
+    // into a 3 and nothing else in the workspace notices.
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a restore whose export could not be OPENED at all must exit 1 (FAILED), not 3: FAILED \
+         outranks INCOMPLETE, and a ceremony that never ran is not a recovery that fell short; \
+         stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // **ANTI-VACUITY FOR THE PRECEDENCE ITSELF (PR #612 review).** The assertion above only pins
+    // an ORDER if this run genuinely has an INCOMPLETE cause for FAILED to outrank. That was true
+    // by construction and asserted nowhere, so a later fixture simplification — a federation-only
+    // medium, say — would keep this test green on `Some(1)` while quietly leaving the workspace
+    // with NO coverage of the order at all. M7 would then survive. Pin the losing verdict too.
     assert!(
-        !out.status.success(),
-        "a restore that inherited no custody must exit non-zero; stdout:\n{stdout}\n\
-         stderr:\n{stderr}"
+        stderr.contains("NO actor registry"),
+        "anti-vacuity: FAILED can only be shown to OUTRANK INCOMPLETE on a run that HAS an \
+         incomplete cause — this one must have no registry, so every clinical record is left on \
+         the medium. Without this, the `Some(1)` above is compatible with a clean restore and \
+         pins nothing; stderr:\n{stderr}"
     );
     // The custody never arrived, so the body cannot open. This is the contrast that makes the
     // headline test meaningful: same inputs, same pipes, one flag apart.
@@ -326,8 +364,10 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
 }
 
 /// **#570 item 1, the loudest bail: a restore that could not offer ONE record must exit
-/// non-zero.** And #570 item 2 for the "NO actor registry" warning, whose reachability a
-/// source-text grep cannot establish.
+/// 3 (INCOMPLETE).** Written as "non-zero" before #594/ADR-0071 gave the command a third
+/// status; it is the 3 that is pinned now, and 1 would be wrong — the charts are still on the
+/// medium and a second restore recovers them. And #570 item 2 for the "NO actor registry"
+/// warning, whose reachability a source-text grep cannot establish.
 ///
 /// A medium carrying charts, with no export beside it, is the most incomplete of the three
 /// outcomes: without the registry every record would be refused as authored by an unenrolled
@@ -340,7 +380,7 @@ async fn without_the_flag_a_piped_restore_still_inherits_no_custody() {
 /// registry door — printing the custody remedy here would be a false promise to someone
 /// mid-disaster.
 #[tokio::test]
-async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_remedy() {
+async fn a_restore_that_offered_no_record_exits_incomplete_and_names_the_real_remedy() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -363,11 +403,22 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
+    // #594/ADR-0071: **3 (INCOMPLETE)**, not 1. Until #594 this was 1, and its own message said
+    // "this exit code says the restore is INCOMPLETE, not that it failed" — an apology for a
+    // vocabulary the command did not have. Now it has one: the node IS restored as a federation
+    // peer, and a second restore with the export recovers the charts. A script must be able to
+    // tell that from the blocked ceremony two tests above, which is still 1.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore that offered NOT ONE record to the door must exit 3 (INCOMPLETE) — a \
+         monitoring script reading exit 0 files an incomplete restore as clean, and one reading \
+         exit 1 files a recoverable one as a failure; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
     assert!(
-        !out.status.success(),
-        "a restore that offered NOT ONE record to the door must exit non-zero — a monitoring \
-         script reading exit 0 files an incomplete restore as clean; stdout:\n{stdout}\n\
-         stderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE"),
+        "the verdict must be on stderr in words too, naming the cause — the exit status alone \
+         serves the cron wrapper, not the human reading the log it wrote; stderr:\n{stderr}"
     );
     // Reachability, which the text-grepping guard cannot establish: gate this block behind
     // `if false` and that guard stays green while this test goes red.
@@ -406,7 +457,7 @@ async fn a_restore_that_offered_no_record_exits_non_zero_and_names_the_real_reme
 /// PENNED **with its key beside it** — recoverable later by `cairn-sync requeue`, which is the
 /// remedy the message must name here and must NOT have named in the test above.
 #[tokio::test]
-async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
+async fn a_penned_clinical_restore_exits_incomplete_and_prints_the_aead_caveat() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -440,10 +491,21 @@ async fn a_penned_clinical_restore_exits_non_zero_and_prints_the_aead_caveat() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 
+    // #594/ADR-0071: **3 (INCOMPLETE)**, not 1. This is the MOST recoverable of the five causes
+    // — `cairn-sync requeue` empties the pen without redoing the restore — so reporting it with
+    // the same status as a database fault was the inversion #594's widening fixed.
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a restore holding records in the pen is INCOMPLETE (3), not FAILED (1), and a script \
+         must see the difference: requeue finishes this one; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
     assert!(
-        !out.status.success(),
-        "a restore holding records in the pen is INCOMPLETE and a script must see that; \
-         stdout:\n{stdout}\nstderr:\n{stderr}"
+        stderr.contains("restore: INCOMPLETE") && stderr.contains("cairn-sync requeue"),
+        "the verdict must name the pen's remedy on stderr — a cron log that kept stderr and \
+         dropped stdout is otherwise told the run is incomplete and not what to run; \
+         stderr:\n{stderr}"
     );
     // THE AEAD CAVEAT. Reachable only when a registry actually restores, which is why it is
     // asserted here rather than guessed at from the source.
