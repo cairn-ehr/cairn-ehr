@@ -48,11 +48,14 @@
 
 /// The exit status of a restore that finished its ceremony but did not finish the recovery.
 ///
-/// **This is the workspace's only literal `3` for this meaning.** `cairn_sync::requeue::
-/// EXIT_INCOMPLETE` is a compile-time alias of it (`cairn-sync` depends on `cairn-node`, never the
-/// reverse), so the two binaries cannot drift into speaking different vocabularies about one
-/// recovery — a real risk, since the commands are used together: `restore` fills the pen and
-/// `requeue` empties it.
+/// **There is a SECOND literal `3` for this meaning, in `cairn_sync::requeue::EXIT_INCOMPLETE`, and
+/// only a test holds the two equal.** It cannot be a compile-time alias: `cairn-sync` is a
+/// binary-only crate whose `cairn-node` dependency is a **dev**-dependency, so aliasing in its
+/// production code would pull this whole crate into that binary's build graph to import an integer.
+/// The guard is `cairn_sync::requeue::tests::exit_incomplete_matches_cairn_nodes_restore`, which
+/// fails naming the other constant. **Change one and you must change both** — the two commands are
+/// used together (`restore` fills the pen, `requeue` empties it) and a script driving one recovery
+/// reads this number from each.
 ///
 /// Distinct from `1`, which is a run that FAILED, and from `2`, which is a bad flag.
 pub const EXIT_INCOMPLETE: i32 = 3;

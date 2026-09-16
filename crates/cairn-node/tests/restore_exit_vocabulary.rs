@@ -8,11 +8,12 @@
 //! | **3** | The ceremony finished; records did NOT come back | a monitoring script |
 //! | **1** | The ceremony was BLOCKED (a refused local-state bundle, a database fault) | the same |
 //!
-//! Every test here is **pure** — no database, no spawned binary, no `CAIRN_TEST_PG` gate — because
-//! the decision of what "incomplete" means is a decision about five booleans and counters, and it
-//! should be readable and falsifiable without a disaster rehearsal to run it against. The
-//! end-to-end pins live in `restore_torn_medium_cli.rs`, `restore_cli_applies_nothing_untrusted.rs`
-//! and `restore_cli_surface.rs`; this file pins the rule they each exercise one arm of.
+//! Every test here runs with **no database and no `CAIRN_TEST_PG` gate** — because the decision of
+//! what "incomplete" means is a decision about five booleans and counters, and it should be readable
+//! and falsifiable without a disaster rehearsal to run it against. All but one are pure; the
+//! exception spawns `restore --help`, which needs no database either. The end-to-end pins live in
+//! `restore_torn_medium_cli.rs`, `restore_cli_applies_nothing_untrusted.rs` and
+//! `restore_cli_surface.rs`; this file pins the rule they each exercise one arm of.
 //!
 //! **Why the value 3 is pinned here rather than compared against `cairn-sync`'s constant.**
 //! `cairn-sync` depends on `cairn-node`, never the reverse, so this crate's tests cannot `use
@@ -235,4 +236,57 @@ fn the_cause_list_is_exactly_five() {
         all.is_complete(),
         "every cause at its zero value is a complete restore: {all:?}"
     );
+}
+
+/// **The vocabulary has to be learnable from the command.** (PR #612 review, finding 3.)
+///
+/// ADR-0071 is written for the author of a cron wrapper around a disaster-recovery drill. That
+/// person reads `--help`, not `docs/spec/decisions/`. `cairn-sync requeue`'s usage text has printed
+/// *"exit 3 = INCOMPLETE … exit 1 = the run itself failed"* since #578, and `restore` — the command
+/// that FILLS the pen `requeue` empties — said nothing about its own statuses at all.
+///
+/// Spawns the binary because clap's help is assembled at runtime from the doc comment: asserting
+/// against the source text would pass while the `--help` a human reads stayed silent.
+#[test]
+fn restore_help_names_the_exit_statuses() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_cairn-node"))
+        .args(["restore", "--help"])
+        .output()
+        .expect("cairn-node restore --help");
+    // clap writes long help to stdout; take both so a clap version that moves it cannot make this
+    // pass vacuously by finding nothing to search.
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        help.contains("restore") && help.len() > 200,
+        "positive control: this must be the real long help for `restore`, not an error or an \
+         empty buffer — otherwise every assertion below is vacuous. Got:\n{help}"
+    );
+    for (needle, why) in [
+        (
+            "exit 3",
+            "the INCOMPLETE status a drill's wrapper branches on",
+        ),
+        (
+            "INCOMPLETE",
+            "the word, so a human reading the log knows it is not a failure",
+        ),
+        (
+            "exit 1",
+            "the FAILED status, which means something different since ADR-0071",
+        ),
+        (
+            "exit 0",
+            "so 'nothing was left behind' is stated, not inferred from silence",
+        ),
+    ] {
+        assert!(
+            help.contains(needle),
+            "`restore --help` must name {needle:?} — {why}. A cron wrapper cannot learn this \
+             vocabulary anywhere else. Help:\n{help}"
+        );
+    }
 }

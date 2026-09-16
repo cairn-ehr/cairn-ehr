@@ -1084,7 +1084,11 @@ fn unsealing_failed_cause(export_path: &std::path::Path, attempts: usize) -> Str
 /// The two return shapes are different answers, not degrees of the same one:
 /// - `Ok(None)` — an honest degradation already reported to the operator. A corrupt or
 ///   bit-rotted export, or a wrong recovery code. Local-state is OPTIONAL and the events are
-///   the load-bearing copy, so the restore stands and the process still succeeds.
+///   the load-bearing copy, so **the restore stands and is not treated as a failure**. It does
+///   NOT follow that the process exits 0: without the export there is usually no actor registry
+///   either, so the clinical plane is never offered and the run ends **3 (INCOMPLETE)** under
+///   ADR-0071 — records still on the medium, recoverable by a second restore with the right
+///   code. The distinction this arm draws is 3-not-1, not 0-not-1.
 /// - `Err` — either recovered key material we could not INSTALL, or a bundle we could not
 ///   DECODE (`from_cbor` refuses a bundle written by a newer node, and that refusal is loud
 ///   on purpose — silently dropping an unknown slot would drop key material). Both are
@@ -1455,6 +1459,23 @@ enum Cmd {
     /// signing key is never backed up), rehydrates the old event history through the
     /// self-trusting restore door, authors a new genesis, and records a supersede linking
     /// the dead node to the new one. The node then re-peers from empty.
+    ///
+    /// EXIT STATUS (ADR-0071) — printed after the full summary, never instead of it:
+    ///   exit 0 = every record this build could apply is in the log.
+    ///   exit 3 = INCOMPLETE: the ceremony finished and records did NOT come back. Five
+    ///            causes, each named on stderr with its own remedy — a torn tail; records
+    ///            past a mid-file chain break; records in a plane this build cannot route;
+    ///            records held in the quarantine pen (`cairn-sync requeue` finishes those);
+    ///            or no actor registry, so the clinical plane was never offered. The node
+    ///            IS restored; this is not a failure.
+    ///   exit 1 = FAILED: the ceremony was BLOCKED (the local-state export could not be
+    ///            applied, no recovery code could be read, a database fault). Checked
+    ///            first, so it outranks 3.
+    /// `cairn-sync requeue` uses the same 3, and is the command that finishes a restore.
+    // `verbatim_doc_comment` because clap otherwise reflows the EXIT STATUS block above into one
+    // dense paragraph, and a status table a cron-wrapper author has to parse out of running prose
+    // is one they will not read (PR #612 review, finding 3).
+    #[command(verbatim_doc_comment)]
     Restore {
         /// Path of the backup medium to restore (as written by `backup`).
         #[arg(long)]
