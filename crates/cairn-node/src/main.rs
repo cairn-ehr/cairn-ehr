@@ -3589,6 +3589,16 @@ async fn main() -> anyhow::Result<()> {
                 for (reason, n) in &clinical.refusals {
                     println!("  refused — {reason}: {n}");
                 }
+                // #614 — a record this build cannot CLASSIFY is IN the log and is counted above
+                // as `applied`, which it honestly is. Saying only that left an operator reading
+                // "N applied" at exit 0 and finding those charts empty months later. The verdict
+                // is right (ADR-0071's rule is about the log, and an upgrade heals this with
+                // nothing left on the medium); the silence was not. See ADR-0072.
+                if let Some(line) =
+                    cairn_node::restore::clinical::deferred_notice(clinical.deferred)
+                {
+                    println!("{line}");
+                }
                 // Repeated at the tail for the same reason the untrusted note is: an
                 // all-zero clinical line is otherwise indistinguishable from a medium that
                 // held nothing, and the two have opposite remedies. Without this the reader
