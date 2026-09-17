@@ -27,7 +27,8 @@
 > `apply_remote_node_event` is the LIVE federation admission gate, reachable over the network
 > with no medium at all. That is [#619](https://github.com/cairn-ehr/cairn-ehr/issues/619),
 > filed and written into ADR-0072 before it merged; it is a refuse-vs-skip DECISION on the
-> pull path (#301/#268), not a patch.** Nine mutations, all killed; full local sweep green (185 suites / 2137 tests / 0 failures). **Still open: #608's
+> pull path (#301/#268), not a patch.** Nine mutations, all killed; full local sweep green (185 suites / **2139** tests / 0 failures), re-run after the review
+> fixes. **Still open: #619 (db/007's two doors — the largest), #608's
 > `cairn_project_late_custody` half, #605, #613, and node-plane completeness accounting.**
 >
 > **⇒ #594 IS BUILT AND MERGED** (2026-09-16,
