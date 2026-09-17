@@ -1507,10 +1507,27 @@ BEGIN
     -- Idempotent re-submit of the SAME event is a silent no-op (set-union).
     -- But a DIFFERENT event reusing this event_id (substitution) must not pass
     -- silently: compare the stored content-address to what we just verified.
+    --
+    -- The COMPARISON lives in cairn_refuse_substitution (db/053) since #615, shared with
+    -- apply_remote_event and restore_node_event. It used to be inline here and inline again in
+    -- db/020, both spelled `<>` — which yields NULL, and so does NOT fire, if the sub-select
+    -- finds no row (#608). One copy per door is how that came to be wrong in two places at once,
+    -- and how db/009 came to have no guard at all. The helper compares IS DISTINCT FROM; the
+    -- message is unchanged because the door name is interpolated.
+    --
+    -- The READ stays here, under the ROW_COUNT check, because this door is on the 100k-event
+    -- clinical path and must not pay a SELECT per event. db/009 reads unconditionally instead,
+    -- for a reason stated there. That asymmetry is deliberate: what the doors share is the
+    -- decision, not how each one fetches the fact.
+    --
+    -- PERFORM overwrites FOUND and ROW_COUNT, which is safe here and was checked rather than
+    -- assumed: the late-custody arm below reads the LOCAL v_log_rows (captured by the
+    -- GET DIAGNOSTICS above, not re-read), and the only FOUND read further down belongs to its
+    -- own immediately preceding SELECT ... INTO in the erasure.shred arm.
     IF v_log_rows = 0 THEN
-        IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
-            RAISE EXCEPTION 'submit_event: event_id % already exists with different content (substitution refused)', v_event_id;
-        END IF;
+        PERFORM cairn_refuse_substitution(
+            (SELECT content_address FROM event_log WHERE event_id = v_event_id),
+            v_ca, v_event_id, 'submit_event');
     END IF;
 
     -- #584 / ADR-0070 — CUSTODY ARRIVED LATE at the strict door: a re-submit of an event this node

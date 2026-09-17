@@ -475,10 +475,24 @@ BEGIN
     -- This guard sits ABOVE the marker clear below since #584, so the late-custody call can
     -- follow it while cairn.remote_apply is still 'on'. Moving it changed nothing it checks: the
     -- marker is transaction-local, and a RAISE aborts the transaction either way.
+    --
+    -- ⚠️ ITS POSITION IS STILL LOAD-BEARING and did not move when the comparison was extracted:
+    -- it must stay ABOVE cairn_project_late_custody so a rival body never reaches an applier
+    -- (ADR-0070 decision 1, HANDOVER trap 10; pinned by
+    -- late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier).
+    --
+    -- The COMPARISON lives in cairn_refuse_substitution (db/053) since #615, shared with
+    -- submit_event and restore_node_event — see db/053's header for why one copy per door was
+    -- the defect (#608's `<>` fail-open, wrong in two places at once). The READ stays here,
+    -- under the ROW_COUNT check, because this door is on the 100k-event clinical path.
+    --
+    -- PERFORM overwrites FOUND and ROW_COUNT — which is exactly what the comment above the
+    -- GET DIAGNOSTICS warns about, and is safe because that line already captured the outcome
+    -- into the LOCAL v_rows, which is what the late-custody arm below reads.
     IF v_rows = 0 THEN
-        IF (SELECT content_address FROM event_log WHERE event_id = v_event_id) <> v_ca THEN
-            RAISE EXCEPTION 'apply_remote_event: event_id % already exists with different content (substitution refused)', v_event_id;
-        END IF;
+        PERFORM cairn_refuse_substitution(
+            (SELECT content_address FROM event_log WHERE event_id = v_event_id),
+            v_ca, v_event_id, 'apply_remote_event');
     END IF;
 
     -- #584 / ADR-0070 — CUSTODY ARRIVED LATE: this call made the body readable (step 9 wrote
