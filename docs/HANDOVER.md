@@ -21,7 +21,7 @@
 > it is no. **The obvious fix for #615 was the wrong one:** porting db/005's guard would have
 > written #608's `<>` fail-open into the floor a THIRD time, so instead ONE pure
 > `cairn_refuse_substitution` (db/053) compares `IS DISTINCT FROM` for all three doors.
-> Guarded by **trap 12**. Eight mutations, all killed. **Still open: #608's
+> Guarded by **trap 12**. Eight mutations, all killed; full local sweep green (185 suites / 2137 tests / 0 failures). **Still open: #608's
 > `cairn_project_late_custody` half, #605, #613, and node-plane completeness accounting.**
 >
 > **⇒ #594 IS BUILT AND MERGED** (2026-09-16,
