@@ -67,7 +67,11 @@ run_mutation() {
 
     local verdict="SURVIVED"
     [ "$rc" -ne 0 ] && verdict="KILLED"
-    if echo "$out" | grep -qE "^error(\[|:)"; then
+    # A COMPILE failure says "could not compile" or carries an error code (error[E0433]).
+    # Cargo prints "error: test failed, to rerun pass ..." for an ordinary RUNTIME failure, so
+    # matching a bare leading "error:" would misreport every runtime kill as a compiler one —
+    # which is exactly what the first run of this harness did.
+    if echo "$out" | grep -qE "could not compile|^error\[E[0-9]+\]"; then
         verdict="KILLED (compiler — says nothing about runtime)"
     fi
     printf '%-4s expected %-9s actual %s\n' "$id" "$expected" "$verdict"
@@ -123,7 +127,7 @@ run_mutation M5 KILLED crates/cairn-node/src/restore/clinical.rs \
 # This one is runtime-observable and aims at the assertion that exists to keep the command there.
 run_mutation M6 KILLED crates/cairn-node/src/restore/clinical.rs \
     ' List them with `cairn-node deferred`.' \
-    '' \
+    ' (mutation M6: remedy stripped).' \
     "${NODE_TEST[@]}" restore_reports_deferred_records
 
 # M7 — db/009's guard moved ABOVE the INSERT branch, where v_found is always NULL. A clean
