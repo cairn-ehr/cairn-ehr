@@ -221,6 +221,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "052_restore_doors",
         include_str!("../../../db/052_restore_doors.sql"),
     ),
+    // db/053 (#615/#608): cairn_refuse_substitution — the ONE substitution refusal all three
+    // write doors share. In BOTH lists: db/005 and db/020 CALL it, and PL/pgSQL binds function
+    // names at EXECUTION, not creation, so a loader that omits this file loads cleanly and then
+    // fails at the first write — a total write outage, the #198 shape.
+    (
+        "053_substitution_guard",
+        include_str!("../../../db/053_substitution_guard.sql"),
+    ),
 ];
 
 // DELIBERATELY ABSENT: db/007 (the node plane). Since issue #231 the serve path READS

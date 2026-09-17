@@ -114,6 +114,23 @@ pub struct ClinicalRestoreReport {
     /// same way: an all-zero report with this set means the clinical plane is still entirely
     /// on the medium and still restorable, which is the opposite of a completed restore.
     pub skipped_no_registry: bool,
+    /// Records this build admitted but cannot CLASSIFY — a newer Cairn's event type (#614).
+    ///
+    /// `db/020` admits an unclassifiable type *uninterpreted*: in its own words it "yields NO
+    /// projection rows and confers NO power", and it returns `Ok`. Custody is orthogonal to
+    /// classification, so nothing above this distinguished such a record from one that came
+    /// fully back, and it was counted in [`applied`](ClinicalRestoreReport::applied) — which, in
+    /// the log, it genuinely is. What was missing is any way for the operator to learn that
+    /// those charts will stay empty until the node is upgraded.
+    ///
+    /// ⚠️ **Deliberately NOT an [`Unrestored`](crate::restore::completeness::Unrestored) cause,
+    /// so the exit code does not move.** The record IS in this node's log, which is precisely
+    /// what ADR-0071's exit-0 rule claims, and `connect_and_load_schema` re-adjudicates deferred
+    /// events — so an upgrade heals this with nothing left behind on the medium and no second
+    /// restore. `Unrestored`'s doc asks for a sixth cause to be "a deliberate decision, not a
+    /// silent widening"; ADR-0072 is that decision, and it is no. The defect was the SILENCE,
+    /// and [`deferred_notice`] ends it.
+    pub deferred: usize,
 }
 
 impl ClinicalRestoreReport {
@@ -395,7 +412,84 @@ pub async fn apply_clinical_plane(
         }
     }
 
+    // Asked ONCE, after the loop — see `deferred_count` for why a table-wide count is the honest
+    // answer to a question about THIS medium, and why this is not a probe per record.
+    report.deferred = deferred_count(db).await?;
+
     Ok(report)
+}
+
+/// How many records this node holds that it cannot yet interpret (#614).
+///
+/// **One aggregate query, not a probe per record.** A per-record probe would double the
+/// round-trips on the path whose §1.2 budget was measured at 1.17 ms/event over 100 003 events
+/// (`crates/cairn-node/results/2026-09-10-macos-m3max.md`); this is O(1) and cannot move it.
+///
+/// **Why it is not simply `count(*)` over the table.** `event_deferred`'s membership is broader
+/// than the sentence [`deferred_notice`] prints. `db/020` writes a row when the type is
+/// unclassified — that is this case — but `db/043`'s re-adjudication, which runs on EVERY
+/// `connect_and_load_schema`, **leaves the row in place with an `adjudication_error`** when the
+/// type is now classified and some other gate still fails (its own example: an overlay whose
+/// target has not arrived yet). Such a row has a type this build CAN classify, and *"upgrade this
+/// node"* is the wrong remedy for it. The `NOT EXISTS` is what keeps the count meaning what the
+/// notice claims; `cairn-node deferred` is the surface that shows both kinds with their reasons.
+///
+/// **On scope.** `restore` runs against an un-enrolled database (`main.rs` bails if
+/// `load_local_opt` finds a genesis) and nothing else writes in that window, so in the ordinary
+/// case every row counted came from this medium — including on a RESUMED restore, where the rows
+/// an earlier attempt left are this same medium's. ⚠️ **Un-enrolled is not empty**: a restore that
+/// aborted before `finalize_identity` — the registry-missing path the operator is told to recover
+/// from — leaves rows behind, so a restore of a DIFFERENT medium into that same database would
+/// count them here. The honest fix for that is a fresh database, which is what every abort path
+/// already instructs; this count does not try to detect it.
+async fn deferred_count(db: &Client) -> anyhow::Result<usize> {
+    let n: i64 = db
+        .query_one(
+            "SELECT count(*) FROM event_deferred d \
+             WHERE NOT EXISTS (SELECT 1 FROM event_type_class c WHERE c.event_type = d.event_type)",
+            &[],
+        )
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "counting the records this build cannot classify ({}). The restore itself has \
+                 already applied them; this count is what the summary reports about them.",
+                crate::db_diagnosis::legible_db_error(&e)
+            )
+        })?
+        .get(0);
+    Ok(n as usize)
+}
+
+/// The operator's line about records that came back but cannot be read yet (#614). **Pure.**
+///
+/// Pure so its wording is testable without a database — the same discipline as
+/// [`Unrestored::notice`](crate::restore::completeness::Unrestored::notice), for the same reason:
+/// this text is the entire difference between an operator who knows and one who does not.
+///
+/// It says four things, and each is load-bearing:
+/// * the **count**, which is the fact an operator checks the chart against;
+/// * that the records **ARE in the log**, so the medium is not short and exit 0 is honest;
+/// * that the remedy is an **upgrade and not a second restore** — without this, an operator
+///   reading the note will reasonably re-run the whole ceremony hunting records already here;
+/// * the **command** that lists them, because a problem named without a way to look at it is
+///   barely better than the silence it replaced.
+pub fn deferred_notice(deferred: usize) -> Option<String> {
+    if deferred == 0 {
+        return None;
+    }
+    // ⚠️ "N of them" had no valid antecedent. The line above this one reads
+    // "{applied} applied, {already_present} already present, …", and `applied` counts only records
+    // this run newly admitted — so on a RESUMED restore over the same medium it is 0 and every
+    // record lands in `already_present`. The operator then read "0 applied" followed by
+    // "3 of them …", where the nearest antecedent was the zero. Name the denominator instead: the
+    // records are in the LOG, which is the claim that is true on a first run and a resume alike.
+    Some(format!(
+        "  · {deferred} record(s) now in this node's log carry an event type this build cannot \
+         classify. They ARE in the log and will project once this node is upgraded — no second \
+         restore is needed, and nothing is left on the medium. List them with \
+         `cairn-node deferred`."
+    ))
 }
 
 /// Did the custody this restore presented actually land for `content_address`?

@@ -359,3 +359,46 @@ fn restore_help_names_the_exit_statuses() {
         );
     }
 }
+
+/// **Exit 0's stated limits must match what exit 0 actually does** (#614, ADR-0072).
+///
+/// The EXIT STATUS block used to disclose #614 as a known limit of exit 0: *"a record this build
+/// cannot CLASSIFY is in the log and counted, but yields no chart until this node is upgraded"*.
+/// Once the summary REPORTS those records, that sentence is stale — it tells a cron-wrapper
+/// author that the command is silent about something it now names.
+///
+/// This is the fourth instance of a pattern PR #612 caught three times: **a fix written under the
+/// pressure of a finding is itself unreviewed code, and `--help` is part of the contract.** Round
+/// 2's fix wrote round 3's contradiction; round 3's fix was falsified by an issue round 3 had
+/// filed an hour earlier. The cheap mechanical form of the defence is to re-ask the original
+/// question of the fix's own diff — and, for a published contract, to pin it with a test.
+///
+/// Spawned, never source-matched, for the reason the test above states.
+#[test]
+fn restore_help_says_a_deferred_record_is_reported_not_merely_admitted() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_cairn-node"))
+        .args(["restore", "--help"])
+        .output()
+        .expect("cairn-node restore --help");
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "`restore --help` must exit 0; got {:?}. Help:\n{help}",
+        out.status.code()
+    );
+    assert!(
+        help.contains("exit 0") && help.len() > 200,
+        "positive control: this must be the real long help, or the assertion below is vacuous. \
+         Got:\n{help}"
+    );
+    assert!(
+        help.contains("cairn-node deferred"),
+        "exit 0's stated limits must name the command that LISTS the records they are about, now \
+         that the summary reports them. A contract that still calls this a silence is a contract \
+         its own code falsifies. Help:\n{help}"
+    );
+}
