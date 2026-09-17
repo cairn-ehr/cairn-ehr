@@ -1158,16 +1158,28 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 Predicting a survivor *before* the run is what distinguishes a reasoned survivor from one
 rationalised afterwards (#594's M9 lesson).
 
-| # | Mutation | Expected | Killed by |
-|---|----------|----------|-----------|
-| M1 | `IS DISTINCT FROM` → `<>` in db/053 | KILLED | `substitution_guard::an_absent_row_fails_closed_rather_than_passing_silently` |
-| M2 | Delete db/009's `PERFORM cairn_refuse_substitution` line | KILLED | `restore_one_node_event_id_one_body::a_rival_node_event_under_one_id_is_refused_not_discarded` |
-| M3 | Delete db/005's `PERFORM` (leave db/020's) | KILLED | the existing db/005 substitution test |
-| M4 | Delete db/020's `PERFORM` (leave db/005's) | KILLED | `restore_one_event_id_one_body.rs` case 2 |
-| M5 | `report.deferred = deferred_count(db).await?` → `= 0` | KILLED | `an_unclassifiable_type_is_reported_and_still_exits_zero` |
-| M6 | `deferred_notice` returns `None` unconditionally | KILLED | `the_notice_names_the_count_the_remedy_and_the_command` |
-| M7 | Swap db/009's guard to *above* the `IF/ELSE` | KILLED | `a_rival_node_event_under_one_id_is_refused_not_discarded` (nothing is inserted yet, so `v_found` is always NULL and even a clean restore refuses) |
-| M8 | Add `deferred` to `Unrestored` and to `is_complete()` | **KILLED at compile** | `restore_exit_vocabulary::the_cause_list_is_exactly_five` — recorded because a *compile* kill says nothing about runtime; it is the guard working as designed, not evidence about the code under test |
+| # | Mutation | Expected | Actual | Killed by |
+|---|----------|----------|--------|-----------|
+| M1 | `IS DISTINCT FROM` → `<>` in db/053 | KILLED | **KILLED** | `substitution_guard::an_absent_row_fails_closed_rather_than_passing_silently` |
+| M2 | Delete db/009's `PERFORM cairn_refuse_substitution` | KILLED | **KILLED** | `restore_one_node_event_id_one_body::a_rival_node_event_under_one_id_is_refused_not_discarded` |
+| M3 | Delete db/005's `PERFORM` (leave db/020's) | KILLED | **KILLED** | `late_custody_reaches_the_chart` — **not** `seal_submit`, where the plan first guessed it |
+| M4 | Delete db/020's `PERFORM` (leave db/005's) | KILLED | **KILLED** | `restore_one_event_id_one_body` case 2 |
+| M5 | `report.deferred` hard-wired to `0` | KILLED | **KILLED** | `an_unclassifiable_type_is_reported_and_still_exits_zero` (reports `applied: 1, deferred: 0` — #614's exact pre-fix state) |
+| M6 | Strip `cairn-node deferred` from the notice | KILLED | **KILLED** | `the_notice_names_the_count_the_remedy_and_the_command` (pure, no database) |
+| M7 | Move db/009's guard **above** the `IF/ELSE` | KILLED | **KILLED** | `re_restoring_the_identical_medium_is_still_a_silent_no_op` — the idempotence arm, not the attack arm: `v_found` is always NULL there, so a CLEAN restore refuses |
+| M8 | Add `deferred` to `Unrestored` | KILLED (compile) | **KILLED (E0063 × 3)** | `the_cause_list_is_exactly_five`'s full struct literal. **Recorded as saying nothing about runtime** — it is the guard working as designed, not evidence about the code under test (#594's M9 lesson) |
+
+**Two harness defects, both found by the harness's own positive control on its first run** — and
+the reason that control exists at all:
+
+1. **The compiler-kill probe matched a bare leading `error:`** — which is also what cargo prints
+   for an *ordinary runtime failure* (`error: test failed, to rerun pass …`). All five kills in
+   the first run were misreported as compiler kills, i.e. as saying nothing about runtime. Now
+   matched on `could not compile` or an error **code**.
+2. **M6 swapped the remedy sentence to the EMPTY STRING**, so the revert's anchor was `''` —
+   37 628 occurrences. **This is #594's exact defect**, the one that discarded a whole run there.
+   Here the uniqueness check stopped the run instead of letting M7 execute on top of an unreverted
+   M6. The tree was left dirty by the abort, inspected, and restored from the committed file.
 
 - [ ] **Step 2: Build the harness with its own positive control**
 
