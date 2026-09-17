@@ -40,6 +40,18 @@
 -- sibling, unrevoked. #382's point is that a missing REVOKE a reader cannot classify as
 -- deliberate is worse than either extreme; this paragraph is that classification.
 -- **If this function ever starts reading a table, revisit it.**
+--
+-- ⚠️ REPLAY ORDER LEAVES A WINDOW, AND IT IS ACCEPTED RATHER THAN UNNOTICED. Each db/*.sql is its
+-- own transaction, replayed in numeric order on every connect, so db/005 and db/020 are REPLACED
+-- WITH BODIES THAT CALL THIS FUNCTION BEFORE THIS FILE CREATES IT. `SCHEMA_LOAD_LOCK` serialises
+-- loaders against each other but not against ordinary writers, so a `cairn-sync` pull or an agent
+-- submit landing inside that window fails with `42883 function cairn_refuse_substitution(...) does
+-- not exist` — the #198 shape, displaced from "a loader omitted the file" to "a loader has not
+-- reached it yet". The window is one file wide and one replay long, the failure is loud and
+-- transient (the next attempt succeeds), and no write is lost: a door that raises writes nothing.
+-- Moving this function into an early file would close it, at the cost of the #188 generation bump
+-- that is the whole reason it is a new file (#605). If that trade is ever revisited, this is the
+-- paragraph to revisit with it.
 
 BEGIN;
 
@@ -49,8 +61,13 @@ CREATE OR REPLACE FUNCTION cairn_refuse_substitution(
     p_event_id  UUID,
     p_door      TEXT
 ) RETURNS VOID
+-- NOT `IMMUTABLE`, though it reads nothing and would qualify on that test. A function whose only
+-- effect is a side-effecting RAISE is not a value-returning pure function, and IMMUTABLE licenses
+-- the planner to fold it: with constant arguments the refusal then fires at PLAN time rather than
+-- execution. Harmless at all three current call sites (each passes variables or a sub-select), but
+-- it is a genuine surprise waiting for the first caller that passes literals, and the default
+-- volatility costs nothing here.
 LANGUAGE plpgsql
-IMMUTABLE
 SET search_path = public, pg_temp
 AS $$
 BEGIN

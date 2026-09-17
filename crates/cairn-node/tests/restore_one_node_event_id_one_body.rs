@@ -106,6 +106,38 @@ fn synth_peer_with_id(
     sign(&body, sk).unwrap().signed_bytes
 }
 
+/// Mint a signed `node.superseded` under a caller-chosen `event_id`.
+///
+/// Separate from [`synth_peer_with_id`] because the supersede arm reads `superseded_node_id_hex`
+/// where the peer arm reads `peer_node_id_hex` — the same branch, a different decode.
+fn synth_supersede_with_id(
+    sk: &SigningKey,
+    name: &str,
+    event_id: uuid::Uuid,
+    superseded_hex: &str,
+) -> Vec<u8> {
+    let body = EventBody {
+        event_id: event_id.to_string(),
+        patient_id: identity::NIL_PATIENT.into(),
+        event_type: "node.superseded".into(),
+        schema_version: "node/1".into(),
+        hlc: Hlc {
+            wall: 3,
+            counter: 0,
+            node_origin: name.into(),
+        },
+        t_effective: None,
+        signer_key_id: hex::encode(sk.verifying_key().to_bytes()),
+        contributors: serde_json::json!([]),
+        payload: serde_json::json!({ "superseded_node_id_hex": superseded_hex }),
+        attachments: vec![],
+        plaintext_twin: None,
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
+    };
+    sign(&body, sk).unwrap().signed_bytes
+}
+
 /// A 32-byte node id as lowercase hex.
 ///
 /// Derived at runtime rather than written as a literal (house rule 6a), and the discriminator is
@@ -140,7 +172,11 @@ async fn a_rival_node_event_under_one_id_is_refused_not_discarded() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    db::reset_node_federation_tables(&c).await.ok();
+    db::reset_node_federation_tables(&c).await.expect(
+        "the fixture reset must succeed — swallowing it with .ok() is the shape that \
+                 produced the #296 pollution lessons: a leftover local_node fences the restore \
+                 door closed and every assertion below then fails for the wrong reason",
+    );
 
     let (sk, _kid) = cairn_event::generate_key().unwrap();
     restore(&c, &synth_enroll(&sk, "Restored"))
@@ -187,7 +223,11 @@ async fn re_restoring_the_identical_medium_is_still_a_silent_no_op() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    db::reset_node_federation_tables(&c).await.ok();
+    db::reset_node_federation_tables(&c).await.expect(
+        "the fixture reset must succeed — swallowing it with .ok() is the shape that \
+                 produced the #296 pollution lessons: a leftover local_node fences the restore \
+                 door closed and every assertion below then fails for the wrong reason",
+    );
 
     let (sk, _kid) = cairn_event::generate_key().unwrap();
     let genesis = synth_enroll(&sk, "Restored");
@@ -198,9 +238,13 @@ async fn re_restoring_the_identical_medium_is_still_a_silent_no_op() {
         "peer.added",
         &node_id_hex(3),
     );
+    // `node.superseded` takes the SAME else-branch as a peer event but reads a DIFFERENT payload
+    // field, and the guard below it is new — so the idempotence claim has to cover it too, not
+    // just the arm that happened to be convenient to build.
+    let supersede = synth_supersede_with_id(&sk, "Restored", uuid::Uuid::now_v7(), &node_id_hex(4));
 
     for pass in 1..=2 {
-        for ev in [&genesis, &peer] {
+        for ev in [&genesis, &peer, &supersede] {
             restore(&c, ev).await.unwrap_or_else(|e| {
                 panic!("pass {pass}: re-applying the SAME medium must stay a no-op, not raise: {e}")
             });

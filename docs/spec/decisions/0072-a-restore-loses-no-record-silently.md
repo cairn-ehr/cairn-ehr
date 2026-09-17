@@ -24,16 +24,30 @@ within hours of that ADR being written, by asking the question its own review ha
 Two of them let `cairn-node restore` exit **0 having left a record behind**. They share nothing in
 mechanism and everything in consequence, which is why they are decided together.
 
-### #615 — the node plane discards a rival event in silence
+### #615 — the restore door discards a rival event in silence
 
-Two of the three write doors refuse a **substitution** — a second, *different* event filed under an
-`event_id` the log already holds. `submit_event` (`db/005`) and `apply_remote_event` (`db/020`) have
-done so since their first review, because two nodes holding different bytes under one `event_id`
+A **substitution** is a second, *different* event filed under an `event_id` the log already holds.
+`submit_event` (`db/005`) and `apply_remote_event` (`db/020`) — the two `event_log` doors — have
+refused one since their first review, because two nodes holding different bytes under one `event_id`
 would diverge forever with no alarm.
 
-The third, `restore_node_event` (`db/009`), did not. Its two
-`INSERT … ON CONFLICT (node_event_id) DO NOTHING` sites carried no comparison at all, so the rival
-was discarded without a word.
+`restore_node_event` (`db/009`) did not. Its two `INSERT … ON CONFLICT (node_event_id) DO NOTHING`
+sites carried no comparison at all, so the rival was discarded without a word.
+
+> ⚠️ **The census #615 and this ADR's first draft used — *"two of the three write doors"* — was
+> wrong, and the correction is load-bearing for anyone reading this later.** It counted the two
+> `event_log` doors alongside the restore door and omitted the other two `node_event` writers
+> entirely: `submit_node_event` and `apply_remote_node_event` (`db/007`), which between them have
+> **five** unguarded `ON CONFLICT (node_event_id) DO NOTHING` sites and no `content_address`
+> comparison anywhere in that file. So the true census of `node_event` writers is **three doors, of
+> which this ADR guards one.** `apply_remote_node_event` is the *live federation admission gate* —
+> reachable over the network by any admitted peer, with no medium required — and there the silent
+> discard is also **non-abortive**: the pull loop counts the event applied and advances its cursor,
+> so set-union never re-offers it. That is **[#619](https://github.com/cairn-ehr/cairn-ehr/issues/619)**,
+> and it is deliberately not built here: db/009's tail-guard shape does not transpose (each db/007
+> arm has its own `RETURN`), and whether that door should **refuse**, **skip-and-advance** or
+> **quarantine** is the open node-vs-clinical-plane divergence (#301 / #268), where a RAISE on the
+> pull path can wedge the watermark. Picking one by analogy to db/009 would be picking it silently.
 
 That door is **self-trusting** by design — any validly-signed `node.enrolled` is admitted without a
 trust check, because a fresh node has no trust set to check against — and db/009's own comment
@@ -168,8 +182,10 @@ so the two cases land on opposite sides of it without any special pleading.
 
 ## Consequences
 
-- A fourth door needing this guard **calls** `cairn_refuse_substitution`. A fourth inline copy is
-  the #608 shape returning, and `substitution_guard_is_single_source.rs` fails on one.
+- A door needing this guard **calls** `cairn_refuse_substitution`. A fourth inline copy is the #608
+  shape returning, and `substitution_guard_is_single_source.rs` fails on one. ⚠️ That guard proves
+  nobody *duplicates* the refusal; it cannot see a door that never calls it, which is why #619 is
+  invisible to it and is named as a residual instead.
 - A restore over a medium carrying rival content under one id now **fails** where it used to
   succeed. No honest medium does this, and the project is pre-clinical, so no deployed node can be
   holding one.
@@ -181,6 +197,10 @@ so the two cases land on opposite sides of it without any special pleading.
 
 ## Residuals — named, not assumed away
 
+- **[#619](https://github.com/cairn-ehr/cairn-ehr/issues/619)** — `db/007`'s two node-plane doors
+  still have no substitution guard, including `apply_remote_node_event`, the live federation
+  admission gate. **The largest thing this ADR leaves open**, and the reason the census paragraph
+  above exists: without it this document would read as a statement that the node plane is covered.
 - **[#608](https://github.com/cairn-ehr/cairn-ehr/issues/608)** — `cairn_project_late_custody`'s
   not-found arm still returns silently. Narrowed, not closed.
 - **[#605](https://github.com/cairn-ehr/cairn-ehr/issues/605)** — an in-place `db/` function edit is

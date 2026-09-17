@@ -331,14 +331,71 @@ pub struct RestoreOutcome {
 /// Returns the number of events PROCESSED (the slice length), not the number newly
 /// inserted. Because the door uses ON CONFLICT DO NOTHING, re-applying the same medium
 /// is a no-op at the DB level but still returns the same count — not 0.
+///
+/// ⚠️ **Every event is its own transaction.** This takes a `&Client`, not a `Transaction`, and
+/// opens none — so each `restore_node_event` autocommits. A refusal part-way through therefore
+/// leaves everything before it **committed**, which is why the substitution refusal's remedy is
+/// not simply "try another medium": the rival that caused it is already in `node_event`, so a
+/// clean medium restored into this same database hits the same guard on the genuine event and is
+/// refused again, forever. `refusal_remedy` adds that instruction; it is the node-plane sibling of
+/// the clinical plane's *"RESTORE AGAIN … into a FRESHLY CREATED database"* (#554 finding 4).
 pub async fn apply_medium(db: &Client, events: &[Vec<u8>]) -> anyhow::Result<usize> {
     use anyhow::Context;
     for (i, e) in events.iter().enumerate() {
         db.execute("SELECT restore_node_event($1)", &[e])
             .await
+            .map_err(|err| {
+                let msg = err
+                    .as_db_error()
+                    .map(|d| d.message().to_string())
+                    .unwrap_or_default();
+                anyhow::anyhow!(
+                    "{}{}",
+                    crate::db_diagnosis::legible_db_error(&err),
+                    substitution_remedy(&msg)
+                )
+            })
             .with_context(|| format!("applying restored event #{i}"))?;
     }
     Ok(events.len())
+}
+
+/// The extra instruction a *substitution* refusal needs, and no other refusal does. **Pure.**
+///
+/// # Why this text is not in the door
+///
+/// `cairn_refuse_substitution` (db/053) is shared with two `event_log` doors whose callers are a
+/// live submit and a sync pull, and *"restore into a fresh database"* is meaningless advice to
+/// either. The remedy is a property of THIS caller, so it is written at this layer — the same
+/// split as `restore::clinical`'s pen reasons, which carry the restore's own wording rather than
+/// the door's.
+///
+/// # Why it says what it says
+///
+/// [`apply_medium`] opens no transaction, so every event before the refusal is **already
+/// committed — including the rival that caused it**. The obvious next move, "find a clean copy of
+/// the backup and restore that", therefore fails too: the clean medium's genuine event meets the
+/// rival still sitting in `node_event` and is refused by the same guard, forever. Without this
+/// sentence an operator loops on that, mid-disaster, with a correct medium in hand.
+///
+/// # Why matching the message is safe here, when it usually is not
+///
+/// The refusal sentence has exactly ONE home (`db/053`), and
+/// `crates/cairn-node/tests/substitution_guard_is_single_source.rs` fails if a second appears —
+/// so this cannot silently start matching some other door's wording. It can still go stale if the
+/// sentence itself is reworded, which is why `SUBSTITUTION_MARKER` is a named constant that greps
+/// to the same string as the test's, rather than a literal buried in a condition.
+fn substitution_remedy(door_message: &str) -> &'static str {
+    /// The distinctive fragment of db/053's refusal. Kept in step with
+    /// `substitution_guard_is_single_source.rs::SENTENCE`.
+    const SUBSTITUTION_MARKER: &str = "substitution refused";
+    if !door_message.contains(SUBSTITUTION_MARKER) {
+        return "";
+    }
+    "\n\nEVERY EVENT APPLIED BEFORE THIS ONE IS ALREADY COMMITTED — each is its own transaction — \
+     and that includes the rival event that caused this refusal. Restoring a different copy of the \
+     backup INTO THIS DATABASE will meet the same rival and be refused again. Recover a clean \
+     medium and restore it into a FRESHLY CREATED database."
 }
 
 /// After the medium is applied, mint the node's NEW identity: author a fresh genesis

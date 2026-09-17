@@ -425,18 +425,30 @@ pub async fn apply_clinical_plane(
 /// round-trips on the path whose §1.2 budget was measured at 1.17 ms/event over 100 003 events
 /// (`crates/cairn-node/results/2026-09-10-macos-m3max.md`); this is O(1) and cannot move it.
 ///
-/// **Why counting the whole table honestly answers a question about THIS medium.** `restore`
-/// runs against a fresh, un-enrolled database *before* `finalize_identity` — `restore_node_event`
-/// fences itself closed the moment a genesis exists — and nothing else writes in that window, so
-/// every `event_deferred` row present came from this medium. That stays true on a RESUMED
-/// restore: rows left by an earlier attempt over the same medium are this same medium's.
+/// **Why it is not simply `count(*)` over the table.** `event_deferred`'s membership is broader
+/// than the sentence [`deferred_notice`] prints. `db/020` writes a row when the type is
+/// unclassified — that is this case — but `db/043`'s re-adjudication, which runs on EVERY
+/// `connect_and_load_schema`, **leaves the row in place with an `adjudication_error`** when the
+/// type is now classified and some other gate still fails (its own example: an overlay whose
+/// target has not arrived yet). Such a row has a type this build CAN classify, and *"upgrade this
+/// node"* is the wrong remedy for it. The `NOT EXISTS` is what keeps the count meaning what the
+/// notice claims; `cairn-node deferred` is the surface that shows both kinds with their reasons.
 ///
-/// ⚠️ **That assumption is the whole of its honesty.** A future caller running this against a
-/// database with other history would get a number that no longer means what its caller says it
-/// means. It is private for that reason.
+/// **On scope.** `restore` runs against an un-enrolled database (`main.rs` bails if
+/// `load_local_opt` finds a genesis) and nothing else writes in that window, so in the ordinary
+/// case every row counted came from this medium — including on a RESUMED restore, where the rows
+/// an earlier attempt left are this same medium's. ⚠️ **Un-enrolled is not empty**: a restore that
+/// aborted before `finalize_identity` — the registry-missing path the operator is told to recover
+/// from — leaves rows behind, so a restore of a DIFFERENT medium into that same database would
+/// count them here. The honest fix for that is a fresh database, which is what every abort path
+/// already instructs; this count does not try to detect it.
 async fn deferred_count(db: &Client) -> anyhow::Result<usize> {
     let n: i64 = db
-        .query_one("SELECT count(*) FROM event_deferred", &[])
+        .query_one(
+            "SELECT count(*) FROM event_deferred d \
+             WHERE NOT EXISTS (SELECT 1 FROM event_type_class c WHERE c.event_type = d.event_type)",
+            &[],
+        )
         .await
         .map_err(|e| {
             anyhow::anyhow!(
@@ -466,10 +478,17 @@ pub fn deferred_notice(deferred: usize) -> Option<String> {
     if deferred == 0 {
         return None;
     }
+    // ⚠️ "N of them" had no valid antecedent. The line above this one reads
+    // "{applied} applied, {already_present} already present, …", and `applied` counts only records
+    // this run newly admitted — so on a RESUMED restore over the same medium it is 0 and every
+    // record lands in `already_present`. The operator then read "0 applied" followed by
+    // "3 of them …", where the nearest antecedent was the zero. Name the denominator instead: the
+    // records are in the LOG, which is the claim that is true on a first run and a resume alike.
     Some(format!(
-        "  · {deferred} of them carry an event type this build cannot classify. They ARE in the \
-         log and will project once this node is upgraded — no second restore is needed, and \
-         nothing is left on the medium. List them with `cairn-node deferred`."
+        "  · {deferred} record(s) now in this node's log carry an event type this build cannot \
+         classify. They ARE in the log and will project once this node is upgraded — no second \
+         restore is needed, and nothing is left on the medium. List them with \
+         `cairn-node deferred`."
     ))
 }
 

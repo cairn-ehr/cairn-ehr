@@ -126,8 +126,8 @@ run_mutation M5 KILLED crates/cairn-node/src/restore/clinical.rs \
 # -D warnings kills it at COMPILE time and it says nothing about runtime — #594's M9 lesson).
 # This one is runtime-observable and aims at the assertion that exists to keep the command there.
 run_mutation M6 KILLED crates/cairn-node/src/restore/clinical.rs \
-    ' List them with `cairn-node deferred`.' \
-    ' (mutation M6: remedy stripped).' \
+    '`cairn-node deferred`."' \
+    '`cairn-node NOT-THE-COMMAND`."' \
     "${NODE_TEST[@]}" restore_reports_deferred_records
 
 # M7 — db/009's guard moved ABOVE the INSERT branch, where v_found is always NULL. A clean
@@ -138,6 +138,30 @@ run_mutation M7 KILLED db/009_node_supersede_and_restore.sql \
     PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, '"'"'restore_node_event'"'"');
     IF v_op = '"'"'enroll'"'"' THEN' \
     "${NODE_TEST[@]}" restore_one_node_event_id_one_body
+
+# M8 — the sixth Unrestored cause ADR-0072 decided AGAINST. Expected to be killed by the
+# COMPILER (E0063: the_cause_list_is_exactly_five uses a full struct literal), which is a real
+# guard doing its job but says nothing about runtime behaviour — recorded as such.
+run_mutation M8 "KILLED (compiler — says nothing about runtime)" \
+    crates/cairn-node/src/restore/completeness.rs \
+    '    pub no_registry: bool,
+}' \
+    '    pub no_registry: bool,
+    /// M8 mutation: the sixth cause ADR-0072 decided against.
+    pub deferred: usize,
+}' \
+    "${NODE_TEST[@]}" restore_exit_vocabulary
+
+# M9 — the PRINT deleted. #614's fix reaches an operator through exactly one println!; every other
+# test in the suite stays green without it, which is why the CLI arm exists (review finding I4).
+run_mutation M9 KILLED crates/cairn-node/src/main.rs \
+    '                if let Some(line) =
+                    cairn_node::restore::clinical::deferred_notice(clinical.deferred)
+                {
+                    println!("{line}");
+                }' \
+    '                // (mutation M9: the print deleted)' \
+    "${NODE_TEST[@]}" restore_reports_deferred_records
 
 echo "=== run complete ==="
 require_clean && echo "tree is clean: every revert landed"
