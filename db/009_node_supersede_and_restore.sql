@@ -43,6 +43,9 @@ AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID; v_signer TEXT;
     v_payload JSONB; v_author_node BYTEA; v_subject BYTEA;
+    -- The content-address ALREADY stored under v_eid, read back after the INSERT so a
+    -- substitution can be told from an idempotent repeat (#615; see the guard at the tail).
+    v_found BYTEA;
 BEGIN
     -- FENCE: restore is only into a fresh, un-enrolled node.
     IF EXISTS (SELECT 1 FROM local_node WHERE id) THEN
@@ -136,6 +139,46 @@ BEGIN
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
     END IF;
+
+    -- SUBSTITUTION REFUSAL (#615). Both branches above insert ON CONFLICT DO NOTHING, which is
+    -- what makes a re-restore of the same medium a no-op — and is also what made a SECOND,
+    -- DIFFERENT event under one node_event_id vanish without a word. db/005 and db/020 have
+    -- refused this since their first review; this door is the one that did not.
+    --
+    -- WHY IT MATTERS MOST HERE. The node plane is the TRUST SET, and the silently-dropped event
+    -- can be the clinic's own `peer.revoked`: the restored node then comes back trusting a peer
+    -- the clinic had revoked, while the summary reads `restored N event(s)` at exit 0. The count
+    -- cannot catch it — apply_medium returns the number of events OFFERED, by its own doc. And
+    -- this door is self-trusting, which is precisely why the medium is the reachable attack
+    -- surface: see the drift-ceiling comment above, which already establishes that the medium
+    -- "can contain OTHER signers' events and is attacker-appendable".
+    --
+    -- THREE THINGS ABOUT THE SHAPE, each chosen rather than inherited from the other two doors:
+    --   * NO GET DIAGNOSTICS. A ROW_COUNT check placed here would be correct only because the
+    --     last statement of BOTH branches happens to be the INSERT. Someone later adding a
+    --     statement inside either branch would disarm the guard SILENTLY — the exact failure
+    --     db/020's own comment warns about. Reading the row back has no such coupling.
+    --   * FAIL-CLOSED ON AN ABSENT ROW. If the read finds nothing, v_found is NULL and
+    --     cairn_refuse_substitution's IS DISTINCT FROM refuses. That state should be
+    --     unreachable; on the §9 surface "should be unreachable" is not a reason to pass (#608).
+    --   * ONCE, NOT TWICE. Both branches write node_event under the same key, so one site covers
+    --     both and there is no second copy to drift — which is the whole lesson of #608, where
+    --     one invariant written twice came to be wrong in both places at once.
+    --
+    -- COST: one extra SELECT per NODE-plane event. A medium carries tens of those (enrolls,
+    -- peers, revokes, supersedes), not the 100 003 clinical records the §1.2 restore budget was
+    -- measured against — which is why db/005 and db/020 keep their ROW_COUNT check and this door
+    -- does not need one.
+    --
+    -- A REFUSAL ABORTS THE WHOLE RESTORE, because apply_medium propagates with `?`. That is not
+    -- a new posture: this door already aborts on an unknown node event type, an over-ceiling
+    -- event, an HLC wall past the drift ceiling, and an author key resolving to no restored
+    -- enroll. A medium carrying two rival events under one id is a compromised or corrupt
+    -- medium, and restoring a node whose peer list was decided by whoever appended last is a
+    -- worse outcome than refusing and sending the operator to find another copy.
+    SELECT content_address INTO v_found FROM node_event WHERE node_event_id = v_eid;
+    PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'restore_node_event');
+
     -- Clock never falls behind a restored event (HLC invariant A3, mirrors the apply path).
     -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge —
     -- and the merge being monotone is exactly why that ceiling has to sit in front of it.
