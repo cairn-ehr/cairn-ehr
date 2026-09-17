@@ -61,7 +61,11 @@ fn address(lineage: u8) -> Vec<u8> {
 /// The id goes over as TEXT and is cast in SQL (`$3::text::uuid`): this project's
 /// `tokio-postgres` carries no uuid `ToSql`/`FromSql` binding, and the repo-wide idiom is the
 /// cast rather than a feature flag (see `apply_proposal.rs`, which says so at its own call site).
-async fn refuse(c: &tokio_postgres::Client, found: Option<Vec<u8>>, new: Vec<u8>) -> Option<String> {
+async fn refuse(
+    c: &tokio_postgres::Client,
+    found: Option<Vec<u8>>,
+    new: Vec<u8>,
+) -> Option<String> {
     let id = uuid::Uuid::now_v7().to_string();
     c.execute(
         "SELECT cairn_refuse_substitution($1, $2, $3::text::uuid, 'test_door')",
