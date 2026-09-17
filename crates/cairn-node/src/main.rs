@@ -1466,15 +1466,20 @@ enum Cmd {
     /// supersede linking the dead node to the new one. The node then re-peers from
     /// empty.
     ///
-    /// EXIT STATUS (ADR-0071) — printed after the full summary, never instead of it:
+    /// EXIT STATUS (ADR-0071, amended by ADR-0072) — printed after the full
+    /// summary, never instead of it:
     ///   exit 0 = every record the medium carried reached this node's log, and
-    ///            none of the five causes below holds. TWO KNOWN LIMITS, both
-    ///            named rather than implied: (a) it is a claim about RECORDS, not
-    ///            provisioning — a restore whose local-state export degraded still
-    ///            exits 0 on a medium carrying no clinical records, having
-    ///            installed no custody key (#613); and (b) a record this build
-    ///            cannot CLASSIFY is in the log and counted, but yields no chart
-    ///            until this node is upgraded (#614).
+    ///            none of the five causes below holds. ONE KNOWN LIMIT, named
+    ///            rather than implied: it is a claim about RECORDS, not
+    ///            provisioning — a restore whose local-state export degraded
+    ///            still exits 0 on a medium carrying no clinical records,
+    ///            having installed no custody key (#613).
+    ///            A record this build cannot CLASSIFY is in the log and
+    ///            counted, and projects into no chart until this node is
+    ///            upgraded — that is no longer a SILENCE of exit 0: the
+    ///            summary names how many, and `cairn-node deferred` lists
+    ///            them. Nothing is left on the medium and no second restore
+    ///            is needed (#614, ADR-0072).
     ///   exit 3 = INCOMPLETE: the ceremony finished and records did NOT come back.
     ///            Five causes, each named on stderr with its own remedy — a torn
     ///            tail; records past a mid-file chain break; records in a plane this
