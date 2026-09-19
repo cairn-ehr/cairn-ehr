@@ -2,13 +2,16 @@
 //!
 //! # Why the pull loop has to ask
 //!
-//! The node-plane pull loop (`super::pull_into`) routes a refusal by SQLSTATE. Every floor refusal
-//! is a bare `RAISE EXCEPTION` — P0001, which is a CONTRACT: db/001 states it for this loop in the
-//! comment above `cairn_decode_hex_or_raise` (#228), and `cairn-sync`'s `refusal_is_deliberate` has
-//! relied on it since #267. A P0001 on a verifiable event is skipped-and-advanced, because on the
-//! node plane it is almost always SCOPING: an event authored by a node this one does not peer with,
-//! which heals on a later full sweep once trust or code arrives. (#268's own comment explains why
-//! penning that steady-state traffic would flood the pen.)
+//! The node-plane pull loop (`super::pull_into`) routes a refusal by SQLSTATE. Every DELIBERATE
+//! floor refusal is a bare `RAISE EXCEPTION` — P0001, which is a CONTRACT: db/001 states it for this
+//! loop in the comment above `cairn_decode_hex_or_raise` (#228), and `cairn-sync`'s
+//! `refusal_is_deliberate` has relied on it since #267. (Some refusals are not deliberate in this
+//! sense — a `::uuid` cast raising 22P02, a CHECK raising 23514 — and freeze the cursor instead;
+//! #621 and ADR-0072's erratum E1.) A P0001 on a verifiable event is skipped-and-advanced, because
+//! on the node plane it is almost always SCOPING: an event authored by a node this one does not
+//! peer with, which heals on a later full sweep once trust or code arrives. (Why penning that
+//! steady-state traffic would flood the pen is recorded in `docs/spec/sync.md` §6.3's #268 note,
+//! and weighed again in ADR-0073's alternatives.)
 //!
 //! A substitution breaks that premise. It is a second, DIFFERENT event under an `event_id` this node
 //! already holds, and it can never apply here — the id is taken — so "it heals on a later sweep" is
@@ -30,9 +33,10 @@
 //! is the table: `node_event` is append-only, so a row holding this id under a different content
 //! address is true now and stays true. The question is asked of the table, after the refusal.
 //!
-//! That also makes the answer independent of WHICH check refused. A rival from an untrusted author
-//! is refused by the trust check before the door ever reaches its substitution guard — and it is
-//! still a rival under a held id, still never applies, and is still penned.
+//! That also makes the answer independent of WHICH check raised the P0001. A rival from an
+//! untrusted author is refused by the trust check before the door ever reaches its substitution
+//! guard — and it is still a rival under a held id, still never applies, and is still penned. (A
+//! refusal with any OTHER SQLSTATE never reaches this question: the loop freezes on it first.)
 
 use tokio_postgres::Client;
 
@@ -62,15 +66,67 @@ pub fn substitution_reason(event_id: &str, held: Option<&[u8]>, offered: &[u8]) 
     ))
 }
 
+/// Read `event_id` EXACTLY as Postgres's `::uuid` cast reads it, or `None` where that cast
+/// would raise. **Pure.**
+///
+/// # Why not `uuid::Uuid::parse_str`
+///
+/// The doors take the id with `(b ->> 'event_id')::uuid`, and the signed body's `event_id` is a
+/// free string that nothing forces into one spelling. Postgres accepts more spellings than the
+/// `uuid` crate: a hyphen after ANY group of four hex digits, braced or not
+/// (`a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11`). With the crate's parser, a rival spelled that
+/// way was refused by the door — the door read it as the held id — yet looked "not held" here,
+/// so the pull loop skipped it as routine scoping and the pen never saw it. Whoever minted the
+/// rival could switch the pen off by choosing a spelling (PR #623 review, finding 1). The only
+/// safe answer is the door's own grammar, so this is a line-for-line mirror of Postgres's
+/// `string_to_uuid` (src/backend/utils/adt/uuid.c):
+///
+/// 1. an optional opening `{`, which then requires a closing `}` at the very end;
+/// 2. exactly 32 hex digits, either case, read as 16 bytes;
+/// 3. after every second byte (every four digits) except the last, at most ONE optional `-`;
+/// 4. nothing else — no whitespace, no `urn:uuid:` prefix, no trailing text.
+///
+/// `tests/node_event_id_spellings.rs` asks a live server the same question over the same
+/// spellings, so if Postgres's grammar ever changes, that test fails rather than the pen going
+/// quietly blind again.
+pub fn uuid_as_postgres_reads_it(event_id: &str) -> Option<uuid::Uuid> {
+    let mut rest = event_id.as_bytes();
+    let braced = rest.first() == Some(&b'{');
+    if braced {
+        rest = &rest[1..];
+    }
+    let mut bytes = [0u8; 16];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        // Two hex digits make one byte. `get(..2)` is `None` when the input runs out early.
+        let pair = std::str::from_utf8(rest.get(..2)?).ok()?;
+        if !pair.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None; // `from_str_radix` alone would also accept a leading `+`
+        }
+        *byte = u8::from_str_radix(pair, 16).ok()?;
+        rest = &rest[2..];
+        // Step 3: one optional hyphen after bytes 1, 3, 5, … 13 — never after the last (15).
+        if i % 2 == 1 && i < 15 && rest.first() == Some(&b'-') {
+            rest = &rest[1..];
+        }
+    }
+    if braced {
+        rest = rest.strip_prefix(b"}")?;
+    }
+    rest.is_empty().then(|| uuid::Uuid::from_bytes(bytes))
+}
+
 /// What `node_event` holds under `event_id`: its content address, or `None` when nothing is.
 ///
-/// An `event_id` that is not a UUID cannot be held (the column is `uuid`), so it answers `None`
-/// WITHOUT a query. Parsing here rather than casting in SQL is deliberate: a cast would turn a
-/// malformed id into a database error, which the caller must treat as a FREEZE — and a refused
-/// event with a malformed id (an oversized one, say, refused before the door parsed it) would
-/// then wedge the cursor forever.
+/// The id is read with [`uuid_as_postgres_reads_it`] — the door's grammar, not the `uuid`
+/// crate's, for the reason given there. An id Postgres cannot read cannot be held (the column is
+/// `uuid`), so it answers `None` WITHOUT a query. Parsing here rather than casting in SQL is
+/// deliberate: a cast would turn a malformed id into a database error, which the caller must
+/// treat as a FREEZE — and a refused event with a malformed id (an oversized one, say, refused
+/// before the door parsed it) would then wedge the cursor forever. A guarded SQL cast
+/// (`CASE WHEN pg_input_is_valid(…) THEN $1::uuid END`) would not avoid that either: planning a
+/// query for its actual parameter value may constant-fold the cast and raise anyway.
 pub async fn held_content_address(db: &Client, event_id: &str) -> anyhow::Result<Option<Vec<u8>>> {
-    let Ok(id) = uuid::Uuid::parse_str(event_id) else {
+    let Some(id) = uuid_as_postgres_reads_it(event_id) else {
         return Ok(None);
     };
     let row = db
@@ -90,7 +146,61 @@ pub async fn held_content_address(db: &Client, event_id: &str) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
-    use super::substitution_reason;
+    use super::{substitution_reason, uuid_as_postgres_reads_it};
+
+    /// The one UUID every spelling below names, in its canonical form.
+    const CANONICAL: &str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+
+    /// Every spelling Postgres 18's `::uuid` ACCEPTS reads as the same UUID here. Each row was
+    /// taken from a live `SELECT '<spelling>'::uuid`; `tests/node_event_id_spellings.rs` re-asks
+    /// the live server the same question, so a drift between the two parsers fails CI.
+    #[test]
+    fn every_spelling_postgres_accepts_reads_as_the_same_uuid() {
+        for spelling in [
+            "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+            "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11",
+            "a0eebc999c0b4ef8bb6d6bb9bd380a11",
+            "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}",
+            // The two the `uuid` crate rejects — the spellings behind the review finding: a
+            // hyphen after ANY group of four hex digits, braced or not.
+            "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11",
+            "{a0eebc99-9c0b4ef8-bb6d6bb9-bd380a11}",
+        ] {
+            assert_eq!(
+                uuid_as_postgres_reads_it(spelling).map(|u| u.to_string()),
+                Some(CANONICAL.to_string()),
+                "Postgres reads {spelling:?} as {CANONICAL}, so the lookup must too"
+            );
+        }
+    }
+
+    /// Every spelling Postgres 18's `::uuid` REJECTS is `None` here: the door raised 22P02 on it
+    /// (a freeze, before this lookup is ever reached), so it names no row the door could hold.
+    #[test]
+    fn every_spelling_postgres_rejects_reads_as_none() {
+        for spelling in [
+            "a0eebc999c0b4ef8bb6d6bb9bd380a11-",
+            "-a0eebc999c0b4ef8bb6d6bb9bd380a11",
+            "a0eebc99--9c0b4ef8bb6d6bb9bd380a11",
+            "a0e-ebc999c0b4ef8bb6d6bb9bd380a11",
+            " a0eebc999c0b4ef8bb6d6bb9bd380a11",
+            "a0eebc999c0b4ef8bb6d6bb9bd380a11 ",
+            "{a0eebc999c0b4ef8bb6d6bb9bd380a11",
+            "a0eebc999c0b4ef8bb6d6bb9bd380a11}",
+            "urn:uuid:a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+            "a0eebc999c0b4ef8bb6d6bb9bd380a1-1",
+            "a0eebc999c0b4ef8bb6d6bb9bd380a",
+            "{-a0eebc999c0b4ef8bb6d6bb9bd380a11}",
+            "",
+            "not-a-uuid",
+        ] {
+            assert_eq!(
+                uuid_as_postgres_reads_it(spelling),
+                None,
+                "Postgres rejects {spelling:?}, so it names no held row"
+            );
+        }
+    }
 
     /// A content address, derived at runtime (house rule 6a) and discriminated by a `lineage`,
     /// never a seed/salt/nonce (6b): nothing here is cryptographic.

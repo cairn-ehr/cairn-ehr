@@ -74,6 +74,19 @@ pub fn node_event(
     wall: i64,
     payload: serde_json::Value,
 ) -> Vec<u8> {
+    node_event_spelled(sk, event_type, &event_id.to_string(), wall, payload)
+}
+
+/// [`node_event`] with the `event_id` given as TEXT, spelled however the caller likes. The signed
+/// body carries the id as a free string and the doors read it with Postgres's `::uuid`, which
+/// accepts more spellings than the canonical one — see [`spelled_oddly`].
+pub fn node_event_spelled(
+    sk: &SigningKey,
+    event_type: &str,
+    event_id: &str,
+    wall: i64,
+    payload: serde_json::Value,
+) -> Vec<u8> {
     let kid = key_hex(sk);
     let body = EventBody {
         event_id: event_id.to_string(),
@@ -117,6 +130,35 @@ pub fn peer_event(sk: &SigningKey, event_type: &str, event_id: Uuid, subject_hex
         2,
         serde_json::json!({ "peer_node_id_hex": subject_hex, "role": "peer" }),
     )
+}
+
+/// [`peer_event`] under an id given as TEXT — for a rival whose id is spelled [`spelled_oddly`].
+pub fn peer_event_spelled(
+    sk: &SigningKey,
+    event_type: &str,
+    event_id: &str,
+    subject_hex: &str,
+) -> Vec<u8> {
+    node_event_spelled(
+        sk,
+        event_type,
+        event_id,
+        2,
+        serde_json::json!({ "peer_node_id_hex": subject_hex, "role": "peer" }),
+    )
+}
+
+/// `id` spelled with a hyphen after EVERY group of four hex digits
+/// (`a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11`). Postgres's `::uuid` reads it as `id`; the `uuid`
+/// crate's `parse_str` rejects it — the gap PR #623's review found (finding 1).
+pub fn spelled_oddly(id: Uuid) -> String {
+    let simple = id.simple().to_string();
+    simple
+        .as_bytes()
+        .chunks(4)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// A `node.superseded` naming `superseded_hex`, under a chosen id. Separate from [`peer_event`]
