@@ -37,6 +37,10 @@ require_clean() {
         positive control; a dirty tree means a previous revert did not land)"
 }
 
+# KNOWN_IDS — every mutation id this harness defines. Validated against the CLI arguments
+# immediately below, before require_clean or any mutation runs.
+KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10)
+
 # want <id> — true when no ids were given on the command line (run everything) or when <id> is
 # one of the requested ids (per-id selection: `2026-09-19-619.sh M3 M7` runs only those). Wraps
 # each run_mutation call site below rather than living inside run_mutation, so run_mutation's own
@@ -51,6 +55,22 @@ want() {
         *) return 1 ;;
     esac
 }
+
+# A typo'd id (e.g. "M9x") must not silently shrink the run to whatever subset happened to
+# match — that is indistinguishable from a correct, deliberate subset run and still exits 0.
+# So every argument is checked against KNOWN_IDS right here, before require_clean touches
+# anything or any mutation runs, and every bad one is named in one loud, non-zero-exit failure.
+if [ "$ARGS_COUNT" -gt 0 ]; then
+    bad=()
+    for a in "$@"; do
+        known=0
+        for k in "${KNOWN_IDS[@]}"; do
+            [ "$a" = "$k" ] && known=1 && break
+        done
+        [ "$known" -eq 0 ] && bad+=("$a")
+    done
+    [ "${#bad[@]}" -eq 0 ] || fail "unknown mutation id(s): ${bad[*]} — known ids are: ${KNOWN_IDS[*]}"
+fi
 
 # swap <file> <from> <to> — refuses unless <from> occurs EXACTLY once.
 swap() {
