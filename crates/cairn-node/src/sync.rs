@@ -258,10 +258,11 @@ pub enum Request {
 /// events the in-DB gate accepted (new or idempotent re-apply); `rejected` =
 /// events the gate refused but that self-heal on a later sweep (deny-all for an
 /// un-trusted author, or an event type this node has no code for yet — the normal
-/// node-plane case, skipped-and-swept as before); `quarantined` = UNVERIFIABLE
-/// events penned this cycle (issue #111); `pending` = this peer's UNACKED pen rows
-/// AFTER the cycle — a non-zero value is the LOUD integrity signal `run` logs
-/// every cycle until the cause is fixed or a human acks the row.
+/// node-plane case, skipped-and-swept as before); `quarantined` = events penned this cycle —
+/// UNVERIFIABLE bytes (issue #111), and SUBSTITUTIONS: a verifiable event under an `event_id`
+/// this node already holds with different content, which can never apply (#619); `pending` =
+/// this peer's UNACKED pen rows AFTER the cycle — a non-zero value is the LOUD integrity signal
+/// `run` logs every cycle until the cause is fixed or a human acks the row.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PullStats {
     pub received: u64,
@@ -690,6 +691,49 @@ async fn quarantine_node_event(
     Ok(exists)
 }
 
+/// What happened when the pull loop tried to pen one refused event.
+enum PenOutcome {
+    /// Penned, or its existing row bumped: durably held, so the cursor may advance past it.
+    Penned,
+    /// Not penned — the pen is at quota, or the write failed. The cursor must FREEZE below it:
+    /// advancing past a refusal nothing holds would lose it (delayed, never lost).
+    Frozen,
+}
+
+/// Pen one refused event, or report that the cursor must freeze — the pen's three outcomes,
+/// handled once for both arms that pen (unverifiable bytes, #111; a substitution, #619).
+async fn pen_or_freeze(
+    db: &Client,
+    peer_key: &str,
+    signed: &[u8],
+    digest: &[u8],
+    seq: i64,
+    reason: &str,
+) -> PenOutcome {
+    match quarantine_node_event(db, peer_key, signed, digest, seq, reason).await {
+        Ok(true) => PenOutcome::Penned,
+        Ok(false) => {
+            // Pen at quota: FREEZE below this seq (delayed, never lost, loud).
+            // Acking pen rows genuinely frees quota now (only UNACKED rows count),
+            // so "ack to release" is a real remedy.
+            eprintln!(
+                "pull: node_event_quarantine for {peer_key} at capacity — \
+                 freezing the cursor at seq {seq} (inspect + ack, or delete, to release)"
+            );
+            PenOutcome::Frozen
+        }
+        Err(qe) => {
+            // A pen WRITE error is transient infrastructure trouble; freeze
+            // conservatively rather than advancing past an un-penned refusal.
+            eprintln!(
+                "pull: could not pen node_event at seq {seq}: {} — freezing",
+                operator_chain(&qe)
+            );
+            PenOutcome::Frozen
+        }
+    }
+}
+
 /// Operator inspection surface (issue #111): one JSON value per pen row, oldest
 /// first — the durable, legible trace of every node_event this node refused as
 /// unverifiable, with the reason and the re-offer floor seq. Content digest is hex
@@ -755,7 +799,11 @@ pub async fn ack_node_quarantine(db: &Client, digest_hex: &str) -> anyhow::Resul
 ///     derived re-offer floor; the cursor still advances (the row is durably held)
 ///     and later pulls fetch from `min(last_seq, MIN(refused_seq))` so the slot keeps
 ///     being re-offered. While any UNACKED pen exists the pull is loud (`pending`).
-///   * A VERIFIABLE-but-refused event (untrusted author / unknown type) is the normal
+///   * A VERIFIABLE event refused under an `event_id` this node ALREADY HOLDS with different
+///     content — a SUBSTITUTION (#619, ADR-0073) — is PENNED the same way, whichever check
+///     refused it: it can never apply (the id is taken), so skipping it would file it under
+///     "self-healing". It never auto-releases; a human acks it.
+///   * Any OTHER verifiable-but-refused event (untrusted author / unknown type) is the normal
 ///     deny-all case: skip-and-advance as before — a later `peer.added` or code arrival
 ///     + full sweep admits it (self-healing).
 ///   * A transient/transport error FREEZES the cursor (no advance), retried next cycle.
@@ -886,8 +934,9 @@ pub async fn pull_into(
                 }
             }
             // Classify the refusal by RE-VERIFYING the bytes ONCE (bind the error for the
-            // reason — do not verify twice). Three outcomes: unverifiable → pen; a verifiable
-            // event the door DELIBERATELY refused → skip-and-sweep; anything else → freeze.
+            // reason — do not verify twice). Four outcomes: unverifiable → pen; a verifiable
+            // P0001 that is a SUBSTITUTION → pen (#619); any other verifiable P0001 (the
+            // deliberate deny-all) → skip-and-sweep; anything else → freeze.
             Err(e) => match verify_self_described(signed) {
                 Err(ve) => {
                     // UNVERIFIABLE: never applies without repair. Pen it durably and record the
@@ -895,47 +944,71 @@ pub async fn pull_into(
                     // vocabulary the DB DETAIL carries, issue #109).
                     let reason = ve.to_string();
                     let digest = event_address(signed);
-                    match quarantine_node_event(db, &peer_key, signed, &digest, seq, &reason).await
-                    {
-                        Ok(true) => stats.quarantined += 1, // penned/held → cursor may advance
-                        Ok(false) => {
-                            // Pen at quota: FREEZE below this seq (delayed, never lost, loud).
-                            // Acking pen rows genuinely frees quota now (only UNACKED rows count),
-                            // so "ack to release" is a real remedy.
-                            eprintln!(
-                                "pull: node_event_quarantine for {peer_key} at capacity — \
-                                 freezing the cursor at seq {seq} (inspect + ack, or delete, to release)"
-                            );
-                            stats.frozen = Some(seq);
-                            break;
-                        }
-                        Err(qe) => {
-                            // A pen WRITE error is transient infrastructure trouble; freeze
-                            // conservatively rather than advancing past an un-penned refusal.
-                            eprintln!(
-                                "pull: could not pen node_event at seq {seq}: {} — freezing",
-                                operator_chain(&qe)
-                            );
+                    match pen_or_freeze(db, &peer_key, signed, &digest, seq, &reason).await {
+                        PenOutcome::Penned => stats.quarantined += 1, // held → cursor may advance
+                        PenOutcome::Frozen => {
                             stats.frozen = Some(seq);
                             break;
                         }
                     }
                 }
-                // Bytes VERIFY, but the door refused. Distinguish a DELIBERATE deny-all from a
+                // Bytes VERIFY, but the door refused. Distinguish a DELIBERATE refusal from a
                 // transient DB fault by SQLSTATE: apply_remote_node_event's refusals are all
-                // bare `RAISE EXCEPTION` (P0001). A P0001 is the normal, self-healing deny-all
-                // (un-trusted author / unknown type) — skip-and-advance; it is re-offered on a
-                // later peer.added / code arrival + full sweep.
-                Ok(_) if e.code().map(|c| c.code()) == Some("P0001") => {
-                    stats.rejected += 1;
-                    // #474 item 1: this is the arm where the door's own `RAISE` text IS
-                    // the entire diagnosis — untrusted author? unknown event type? —
-                    // and `{e}` printed `db error` in its place. The reason was one
-                    // `as_db_error()` away the whole time.
-                    eprintln!(
-                        "pull: node_event refused (recoverable, non-fatal): {}",
-                        legible_db_error(&e)
-                    );
+                // bare `RAISE EXCEPTION` (P0001, db/001's contract).
+                Ok(body) if e.code().map(|c| c.code()) == Some("P0001") => {
+                    // #619 / ADR-0073: ONE question before skipping. A P0001 is normally the
+                    // self-healing deny-all — but a rival under an id this node already holds can
+                    // never apply (the id is taken), so it is penned as evidence instead. Asked of
+                    // the TABLE, not of the SQLSTATE or the door's sentence: see sync/substitution.rs.
+                    let offered = event_address(signed);
+                    let held = match substitution::held_content_address(db, &body.event_id).await {
+                        Ok(held) => held,
+                        Err(le) => {
+                            // Could not tell whether it is a substitution: FREEZE, never advance
+                            // past a refusal this loop could not classify.
+                            eprintln!(
+                                "pull: could not check node_event at seq {seq} for a \
+                                 substitution: {} — freezing",
+                                operator_chain(&le)
+                            );
+                            stats.frozen = Some(seq);
+                            break;
+                        }
+                    };
+                    match substitution::substitution_reason(
+                        &body.event_id,
+                        held.as_deref(),
+                        &offered,
+                    ) {
+                        // Deliberately no per-event log line: an ACKED row is still re-offered on
+                        // every full sweep, and a per-event line would keep printing after a human
+                        // had decided. The loud signal is `run`'s INTEGRITY line, which counts only
+                        // UNACKED rows — the unverifiable arm's convention too.
+                        Some(reason) => {
+                            match pen_or_freeze(db, &peer_key, signed, &offered, seq, &reason).await
+                            {
+                                PenOutcome::Penned => stats.quarantined += 1,
+                                PenOutcome::Frozen => {
+                                    stats.frozen = Some(seq);
+                                    break;
+                                }
+                            }
+                        }
+                        // The normal, self-healing deny-all (un-trusted author / unknown type):
+                        // skip-and-advance; re-offered on a later peer.added / code arrival + full
+                        // sweep.
+                        None => {
+                            stats.rejected += 1;
+                            // #474 item 1: this is the arm where the door's own `RAISE` text IS
+                            // the entire diagnosis — untrusted author? unknown event type? —
+                            // and `{e}` printed `db error` in its place. The reason was one
+                            // `as_db_error()` away the whole time.
+                            eprintln!(
+                                "pull: node_event refused (recoverable, non-fatal): {}",
+                                legible_db_error(&e)
+                            );
+                        }
+                    }
                 }
                 // Any OTHER error on a verifiable event is NOT a deliberate refusal: a transient
                 // DB fault (serialization_failure / deadlock / statement_timeout / disk-full …)
@@ -1105,7 +1178,9 @@ pub async fn run(
                 if s.pending > 0 {
                     eprintln!(
                         "run: INTEGRITY: {} unacked quarantined node_event(s) from {peer} — \
-                         inspect `cairn-node quarantine`, then fix trust/code or `ack-quarantine`",
+                         inspect `cairn-node quarantine` (each row's reason says why: unverifiable \
+                         bytes, or a substitution under an event_id this node already holds), then \
+                         fix the cause or `ack-quarantine`",
                         s.pending
                     );
                 }
