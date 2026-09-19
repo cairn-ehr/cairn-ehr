@@ -199,6 +199,7 @@ nav:
       - ADR-0070 · A late key reaches the chart: spec/decisions/0070-a-late-key-reaches-the-chart.md
       - ADR-0071 · A restore that left records behind exits INCOMPLETE: spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md
       - ADR-0072 · A restore loses no record silently: spec/decisions/0072-a-restore-loses-no-record-silently.md
+      - ADR-0073 · The node plane refuses a substitution and pens it: spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
