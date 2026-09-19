@@ -5,13 +5,17 @@
 //!
 //! # Why a catalogue rule and not a list
 //!
-//! Until #619 the inventory of guarded doors was a hand-written list in
-//! `substitution_guard_is_single_source.rs`, and it was WRONG: #615 and ADR-0072's first draft said
-//! "two of the three write doors" refuse a substitution, counting the two `event_log` doors beside
-//! the restore door and omitting `node_event`'s other two writers entirely — `submit_node_event` and
+//! Until #619 the inventory of guarded doors was a hand-written list of three migration files —
+//! `every_door_this_change_guards_still_calls_the_helper`, in
+//! `substitution_guard_is_single_source.rs`. The list was honest about its edge: its own doc left
+//! db/007's two `node_event` writers out DELIBERATELY, because #619 was then a pending decision.
+//! The census error was elsewhere, in prose: #615 and ADR-0072's first draft said "two of the three
+//! write doors" refuse a substitution, counting the two `event_log` doors beside the restore door
+//! and omitting `node_event`'s other two writers entirely — `submit_node_event` and
 //! `apply_remote_node_event`, five unguarded sites, one of them the live federation admission gate.
-//! A list says what its author believed. This rule derives the writer set from the functions that
-//! exist, so a writer nobody thought of is found rather than trusted.
+//! A census made by hand, and a list, both record what their author believed. This rule derives the
+//! writer set from the functions that exist, so a writer nobody thought of is found rather than
+//! trusted.
 //!
 //! The derived set is still PINNED by name, so a sixth writer fails here and becomes a decision —
 //! give it the call (and say why) — rather than a drift.

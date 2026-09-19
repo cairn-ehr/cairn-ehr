@@ -1,4 +1,4 @@
-//! #615 / #608 — the ONE refusal all three write doors share.
+//! #615 / #608 — the ONE refusal all five event-log write doors share (db/007's two since #619).
 //!
 //! # What a substitution is, and why silence is the danger
 //!
@@ -23,15 +23,16 @@
 //! # What the helper is
 //!
 //! A PURE raiser. It reads no table; both content-addresses arrive as arguments. That is what
-//! lets one function serve `event_log` (db/005, db/020) and `node_event` (db/009) without
-//! knowing about either, and it is why each door keeps its own read: db/005 and db/020 are on
-//! the 100k-event clinical path and read only when their INSERT was a no-op, while db/009 reads
-//! unconditionally and is thereby robust to a later edit disarming a `ROW_COUNT` it no longer
-//! sets.
+//! lets one function serve `event_log` (db/005, db/020) and `node_event` (db/007, db/009)
+//! without knowing about either, and it is why each door keeps its own read: db/005 and db/020
+//! are on the 100k-event clinical path and read only when their INSERT was a no-op, while db/007
+//! and db/009 read unconditionally and are thereby robust to a later edit disarming a
+//! `ROW_COUNT` they no longer set.
 //!
 //! The door-by-door behaviour lives with the doors — `restore_one_node_event_id_one_body.rs`
-//! (db/009) and `restore_one_event_id_one_body.rs` case 2 (db/020). This file tests the
-//! predicate itself, including the arm no door can currently reach.
+//! (db/009), `node_plane_one_event_id_one_body.rs` (db/007's two doors, #619) and
+//! `restore_one_event_id_one_body.rs` case 2 (db/020). This file tests the predicate itself,
+//! including the arm no door can currently reach.
 
 use cairn_node::db;
 

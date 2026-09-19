@@ -78,7 +78,8 @@ const SCHEMA: &[(&str, &str)] = &[
         include_str!("../../../db/021_sync_quarantine.sql"),
     ),
     // The node-plane sibling (issue #111): the same durable-trace + re-offer
-    // floor for a node_event the pull loop (sync.rs) refuses as UNVERIFIABLE.
+    // floor for a node_event the pull loop (sync.rs) refuses as UNVERIFIABLE —
+    // or, since #619 (ADR-0073), as a SUBSTITUTION under an id already held.
     // Keyed off the seq-ordered node plane (derived floor = MIN(refused_seq)),
     // and a separate table so a node-plane requeue is unambiguously routed
     // through apply_remote_node_event, never the clinical door.

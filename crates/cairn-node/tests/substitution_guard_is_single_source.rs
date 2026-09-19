@@ -88,8 +88,10 @@ fn only_db_053_raises_the_substitution_refusal() {
 }
 
 // The INVENTORY of guarded doors used to be a hand-written list here
-// (`every_door_this_change_guards_still_calls_the_helper`), and it was wrong: it omitted db/007's two
-// `node_event` writers, one of them the live federation admission gate (#619). A list says what its
-// author believed. The inventory is now DERIVED from the catalogue — every function that writes an
-// event log must call the helper — in `substitution_guard_covers_every_writer.rs`. This file keeps
-// the other half: nobody DUPLICATES the refusal.
+// (`every_door_this_change_guards_still_calls_the_helper`, three migration files). Its own doc left
+// db/007's two `node_event` writers out DELIBERATELY — #619, one of them the live federation
+// admission gate, was then a pending decision — so the list was honest about its edge; the
+// census that MISSED those writers was #615's and ADR-0072's first-draft prose. A list says what
+// its author believed. The inventory is now DERIVED from the catalogue — every function that
+// writes an event log must call the helper — in `substitution_guard_covers_every_writer.rs`. This
+// file keeps the other half: nobody DUPLICATES the refusal.

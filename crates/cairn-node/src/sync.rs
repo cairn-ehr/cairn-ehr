@@ -203,8 +203,9 @@ pub fn pull_failure_class(e: &anyhow::Error) -> PullFailureClass {
 
 /// Per-peer bounds on the node-plane quarantine pen (issue #111, mirroring the
 /// clinical plane's #110 quota). Identical re-offers dedupe onto one row, so only
-/// a peer shipping ever-DIFFERENT unverifiable bytes (corruption or malice) can
-/// grow the pen — and remote bytes must never be able to fill this node's disk.
+/// a peer shipping ever-DIFFERENT unverifiable bytes or substitutions (#619) —
+/// corruption or malice — can grow the pen, and remote bytes must never be able to
+/// fill this node's disk.
 /// At the cap the pen refuses further inserts and the pull FREEZES the cursor
 /// rather than growing: delayed, never lost — and loud.
 const MAX_NODE_QUARANTINE_ROWS_PER_PEER: i64 = 10_000;
@@ -270,11 +271,13 @@ pub struct PullStats {
     pub rejected: u64,
     pub quarantined: u64,
     pub pending: u64,
-    /// The seq the cursor FROZE below, when this cycle hit one of `pull_into`'s three
-    /// freeze paths (pen at quota, a failed pen write, a transient fault while applying).
+    /// The seq the cursor FROZE below, when this cycle hit one of `pull_into`'s four
+    /// freeze paths (pen at quota, a failed pen write, a transient fault while applying,
+    /// and a failed lookup of what `node_event` holds under a refused event's id — the
+    /// substitution question it could not answer, #619).
     ///
     /// `None` on every healthy cycle, which is what makes the loud line in `run` free of
-    /// noise. It exists because all three freeze paths `break` and then return `Ok` — so
+    /// noise. It exists because all four freeze paths `break` and then return `Ok` — so
     /// the cycle is not a failure, `pull_failure_class` never sees it, and without this
     /// field the summary line for a stuck node was indistinguishable from a healthy one
     /// (PR #478 review, finding 6).
@@ -614,7 +617,8 @@ pub async fn pull_once(
     pull_into(peer, cfg.tls, &db, full_sweep).await
 }
 
-/// Pen an UNVERIFIABLE node_event durably (issue #111). Content-addressed dedupe:
+/// Pen a refused node_event durably: UNVERIFIABLE bytes (issue #111), or a SUBSTITUTION
+/// under an id this node already holds (#619). Content-addressed dedupe:
 /// a re-offer of the same bytes bumps `seen_count`/`last_seen` on the one row
 /// rather than duplicating it. A genuinely-new digest is inserted only if this
 /// peer is under BOTH the row-count and byte-sum quota — at the cap the insert is
@@ -735,9 +739,10 @@ async fn pen_or_freeze(
 }
 
 /// Operator inspection surface (issue #111): one JSON value per pen row, oldest
-/// first — the durable, legible trace of every node_event this node refused as
-/// unverifiable, with the reason and the re-offer floor seq. Content digest is hex
-/// so it can be passed straight to [`ack_node_quarantine`].
+/// first — the durable, legible trace of every node_event this node penned as
+/// unverifiable or as a substitution (#619), with the reason (which says which) and the
+/// re-offer floor seq. Content digest is hex so it can be passed straight to
+/// [`ack_node_quarantine`].
 pub async fn list_node_quarantine(db: &Client) -> anyhow::Result<Vec<serde_json::Value>> {
     let rows = db
         .query(
@@ -808,8 +813,9 @@ pub async fn ack_node_quarantine(db: &Client, digest_hex: &str) -> anyhow::Resul
 ///     + full sweep admits it (self-healing).
 ///   * A transient/transport error FREEZES the cursor (no advance), retried next cycle.
 ///
-/// A penned event whose cause is later fixed re-applies on a sweep and is auto-released
-/// (DELETEd) — so no manual requeue command is needed.
+/// A penned UNVERIFIABLE event whose cause is later fixed re-applies on a sweep and is
+/// auto-released (DELETEd) — so no manual requeue command is needed. A penned substitution
+/// never re-applies, so only an ack clears it.
 pub async fn pull_into(
     peer: SocketAddr,
     tls: Arc<ClientConfig>,
@@ -1052,8 +1058,8 @@ pub async fn pull_into(
         .map_err(|e| LocalDbFault::new("checkpointing sync cursor", e))?;
     }
     // The LOUD signal: this peer's unacked pen rows AFTER the cycle. `run` logs a distinct
-    // integrity line every cycle while this is non-zero — until the cause is fixed (the
-    // event auto-releases) or a human acks the row.
+    // integrity line every cycle while this is non-zero — until the cause is fixed (unverifiable
+    // bytes then auto-release; a substitution never does) or a human acks the row.
     let pending: i64 = db
         .query_one(
             "SELECT count(*) FROM node_event_quarantine WHERE peer = $1 AND NOT acked",
@@ -1167,8 +1173,9 @@ pub async fn run(
                 );
                 // LOUD integrity signal (issue #111): while this peer has unacked
                 // quarantined node_events, say so every cycle — the operator must fix the
-                // cause (the event then auto-releases) or ack the row. Not fatal: the loop
-                // keeps serving and pulling (availability over consistency).
+                // cause (unverifiable bytes then auto-release; a substitution never does, so
+                // only the ack clears it) or ack the row. Not fatal: the loop keeps serving
+                // and pulling (availability over consistency).
                 // A frozen cursor returns `Ok`, so neither `LOCAL FAULT` nor `PARTITION`
                 // can fire for it — this is the only line that says the node is stuck
                 // (PR #478 review, finding 6).

@@ -1,4 +1,5 @@
--- Cairn — the one substitution refusal all three write doors share (#615, #608).
+-- Cairn — the one substitution refusal all five event-log write doors share: db/005, db/020,
+-- db/009, and db/007's two (#615, #608, #619).
 --
 -- WHY THIS FILE EXISTS. A substitution is a SECOND, DIFFERENT event filed under an event_id the
 -- log already holds. Every door inserts `ON CONFLICT (…) DO NOTHING`, because an idempotent
@@ -8,13 +9,14 @@
 -- DISCARDED in silence: two nodes then hold different bytes under one event_id, forever, with no
 -- alarm.
 --
--- Two of the three doors already refused it, each with its own inline copy of the same four
--- lines. The third — `restore_node_event` (db/009) — did not, which is #615: an attacker who can
--- append to a sneakernet medium reuses the event_id of the clinic's `peer.revoked`, the genuine
--- revocation is dropped, and the node comes back TRUSTING A PEER THE CLINIC REVOKED, at exit 0.
--- That door is self-trusting by design (db/009's own drift-ceiling comment says the medium "can
--- contain OTHER signers' events and is attacker-appendable"), so it is the door where the guard
--- matters most and the one that had none.
+-- Two doors — db/005 and db/020, the `event_log` pair — already refused it, each with its own
+-- inline copy of the same four lines. `restore_node_event` (db/009) did not, which is #615: an
+-- attacker who can append to a sneakernet medium reuses the event_id of the clinic's
+-- `peer.revoked`, the genuine revocation is dropped, and the node comes back TRUSTING A PEER THE
+-- CLINIC REVOKED, at exit 0. That door is self-trusting by design (db/009's own drift-ceiling
+-- comment says the medium "can contain OTHER signers' events and is attacker-appendable"), so it
+-- is the door where the guard matters most. It was not the only one without it: db/007's two
+-- node_event doors had none either — a census #615 missed; #619 (ADR-0073) gave them the call.
 --
 -- WHY A HELPER RATHER THAN A THIRD COPY. Both existing copies compare with `<>`. The branch is
 -- reached only when a row with that id exists, so the read-back should always find one — but if
@@ -28,8 +30,9 @@
 -- arguments. That is what lets the same function serve `event_log` (db/005, db/020) and
 -- `node_event` (db/007, db/009) without knowing about either, and it is why each door keeps
 -- its OWN read. db/005 and db/020 are on the 100k-event clinical path and read only when
--- their INSERT was a no-op; db/009 (tens of node events per medium) reads unconditionally
--- and is thereby robust to a later edit disarming a ROW_COUNT it no longer sets.
+-- their INSERT was a no-op; db/009 (tens of node events per medium) and db/007's two doors (the
+-- node plane is tens of events) read unconditionally, and are thereby robust to a later edit
+-- disarming a ROW_COUNT they no longer set.
 --
 -- ⚠️ NO `REVOKE EXECUTE … FROM PUBLIC`, AND THAT IS DELIBERATE — NOT AN OVERSIGHT OF #382.
 -- The convention `crates/cairn-node/tests/floor_execute_grants.rs` checks covers four families:

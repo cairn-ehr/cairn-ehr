@@ -3,11 +3,12 @@
 //! # Why the pull loop has to ask
 //!
 //! The node-plane pull loop (`super::pull_into`) routes a refusal by SQLSTATE. Every floor refusal
-//! is a bare `RAISE EXCEPTION` — P0001, which db/001's header makes a CONTRACT — and a P0001 on a
-//! verifiable event is skipped-and-advanced, because on the node plane it is almost always
-//! SCOPING: an event authored by a node this one does not peer with, which heals on a later full
-//! sweep once trust or code arrives. (#268's own comment explains why penning that steady-state
-//! traffic would flood the pen.)
+//! is a bare `RAISE EXCEPTION` — P0001, which is a CONTRACT: db/001 states it for this loop in the
+//! comment above `cairn_decode_hex_or_raise` (#228), and `cairn-sync`'s `refusal_is_deliberate` has
+//! relied on it since #267. A P0001 on a verifiable event is skipped-and-advanced, because on the
+//! node plane it is almost always SCOPING: an event authored by a node this one does not peer with,
+//! which heals on a later full sweep once trust or code arrives. (#268's own comment explains why
+//! penning that steady-state traffic would flood the pen.)
 //!
 //! A substitution breaks that premise. It is a second, DIFFERENT event under an `event_id` this node
 //! already holds, and it can never apply here — the id is taken — so "it heals on a later sweep" is
@@ -16,8 +17,13 @@
 //!
 //! # Why by STATE, and not by SQLSTATE or message text
 //!
-//! The refusal cannot carry its own code: db/001 forbids `USING ERRCODE`, because both pull loops
-//! route on P0001, and a distinct code would turn `cairn-sync`'s clinical pen into a freeze.
+//! The refusal cannot carry its own code. Both pull loops route on P0001: for this loop, db/001's
+//! comment above `cairn_decode_hex_or_raise` (#228) calls it a contract and forbids `USING ERRCODE`
+//! on that helper's refusals, because any other code freezes the cursor; for the clinical loop,
+//! `cairn-sync`'s `refusal_is_deliberate` pens a verifiable event's refusal only when it is P0001,
+//! since #267. And `cairn_refuse_substitution` is shared with the two clinical doors, so a distinct
+//! code there would turn `cairn-sync`'s clinical pen into a freeze.
+//!
 //! Matching the door's sentence would make English prose part of the protocol. What IS unambiguous
 //! is the table: `node_event` is append-only, so a row holding this id under a different content
 //! address is true now and stays true. The question is asked of the table, after the refusal.

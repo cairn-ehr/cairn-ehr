@@ -456,9 +456,10 @@ BEGIN
     PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'apply_remote_node_event');
 
     -- Clock never falls behind an event we accepted (HLC invariant A3, mirrors cairn-sync).
-    -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge. ONE
-    -- merge for all three arms since #619 folded them into this tail (it used to be three
-    -- copies), and AFTER the guard, so a refused rival never advances this node's clock.
+    -- The clock-drift REJECTION near the top of this function is this door's ceiling; the helper
+    -- (db/001) is the pure merge. ONE merge for all three arms since #619 folded them into this
+    -- tail (it used to be three copies), and AFTER the guard, so a refused rival never advances
+    -- this node's clock (the RAISE would roll it back regardless; the order says what is meant).
     PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
                                  (b -> 'hlc' ->> 'counter')::int);
     RETURN v_eid;

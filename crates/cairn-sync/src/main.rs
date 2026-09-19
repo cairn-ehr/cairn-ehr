@@ -775,9 +775,10 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// # Why a DELIBERATE refusal cannot be misread as local here
 ///
 /// It would be, if a door ever raised a verdict with `USING ERRCODE` in one of the classes
-/// above. None does, and none may: `db/001_envelope.sql`'s header states that **the P0001 is
-/// a contract, not an accident of using `RAISE EXCEPTION`** — precisely because the pull
-/// loop routes on it — and forbids adding `USING ERRCODE` to any raise. So every SQLSTATE
+/// above. None does, and none may: `db/001_envelope.sql` states, in the comment above
+/// `cairn_decode_hex_or_raise` (#228), that **the P0001 is a contract, not an accident of
+/// using `RAISE EXCEPTION`** — precisely because the pull loop routes on it — and forbids
+/// adding `USING ERRCODE` to any raise below it. So every SQLSTATE
 /// this function sees came from PostgreSQL itself, which is what makes reading its class
 /// meaningful at all.
 fn apply_failure_is_local(sqlstate: Option<&str>) -> bool {
