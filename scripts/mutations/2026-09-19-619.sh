@@ -241,12 +241,13 @@ run_mutation M9 KILLED db/007_node_federation.sql \
 fi
 
 # M10 — the lookup-failure FREEZE turned into a SKIP (the arm yields `None`, so the event is
-# skipped-and-advanced instead of freezing the cursor). EXPECTED SURVIVOR, declared before the run:
-# no test can make `held_content_address` fail inside the self-pull (a lock BLOCKS rather than
-# fails, and the owner role bypasses grants). Bounded: a skipped substitution is re-offered on the
-# next full sweep and penned then. Recorded so the gap is a stated residual, not a silent one.
+# skipped-and-advanced instead of freezing the cursor). First declared a survivor on the premise
+# that no seam could make `held_content_address` fail inside the self-pull; the final review showed
+# one — `pull_into` takes the caller's `&Client`, so the pull can run under `SET ROLE` to a role
+# lacking only `SELECT ON node_event` (both doors it calls are SECURITY DEFINER).
+# `node_substitution_lookup_freezes.rs` does exactly that and asserts the freeze.
 if want M10; then
-run_mutation M10 SURVIVED crates/cairn-node/src/sync.rs \
+run_mutation M10 KILLED crates/cairn-node/src/sync.rs \
     '                            stats.frozen = Some(seq);
                             break;
                         }
@@ -254,7 +255,7 @@ run_mutation M10 SURVIVED crates/cairn-node/src/sync.rs \
     '                            None
                         }
                     };' \
-    "${NODE_TEST[@]}" node_substitution_is_penned
+    "${NODE_TEST[@]}" node_substitution_lookup_freezes
 fi
 
 echo "=== run complete ==="
