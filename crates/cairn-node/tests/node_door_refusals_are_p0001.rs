@@ -132,14 +132,12 @@ async fn fixture(base: &str, door: &'static str) -> DoorFixture {
 async fn refuses_legibly(f: &DoorFixture, signed: &[u8], field: &str) {
     let r = refusal(&f.db, f.door, signed).await;
     assert_eq!(
-        r.sqlstate,
-        SKIP_AND_ADVANCE,
+        r.sqlstate, SKIP_AND_ADVANCE,
         "{}: a refusal this door will repeat forever must carry {SKIP_AND_ADVANCE}, the code the \
          node puller reads as a VERDICT. Under any other code the puller cannot tell it from a \
          deadlock, so it freezes that peer's cursor below this seq — permanently, holding back \
          every later event on the link. Message was: {}",
-        f.door,
-        r.message
+        f.door, r.message
     );
     assert!(
         r.message.contains(f.door) && r.message.contains(field),
