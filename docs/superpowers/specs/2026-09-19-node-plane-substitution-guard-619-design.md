@@ -108,6 +108,10 @@ guard naming `'submit_node_event'`, then `RETURN`.
   the merge back anyway, but the order should say what is meant.)
 - **Behaviour is otherwise unchanged.** Every existing refusal keeps its text and its order; only the
   shared tail is new. The restructure's safety net is the existing door suites staying green.
+- **Two pinned counts move, deliberately.** `hlc_merge_helper.rs` pins db/007 at **3**
+  `PERFORM cairn_node_hlc_merge(` sites (one per arm); the shared tail makes it **1**, and the pin
+  changes with its comment saying why. `hex_decode_helper.rs` pins db/007 at **4**
+  `cairn_decode_hex_or_raise` calls; the restructure moves them and must keep exactly four.
 
 ### 2.2 The pull path — classify by state, pen the substitution
 
@@ -119,7 +123,11 @@ SQLSTATE **P0001** gains one question before it skips: **does `node_event` alrea
   `Ok(_)`); the offered address is `event_address(signed)`, byte-identical to db/007's `v_ca`.
 - The held address is one `SELECT content_address FROM node_event WHERE node_event_id = $1`.
 - **Held and different ⇒ substitution ⇒ pen it** through the existing `quarantine_node_event`, with a
-  reason naming the id and both addresses, and a per-event `eprintln!` that says SUBSTITUTION.
+  reason (starting `substitution:`) naming the id and both addresses. **No per-event log line**, and
+  that is deliberate — it is the unverifiable arm's existing convention, and for a reason: an ACKED
+  row is still re-offered on every full sweep and dedupes onto its row, so a per-event line would
+  keep printing after a human had already decided. The loud signal is `run`'s INTEGRITY line, which
+  counts only UNACKED rows. *(Refined while planning; an earlier draft had a per-event line.)*
   **Absent, or held and equal ⇒ today's skip-and-advance, unchanged.**
 - **The rule is "whichever check refused it."** A rival under a held id can never apply — the id is
   taken — so skip-and-advance's premise (*"self-heals on a later sweep"*) is false for it even when an
@@ -132,10 +140,17 @@ SQLSTATE **P0001** gains one question before it skips: **does `node_event` alrea
 - **The transient arm is untouched.** A non-P0001 failure still freezes; the retry will reach the door's
   guard and come back as a P0001.
 
-The routing decision becomes **one pure function** — inputs *(verifiable?, SQLSTATE, held address,
-offered address)*, output **Pen(reason) / Skip / Freeze** — unit-tested without a database, with the
-I/O kept in `pull_into`. It lives in a new small module rather than growing `sync.rs` (already ~1 180
-lines).
+The substitution decision is **one pure function**, `substitution_reason(event_id, held, offered) ->
+Option<String>` — `Some(reason)` exactly when something is held and it differs — unit-tested without a
+database, with the one-row lookup kept beside it and the I/O in `pull_into`. It lives in a new small
+module, `crates/cairn-node/src/sync/substitution.rs`, rather than growing `sync.rs` (already ~1 180
+lines). *(Refined while planning: an earlier draft of this paragraph made the whole Pen/Skip/Freeze
+routing one pure function taking the SQLSTATE too. That forces an input meaning "the held address, or
+nothing because the question was not asked" — only a verifiable P0001 needs the lookup — which is
+worse to read than the existing three-arm match, already covered by `node_quarantine.rs`. So the
+existing split stays where it is and gains one question in its P0001 arm.)* The pen-write handling
+that the unverifiable arm already does inline (pen, freeze at quota, freeze on a write error) is
+extracted into one helper both arms call, rather than copied.
 
 **What the pen then does, all existing behaviour:** the row pins the derived re-offer floor, so the
 rival is re-offered and re-refused every cycle (deduping onto its row, `seen_count` rising); the cycle
@@ -183,9 +198,10 @@ widening the rule to it here would fail on db/052 and pull #569 into this slice.
 
 TDD throughout; every new test is seen red before the code that turns it green.
 
-- **The pure router** (unit, no DB): the full routing table — unverifiable → pen; P0001 + held-different
-  → pen (reason names both addresses); P0001 + absent → skip; P0001 + held-equal → skip; non-P0001 →
-  freeze.
+- **The pure decision** (unit, no DB): nothing held → `None`; held and equal → `None` (an idempotent
+  re-offer); held and different → `Some(reason)` naming the id and both addresses. The surrounding
+  three-way split (unverifiable → pen · P0001 → this question · other → freeze) keeps its existing
+  DB-gated coverage in `node_quarantine.rs`.
 - **The doors** (DB-gated, a new file beside `restore_one_node_event_id_one_body.rs`), one case per
   guarded arm: a rival under a held id is **refused with the shared sentence naming its door**, the
   held row is unchanged, and **the same bytes re-applied still succeed** (set-union must survive the
@@ -201,7 +217,7 @@ TDD throughout; every new test is seen red before the code that turns it green.
 - **The catalogue rule** (DB-gated) plus its positive control.
 - **Mutations**, with a harness carrying its own positive control (the ADR-0072 practice): delete each
   door's guard; move a guard above its `IF/ELSE`; delete the puller's substitution check; invert the
-  router's comparison; route a substitution to Skip. Each must be killed at the assertion that names
+  decision's comparison; route a substitution to Skip. Each must be killed at the assertion that names
   its claim.
 - **Gates:** `scripts/run-db-gated-tests.sh` (the one local gate), `cargo fmt --check`, the
   `-D warnings` doc build, and the strict mkdocs build (the new ADR needs its `mkdocs.yml` nav line in
