@@ -46,8 +46,9 @@ async fn postgres_reads(db: &Client, spelling: &str) -> Option<String> {
 }
 
 /// Every spelling worth asking about for `id`: each of the 2^7 ways to place the optional hyphens
-/// Postgres allows (after every second byte but the last), braced and unbraced, in both cases —
-/// plus the malformed neighbours it must reject.
+/// Postgres allows (after every second byte but the last), three ways each — lowercase, uppercase,
+/// and braced lowercase (the parser treats case and braces independently) — plus the malformed
+/// neighbours it must reject.
 fn corpus(id: Uuid) -> Vec<String> {
     let hex = id.simple().to_string();
     let groups: Vec<&str> = (0..8).map(|g| &hex[g * 4..g * 4 + 4]).collect();

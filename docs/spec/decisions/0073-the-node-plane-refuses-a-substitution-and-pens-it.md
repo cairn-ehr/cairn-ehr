@@ -118,6 +118,15 @@ held address is one primary-key read, `held_content_address`, in
 `substitution_reason(event_id, held, offered)` — `Some(reason)` exactly when something is held and
 it differs.
 
+The lookup reads the `event_id` **in the door's grammar, not the `uuid` crate's.** The body carries
+the id as a free string; the doors read it with Postgres's `::uuid`, which accepts more spellings
+than the crate — a hyphen after any group of four hex digits, braced or not. Read with the crate's
+narrower parser, a rival whose id was the held one spelled differently was refused by the door yet
+looked "not held" here, and was skipped: whoever minted a rival could switch the pen off by choosing
+a spelling (found in PR #623's review). `uuid_as_postgres_reads_it` mirrors Postgres's
+`string_to_uuid`; `node_event_id_spellings.rs` pins it against a live server. That one UUID has
+many spellings at all is [#624](https://github.com/cairn-ehr/cairn-ehr/issues/624).
+
 - **Held, and different** ⇒ a substitution ⇒ **penned** in `node_event_quarantine` (`db/022`),
   through the same pen-or-freeze helper the unverifiable arm uses, with a reason that begins
   `substitution:` and names the id and both addresses.
@@ -223,7 +232,7 @@ loud and lets the rest of the stream through.
 ## Consequences
 
 - **The cost, honestly.** On the puller: at most one primary-key read per verifiable `P0001`
-  refusal on the node plane (none when the `event_id` is not a UUID). A full sweep — every tenth
+  refusal on the node plane (none when Postgres could not read the `event_id` as a UUID). A full sweep — every tenth
   cycle (`FULL_SWEEP_EVERY`), and whenever trust changes — re-offers every row a peer serves, so the
   scoping refusals, the routine case, pay it again each sweep. On the doors: one primary-key read
   per event through either door, re-applies included (the local genesis arm aside), since the read
@@ -250,16 +259,24 @@ loud and lets the rest of the stream through.
   (`node_plane_one_event_id_one_body.rs`: the local door's peer/revoke and supersede arms; the
   admission gate's enroll, supersede and peer/revoke arms), each door has an idempotence case — the
   same event twice still succeeds — and the pull path has `node_substitution_is_penned.rs`, which
-  also pins the false-positive direction: a refused event held with the SAME bytes is skipped,
-  never penned. The lookup-failure freeze is pinned by `node_substitution_lookup_freezes.rs`, which
-  runs the pull under a role granted everything it needs except `SELECT` on `node_event`. Eleven
+  also pins the false-positive direction (a refused event held with the SAME bytes is skipped,
+  never penned), that a pen lets the rest of the stream through, that an unacked row survives the
+  next sweep as the same row, and a rival whose id is the held one spelled differently. The
+  lookup-failure freeze is pinned by `node_substitution_lookup_freezes.rs`, which runs the pull under
+  a role granted everything it needs except `SELECT` on `node_event` — and, with a second role that
+  cannot insert a pen row, the pen-failure freeze. `every_arm_of_the_admission_gate_merges_the_clock`
+  pins where the one shared clock merge sits, which a call count cannot. Sixteen
   mutations were run with `scripts/mutations/2026-09-19-619.sh`: deleting either door's guard (M1,
   M2, and M3 against the catalogue rule alone), hoisting either guard above its `IF/ELSE` (M4, M5),
   inverting the pure decision (M6), removing the puller's question (M7), blinding the lookup (M8),
   deleting the shared clock merge (M9), turning the lookup-failure freeze into a skip (M10) and
   addressing the whole frame rather than the signed bytes, so that every refused re-offer of an
-  event already held with the same bytes would be penned (M11), were **each killed at the assertion
-  that names its claim**. M10 was first
+  event already held with the same bytes would be penned (M11), reading the id with the `uuid`
+  crate again (M12), turning the pen-failure freeze into a skip (M13), freezing after a successful
+  pen (M14), widening the auto-release past the applied bytes (M15) and confining the clock merge to
+  one arm (M16), were **each killed at the assertion that names its claim**. M12–M16 came from PR
+  #623's review; M15 first survived — the deleted row was re-penned in the same sweep, so every count
+  held — until the test asserted the row's identity. M10 was first
   declared a survivor, on the premise that nothing could make the lookup fail inside the self-pull;
   review found the seam — `pull_into` takes the caller's connection, and both doors it calls are
   `SECURITY DEFINER` — and the test was written.
@@ -283,6 +300,12 @@ loud and lets the rest of the stream through.
   fail-closes on a node event type it cannot map; ADR-0056's admit-uninterpreted is not live there.
 - **[#569](https://github.com/cairn-ehr/cairn-ehr/issues/569)** — `restore_actor_registry`
   (`db/052`) still discards a content conflict in `actor_event` in silence.
+- **[#625](https://github.com/cairn-ehr/cairn-ehr/issues/625)** — the pen dedupes by content
+  digest across peers, but counts `pending` per peer: a rival penned under a peer that later leaves
+  the pull set stops making any cycle loud while another peer keeps serving it.
+- **[#624](https://github.com/cairn-ehr/cairn-ehr/issues/624)** — nothing refuses a non-canonical
+  `event_id` spelling; the puller now reads every spelling the door does, but one id still has many
+  byte spellings.
 - **Node-plane completeness accounting** still does not exist: there is no general *"what did the
   node plane fail to apply"* report.
 - **[#608](https://github.com/cairn-ehr/cairn-ehr/issues/608)** — `cairn_project_late_custody`'s

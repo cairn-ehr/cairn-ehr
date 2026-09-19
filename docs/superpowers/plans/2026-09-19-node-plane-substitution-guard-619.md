@@ -2060,6 +2060,32 @@ killer — the rival tests fail under M11 too, and the harness shows only the fi
 runs against the one test it targets; its second run died at the anti-vacuity check rather than
 the claim, so that test now asserts its claim first.
 
+### Ledger addendum — PR #623 review (M12–M16)
+
+The PR review (four reviewers: code, silent failures, tests, comments) found one critical defect and
+four untested behaviours. Each got a test and a mutation, run 2026-09-19 against the fixed tree:
+
+| Id | Mutation | Suite (filter) | Expected | Observed (failing assertion) |
+|---|---|---|---|---|
+| M12 | the lookup reads the id with `uuid::Uuid::parse_str` again | node_substitution_is_penned (`a_rival_under_an_oddly_spelled_held_id_is_still_penned`) | KILLED | KILLED — "the oddly spelled rival is PENNED, not skipped" (`rejected: 1, quarantined: 0`) |
+| M13 | the substitution arm's pen-failure freeze turned into a skip | node_substitution_lookup_freezes (`a_substitution_that_cannot_be_penned_freezes_rather_than_skips`) | KILLED | KILLED — "the cycle FROZE at the rival it could not pen" (`frozen: None`) |
+| M14 | a successful pen also freezes the cursor | node_substitution_is_penned (`a_rival_under_a_held_id_is_penned_not_skipped`) | KILLED | KILLED — "a penned rival is HELD, so the cursor does not freeze at it" |
+| M15 | the auto-release deletes every unacked row, not the applied bytes' | node_substitution_is_penned (`an_unacked_substitution_survives_the_next_sweep`) | KILLED | first run **SURVIVED**; after the fix, KILLED — "and it is the SAME row — first seen when it was penned, and bumped by the re-offer" |
+| M16 | the one shared clock merge confined to the enroll arm | node_plane_one_event_id_one_body (`every_arm_of_the_admission_gate_merges_the_clock`) | KILLED | KILLED — "the peer arm must merge this node's clock forward to the admitted wall" |
+
+**Finding 1 — two parsers, one id.** The doors read `event_id` with Postgres's `::uuid`; the puller's
+lookup used the `uuid` crate, which rejects spellings Postgres accepts (a hyphen after any four hex
+digits). A rival under the held id, spelled that way, was refused by the door and skipped by the
+loop — the pen switched off by the rival's author. `uuid_as_postgres_reads_it` mirrors
+`string_to_uuid`; `node_event_id_spellings.rs` pins it against the live server. The obvious SQL fix,
+`CASE WHEN pg_input_is_valid($1,'uuid') THEN $1::uuid END`, was rejected: planning for the actual
+parameter value may constant-fold the cast and raise, turning a skip into a permanent freeze.
+
+**M15's survival is the lesson.** Counting rows could not see a wrongful release, because the
+stream re-penned the deleted rival as a fresh row within the same sweep: same count, same ack flag,
+same `pending`, lost history. **When the system can recreate what a mutation destroys, assert the
+object's identity, not its existence.**
+
 ## Paper-parity benchmark (§1.2)
 
 Paper-parity: not clinical-surface — this changes how two federation write doors and the node-plane pull loop treat a forged or colliding trust-plane event; no clinician performs, sees or waits on any step of it, and no clinical workflow gains or loses an act.

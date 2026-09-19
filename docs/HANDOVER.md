@@ -13,14 +13,21 @@
 > three clock merges fold into one). The node puller asks the TABLE whether a refused event's
 > `event_id` is already held under a different content address and, if so, **pens it** whichever
 > check refused it; routine scoping refusals keep skip-and-advance. The door inventory is now a
-> `pg_proc` catalogue rule. ADR-0072 gained **Errata E1–E2**. 11/11 mutations killed. Guarded by
+> `pg_proc` catalogue rule. ADR-0072 gained **Errata E1–E2**. 16/16 mutations killed. **PR #623's own
+> review found a CRITICAL bypass, fixed on the branch:** the puller read `event_id` with the `uuid`
+> crate while the doors use Postgres's wider `::uuid` grammar, so a rival spelled with a hyphen after
+> every four hex digits was refused by the door yet skipped as scoping — the pen switched off by the
+> rival's author. The lookup now mirrors `string_to_uuid` (`uuid_as_postgres_reads_it`). Guarded by
 > **trap 13**. **Maintainer rulings:** pen (not skip, not all of #268); one tail per door. **Filed from
 > its review:** **#620** (the COSE unprotected header is hashed into the content address but lies
 > outside the signature, so a relay can re-wrap an event into a different address — wire core, both
 > planes, a DECISION) · **#621** (db/007 raises NON-P0001 codes deterministically on
 > verifiable-but-malformed events — a uuid cast before any trust check, the HLC CHECK — so the node
 > pull freezes that peer PERMANENTLY, with no pen/ack remedy; #228's class) · **#622** (the catalogue
-> guards cannot see a `BEGIN ATOMIC` body).
+> guards cannot see a `BEGIN ATOMIC` body). **Filed from the PR review:** **#624** (one `event_id`,
+> one spelling — nothing refuses a non-canonical spelling; hardening) · **#625** (the pen dedupes by
+> digest across peers but counts `pending` per peer, so a penned rival goes quiet when its first
+> server leaves the pull set).
 >
 > **⇒ WHAT IS NEXT: NO DECIDED-AND-UNBUILT DR ITEM REMAINS.** Pick from below, or leave DR for the
 > *Other build candidates*. **Recommended: #621** — a live, network-reachable wedge (any trusted peer
@@ -410,7 +417,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-19 (**#619 built — the node plane refuses a substitution at both live doors, and pens it.** **ADR-0073**, spec **v0.75**, no migration, `SCHEMA_GENERATION` still **53**; db/007's two doors get db/009's single-tail guard; the node puller classifies by STATE and pens; the door inventory becomes a `pg_proc` catalogue rule; ADR-0072 gains Errata E1–E2; 11/11 mutations killed after the harness caught its own unrevertable M9; the whole-branch review found the M10 "no seam" residual false (a `SET ROLE` seam killed it) and a wire-core finding; filed **#620–#622**; closed **#614** by hand; subagent-driven, seven tasks each spec- and quality-reviewed; PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**) · 2026-09-17 (**#614 + #615** — ADR-0072, spec v0.74, db/053, `SCHEMA_GENERATION` 52 → 53; filed #619; PR #618) · 2026-09-16 (**#594** — ADR-0071, exit 3 INCOMPLETE; filed #611, #613, #614–#617; PR #612) · 2026-09-15/16 (**#584** — ADR-0070; filed #602–#604; PR #601) · earlier, one line each: 09-15 **PR #595's review** (filed #596–#599; #600) · 09-14 **#593** (PR #595) · 09-13/14 **#567** (PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.75** ([ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md), which amends ADR-0072's census; [ADR-0072](spec/decisions/0072-a-restore-loses-no-record-silently.md), now carrying Errata E1–E2; [ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md); [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-19 (**#619 built — the node plane refuses a substitution at both live doors, and pens it.** **ADR-0073**, spec **v0.75**, no migration, `SCHEMA_GENERATION` still **53**; db/007's two doors get db/009's single-tail guard; the node puller classifies by STATE and pens; the door inventory becomes a `pg_proc` catalogue rule; ADR-0072 gains Errata E1–E2; 16/16 mutations killed after the harness caught its own unrevertable M9; the whole-branch review found the M10 "no seam" residual false (a `SET ROLE` seam killed it) and a wire-core finding; the PR review found and fixed a critical `event_id`-spelling pen bypass; filed **#620–#622**, **#624–#625**; closed **#614** by hand; subagent-driven, seven tasks each spec- and quality-reviewed; PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**) · 2026-09-17 (**#614 + #615** — ADR-0072, spec v0.74, db/053, `SCHEMA_GENERATION` 52 → 53; filed #619; PR #618) · 2026-09-16 (**#594** — ADR-0071, exit 3 INCOMPLETE; filed #611, #613, #614–#617; PR #612) · 2026-09-15/16 (**#584** — ADR-0070; filed #602–#604; PR #601) · earlier, one line each: 09-15 **PR #595's review** (filed #596–#599; #600) · 09-14 **#593** (PR #595) · 09-13/14 **#567** (PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.75** ([ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md), which amends ADR-0072's census; [ADR-0072](spec/decisions/0072-a-restore-loses-no-record-silently.md), now carrying Errata E1–E2; [ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md); [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -438,7 +445,7 @@ that generalise past the slice that found them.
 ### 2026-09-19 — #619: the node plane refuses a substitution at both live doors, and pens it
 
 Design `docs/superpowers/specs/2026-09-19-node-plane-substitution-guard-619-design.md`; plan
-`docs/superpowers/plans/2026-09-19-node-plane-substitution-guard-619.md` (its M1–M11 ledger);
+`docs/superpowers/plans/2026-09-19-node-plane-substitution-guard-619.md` (its M1–M16 ledger);
 [ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md). The durable rule
 is trap 13. What generalises past the slice:
 
@@ -463,6 +470,15 @@ is trap 13. What generalises past the slice:
 - **⇒ CONTENT-ADDRESSING OVER UNSIGNED BYTES IS NOT CONTENT-ADDRESSING.** The COSE unprotected header
   is hashed into the content address but lies outside the signature, so a relay can re-wrap an event
   into a different address (#620). Read #620 before reasoning "same address ⇔ same signed event".
+- **⇒ TWO PARSERS FOR ONE VALUE ARE TWO PROTOCOLS.** The door read `event_id` with Postgres's `::uuid`,
+  the puller with the `uuid` crate; the gap between the grammars was a pen bypass any rival's author
+  could choose (PR #623 review, finding 1). Where Rust must agree with the database on a value, mirror
+  the DB's grammar exactly and pin the mirror against the live server — and do not reach for
+  `CASE WHEN pg_input_is_valid(…) THEN $1::uuid END`: a plan made for the actual value may fold the
+  cast and raise.
+- **⇒ WHEN THE SYSTEM CAN RECREATE WHAT A MUTATION DESTROYS, ASSERT IDENTITY, NOT EXISTENCE.** M15 (a
+  too-wide auto-release) survived every row-count assertion because the same sweep re-penned the
+  deleted rival as a fresh row. `first_seen` unchanged and `seen_count` bumped is what killed it.
 - **Process (subagent-driven, seven tasks):** each task got a spec + quality review, and four needed a
   fix round — a plan step that omitted `cargo fmt`, the harness twice, and two false ADR sentences
   (a brief's false "Amends" line; an overclaim, "no future arm can forget the guard", that an early
@@ -621,7 +637,7 @@ workspace); `poc/` is frozen historical spikes.
   **#531**/**#329** (decompose `cairn-sync/src/main.rs` — a maintainer decision on which to keep),
   **#532**, **#534**, **#535**, **#536**, **#537**, **#538**, **#556**–**#563**, **#569**, **#575**,
   **#589**–**#592**, **#596**–**#599**, **#602**–**#611**, **#613**, **#616**, **#617**,
-  **#620**–**#622**.
+  **#620**–**#622**, **#624**, **#625**.
   (Ranges silently absorb issues that leave them: re-check each against GitHub before trusting it.)
 - **§5.9 parts C/D** (#232) — see ⇒ NEXT. Related: **#235** (shred authorization hooks), **#236** (FTS/RAG
   must build on `event_clear`).

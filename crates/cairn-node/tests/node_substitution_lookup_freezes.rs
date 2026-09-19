@@ -38,8 +38,10 @@
 //! holds (`pen_or_freeze`'s `Frozen`). The second test grants the lookup back (`SELECT` on
 //! `node_event`) and withholds exactly one thing instead: `INSERT` on `node_event_quarantine`, the
 //! pen's new-row write (PR #623 review, test gap 3; mutation M13). The dedupe `UPDATE` before it is
-//! still granted, so the failure lands on the insert itself. The unverifiable arm (#111) reaches the
-//! same `pen_or_freeze`, so this one test covers the freeze both arms share.
+//! still granted, so the failure lands on the insert itself. This pins the substitution arm's
+//! `Frozen` handling in `pull_into`, and the write-failure-to-`Frozen` mapping inside
+//! `pen_or_freeze` that the unverifiable arm (#111) shares; the unverifiable arm's own `Frozen`
+//! match arm is not exercised here.
 
 #[path = "common/node_plane_kit.rs"]
 mod node_plane_kit;
