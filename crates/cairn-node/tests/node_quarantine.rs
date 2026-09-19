@@ -16,9 +16,13 @@
 //! node_event is streamed, received, and re-applied through the real admission
 //! gate — exercising pull_into's classification end-to-end without a second DB.
 
+#[path = "common/node_plane_kit.rs"]
+mod node_plane_kit;
+
+use node_plane_kit::{pen_count, self_node};
+
 use cairn_event::{generate_key, sign, EventBody, Hlc};
-use cairn_node::{db, identity, keystore, sync};
-use std::net::SocketAddr;
+use cairn_node::{db, identity, sync};
 use tokio_postgres::Client;
 
 fn cs() -> Option<String> {
@@ -28,54 +32,6 @@ fn cs() -> Option<String> {
 /// Corrupt bytes that cannot verify as a COSE_Sign1/Ed25519 event — the
 /// "unverifiable" class the node pen exists for.
 const BAD: &[u8] = b"\xde\xad\xbe\xef";
-
-/// Provision node A, self-peer it (so A trusts A for the mutual-mTLS self-pull),
-/// bind a serve listener, and return everything a self-pull needs.
-struct SelfNode {
-    a: Client,
-    addr: SocketAddr,
-    serve: tokio::task::JoinHandle<anyhow::Result<()>>,
-    sk: cairn_event::SigningKey,
-    _tmp: tempfile::TempDir,
-}
-
-async fn self_node(base: &str, listen_addr: &str) -> SelfNode {
-    let a = db::connect_and_load_schema(base).await.unwrap();
-    db::reset_node_federation_tables(&a).await.ok();
-    let tmp = tempfile::tempdir().unwrap();
-    let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
-    identity::provision(&a, &sk, &kid, "A", listen_addr)
-        .await
-        .unwrap();
-    let id = identity::load_local(&a).await.unwrap();
-    // Self-peer so the mutual-mTLS handshake pins A's own key as trusted.
-    let self_bundle = cairn_event::PairingBundle {
-        node_id_hex: id.node_id_hex.clone(),
-        pubkey_hex: id.pubkey_hex.clone(),
-        address: listen_addr.into(),
-        fingerprint: cairn_event::short_fingerprint(&id.pubkey_hex).unwrap(),
-        nonce: "n".into(),
-        hlc: cairn_event::Hlc {
-            wall: 0,
-            counter: 0,
-            node_origin: id.node_id_hex.clone(),
-        },
-    };
-    identity::author_peer(&a, &sk, &kid, &id.node_id_hex, &self_bundle, Some("peer"))
-        .await
-        .unwrap();
-    let trust = sync::trust_store_from_db(&a).await.unwrap();
-    let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let (addr, serve_cfg) = sync::bind_serve(listen, base, &sk, trust).await.unwrap();
-    let serve = tokio::spawn(sync::serve(serve_cfg));
-    SelfNode {
-        a,
-        addr,
-        serve,
-        sk,
-        _tmp: tmp,
-    }
-}
 
 /// Raw-insert an UNVERIFIABLE node_event into A's log (owner privilege bypasses
 /// the C5.4 raw-INSERT floor — this stands in for a corrupt/pre-ADR-0040 frame a
@@ -93,13 +49,6 @@ async fn insert_corrupt_node_event(a: &Client) -> i64 {
     .await
     .expect("owner may seed a corrupt served row")
     .get(0)
-}
-
-async fn pen_count(a: &Client) -> i64 {
-    a.query_one("SELECT count(*) FROM node_event_quarantine", &[])
-        .await
-        .unwrap()
-        .get(0)
 }
 
 #[tokio::test]

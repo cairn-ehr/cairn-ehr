@@ -16,11 +16,16 @@
 -- the node plane's steady state is deny-all — a serving peer streams events
 -- authored by nodes THIS puller does not (yet) trust, and refusing them is
 -- normal and self-healing (a later peer.added + a full sweep admits them). So
--- pull_into pens ONLY the events that will NEVER apply without repair —
--- signature/context-unverifiable bytes — and keeps skip-and-sweep for a
--- verifiable-but-refused event (untrusted author, or an event type this node has
--- no code for yet under the two-plane model: both resolve on a later sweep). A
--- transient DB/transport error freezes the cursor instead (retried next cycle).
+-- pull_into pens ONLY the events that will NEVER apply without repair:
+-- signature/context-unverifiable bytes, and — since #619 (ADR-0073) — a
+-- SUBSTITUTION, a verifiable event refused with P0001 under an event_id this node
+-- already holds with a different content address, whichever check raised the P0001
+-- (a refusal with any other SQLSTATE freezes instead; the id is taken, so no
+-- sweep, trust change or upgrade ever makes it apply). It keeps skip-and-sweep for
+-- every other verifiable-but-refused event (untrusted author, or an event type
+-- this node has no code for yet under the two-plane model: both resolve on a later
+-- sweep). A transient DB/transport error freezes the cursor instead (retried next
+-- cycle).
 --
 -- THE RE-OFFER FLOOR (derived, not stored): quarantining an event records the
 -- serving-node `seq` it was refused at (`refused_seq`). Every subsequent pull
@@ -31,7 +36,8 @@
 -- heals the moment the cause is fixed — a re-offered event that now applies is
 -- DELETEd from the pen on success (auto-requeue), and an operator who accepts a
 -- permanent exclusion sets `acked = TRUE` (a recorded human decision, policy-
--- neutral mechanism). While any UNACKED row exists for a peer, the pull logs a
+-- neutral mechanism). A substitution never applies, so it never auto-releases:
+-- only the ack silences it (the row is kept). While any UNACKED row exists for a peer, the pull logs a
 -- LOUD integrity line every cycle. No manual `requeue` command is needed — the
 -- floor + full-sweep already re-offer, and success auto-releases.
 --
@@ -63,9 +69,12 @@ CREATE TABLE IF NOT EXISTS node_event_quarantine (
     -- MIN(refused_seq) over this peer's unacked rows. Lets a later pull fetch
     -- from just below the earliest still-unresolved refusal.
     refused_seq    BIGINT      NOT NULL,
-    -- The legible refusal reason AT QUARANTINE TIME (apply_remote_node_event's
-    -- message / cairn_verify_error vocabulary): an operator must be able to see
-    -- WHY the bytes were excluded without a debugger (principle 4).
+    -- The legible refusal reason AT QUARANTINE TIME: for unverifiable bytes, the
+    -- verifier's reason (the cairn_verify_error vocabulary); for a substitution
+    -- (#619), a reason beginning `substitution:` that names the event_id and both
+    -- content addresses (crates/cairn-node/src/sync/substitution.rs). An operator
+    -- must be able to see WHY the bytes were excluded without a debugger
+    -- (principle 4).
     reason         TEXT        NOT NULL,
     first_seen     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     last_seen      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),

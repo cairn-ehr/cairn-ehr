@@ -1548,10 +1548,12 @@ enum Cmd {
         #[arg(long, default_value_t = 5)]
         interval_secs: u64,
     },
-    /// List the durable node-event quarantine (issue #111): every pulled node_event
-    /// this node refused as UNVERIFIABLE, with its reason, re-offer floor seq, and
-    /// ack state. One JSON object per line. An unacked row makes the pull loud every
-    /// cycle until its cause is fixed (auto-releases) or it is acked.
+    /// List the durable node-event quarantine (issues #111, #619): every pulled
+    /// node_event this node penned — UNVERIFIABLE bytes, or a SUBSTITUTION (a second,
+    /// different event under an event_id this node already holds) — with its reason,
+    /// re-offer floor seq, and ack state. One JSON object per line. An unacked row makes
+    /// the pull loud every cycle until its cause is fixed (auto-releases) or it is acked;
+    /// a substitution never auto-releases, because the id it reuses is taken.
     Quarantine,
     /// License a permanent exclusion for one quarantined node_event: mark it acked so
     /// it no longer pins the re-offer floor or makes the pull loud. Takes the hex

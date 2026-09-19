@@ -1,8 +1,9 @@
 //! A frozen cursor must not produce a line that reads like a healthy cycle.
 //! (PR #478 review, finding 6.)
 //!
-//! `pull_into` has three freeze paths — the quarantine pen at quota, a pen WRITE that
-//! failed, and a transient database fault while applying. All three `break` out of the
+//! `pull_into` has four freeze paths — the quarantine pen at quota, a pen WRITE that
+//! failed, a transient database fault while applying, and (since #619) a failed lookup of
+//! what `node_event` holds under a refused event's id. All four `break` out of the
 //! loop and then return `Ok(stats)`, which is correct: freezing is the deliberate,
 //! availability-preserving choice (never advance past an unresolved refusal), and the
 //! cycle itself did not fail.

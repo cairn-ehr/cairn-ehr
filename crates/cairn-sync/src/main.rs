@@ -755,9 +755,10 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// * `do_requeue` must INTERRUPT for a local fault (the operator has something to fix, and
 ///   every row behind it would meet the same fault anyway) but ANNOTATE-AND-CONTINUE for a
 ///   byte-attributable one. Halting there wedges the whole recovery command behind one row
-///   forever, and `cairn-sync quarantine` is read-only — there is no CLI remedy. The header
-///   of `db/001_envelope.sql` records that exact outcome on the pull plane: a class-22
-///   `decode()` raise from one buggy peer froze that peer's cursor PERMANENTLY.
+///   forever, and `cairn-sync quarantine` is read-only — there is no CLI remedy. The comment
+///   above `cairn_decode_hex_or_raise` in `db/001_envelope.sql` (#228) records that exact
+///   outcome on the node pull plane: a class-22 `decode()` raise from one buggy peer froze
+///   that peer's cursor PERMANENTLY.
 ///
 /// # Why the CLASS, and why `false` is the default
 ///
@@ -775,11 +776,14 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// # Why a DELIBERATE refusal cannot be misread as local here
 ///
 /// It would be, if a door ever raised a verdict with `USING ERRCODE` in one of the classes
-/// above. None does, and none may: `db/001_envelope.sql`'s header states that **the P0001 is
-/// a contract, not an accident of using `RAISE EXCEPTION`** — precisely because the pull
-/// loop routes on it — and forbids adding `USING ERRCODE` to any raise. So every SQLSTATE
-/// this function sees came from PostgreSQL itself, which is what makes reading its class
-/// meaningful at all.
+/// above. None does today (no `USING ERRCODE` appears anywhere in `db/`), and the rule
+/// that keeps it so is written down where it was learned: `db/001_envelope.sql` states, in
+/// the comment above `cairn_decode_hex_or_raise` (#228), that **the P0001 is a contract, not
+/// an accident of using `RAISE EXCEPTION`** — because the node pull loop
+/// (`cairn-node`'s `sync.rs`) routes on it — and forbids `USING ERRCODE` on that helper's
+/// refusals. This loop leans on the same contract through `refusal_is_deliberate` (#267).
+/// So every SQLSTATE this function sees came from PostgreSQL itself, which is what makes
+/// reading its class meaningful at all.
 fn apply_failure_is_local(sqlstate: Option<&str>) -> bool {
     match sqlstate {
         // No SQLSTATE at all: the statement never reached a verdict — a dropped
@@ -4546,7 +4550,8 @@ fn do_requeue(
             // all DETERMINISTIC and attributable to the row itself. Halting on one of those
             // stops every future run at the same row — the listing is `ORDER BY first_seen`
             // — and `cairn-sync quarantine` is read-only, so raw SQL was the only remedy.
-            // `db/001_envelope.sql`'s header records that exact failure one plane over.
+            // The comment above `cairn_decode_hex_or_raise` in `db/001_envelope.sql` (#228)
+            // records that exact failure one plane over.
             //
             // The accepted cost, and it is the pull path's cost too: a LOCAL fault stops
             // every requeue run at the same row rather than annotating it and moving on.
@@ -9611,8 +9616,9 @@ mod quarantine_tests {
     /// constraint violation, an `XX000` from a function fed adversarial bytes are all
     /// DETERMINISTIC. Halting on one stopped every future `requeue` at the same row — the
     /// listing is `ORDER BY first_seen` — and `cairn-sync quarantine` is read-only, so raw
-    /// SQL was the operator's only remedy. `db/001_envelope.sql`'s header records exactly
-    /// that outcome one plane over, from one buggy peer.
+    /// SQL was the operator's only remedy. The comment above `cairn_decode_hex_or_raise` in
+    /// `db/001_envelope.sql` (#228) records exactly that outcome one plane over, from one
+    /// buggy peer.
     ///
     /// So a byte-attributable failure ANNOTATES and continues. What it must not do is
     /// annotate in the door's voice: `last_requeue_error` is what an operator reads while

@@ -164,6 +164,7 @@ AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID;
     v_local_node BYTEA; v_local_key TEXT; v_signer TEXT; v_payload JSONB;
+    v_found BYTEA;
 BEGIN
     -- Size ceiling (review fix A7a): an oversized event would wedge the read-capped wire.
     IF octet_length(p_signed) > cairn_max_event_bytes() THEN
@@ -234,30 +235,46 @@ BEGIN
             v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
-        RETURN v_eid;
+    ELSE
+        -- subject_node_id is NOT NULL; a missing peer_node_id_hex would otherwise surface
+        -- as an opaque constraint error rather than a legible rejection. The sibling case —
+        -- present but MALFORMED — is caught inside cairn_decode_hex_or_raise below (issue
+        -- #228). This guard is kept rather than folded into the helper because it names
+        -- v_type, which the helper cannot see.
+        IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
+            RAISE EXCEPTION 'submit_node_event: % missing peer_node_id_hex in payload', v_type;
+        END IF;
+
+        INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
+            signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
+            hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+        VALUES (v_eid, v_op, v_local_node,
+            cairn_decode_hex_or_raise('peer_node_id_hex',
+                v_payload ->> 'peer_node_id_hex', 'submit_node_event'),
+            v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
+            v_payload ->> 'role', v_payload ->> 'scope_hint',
+            NULLIF(v_payload ->> 'target_event_id','')::uuid,
+            (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
+            b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
+        ON CONFLICT (node_event_id) DO NOTHING;
     END IF;
 
-    -- subject_node_id is NOT NULL; a missing peer_node_id_hex would otherwise surface
-    -- as an opaque constraint error rather than a legible rejection. The sibling case —
-    -- present but MALFORMED — is caught inside cairn_decode_hex_or_raise below (issue
-    -- #228). This guard is kept rather than folded into the helper because it names
-    -- v_type, which the helper cannot see.
-    IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
-        RAISE EXCEPTION 'submit_node_event: % missing peer_node_id_hex in payload', v_type;
-    END IF;
-
-    INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
-        signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
-        hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
-    VALUES (v_eid, v_op, v_local_node,
-        cairn_decode_hex_or_raise('peer_node_id_hex',
-            v_payload ->> 'peer_node_id_hex', 'submit_node_event'),
-        v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
-        v_payload ->> 'role', v_payload ->> 'scope_hint',
-        NULLIF(v_payload ->> 'target_event_id','')::uuid,
-        (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
-        b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
-    ON CONFLICT (node_event_id) DO NOTHING;
+    -- SUBSTITUTION REFUSAL (#619, ADR-0073). Both arms above insert ON CONFLICT DO NOTHING, which
+    -- is right for a REPEAT of the same event (set-union) and silently wrong for a DIFFERENT event
+    -- under an id already held: the rival vanished and this door returned the id as if it had
+    -- succeeded — for a peer.revoked, the node kept trusting a peer it had revoked. The comparison
+    -- is the shared cairn_refuse_substitution (db/053, IS DISTINCT FROM), never an inline copy
+    -- (substitution_guard_is_single_source.rs).
+    --
+    -- Two placement rules, each of which a later edit might "tidy" away:
+    --   * AFTER the IF/ELSE, never above it. Above the branch nothing is held yet, v_found is
+    --     NULL, and IS DISTINCT FROM refuses — every clean write would be refused.
+    --   * The read is UNCONDITIONAL — no GET DIAGNOSTICS ROW_COUNT. The node plane carries tens
+    --     of events, and a ROW_COUNT check is only correct while each INSERT stays the last
+    --     statement of its arm; a later edit would disarm it silently (db/009's rule, ADR-0072).
+    -- The genesis arm above needs neither: it has no ON CONFLICT, so a colliding id raises.
+    SELECT content_address INTO v_found FROM node_event WHERE node_event_id = v_eid;
+    PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'submit_node_event');
     RETURN v_eid;
 END;
 $$;
@@ -312,6 +329,7 @@ AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID; v_signer TEXT;
     v_payload JSONB; v_author_node BYTEA;
+    v_found BYTEA;
 BEGIN
     -- Size ceiling (review fix A7a): refuse an oversized remote event at the gate; the
     -- server-side stream skips any legacy oversized row, but the admission door is the floor.
@@ -367,75 +385,82 @@ BEGIN
             (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
-        -- Clock never falls behind an event we accepted (HLC invariant A3, mirrors cairn-sync).
-        -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge.
-        PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
-                                     (b -> 'hlc' ->> 'counter')::int);
-        RETURN v_eid;
-    END IF;
-
-    -- peer/revoke/supersede: the author must be a currently-trusted peer (resolved by key).
-    SELECT node_id INTO v_author_node FROM node_current WHERE signer_key_id = v_signer;
-    IF v_author_node IS NULL THEN
-        RAISE EXCEPTION 'apply_remote_node_event: author key % maps to no known node', v_signer;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM trust_peer WHERE peer_node_id = v_author_node AND status = 'active') THEN
-        RAISE EXCEPTION 'apply_remote_node_event: author % is not an active peer (deny-all)', encode(v_author_node,'hex');
-    END IF;
-
-    -- supersede (issue #201, ADR-0026 slice C): a restored node's lineage claim
-    -- REPLICATES like every other node event — the submit door emits it and the
-    -- restore door applies it, so an apply door without this arm left a peer pulling
-    -- a restored node's history refusing the event on every full sweep FOREVER (a
-    -- permanent set-union exclusion on the node plane). Admitting it is trust-bounded
-    -- exactly like peer/revoke: the author must be an active peer (checked above),
-    -- and the claim feeds ONLY the advisory node_lineage view — node_current resolves
-    -- keys from `enroll` rows alone and trust_peer reads only `peer`/`revoke`, so a
-    -- false supersede from a hostile-but-trusted peer can hijack neither key
-    -- resolution nor peer trust; it is an attributable, signed claim (principle 2).
-    IF v_op = 'supersede' THEN
-        -- Mirror the local door's legible guard: name the missing field, never store
-        -- a NULL/garbage subject.
-        IF v_payload ->> 'superseded_node_id_hex' IS NULL THEN
-            RAISE EXCEPTION 'apply_remote_node_event: node.superseded from % missing superseded_node_id_hex in payload', encode(v_author_node,'hex');
+    ELSE
+        -- peer/revoke/supersede: the author must be a currently-trusted peer (resolved by key).
+        SELECT node_id INTO v_author_node FROM node_current WHERE signer_key_id = v_signer;
+        IF v_author_node IS NULL THEN
+            RAISE EXCEPTION 'apply_remote_node_event: author key % maps to no known node', v_signer;
         END IF;
-        INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
-            signer_key_id, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
-        VALUES (v_eid, 'supersede', v_author_node,
-            cairn_decode_hex_or_raise('superseded_node_id_hex',
-                v_payload ->> 'superseded_node_id_hex', 'apply_remote_node_event'),
-            v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
-            b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
-        ON CONFLICT (node_event_id) DO NOTHING;
-        -- Clock never falls behind an event we accepted (HLC invariant A3, mirrors cairn-sync).
-        -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge.
-        PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
-                                     (b -> 'hlc' ->> 'counter')::int);
-        RETURN v_eid;
+        IF NOT EXISTS (SELECT 1 FROM trust_peer WHERE peer_node_id = v_author_node AND status = 'active') THEN
+            RAISE EXCEPTION 'apply_remote_node_event: author % is not an active peer (deny-all)', encode(v_author_node,'hex');
+        END IF;
+
+        -- supersede (issue #201, ADR-0026 slice C): a restored node's lineage claim
+        -- REPLICATES like every other node event — the submit door emits it and the
+        -- restore door applies it, so an apply door without this arm left a peer pulling
+        -- a restored node's history refusing the event on every full sweep FOREVER (a
+        -- permanent set-union exclusion on the node plane). Admitting it is trust-bounded
+        -- exactly like peer/revoke: the author must be an active peer (checked above),
+        -- and the claim feeds ONLY the advisory node_lineage view — node_current resolves
+        -- keys from `enroll` rows alone and trust_peer reads only `peer`/`revoke`, so a
+        -- false supersede from a hostile-but-trusted peer can hijack neither key
+        -- resolution nor peer trust; it is an attributable, signed claim (principle 2).
+        IF v_op = 'supersede' THEN
+            -- Mirror the local door's legible guard: name the missing field, never store
+            -- a NULL/garbage subject.
+            IF v_payload ->> 'superseded_node_id_hex' IS NULL THEN
+                RAISE EXCEPTION 'apply_remote_node_event: node.superseded from % missing superseded_node_id_hex in payload', encode(v_author_node,'hex');
+            END IF;
+            INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
+                signer_key_id, hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+            VALUES (v_eid, 'supersede', v_author_node,
+                cairn_decode_hex_or_raise('superseded_node_id_hex',
+                    v_payload ->> 'superseded_node_id_hex', 'apply_remote_node_event'),
+                v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
+                b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
+            ON CONFLICT (node_event_id) DO NOTHING;
+        ELSE
+            -- Mirror the local door's legible guard: a trusted-but-malformed peer event
+            -- (missing peer_node_id_hex) is rejected, not stored with a \x00 subject. Present but
+            -- MALFORMED is caught by cairn_decode_hex_or_raise below (issue #228). Both guards
+            -- stay here rather than moving into the helper: they can name the AUTHOR, which is
+            -- what tells the operator which peer to go and fix, and the helper cannot see it.
+            IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
+                RAISE EXCEPTION 'apply_remote_node_event: % from % missing peer_node_id_hex in payload', v_type, encode(v_author_node,'hex');
+            END IF;
+            INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
+                signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
+                hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+            VALUES (v_eid, v_op, v_author_node,
+                cairn_decode_hex_or_raise('peer_node_id_hex',
+                    v_payload ->> 'peer_node_id_hex', 'apply_remote_node_event'),
+                v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
+                v_payload ->> 'role', v_payload ->> 'scope_hint',
+                NULLIF(v_payload ->> 'target_event_id','')::uuid,
+                (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
+                b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
+            ON CONFLICT (node_event_id) DO NOTHING;
+        END IF;
     END IF;
 
-    -- Mirror the local door's legible guard: a trusted-but-malformed peer event
-    -- (missing peer_node_id_hex) is rejected, not stored with a \x00 subject. Present but
-    -- MALFORMED is caught by cairn_decode_hex_or_raise below (issue #228). Both guards
-    -- stay here rather than moving into the helper: they can name the AUTHOR, which is
-    -- what tells the operator which peer to go and fix, and the helper cannot see it.
-    IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
-        RAISE EXCEPTION 'apply_remote_node_event: % from % missing peer_node_id_hex in payload', v_type, encode(v_author_node,'hex');
-    END IF;
-    INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
-        signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
-        hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
-    VALUES (v_eid, v_op, v_author_node,
-        cairn_decode_hex_or_raise('peer_node_id_hex',
-            v_payload ->> 'peer_node_id_hex', 'apply_remote_node_event'),
-        v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
-        v_payload ->> 'role', v_payload ->> 'scope_hint',
-        NULLIF(v_payload ->> 'target_event_id','')::uuid,
-        (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
-        b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
-    ON CONFLICT (node_event_id) DO NOTHING;
+    -- SUBSTITUTION REFUSAL (#619, ADR-0073) — the federation admission gate's copy of the
+    -- submit_node_event tail. Every arm above inserts ON CONFLICT DO NOTHING; without this, a
+    -- trusted peer's SECOND, different event under an id already held vanished, the function
+    -- returned normally, the puller counted it admitted and advanced past it: every later full
+    -- sweep re-offered it only to drop it again in silence — two nodes holding different bytes
+    -- under one id, forever. A dropped rival GENESIS is the sharpest case — that peer's key
+    -- would never resolve here.
+    -- The refusal is P0001 like every other (db/001's contract); the node puller tells it from a
+    -- routine deny-all by STATE, not by this text (crates/cairn-node/src/sync/substitution.rs).
+    -- Same two placement rules as submit_node_event: AFTER the IF/ELSE, and an UNCONDITIONAL read.
+    SELECT content_address INTO v_found FROM node_event WHERE node_event_id = v_eid;
+    PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'apply_remote_node_event');
+
     -- Clock never falls behind an event we accepted (HLC invariant A3, mirrors cairn-sync).
-    -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge.
+    -- The clock-drift REJECTION near the top of this function is this door's ceiling; the helper
+    -- (db/001) is the pure merge. ONE merge for all three arms since #619 folded them into this
+    -- tail (it used to be three copies), and AFTER the guard, so a refused rival never advances
+    -- this node's clock (the RAISE would roll it back regardless; the order says what is meant).
     PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
                                  (b -> 'hlc' ->> 'counter')::int);
     RETURN v_eid;

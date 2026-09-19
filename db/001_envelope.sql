@@ -249,7 +249,7 @@ INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
 -- The A3 clock merge: drag this node's HLC forward past an event we have just ADMITTED,
 -- so the local clock never falls behind anything in our own log (§3.6, ADR-0003).
 --
--- ONE copy, five callers (issue #227). This block used to be pasted verbatim into every
+-- ONE copy (issue #227), three callers since #619 folded db/007's three arms into one tail. This block used to be pasted verbatim into every
 -- admission door — the three arms of apply_remote_node_event (db/007), restore_node_event
 -- (db/009), and apply_remote_event (db/020). A later edit that fixed one copy and missed
 -- another would leave two doors with DIFFERENT clock semantics: silent divergence between
@@ -472,8 +472,9 @@ REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 -- a SUBSET of the migrations that includes db/001 but not db/007 or db/009, and PL/pgSQL
 -- binds a function call at first EXECUTION. Declaring a shared helper beside its current
 -- callers is what turns a later clinical-plane call site into a first-write outage — the
--- late-binding trap of issue #198. Today's six call sites are all node-plane; a
--- decode-hex helper is exactly what the next door reaches for.
+-- late-binding trap of issue #198. It started with six node-plane call sites (#228); the
+-- next doors did reach for it — there are eleven today, clinical ones among them (db/027,
+-- db/048), counted in hex_decode_helper.rs.
 --
 -- DELIBERATELY NOT `STRICT`: a STRICT function returns NULL on NULL input without ever
 -- entering the body, which would skip the guard below and hand the caller's NOT NULL
