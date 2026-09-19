@@ -87,34 +87,9 @@ fn only_db_053_raises_the_substitution_refusal() {
     );
 }
 
-/// Every door this change guards still CALLS the helper.
-///
-/// ⚠️ **The test above cannot see this, and the difference is what #619 is made of.** It proves
-/// nobody *duplicates* the refusal sentence; a door that simply never calls the helper contains no
-/// sentence to find and is invisible to it. That is not hypothetical — `db/007`'s
-/// `submit_node_event` and `apply_remote_node_event` write `node_event` through five
-/// `ON CONFLICT DO NOTHING` sites with no guard at all, and the file passes the test above
-/// cleanly. They are **deliberately not in this list** (#619 is a decision about refuse-vs-skip on
-/// the pull path, not a patch); the list is the set this change is responsible for, so adding a
-/// door here is how a future slice records that it took that responsibility on.
-///
-/// Behaviour tests already kill the deletion of each call (mutations M2/M3/M4). This exists so the
-/// *inventory* is written down in one greppable place rather than inferred from three suites.
-#[test]
-fn every_door_this_change_guards_still_calls_the_helper() {
-    const GUARDED_DOORS: [&str; 3] = [
-        "005_submit.sql",
-        "009_node_supersede_and_restore.sql",
-        "020_apply_remote_event.sql",
-    ];
-    for door in GUARDED_DOORS {
-        let text = fs::read_to_string(db_dir().join(door))
-            .unwrap_or_else(|e| panic!("db/{door} must be readable: {e}"));
-        assert!(
-            text.contains("cairn_refuse_substitution"),
-            "db/{door} no longer calls cairn_refuse_substitution. If a door genuinely stopped \
-             needing the guard, say so here with the reason — do not just delete the call, and do \
-             not re-inline the comparison (that is #608's shape returning)."
-        );
-    }
-}
+// The INVENTORY of guarded doors used to be a hand-written list here
+// (`every_door_this_change_guards_still_calls_the_helper`), and it was wrong: it omitted db/007's two
+// `node_event` writers, one of them the live federation admission gate (#619). A list says what its
+// author believed. The inventory is now DERIVED from the catalogue — every function that writes an
+// event log must call the helper — in `substitution_guard_covers_every_writer.rs`. This file keeps
+// the other half: nobody DUPLICATES the refusal.

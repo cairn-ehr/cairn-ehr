@@ -249,7 +249,7 @@ INSERT INTO hlc_state (id, hlc_wall, hlc_counter)
 -- The A3 clock merge: drag this node's HLC forward past an event we have just ADMITTED,
 -- so the local clock never falls behind anything in our own log (§3.6, ADR-0003).
 --
--- ONE copy, five callers (issue #227). This block used to be pasted verbatim into every
+-- ONE copy (issue #227), three callers since #619 folded db/007's three arms into one tail. This block used to be pasted verbatim into every
 -- admission door — the three arms of apply_remote_node_event (db/007), restore_node_event
 -- (db/009), and apply_remote_event (db/020). A later edit that fixed one copy and missed
 -- another would leave two doors with DIFFERENT clock semantics: silent divergence between

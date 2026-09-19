@@ -49,11 +49,13 @@
 //! refactor, which is the regression proof for that behaviour.
 //!
 //! They do NOT cover the clock advance at every site. A positive "`hlc_state` moved
-//! forward after admission" assertion exists for only two of the five call sites:
-//! db/007's enroll arm (`hlc_drift.rs`) and db/020 (`apply_remote_event.rs`). The
-//! supersede arm, the peer/revoke arm and `restore_node_event` have none — dropping
-//! their merge leaves the entire tree green. That is precisely why guard 5 exists, and
-//! why it is a source-level count rather than a behavioural assertion.
+//! forward after admission" assertion exists for two of the three call sites that
+//! remain since #619 folded db/007's three arms into one shared tail: db/007
+//! (`hlc_drift.rs`, through the enroll arm, which now shares its merge with the
+//! supersede and peer/revoke arms) and db/020 (`apply_remote_event.rs`).
+//! `restore_node_event` has none — dropping its merge leaves the entire tree green.
+//! That is precisely why guard 5 exists, and why it is a source-level count rather
+//! than a behavioural assertion.
 //!
 //! DB-backed cases use real Postgres, gated on `$CAIRN_TEST_PG`, serialized
 //! cluster-wide via `db::test_serial_guard` (shared-DB pattern).
@@ -143,14 +145,14 @@ fn the_helper_is_declared_in_db001_so_the_sync_subset_can_reach_it() {
 ///
 /// The two guards above forbid a sixth COPY of the merge from re-growing. Neither
 /// notices the opposite failure: a call site silently VANISHING. Both still pass with
-/// every `PERFORM cairn_node_hlc_merge(...)` deleted, including all five at once. The
+/// every `PERFORM cairn_node_hlc_merge(...)` deleted, including all of them at once. The
 /// de-duplication itself made that failure easier to miss — removing the eight-line
 /// block was conspicuous in review, removing one `PERFORM` line is not.
 ///
 /// A source-level count is the right tool here because behavioural coverage does not
-/// exist for three of the five sites (see the header): the supersede arm, the
-/// peer/revoke arm and `restore_node_event` have no assertion anywhere in the tree that
-/// the clock advanced, so their merge could be dropped with the whole suite green.
+/// exist for every site (see the header): `restore_node_event` has no assertion anywhere
+/// in the tree that the clock advanced, so its merge could be dropped with the whole
+/// suite green.
 ///
 /// Concretely, what that would cost — take `restore_node_event`. A node restored from a
 /// sneakernet medium whose events carry honest forward skew (walls inside the 24h
@@ -170,7 +172,7 @@ fn every_door_still_calls_the_helper() {
     let needle = "PERFORM cairn_node_hlc_merge(";
     // (migration, how many of its arms merge the clock)
     let want: Vec<(String, usize)> = [
-        ("007_node_federation.sql", 3), // apply_remote_node_event: enroll, supersede, peer/revoke
+        ("007_node_federation.sql", 1), // apply_remote_node_event: ONE shared tail for all three arms (#619)
         ("009_node_supersede_and_restore.sql", 1), // restore_node_event
         ("020_apply_remote_event.sql", 1), // the clinical door, passing its clamped wall
     ]

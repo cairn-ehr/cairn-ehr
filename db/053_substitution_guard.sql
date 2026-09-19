@@ -26,10 +26,10 @@
 --
 -- WHY IT IS PURE, AND WHY THAT MATTERS. It reads no table: both content-addresses arrive as
 -- arguments. That is what lets the same function serve `event_log` (db/005, db/020) and
--- `node_event` (db/009) without knowing about either, and it is why each door keeps its OWN
--- read. db/005 and db/020 are on the 100k-event clinical path and read only when their INSERT
--- was a no-op; db/009 (tens of node events per medium) reads unconditionally and is thereby
--- robust to a later edit disarming a ROW_COUNT it no longer sets.
+-- `node_event` (db/007, db/009) without knowing about either, and it is why each door keeps
+-- its OWN read. db/005 and db/020 are on the 100k-event clinical path and read only when
+-- their INSERT was a no-op; db/009 (tens of node events per medium) reads unconditionally
+-- and is thereby robust to a later edit disarming a ROW_COUNT it no longer sets.
 --
 -- ⚠️ NO `REVOKE EXECUTE … FROM PUBLIC`, AND THAT IS DELIBERATE — NOT AN OVERSIGHT OF #382.
 -- The convention `crates/cairn-node/tests/floor_execute_grants.rs` checks covers four families:
@@ -64,7 +64,7 @@ CREATE OR REPLACE FUNCTION cairn_refuse_substitution(
 -- NOT `IMMUTABLE`, though it reads nothing and would qualify on that test. A function whose only
 -- effect is a side-effecting RAISE is not a value-returning pure function, and IMMUTABLE licenses
 -- the planner to fold it: with constant arguments the refusal then fires at PLAN time rather than
--- execution. Harmless at all three current call sites (each passes variables or a sub-select), but
+-- execution. Harmless at every current call site (each passes variables or a sub-select), but
 -- it is a genuine surprise waiting for the first caller that passes literals, and the default
 -- volatility costs nothing here.
 LANGUAGE plpgsql
@@ -89,7 +89,9 @@ $$;
 
 COMMENT ON FUNCTION cairn_refuse_substitution(BYTEA, BYTEA, UUID, TEXT) IS
     'Refuse a second, different event filed under an event_id the log already holds. Called by '
-    'submit_event (db/005), apply_remote_event (db/020) and restore_node_event (db/009). Pure: '
-    'reads no table, so it serves event_log and node_event alike.';
+    'submit_event (db/005), apply_remote_event (db/020), restore_node_event (db/009), and '
+    'submit_node_event and apply_remote_node_event (db/007). Pure: reads no table, so it serves '
+    'event_log and node_event alike. The derived inventory of every event-log writer lives in '
+    'crates/cairn-node/tests/substitution_guard_covers_every_writer.rs.';
 
 COMMIT;

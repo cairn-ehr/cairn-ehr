@@ -27,10 +27,11 @@
 #[path = "common/node_plane_kit.rs"]
 mod node_plane_kit;
 
+use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use node_plane_kit::{
-    address_of, call, cs, fresh_node, held_address, node_id_hex, peer_event, supersede_event,
-    SENTENCE,
+    address_of, call, cs, fresh_node, genesis_event, held_address, node_id_hex, peer_event,
+    supersede_event, trust, FreshNode, SENTENCE,
 };
 use uuid::Uuid;
 
@@ -116,6 +117,143 @@ async fn the_local_door_still_admits_the_same_event_twice() {
     for pass in 1..=2 {
         for ev in [&peer, &supersede] {
             call(&a.db, "submit_node_event", ev)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("pass {pass}: the SAME event twice must stay a no-op, never raise: {e}")
+                });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apply_remote_node_event — the federation admission gate.
+// ---------------------------------------------------------------------------
+
+/// Node A, plus a peer B that A trusts and whose genesis A has admitted through the remote door.
+/// That is the minimum for B's later events to REACH the guard: without it they are refused
+/// earlier, by the deny-all trust checks, and a rival test would pass for the wrong reason.
+/// Returns B's key and B's genesis id (the enroll-arm case reuses that id).
+async fn a_with_trusted_b(base: &str) -> (FreshNode, SigningKey, Uuid) {
+    let a = fresh_node(base).await;
+    let (b_sk, _) = generate_key().unwrap();
+    let b_genesis_id = Uuid::now_v7();
+    let b_genesis = genesis_event(&b_sk, b_genesis_id, "B");
+    trust(&a, &b_genesis, &b_sk).await;
+    call(&a.db, "apply_remote_node_event", &b_genesis)
+        .await
+        .expect("A admits the genesis of a peer it trusts");
+    (a, b_sk, b_genesis_id)
+}
+
+/// A trusted peer serves a rival `peer.revoked` under the id of its own `peer.added`.
+#[tokio::test]
+async fn the_admission_gate_refuses_a_rival_peer_event() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (a, b_sk, _) = a_with_trusted_b(&base).await;
+
+    let contested = Uuid::now_v7();
+    let subject = node_id_hex(6);
+    let held = peer_event(&b_sk, "peer.added", contested, &subject);
+    let rival = peer_event(&b_sk, "peer.revoked", contested, &subject);
+
+    call(&a.db, "apply_remote_node_event", &held)
+        .await
+        .expect("B's first event under a fresh id is admitted");
+    let msg = call(&a.db, "apply_remote_node_event", &rival)
+        .await
+        .expect_err(
+        "a peer's SECOND, different event under a held id must be refused. Admitting it silently \
+         is #619: A and B then hold different bytes under one id, forever, and nothing says so",
+    );
+    assert!(
+        msg.contains("apply_remote_node_event") && msg.contains(SENTENCE),
+        "got: {msg}"
+    );
+    assert_eq!(
+        held_address(&a.db, contested).await,
+        Some(address_of(&held))
+    );
+}
+
+/// The supersede arm, through the remote door.
+#[tokio::test]
+async fn the_admission_gate_refuses_a_rival_supersede() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (a, b_sk, _) = a_with_trusted_b(&base).await;
+
+    let contested = Uuid::now_v7();
+    let held = supersede_event(&b_sk, contested, &node_id_hex(7));
+    let rival = supersede_event(&b_sk, contested, &node_id_hex(8));
+
+    call(&a.db, "apply_remote_node_event", &held)
+        .await
+        .expect("B's first supersede under a fresh id is admitted");
+    let msg = call(&a.db, "apply_remote_node_event", &rival)
+        .await
+        .expect_err("a rival supersede under a held id must be refused");
+    assert!(
+        msg.contains("apply_remote_node_event") && msg.contains(SENTENCE),
+        "got: {msg}"
+    );
+    assert_eq!(
+        held_address(&a.db, contested).await,
+        Some(address_of(&held))
+    );
+}
+
+/// THE SHARPEST REMOTE CASE: a rival GENESIS. C is trusted too, and its genesis reuses B's genesis
+/// id. Dropped silently, C's genesis would never be stored, `node_current` would never resolve C's
+/// key, and every event C authors would be refused as "author key maps to no known node" —
+/// logged as recoverable, which it never would be.
+#[tokio::test]
+async fn the_admission_gate_refuses_a_rival_genesis() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (a, _b_sk, b_genesis_id) = a_with_trusted_b(&base).await;
+
+    let (c_sk, _) = generate_key().unwrap();
+    let c_genesis = genesis_event(&c_sk, b_genesis_id, "C");
+    trust(&a, &c_genesis, &c_sk).await;
+
+    let msg = call(&a.db, "apply_remote_node_event", &c_genesis)
+        .await
+        .expect_err("a trusted node's genesis under an id already held must be refused");
+    assert!(
+        msg.contains("apply_remote_node_event") && msg.contains(SENTENCE),
+        "got: {msg}"
+    );
+}
+
+/// A REPEAT through the remote door, in every arm, is still admitted — set-union survives the
+/// guard. (Green before the guard exists; it catches a guard moved above the branch.)
+#[tokio::test]
+async fn the_admission_gate_still_admits_the_same_event_twice() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let a = fresh_node(&base).await;
+    let (b_sk, _) = generate_key().unwrap();
+    let b_genesis = genesis_event(&b_sk, Uuid::now_v7(), "B");
+    trust(&a, &b_genesis, &b_sk).await;
+    let peer = peer_event(&b_sk, "peer.added", Uuid::now_v7(), &node_id_hex(9));
+    let supersede = supersede_event(&b_sk, Uuid::now_v7(), &node_id_hex(10));
+
+    for pass in 1..=2 {
+        for ev in [&b_genesis, &peer, &supersede] {
+            call(&a.db, "apply_remote_node_event", ev)
                 .await
                 .unwrap_or_else(|e| {
                     panic!("pass {pass}: the SAME event twice must stay a no-op, never raise: {e}")
