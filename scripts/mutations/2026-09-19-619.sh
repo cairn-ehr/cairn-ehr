@@ -74,6 +74,24 @@ PY
 run_mutation() {
     local id=$1 expected=$2 file=$3 from=$4 to=$5; shift 5
     require_clean
+
+    # Reverse-direction half of the positive control. Incident: M9's first `to` was a bare
+    # `    RETURN v_eid;`, which already occurred twice elsewhere in db/007 — after the forward
+    # swap it occurred THREE times, so the revert's `swap "$to" "$from"` refused as ambiguous and
+    # the mutation was left applied on what the harness still called a clean tree. `swap`'s own
+    # exactly-once check only ever looks at the FROM direction, so it cannot catch this. Refuse
+    # here, before anything is touched, unless `to` is currently absent — the only way its
+    # post-swap count is guaranteed to be exactly one, which is what the revert needs.
+    local to_before
+    to_before=$(python3 - "$file" "$to" <<'PY'
+import sys
+print(open(sys.argv[1]).read().count(sys.argv[2]))
+PY
+)
+    [ "$to_before" = "0" ] || fail "$id: replacement text already occurs $to_before time(s) in
+        $file — the revert would be ambiguous after the forward swap (this is M9's incident,
+        guarded against structurally): ${to:0:60}..."
+
     swap "$file" "$from" "$to"
     git diff --quiet && fail "$id: the mutation changed nothing — the anchor did not apply"
 
@@ -188,13 +206,17 @@ run_mutation M8 KILLED crates/cairn-node/src/sync/substitution.rs \
     "${NODE_TEST[@]}" node_substitution_is_penned
 fi
 
-# M9 — the one shared clock merge deleted. The moved pin (3 → 1) must be live.
+# M9 — the one shared clock merge deleted. The moved pin (3 → 1) must be live. `to` carries a
+# distinguishing comment (not a bare `RETURN v_eid;`, which already occurs twice elsewhere in
+# this file and made the revert ambiguous — the incident the reverse-direction guard above now
+# catches structurally).
 if want M9; then
 run_mutation M9 KILLED db/007_node_federation.sql \
     "    PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
                                  (b -> 'hlc' ->> 'counter')::int);
     RETURN v_eid;" \
-    '    RETURN v_eid;' \
+    '    -- (mutation M9: shared clock merge deleted)
+    RETURN v_eid;' \
     "${NODE_TEST[@]}" hlc_merge_helper
 fi
 
