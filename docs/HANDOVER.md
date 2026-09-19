@@ -24,20 +24,15 @@
 >
 > **⇒ #619 IS BUILT AND MERGED** (2026-09-19,
 > [ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md), spec v0.75,
-> PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**, #619 closed by hand).
-> `submit_node_event` and `apply_remote_node_event` each call `cairn_refuse_substitution` once, in a
-> shared tail after the `IF/ELSE` (db/009's shape). The node puller asks the TABLE whether a refused
-> event's `event_id` is already held under a different content address and, if so, **pens it**
-> whichever check refused it; routine scoping refusals keep skip-and-advance. The door inventory is a
-> `pg_proc` catalogue rule. ADR-0072 gained **Errata E1–E2**. Its review found a CRITICAL pen bypass:
-> the puller read `event_id` with the `uuid` crate while the doors use Postgres's wider `::uuid`, so a
-> rival spelled with a hyphen after every four hex digits was refused by the door yet skipped as
-> scoping. Guarded by **trap 13**. **Filed from it:** **#620** (the COSE unprotected header is hashed
-> into the content address but lies outside the signature, so a relay can re-wrap an event into a
-> different address — wire core, both planes, a DECISION) · **#622** (the catalogue guards cannot see
-> a `BEGIN ATOMIC` body) · **#624** (one `event_id`, one spelling — nothing refuses a non-canonical
-> spelling; hardening) · **#625** (the pen dedupes by digest across peers but counts `pending` per
-> peer, so a penned rival goes quiet when its first server leaves the pull set).
+> PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**, #619 closed by hand). Both live
+> node-plane doors refuse a substitution in a shared tail, and the puller asks the TABLE and **pens**
+> the rival whichever check refused it; routine scoping refusals keep skip-and-advance. The durable
+> rules are **trap 13**; the detail is ADR-0073 and ROADMAP. **Filed from it:** **#620** (the COSE
+> unprotected header is hashed into the content address but lies outside the signature, so a relay can
+> re-wrap an event — wire core, both planes, a DECISION) · **#622** (the catalogue guards cannot see a
+> `BEGIN ATOMIC` body) · **#624** (nothing refuses a non-canonical `event_id` spelling; hardening) ·
+> **#625** (the pen dedupes by digest across peers but counts `pending` per peer, so a penned rival
+> goes quiet when its first server leaves the pull set).
 >
 > **⇒ WHAT IS NEXT: NO DECIDED-AND-UNBUILT DR ITEM REMAINS.** Pick from below, or leave DR for the
 > *Other build candidates*. **Recommended: #620** — a wire-contract DECISION (content-addressing over
@@ -86,23 +81,19 @@
 
 > [!IMPORTANT]
 > **⇒ #527/#562's TRIAGE NOTE IS FALSE** — *"no cron-run command reaches `print_recovery_code`"* was
-> already untrue **before** ADR-0069: a medium with no local-state export sibling never reaches the
-> recovery-code prompt, so a sealed `restore` of one has always run unattended and printed a fresh
-> code to stderr. The real fix is **[#575](https://github.com/cairn-ehr/cairn-ehr/issues/575)** — a
-> `--new-recovery-code-file` sink, or refusing to mint a sealed key nothing can show to a human.
+> untrue even before ADR-0069: a medium with no local-state export sibling never reaches the prompt,
+> so a sealed `restore` of one has always run unattended and printed a fresh code to stderr. The real
+> fix is **#575** — a `--new-recovery-code-file` sink, or refusing to mint a sealed key nothing can
+> show to a human.
 
-> **⇒ #567 IS BUILT AND MERGED (2026-09-13/14, PR [#588](https://github.com/cairn-ehr/cairn-ehr/pull/588)).
-> `verify-backup` NOW ASKS THE CLINICAL-PLANE QUESTION.**
-> It fails **`backup SHORT` ONLY ON EVIDENCE** (maintainer decision): this node's own
-> `backup-status.json` describes the `--from` path AND the medium is behind it on the newest trusted
-> clinical seq OR the raw clinical record count (v2+ sidecars). Policy in
-> `cairn-node/src/backup/clinical_verdict.rs`; ROADMAP has what it deliberately did not build and why.
-> **Residuals:** **#551** (evidence is PATH-bound — a drive rotated through a DIFFERENT path stays
-> green) · **#589** (cannot say a medium predates a crypto-shred) · **#590** (ADR-0068's
-> unsigned-segment residual) · **#591** (a relative `--to` recorded verbatim) · **#592** (requires
-> `--conn` though it never connects). ⚠️ **Operators: run `verify-backup` AFTER the nightly `backup`, not before** — a
-> `verify-backup && backup` cron stops backing up after every same-mount-point rotation, because the
-> drive that missed the latest backup reads SHORT until its own next backup catches it up.
+> **⇒ #567 IS BUILT AND MERGED (PR #588). `verify-backup` ASKS THE CLINICAL-PLANE QUESTION**, failing
+> **`backup SHORT` ONLY ON EVIDENCE** (maintainer decision): this node's own `backup-status.json`
+> describes the `--from` path AND the medium is behind it on the newest trusted clinical seq or raw
+> record count. Policy in `cairn-node/src/backup/clinical_verdict.rs`; ROADMAP has what it did not
+> build and why. **Residuals:** **#551** (evidence is PATH-bound) · **#589** (cannot say a medium
+> predates a shred) · **#590** · **#591** · **#592**. ⚠️ **Operators: run `verify-backup` AFTER the
+> nightly `backup`** — a `verify-backup && backup` cron stops backing up after every same-mount-point
+> rotation, because the drive that missed the latest backup reads SHORT until its own next one.
 >
 > **The pen-release rule (#578, PR #582) — do not undo.** `db/020` returns `Ok` while admitting a
 > sealed event WITHOUT custody on four paths, so **a pen row carrying a wrapped DEK is released only
@@ -117,11 +108,10 @@
 > facts: `sync_quarantine.refused_seq` is **NOT NULL**, and `cairn_quarantine_event` returns
 > **`acked`**, not "was it penned".
 >
-> **All 23 of slice 2d's §7 design tests are written** (test 4 by #568, 23 by PR #574, and 7, 14, 16,
-> 17, 19, 22 by #593, each proven by a named mutation; shared fixtures in
-> `tests/common/restore_kit.rs`). **A retry after a crashed restore must move the `<key>.unwrap` that
-> attempt installed aside first** — the pre-flight refuses otherwise and says so, the crash message
-> does not (**#596**); test 19 pins the refusal and follows its remedy.
+> **All 23 of slice 2d's §7 design tests are written** (shared fixtures in
+> `tests/common/restore_kit.rs`), each proven by a named mutation. **A retry after a crashed restore
+> must move the `<key>.unwrap` that attempt installed aside first** — the pre-flight refuses otherwise
+> and says so, the crash message does not (**#596**); test 19 pins the refusal and follows its remedy.
 >
 > **⇒ `M > N` STILL STANDS AND #512 STAYS OPEN.** The third act is the **recovery code**, a second
 > secret asked for after the node plane is applied (ADR-0068 deleted the provenance confirmation
@@ -157,12 +147,11 @@
 > list with `scripts/codeql-alerts.sh`, never assume it**; CONTRIBUTING has the local reproduction.
 
 > [!IMPORTANT]
-> **⇒ #500 SPENT THREE DAYS *CLOSED ON GITHUB*, AND SIX OTHERS WITH IT (2026-09-04):** #101, #115,
-> #434, #441, #468, #500, #534, all reopened. GitHub reads `close`/`fix`/`resolve` **adjacent** to a
-> reference and never the sentence around it, so the sentences disclaiming the close performed it.
-> Now guarded by `scripts/check_closing_keywords.py` + `.github/workflows/closing-keywords.yml`;
-> promotion to a required check is **#444**. **The commit convention `fix(#500):` is SAFE** — the
-> parenthesis breaks the adjacency. Residuals: **#547**, **#548**.
+> **⇒ GITHUB CLOSES ON ADJACENCY, NOT ON SENTENCES (2026-09-04).** Seven issues (#101, #115, #434,
+> #441, #468, #500, #534) were closed by prose *disclaiming* the close; all reopened. Guarded by
+> `scripts/check_closing_keywords.py` + `.github/workflows/closing-keywords.yml` (**#444** would make
+> it required). **`fix(#500):` is SAFE** — the parenthesis breaks the adjacency. Residuals: **#547**,
+> **#548**.
 
 > [!IMPORTANT]
 > **Fourteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
@@ -239,24 +228,17 @@
 >    the headline test and skips the check whenever the key did not open. `cairn_release_pen_row`
 >    catches that in the database too — do not read the floor as licence to drop the Rust check, which
 >    is what tells the operator WHY.
-> 9. **RETIRED — HISTORY, NOT ADVICE (#584 built, ADR-0070, 2026-09-15/16).** It read *"the body opens
->     is not the chart has it — do not drop `reproject_owed` or exit 3"*: a key landing on an event
->     already admitted without it opened the body and left `medication_statement` empty, because the
->     projection trigger is `AFTER INSERT` and a re-apply inserts nothing. **The door now projects a
->     late key, and `reproject_owed` is gone.** What survives as live advice: **do not remove the
+> 9. **RETIRED — HISTORY, NOT ADVICE (#584 built, ADR-0070).** It warned that a key landing on an
+>     already-admitted event opened the body and left the chart empty; **the door now projects a late
+>     key, and `reproject_owed` is gone.** What survives as live advice: **do not remove the
 >     `cairn_project_late_custody` calls or move them.** In BOTH doors they sit AFTER the substitution
->     guard (a rival body must never reach an applier) and **both placements are test-pinned** —
->     `late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier` (db/020, mutation M6)
->     and `::the_strict_door_refuses_a_rival_body_before_any_applier_runs` (db/005), each with its OWN
->     positive control so a raising probe that stopped being registered cannot leave them passing
->     vacuously. The strict door's POSTURE is pinned too
->     (`::a_contradiction_revealed_by_a_late_key_is_refused_at_the_strict_door`): wrapping db/005's
->     call in `cairn.remote_apply = 'on'` "to match db/020" turns a strict refusal into a flag, and now
->     fails. In `db/020` the call sits BEFORE the `cairn.remote_apply` clear — after it, three
->     projection guards RAISE and the key could never land. The heal is asserted by
->     `restore_one_event_id_one_body.rs::a_keyless_copy_first_still_reaches_the_chart` and
->     `requeue_retains_unlanded_custody.rs` arm 1. (#597's notice is still misleading; it no longer
->     hides an empty chart.)
+>     guard (a rival body must never reach an applier) and both placements are test-pinned in
+>     `late_custody_reaches_the_chart.rs`, each with its OWN positive control so a probe that stopped
+>     being registered cannot leave them passing vacuously. The strict door's POSTURE is pinned too:
+>     wrapping db/005's call in `cairn.remote_apply = 'on'` "to match db/020" turns a strict refusal
+>     into a flag, and now fails. In db/020 the call sits BEFORE the `cairn.remote_apply` clear —
+>     after it, three projection guards RAISE and the key could never land. (#597's notice is still
+>     misleading; it no longer hides an empty chart.)
 > 10. **⇒ WHEN `late_custody_guards.rs` FIRES, THE GUARD IS RIGHT (#584, 2026-09-15/16).** Two rules
 >     over the catalogue (`pg_proc`, what actually runs), each the reason a late key can never leave a
 >     debt on a sequential path (#603/#604 are the concurrent exceptions): **every PL/pgSQL or SQL
@@ -473,47 +455,67 @@ ROADMAP carries the per-slice narrative and **every open issue number** (includi
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
 
-### 2026-09-19 — #619: the node plane refuses a substitution at both live doors, and pens it
+### 2026-09-20 — #621: a deterministic door failure is a refusal, not a fault
 
-Design `docs/superpowers/specs/2026-09-19-node-plane-substitution-guard-619-design.md`; plan
-`docs/superpowers/plans/2026-09-19-node-plane-substitution-guard-619.md` (its M1–M16 ledger);
+Design `docs/superpowers/specs/2026-09-20-node-pull-deterministic-refusal-621-design.md`; plan
+`docs/superpowers/plans/2026-09-20-node-pull-deterministic-refusal-621.md` (M1–M13 ledger);
+[ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md). The durable
+rule is trap 14. What generalises past the slice:
+
+- **⇒ AN ISSUE'S FAILURE SCENARIO IS A CLAIM — AGAIN, AND IT CHANGED THE ADR.** #621 said *"any
+  trusted peer serving a stranger-signed event"*; `serve` streams only rows already in the serving
+  peer's own log, which passed its identical casts and CHECKs, so an honest peer cannot. The real
+  triggers are a misbehaving peer (which can wedge only its own link, and could stall it by going
+  silent anyway) and **cross-version CHECK-vocabulary skew**. Reading the table also found a FOURTH
+  deterministic raise the issue never listed (`node_event_role_check`). **Read the code before the
+  issue's severity enters an immutable record — and read it for what the issue MISSED, not only for
+  what it claimed.**
+- **⇒ VALIDATE A SQL VALUE WITH THE PARSER THAT WILL PARSE IT.** `pg_input_is_valid(v,'uuid')` asks
+  the very grammar the `::uuid` on the next line uses, so no second parser exists to drift. A regex
+  "equivalent" is narrower and refuses events the log can already hold — PR #623's finding 1 with the
+  polarity reversed (mutation M9 pins it).
+- **⇒ A GUARD THAT HAS ONLY EVER BEEN GREEN HAS PROVED NOTHING.** The two-plane SQLSTATE drift guard
+  was checked by actually deleting a class from `cairn-sync`'s list and watching it fail, before any
+  work was built on it. Cheap, and the alternative is a guard discovered to be vacuous much later.
+- **⇒ A HARNESS THAT RUNS NOTHING STILL PRINTS SUCCESS.** A mis-assembled copy of the mutation script
+  executed ZERO mutations and reported *"tree is clean: every revert landed"* — true, and worthless.
+  It now compares the number that RAN against what was asked for. Sibling of #594's revert defect and
+  #619's unknown-id defect: **every harness needs a control for the run not happening.**
+- **⇒ `nohup cmd &` INSIDE A BACKGROUNDED TOOL CALL IS DOUBLE-DETACHED.** The launcher exits 0
+  immediately, the runner is reported "completed", and the log stops mid-compile. Same family as the
+  `cmd; echo exit=$?` trap: **read the log's own last line, never the wrapper's status.**
+- **⇒ A FIXTURE CAN MANUFACTURE A SQLSTATE PRODUCTION NEVER SEES.** `serve_raw` plants bytes under a
+  FRESH table id, so re-applying them collides on the `content_address` UNIQUE (`23505`) rather than
+  the primary key. Unreachable in production (bytes determine the id inside them, so identical bytes
+  always hit the PK first), but it silently changed what an anti-vacuity control was measuring.
+- **Fixture fact:** `restore_node_event` refuses a node that is already enrolled, so a db/009 fixture
+  provisions nothing and restores a genesis first.
+
+### 2026-09-19 — #619: the node plane refuses a substitution at both live doors, and pens it (condensed)
+
+Design/plan in `docs/superpowers/` (M1–M16 ledger);
 [ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md). The durable rule
-is trap 13. What generalises past the slice:
+is trap 13. What still generalises:
 
-- **⇒ A RESIDUAL RESTS ON A PREMISE — CHECK THE PREMISE BEFORE IT ENTERS AN IMMUTABLE ADR.** M10 (the
-  failed-lookup freeze) was declared an unkillable survivor because "no fault-injection seam exists in
-  the self-pull". The whole-branch review found one: `pull_into` is `pub` and takes the caller's
-  client, and `SET ROLE` to a role without SELECT on `node_event` makes the lookup fail with 42501.
-  The ruling had been made without trying. **"Untestable" is a claim; try the seam first.**
-- **⇒ A MUTATION ANCHOR MUST BE UNIQUE IN BOTH DIRECTIONS.** M9 replaced three lines with a bare
-  `RETURN v_eid;`, which db/007 already contained twice, so the REVERT anchor was ambiguous and the
-  harness stopped with the mutation applied (#594's defect, caught this time). The harness now refuses,
-  before touching the file, a mutation whose replacement text already occurs there, and an unknown id
-  (a typo used to shrink a run silently and still print "tree is clean").
-- **⇒ AN ISSUE'S FAILURE SCENARIO IS A CLAIM.** #619 said a compromised peer could make node A "keep
-  trusting C". It cannot — `trust_peer` reads only events A itself authored. The real costs (silent
-  divergence; a dropped rival genesis wedging that peer's key) are what ADR-0073 states. Check the
-  scenario against the code before it becomes the ADR's motivation.
+- **⇒ A RESIDUAL RESTS ON A PREMISE — CHECK IT BEFORE IT ENTERS AN IMMUTABLE ADR.** M10 was declared
+  an unkillable survivor for want of a fault-injection seam that existed (`SET ROLE` to a role without
+  SELECT). **"Untestable" is a claim; try the seam first.**
+- **⇒ A MUTATION ANCHOR MUST BE UNIQUE IN BOTH DIRECTIONS** — M9's replacement text already occurred
+  twice, so the revert was ambiguous and the harness stopped with the mutation applied (#594's defect).
 - **⇒ CITE A CONTRACT WHERE IT IS WRITTEN, NOT WHERE YOU REMEMBER IT.** "db/001's header makes P0001 a
-  contract" had propagated into the design, the ADR draft, `substitution.rs` and `cairn-sync`'s
-  `main.rs`; the contract is the comment above `cairn_decode_hex_or_raise` (#228), and db/048 states
-  the clinical door's half. One misattribution copied four times — #608's lesson, in prose.
-- **⇒ CONTENT-ADDRESSING OVER UNSIGNED BYTES IS NOT CONTENT-ADDRESSING.** The COSE unprotected header
-  is hashed into the content address but lies outside the signature, so a relay can re-wrap an event
-  into a different address (#620). Read #620 before reasoning "same address ⇔ same signed event".
-- **⇒ TWO PARSERS FOR ONE VALUE ARE TWO PROTOCOLS.** The door read `event_id` with Postgres's `::uuid`,
-  the puller with the `uuid` crate; the gap between the grammars was a pen bypass any rival's author
-  could choose (PR #623 review, finding 1). Where Rust must agree with the database on a value, mirror
-  the DB's grammar exactly and pin the mirror against the live server — and do not reach for
-  `CASE WHEN pg_input_is_valid(…) THEN $1::uuid END`: a plan made for the actual value may fold the
-  cast and raise.
-- **⇒ WHEN THE SYSTEM CAN RECREATE WHAT A MUTATION DESTROYS, ASSERT IDENTITY, NOT EXISTENCE.** M15 (a
-  too-wide auto-release) survived every row-count assertion because the same sweep re-penned the
-  deleted rival as a fresh row. `first_seen` unchanged and `seen_count` bumped is what killed it.
-- **Process (subagent-driven, seven tasks):** each task got a spec + quality review, and four needed a
-  fix round — a plan step that omitted `cargo fmt`, the harness twice, and two false ADR sentences
-  (a brief's false "Amends" line; an overclaim, "no future arm can forget the guard", that an early
-  `RETURN` disproves). **Review the brief as hard as the code: two of the defects were in the plan.**
+  contract" was copied into four places; it is the comment above `cairn_decode_hex_or_raise` (#228),
+  and db/048 states the clinical half. #608's lesson in prose.
+- **⇒ CONTENT-ADDRESSING OVER UNSIGNED BYTES IS NOT CONTENT-ADDRESSING** — the COSE unprotected header
+  is hashed into the address but lies outside the signature (**#620**). Read it before reasoning "same
+  address ⇔ same signed event".
+- **⇒ TWO PARSERS FOR ONE VALUE ARE TWO PROTOCOLS** (PR #623 finding 1, **#624**): where Rust must
+  agree with the database, mirror the DB's grammar and pin the mirror against the live server — and do
+  not reach for `CASE WHEN pg_input_is_valid(…) THEN $1::uuid END` in a bound-parameter query: a plan
+  made for the actual value may fold the cast and raise.
+- **⇒ WHEN THE SYSTEM CAN RECREATE WHAT A MUTATION DESTROYS, ASSERT IDENTITY, NOT EXISTENCE** (M15 —
+  `first_seen` unchanged and `seen_count` bumped is what killed it).
+- **Process:** subagent-driven, seven tasks; four needed a fix round and **two of the defects were in
+  the plan, not the code**. Review the brief as hard as the code.
 
 ### 2026-09-17 — #614 + #615: a restore loses no record silently (condensed)
 
