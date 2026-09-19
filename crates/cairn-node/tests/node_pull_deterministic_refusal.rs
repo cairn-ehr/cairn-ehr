@@ -232,6 +232,61 @@ async fn a_local_fault_still_freezes_the_cursor() {
     remove_injected_failure(&n).await;
 }
 
+/// THE NEW ARM'S OWN FREEZE PATH. Penning is how the cursor is allowed to advance past a
+/// refusal — the bytes are durably held — so a pen that CANNOT be written must freeze instead.
+/// Advancing past an unpenned refusal would lose it until the next full sweep, the #111 review's
+/// A1, and this arm is new enough that the shared `pen_or_freeze` outcome could be dropped on the
+/// floor here without any other suite noticing.
+#[tokio::test]
+async fn a_deterministic_refusal_whose_pen_cannot_be_written_freezes() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let n = self_node(&base, "127.0.0.1:0").await;
+    inject_failure(&n, "23514").await;
+    // A second injected fault, on the pen itself: the door refuses deterministically AND the pen
+    // write fails, which is the only combination that reaches this arm's Frozen outcome.
+    n.a.batch_execute(
+        "DROP TRIGGER IF EXISTS cairn_test_621_pen_fails ON node_event_quarantine;
+         DROP FUNCTION IF EXISTS cairn_test_621_pen_fails();
+         CREATE FUNCTION cairn_test_621_pen_fails() RETURNS trigger
+         LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+         BEGIN
+             RAISE EXCEPTION 'injected: the pen cannot be written';
+         END;
+         $fn$;
+         CREATE TRIGGER cairn_test_621_pen_fails BEFORE INSERT ON node_event_quarantine
+             FOR EACH ROW EXECUTE FUNCTION cairn_test_621_pen_fails();",
+    )
+    .await
+    .unwrap();
+
+    let poisoned = poisoned_event(&n, 5);
+    let seq = serve_raw(&n.a, &poisoned).await;
+
+    let stats = full_pull(&base, &n).await;
+    assert_eq!(
+        stats.frozen,
+        Some(seq),
+        "with nothing holding the refused bytes, the cursor must stop below them: {stats:?}"
+    );
+    assert_eq!(stats.quarantined, 0, "nothing was penned: {stats:?}");
+    assert!(
+        cursor(&n).await.is_none_or(|c| c < seq),
+        "and the committed cursor did not move past the event"
+    );
+
+    n.a.batch_execute(
+        "DROP TRIGGER IF EXISTS cairn_test_621_pen_fails ON node_event_quarantine;
+         DROP FUNCTION IF EXISTS cairn_test_621_pen_fails();",
+    )
+    .await
+    .unwrap();
+    remove_injected_failure(&n).await;
+}
+
 /// The anti-vacuity control for the two injected cases. With the SAME trigger installed, the
 /// events that carry no marker — node A's own genesis and self-peering, which the self-pull
 /// re-offers on every sweep — still apply. Without this, a trigger that raised for every row
