@@ -61,9 +61,11 @@ Both were pre-existing (`db/007`'s doors predate `db/053`), and both were silent
 ### A RAISE does not wedge the node pull
 
 #619 (its point 2) and ADR-0072 both feared that refusing at the admission gate would wedge the pull
-watermark. **On the node plane it cannot.** Every floor refusal is a bare `RAISE EXCEPTION` —
-SQLSTATE `P0001`, which `db/001`'s header makes a *contract* — and the node puller's arm for a
-verifiable event refused with `P0001` skipped and advanced before this change. So the question was
+watermark. **On the node plane it cannot.** The admission gate's deliberate refusals are bare
+`RAISE EXCEPTION`s — SQLSTATE `P0001`, which is a *contract*: `db/001` states it for the node pull
+loop in the comment above `cairn_decode_hex_or_raise` (#228), and `cairn-sync`'s
+`refusal_is_deliberate` has relied on it since #267 — and the node puller's arm for a verifiable
+event refused with `P0001` skipped and advanced before this change. So the question was
 never *refuse or wedge*. It was narrower: **what should the puller do with a refusal it would
 otherwise file as self-healing?**
 
@@ -77,12 +79,14 @@ trace that two different signed events exist under one id.
 ## Decision
 
 **1. Both `db/007` doors refuse a substitution — once each, after the branch.** Each door is
-restructured to the shape `db/009` already has: every arm that inserts falls through to one shared
+restructured to the shape `db/009` already has: every `ON CONFLICT` arm falls through to one shared
 tail, which reads the stored content address **unconditionally** and calls
 `cairn_refuse_substitution` once, naming its door. **Two call sites, where there were five unguarded
-`ON CONFLICT` sites** — and no future arm can forget its guard, because there is no per-arm guard to
-forget. `submit_node_event`'s genesis arm keeps its early `RETURN` and needs no guard: it has no
-`ON CONFLICT`, so a colliding id raises `unique_violation` — loud, not silent.
+`ON CONFLICT` sites**. An arm that falls through to the tail inherits the guard; an arm that
+`RETURN`s early bypasses it. `submit_node_event`'s genesis arm does exactly that, and is safe only
+because it has no `ON CONFLICT`: a colliding id raises `unique_violation` — loud, not silent. A
+future arm written in its image *with* an `ON CONFLICT` would bypass the guard, and the catalogue
+rule of decision 3 would not notice (see Residuals).
 
 Each placement is one a later edit might "tidy" away, so each is stated:
 
@@ -118,11 +122,13 @@ it differs.
 
 Why by **state**:
 
-- **Not by SQLSTATE.** `db/001`'s header forbids `USING ERRCODE` on a floor refusal, because both
-  pull loops route on `P0001`. And `cairn_refuse_substitution` is shared with the two clinical doors:
-  a distinct code there would turn `cairn-sync`'s clinical pen — which pens a verifiable event's
-  refusal only when it is `P0001`, since
-  [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267) — into a freeze.
+- **Not by SQLSTATE.** Both pull loops route on `P0001`. For the node loop, `db/001`'s comment above
+  `cairn_decode_hex_or_raise` (#228) calls it a contract and forbids `USING ERRCODE` on that
+  helper's refusals, because any other code freezes the cursor; for the clinical loop,
+  `cairn-sync`'s `refusal_is_deliberate` pens a verifiable event's refusal only when it is `P0001`,
+  since [#267](https://github.com/cairn-ehr/cairn-ehr/issues/267) (`db/048` restates that half).
+  And `cairn_refuse_substitution` is shared with the two clinical doors, so a distinct code there
+  would turn `cairn-sync`'s clinical pen into a freeze.
 - **Not by the door's sentence.** That would make English prose part of the protocol.
 - **State is what makes "whichever check refused it" true without reading any text.** A rival
   signed by a key this node does not trust is refused by the author check *before* the door reaches
@@ -158,7 +164,7 @@ the pin the rule's own positive control (a rule that sees no writer passes over 
 turns a sixth writer into a decision rather than drift. The comment stripper both catalogue rules
 use now lives once, in `tests/common/sql_text.rs`. The no-database
 `substitution_guard_is_single_source.rs` stays: it proves nobody *duplicates* the refusal; the new
-rule proves nobody *skips* it. `db/053`'s `COMMENT ON FUNCTION` now names all five callers and
+rule proves every writer *calls* it. `db/053`'s `COMMENT ON FUNCTION` now names all five callers and
 points at the new rule.
 
 **4. The published operator text moves with the code.**
@@ -183,13 +189,15 @@ loud and lets the rest of the stream through.
 
 ## Alternatives rejected
 
-- **A distinct SQLSTATE for the substitution refusal**, so the puller could route on it. `db/001`
-  makes `P0001` a contract for every floor refusal, and the refusal lives in a helper the clinical
+- **A distinct SQLSTATE for the substitution refusal**, so the puller could route on it. `P0001` is
+  the contract both pull loops route on (`db/001` above `cairn_decode_hex_or_raise` for the node
+  loop; `refusal_is_deliberate` in `cairn-sync`), and the refusal lives in a helper the clinical
   doors share: `cairn-sync` would read the new code as a fault and freeze where it pens today.
 - **Matching the refusal's message text.** It makes English prose part of the protocol, and it would
   still miss a rival refused by an earlier check.
 - **Five inline call sites**, one per `ON CONFLICT`. The smallest diff. Rejected by the maintainer's
-  ruling for a single tail per door: two call sites, and none for a future arm to forget.
+  ruling for a single tail per door: two call sites, inherited by every arm that falls through to
+  the tail, rather than one per arm to keep in step.
 - **Refuse at the door, and skip on the pull path.** It needs no puller change, and it files a record
   that can never apply under *self-healing* — logged as *"recoverable, non-fatal"* and kept nowhere
   durable. Rejected by the maintainer's ruling: **pen it.**
@@ -274,9 +282,12 @@ loud and lets the rest of the stream through.
   [sync §6.3](../sync.md#63-failure-modes-designed-for) already states for a hostile-but-credentialed
   peer.
 - **The catalogue rule's blind spots.** As the test states, it reads a function's own body, so a
-  write through a helper, a `MERGE` or a dynamic `EXECUTE` is not recognised. One more is not yet
-  stated there: it reads `pg_proc.prosrc`, which is empty for a `LANGUAGE sql` function written with
-  a SQL-standard `BEGIN ATOMIC` body. None of those writes an event log today.
+  write through a helper, a `MERGE` or a dynamic `EXECUTE` is not recognised. Two more are not
+  stated there. It reads `pg_proc.prosrc`, which is empty for a `LANGUAGE sql` function written with
+  a SQL-standard `BEGIN ATOMIC` body; none of those shapes writes an event log today. And it asks
+  whether a function *calls* the helper, not whether every INSERT path *reaches* the call: an arm
+  that inserts `ON CONFLICT DO NOTHING` and `RETURN`s before the tail would pass it. Only a rival
+  test written for that arm, or review, would catch it.
 
 The design and the implementation plan — including the full mutation ledger — are
 `docs/superpowers/specs/2026-09-19-node-plane-substitution-guard-619-design.md` and
