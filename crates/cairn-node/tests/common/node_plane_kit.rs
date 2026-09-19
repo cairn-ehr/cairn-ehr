@@ -225,7 +225,11 @@ pub struct SelfNode {
 
 pub async fn self_node(base: &str, listen_addr: &str) -> SelfNode {
     let a = db::connect_and_load_schema(base).await.unwrap();
-    db::reset_node_federation_tables(&a).await.ok();
+    db::reset_node_federation_tables(&a).await.expect(
+        "the fixture reset must succeed — swallowing it with .ok() is the shape behind the #296 \
+         pollution lessons: a leftover local_node would fence the doors closed and every \
+         assertion would then fail for the wrong reason",
+    );
     let tmp = tempfile::tempdir().unwrap();
     let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
     identity::provision(&a, &sk, &kid, "A", listen_addr)

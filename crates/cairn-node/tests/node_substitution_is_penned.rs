@@ -17,10 +17,10 @@
 mod node_plane_kit;
 
 use cairn_event::generate_key;
-use cairn_node::{db, sync};
+use cairn_node::{db, identity, sync};
 use node_plane_kit::{
-    address_of, call, cs, held_address, node_id_hex, peer_event, pen_count, self_node, serve_raw,
-    SelfNode,
+    address_of, call, cs, held_address, key_hex, node_id_hex, peer_event, pen_count, self_node,
+    serve_raw, SelfNode,
 };
 use uuid::Uuid;
 
@@ -119,6 +119,13 @@ async fn an_acked_substitution_stays_quiet_on_reoffer() {
     assert_eq!(acked, 1, "the ack found the substitution's row");
 
     let second = full_pull(&base, &n).await;
+    // Without this, every assertion below would also pass if the second sweep never re-offered
+    // the rival at all — "the re-offer must not un-ack" would be true of a re-offer that did not
+    // happen.
+    assert_eq!(
+        second.quarantined, 1,
+        "the rival WAS re-offered and deduped onto the acked row"
+    );
     assert_eq!(
         second.pending, 0,
         "an acked substitution no longer makes the pull loud"
@@ -163,5 +170,58 @@ async fn a_rival_refused_by_an_earlier_check_is_still_penned() {
     );
     assert_eq!(s.rejected, 0, "and is not filed under self-healing");
     assert!(pen_reason(&n, &rival).await.starts_with("substitution:"));
+    n.serve.abort();
+}
+
+/// The FALSE-POSITIVE direction. A refused event this node already holds with the SAME bytes is
+/// not a substitution — it is the same event again — so it is SKIPPED, never penned.
+///
+/// This is the routine case, not an edge. A node does not peer with itself, so its OWN events,
+/// echoed back by every peer that pulled them, are refused by the author check on each full sweep
+/// — and so is every event of a peer it has revoked, re-served by a peer it still trusts. It
+/// already holds all of them, with the same bytes. Penning them would hold the INTEGRITY line on
+/// for good and fill the pen quota: the flood of steady-state refusals #268 warns against.
+///
+/// The self-pull reproduces it: node A revokes ITS OWN self-peer, so each event A holds (the
+/// genesis, the self-`peer.added`, the revocation itself) comes back, is refused by the author
+/// check, and is found held under the same content address.
+///
+/// The TLS config is built BEFORE the revocation: the trust store is a snapshot, and one taken
+/// after it would no longer pin A's own key, so the handshake — not the classification under
+/// test — would fail.
+#[tokio::test]
+async fn a_refusal_of_an_event_held_with_the_same_bytes_is_skipped_not_penned() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let n = self_node(&base, "127.0.0.1:7955").await;
+    let cfg = sync::client_config(&base, &n.sk, sync::trust_store_from_db(&n.a).await.unwrap())
+        .await
+        .unwrap();
+    let me = identity::load_local(&n.a).await.unwrap().node_id_hex;
+    identity::author_unpeer(&n.a, &n.sk, &key_hex(&n.sk), &me, &me)
+        .await
+        .expect("A revokes its own self-peer through the real submit door");
+
+    let s = sync::pull_once(n.addr, cfg, true).await.unwrap();
+
+    assert!(
+        s.rejected >= 1,
+        "the fixture must actually produce refusals, or the assertions below are vacuous: {s:?}"
+    );
+    assert_eq!(
+        s.rejected, s.received,
+        "every event A holds was refused (its author is no longer an active peer) and \
+         skipped: {s:?}"
+    );
+    assert_eq!(
+        s.quarantined, 0,
+        "held with the SAME bytes is not a substitution: nothing is penned"
+    );
+    assert_eq!(pen_count(&n.a).await, 0, "and the pen stays empty");
+    assert_eq!(s.pending, 0, "so the pull is not loud");
+    assert_eq!(s.frozen, None, "and the cursor did not freeze");
     n.serve.abort();
 }

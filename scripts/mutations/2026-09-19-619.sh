@@ -39,7 +39,7 @@ require_clean() {
 
 # KNOWN_IDS — every mutation id this harness defines. Validated against the CLI arguments
 # immediately below, before require_clean or any mutation runs.
-KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10)
+KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11)
 
 # want <id> — true when no ids were given on the command line (run everything) or when <id> is
 # one of the requested ids (per-id selection: `2026-09-19-619.sh M3 M7` runs only those). Wraps
@@ -256,6 +256,18 @@ run_mutation M10 KILLED crates/cairn-node/src/sync.rs \
                         }
                     };' \
     "${NODE_TEST[@]}" node_substitution_lookup_freezes
+fi
+
+# M11 — the offered address taken over the whole FRAME (the 8-byte seq prefix included) instead of
+# the signed bytes: no offered address would ever equal a held one, so every held-and-equal re-offer
+# the door refuses — the routine case once a peer is revoked — would be penned as a substitution.
+# The false-positive direction: `node_substitution_is_penned.rs`'s
+# `a_refusal_of_an_event_held_with_the_same_bytes_is_skipped_not_penned` must catch it.
+if want M11; then
+run_mutation M11 KILLED crates/cairn-node/src/sync.rs \
+    '                    let offered = event_address(signed);' \
+    '                    let offered = event_address(&frame);' \
+    "${NODE_TEST[@]}" node_substitution_is_penned
 fi
 
 echo "=== run complete ==="
