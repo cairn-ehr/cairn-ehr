@@ -83,9 +83,16 @@ BEGIN
         RAISE EXCEPTION 'restore_node_event: HLC wall % ms is more than % ms ahead of local time — clock-drift ceiling (issue #193)',
             (b -> 'hlc' ->> 'wall')::bigint, cairn_max_hlc_drift_ms();
     END IF;
-    v_type := b ->> 'event_type'; v_eid := (b ->> 'event_id')::uuid;
+    v_type := b ->> 'event_type';
+    -- P0001 for every malformed field (#621), like the two live doors. This door aborts the
+    -- WHOLE restore on any raise, so here the helpers buy legibility rather than availability:
+    -- an operator reading a failed restore is told which field of which event the medium got
+    -- wrong, instead of PostgreSQL's bare "invalid input syntax for type uuid".
+    v_eid := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'restore_node_event');
     v_signer := b ->> 'signer_key_id'; v_payload := b -> 'payload';
     v_ca := '\x1220'::bytea || digest(p_signed, 'sha256');
+    PERFORM cairn_hlc_nonneg_or_raise((b -> 'hlc' ->> 'wall')::bigint,
+                                      (b -> 'hlc' ->> 'counter')::int, 'restore_node_event');
     v_op := CASE v_type WHEN 'node.enrolled' THEN 'enroll' WHEN 'peer.added' THEN 'peer'
                         WHEN 'peer.revoked' THEN 'revoke' WHEN 'node.superseded' THEN 'supersede'
                         ELSE NULL END;
@@ -133,8 +140,11 @@ BEGIN
             hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
         VALUES (v_eid, v_op, v_author_node, v_subject,
             v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
-            v_payload ->> 'role', v_payload ->> 'scope_hint',
-            NULLIF(v_payload ->> 'target_event_id','')::uuid,
+            cairn_node_role_or_raise(v_payload ->> 'role', 'restore_node_event'),
+            v_payload ->> 'scope_hint',
+            CASE WHEN NULLIF(v_payload ->> 'target_event_id','') IS NULL THEN NULL
+                 ELSE cairn_uuid_or_raise('target_event_id',
+                        v_payload ->> 'target_event_id', 'restore_node_event') END,
             (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;

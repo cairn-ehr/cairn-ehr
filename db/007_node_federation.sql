@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS node_event (
     signer_key_id   TEXT    NOT NULL,               -- hex Ed25519 public key of the author
     peer_pubkey     TEXT,                           -- peer/revoke: hex pubkey of the subject peer
     fingerprint     TEXT,                           -- peer: the operator-confirmed short fingerprint
-    role            TEXT    CHECK (role IS NULL OR role IN ('upstream','downstream','peer')),
+    role            TEXT,                           -- vocabulary: see node_event_role_check below
     scope_hint      TEXT,                           -- peer: optional default sync-scope label (ADR-0004)
     target_event_id UUID,                           -- revoke: the peer event it overlays
     hlc_wall        BIGINT  NOT NULL,
@@ -29,6 +29,46 @@ CREATE TABLE IF NOT EXISTS node_event (
         CHECK (content_address = '\x1220'::bytea || digest(signed_bytes, 'sha256')),
     CONSTRAINT node_event_hlc_nonneg CHECK (hlc_wall >= 0 AND hlc_counter >= 0)
 );
+
+-- The peer-role vocabulary, in ONE place (#621). Both the table's CHECK and the doors'
+-- refusal read it here, because a list written twice is a list that drifts — and the two
+-- directions of drift are not symmetric. A door that accepts a role the CHECK rejects raises
+-- `23514`, which the node puller cannot tell from a deadlock, so it freezes that peer's cursor
+-- permanently; a door that refuses a role the CHECK would accept merely refuses, legibly.
+--
+-- Widening this function is how the vocabulary grows (additive-only, principle 11). An OLDER
+-- node meeting the new value then refuses it with P0001 and SKIPS it — re-offered on every full
+-- sweep and admitted the day that node is upgraded — instead of wedging the link. That is the
+-- whole reason the vocabulary is enforced at the door at all.
+CREATE OR REPLACE FUNCTION cairn_node_roles()
+RETURNS TEXT[] LANGUAGE sql IMMUTABLE AS $$
+    SELECT ARRAY['upstream', 'downstream', 'peer'];
+$$;
+
+-- Re-point the CHECK at the vocabulary function, idempotently — db/009's `op` DROP/ADD pair is
+-- the precedent. `CREATE TABLE IF NOT EXISTS` above cannot change an existing table's constraint,
+-- so an in-place constraint change needs this paired ALTER (#207) or it lands only on fresh
+-- databases. node_event is low-volume, so the re-validation on each schema load is free.
+ALTER TABLE node_event DROP CONSTRAINT IF EXISTS node_event_role_check;
+ALTER TABLE node_event ADD CONSTRAINT node_event_role_check
+    CHECK (role IS NULL OR role = ANY (cairn_node_roles()));
+
+-- A peer role, or a LEGIBLE P0001 refusal — the raising face of the vocabulary above (#621).
+-- NULL passes: role is optional on the wire, and the CHECK says so too.
+CREATE OR REPLACE FUNCTION cairn_node_role_or_raise(p_role TEXT, p_door TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF p_role IS NOT NULL AND NOT (p_role = ANY (cairn_node_roles())) THEN
+        RAISE EXCEPTION '%: role "%" is not one of this node''s known peer roles (%)',
+            p_door, cairn_value_glimpse(p_role), array_to_string(cairn_node_roles(), ', ');
+    END IF;
+    RETURN p_role;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_node_role_or_raise(text, text) FROM PUBLIC;
 
 CREATE INDEX IF NOT EXISTS node_event_signer_idx  ON node_event (signer_key_id);
 CREATE INDEX IF NOT EXISTS node_event_subject_idx ON node_event (subject_node_id);
@@ -181,10 +221,18 @@ BEGIN
         RAISE EXCEPTION 'submit_node_event: body could not be parsed after verify';
     END IF;
     v_type   := b ->> 'event_type';
-    v_eid    := (b ->> 'event_id')::uuid;
+    -- Every field this door reads out of caller-supplied bytes is validated through a helper
+    -- that raises P0001 (#621). A bare `::uuid` here raises 22P02, which the node puller reads
+    -- as "the door never decided" and answers by FREEZING that peer's cursor forever.
+    v_eid    := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'submit_node_event');
     v_signer := b ->> 'signer_key_id';
     v_payload := b -> 'payload';
     v_ca     := '\x1220'::bytea || digest(p_signed, 'sha256');
+    -- The clock, before the INSERT meets node_event_hlc_nonneg (a 23514 CHECK violation, which
+    -- freezes the same way). The drift ceiling in the remote door bounds the wall from ABOVE
+    -- only, so a negative clock is a different question and gets its own guard.
+    PERFORM cairn_hlc_nonneg_or_raise((b -> 'hlc' ->> 'wall')::bigint,
+                                      (b -> 'hlc' ->> 'counter')::int, 'submit_node_event');
     v_op := CASE v_type
         WHEN 'node.enrolled' THEN 'enroll'
         WHEN 'peer.added'    THEN 'peer'
@@ -252,8 +300,13 @@ BEGIN
             cairn_decode_hex_or_raise('peer_node_id_hex',
                 v_payload ->> 'peer_node_id_hex', 'submit_node_event'),
             v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
-            v_payload ->> 'role', v_payload ->> 'scope_hint',
-            NULLIF(v_payload ->> 'target_event_id','')::uuid,
+            cairn_node_role_or_raise(v_payload ->> 'role', 'submit_node_event'),
+            v_payload ->> 'scope_hint',
+            -- Optional: absent or empty stays NULL, and only a PRESENT value is validated —
+            -- which is why cairn_uuid_or_raise is not STRICT and the emptiness test is here.
+            CASE WHEN NULLIF(v_payload ->> 'target_event_id','') IS NULL THEN NULL
+                 ELSE cairn_uuid_or_raise('target_event_id',
+                        v_payload ->> 'target_event_id', 'submit_node_event') END,
             (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
@@ -343,9 +396,14 @@ BEGIN
             USING DETAIL = coalesce(cairn_verify_error(p_signed), 'unknown');
     END IF;
     b := cairn_body(p_signed);
-    v_type := b ->> 'event_type'; v_eid := (b ->> 'event_id')::uuid;
+    v_type := b ->> 'event_type';
+    -- P0001 for every malformed field, never PostgreSQL's own cast/CHECK code (#621): this is
+    -- THE door the puller talks to, so a 22P02 or 23514 here is a permanently frozen link.
+    v_eid := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'apply_remote_node_event');
     v_signer := b ->> 'signer_key_id'; v_payload := b -> 'payload';
     v_ca := '\x1220'::bytea || digest(p_signed, 'sha256');
+    PERFORM cairn_hlc_nonneg_or_raise((b -> 'hlc' ->> 'wall')::bigint,
+                                      (b -> 'hlc' ->> 'counter')::int, 'apply_remote_node_event');
     v_op := CASE v_type WHEN 'node.enrolled' THEN 'enroll' WHEN 'peer.added' THEN 'peer'
                         WHEN 'peer.revoked' THEN 'revoke'
                         WHEN 'node.superseded' THEN 'supersede'  -- issue #201: lineage replicates
@@ -435,8 +493,11 @@ BEGIN
                 cairn_decode_hex_or_raise('peer_node_id_hex',
                     v_payload ->> 'peer_node_id_hex', 'apply_remote_node_event'),
                 v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
-                v_payload ->> 'role', v_payload ->> 'scope_hint',
-                NULLIF(v_payload ->> 'target_event_id','')::uuid,
+                cairn_node_role_or_raise(v_payload ->> 'role', 'apply_remote_node_event'),
+                v_payload ->> 'scope_hint',
+                CASE WHEN NULLIF(v_payload ->> 'target_event_id','') IS NULL THEN NULL
+                     ELSE cairn_uuid_or_raise('target_event_id',
+                            v_payload ->> 'target_event_id', 'apply_remote_node_event') END,
                 (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
                 b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
             ON CONFLICT (node_event_id) DO NOTHING;
