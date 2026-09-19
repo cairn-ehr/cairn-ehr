@@ -201,6 +201,64 @@ pub fn pull_failure_class(e: &anyhow::Error) -> PullFailureClass {
     PullFailureClass::Partition
 }
 
+/// Is a failed apply attributable to **the EVENT**, rather than to this node's own database?
+///
+/// **Pure**, so `tests/node_pull_refusal_class.rs` pins it with no database and no peer.
+///
+/// # Why the question exists (#621)
+///
+/// [`pull_into`] used to read the non-`P0001` space as one thing — *"transient, retry next
+/// cycle"* — and freeze the cursor under it. But a door can fail deterministically without
+/// reaching a verdict: a cast on a peer-supplied field (`22P02`), a CHECK constraint (`23514`),
+/// an `XX000` out of a pgrx function fed adversarial bytes. Each of those recurs identically on
+/// every retry, so the freeze is permanent: the link holds every later event behind the poison
+/// one — including that peer's own `peer.revoked` — nothing is penned, and there is no `ack`
+/// remedy. That is #228's failure, which was closed for malformed hex and not for the rest.
+///
+/// db/007 no longer raises any of the four known deterministic codes (they are P0001 verdicts
+/// now — see `cairn_uuid_or_raise` / `cairn_hlc_nonneg_or_raise` / `cairn_node_role_or_raise`).
+/// This classifier is what covers the ones nobody has written yet.
+///
+/// # Why the CLASS, and why an unknown code is DETERMINISTIC
+///
+/// The two-character class is the part PostgreSQL documents as stable; individual codes are not.
+/// The local classes are claimed EXPLICITLY and everything else answers `true`, because the two
+/// mistakes are not equally expensive:
+///
+/// * a wrong `true` (calling this node's own trouble the event's fault) **pens** a valid event —
+///   which is delayed, loud, durably held, re-offered every sweep and **auto-released** the moment
+///   it applies;
+/// * a wrong `false` **freezes the link forever**, which is the defect this exists to end.
+///
+/// So the cheaper mistake is the one that keeps the link moving, and the unknown code takes it.
+/// The list and its reasoning are deliberately the same as `cairn-sync`'s `apply_failure_is_local`
+/// one plane over, whose `do_requeue` already routes on it; `sqlstate_classes_agree.rs` fails if
+/// the two drift, and merging them into one home is #626.
+///
+/// `XX` (internal_error) is NOT local, on purpose: a pgrx function panicking on adversarial bytes
+/// raises it, and that is precisely the case that must not be able to wedge a link.
+pub fn deterministic_apply_failure(sqlstate: Option<&str>) -> bool {
+    match sqlstate {
+        // No SQLSTATE at all: the statement never reached a verdict — a dropped connection, a
+        // client-side decode failure. Nothing about the bytes was decided, so retrying is right.
+        None => false,
+        // `get(..2)` rather than a slice: a code shorter than two characters (or not ASCII)
+        // answers `None` here and falls through to `true`, the keep-the-link-moving side.
+        Some(code) => !matches!(
+            code.get(..2),
+            Some(
+                "08"    // connection_exception
+                    | "40" // transaction_rollback — serialization failure, deadlock
+                    | "42" // access rule violation — a revoked grant, a missing table
+                    | "53" // insufficient_resources — disk full, out of memory
+                    | "55" // object_not_in_prerequisite_state — lock_not_available
+                    | "57" // operator_intervention — statement timeout, shutdown
+                    | "58" // system_error — an I/O error underneath the database
+            )
+        ),
+    }
+}
+
 /// Per-peer bounds on the node-plane quarantine pen (issue #111, mirroring the
 /// clinical plane's #110 quota). Identical re-offers dedupe onto one row, so only
 /// a peer shipping ever-DIFFERENT unverifiable bytes or substitutions (#619) —
@@ -260,8 +318,9 @@ pub enum Request {
 /// events the gate refused but that self-heal on a later sweep (deny-all for an
 /// un-trusted author, or an event type this node has no code for yet — the normal
 /// node-plane case, skipped-and-swept as before); `quarantined` = events penned this cycle —
-/// UNVERIFIABLE bytes (issue #111), and SUBSTITUTIONS: a verifiable event under an `event_id`
-/// this node already holds with different content, which can never apply (#619); `pending` =
+/// UNVERIFIABLE bytes (issue #111), SUBSTITUTIONS: a verifiable event under an `event_id`
+/// this node already holds with different content, which can never apply (#619), and events whose
+/// apply failed DETERMINISTICALLY without a verdict (#621); `pending` =
 /// this peer's UNACKED pen rows AFTER the cycle — a non-zero value is the LOUD integrity signal
 /// `run` logs every cycle until the cause is fixed or a human acks the row.
 #[derive(Debug, Default, Clone, Copy)]
@@ -811,12 +870,17 @@ pub async fn ack_node_quarantine(db: &Client, digest_hex: &str) -> anyhow::Resul
 ///   * Any OTHER verifiable event refused with P0001 (untrusted author / unknown type) is the
 ///     normal deny-all case: skip-and-advance as before — a later `peer.added` or code arrival
 ///     + full sweep admits it (self-healing).
+///   * A VERIFIABLE event whose apply failed with a non-P0001 code that is nevertheless
+///     DETERMINISTIC — a cast, a CHECK violation, an XX000: attributable to the bytes and
+///     identical on every retry (`deterministic_apply_failure`, #621) — is PENNED too. No
+///     verdict about it exists, so the pen records the database's own words; it auto-releases
+///     if a later build admits it.
 ///   * The cursor FREEZES (no advance past the event, retried next cycle) on any of four
-///     paths: a verifiable event refused with anything OTHER than P0001 (a transient DB fault
-///     or a dropped connection); a failed lookup of what `node_event` holds under a P0001-
-///     refused event's id (the substitution question it could not answer); and, for either
-///     arm that pens, a pen at quota or a failed pen write. A transport error mid-stream
-///     returns early without checkpointing, which holds the cursor the same way.
+///     paths: a verifiable event whose apply failed for a reason local to THIS node (a
+///     transient DB fault or a dropped connection); a failed lookup of what `node_event` holds
+///     under a P0001-refused event's id (the substitution question it could not answer); and,
+///     for any arm that pens, a pen at quota or a failed pen write. A transport error
+///     mid-stream returns early without checkpointing, which holds the cursor the same way.
 ///
 /// A penned UNVERIFIABLE event whose cause is later fixed re-applies on a sweep and is
 /// auto-released (DELETEd) — so no manual requeue command is needed. A penned substitution
@@ -1022,7 +1086,35 @@ pub async fn pull_into(
                         }
                     }
                 }
-                // Any OTHER error on a verifiable event is NOT a deliberate refusal: a transient
+                // Verifiable, no verdict, but the failure is attributable to THESE BYTES and
+                // will recur identically forever (#621): a cast in the 22 class, a CHECK
+                // violation, an XX000 out of a function fed adversarial bytes. Freezing here is
+                // what wedged a link permanently — the retry meets the same error, and nothing
+                // is penned, so there is no ack remedy either. PEN it instead: durably held,
+                // loud through `pending`, ack-able, and auto-released the moment a later build
+                // admits the event (the `floor.is_some()` delete above).
+                //
+                // No per-event log line, the substitution arm's convention: an acked row is
+                // still re-offered on every full sweep, and a line here would keep printing
+                // after a human had decided. The REASON travels on the pen row instead, in the
+                // DATABASE's vocabulary (SQLSTATE included) rather than the door's — writing a
+                // non-verdict in the door's voice is what #480 was filed about, one plane over.
+                Ok(_) if deterministic_apply_failure(e.code().map(|c| c.code())) => {
+                    let digest = event_address(signed);
+                    let reason = format!(
+                        "the door did not reach a verdict, and will fail on these bytes \
+                         identically every time: {}",
+                        legible_db_error(&e)
+                    );
+                    match pen_or_freeze(db, &peer_key, signed, &digest, seq, &reason).await {
+                        PenOutcome::Penned => stats.quarantined += 1,
+                        PenOutcome::Frozen => {
+                            stats.frozen = Some(seq);
+                            break;
+                        }
+                    }
+                }
+                // Any OTHER error on a verifiable event is THIS NODE'S OWN trouble: a transient
                 // DB fault (serialization_failure / deadlock / statement_timeout / disk-full …)
                 // or a dropped connection (no db_error object). FREEZE — advancing past it would
                 // silently lose a valid event until the next full sweep (the #111 review's A1).
@@ -1031,7 +1123,9 @@ pub async fn pull_into(
                     // consequential line in the loop — and `{e}` could not separate
                     // `40001`/`40P01` (retry, self-heals) from `53100` (disk full) from
                     // `42501` (a missing grant) from a dropped connection. That is the
-                    // exact list the comment above gives as the REASON the freeze exists.
+                    // exact list `deterministic_apply_failure` now claims as local, and the
+                    // reason this arm is the right place to stop rather than pen: every one
+                    // of them may well admit the same bytes on the next cycle.
                     eprintln!(
                         "pull: transient/unexpected error applying node_event at seq {seq}: {} \
                          — freezing (not skipped past)",
