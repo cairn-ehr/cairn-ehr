@@ -52,8 +52,9 @@ Extend `node_door_refusals_are_p0001.rs` (or a sibling) with the guards `hex_dec
    Asked of `pg_proc.prosrc` (what actually runs), like `substitution_guard_covers_every_writer.rs`;
 3. **no bare `::uuid` in any of the three door bodies** — the rule that keeps the next cast from
    reopening the freeze;
-4. the live `node_event_role_check` definition **references `cairn_node_role_is_known`**, so the
-   vocabulary cannot be re-inlined into two places.
+4. the live `node_event_role_check` definition **references `cairn_node_roles()`**, so the
+   vocabulary cannot be re-inlined into two places — plus a case proving the CHECK is still a
+   FLOOR (it refuses a raw INSERT), since the guard above could read as making it decorative.
 
 ## Task 4 — RED: the puller's classifier (pure, no DB)
 
@@ -80,8 +81,9 @@ In the same suite family as #619's (`common/node_plane_kit.rs`'s `self_node` / `
 2. a deterministic non-P0001 — fault-injected by a `cairn_test_*` trigger on `node_event` raising
    `USING ERRCODE = '23514'`, dropped at test start and end (no residue, HANDOVER's rule) — is
    **penned**, not frozen, and the pen row is ack-able;
-3. a **local** fault (a `SET ROLE` to a role without INSERT rights → `42501`, the seam #619's review
-   found) still **freezes**: the safe direction is untouched.
+3. a **local** fault (injected the same way, `40001`) still **freezes**: the safe direction is
+   untouched. Plus an anti-vacuity control that the injected trigger fires only for the marked
+   event, and the new arm's own freeze path — a pen that cannot be written.
 
 ## Task 7 — Mutation run
 
