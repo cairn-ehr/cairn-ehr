@@ -2017,17 +2017,33 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Mutation ledger
 
+Run 2026-09-19 with `scripts/mutations/2026-09-19-619.sh` (M1–M8 in the full run; M9–M10 re-run
+after fix round 1, see below). **Nine killed, each at the assertion that names its claim; one declared
+survivor survived as declared.**
+
 | Id | Mutation | Suite | Expected | Observed (failing assertion) |
 |---|---|---|---|---|
-| M1 | local guard deleted | node_plane_one_event_id_one_body | KILLED | |
-| M2 | admission-gate guard deleted | node_plane_one_event_id_one_body | KILLED | |
-| M3 | local guard deleted, catalogue only | substitution_guard_covers_every_writer | KILLED | |
-| M4 | admission-gate guard hoisted above IF/ELSE | node_plane_one_event_id_one_body | KILLED | |
-| M5 | local guard hoisted above IF/ELSE | node_plane_one_event_id_one_body | KILLED | |
-| M6 | decision inverted | --lib sync::substitution | KILLED | |
-| M7 | puller never asks | node_substitution_is_penned | KILLED | |
-| M8 | lookup blinded | node_substitution_is_penned | KILLED | |
-| M9 | shared clock merge deleted | hlc_merge_helper | KILLED | |
+| M1 | local guard deleted | node_plane_one_event_id_one_body | KILLED | KILLED — `the_local_door_refuses_a_rival_supersede`: "a rival supersede under a held id must be refused, not dropped: ()" |
+| M2 | admission-gate guard deleted | node_plane_one_event_id_one_body | KILLED | KILLED — `the_admission_gate_refuses_a_rival_supersede`: "a rival supersede under a held id must be refused: ()" |
+| M3 | local guard deleted, catalogue only | substitution_guard_covers_every_writer | KILLED | KILLED — `every_event_log_writer_refuses_a_substitution`: "… never call cairn_refuse_substitution … ["submit_node_event"]" |
+| M4 | admission-gate guard hoisted above IF/ELSE | node_plane_one_event_id_one_body | KILLED | KILLED — `the_admission_gate_still_admits_the_same_event_twice`: "pass 1: the SAME event twice must stay a no-op, never raise: apply_remote_node_event: … (substitution refused)" |
+| M5 | local guard hoisted above IF/ELSE | node_plane_one_event_id_one_body | KILLED | KILLED — `the_local_door_still_admits_the_same_event_twice`: "pass 1: the SAME event twice must stay a no-op, never raise: submit_node_event: … (substitution refused)" |
+| M6 | decision inverted | --lib sync::substitution | KILLED | KILLED — `the_same_event_again_is_not_a_substitution`: "an idempotent re-offer is set-union working, never a refusal of this kind" |
+| M7 | puller never asks | node_substitution_is_penned | KILLED | KILLED — `an_acked_substitution_stays_quiet_on_reoffer`: "penned on the first sweep" (left 0, right 1) |
+| M8 | lookup blinded | node_substitution_is_penned | KILLED | KILLED — `a_rival_refused_by_an_earlier_check_is_still_penned`: "a rival under a held id is penned whatever refused it" |
+| M9 | shared clock merge deleted | hlc_merge_helper | KILLED | KILLED — `every_door_still_calls_the_helper`: "every admission door must still PERFORM cairn_node_hlc_merge …" — the moved pin (3 → 1) is live |
+| M10 | lookup-failure FREEZE turned into a SKIP | node_substitution_is_penned | **SURVIVED (declared before the run)** | SURVIVED, as declared — no fault-injection seam can make `held_content_address` fail inside the single-DB self-pull (a lock blocks rather than fails; the owner role bypasses grants). Bounded: a skipped substitution is re-offered on the next full sweep and penned then. A stated residual, not a silent one. |
+
+**The harness caught itself once, and that is the durable part.** The first full run stopped at M9:
+its replacement text was a bare `    RETURN v_eid;`, which occurs three times in db/007, so after the
+forward swap the REVERT anchor was ambiguous and `swap` refused — with the mutation still applied.
+The `git diff --quiet` control is what stopped M10 from running on top of it (#594's defect, caught
+this time rather than shipped). The tree was restored by reversing exactly that two-line patch.
+Fix round 1 gave M9 a unique replacement and added the reverse-direction half of the control:
+`run_mutation` now refuses, before touching the file, any mutation whose replacement text already
+occurs there — so an unrevertable mutation can no longer be applied at all. **The general lesson:
+checking that an anchor is unique in the direction you apply it is half the check; the revert
+needs the replacement to be unique too.**
 
 ## Paper-parity benchmark (§1.2)
 
