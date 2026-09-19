@@ -446,9 +446,10 @@ BEGIN
     -- SUBSTITUTION REFUSAL (#619, ADR-0073) — the federation admission gate's copy of the
     -- submit_node_event tail. Every arm above inserts ON CONFLICT DO NOTHING; without this, a
     -- trusted peer's SECOND, different event under an id already held vanished, the function
-    -- returned normally, the puller counted it admitted and advanced past it, and set-union never
-    -- re-offered it: two nodes holding different bytes under one id, forever, in silence. A
-    -- dropped rival GENESIS is the sharpest case — that peer's key would never resolve here.
+    -- returned normally, the puller counted it admitted and advanced past it: every later full
+    -- sweep re-offered it only to drop it again in silence — two nodes holding different bytes
+    -- under one id, forever. A dropped rival GENESIS is the sharpest case — that peer's key
+    -- would never resolve here.
     -- The refusal is P0001 like every other (db/001's contract); the node puller tells it from a
     -- routine deny-all by STATE, not by this text (crates/cairn-node/src/sync/substitution.rs).
     -- Same two placement rules as submit_node_event: AFTER the IF/ELSE, and an UNCONDITIONAL read.

@@ -225,8 +225,8 @@ const SQLSTATE_RAISE_EXCEPTION: &str = "P0001";
 /// Did the apply door DELIBERATELY refuse these bytes, or did something on this node break?
 /// **Pure.**
 ///
-/// Every refusal in `apply_remote_event` (db/020) is a bare `RAISE EXCEPTION`, which db/001 — in
-/// the comment above `cairn_decode_hex_or_raise` (#228) — states is a CONTRACT rather than an
+/// Every refusal in `apply_remote_event` (db/020) is a bare `RAISE EXCEPTION`, which db/048 — in
+/// the comment above `cairn_check_sensitivity_withdrawal` — states is a CONTRACT rather than an
 /// accident. So `P0001` means the floor decided against this record and will decide the same way
 /// on every retry: pen it, and let `cairn-sync requeue` release it once the cause is fixed.
 /// Anything else — a lock timeout, a serialization failure, a full disk, a dropped connection —

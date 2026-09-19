@@ -174,13 +174,15 @@ BEGIN
     -- a new posture: this door already aborts on an unknown node event type, an over-ceiling
     -- event, an HLC wall past the drift ceiling, and an author key resolving to no restored
     -- enroll. A medium carrying two rival events under one id is a compromised or corrupt
-    -- medium, and restoring a node whose peer list was decided by whoever appended last is a
-    -- worse outcome than refusing and sending the operator to find another copy.
+    -- medium, and restoring a node whose peer list was decided by whichever copy the medium
+    -- ordered first — which whoever can append to the medium controls — is a worse outcome than
+    -- refusing and sending the operator to find another copy.
     SELECT content_address INTO v_found FROM node_event WHERE node_event_id = v_eid;
     PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'restore_node_event');
 
     -- Clock never falls behind a restored event (HLC invariant A3, mirrors the apply path).
-    -- The REJECTION above is this door's ceiling; the helper (db/001) is the pure merge —
+    -- The clock-drift REJECTION near the top of this function is this door's ceiling; the helper
+    -- (db/001) is the pure merge —
     -- and the merge being monotone is exactly why that ceiling has to sit in front of it.
     PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
                                  (b -> 'hlc' ->> 'counter')::int);

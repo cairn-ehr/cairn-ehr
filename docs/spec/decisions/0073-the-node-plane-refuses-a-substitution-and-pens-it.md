@@ -69,9 +69,10 @@ loop in the comment above `cairn_decode_hex_or_raise` (#228), and `cairn-sync`'s
 `refusal_is_deliberate` has relied on it since #267 — and the node puller's arm for a verifiable
 event refused with `P0001` skipped and advanced before this change. So the question was
 never *refuse or wedge*. It was narrower: **what should the puller do with a refusal it would
-otherwise file as self-healing?** (An error that is *not* a deliberate RAISE does freeze the node
-pull, and for a deterministic one the freeze is permanent: a verifiable event whose `event_id`
-fails the gate's `uuid` cast raises `22P02` before any trust check. That pre-existing case is
+otherwise file as self-healing?** (An error on a *verifiable* event that is not a deliberate RAISE
+does freeze the node pull, and for a deterministic one the freeze is permanent: a verifiable event
+whose `event_id` fails the gate's `uuid` cast raises `22P02` before any trust check. That
+pre-existing case is
 [#621](https://github.com/cairn-ehr/cairn-ehr/issues/621); nothing here changes it.)
 
 The skip exists because a node-plane refusal is almost always **scoping**. `stream_node_events`

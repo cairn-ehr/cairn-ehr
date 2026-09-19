@@ -36,8 +36,9 @@
 //! a new posture — this door already aborts on an unknown node event type, an over-ceiling
 //! event, an HLC wall past the drift ceiling, and an author key resolving to no restored enroll.
 //! A medium carrying two rival events under one id is a compromised or corrupt medium, and
-//! restoring a node whose peer list was decided by whoever appended last is a worse outcome than
-//! refusing and telling the operator to find another copy.
+//! restoring a node whose peer list was decided by whichever copy the medium ordered first —
+//! which whoever can append to the medium controls — is a worse outcome than refusing and
+//! telling the operator to find another copy.
 
 use cairn_event::{sign, EventBody, Hlc, SigningKey};
 use cairn_node::{db, identity};

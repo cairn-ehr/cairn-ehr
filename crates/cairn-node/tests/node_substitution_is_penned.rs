@@ -1,7 +1,8 @@
 //! #619 / ADR-0073 — a substituted node event arriving over the network is PENNED, not skipped.
 //!
 //! Since #619 (ADR-0073) the admission gate (`apply_remote_node_event`) refuses a rival under a
-//! held id, with a P0001 like every other refusal. The node puller's P0001 arm skips-and-advances, because on the node plane a P0001 is
+//! held id, with a P0001 like every other refusal. The node puller's P0001 arm
+//! skips-and-advances, because on the node plane a P0001 is
 //! almost always SCOPING (an event from a node this one does not peer with) and heals on a later
 //! sweep. A substitution never heals — the id is taken — so skipping it would log "recoverable,
 //! non-fatal" for something that is neither, and keep no trace of a peer that served two different
