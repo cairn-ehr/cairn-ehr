@@ -164,6 +164,7 @@ AS $$
 DECLARE
     b JSONB; v_type TEXT; v_op TEXT; v_ca BYTEA; v_eid UUID;
     v_local_node BYTEA; v_local_key TEXT; v_signer TEXT; v_payload JSONB;
+    v_found BYTEA;
 BEGIN
     -- Size ceiling (review fix A7a): an oversized event would wedge the read-capped wire.
     IF octet_length(p_signed) > cairn_max_event_bytes() THEN
@@ -234,30 +235,46 @@ BEGIN
             v_signer, (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
             b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
         ON CONFLICT (node_event_id) DO NOTHING;
-        RETURN v_eid;
+    ELSE
+        -- subject_node_id is NOT NULL; a missing peer_node_id_hex would otherwise surface
+        -- as an opaque constraint error rather than a legible rejection. The sibling case —
+        -- present but MALFORMED — is caught inside cairn_decode_hex_or_raise below (issue
+        -- #228). This guard is kept rather than folded into the helper because it names
+        -- v_type, which the helper cannot see.
+        IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
+            RAISE EXCEPTION 'submit_node_event: % missing peer_node_id_hex in payload', v_type;
+        END IF;
+
+        INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
+            signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
+            hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
+        VALUES (v_eid, v_op, v_local_node,
+            cairn_decode_hex_or_raise('peer_node_id_hex',
+                v_payload ->> 'peer_node_id_hex', 'submit_node_event'),
+            v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
+            v_payload ->> 'role', v_payload ->> 'scope_hint',
+            NULLIF(v_payload ->> 'target_event_id','')::uuid,
+            (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
+            b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
+        ON CONFLICT (node_event_id) DO NOTHING;
     END IF;
 
-    -- subject_node_id is NOT NULL; a missing peer_node_id_hex would otherwise surface
-    -- as an opaque constraint error rather than a legible rejection. The sibling case —
-    -- present but MALFORMED — is caught inside cairn_decode_hex_or_raise below (issue
-    -- #228). This guard is kept rather than folded into the helper because it names
-    -- v_type, which the helper cannot see.
-    IF v_payload ->> 'peer_node_id_hex' IS NULL THEN
-        RAISE EXCEPTION 'submit_node_event: % missing peer_node_id_hex in payload', v_type;
-    END IF;
-
-    INSERT INTO node_event (node_event_id, op, author_node_id, subject_node_id,
-        signer_key_id, peer_pubkey, fingerprint, role, scope_hint, target_event_id,
-        hlc_wall, hlc_counter, node_origin, signed_bytes, content_address)
-    VALUES (v_eid, v_op, v_local_node,
-        cairn_decode_hex_or_raise('peer_node_id_hex',
-            v_payload ->> 'peer_node_id_hex', 'submit_node_event'),
-        v_signer, v_payload ->> 'peer_pubkey', v_payload ->> 'fingerprint',
-        v_payload ->> 'role', v_payload ->> 'scope_hint',
-        NULLIF(v_payload ->> 'target_event_id','')::uuid,
-        (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
-        b -> 'hlc' ->> 'node_origin', p_signed, v_ca)
-    ON CONFLICT (node_event_id) DO NOTHING;
+    -- SUBSTITUTION REFUSAL (#619, ADR-0073). Both arms above insert ON CONFLICT DO NOTHING, which
+    -- is right for a REPEAT of the same event (set-union) and silently wrong for a DIFFERENT event
+    -- under an id already held: the rival vanished and this door returned the id as if it had
+    -- succeeded — for a peer.revoked, the node kept trusting a peer it had revoked. The comparison
+    -- is the shared cairn_refuse_substitution (db/053, IS DISTINCT FROM), never an inline copy
+    -- (trap 12; substitution_guard_is_single_source.rs).
+    --
+    -- Two placement rules, each of which a later edit might "tidy" away:
+    --   * AFTER the IF/ELSE, never above it. Above the branch nothing is held yet, v_found is
+    --     NULL, and IS DISTINCT FROM refuses — every clean write would be refused.
+    --   * The read is UNCONDITIONAL — no GET DIAGNOSTICS ROW_COUNT. The node plane carries tens
+    --     of events, and a ROW_COUNT check is only correct while each INSERT stays the last
+    --     statement of its arm; a later edit would disarm it silently (db/009's rule, trap 12).
+    -- The genesis arm above needs neither: it has no ON CONFLICT, so a colliding id raises.
+    SELECT content_address INTO v_found FROM node_event WHERE node_event_id = v_eid;
+    PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'submit_node_event');
     RETURN v_eid;
 END;
 $$;
