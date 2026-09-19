@@ -2018,8 +2018,9 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ## Mutation ledger
 
 Run 2026-09-19 with `scripts/mutations/2026-09-19-619.sh` (M1–M8 in the full run; M9–M10 re-run
-after fix round 1, see below). **Nine killed, each at the assertion that names its claim; one declared
-survivor survived as declared.**
+after fix round 1; M10 re-run and M11 added in the final-review fix wave, see below). **Eleven
+killed, each at the assertion that names its claim.** M10 was first declared a survivor and survived
+as declared; the final review showed the declaration rested on a false premise, and it is now killed.
 
 | Id | Mutation | Suite | Expected | Observed (failing assertion) |
 |---|---|---|---|---|
@@ -2032,7 +2033,8 @@ survivor survived as declared.**
 | M7 | puller never asks | node_substitution_is_penned | KILLED | KILLED — `an_acked_substitution_stays_quiet_on_reoffer`: "penned on the first sweep" (left 0, right 1) |
 | M8 | lookup blinded | node_substitution_is_penned | KILLED | KILLED — `a_rival_refused_by_an_earlier_check_is_still_penned`: "a rival under a held id is penned whatever refused it" |
 | M9 | shared clock merge deleted | hlc_merge_helper | KILLED | KILLED — `every_door_still_calls_the_helper`: "every admission door must still PERFORM cairn_node_hlc_merge …" — the moved pin (3 → 1) is live |
-| M10 | lookup-failure FREEZE turned into a SKIP | node_substitution_is_penned | **SURVIVED (declared before the run)** | SURVIVED, as declared — no fault-injection seam can make `held_content_address` fail inside the single-DB self-pull (a lock blocks rather than fails; the owner role bypasses grants). Bounded: a skipped substitution is re-offered on the next full sweep and penned then. A stated residual, not a silent one. |
+| M10 | lookup-failure FREEZE turned into a SKIP | node_substitution_lookup_freezes | KILLED (first declared SURVIVED — see below) | KILLED — `a_substitution_check_that_cannot_read_the_log_freezes_rather_than_skips`: "the cycle FROZE at the rival: the loop could not tell a substitution from scoping, so it must not advance past it" |
+| M11 | offered address taken over the whole FRAME (seq prefix included), not the signed bytes | node_substitution_is_penned, filtered to the false-positive test | KILLED | KILLED — `a_refusal_of_an_event_held_with_the_same_bytes_is_skipped_not_penned`: "held with the SAME bytes is not a substitution: nothing is penned" (`quarantined: 3`) |
 
 **The harness caught itself once, and that is the durable part.** The first full run stopped at M9:
 its replacement text was a bare `    RETURN v_eid;`, which occurs three times in db/007, so after the
@@ -2045,6 +2047,18 @@ Fix round 1 gave M9 a unique replacement and added the reverse-direction half of
 occurs there — so an unrevertable mutation can no longer be applied at all. **The general lesson:
 checking that an anchor is unique in the direction you apply it is half the check; the revert
 needs the replacement to be unique too.**
+
+**A declared survivor is a claim, and M10's was false.** It was declared on the premise that no
+seam could make `held_content_address` fail inside the single-DB self-pull (a lock blocks rather
+than fails; the owner role bypasses grants). The final review found one: `pull_into` takes the
+caller's `&Client`, and both doors it calls (`apply_remote_node_event`, `checkpoint_sync_cursor`)
+are `SECURITY DEFINER`, so the pull can run under `SET ROLE` to a role granted everything it needs
+except `SELECT` on `node_event`. `node_substitution_lookup_freezes.rs` does exactly that, and M10
+now dies at its freeze assertion. The same wave added M11 for the direction no test had pinned: a
+refused event held with the SAME bytes must be skipped, never penned. Its first run named the wrong
+killer — the rival tests fail under M11 too, and the harness shows only the first panic — so M11
+runs against the one test it targets; its second run died at the anti-vacuity check rather than
+the claim, so that test now asserts its claim first.
 
 ## Paper-parity benchmark (§1.2)
 

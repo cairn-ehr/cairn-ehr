@@ -13,6 +13,12 @@
   [ADR-0017](0017-federation-admission-sovereignty-peering-and-trust-anchors.md)
 - **Amends:** ADR-0071's published exit-0 contract — not its rule, which is unchanged, but the
   list of limits the command states alongside it. Reverses nothing.
+- **Errata:** **E1**–**E2**, appended 2026-09-19 when
+  [#619](https://github.com/cairn-ehr/cairn-ehr/issues/619)
+  ([ADR-0073](0073-the-node-plane-refuses-a-substitution-and-pens-it.md)) found two statements in
+  the census note under *#615* to be false about the code. Each is a marked blockquote immediately
+  below the passage it corrects, the original wording is preserved above it, and **no decision
+  content changes** — see the errata rule in [README](README.md#rules).
 
 ## Context
 
@@ -48,6 +54,31 @@ sites carried no comparison at all, so the rival was discarded without a word.
 > arm has its own `RETURN`), and whether that door should **refuse**, **skip-and-advance** or
 > **quarantine** is the open node-vs-clinical-plane divergence (#301 / #268), where a RAISE on the
 > pull path can wedge the watermark. Picking one by analogy to db/009 would be picking it silently.
+>
+> > **Erratum E1 (2026-09-19) — factual; the decision is unchanged.** *"where a RAISE on the pull
+> > path can wedge the watermark"* is false for the node plane. Every deliberate refusal in
+> > `apply_remote_node_event` (`db/007`) is a bare `RAISE EXCEPTION` — SQLSTATE `P0001` — and the
+> > node puller (`pull_into`, `crates/cairn-node/src/sync.rs`) sent a verifiable event refused with
+> > `P0001` to skip-and-advance, never to a freeze. Its pen arm, for unverifiable bytes, advanced
+> > too once the bytes were penned, freezing only when the pen was at quota or its write failed. So
+> > refusing at the admission gate could not wedge the watermark, and it now refuses there: see
+> > [ADR-0073](0073-the-node-plane-refuses-a-substitution-and-pens-it.md), tracked as
+> > [#619](https://github.com/cairn-ehr/cairn-ehr/issues/619). A separate case is real, and is not
+> > this one: an error that is *not* a deliberate refusal — a verifiable event whose `event_id`
+> > fails the gate's `uuid` cast (`22P02`), or a trusted author's event whose HLC trips
+> > `node_event`'s non-negative CHECK (`23514`) — is not `P0001`, so the puller freezes on it, and
+> > permanently when the error is deterministic
+> > ([#621](https://github.com/cairn-ehr/cairn-ehr/issues/621)).
+>
+> > **Erratum E2 (2026-09-19) — factual; the decision is unchanged.** *"so set-union never
+> > re-offers it"* is false. The node puller's full sweep — every `FULL_SWEEP_EVERY` cycles, and
+> > whenever the trust set changes — requests the serving peer's whole log, so the rival **was**
+> > re-offered; each time, the admission gate's `ON CONFLICT DO NOTHING` dropped it again in silence
+> > and the puller counted it admitted. The rest of the sentence stands — the pull loop did count
+> > the event applied and advance its cursor, and the discard was silent — and so does its point:
+> > the divergence was permanent, because every re-offer was discarded the same way. See
+> > [ADR-0073](0073-the-node-plane-refuses-a-substitution-and-pens-it.md), tracked as
+> > [#619](https://github.com/cairn-ehr/cairn-ehr/issues/619).
 
 That door is **self-trusting** by design — any validly-signed `node.enrolled` is admitted without a
 trust check, because a fresh node has no trust set to check against — and db/009's own comment

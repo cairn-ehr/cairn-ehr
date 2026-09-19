@@ -11,7 +11,9 @@
 - **Amends:** ADR-0072's decision 1, whose shared refusal served three doors and now serves all five
   event-log writers; and two premises of its #619 paragraph — that `db/009`'s tail-guard shape does
   not transpose to `db/007`, and that a RAISE on the node pull path can wedge the watermark (see
-  Context). Takes on the residual ADR-0072 called its largest. Reverses nothing.
+  Context). Takes on the residual ADR-0072 called its largest. Reverses nothing. The two statements
+  in that paragraph that were false about the code — the wedge, and that set-union never re-offers
+  the dropped rival — are corrected by errata E1–E2 appended to ADR-0072.
 
 ## Context
 
@@ -67,7 +69,10 @@ loop in the comment above `cairn_decode_hex_or_raise` (#228), and `cairn-sync`'s
 `refusal_is_deliberate` has relied on it since #267 — and the node puller's arm for a verifiable
 event refused with `P0001` skipped and advanced before this change. So the question was
 never *refuse or wedge*. It was narrower: **what should the puller do with a refusal it would
-otherwise file as self-healing?**
+otherwise file as self-healing?** (An error that is *not* a deliberate RAISE does freeze the node
+pull, and for a deterministic one the freeze is permanent: a verifiable event whose `event_id`
+fails the gate's `uuid` cast raises `22P02` before any trust check. That pre-existing case is
+[#621](https://github.com/cairn-ehr/cairn-ehr/issues/621); nothing here changes it.)
 
 The skip exists because a node-plane refusal is almost always **scoping**. `stream_node_events`
 serves every row, so a puller routinely refuses events authored by nodes it does not peer with;
@@ -181,8 +186,9 @@ points at the new rule.
 
 ADR-0072 decision 2 makes a substitution on a sneakernet medium **abort** the restore; this ADR
 **pens** one on the pull path and carries on. The difference is what stopping would protect. A
-restore that continued would bring a node back with a trust set decided by whoever appended last,
-and the operator's remedy — find another copy of the medium — is available. A pull that froze on a
+restore that continued would bring a node back with a trust set decided by whichever copy the
+medium ordered first — which whoever can append to the medium controls — and the operator's
+remedy, finding another copy of the medium, is available. A pull that froze on a
 substitution would hold every later event from that peer behind one rival, which is the reason
 `cairn-sync` pens a door refusal rather than freezing (#267); a pen keeps the evidence durable and
 loud and lets the rest of the stream through.
@@ -224,7 +230,9 @@ loud and lets the rest of the stream through.
   **the clinical plane pays nothing**: `cairn-sync`, `db/005` and `db/020` are unchanged.
 - **A new loud signal.** A substitution keeps the pull loud until a human acks it. That is the
   intent: it fires only when two different signed events exist under one `event_id` — evidence that
-  some signer minted an id already in use, by bug or on purpose.
+  some signer minted an id already in use, or that a relay re-wrapped a signed event — the COSE
+  unprotected header lies outside the signature
+  ([#620](https://github.com/cairn-ehr/cairn-ehr/issues/620)) — by bug or on purpose.
 - **The guard makes a substitution loud; it does not decide which event is genuine.** Whichever
   reached this node first holds the id; the pen row names both addresses so a human can find both.
   A rival genesis is now refused and penned rather than dropped in silence — but the id is still
@@ -240,12 +248,20 @@ loud and lets the rest of the stream through.
 - **Tested per arm, and by mutation.** Every guarded arm has its own rival case
   (`node_plane_one_event_id_one_body.rs`: the local door's peer/revoke and supersede arms; the
   admission gate's enroll, supersede and peer/revoke arms), each door has an idempotence case — the
-  same event twice still succeeds — and the pull path has `node_substitution_is_penned.rs`. Ten
+  same event twice still succeeds — and the pull path has `node_substitution_is_penned.rs`, which
+  also pins the false-positive direction: a refused event held with the SAME bytes is skipped,
+  never penned. The lookup-failure freeze is pinned by `node_substitution_lookup_freezes.rs`, which
+  runs the pull under a role granted everything it needs except `SELECT` on `node_event`. Eleven
   mutations were run with `scripts/mutations/2026-09-19-619.sh`: deleting either door's guard (M1,
   M2, and M3 against the catalogue rule alone), hoisting either guard above its `IF/ELSE` (M4, M5),
-  inverting the pure decision (M6), removing the puller's question (M7), blinding the lookup (M8)
-  and deleting the shared clock merge (M9) were **each killed at the assertion that names its
-  claim**. M10 was declared a survivor before the run, and survived — see Residuals.
+  inverting the pure decision (M6), removing the puller's question (M7), blinding the lookup (M8),
+  deleting the shared clock merge (M9), turning the lookup-failure freeze into a skip (M10) and
+  addressing the whole frame rather than the signed bytes, so that every refused re-offer of an
+  event already held with the same bytes would be penned (M11), were **each killed at the assertion
+  that names its claim**. M10 was first
+  declared a survivor, on the premise that nothing could make the lookup fail inside the self-pull;
+  review found the seam — `pull_into` takes the caller's connection, and both doors it calls are
+  `SECURITY DEFINER` — and the test was written.
 - **How we would know the bet failed:** `substitution_guard_covers_every_writer.rs` fails, naming a
   writer that does not call the helper or a sixth writer nobody decided on; or a node that has pulled
   from a peer holds different bytes from that peer's under one `node_event_id`, with no pen row for
@@ -259,11 +275,6 @@ loud and lets the rest of the stream through.
   replays its own embedded `db/007` and `CREATE OR REPLACE`s both doors back to their unguarded
   bodies, in silence. (`cairn-sync` does not load `db/007`.) Accepted as #601 accepted the same
   exposure for its in-place edits: pre-clinical, no mixed-version fleet.
-- **The lookup-failure freeze is untested** (mutation M10, declared a survivor before the run). No
-  fault-injection seam can make `held_content_address` fail inside the single-database self-pull —
-  a lock blocks rather than fails, and the owner role bypasses grants — so a regression turning
-  that freeze into a skip would pass the suite. Bounded: a skipped substitution is re-offered on the
-  next full sweep, and penned then.
 - **[#268](https://github.com/cairn-ehr/cairn-ehr/issues/268)'s remaining classes.** Every other
   genuinely-refused verifiable node event — oversized, a missing or malformed payload field, an HLC
   wall past the drift ceiling — still skips and advances, re-offered only on the full sweep.
@@ -284,7 +295,8 @@ loud and lets the rest of the stream through.
 - **The catalogue rule's blind spots.** As the test states, it reads a function's own body, so a
   write through a helper, a `MERGE` or a dynamic `EXECUTE` is not recognised. Two more are not
   stated there. It reads `pg_proc.prosrc`, which is empty for a `LANGUAGE sql` function written with
-  a SQL-standard `BEGIN ATOMIC` body; none of those shapes writes an event log today. And it asks
+  a SQL-standard `BEGIN ATOMIC` body; none of those shapes writes an event log today
+  ([#622](https://github.com/cairn-ehr/cairn-ehr/issues/622)). And it asks
   whether a function *calls* the helper, not whether every INSERT path *reaches* the call: an arm
   that inserts `ON CONFLICT DO NOTHING` and `RETURN`s before the tail would pass it. Only a rival
   test written for that arm, or review, would catch it.

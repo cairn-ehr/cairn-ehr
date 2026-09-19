@@ -12,8 +12,10 @@
 //!
 //! A substitution breaks that premise. It is a second, DIFFERENT event under an `event_id` this node
 //! already holds, and it can never apply here — the id is taken — so "it heals on a later sweep" is
-//! false for it. It is also evidence: a peer served two different signed events under one id, which
-//! an honest, bug-free peer never does. So it is PENNED — durable, loud until a human acks it.
+//! false for it. It is also evidence that two different signed events exist under one id: some
+//! signer minted an id already in use, or a relay re-wrapped a signed event — the COSE unprotected
+//! header lies outside the signature (#620) — by bug or on purpose. So it is PENNED — durable, loud
+//! until a human acks it.
 //!
 //! # Why by STATE, and not by SQLSTATE or message text
 //!
