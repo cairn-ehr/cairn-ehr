@@ -3,35 +3,47 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ #619 IS BUILT: THE NODE PLANE REFUSES A SUBSTITUTION AT BOTH LIVE DOORS, AND PENS IT**
-> (2026-09-19, [ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md),
-> spec **v0.75**, PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)** — **merged
-> 2026-09-19, #619 closed by hand**; no migration, `SCHEMA_GENERATION` still **53**).
-> `submit_node_event` and `apply_remote_node_event` — the live federation admission gate — each call
-> `cairn_refuse_substitution` once, in a shared tail after the `IF/ELSE` (db/009's shape; the gate's
-> three clock merges fold into one). The node puller asks the TABLE whether a refused event's
-> `event_id` is already held under a different content address and, if so, **pens it** whichever
-> check refused it; routine scoping refusals keep skip-and-advance. The door inventory is now a
-> `pg_proc` catalogue rule. ADR-0072 gained **Errata E1–E2**. 16/16 mutations killed. **PR #623's own
-> review found a CRITICAL bypass, fixed on the branch:** the puller read `event_id` with the `uuid`
-> crate while the doors use Postgres's wider `::uuid` grammar, so a rival spelled with a hyphen after
-> every four hex digits was refused by the door yet skipped as scoping — the pen switched off by the
-> rival's author. The lookup now mirrors `string_to_uuid` (`uuid_as_postgres_reads_it`). Guarded by
-> **trap 13**. **Maintainer rulings:** pen (not skip, not all of #268); one tail per door. **Filed from
-> its review:** **#620** (the COSE unprotected header is hashed into the content address but lies
-> outside the signature, so a relay can re-wrap an event into a different address — wire core, both
-> planes, a DECISION) · **#621** (db/007 raises NON-P0001 codes deterministically on
-> verifiable-but-malformed events — a uuid cast before any trust check, the HLC CHECK — so the node
-> pull freezes that peer PERMANENTLY, with no pen/ack remedy; #228's class) · **#622** (the catalogue
-> guards cannot see a `BEGIN ATOMIC` body). **Filed from the PR review:** **#624** (one `event_id`,
-> one spelling — nothing refuses a non-canonical spelling; hardening) · **#625** (the pen dedupes by
-> digest across peers but counts `pending` per peer, so a penned rival goes quiet when its first
-> server leaves the pull set).
+> **⇒ #621 IS BUILT: A DETERMINISTIC DOOR FAILURE IS A REFUSAL, NOT A FAULT**
+> (2026-09-20, [ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md),
+> spec **v0.76**, no migration — db/001, db/007 and db/009 edited in place, `SCHEMA_GENERATION` still
+> **53**). The node puller froze its cursor under every non-`P0001` failure, but db/007 failed
+> **deterministically without a verdict** in four places on caller-supplied bytes (the `event_id` and
+> `target_event_id` casts → `22P02`; the `node_event_hlc_nonneg` and `node_event_role_check` CHECKs →
+> `23514` — the last of those **not listed in #621**), so the freeze was permanent and the whole link
+> stood still behind one event. Two halves: **the doors are now total** (`cairn_uuid_or_raise` on
+> `pg_input_is_valid` — the cast's OWN grammar, so no second parser can drift — plus
+> `cairn_hlc_nonneg_or_raise`, both db/001, and a role vocabulary that is ONE function the table's
+> CHECK itself calls), and **the puller pens** any remaining non-`P0001` failure whose SQLSTATE class
+> is not local. 13/13 mutations killed. **The severity in #621 and in the old ⇒ NEXT was overstated,
+> and the ADR says so:** `serve` streams only rows already in the serving peer's log, so an honest
+> peer on the same schema cannot serve one — the real triggers are a misbehaving peer (which wedges
+> only its own link and could stall it by going silent anyway) and **cross-version CHECK-vocabulary
+> skew**, which is the one that matters under principle 11. **Filed:** **#626** (the clinical plane
+> has the identical shape — db/020's raw casts and `do_pull`'s single freeze arm — kept out by
+> maintainer decision because db/020 is the 100k-event hot path).
+>
+> **⇒ #619 IS BUILT AND MERGED** (2026-09-19,
+> [ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md), spec v0.75,
+> PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**, #619 closed by hand).
+> `submit_node_event` and `apply_remote_node_event` each call `cairn_refuse_substitution` once, in a
+> shared tail after the `IF/ELSE` (db/009's shape). The node puller asks the TABLE whether a refused
+> event's `event_id` is already held under a different content address and, if so, **pens it**
+> whichever check refused it; routine scoping refusals keep skip-and-advance. The door inventory is a
+> `pg_proc` catalogue rule. ADR-0072 gained **Errata E1–E2**. Its review found a CRITICAL pen bypass:
+> the puller read `event_id` with the `uuid` crate while the doors use Postgres's wider `::uuid`, so a
+> rival spelled with a hyphen after every four hex digits was refused by the door yet skipped as
+> scoping. Guarded by **trap 13**. **Filed from it:** **#620** (the COSE unprotected header is hashed
+> into the content address but lies outside the signature, so a relay can re-wrap an event into a
+> different address — wire core, both planes, a DECISION) · **#622** (the catalogue guards cannot see
+> a `BEGIN ATOMIC` body) · **#624** (one `event_id`, one spelling — nothing refuses a non-canonical
+> spelling; hardening) · **#625** (the pen dedupes by digest across peers but counts `pending` per
+> peer, so a penned rival goes quiet when its first server leaves the pull set).
 >
 > **⇒ WHAT IS NEXT: NO DECIDED-AND-UNBUILT DR ITEM REMAINS.** Pick from below, or leave DR for the
-> *Other build candidates*. **Recommended: #621** — a live, network-reachable wedge (any trusted peer
-> serving a stranger-signed event with a non-UUID `event_id` freezes that link forever), small, and
-> #228 already shows the fix pattern. Then **#620**, a wire-contract decision.
+> *Other build candidates*. **Recommended: #620** — a wire-contract DECISION (content-addressing over
+> bytes the signature does not cover), and the only open item that can still change the wire. After it,
+> **#626** (the clinical twin of #621; the pattern is now built and proven one plane over) or the
+> **registration/search UI slice**.
 >
 > - **Open decisions (none a patch):** **#575** (the minted recovery code still reaches stderr on both
 >   restore paths — re-deferred once) · **#602** (any client can set `cairn.remote_apply` and turn the
@@ -153,10 +165,10 @@
 > parenthesis breaks the adjacency. Residuals: **#547**, **#548**.
 
 > [!IMPORTANT]
-> **Thirteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
+> **Fourteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
 > trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review —
-> **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615 and
-> trap 13 by #619.)
+> **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615,
+> trap 13 by #619 and trap 14 by #621.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -341,6 +353,26 @@
 >     seq prefix included — every held-and-equal re-offer would then be penned, #268's alarm fatigue
 >     (M11). **A sixth event-log writer fails the catalogue rule: give it the call and add it to the
 >     pinned list — never the reverse.** Residuals: **#620**, **#621**, **#622**, **#605**.
+> 14. **⇒ A DOOR THAT LETS POSTGRES RAISE ON CALLER-SUPPLIED BYTES IS BREAKING THE P0001 CONTRACT BY
+>     OMISSION (#621, ADR-0074, 2026-09-20).** Every field the three node doors read out of signed
+>     bytes goes through a helper that raises P0001 — `cairn_uuid_or_raise` (db/001, on
+>     `pg_input_is_valid`), `cairn_hlc_nonneg_or_raise` (db/001), `cairn_node_role_or_raise` (db/007) —
+>     and `node_door_input_guards.rs` fails on a bare `::uuid` in any door body or on a door that
+>     stopped calling one. **The tempting wrong moves:** (a) writing a REGEX instead of
+>     `pg_input_is_valid` — a validator narrower than the cast it replaces refuses events the log can
+>     already hold, the mirror of PR #623's finding 1 (mutation M9; only the odd-spelling positive
+>     control sees it); (b) re-inlining the role list into the CHECK "since it is only three values" —
+>     the door and the floor then hold two lists, and the day one is widened an older node meets
+>     `23514`, a frozen link, instead of a P0001 it could skip (M10; behaviour is identical TODAY, so
+>     only the structural guard sees it); (c) giving any of these refusals `USING ERRCODE` — that turns
+>     `cairn-sync`'s clinical pen into a freeze (trap 13a); (d) deleting the CHECK constraints as
+>     redundant — they are the floor for raw SQL, the door is the privilege (principle 12).
+>     ⚠️ **The puller's default for an UNKNOWN SQLSTATE is DETERMINISTIC (pen), and "tightening" it to
+>     freeze reinstates #621.** A wrongly penned event is delayed, held, re-offered and auto-released;
+>     a wrongly frozen link is permanent and has no remedy. The local classes — `08 40 42 53 55 57 58`
+>     and *no SQLSTATE at all* — are claimed explicitly and must stay equal to `cairn-sync`'s
+>     `apply_failure_is_local` (`sqlstate_classes_agree.rs`; merging the two copies is **#626**).
+>     Residuals: **#626** (the clinical plane still freezes on all of them), **#605**, **#268**.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
@@ -416,7 +448,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-19 (**#619 built — the node plane refuses a substitution at both live doors, and pens it.** **ADR-0073**, spec **v0.75**, no migration, `SCHEMA_GENERATION` still **53**; db/007's two doors get db/009's single-tail guard; the node puller classifies by STATE and pens; the door inventory becomes a `pg_proc` catalogue rule; ADR-0072 gains Errata E1–E2; 16/16 mutations killed after the harness caught its own unrevertable M9; the whole-branch review found the M10 "no seam" residual false (a `SET ROLE` seam killed it) and a wire-core finding; the PR review found and fixed a critical `event_id`-spelling pen bypass; filed **#620–#622**, **#624–#625**; closed **#614** by hand; subagent-driven, seven tasks each spec- and quality-reviewed; PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**) · 2026-09-17 (**#614 + #615** — ADR-0072, spec v0.74, db/053, `SCHEMA_GENERATION` 52 → 53; filed #619; PR #618) · 2026-09-16 (**#594** — ADR-0071, exit 3 INCOMPLETE; filed #611, #613, #614–#617; PR #612) · 2026-09-15/16 (**#584** — ADR-0070; filed #602–#604; PR #601) · earlier, one line each: 09-15 **PR #595's review** (filed #596–#599; #600) · 09-14 **#593** (PR #595) · 09-13/14 **#567** (PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.75** ([ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md), which amends ADR-0072's census; [ADR-0072](spec/decisions/0072-a-restore-loses-no-record-silently.md), now carrying Errata E1–E2; [ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md); [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
+**Session date:** 2026-09-20 (**#621 built — a deterministic door failure is a refusal, not a fault.** **ADR-0074**, spec **v0.76**, no migration, `SCHEMA_GENERATION` still **53**; the three node doors become total (P0001 for every malformed field, via `cairn_uuid_or_raise` on `pg_input_is_valid`, `cairn_hlc_nonneg_or_raise`, and a role vocabulary the CHECK itself calls); the puller pens a non-`P0001` failure whose SQLSTATE class is not local instead of freezing; the `role` CHECK was a fourth raise #621 never listed; the issue's severity claim was overstated and the ADR corrects it; 13/13 mutations killed after the harness caught a copy of itself that ran ZERO and still reported a clean tree; filed **#626**; closed **#619** by hand) · 2026-09-19 (**#619 built — the node plane refuses a substitution at both live doors, and pens it.** **ADR-0073**, spec **v0.75**, no migration, `SCHEMA_GENERATION` still **53**; db/007's two doors get db/009's single-tail guard; the node puller classifies by STATE and pens; the door inventory becomes a `pg_proc` catalogue rule; ADR-0072 gains Errata E1–E2; 16/16 mutations killed after the harness caught its own unrevertable M9; the whole-branch review found the M10 "no seam" residual false (a `SET ROLE` seam killed it) and a wire-core finding; the PR review found and fixed a critical `event_id`-spelling pen bypass; filed **#620–#622**, **#624–#625**; closed **#614** by hand; subagent-driven, seven tasks each spec- and quality-reviewed; PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**) · 2026-09-17 (**#614 + #615** — ADR-0072, spec v0.74, db/053, `SCHEMA_GENERATION` 52 → 53; filed #619; PR #618) · 2026-09-16 (**#594** — ADR-0071, exit 3 INCOMPLETE; filed #611, #613, #614–#617; PR #612) · 2026-09-15/16 (**#584** — ADR-0070; filed #602–#604; PR #601) · earlier, one line each: 09-15 **PR #595's review** (filed #596–#599; #600) · 09-14 **#593** (PR #595) · 09-13/14 **#567** (PR #588; opened #589–#592) · 09-13 **the PR #582 review** (opened #584–#587) · 09-12 **requeue custody** (PRs #577, #582; opened #583) and **the CodeQL model pack** (PR #576) · 09-11 **ADR-0069** (PR #574; opened #575) · 09-10 **DR slice 2d** + **ADR-0067/0068** · 09-07 → 08-24 **DR slices 1, 2a–2c**, **#503**, **#511**, **#527**, the closing-keyword guard. Detail: *Recent sessions* below and ROADMAP. · **Spec/ADRs:** **v0.75** ([ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md), which amends ADR-0072's census; [ADR-0072](spec/decisions/0072-a-restore-loses-no-record-silently.md), now carrying Errata E1–E2; [ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md); [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md); [ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md); [ADR-0068](spec/decisions/0068-provenance-warns-never-gates-on-the-restore-path.md), refining 0067; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), which supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 med-list window.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -627,7 +659,7 @@ workspace); `poc/` is frozen historical spikes.
 
 **Desk-doable now (no external dependency):**
 - **⇒ DR — closed and rehearsable end to end** (2a→2d, the §1.2 measurement, the non-interactive
-  recovery code, #584, #594, #614/#615, and #619 on the node plane). What remains is the ⇒ NEXT list.
+  recovery code, #584, #594, #614/#615, and #619 + #621 on the node plane). What remains is the ⇒ NEXT list.
   Two things a reader is led to expect and will not find: **2d does NOT drive `cairn-sync`'s puller
   through `MediumTransport`** (the pure `within(verified_through) → sort by source_seq` derivation
   lives in `cairn-medium`), and **the per-peer quarantine quota does not apply to a restore-originated
@@ -636,7 +668,7 @@ workspace); `poc/` is frozen historical spikes.
   **#531**/**#329** (decompose `cairn-sync/src/main.rs` — a maintainer decision on which to keep),
   **#532**, **#534**, **#535**, **#536**, **#537**, **#538**, **#556**–**#563**, **#569**, **#575**,
   **#589**–**#592**, **#596**–**#599**, **#602**–**#611**, **#613**, **#616**, **#617**,
-  **#620**–**#622**, **#624**, **#625**.
+  **#620**, **#622**, **#624**–**#626**.
   (Ranges silently absorb issues that leave them: re-check each against GitHub before trusting it.)
 - **§5.9 parts C/D** (#232) — see ⇒ NEXT. Related: **#235** (shred authorization hooks), **#236** (FTS/RAG
   must build on `event_clear`).
