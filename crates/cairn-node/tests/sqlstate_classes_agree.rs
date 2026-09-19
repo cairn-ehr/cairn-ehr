@@ -37,8 +37,8 @@ fn classes_in(file: &str, name: &str) -> Vec<String> {
         fs::read_to_string(crates_dir().join(file)).unwrap_or_else(|e| panic!("read {file}: {e}"));
     let at = src.find(&format!("fn {name}(")).unwrap_or_else(|| {
         panic!(
-            "{file} no longer declares {name} — if it was renamed, rename \
-                                   it here too; this guard exists to notice"
+            "{file} no longer declares {name} — if it was renamed, rename it here too; \
+             this guard exists to notice"
         )
     });
     let body: &str = &src[at..];
