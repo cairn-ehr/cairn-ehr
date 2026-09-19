@@ -2036,9 +2036,10 @@ survivor survived as declared.**
 
 **The harness caught itself once, and that is the durable part.** The first full run stopped at M9:
 its replacement text was a bare `    RETURN v_eid;`, which occurs three times in db/007, so after the
-forward swap the REVERT anchor was ambiguous and `swap` refused — with the mutation still applied.
-The `git diff --quiet` control is what stopped M10 from running on top of it (#594's defect, caught
-this time rather than shipped). The tree was restored by reversing exactly that two-line patch.
+forward swap the REVERT anchor was ambiguous and `swap`'s exactly-once count refused it, exiting
+the harness with the mutation still applied — which is what stopped M10 running on top of it
+(#594's defect, caught this time rather than shipped; had the script continued, `require_clean`'s
+`git diff --quiet` would have stopped it one mutation later). The tree was restored by reversing exactly that two-line patch.
 Fix round 1 gave M9 a unique replacement and added the reverse-direction half of the control:
 `run_mutation` now refuses, before touching the file, any mutation whose replacement text already
 occurs there — so an unrevertable mutation can no longer be applied at all. **The general lesson:
