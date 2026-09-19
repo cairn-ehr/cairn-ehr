@@ -2,8 +2,9 @@
 # Mutation harness for #621 (ADR-0074). THROWAWAY — committed only so the run's ledger in
 # docs/superpowers/plans/2026-09-20-node-pull-deterministic-refusal-621.md is reproducible.
 #
-# Adapted from scripts/mutations/2026-09-19-619.sh, whose header below records why the harness
-# has this shape; nothing in its infrastructure changed.
+# Adapted from scripts/mutations/2026-09-19-619.sh — its header below records why the harness has
+# this shape, and nothing in that infrastructure changed except the RAN counter at the end, which
+# this slice added after a mis-assembled copy ran ZERO mutations and still reported a clean tree.
 #
 # WHY THIS HARNESS HAS THE SHAPE IT HAS. PR #594's first M2–M6 run was DISCARDED, for two defects
 # that this script exists not to repeat:
@@ -93,6 +94,63 @@ open(p, "w").write(s.replace(a, b, 1))
 PY
 }
 
+# How many mutations actually RAN. A harness that executes none and then prints "tree is
+# clean: every revert landed" is telling the truth about a run that never happened — which is
+# exactly what a mis-assembled copy of this script did once. The tail refuses that silence.
+RAN=0
+
+# run_mutation <id> <expected> <file> <from> <to> <test-cmd...>
+run_mutation() {
+    RAN=$((RAN + 1))
+    local id=$1 expected=$2 file=$3 from=$4 to=$5; shift 5
+    require_clean
+
+    # Reverse-direction half of the positive control. Incident: M9's first `to` was a bare
+    # `    RETURN v_eid;`, which already occurred twice elsewhere in db/007 — after the forward
+    # swap it occurred THREE times, so the revert's `swap "$to" "$from"` refused as ambiguous and
+    # the mutation was left applied on what the harness still called a clean tree. `swap`'s own
+    # exactly-once check only ever looks at the FROM direction, so it cannot catch this. Refuse
+    # here, before anything is touched, unless `to` is currently absent — the only way its
+    # post-swap count is guaranteed to be exactly one, which is what the revert needs.
+    local to_before
+    to_before=$(python3 - "$file" "$to" <<'PY'
+import sys
+print(open(sys.argv[1]).read().count(sys.argv[2]))
+PY
+)
+    [ "$to_before" = "0" ] || fail "$id: replacement text already occurs $to_before time(s) in
+        $file — the revert would be ambiguous after the forward swap (this is M9's incident,
+        guarded against structurally): ${to:0:60}..."
+
+    swap "$file" "$from" "$to"
+    git diff --quiet && fail "$id: the mutation changed nothing — the anchor did not apply"
+
+    local out rc
+    out=$("$@" 2>&1); rc=$?
+
+    # Revert, then PROVE it landed.
+    swap "$file" "$to" "$from"
+    git diff --quiet || fail "$id: REVERT DID NOT LAND — stopping before the next mutation runs
+        on top of this one (the #594 failure). Fix by hand: git diff"
+
+    local verdict="SURVIVED"
+    [ "$rc" -ne 0 ] && verdict="KILLED"
+    # A COMPILE failure says "could not compile" or carries an error code (error[E0433]).
+    # Cargo prints "error: test failed, to rerun pass ..." for an ordinary RUNTIME failure, so
+    # matching a bare leading "error:" would misreport every runtime kill as a compiler one —
+    # which is exactly what the first run of this harness did.
+    if echo "$out" | grep -qE "could not compile|^error\[E[0-9]+\]"; then
+        verdict="KILLED (compiler — says nothing about runtime)"
+    fi
+    printf '%-4s expected %-9s actual %s\n' "$id" "$expected" "$verdict"
+    [ "$verdict" != "${expected}" ] && echo "     ^ DIVERGENCE — investigate; see the plan's ledger"
+    # Kill evidence: the first panicked-at line and the line after it, indented, so the ledger
+    # can confirm the kill failed at the assertion that names its claim.
+    if [ "$verdict" = "KILLED" ]; then
+        echo "$out" | grep -m1 -A1 "panicked at" | sed 's/^/       /'
+    fi
+    return 0
+}
 
 echo "=== #621 mutation run — $(date -u +%FT%TZ) ==="
 require_clean
@@ -234,5 +292,9 @@ run_mutation M13 KILLED crates/cairn-node/src/sync.rs \
     "${NODE_TEST[@]}" node_pull_deterministic_refusal -- --test-threads=1
 fi
 
-echo "=== run complete ==="
+echo "=== run complete: $RAN mutation(s) ran ==="
+EXPECTED_RUNS=$ARGS_COUNT
+[ "$ARGS_COUNT" -eq 0 ] && EXPECTED_RUNS=${#KNOWN_IDS[@]}
+[ "$RAN" -eq "$EXPECTED_RUNS" ] || fail "expected $EXPECTED_RUNS mutation(s) to run, but $RAN did —
+    a run that executes nothing and reports a clean tree is a lie about work never done"
 require_clean && echo "tree is clean: every revert landed"
