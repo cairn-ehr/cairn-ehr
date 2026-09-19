@@ -1,9 +1,10 @@
 //! #619 — one `node_event_id`, one body, through the two LIVE node-plane doors (db/007).
 //!
 //! The sibling of `restore_one_node_event_id_one_body.rs` (db/009, #615). A SUBSTITUTION is a
-//! second, different event filed under an `event_id` the log already holds. Every door inserts
-//! `ON CONFLICT (node_event_id) DO NOTHING` so a repeat of the SAME event stays a silent no-op —
-//! set-union, principle 1 — and a substitution looks exactly like that no-op from the INSERT's side.
+//! second, different event filed under an `event_id` the log already holds. Every arm but the local
+//! genesis inserts `ON CONFLICT (node_event_id) DO NOTHING` so a repeat of the SAME event stays a
+//! silent no-op — set-union, principle 1 — and a substitution looks exactly like that no-op from
+//! the INSERT's side.
 //! Before #619, db/007 compared nothing, so the rival vanished and the door returned the id as if
 //! it had succeeded.
 //!
@@ -30,8 +31,8 @@ mod node_plane_kit;
 use cairn_event::{generate_key, SigningKey};
 use cairn_node::db;
 use node_plane_kit::{
-    address_of, call, cs, fresh_node, genesis_event, held_address, node_id_hex, peer_event,
-    supersede_event, trust, FreshNode, SENTENCE,
+    address_of, call, cs, fresh_node, genesis_event, held_address, node_event, node_id_hex,
+    peer_event, supersede_event, trust, FreshNode, SENTENCE,
 };
 use uuid::Uuid;
 
@@ -132,8 +133,8 @@ async fn the_local_door_still_admits_the_same_event_twice() {
 /// Node A, plus a peer B that A trusts and whose genesis A has admitted through the remote door.
 /// That is the minimum for B's later events to REACH the guard: without it they are refused
 /// earlier, by the deny-all trust checks, and a rival test would pass for the wrong reason.
-/// Returns B's key and B's genesis id (the enroll-arm case reuses that id).
-async fn a_with_trusted_b(base: &str) -> (FreshNode, SigningKey, Uuid) {
+/// Returns B's key, B's genesis id (the enroll-arm case reuses that id) and B's genesis bytes.
+async fn a_with_trusted_b(base: &str) -> (FreshNode, SigningKey, Uuid, Vec<u8>) {
     let a = fresh_node(base).await;
     let (b_sk, _) = generate_key().unwrap();
     let b_genesis_id = Uuid::now_v7();
@@ -142,7 +143,7 @@ async fn a_with_trusted_b(base: &str) -> (FreshNode, SigningKey, Uuid) {
     call(&a.db, "apply_remote_node_event", &b_genesis)
         .await
         .expect("A admits the genesis of a peer it trusts");
-    (a, b_sk, b_genesis_id)
+    (a, b_sk, b_genesis_id, b_genesis)
 }
 
 /// A trusted peer serves a rival `peer.revoked` under the id of its own `peer.added`.
@@ -153,7 +154,7 @@ async fn the_admission_gate_refuses_a_rival_peer_event() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let (a, b_sk, _) = a_with_trusted_b(&base).await;
+    let (a, b_sk, _, _) = a_with_trusted_b(&base).await;
 
     let contested = Uuid::now_v7();
     let subject = node_id_hex(6);
@@ -187,7 +188,7 @@ async fn the_admission_gate_refuses_a_rival_supersede() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let (a, b_sk, _) = a_with_trusted_b(&base).await;
+    let (a, b_sk, _, _) = a_with_trusted_b(&base).await;
 
     let contested = Uuid::now_v7();
     let held = supersede_event(&b_sk, contested, &node_id_hex(7));
@@ -220,7 +221,7 @@ async fn the_admission_gate_refuses_a_rival_genesis() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let (a, _b_sk, b_genesis_id) = a_with_trusted_b(&base).await;
+    let (a, _b_sk, b_genesis_id, b_genesis) = a_with_trusted_b(&base).await;
 
     let (c_sk, _) = generate_key().unwrap();
     let c_genesis = genesis_event(&c_sk, b_genesis_id, "C");
@@ -232,6 +233,11 @@ async fn the_admission_gate_refuses_a_rival_genesis() {
     assert!(
         msg.contains("apply_remote_node_event") && msg.contains(SENTENCE),
         "got: {msg}"
+    );
+    assert_eq!(
+        held_address(&a.db, b_genesis_id).await,
+        Some(address_of(&b_genesis)),
+        "B's genesis, first under the id, is untouched"
     );
 }
 
@@ -259,5 +265,73 @@ async fn the_admission_gate_still_admits_the_same_event_twice() {
                     panic!("pass {pass}: the SAME event twice must stay a no-op, never raise: {e}")
                 });
         }
+    }
+}
+
+/// Every arm of the admission gate still merges this node's clock forward past an admitted event
+/// (the HLC A3 invariant). #619 replaced the three per-arm `cairn_node_hlc_merge` calls with ONE in
+/// the shared tail, after the substitution guard. `hlc_merge_helper.rs` pins that db/007 has
+/// exactly one call — but a count cannot see WHERE it sits: moved inside the enroll branch, it
+/// would still count one, and the peer and supersede arms would stop merging in silence. So each
+/// arm is driven here with a wall ahead of the clock (inside the drift ceiling), and the clock
+/// must reach it.
+#[tokio::test]
+async fn every_arm_of_the_admission_gate_merges_the_clock() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let (a, b_sk, _, _) = a_with_trusted_b(&base).await;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let hour = 3_600_000;
+
+    // A trusted C whose genesis carries a future wall, so the enroll arm has something to merge.
+    let (c_sk, _) = generate_key().unwrap();
+    let c_genesis = node_event(
+        &c_sk,
+        "node.enrolled",
+        Uuid::now_v7(),
+        now_ms + hour,
+        serde_json::json!({ "display_name": "C", "address": "127.0.0.1:7997" }),
+    );
+    trust(&a, &c_genesis, &c_sk).await;
+    let peer = node_event(
+        &b_sk,
+        "peer.added",
+        Uuid::now_v7(),
+        now_ms + 2 * hour,
+        serde_json::json!({ "peer_node_id_hex": node_id_hex(11), "role": "peer" }),
+    );
+    let supersede = node_event(
+        &b_sk,
+        "node.superseded",
+        Uuid::now_v7(),
+        now_ms + 3 * hour,
+        serde_json::json!({ "superseded_node_id_hex": node_id_hex(12) }),
+    );
+
+    // Walls rise arm by arm, so each arm must move the clock itself — a merge performed by an
+    // earlier arm cannot account for a later one's wall.
+    for (arm, event, wall) in [
+        ("enroll", &c_genesis, now_ms + hour),
+        ("peer", &peer, now_ms + 2 * hour),
+        ("supersede", &supersede, now_ms + 3 * hour),
+    ] {
+        call(&a.db, "apply_remote_node_event", event)
+            .await
+            .unwrap_or_else(|e| panic!("the {arm} arm admits a trusted event: {e}"));
+        let clock: i64 =
+            a.db.query_one("SELECT hlc_wall FROM hlc_state WHERE id", &[])
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(
+            clock, wall,
+            "the {arm} arm must merge this node's clock forward to the admitted wall"
+        );
     }
 }

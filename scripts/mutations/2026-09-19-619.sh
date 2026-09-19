@@ -39,7 +39,7 @@ require_clean() {
 
 # KNOWN_IDS — every mutation id this harness defines. Validated against the CLI arguments
 # immediately below, before require_clean or any mutation runs.
-KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11)
+KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15 M16)
 
 # want <id> — true when no ids were given on the command line (run everything) or when <id> is
 # one of the requested ids (per-id selection: `2026-09-19-619.sh M3 M7` runs only those). Wraps
@@ -271,6 +271,77 @@ run_mutation M11 KILLED crates/cairn-node/src/sync.rs \
     '                    let offered = event_address(&frame);' \
     "${NODE_TEST[@]}" node_substitution_is_penned \
     a_refusal_of_an_event_held_with_the_same_bytes_is_skipped_not_penned
+fi
+
+# ---------------------------------------------------------------------------
+# M12–M16 — added by the PR #623 review (one per gap it found; see the plan's ledger addendum).
+# ---------------------------------------------------------------------------
+
+# M12 — the lookup reads the id with the `uuid` crate's grammar again (review finding 1). A rival
+# whose id is the held one spelled with a hyphen after every four digits — which the door reads as
+# the held id — then looks "not held" and is skipped, not penned.
+if want M12; then
+run_mutation M12 KILLED crates/cairn-node/src/sync/substitution.rs \
+    '    let Some(id) = uuid_as_postgres_reads_it(event_id) else {' \
+    '    let Some(id) = uuid::Uuid::parse_str(event_id).ok() else { // (mutation M12)' \
+    "${NODE_TEST[@]}" node_substitution_is_penned \
+    a_rival_under_an_oddly_spelled_held_id_is_still_penned
+fi
+
+# M13 — the substitution arm's pen-failure FREEZE turned into a skip (review test gap 3): a rival
+# the loop knows it cannot pen is advanced past with nothing holding it — lost, not delayed. The
+# 32-space indent is what makes the anchor this arm's and not the unverifiable arm's.
+if want M13; then
+run_mutation M13 KILLED crates/cairn-node/src/sync.rs \
+    '                                PenOutcome::Frozen => {
+                                    stats.frozen = Some(seq);
+                                    break;
+                                }' \
+    '                                PenOutcome::Frozen => stats.rejected += 1, // (mutation M13)' \
+    "${NODE_TEST[@]}" node_substitution_lookup_freezes \
+    a_substitution_that_cannot_be_penned_freezes_rather_than_skips
+fi
+
+# M14 — a PENNED substitution also freezes the cursor (review test gap 1): the rest of the stream
+# stops at every rival, which is the failure ADR-0073 chose pen-over-freeze to avoid. With the
+# rival served last, the original assertions all passed under this; the clean event served after
+# it is what kills it.
+if want M14; then
+run_mutation M14 KILLED crates/cairn-node/src/sync.rs \
+    '                                PenOutcome::Penned => stats.quarantined += 1,
+' \
+    '                                PenOutcome::Penned => { stats.quarantined += 1; stats.frozen = Some(seq); break; } // (mutation M14)
+' \
+    "${NODE_TEST[@]}" node_substitution_is_penned \
+    a_rival_under_a_held_id_is_penned_not_skipped
+fi
+
+# M15 — the auto-release keyed wider than the applied bytes (review test gap 2): a clean re-apply
+# of the GENUINE event under the contested id deletes the unacked substitution's row, and the
+# evidence of two bodies under one id is gone with the node quiet.
+if want M15; then
+run_mutation M15 KILLED crates/cairn-node/src/sync.rs \
+    '                        "DELETE FROM node_event_quarantine WHERE content_digest = $1",' \
+    '                        "DELETE FROM node_event_quarantine WHERE content_digest = $1 OR NOT acked", // (mutation M15)' \
+    "${NODE_TEST[@]}" node_substitution_is_penned \
+    an_unacked_substitution_survives_the_next_sweep
+fi
+
+# M16 — the ONE shared clock merge confined to the enroll arm (review test gap 5). The count in
+# `hlc_merge_helper.rs` still reads one call in db/007, so only the behavioural per-arm test can
+# see that the peer and supersede arms stopped merging.
+if want M16; then
+run_mutation M16 KILLED db/007_node_federation.sql \
+    "    PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
+                                 (b -> 'hlc' ->> 'counter')::int);
+    RETURN v_eid;" \
+    "    IF v_op = 'enroll' THEN -- (mutation M16: merge confined to one arm)
+    PERFORM cairn_node_hlc_merge((b -> 'hlc' ->> 'wall')::bigint,
+                                 (b -> 'hlc' ->> 'counter')::int);
+    END IF;
+    RETURN v_eid;" \
+    "${NODE_TEST[@]}" node_plane_one_event_id_one_body \
+    every_arm_of_the_admission_gate_merges_the_clock
 fi
 
 echo "=== run complete ==="
