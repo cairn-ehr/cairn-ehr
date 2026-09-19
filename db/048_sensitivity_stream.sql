@@ -136,9 +136,11 @@ REVOKE EXECUTE ON FUNCTION cairn_check_sensitivity_grade(text, jsonb) FROM PUBLI
 --
 --    `withdraws` is decoded through cairn_decode_hex_or_raise (db/001, issue #228) so a
 --    malformed value fails with the door named AND with SQLSTATE P0001. That code is a
---    CONTRACT with cairn-sync's pull loop: P0001 means "deliberate, skip and re-offer",
---    while any other SQLSTATE is read as a transient fault the cursor FREEZES on. A bare
---    decode() raises in class 22 and would stall sync from that peer permanently.
+--    CONTRACT with cairn-sync's pull loop: P0001 means "deliberate" — since #267 a
+--    verifiable event refused with it is PENNED and its slot re-offered
+--    (`refusal_is_deliberate`) — while any other SQLSTATE is read as a transient fault the
+--    cursor FREEZES on. A bare decode() raises in class 22 and would stall sync from that
+--    peer permanently.
 CREATE OR REPLACE FUNCTION cairn_check_sensitivity_withdrawal(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE

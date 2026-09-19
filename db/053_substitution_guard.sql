@@ -1,13 +1,14 @@
--- Cairn — the one substitution refusal all five event-log write doors share: db/005, db/020,
--- db/009, and db/007's two (#615, #608, #619).
+-- Cairn — the one substitution refusal all five write doors of the two event logs (`event_log`
+-- and `node_event`) share: db/005, db/020, db/009, and db/007's two (#615, #608, #619).
 --
 -- WHY THIS FILE EXISTS. A substitution is a SECOND, DIFFERENT event filed under an event_id the
--- log already holds. Every door inserts `ON CONFLICT (…) DO NOTHING`, because an idempotent
--- re-write of the SAME event must stay a silent no-op — that is set-union, and it is what makes
--- sync safe (principle 1). But the identical no-op is what a substitution looks like from the
--- INSERT's point of view, so without a comparison the two are indistinguishable and the rival is
--- DISCARDED in silence: two nodes then hold different bytes under one event_id, forever, with no
--- alarm.
+-- log already holds. The doors insert `ON CONFLICT (…) DO NOTHING` (every arm but
+-- submit_node_event's genesis, which has none: a colliding id there raises unique_violation,
+-- loudly — ADR-0073, Residuals), because an idempotent re-write of the SAME event must stay a
+-- silent no-op — that is set-union, and it is what makes sync safe (principle 1). But the
+-- identical no-op is what a substitution looks like from the INSERT's point of view, so without a
+-- comparison the two are indistinguishable and the rival is DISCARDED in silence: two nodes then
+-- hold different bytes under one event_id, forever, with no alarm.
 --
 -- Two doors — db/005 and db/020, the `event_log` pair — already refused it, each with its own
 -- inline copy of the same four lines. `restore_node_event` (db/009) did not, which is #615: an
@@ -94,7 +95,7 @@ COMMENT ON FUNCTION cairn_refuse_substitution(BYTEA, BYTEA, UUID, TEXT) IS
     'Refuse a second, different event filed under an event_id the log already holds. Called by '
     'submit_event (db/005), apply_remote_event (db/020), restore_node_event (db/009), and '
     'submit_node_event and apply_remote_node_event (db/007). Pure: reads no table, so it serves '
-    'event_log and node_event alike. The derived inventory of every event-log writer lives in '
+    'event_log and node_event alike. The derived inventory of every writer of either log lives in '
     'crates/cairn-node/tests/substitution_guard_covers_every_writer.rs.';
 
 COMMIT;

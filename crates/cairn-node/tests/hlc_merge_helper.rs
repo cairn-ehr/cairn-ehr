@@ -143,7 +143,7 @@ fn the_helper_is_declared_in_db001_so_the_sync_subset_can_reach_it() {
 /// Every door that admits someone else's event must still CALL the merge — the mirror
 /// image of the guard above.
 ///
-/// The two guards above forbid a sixth COPY of the merge from re-growing. Neither
+/// The two guards above forbid any new COPY of the merge outside db/001. Neither
 /// notices the opposite failure: a call site silently VANISHING. Both still pass with
 /// every `PERFORM cairn_node_hlc_merge(...)` deleted, including all of them at once. The
 /// de-duplication itself made that failure easier to miss — removing the eight-line
@@ -152,7 +152,10 @@ fn the_helper_is_declared_in_db001_so_the_sync_subset_can_reach_it() {
 /// A source-level count is the right tool here because behavioural coverage does not
 /// exist for every site (see the header): `restore_node_event` has no assertion anywhere
 /// in the tree that the clock advanced, so its merge could be dropped with the whole
-/// suite green.
+/// suite green. A count cannot see WHERE a call sits, though: db/007's one call serves all
+/// three arms of the admission gate, and moved inside one branch it would still count one.
+/// `node_plane_one_event_id_one_body.rs`'s `every_arm_of_the_admission_gate_merges_the_clock`
+/// pins that placement behaviourally.
 ///
 /// Concretely, what that would cost — take `restore_node_event`. A node restored from a
 /// sneakernet medium whose events carry honest forward skew (walls inside the 24h
@@ -170,7 +173,8 @@ fn the_helper_is_declared_in_db001_so_the_sync_subset_can_reach_it() {
 #[test]
 fn every_door_still_calls_the_helper() {
     let needle = "PERFORM cairn_node_hlc_merge(";
-    // (migration, how many of its arms merge the clock)
+    // (migration, how many `PERFORM cairn_node_hlc_merge(` call sites it has — db/007's one
+    // call serves three arms)
     let want: Vec<(String, usize)> = [
         ("007_node_federation.sql", 1), // apply_remote_node_event: ONE shared tail for all three arms (#619)
         ("009_node_supersede_and_restore.sql", 1), // restore_node_event

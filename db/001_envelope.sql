@@ -472,8 +472,9 @@ REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 -- a SUBSET of the migrations that includes db/001 but not db/007 or db/009, and PL/pgSQL
 -- binds a function call at first EXECUTION. Declaring a shared helper beside its current
 -- callers is what turns a later clinical-plane call site into a first-write outage — the
--- late-binding trap of issue #198. Today's six call sites are all node-plane; a
--- decode-hex helper is exactly what the next door reaches for.
+-- late-binding trap of issue #198. It started with six node-plane call sites (#228); the
+-- next doors did reach for it — there are eleven today, clinical ones among them (db/027,
+-- db/048), counted in hex_decode_helper.rs.
 --
 -- DELIBERATELY NOT `STRICT`: a STRICT function returns NULL on NULL input without ever
 -- entering the body, which would skip the guard below and hand the caller's NOT NULL

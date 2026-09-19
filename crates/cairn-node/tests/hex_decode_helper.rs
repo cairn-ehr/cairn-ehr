@@ -34,8 +34,9 @@
 //! ## The fix
 //!
 //! One helper, `cairn_decode_hex_or_raise(field, value, door)` in **db/001**, at six call
-//! sites. Modelled on the issue-#227 extraction (`cairn_node_hlc_merge`), including its
-//! placement rule — see `the_helper_is_declared_in_db001_so_every_subset_can_reach_it`.
+//! sites when #228 landed and eleven today. Modelled on the issue-#227 extraction
+//! (`cairn_node_hlc_merge`), including its placement rule — see
+//! `the_helper_is_declared_in_db001_so_every_subset_can_reach_it`.
 //!
 //! ## What this suite pins
 //!
@@ -133,8 +134,8 @@ fn migrations() -> Vec<(String, String)> {
 /// first EXECUTION rather than at definition. A helper declared in db/007 and called from
 /// any future clinical-plane door would let cairn-sync's schema load cleanly and then fail
 /// on its first admitted event — a first-write outage, the late-binding trap issue #198
-/// was filed for. Today's six call sites are all node-plane; the next one need not be, and
-/// a decode-hex helper is exactly the sort of thing a later door reaches for.
+/// was filed for. It started with six node-plane call sites; later doors did reach for it,
+/// and five of today's eleven are outside db/007 and db/009 — clinical ones among them.
 #[test]
 fn the_helper_is_declared_in_db001_so_every_subset_can_reach_it() {
     let needle = "CREATE OR REPLACE FUNCTION cairn_decode_hex_or_raise(";
@@ -159,7 +160,7 @@ fn the_helper_is_declared_in_db001_so_every_subset_can_reach_it() {
 /// That reversion is invisible in review (one expression, unchanged shape) and restores
 /// precisely the illegible refusal #228 was filed about — with no test anywhere in the
 /// tree going red, because a malformed value is still *refused*, just not legibly. The
-/// end-to-end cases below cover two of the six sites; this count covers all six.
+/// end-to-end cases below cover two of the eleven sites; this count covers all of them.
 ///
 /// The needle matches a CALL and not the declaration or the REVOKE, because every call
 /// passes its field name as a literal first argument (`cairn_decode_hex_or_raise('peer_…`)

@@ -18,8 +18,9 @@
 -- normal and self-healing (a later peer.added + a full sweep admits them). So
 -- pull_into pens ONLY the events that will NEVER apply without repair:
 -- signature/context-unverifiable bytes, and — since #619 (ADR-0073) — a
--- SUBSTITUTION, a verifiable event under an event_id this node already holds with
--- a different content address, whichever check refused it (the id is taken, so no
+-- SUBSTITUTION, a verifiable event refused with P0001 under an event_id this node
+-- already holds with a different content address, whichever check raised the P0001
+-- (a refusal with any other SQLSTATE freezes instead; the id is taken, so no
 -- sweep, trust change or upgrade ever makes it apply). It keeps skip-and-sweep for
 -- every other verifiable-but-refused event (untrusted author, or an event type
 -- this node has no code for yet under the two-plane model: both resolve on a later
@@ -36,7 +37,7 @@
 -- DELETEd from the pen on success (auto-requeue), and an operator who accepts a
 -- permanent exclusion sets `acked = TRUE` (a recorded human decision, policy-
 -- neutral mechanism). A substitution never applies, so it never auto-releases:
--- only the ack clears it. While any UNACKED row exists for a peer, the pull logs a
+-- only the ack silences it (the row is kept). While any UNACKED row exists for a peer, the pull logs a
 -- LOUD integrity line every cycle. No manual `requeue` command is needed — the
 -- floor + full-sweep already re-offer, and success auto-releases.
 --

@@ -1,4 +1,4 @@
-//! #615 / #608 — the ONE refusal all five event-log write doors share (db/007's two since #619).
+//! #615 / #608 — the ONE refusal all five write doors of the two event logs share (db/007's two since #619).
 //!
 //! # What a substitution is, and why silence is the danger
 //!

@@ -804,18 +804,24 @@ pub async fn ack_node_quarantine(db: &Client, digest_hex: &str) -> anyhow::Resul
 ///     derived re-offer floor; the cursor still advances (the row is durably held)
 ///     and later pulls fetch from `min(last_seq, MIN(refused_seq))` so the slot keeps
 ///     being re-offered. While any UNACKED pen exists the pull is loud (`pending`).
-///   * A VERIFIABLE event refused under an `event_id` this node ALREADY HOLDS with different
-///     content — a SUBSTITUTION (#619, ADR-0073) — is PENNED the same way, whichever check
-///     refused it: it can never apply (the id is taken), so skipping it would file it under
-///     "self-healing". It never auto-releases; a human acks it.
-///   * Any OTHER verifiable-but-refused event (untrusted author / unknown type) is the normal
-///     deny-all case: skip-and-advance as before — a later `peer.added` or code arrival
+///   * A VERIFIABLE event refused with P0001 under an `event_id` this node ALREADY HOLDS with
+///     different content — a SUBSTITUTION (#619, ADR-0073) — is PENNED the same way, whichever
+///     check raised the P0001: it can never apply (the id is taken), so skipping it would file
+///     it under "self-healing". It never auto-releases; a human acks it.
+///   * Any OTHER verifiable event refused with P0001 (untrusted author / unknown type) is the
+///     normal deny-all case: skip-and-advance as before — a later `peer.added` or code arrival
 ///     + full sweep admits it (self-healing).
-///   * A transient/transport error FREEZES the cursor (no advance), retried next cycle.
+///   * The cursor FREEZES (no advance past the event, retried next cycle) on any of four
+///     paths: a verifiable event refused with anything OTHER than P0001 (a transient DB fault
+///     or a dropped connection); a failed lookup of what `node_event` holds under a P0001-
+///     refused event's id (the substitution question it could not answer); and, for either
+///     arm that pens, a pen at quota or a failed pen write. A transport error mid-stream
+///     returns early without checkpointing, which holds the cursor the same way.
 ///
 /// A penned UNVERIFIABLE event whose cause is later fixed re-applies on a sweep and is
 /// auto-released (DELETEd) — so no manual requeue command is needed. A penned substitution
-/// never re-applies, so only an ack clears it.
+/// never re-applies, so only an ack silences it (the row is kept, as the record of the
+/// decision).
 pub async fn pull_into(
     peer: SocketAddr,
     tls: Arc<ClientConfig>,
@@ -1174,7 +1180,7 @@ pub async fn run(
                 // LOUD integrity signal (issue #111): while this peer has unacked
                 // quarantined node_events, say so every cycle — the operator must fix the
                 // cause (unverifiable bytes then auto-release; a substitution never does, so
-                // only the ack clears it) or ack the row. Not fatal: the loop keeps serving
+                // only the ack silences it) or ack the row. Not fatal: the loop keeps serving
                 // and pulling (availability over consistency).
                 // A frozen cursor returns `Ok`, so neither `LOCAL FAULT` nor `PARTITION`
                 // can fire for it — this is the only line that says the node is stuck

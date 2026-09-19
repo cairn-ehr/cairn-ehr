@@ -19,8 +19,8 @@
 
 [ADR-0072](0072-a-restore-loses-no-record-silently.md) gave the write doors one shared substitution
 refusal, `cairn_refuse_substitution` (`db/053`). A **substitution** is a second, *different* event
-filed under an `event_id` the log already holds. Every door inserts `ON CONFLICT (…) DO NOTHING`, so
-that a repeat of the *same* event stays a silent no-op — set-union, principle 1 — and that identical
+filed under an `event_id` the log already holds. The doors insert `ON CONFLICT (…) DO NOTHING` (every
+arm but `submit_node_event`'s genesis — see Residuals), so that a repeat of the *same* event stays a silent no-op — set-union, principle 1 — and that identical
 no-op is what a substitution looks like from the INSERT's side. Without a comparison, the rival is
 discarded in silence.
 
