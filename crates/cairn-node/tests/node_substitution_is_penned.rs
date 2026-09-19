@@ -207,20 +207,22 @@ async fn a_refusal_of_an_event_held_with_the_same_bytes_is_skipped_not_penned() 
 
     let s = sync::pull_once(n.addr, cfg, true).await.unwrap();
 
+    // The claim first, so a regression fails at the assertion that names it. The anti-vacuity
+    // check after it still fails on its own if the fixture ever stops producing refusals.
+    assert_eq!(
+        s.quarantined, 0,
+        "held with the SAME bytes is not a substitution: nothing is penned: {s:?}"
+    );
+    assert_eq!(pen_count(&n.a).await, 0, "and the pen stays empty");
     assert!(
         s.rejected >= 1,
-        "the fixture must actually produce refusals, or the assertions below are vacuous: {s:?}"
+        "the fixture must actually produce refusals, or the assertions above are vacuous: {s:?}"
     );
     assert_eq!(
         s.rejected, s.received,
         "every event A holds was refused (its author is no longer an active peer) and \
          skipped: {s:?}"
     );
-    assert_eq!(
-        s.quarantined, 0,
-        "held with the SAME bytes is not a substitution: nothing is penned"
-    );
-    assert_eq!(pen_count(&n.a).await, 0, "and the pen stays empty");
     assert_eq!(s.pending, 0, "so the pull is not loud");
     assert_eq!(s.frozen, None, "and the cursor did not freeze");
     n.serve.abort();
