@@ -264,14 +264,14 @@ BEGIN
     -- under an id already held: the rival vanished and this door returned the id as if it had
     -- succeeded — for a peer.revoked, the node kept trusting a peer it had revoked. The comparison
     -- is the shared cairn_refuse_substitution (db/053, IS DISTINCT FROM), never an inline copy
-    -- (trap 12; substitution_guard_is_single_source.rs).
+    -- (substitution_guard_is_single_source.rs).
     --
     -- Two placement rules, each of which a later edit might "tidy" away:
     --   * AFTER the IF/ELSE, never above it. Above the branch nothing is held yet, v_found is
     --     NULL, and IS DISTINCT FROM refuses — every clean write would be refused.
     --   * The read is UNCONDITIONAL — no GET DIAGNOSTICS ROW_COUNT. The node plane carries tens
     --     of events, and a ROW_COUNT check is only correct while each INSERT stays the last
-    --     statement of its arm; a later edit would disarm it silently (db/009's rule, trap 12).
+    --     statement of its arm; a later edit would disarm it silently (db/009's rule, ADR-0072).
     -- The genesis arm above needs neither: it has no ON CONFLICT, so a colliding id raises.
     SELECT content_address INTO v_found FROM node_event WHERE node_event_id = v_eid;
     PERFORM cairn_refuse_substitution(v_found, v_ca, v_eid, 'submit_node_event');

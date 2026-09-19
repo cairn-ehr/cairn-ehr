@@ -94,7 +94,10 @@ async fn the_local_door_refuses_a_rival_supersede() {
         msg.contains("submit_node_event") && msg.contains(SENTENCE),
         "got: {msg}"
     );
-    assert_eq!(held_address(&a.db, contested).await, Some(address_of(&held)));
+    assert_eq!(
+        held_address(&a.db, contested).await,
+        Some(address_of(&held))
+    );
 }
 
 /// A REPEAT is not a substitution. Green before the guard exists and green after — its job is to
