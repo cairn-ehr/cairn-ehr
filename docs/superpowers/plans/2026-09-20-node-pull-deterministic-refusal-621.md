@@ -99,8 +99,10 @@ build. Close #621 by hand after merge (the closing-keyword guard).
 
 ## Mutation ledger
 
-`scripts/mutations/2026-09-20-621.sh` — **13 defined, 13 run, 13 killed**, each at the assertion
+`scripts/mutations/2026-09-20-621.sh` — **15 defined, 15 run, 15 killed**, each at the assertion
 that names its claim (the harness prints the panic line). No survivors, declared or otherwise.
+M14–M15 were added by the PR review's findings, so the two fixes it prompted are pinned like the
+rest.
 
 The harness itself needed one fix first, and it is the reason the run is trustworthy: a
 mis-assembled copy ran **zero** mutations and still printed *"tree is clean: every revert landed"*
@@ -122,6 +124,8 @@ the arguments asked for.
 | M11 | a dropped connection (no SQLSTATE) starts penning | `node_pull_refusal_class::no_sqlstate_means_nothing_was_decided…` |
 | M12 | the `22` class claimed as LOCAL — #621's defect restated in Rust | `node_pull_refusal_class::a_failure_that_will_recur_identically…` |
 | M13 | the new arm stops freezing when its pen could not be written | `node_pull_deterministic_refusal::a_deterministic_refusal_whose_pen_cannot_be_written_freezes` |
+| M14 | `XX001`/`XX002` lose their exception, so a corrupt index pens the peer's whole log | `node_pull_refusal_class::a_failure_local_to_this_node…` |
+| M15 | the role CHECK goes back to VALIDATING on every connect | `node_door_input_guards::the_role_check_declines_to_re_litigate_history` |
 
 M9 and M10 are the two worth reading twice: each leaves every REFUSAL test green and is caught only
 by a positive control (M9) or a structural guard (M10). M9 is the mirror of PR #623's finding 1 —
@@ -143,3 +147,36 @@ widened vocabulary freeze an older node's link.
 - **The clinical plane has the same defect**, filed as
   [#626](https://github.com/cairn-ehr/cairn-ehr/issues/626) rather than folded in (maintainer
   decision: `db/020` is the 100k-event hot path).
+
+## What the two branch reviews changed
+
+Both halves were reviewed independently (SQL doors; Rust puller), read-only while the gate ran.
+Nothing was rejected as wrong; two findings were answered differently from the suggestion, with
+the reason recorded.
+
+- **`cairn_body` raises `22P05` before every guard on a NUL in any body string**, so decision 1's
+  *"total"* is literally false — `jsonb` cannot hold `U+0000` while a CBOR text string can. Filed
+  as **#628** (it needs an extension rebuild), stated as an exception in ADR-0074, and pinned end
+  to end by a test that asserts only *the link does not freeze* — so closing #628, which moves the
+  event from the pen to the skip class, cannot break it.
+- **The re-pointed role CHECK is now `NOT VALID`.** A validating pair re-scans `node_event` on
+  every connect, and one stored row outside today's vocabulary — what a downgrade after a widening
+  leaves — would have stopped the node STARTING, unrepairably on an append-only table.
+- **`XX001`/`XX002` are local on both planes.** Class `XX` is otherwise the adversarial-bytes case,
+  but a corrupt index on `node_event` (pen table healthy) would have penned a peer's entire log
+  while blaming the peer in every row. The drift guard now compares five-character codes too,
+  because an exception mirrored on one plane only is exactly the drift it exists to catch.
+- **Answered differently — the pen's release path.** The review proposed releasing a
+  deterministically-penned row when the door later reaches a P0001 verdict about the same bytes
+  (the likely shape of the fix). Rejected: the deny-all arm cannot tell which KIND of pen row it
+  would delete without reading the reason TEXT, which this loop never classifies on, and a
+  substitution row must never auto-release (ADR-0073). The three operator sentences that promised
+  otherwise were corrected instead — a row leaves by applying, or by an ack.
+- **Answered differently — the role refusal.** It glimpsed its value like every other helper; for a
+  closed three-value public vocabulary that hides the operator's own typo, so it echoes in full
+  (bounded at 64 characters) with a comment saying why this field is the exception.
+- Also: the HLC casts' premise (`cairn_event::Hlc`'s field types) is now pinned at compile time and
+  db/007 no longer claims more than it enforces; the empty-string `target_event_id` branch got the
+  case it lacked; the pen-failure test trigger was unconditional and leaked on a failed assertion,
+  which would have made every later pen test freeze — now scoped and dropped first. Filed **#629**
+  (nothing pins that the local-fault freeze prints its reason line).
