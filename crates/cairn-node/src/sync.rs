@@ -36,6 +36,9 @@ use crate::db;
 use crate::db_diagnosis::{legible_db_error, operator_chain, LocalDbFault};
 use crate::transport::{self, TrustStore};
 
+/// Is a refused node event a SUBSTITUTION? (#619, ADR-0073) — see the module's own header.
+pub mod substitution;
+
 /// What kind of failure ended a pull cycle? (Issue #474 item 3 and issue #482; issue #469
 /// is the same distinction in `cairn-sync`.)
 ///
