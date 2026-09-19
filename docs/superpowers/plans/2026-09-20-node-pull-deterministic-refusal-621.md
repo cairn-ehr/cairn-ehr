@@ -33,8 +33,8 @@ Red on the current tree with `22P02` / `23514`.
 
 - **db/001:** extract the value-characterising prefix out of `cairn_decode_hex_or_raise` into a pure
   `cairn_value_glimpse(text)` (same output, one home), then add `cairn_uuid_or_raise(field, value,
-  door)` on `pg_input_is_valid` and `cairn_node_hlc_nonneg_or_raise(wall, counter, door)`.
-- **db/007:** `cairn_node_role_is_known(text)` IMMUTABLE + `cairn_node_role_or_raise(role, door)`; the
+  door)` on `pg_input_is_valid` and `cairn_hlc_nonneg_or_raise(wall, counter, door)`.
+- **db/007:** `cairn_node_roles()` (the vocabulary, called by the CHECK itself) + `cairn_node_role_or_raise(role, door)`; the
   `node_event_role_check` constraint is re-pointed at the predicate with an idempotent
   `DROP CONSTRAINT IF EXISTS` / `ADD CONSTRAINT` pair (db/009's `op` precedent). Both doors call the
   three helpers; no bare `::uuid` remains in either body.
@@ -97,8 +97,47 @@ build. Close #621 by hand after merge (the closing-keyword guard).
 
 ## Mutation ledger
 
-Filled in during Task 7; each row is *mutation → the test that killed it*.
+`scripts/mutations/2026-09-20-621.sh` — **13 defined, 13 run, 13 killed**, each at the assertion
+that names its claim (the harness prints the panic line). No survivors, declared or otherwise.
+
+The harness itself needed one fix first, and it is the reason the run is trustworthy: a
+mis-assembled copy ran **zero** mutations and still printed *"tree is clean: every revert landed"*
+— true of a run that never happened. It now compares the number of mutations that RAN with what
+the arguments asked for.
 
 | id | mutation | killed by |
 | --- | --- | --- |
-| | | |
+| M1 | the admission gate's `event_id` guard reverts to the bare cast (#621's defect, verbatim) | `node_door_refusals_are_p0001::a_non_uuid_event_id_…` |
+| M2 | the same reversion, measured against the CATALOGUE guards alone | `node_door_input_guards::no_node_door_casts_to_uuid_bare` |
+| M3 | the LOCAL door's `event_id` guard reverts | `node_door_refusals_are_p0001::a_non_uuid_event_id_…` |
+| M4 | the RESTORE door's `event_id` guard reverts | `node_door_refusals_are_p0001::a_non_uuid_event_id_…` |
+| M5 | the admission gate's clock guard deleted | `…::a_negative_hlc_wall_…` |
+| M6 | the clock guard checks the WALL only — the plausible half-guard | `…::a_negative_hlc_counter_…` |
+| M7 | the role guard deleted from the admission gate | `…::an_unknown_peer_role_…` |
+| M8 | `target_event_id` reverts to its bare cast | `…::a_non_uuid_target_event_id_…` |
+| M9 | the UUID validator becomes NARROWER than the cast it replaces (canonical spellings only) | `…::a_well_formed_event_still_applies_however_its_id_is_spelled` |
+| M10 | the role vocabulary re-inlined into the CHECK (behaviour identical today) | `node_door_input_guards::the_role_check_reads_the_one_vocabulary` |
+| M11 | a dropped connection (no SQLSTATE) starts penning | `node_pull_refusal_class::no_sqlstate_means_nothing_was_decided…` |
+| M12 | the `22` class claimed as LOCAL — #621's defect restated in Rust | `node_pull_refusal_class::a_failure_that_will_recur_identically…` |
+| M13 | the new arm stops freezing when its pen could not be written | `node_pull_deterministic_refusal::a_deterministic_refusal_whose_pen_cannot_be_written_freezes` |
+
+M9 and M10 are the two worth reading twice: each leaves every REFUSAL test green and is caught only
+by a positive control (M9) or a structural guard (M10). M9 is the mirror of PR #623's finding 1 —
+a validator narrower than the parser it stands in for — and M10 is the drift that would let a
+widened vocabulary freeze an older node's link.
+
+## What the work actually changed, beyond the plan
+
+- **The `role` CHECK was a fourth deterministic raise the issue did not list**, reachable by any
+  trusted author today and by version skew tomorrow. Found by reading the table rather than the
+  issue.
+- **`restore_node_event` refuses an already-enrolled node**, so its fixture provisions nothing and
+  restores a genesis first. The plan assumed the three doors shared one fixture shape.
+- **A `serve_raw` row's bytes are already in `node_event` under a different id**, so a clean
+  re-apply conflicts on the `content_address` UNIQUE (`23505`) rather than the primary key — which
+  the new arm now pens. It is a fixture artifact, not a production path (identical bytes always
+  collide on the primary key first), and it cost the anti-vacuity control one rewrite. Recorded in
+  that test.
+- **The clinical plane has the same defect**, filed as
+  [#626](https://github.com/cairn-ehr/cairn-ehr/issues/626) rather than folded in (maintainer
+  decision: `db/020` is the 100k-event hot path).
