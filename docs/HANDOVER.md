@@ -5,9 +5,8 @@
 > [!NOTE]
 > **⇒ #619 IS BUILT: THE NODE PLANE REFUSES A SUBSTITUTION AT BOTH LIVE DOORS, AND PENS IT**
 > (2026-09-19, [ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md),
-> spec **v0.75**, PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)**; no migration,
-> `SCHEMA_GENERATION` still **53**). **If #623 has not merged, none of this is on `main` — and #619 is
-> closed BY HAND once it merges** (the closing-keyword guard stops a PR body doing it).
+> spec **v0.75**, PR **[#623](https://github.com/cairn-ehr/cairn-ehr/pull/623)** — **merged
+> 2026-09-19, #619 closed by hand**; no migration, `SCHEMA_GENERATION` still **53**).
 > `submit_node_event` and `apply_remote_node_event` — the live federation admission gate — each call
 > `cairn_refuse_substitution` once, in a shared tail after the `IF/ELSE` (db/009's shape; the gate's
 > three clock merges fold into one). The node puller asks the TABLE whether a refused event's
