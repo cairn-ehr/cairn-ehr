@@ -43,7 +43,7 @@ require_clean() {
 
 # KNOWN_IDS — every mutation id this harness defines. Validated against the CLI arguments
 # immediately below, before require_clean or any mutation runs.
-KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13)
+KNOWN_IDS=(M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13 M14 M15)
 
 # want <id> — true when no ids were given on the command line (run everything) or when <id> is
 # one of the requested ids (per-id selection: `2026-09-20-621.sh M3 M7` runs only those). Wraps
@@ -249,8 +249,8 @@ fi
 # cannot leave the door and the floor disagreeing.
 if want M10; then
 run_mutation M10 KILLED db/007_node_federation.sql \
-    "    CHECK (role IS NULL OR role = ANY (cairn_node_roles()));" \
-    "    CHECK (role IS NULL OR role IN ('upstream','downstream','peer')); -- (mutation M10)" \
+    "    CHECK (role IS NULL OR role = ANY (cairn_node_roles())) NOT VALID;" \
+    "    CHECK (role IS NULL OR role IN ('upstream','downstream','peer')) NOT VALID; -- (M10)" \
     "${NODE_TEST[@]}" node_door_input_guards
 fi
 
@@ -290,6 +290,24 @@ run_mutation M13 KILLED crates/cairn-node/src/sync.rs \
                 }
                 // Any OTHER error on a verifiable event is THIS NODE'S OWN trouble:" \
     "${NODE_TEST[@]}" node_pull_deterministic_refusal -- --test-threads=1
+fi
+
+# M14 — the two corruption codes lose their exception, so a corrupt index on node_event makes the
+# puller pen a peer's entire log while blaming the peer in every durable row (PR #627 finding 2).
+if want M14; then
+run_mutation M14 KILLED crates/cairn-node/src/sync.rs \
+    '        Some("XX001") | Some("XX002") => false,' \
+    '        // (mutation M14: the corruption codes lose their exception)' \
+    "${NODE_TEST[@]}" node_pull_refusal_class
+fi
+
+# M15 — the role CHECK goes back to VALIDATING on every connect, so one row left by a downgrade
+# after a vocabulary widening stops the node starting, unrepairably (PR #627 finding 4).
+if want M15; then
+run_mutation M15 KILLED db/007_node_federation.sql \
+    "    CHECK (role IS NULL OR role = ANY (cairn_node_roles())) NOT VALID;" \
+    "    CHECK (role IS NULL OR role = ANY (cairn_node_roles())); -- (mutation M15)" \
+    "${NODE_TEST[@]}" node_door_input_guards
 fi
 
 echo "=== run complete: $RAN mutation(s) ran ==="

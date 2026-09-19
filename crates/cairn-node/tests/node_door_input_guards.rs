@@ -170,6 +170,28 @@ async fn no_node_door_casts_to_uuid_bare() {
     }
 }
 
+/// The premise the doors' REMAINING casts rest on: `cairn_event::Hlc` types the clock.
+///
+/// `(b -> 'hlc' ->> 'wall')::bigint` and `… 'counter')::int` survive in all three doors, and they
+/// are safe only because a body that cannot produce an `i64`/`i32` fails verification in Rust and
+/// never reaches the cast — `Hlc`'s fields carry no `serde(default)`, so a missing or non-numeric
+/// clock is a decode error, not a SQL one. That is a guarantee in ANOTHER CRATE than the one the
+/// SQL lives in, which is precisely the kind of premise that rots silently (PR #627 review,
+/// finding 2).
+///
+/// This is a COMPILE-TIME pin: loosening either field to `Option`, to a `serde_json::Value`, or to
+/// a wider integer stops this building, and whoever fixes it is standing in the file that tells
+/// them db/007 and db/009 now need `cairn_*_or_raise` on those casts too.
+#[test]
+fn the_hlc_casts_rest_on_cairn_events_types() {
+    let _pin: fn(i64, i32, String) -> cairn_event::Hlc =
+        |wall, counter, node_origin| cairn_event::Hlc {
+            wall,
+            counter,
+            node_origin,
+        };
+}
+
 /// The peer-role vocabulary has ONE source, and the table's CHECK reads it.
 ///
 /// Re-inlining the list into the constraint is the tidy-up this exists to stop: the CHECK and the
@@ -197,6 +219,43 @@ async fn the_role_check_reads_the_one_vocabulary() {
     assert!(
         def.contains("cairn_node_roles()"),
         "node_event_role_check must read the vocabulary function, not a list of its own: {def}"
+    );
+}
+
+/// The role CHECK is `NOT VALID`, and that word is a startup guarantee.
+///
+/// `connect_and_load_schema` replays every migration on every connect, so a VALIDATING
+/// `ADD CONSTRAINT` re-scans `node_event` each time. The inline CHECK it replaced never
+/// re-validated anything after `CREATE TABLE`, so validating here would give the table a property
+/// it never had: one stored row outside today's vocabulary — exactly what a downgrade after a
+/// vocabulary widening leaves behind — makes the statement raise, db/007 abort, and **the node
+/// refuse to start**, on an append-only table whose trigger blocks DELETE as well as UPDATE. There
+/// is no repair short of an owner disabling the trigger and deleting a signed event.
+///
+/// New rows are still checked, which is the whole reason the constraint is kept (the sibling test
+/// below proves that). (PR #627 review, finding 4.)
+#[tokio::test]
+async fn the_role_check_declines_to_re_litigate_history() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let validated: bool = c
+        .query_one(
+            "SELECT convalidated FROM pg_constraint
+              WHERE conrelid = 'node_event'::regclass AND conname = 'node_event_role_check'",
+            &[],
+        )
+        .await
+        .expect("node_event_role_check must still exist")
+        .get(0);
+    assert!(
+        !validated,
+        "node_event_role_check must be NOT VALID: a validating constraint re-scans node_event on \
+         every connect, so one row left by a downgrade after a vocabulary widening would stop this \
+         node STARTING, unrepairably (#627 review, finding 4)"
     );
 }
 

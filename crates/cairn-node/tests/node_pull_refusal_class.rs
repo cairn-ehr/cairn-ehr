@@ -16,8 +16,8 @@
 
 use cairn_node::sync::deterministic_apply_failure;
 
-/// The local classes, each with the failure a reader should picture.
-const LOCAL: [(&str, &str); 7] = [
+/// The local classes and codes, each with the failure a reader should picture.
+const LOCAL: [(&str, &str); 9] = [
     (
         "08006",
         "connection_failure — the link to our own database went away",
@@ -31,6 +31,14 @@ const LOCAL: [(&str, &str); 7] = [
     ("53100", "disk_full"),
     ("55P03", "lock_not_available"),
     ("57014", "query_canceled — a statement timeout"),
+    // The two exceptions inside class XX, claimed by full code (PR #627 review, finding 2). A
+    // corrupt page or index on node_event is THIS machine's disk, and without these the puller
+    // would pen a peer's whole log while blaming the peer in every durable row.
+    ("XX001", "data_corrupted — a bad heap page under node_event"),
+    (
+        "XX002",
+        "index_corrupted — a torn index, while the pen table stays healthy",
+    ),
 ];
 
 /// The deterministic ones: nothing about them improves by waiting.
@@ -47,7 +55,8 @@ const DETERMINISTIC: [(&str, &str); 5] = [
     ("23505", "unique_violation"),
     (
         "XX000",
-        "internal_error — a pgrx function panicking on adversarial bytes",
+        "internal_error — a pgrx function panicking on adversarial bytes, the case that must \
+         never be able to wedge a link",
     ),
 ];
 

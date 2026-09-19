@@ -290,5 +290,30 @@ async fn a_well_formed_event_still_applies_however_its_id_is_spelled() {
                  validator would refuse events the log can already hold: {e}"
             )
         });
+
+        // The EMPTY optional field, which is the branch the guard actually rewrote: the old code
+        // was `NULLIF(payload ->> 'target_event_id','')::uuid`, and the tidy-up that calls the
+        // helper directly (dropping the NULLIF) would turn an accepted event into a P0001 refusal
+        // — narrowing the door against events the log can already hold, exactly like an over-tight
+        // validator. Absent is covered by every other case here; empty is covered only here.
+        // (PR #627 review.)
+        let empty_target = node_event_spelled(
+            &f.sk,
+            "peer.revoked",
+            &Uuid::now_v7().to_string(),
+            2,
+            serde_json::json!({
+                "peer_node_id_hex": node_id_hex(8),
+                "role": "peer",
+                "target_event_id": "",
+            }),
+        );
+        call(&f.db, f.door, &empty_target)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{door}: an EMPTY optional target_event_id must stay absent, not refused: {e}"
+                )
+            });
     }
 }

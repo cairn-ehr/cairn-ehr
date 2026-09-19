@@ -34,6 +34,11 @@ use uuid::Uuid;
 /// text column no door interprets, so the event is otherwise entirely ordinary.
 const POISON: &str = "cairn-test-621-poison";
 
+/// The message the injected DOOR failure raises. It reaches the pen row's `reason` (the puller
+/// records the database's own words), which is what lets the pen-failure trigger below scope
+/// itself to this test's event instead of failing every pen in the database.
+const INJECTED_DOOR_MESSAGE: &str = "injected fault for the #621 pull test";
+
 async fn full_pull(base: &str, n: &SelfNode) -> sync::PullStats {
     let cfg = sync::client_config(base, &n.sk, sync::trust_store_from_db(&n.a).await.unwrap())
         .await
@@ -67,7 +72,7 @@ async fn inject_failure(n: &SelfNode, sqlstate: &str) {
         "CREATE FUNCTION cairn_test_621_poison() RETURNS trigger
          LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
          BEGIN
-             RAISE EXCEPTION 'injected fault for the #621 pull test'
+             RAISE EXCEPTION '{INJECTED_DOOR_MESSAGE}'
                  USING ERRCODE = '{sqlstate}';
          END;
          $fn$;
@@ -83,6 +88,20 @@ async fn remove_injected_failure(n: &SelfNode) {
     n.a.batch_execute(
         "DROP TRIGGER IF EXISTS cairn_test_621_poison ON node_event;
          DROP FUNCTION IF EXISTS cairn_test_621_poison();",
+    )
+    .await
+    .unwrap();
+}
+
+/// Drop BOTH injected objects, whether or not this run created them. Called at the start of every
+/// test in this file: a previous run killed between its assertion and its cleanup must not be able
+/// to change what this one measures (#583's lesson — the test database is never recreated).
+async fn clear_injected_faults(n: &SelfNode) {
+    n.a.batch_execute(
+        "DROP TRIGGER IF EXISTS cairn_test_621_poison ON node_event;
+         DROP FUNCTION IF EXISTS cairn_test_621_poison();
+         DROP TRIGGER IF EXISTS cairn_test_621_pen_fails ON node_event_quarantine;
+         DROP FUNCTION IF EXISTS cairn_test_621_pen_fails();",
     )
     .await
     .unwrap();
@@ -116,6 +135,7 @@ async fn a_non_uuid_event_id_is_skipped_and_the_cursor_advances() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let n = self_node(&base, "127.0.0.1:0").await;
+    clear_injected_faults(&n).await;
 
     let malformed = node_event_spelled(
         &n.sk,
@@ -158,6 +178,7 @@ async fn a_deterministic_failure_without_a_verdict_is_penned_not_frozen() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let n = self_node(&base, "127.0.0.1:0").await;
+    clear_injected_faults(&n).await;
     // 23514 is what the node_event CHECKs raised before #621, and what a FUTURE constraint or a
     // widened vocabulary will raise again.
     inject_failure(&n, "23514").await;
@@ -207,6 +228,7 @@ async fn a_local_fault_still_freezes_the_cursor() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let n = self_node(&base, "127.0.0.1:0").await;
+    clear_injected_faults(&n).await;
     // 40001 serialization_failure: the textbook retry-and-it-works fault.
     inject_failure(&n, "40001").await;
 
@@ -232,6 +254,60 @@ async fn a_local_fault_still_freezes_the_cursor() {
     remove_injected_failure(&n).await;
 }
 
+/// A REAL deterministic raise the door work did NOT close, pinned end to end.
+///
+/// `cairn_body` hands the verified body to PostgreSQL as `jsonb`, which cannot represent
+/// `U+0000` — so a signed event carrying a NUL anywhere in a body string raises `22P05`
+/// (`unsupported_escape_sequence`) at the FIRST line of every door, before any guard this slice
+/// added. `EventBody`'s fields are plain `String`s and CBOR text strings may contain NUL, so the
+/// bytes verify; the raise is deterministic and would have frozen the link for ever.
+///
+/// The assertion is deliberately **not** "penned" and not "skipped": it is that the link keeps
+/// moving. Closing the gap in `cairn_body` (#628) would turn this into a P0001 verdict and move
+/// the event from the pen to the skip class — a better outcome that must not fail this test. What
+/// must never come back is the freeze. (PR #627 review, SQL finding 1.)
+#[tokio::test]
+async fn a_body_string_carrying_a_nul_does_not_freeze_the_link() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let n = self_node(&base, "127.0.0.1:0").await;
+    clear_injected_faults(&n).await;
+
+    let with_nul = node_event_spelled(
+        &n.sk,
+        "peer.added",
+        &Uuid::now_v7().to_string(),
+        2,
+        serde_json::json!({
+            "peer_node_id_hex": node_id_hex(6),
+            "role": "peer",
+            "scope_hint": "a scope hint with a \u{0000} in it",
+        }),
+    );
+    let seq = serve_raw(&n.a, &with_nul).await;
+
+    let stats = full_pull(&base, &n).await;
+    assert_eq!(
+        stats.frozen, None,
+        "a deterministic raise the doors do not catch must still leave the link moving — that is \
+         what the puller's classification is for, and it is the half of #621 that covers the \
+         raises nobody has enumerated: {stats:?}"
+    );
+    assert!(
+        stats.quarantined + stats.rejected >= 1,
+        "non-vacuity: the event must actually have been REFUSED — penned today, skipped once \
+         #628 makes it a verdict. If it were simply admitted, the freeze assertion above would \
+         be measuring nothing: {stats:?}"
+    );
+    assert!(
+        cursor(&n).await.is_some_and(|c| c >= seq),
+        "and the cursor advanced past it"
+    );
+}
+
 /// THE NEW ARM'S OWN FREEZE PATH. Penning is how the cursor is allowed to advance past a
 /// refusal — the bytes are durably held — so a pen that CANNOT be written must freeze instead.
 /// Advancing past an unpenned refusal would lose it until the next full sweep, the #111 review's
@@ -245,10 +321,19 @@ async fn a_deterministic_refusal_whose_pen_cannot_be_written_freezes() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let n = self_node(&base, "127.0.0.1:0").await;
+    clear_injected_faults(&n).await;
     inject_failure(&n, "23514").await;
     // A second injected fault, on the pen itself: the door refuses deterministically AND the pen
     // write fails, which is the only combination that reaches this arm's Frozen outcome.
-    n.a.batch_execute(
+    //
+    // SCOPED, like the door trigger, and for a sharper reason (PR #627 review, finding 4): an
+    // UNCONDITIONAL trigger on the pen table that survives a failed assertion — the panic skips
+    // the cleanup, and a schema reload does not drop a `cairn_test_*` object — makes every later
+    // test that pens ANYTHING freeze instead, in this file and in `node_substitution_is_penned.rs`
+    // and the #111 suite. That cascade reads as a code defect and is a fixture leak. The `WHEN`
+    // ties it to the reason text THIS test's own injected door failure produces, so even a leaked
+    // copy is inert.
+    n.a.batch_execute(&format!(
         "DROP TRIGGER IF EXISTS cairn_test_621_pen_fails ON node_event_quarantine;
          DROP FUNCTION IF EXISTS cairn_test_621_pen_fails();
          CREATE FUNCTION cairn_test_621_pen_fails() RETURNS trigger
@@ -258,8 +343,9 @@ async fn a_deterministic_refusal_whose_pen_cannot_be_written_freezes() {
          END;
          $fn$;
          CREATE TRIGGER cairn_test_621_pen_fails BEFORE INSERT ON node_event_quarantine
-             FOR EACH ROW EXECUTE FUNCTION cairn_test_621_pen_fails();",
-    )
+             FOR EACH ROW WHEN (NEW.reason LIKE '%{INJECTED_DOOR_MESSAGE}%')
+             EXECUTE FUNCTION cairn_test_621_pen_fails();"
+    ))
     .await
     .unwrap();
 
@@ -309,6 +395,7 @@ async fn the_injected_fault_touches_only_the_marked_event() {
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let n = self_node(&base, "127.0.0.1:0").await;
+    clear_injected_faults(&n).await;
     inject_failure(&n, "23514").await;
 
     let stats = full_pull(&base, &n).await;

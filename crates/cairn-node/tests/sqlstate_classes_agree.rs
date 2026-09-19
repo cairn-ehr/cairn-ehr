@@ -15,6 +15,13 @@
 //! functions, so there is nothing to ask at runtime; what a reader must be stopped from doing is
 //! editing one list. The guard is non-vacuous by construction: it fails if either extraction
 //! finds nothing, which is what would otherwise turn a renamed function into a silent pass.
+//!
+//! **What it does NOT guard, stated so nobody relies on it for more** (PR #627 review, finding 5):
+//! the two functions have OPPOSITE polarity (`deterministic_apply_failure` negates the match and
+//! answers `false` for `None`; `apply_failure_is_local` does neither), so this compares the SETS
+//! they claim and nothing about what they then do with them. A refactor that dropped the `!` would
+//! invert the node plane's whole answer and leave both lists identical here. That inversion is
+//! what `node_pull_refusal_class.rs` exists for — it asserts the meaning, class by class.
 
 use std::fs;
 use std::path::PathBuf;
@@ -26,12 +33,15 @@ fn crates_dir() -> PathBuf {
         .expect("crates/ dir")
 }
 
-/// The two-character class literals inside the body of `fn <name>` in `file`.
+/// The SQLSTATE literals inside the body of `fn <name>` in `file`: two-character CLASSES, and
+/// five-character full codes for the exceptions claimed ahead of the class match (`XX001` /
+/// `XX002`). Both lengths matter — an exception added on one plane and not the other is exactly
+/// the drift this guard exists to catch, and a classes-only extractor would not see it.
 ///
 /// The body is taken from the function's signature to the first line that is exactly `}` at
 /// column 0 — the shape rustfmt guarantees for a top-level item, and the same convention the
-/// other source guards in this tree use. Only two-character double-quoted literals count, so the
-/// surrounding prose (which names codes like `40001` and `53100`) cannot contribute.
+/// other source guards in this tree use. Only double-quoted literals count, so the surrounding
+/// prose (which names codes like `40001` and `53100`) cannot contribute.
 fn classes_in(file: &str, name: &str) -> Vec<String> {
     let src =
         fs::read_to_string(crates_dir().join(file)).unwrap_or_else(|e| panic!("read {file}: {e}"));
@@ -53,7 +63,8 @@ fn classes_in(file: &str, name: &str) -> Vec<String> {
         rest = &rest[open + 1..];
         let Some(close) = rest.find('"') else { break };
         let literal = &rest[..close];
-        if literal.len() == 2 && literal.chars().all(|c| c.is_ascii_alphanumeric()) {
+        let shaped = matches!(literal.len(), 2 | 5);
+        if shaped && literal.chars().all(|c| c.is_ascii_alphanumeric()) {
             out.push(literal.to_string());
         }
         rest = &rest[close + 1..];
@@ -64,7 +75,7 @@ fn classes_in(file: &str, name: &str) -> Vec<String> {
 }
 
 #[test]
-fn the_node_and_clinical_planes_claim_the_same_local_classes() {
+fn the_node_and_clinical_planes_claim_the_same_local_sqlstates() {
     let node = classes_in("cairn-node/src/sync.rs", "deterministic_apply_failure");
     let clinical = classes_in("cairn-sync/src/main.rs", "apply_failure_is_local");
 

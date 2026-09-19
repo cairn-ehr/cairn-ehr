@@ -61,7 +61,7 @@ serving a stranger-signed event") is not reachable that way. Two triggers remain
 
 ## Decisions
 
-### 1. The node-plane doors are TOTAL: every deterministic malformed input raises P0001
+### 1. The node-plane doors are TOTAL for every field they CAST: each raises P0001
 
 Three helpers, each naming **field, door and reason**, at all three signed-bytes doors
 (`submit_node_event`, `apply_remote_node_event`, `restore_node_event`):
@@ -80,7 +80,25 @@ Both shared helpers live in `db/001` for `cairn_decode_hex_or_raise`'s reason: c
 subset containing `db/001` but not `db/007`, and PL/pgSQL binds a call at first execution (#198).
 
 The **CHECK constraints stay**. They are the floor for a caller with raw SQL (principle 12's
-privilege gradient); the door's refusal is the legible, skippable one.
+privilege gradient); the door's refusal is the legible, skippable one. The re-pointed role
+constraint is added **`NOT VALID`**: `connect_and_load_schema` replays every migration on every
+connect, so a validating `ADD CONSTRAINT` would re-scan `node_event` each time and one stored row
+outside today's vocabulary — which is exactly what a downgrade after a widening leaves — would stop
+the node STARTING, on an append-only table with no repair path. New rows are still checked, which
+is what the floor is for.
+
+**Two honest limits of "total", both named rather than assumed away:**
+
+- **`cairn_body` raises `22P05` before every guard** if any body string contains `U+0000`, because
+  `jsonb` cannot represent it while a CBOR text string can. The bytes verify, so this reaches the
+  door and is deterministic ([#628](https://github.com/cairn-ehr/cairn-ehr/issues/628)). Decision 2
+  catches it — the link keeps moving — but the event is penned where decision 3 says it should
+  skip. Pinned end to end by `a_body_string_carrying_a_nul_does_not_freeze_the_link`, which asserts
+  only the freeze-freedom, so closing #628 cannot break it.
+- **The surviving `::bigint` / `::int` casts on the HLC are safe by TYPING, not by a helper**:
+  `cairn_event::Hlc` declares `i64`/`i32` with no serde default, so a body that cannot produce them
+  fails verification. That is a guarantee in another crate, and it is pinned at compile time by
+  `node_door_input_guards.rs::the_hlc_casts_rest_on_cairn_events_types`.
 
 ### 2. The puller partitions the non-P0001 space: deterministic ⇒ PEN, local ⇒ FREEZE
 
@@ -142,7 +160,22 @@ fields, with the odd-spelling positive control), `node_door_input_guards.rs` (th
 every door calls every guard; no bare `::uuid` survives in any door body; the CHECK reads the one
 vocabulary; the CHECK still refuses a raw INSERT), `node_pull_refusal_class.rs` (the pure
 classifier, both directions and the unknown-code default), `node_pull_deterministic_refusal.rs`
-(the three outcomes end to end over the real self-pull, plus the pen-write freeze and an
-anti-vacuity control), `sqlstate_classes_agree.rs` (the two planes' lists). Thirteen mutations,
-thirteen killed — ledger in
+(the three outcomes end to end over the real self-pull, plus the pen-write freeze, the `22P05`
+path above and an anti-vacuity control), `sqlstate_classes_agree.rs` (the two planes' lists).
+Thirteen mutations, thirteen killed — ledger in
 `docs/superpowers/plans/2026-09-20-node-pull-deterministic-refusal-621.md`.
+
+## What the PR review changed
+
+`XX001`/`XX002` (data_corrupted / index_corrupted) are claimed as **local** on both planes: class
+`XX` is otherwise the adversarial-bytes case, but a corrupt page or index is this machine's disk,
+and without the exception a corrupt index on `node_event` would have made the puller pen a peer's
+entire log while writing *"will fail on these bytes identically every time"* onto every row — a
+local catastrophe wearing the peer's name. It is the only realistic case of that shape, because
+anything that breaks the pen table's writes too makes `pen_or_freeze` freeze and say so.
+
+A pen row of this kind leaves the pen by **applying** or by an **ack** — never by a later P0001
+verdict about the same bytes, because the deny-all arm cannot tell which KIND of row it would be
+deleting without reading the reason TEXT (the one thing the loop never classifies on) and a
+substitution row must never auto-release. Every operator-facing sentence now says exactly that;
+before the review three of them still enumerated two pen causes and promised "fix the cause".

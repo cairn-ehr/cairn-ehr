@@ -48,13 +48,34 @@ $$;
 -- Re-point the CHECK at the vocabulary function, idempotently — db/009's `op` DROP/ADD pair is
 -- the precedent. `CREATE TABLE IF NOT EXISTS` above cannot change an existing table's constraint,
 -- so an in-place constraint change needs this paired ALTER (#207) or it lands only on fresh
--- databases. node_event is low-volume, so the re-validation on each schema load is free.
+-- databases.
+--
+-- NOT VALID, and that word is load-bearing (PR #627 review, finding 4). connect_and_load_schema
+-- replays EVERY migration on EVERY connect, and a plain ADD CONSTRAINT re-scans the whole table
+-- each time. The inline CHECK it replaces never re-validated anything after CREATE TABLE, so a
+-- validating pair would give node_event a property it never had: a single stored row that does not
+-- satisfy today's vocabulary makes this statement raise, db/007 abort, and the node refuse to
+-- START — on an append-only table whose trigger blocks DELETE as well as UPDATE, so there is no
+-- repair short of an owner disabling the trigger and deleting a signed event. That row is exactly
+-- what a downgrade after a vocabulary widening leaves behind, and widening cairn_node_roles() IS
+-- how the vocabulary grows (ADR-0074). NOT VALID still checks every NEW row, which is the whole
+-- point of keeping the constraint (principle 12's floor); it only declines to re-litigate history
+-- this node already admitted.
 ALTER TABLE node_event DROP CONSTRAINT IF EXISTS node_event_role_check;
 ALTER TABLE node_event ADD CONSTRAINT node_event_role_check
-    CHECK (role IS NULL OR role = ANY (cairn_node_roles()));
+    CHECK (role IS NULL OR role = ANY (cairn_node_roles())) NOT VALID;
 
 -- A peer role, or a LEGIBLE P0001 refusal — the raising face of the vocabulary above (#621).
 -- NULL passes: role is optional on the wire, and the CHECK says so too.
+--
+-- THE VALUE IS ECHOED IN FULL, which is the deliberate exception to cairn_value_glimpse's habit
+-- (PR #627 review, finding 6). That habit exists because a general value-refusing helper outlives
+-- the assumption that its field holds nothing secret; a peer role is the opposite — a closed,
+-- three-value public vocabulary this very sentence prints in full. Glimpsing it produced
+-- `role "ups..." is not one of ... (upstream, downstream, peer)`, which hides the operator's own
+-- typo and, in the cross-version case this guard exists for, hides WHICH new vocabulary member
+-- the peer is using. Bounded at 64 characters so a hostile 8 MB field cannot fill the log, and the
+-- ellipsis is added only when something really was cut.
 CREATE OR REPLACE FUNCTION cairn_node_role_or_raise(p_role TEXT, p_door TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql
@@ -63,7 +84,9 @@ AS $$
 BEGIN
     IF p_role IS NOT NULL AND NOT (p_role = ANY (cairn_node_roles())) THEN
         RAISE EXCEPTION '%: role "%" is not one of this node''s known peer roles (%)',
-            p_door, cairn_value_glimpse(p_role), array_to_string(cairn_node_roles(), ', ');
+            p_door,
+            left(p_role, 64) || CASE WHEN length(p_role) > 64 THEN '...' ELSE '' END,
+            array_to_string(cairn_node_roles(), ', ');
     END IF;
     RETURN p_role;
 END;
@@ -221,9 +244,17 @@ BEGIN
         RAISE EXCEPTION 'submit_node_event: body could not be parsed after verify';
     END IF;
     v_type   := b ->> 'event_type';
-    -- Every field this door reads out of caller-supplied bytes is validated through a helper
-    -- that raises P0001 (#621). A bare `::uuid` here raises 22P02, which the node puller reads
-    -- as "the door never decided" and answers by FREEZING that peer's cursor forever.
+    -- Every field this door CASTS out of caller-supplied bytes is validated through a helper that
+    -- raises P0001 (#621). A bare `::uuid` here raises 22P02, which the node puller reads as "the
+    -- door never decided" and answers by FREEZING that peer's cursor forever.
+    --
+    -- THE PREMISE UNDER THE REMAINING CASTS, since the sentence above used to overclaim (PR #627
+    -- review, finding 2): `(b -> 'hlc' ->> 'wall')::bigint`, `… 'counter')::int` and the NOT NULL
+    -- `node_origin` / `signer_key_id` are safe because `cairn_event::Hlc` types those fields
+    -- `i64`/`i32`/`String` with no serde default, so a body that cannot produce them fails
+    -- verification and never reaches here. That is a guarantee in ANOTHER CRATE. If those field
+    -- types ever loosen, these casts need `cairn_*_or_raise` too —
+    -- `node_door_input_guards.rs::the_hlc_casts_rest_on_cairn_events_types` pins the premise.
     v_eid    := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'submit_node_event');
     v_signer := b ->> 'signer_key_id';
     v_payload := b -> 'payload';

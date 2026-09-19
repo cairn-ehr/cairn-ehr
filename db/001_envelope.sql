@@ -498,9 +498,12 @@ REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 -- secret today, but a general value-refusing helper outlives that assumption and door errors
 -- land in logs that outlive the session.
 CREATE OR REPLACE FUNCTION cairn_value_glimpse(p_value TEXT)
-RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+RETURNS TEXT LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
     SELECT left(p_value, LEAST(8, length(p_value) / 2)) || '...';
 $$;
+REVOKE EXECUTE ON FUNCTION cairn_value_glimpse(text) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION cairn_decode_hex_or_raise(p_field TEXT, p_value TEXT, p_door TEXT)
 RETURNS BYTEA

@@ -235,13 +235,25 @@ pub fn pull_failure_class(e: &anyhow::Error) -> PullFailureClass {
 /// one plane over, whose `do_requeue` already routes on it; `sqlstate_classes_agree.rs` fails if
 /// the two drift, and merging them into one home is #626.
 ///
-/// `XX` (internal_error) is NOT local, on purpose: a pgrx function panicking on adversarial bytes
-/// raises it, and that is precisely the case that must not be able to wedge a link.
+/// `XX000` (internal_error) is NOT local, on purpose: a pgrx function panicking on adversarial
+/// bytes raises it, and that is precisely the case that must not be able to wedge a link. Its two
+/// siblings in the same class ARE local and are named explicitly below — see there.
 pub fn deterministic_apply_failure(sqlstate: Option<&str>) -> bool {
     match sqlstate {
         // No SQLSTATE at all: the statement never reached a verdict — a dropped connection, a
         // client-side decode failure. Nothing about the bytes was decided, so retrying is right.
         None => false,
+        // The two corruption codes, claimed BEFORE the class match because they are the exception
+        // that makes the `XX` rule safe (PR #627 review, finding 2). A corrupt heap page or index
+        // on `node_event` makes EVERY apply raise, while the pen table's own indexes stay healthy
+        // — so without this the puller would walk a peer's whole log, pen every valid event it was
+        // offered, and write "will fail on these bytes identically every time" onto each durable
+        // row: a local catastrophe wearing the peer's name, and the operator's first move would be
+        // the wrong machine. It is the only realistic case of that shape, because anything that
+        // breaks `node_event` writes AND `node_event_quarantine` writes (a read-only transaction
+        // after a failover, a full disk) fails the pen write too, and `pen_or_freeze` then freezes
+        // and says so.
+        Some("XX001") | Some("XX002") => false,
         // `get(..2)` rather than a slice: a code shorter than two characters (or not ASCII)
         // answers `None` here and falls through to `true`, the keep-the-link-moving side.
         Some(code) => !matches!(
@@ -798,9 +810,9 @@ async fn pen_or_freeze(
 }
 
 /// Operator inspection surface (issue #111): one JSON value per pen row, oldest
-/// first — the durable, legible trace of every node_event this node penned as
-/// unverifiable or as a substitution (#619), with the reason (which says which) and the
-/// re-offer floor seq. Content digest is hex so it can be passed straight to
+/// first — the durable, legible trace of every node_event this node penned: unverifiable bytes,
+/// a substitution (#619), or an apply that failed deterministically without reaching a verdict
+/// (#621). The reason says which, and the re-offer floor seq is beside it. Content digest is hex so it can be passed straight to
 /// [`ack_node_quarantine`].
 pub async fn list_node_quarantine(db: &Client) -> anyhow::Result<Vec<serde_json::Value>> {
     let rows = db
@@ -1099,6 +1111,19 @@ pub async fn pull_into(
                 // after a human had decided. The REASON travels on the pen row instead, in the
                 // DATABASE's vocabulary (SQLSTATE included) rather than the door's — writing a
                 // non-verdict in the door's voice is what #480 was filed about, one plane over.
+                // It is peer-influenced text and is NOT counted against the pen's byte quota,
+                // which sums signed_bytes only; bounded at roughly 2x, not a growth path.
+                //
+                // HOW A ROW OF THIS KIND LEAVES THE PEN, exactly (PR #627 review, finding 1):
+                // by APPLYING (the auto-release above), or by an ack. Releasing it when the door
+                // later reaches a P0001 VERDICT about the same bytes would be the tempting third
+                // way, and it is wrong twice over: the deny-all arm cannot tell which KIND of pen
+                // row it would be deleting without reading the reason TEXT — the one thing this
+                // loop never classifies on — and a substitution row must never auto-release
+                // (ADR-0073). So the upgrade that converts this raise into a verdict (which is
+                // precisely what db/007 did for the four known ones) leaves the row penned and
+                // the pull loud until a human acks it. Every operator-facing sentence about the
+                // pen says that; do not let one of them drift back to "fix the cause".
                 Ok(_) if deterministic_apply_failure(e.code().map(|c| c.code())) => {
                     let digest = event_address(signed);
                     let reason = format!(
@@ -1273,8 +1298,9 @@ pub async fn run(
                 );
                 // LOUD integrity signal (issue #111): while this peer has unacked
                 // quarantined node_events, say so every cycle — the operator must fix the
-                // cause (unverifiable bytes then auto-release; a substitution never does, so
-                // only the ack silences it) or ack the row. Not fatal: the loop keeps serving
+                // cause (unverifiable bytes then auto-release; a substitution never does, and a
+                // deterministic no-verdict failure only does if the event later APPLIES — see the
+                // arm that pens it) or ack the row. Not fatal: the loop keeps serving
                 // and pulling (availability over consistency).
                 // A frozen cursor returns `Ok`, so neither `LOCAL FAULT` nor `PARTITION`
                 // can fire for it — this is the only line that says the node is stuck
@@ -1286,8 +1312,11 @@ pub async fn run(
                     eprintln!(
                         "run: INTEGRITY: {} unacked quarantined node_event(s) from {peer} — \
                          inspect `cairn-node quarantine` (each row's reason says why: unverifiable \
-                         bytes, or a substitution under an event_id this node already holds), then \
-                         fix the cause or `ack-quarantine`",
+                         bytes, a substitution under an event_id this node already holds, or an \
+                         apply that failed deterministically without reaching a verdict), then fix \
+                         the cause or `ack-quarantine`. Only bytes that later APPLY release \
+                         themselves; a substitution never does, and a fix that turns a \
+                         deterministic failure into a refusal does not either — ack those",
                         s.pending
                     );
                 }
