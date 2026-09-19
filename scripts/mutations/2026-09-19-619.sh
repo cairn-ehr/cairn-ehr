@@ -317,8 +317,10 @@ run_mutation M14 KILLED crates/cairn-node/src/sync.rs \
 fi
 
 # M15 — the auto-release keyed wider than the applied bytes (review test gap 2): a clean re-apply
-# of the GENUINE event under the contested id deletes the unacked substitution's row, and the
-# evidence of two bodies under one id is gone with the node quiet.
+# of the GENUINE event under the contested id deletes the unacked substitution's row. Its first run
+# SURVIVED: the rival is served after the genuine event, so it was re-penned as a fresh row in the
+# same sweep and every row-count assertion held. The test now asserts the row's identity
+# (first_seen kept, seen_count bumped to 2), which is what a deletion destroys.
 if want M15; then
 run_mutation M15 KILLED crates/cairn-node/src/sync.rs \
     '                        "DELETE FROM node_event_quarantine WHERE content_digest = $1",' \

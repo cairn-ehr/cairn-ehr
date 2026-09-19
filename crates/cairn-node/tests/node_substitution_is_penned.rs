@@ -91,6 +91,20 @@ async fn is_acked(n: &SelfNode, rival: &[u8]) -> bool {
     .get(0)
 }
 
+/// The rival's pen-row history: when it was first seen (as text, to compare exactly) and how
+/// many times it has been offered.
+async fn row_history(n: &SelfNode, rival: &[u8]) -> (String, i32) {
+    let r =
+        n.a.query_one(
+            "SELECT first_seen::text, seen_count FROM node_event_quarantine
+              WHERE content_digest = $1",
+            &[&address_of(rival)],
+        )
+        .await
+        .expect("the rival has a pen row");
+    (r.get(0), r.get(1))
+}
+
 async fn pen_reason(n: &SelfNode, rival: &[u8]) -> String {
     n.a.query_one(
         "SELECT reason FROM node_event_quarantine WHERE content_digest = $1",
@@ -199,6 +213,13 @@ async fn an_acked_substitution_stays_quiet_on_reoffer() {
 /// contested id re-applies cleanly on every full sweep, and the auto-release on a clean apply
 /// deletes by the APPLIED bytes' address — so it can never reach the rival's row. A release keyed
 /// on the event id or on the peer would; this pins that nothing but an ack quiets the row.
+///
+/// Counting rows is not enough to see that. The rival is served AFTER the genuine event, so a
+/// release that wrongly deleted its row would be followed, in the same sweep, by the rival being
+/// re-offered and penned afresh: one unacked row again, the pull still loud — and the original
+/// row's forensics (`first_seen`, `refused_seq`, how often it was seen) gone. Mutation M15 did
+/// exactly that and survived the row count. So the assertion is that it is the SAME row: its
+/// `first_seen` is unchanged and its `seen_count` was bumped by the re-offer, not reset.
 #[tokio::test]
 async fn an_unacked_substitution_survives_the_next_sweep() {
     let Some(base) = cs() else {
@@ -212,6 +233,8 @@ async fn an_unacked_substitution_survives_the_next_sweep() {
 
     let first = full_pull(&base, &n).await;
     assert_eq!(first.quarantined, 1, "penned on the first sweep");
+    let (first_seen, seen_once) = row_history(&n, &rival).await;
+    assert_eq!(seen_once, 1, "a fresh pen row has been seen once");
 
     let second = full_pull(&base, &n).await;
 
@@ -227,6 +250,12 @@ async fn an_unacked_substitution_survives_the_next_sweep() {
     );
     assert!(!is_acked(&n, &rival).await, "and still unacked");
     assert_eq!(second.pending, 1, "so the pull is still LOUD");
+    assert_eq!(
+        row_history(&n, &rival).await,
+        (first_seen, 2),
+        "and it is the SAME row — first seen when it was penned, and bumped by the re-offer — not \
+         a row deleted by the genuine event's re-apply and penned afresh"
+    );
     n.serve.abort();
 }
 
