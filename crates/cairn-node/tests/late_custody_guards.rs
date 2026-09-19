@@ -21,8 +21,9 @@
 //! as a string and run through a dynamic `EXECUTE format(...)`, is NOT recognised. None exists
 //! today; a new one must be reviewed by hand for the late-custody call.
 //!
-//! Comments — `--` line comments and `/* ... */` block comments — are stripped before matching, so
-//! prose naming a function neither satisfies nor trips a rule. (A block comment that named the
+//! Comments — `--` line comments and `/* ... */` block comments — are stripped before matching
+//! (by `common/sql_text.rs`, shared with #619's catalogue guard), so prose naming a function
+//! neither satisfies nor trips a rule. (A block comment that named the
 //! call used to satisfy rule 2: the unsafe direction.) The pure predicates are exercised without a
 //! database below, so this file proves something even where `$CAIRN_TEST_PG` is unset.
 //!
@@ -31,78 +32,15 @@
 //! late-custody call written after such a literal would be missed. No call site today follows a
 //! comment marker inside a literal; keep each of these calls clear of one.
 
+#[path = "common/sql_text.rs"]
+mod sql_text;
+
+use sql_text::normalised;
+
 use cairn_node::db;
 
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
-}
-
-/// The body with its SQL comments removed: `--` line comments and `/* ... */` block comments.
-/// **Pure, and literal-blind.**
-///
-/// One left-to-right pass, because the two comment kinds hide each other and the order matters:
-/// a `/*` inside a line comment opens nothing (our own SQL writes `-- ... db/*.sql ...` in
-/// function bodies), and a `--` inside a block comment is just comment text. Stripping block
-/// comments first and line comments second would get the first case wrong and swallow real code.
-///
-/// Block comments NEST in Postgres (`/* a /* b */ still comment */`), so a depth counter tracks
-/// them; a comment is replaced by one space because it separates tokens exactly as a space does.
-/// An unterminated block comment swallows the rest of the body — Postgres would refuse such a
-/// body anyway.
-///
-/// Literal-blind: there is no awareness of string or dollar-quoted literals, so a `--` inside a
-/// literal hides the rest of that line and a `/*` inside one hides everything up to its `*/`.
-fn without_sql_comments(body: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-    // > 0 while inside a block comment; counts how many `/*` are still open.
-    let mut block_depth = 0usize;
-    while !rest.is_empty() {
-        if let Some(after) = rest.strip_prefix("/*") {
-            // Checked first so a `/*` opens (or nests) a block comment wherever it starts —
-            // unless an earlier `--` on this line already skipped it (the branch below).
-            block_depth += 1;
-            rest = after;
-        } else if block_depth > 0 {
-            if let Some(after) = rest.strip_prefix("*/") {
-                block_depth -= 1;
-                if block_depth == 0 {
-                    out.push(' ');
-                }
-                rest = after;
-            } else {
-                rest = without_first_char(rest);
-            }
-        } else if let Some(after) = rest.strip_prefix("--") {
-            // Skip to the end of the line, keeping the newline itself.
-            rest = after.find('\n').map_or("", |at| &after[at..]);
-        } else {
-            let mut chars = rest.chars();
-            if let Some(ch) = chars.next() {
-                out.push(ch);
-            }
-            rest = chars.as_str();
-        }
-    }
-    out
-}
-
-/// `text` without its first character (UTF-8 aware, so a multi-byte character such as an em dash
-/// in a comment is never split). **Pure.**
-fn without_first_char(text: &str) -> &str {
-    let mut chars = text.chars();
-    chars.next();
-    chars.as_str()
-}
-
-/// Uppercase with every whitespace run collapsed to one space, so `insert  into\n event_clear`
-/// matches. **Pure.**
-fn normalised(body: &str) -> String {
-    without_sql_comments(body)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_uppercase()
 }
 
 /// Does this function body read custody — the clear view a sealed body opens into? **Pure.**
