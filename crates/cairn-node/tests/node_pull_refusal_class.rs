@@ -17,7 +17,7 @@
 use cairn_node::sync::deterministic_apply_failure;
 
 /// The local classes and codes, each with the failure a reader should picture.
-const LOCAL: [(&str, &str); 9] = [
+const LOCAL: [(&str, &str); 10] = [
     (
         "08006",
         "connection_failure — the link to our own database went away",
@@ -31,6 +31,12 @@ const LOCAL: [(&str, &str); 9] = [
     ("53100", "disk_full"),
     ("55P03", "lock_not_available"),
     ("57014", "query_canceled — a statement timeout"),
+    // Class 58 was claimed by `deterministic_apply_failure` with NO code here to hold it, so
+    // deleting `| "58"` from BOTH crates passed a `-p cairn-node` gate (only cairn-sync's own
+    // in-crate test named a 58 code, and the mutation harness never runs that crate). Then an
+    // I/O error under the database reads as the peer's fault and the puller pens valid events
+    // while the disk is dying. PR #627 review, second pass.
+    ("58030", "io_error — an I/O error underneath the database"),
     // The two exceptions inside class XX, claimed by full code (PR #627 review, finding 2). A
     // corrupt page or index on node_event is THIS machine's disk, and without these the puller
     // would pen a peer's whole log while blaming the peer in every durable row.

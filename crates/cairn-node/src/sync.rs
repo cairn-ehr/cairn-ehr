@@ -215,14 +215,20 @@ pub fn pull_failure_class(e: &anyhow::Error) -> PullFailureClass {
 /// one — including that peer's own `peer.revoked` — nothing is penned, and there is no `ack`
 /// remedy. That is #228's failure, which was closed for malformed hex and not for the rest.
 ///
-/// db/007 no longer raises any of the four known deterministic codes (they are P0001 verdicts
-/// now — see `cairn_uuid_or_raise` / `cairn_hlc_nonneg_or_raise` / `cairn_node_role_or_raise`).
-/// This classifier is what covers the ones nobody has written yet.
+/// db/007's DOORS no longer produce any of the four known deterministic raises — `22P02` on the
+/// two `::uuid` casts, `23514` on the two CHECKs — because each is now a P0001 verdict (see
+/// `cairn_uuid_or_raise` / `cairn_hlc_nonneg_or_raise` / `cairn_node_role_or_raise`). Read that
+/// precisely: the CHECKs themselves STAY and still raise `23514` for a caller who bypasses the
+/// doors with raw SQL. That is principle 12's floor, not a leftover
+/// (`node_door_input_guards.rs::the_role_check_still_refuses_a_raw_insert` pins it), and this
+/// sentence is not a licence to delete them. This classifier is what covers the raises nobody
+/// has written yet.
 ///
 /// # Why the CLASS, and why an unknown code is DETERMINISTIC
 ///
 /// The two-character class is the part PostgreSQL documents as stable; individual codes are not.
-/// The local classes are claimed EXPLICITLY and everything else answers `true`, because the two
+/// Everything local is claimed EXPLICITLY — the seven classes below, plus `XX001`/`XX002` by
+/// FULL code, plus no-SQLSTATE-at-all — and everything else answers `true`, because the two
 /// mistakes are not equally expensive:
 ///
 /// * a wrong `true` (calling this node's own trouble the event's fault) **pens** a valid event —
@@ -249,10 +255,19 @@ pub fn deterministic_apply_failure(sqlstate: Option<&str>) -> bool {
         // — so without this the puller would walk a peer's whole log, pen every valid event it was
         // offered, and write "will fail on these bytes identically every time" onto each durable
         // row: a local catastrophe wearing the peer's name, and the operator's first move would be
-        // the wrong machine. It is the only realistic case of that shape, because anything that
-        // breaks `node_event` writes AND `node_event_quarantine` writes (a read-only transaction
-        // after a failover, a full disk) fails the pen write too, and `pen_or_freeze` then freezes
-        // and says so.
+        // the wrong machine.
+        //
+        // WHY ONLY THESE TWO, and the honest limit of that (#632). Anything that breaks
+        // `node_event` writes AND `node_event_quarantine` writes — a read-only transaction after
+        // a failover, a full disk — fails the pen write too, so `pen_or_freeze` freezes and says
+        // so without needing a rule here. Corruption is the case that slips between: it can hit
+        // `node_event` alone while the pen table stays healthy. But that argument does NOT cover
+        // a defect confined to a DOOR, which touches neither table: `P0004` from an `ASSERT`,
+        // `P0002`/`21000` from a `SELECT … INTO STRICT`, `22012` from arithmetic. Each is local,
+        // permanent, deterministic for every event the peer offers, and outside the claimed
+        // classes — so each pens a peer's whole log under this node's own bug. Tracked as #632;
+        // the bytes are held, loud and ack-able throughout, so it is diagnosis damage and quota
+        // exhaustion rather than loss, which is why it is an issue and not a blocker.
         Some("XX001") | Some("XX002") => false,
         // `get(..2)` rather than a slice: a code shorter than two characters (or not ASCII)
         // answers `None` here and falls through to `true`, the keep-the-link-moving side.
@@ -261,7 +276,16 @@ pub fn deterministic_apply_failure(sqlstate: Option<&str>) -> bool {
             Some(
                 "08"    // connection_exception
                     | "40" // transaction_rollback — serialization failure, deadlock
-                    | "42" // access rule violation — a revoked grant, a missing table
+                    // access rule violation — a revoked grant, a missing table. Claimed by CLASS,
+                    // which is safe only while `node_event` has no row-level security: `42501` is
+                    // also "new row violates row-level security policy", and an RLS rejection is
+                    // content-dependent and permanent, so it would freeze this link for ever —
+                    // #621 reproduced under a code this list explicitly trusts. There is no
+                    // ENABLE/FORCE ROW LEVEL SECURITY anywhere in db/ today, and all three doors
+                    // are SECURITY DEFINER (the owner bypasses RLS regardless). If that ever
+                    // changes, claim `42` by CODE (`42501` only when it is a grant problem,
+                    // `42P01`, `42883`, `42601`, `42704`) instead of by class.
+                    | "42"
                     | "53" // insufficient_resources — disk full, out of memory
                     | "55" // object_not_in_prerequisite_state — lock_not_available
                     | "57" // operator_intervention — statement timeout, shutdown
@@ -273,8 +297,9 @@ pub fn deterministic_apply_failure(sqlstate: Option<&str>) -> bool {
 
 /// Per-peer bounds on the node-plane quarantine pen (issue #111, mirroring the
 /// clinical plane's #110 quota). Identical re-offers dedupe onto one row, so only
-/// a peer shipping ever-DIFFERENT unverifiable bytes or substitutions (#619) —
-/// corruption or malice — can grow the pen, and remote bytes must never be able to
+/// a peer shipping ever-DIFFERENT bytes that the pen accepts — unverifiable (#111),
+/// substitutions (#619), or an apply that fails deterministically (#621) — i.e.
+/// corruption or malice, can grow the pen, and remote bytes must never be able to
 /// fill this node's disk.
 /// At the cap the pen refuses further inserts and the pull FREEZES the cursor
 /// rather than growing: delayed, never lost — and loud.
@@ -334,7 +359,8 @@ pub enum Request {
 /// this node already holds with different content, which can never apply (#619), and events whose
 /// apply failed DETERMINISTICALLY without a verdict (#621); `pending` =
 /// this peer's UNACKED pen rows AFTER the cycle — a non-zero value is the LOUD integrity signal
-/// `run` logs every cycle until the cause is fixed or a human acks the row.
+/// `run` logs every cycle until the event applies on a later offer (the only self-release) or a
+/// human acks the row.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PullStats {
     pub received: u64,
@@ -776,7 +802,8 @@ enum PenOutcome {
 }
 
 /// Pen one refused event, or report that the cursor must freeze — the pen's three outcomes,
-/// handled once for both arms that pen (unverifiable bytes, #111; a substitution, #619).
+/// handled once for all three arms that pen (unverifiable bytes, #111; a substitution, #619;
+/// a deterministic failure that reached no verdict, #621).
 async fn pen_or_freeze(
     db: &Client,
     peer_key: &str,
@@ -1112,7 +1139,13 @@ pub async fn pull_into(
                 // DATABASE's vocabulary (SQLSTATE included) rather than the door's — writing a
                 // non-verdict in the door's voice is what #480 was filed about, one plane over.
                 // It is peer-influenced text and is NOT counted against the pen's byte quota,
-                // which sums signed_bytes only; bounded at roughly 2x, not a growth path.
+                // which sums `signed_bytes` only. Nothing truncates it, either: a PostgreSQL
+                // message that quotes the offending field can be about as large as that field,
+                // and DETAIL/HINT ride along. So the reason is bounded by the ROW-count quota,
+                // not by the byte quota — adequate today (PostgreSQL truncates each column to
+                // 64 chars in a CHECK violation's "Failing row contains" DETAIL, and the door
+                // guards catch the casts that would quote a whole field), but the honest
+                // statement is that it is unmetered, not that it is bounded at some multiple.
                 //
                 // HOW A ROW OF THIS KIND LEAVES THE PEN, exactly (PR #627 review, finding 1):
                 // by APPLYING (the auto-release above), or by an ack. Releasing it when the door
@@ -1148,9 +1181,16 @@ pub async fn pull_into(
                     // consequential line in the loop — and `{e}` could not separate
                     // `40001`/`40P01` (retry, self-heals) from `53100` (disk full) from
                     // `42501` (a missing grant) from a dropped connection. That is the
-                    // exact list `deterministic_apply_failure` now claims as local, and the
-                    // reason this arm is the right place to stop rather than pen: every one
-                    // of them may well admit the same bytes on the next cycle.
+                    // exact list `deterministic_apply_failure` now claims as local.
+                    //
+                    // WHY STOPPING IS RIGHT HERE, stated carefully, because the obvious reason
+                    // is wrong: it is NOT that every one of them is transient. A revoked grant
+                    // (`42501`) or a missing table (`42P01`) is as permanent as any poison byte.
+                    // It is that the REMEDY IS LOCAL AND AVAILABLE — the operator restores the
+                    // grant, fixes the disk, waits out the failover, and the link resumes with
+                    // every event intact. #621's wedge was unfixable because the cause lived in
+                    // the peer's bytes and nothing was penned, so there was no remedy at all.
+                    // Locality of the remedy, not transience, is the line this arm draws.
                     eprintln!(
                         "pull: transient/unexpected error applying node_event at seq {seq}: {} \
                          — freezing (not skipped past)",
@@ -1183,8 +1223,10 @@ pub async fn pull_into(
         .map_err(|e| LocalDbFault::new("checkpointing sync cursor", e))?;
     }
     // The LOUD signal: this peer's unacked pen rows AFTER the cycle. `run` logs a distinct
-    // integrity line every cycle while this is non-zero — until the cause is fixed (unverifiable
-    // bytes then auto-release; a substitution never does) or a human acks the row.
+    // integrity line every cycle while this is non-zero — until the event itself APPLIES on a
+    // later offer, which is the only thing that releases a row by itself (unverifiable bytes
+    // reach it once the cause is fixed; a deterministic no-verdict failure only if a later build
+    // admits the bytes; a substitution never can, the id is taken) — or a human acks the row.
     let pending: i64 = db
         .query_one(
             "SELECT count(*) FROM node_event_quarantine WHERE peer = $1 AND NOT acked",

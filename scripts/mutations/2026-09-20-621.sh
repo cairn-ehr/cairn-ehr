@@ -302,7 +302,8 @@ run_mutation M14 KILLED crates/cairn-node/src/sync.rs \
 fi
 
 # M15 — the role CHECK goes back to VALIDATING on every connect, so one row left by a downgrade
-# after a vocabulary widening stops the node starting, unrepairably (PR #627 finding 4).
+# after a vocabulary widening stops the node starting, before an operator can reach the database
+# to widen the vocabulary again or drop the constraint (PR #627 finding 4).
 if want M15; then
 run_mutation M15 KILLED db/007_node_federation.sql \
     "    CHECK (role IS NULL OR role = ANY (cairn_node_roles())) NOT VALID;" \

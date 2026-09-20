@@ -162,7 +162,8 @@ vocabulary; the CHECK still refuses a raw INSERT), `node_pull_refusal_class.rs` 
 classifier, both directions and the unknown-code default), `node_pull_deterministic_refusal.rs`
 (the three outcomes end to end over the real self-pull, plus the pen-write freeze, the `22P05`
 path above and an anti-vacuity control), `sqlstate_classes_agree.rs` (the two planes' lists).
-Thirteen mutations, thirteen killed — ledger in
+Fifteen mutations, fifteen killed — M14/M15 added by the PR review, so its own two fixes are
+pinned like the rest — ledger in
 `docs/superpowers/plans/2026-09-20-node-pull-deterministic-refusal-621.md`.
 
 ## What the PR review changed
@@ -171,11 +172,53 @@ Thirteen mutations, thirteen killed — ledger in
 `XX` is otherwise the adversarial-bytes case, but a corrupt page or index is this machine's disk,
 and without the exception a corrupt index on `node_event` would have made the puller pen a peer's
 entire log while writing *"will fail on these bytes identically every time"* onto every row — a
-local catastrophe wearing the peer's name. It is the only realistic case of that shape, because
-anything that breaks the pen table's writes too makes `pen_or_freeze` freeze and say so.
+local catastrophe wearing the peer's name. Anything that breaks the pen table's writes too makes
+`pen_or_freeze` freeze and say so, so corruption is the case that slips between — but the claim
+that it is the *only* case of that shape is too strong, and the second review pass corrected it:
+a defect confined to a DOOR touches neither table, so `P0004` from an `ASSERT`, `P0002`/`21000`
+from a `SELECT … INTO STRICT` or `22012` from arithmetic would each pen a peer's whole log under
+this node's own bug. The bytes stay held, loud and ack-able throughout, so the cost is diagnosis
+damage and quota exhaustion rather than loss; widening the claimed-local set is
+[#632](https://github.com/cairn-ehr/cairn-ehr/issues/632).
 
 A pen row of this kind leaves the pen by **applying** or by an **ack** — never by a later P0001
 verdict about the same bytes, because the deny-all arm cannot tell which KIND of row it would be
 deleting without reading the reason TEXT (the one thing the loop never classifies on) and a
 substitution row must never auto-release. Every operator-facing sentence now says exactly that;
 before the review three of them still enumerated two pen causes and promised "fix the cause".
+
+### The second review pass
+
+A four-reviewer pass over the finished branch found no defect in the shipped behaviour and four
+documentation faults that would have outlived it, all fixed here:
+
+- a ~70-line header in `db/001` — the one that carries the *"never add `USING ERRCODE`"* contract
+  — had been orphaned above `cairn_value_glimpse` by the insertion, leaving
+  `cairn_decode_hex_or_raise` with no header and the contract pointing at a function that cannot
+  raise;
+- `db/022`, the pen's own table definition, still said *"a refusal with any other SQLSTATE freezes
+  instead"* and still enumerated two reason kinds;
+- `sync.md` and this log's index row omitted `XX001`/`XX002`, documenting the pre-review behaviour
+  as current;
+- `cairn_node_roles()` was the only helper in the slice with neither `SET search_path` nor
+  `REVOKE EXECUTE … FROM PUBLIC`. Both are now present and, more importantly, *explained*: the
+  `SET` blocks SQL-function inlining, so the CHECK cannot hold a constant-folded copy of a
+  superseded vocabulary, and the `REVOKE` is safe only while no non-owner role holds INSERT on
+  `node_event` — a CHECK executes its functions as the INSERTING user, so a future grant would
+  turn the floor's honest `23514` into a `42501` the puller freezes on.
+
+Two reasoning faults were corrected without changing behaviour: class `42` is claimed as local
+because the **remedy is local and available**, not because it is transient (a revoked grant is as
+permanent as any poison byte), and the role refusal echoes its value in full because a wire-level
+routing label carries nothing secret — not because the vocabulary is closed, since the value being
+echoed is by definition not in it.
+
+Filed rather than repaired here: [#630](https://github.com/cairn-ehr/cairn-ehr/issues/630) (the pen's
+dedupe is keyed on digest alone while its floor and `pending` are per-peer — pre-existing from
+#111, latent while `run` pulls one peer, but this slice widens what reaches it),
+[#631](https://github.com/cairn-ehr/cairn-ehr/issues/631) (a bumped row keeps its original
+`reason`, which can stop describing the current exclusion), #632 above,
+[#633](https://github.com/cairn-ehr/cairn-ehr/issues/633) (nothing pins the `USING ERRCODE`
+contract itself) and [#634](https://github.com/cairn-ehr/cairn-ehr/issues/634) (pen-at-quota,
+auto-release of this pen kind, and the deliberate *no*-release-on-later-verdict invariant all
+lack tests).

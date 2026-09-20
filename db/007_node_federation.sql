@@ -40,10 +40,34 @@ CREATE TABLE IF NOT EXISTS node_event (
 -- node meeting the new value then refuses it with P0001 and SKIPS it — re-offered on every full
 -- sweep and admitted the day that node is upgraded — instead of wedging the link. That is the
 -- whole reason the vocabulary is enforced at the door at all.
+-- THE TWO CLAUSES ARE DELIBERATE, and so is the fact that they are the same two every other
+-- helper in db/001 and db/007 carries (PR #627 review). `SET search_path` is not needed by this
+-- body — an array of literals resolves nothing — but it is kept for two reasons beyond habit:
+-- this function is resident inside a CHECK constraint on an append-only table, which is the last
+-- place in the tree you want a loosely-specified function, and whatever the vocabulary GROWS into
+-- (ADR-0074 makes widening it the growth path) inherits whatever is written here. The `SET` also
+-- blocks SQL-function inlining, which matters: without it a zero-arg IMMUTABLE SQL function is
+-- constant-folded into the cached constraint expression, so a backend could in principle hold the
+-- OLD array after a widening and reject at the CHECK what the door just accepted — a `23514`,
+-- which is precisely the code this whole slice exists to stop the doors producing. (The window is
+-- nil today, because the DROP/ADD pair below ships a relcache invalidation at the same moment the
+-- function is replaced. Do not remove that pair behind an "it already exists" guard without
+-- re-reading this paragraph.)
+--
+-- The REVOKE is safe because nothing can reach this function as a non-owner: `node_event` grants
+-- `cairn_node` SELECT only (see the grants at the foot of this file), and all three writers are
+-- SECURITY DEFINER, so the CHECK always evaluates as the owner. It would NOT be safe if a
+-- non-owner role were ever granted INSERT on node_event directly — a CHECK constraint executes
+-- its functions as the INSERTING user, so the raw-SQL floor's honest `23514` would become a
+-- `42501`, which the puller reads as this node's own fault and FREEZES on. If you ever widen the
+-- grants on node_event, revisit this REVOKE first.
 CREATE OR REPLACE FUNCTION cairn_node_roles()
-RETURNS TEXT[] LANGUAGE sql IMMUTABLE AS $$
+RETURNS TEXT[] LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
     SELECT ARRAY['upstream', 'downstream', 'peer'];
 $$;
+REVOKE EXECUTE ON FUNCTION cairn_node_roles() FROM PUBLIC;
 
 -- Re-point the CHECK at the vocabulary function, idempotently — db/009's `op` DROP/ADD pair is
 -- the precedent. `CREATE TABLE IF NOT EXISTS` above cannot change an existing table's constraint,
@@ -55,10 +79,14 @@ $$;
 -- each time. The inline CHECK it replaces never re-validated anything after CREATE TABLE, so a
 -- validating pair would give node_event a property it never had: a single stored row that does not
 -- satisfy today's vocabulary makes this statement raise, db/007 abort, and the node refuse to
--- START — on an append-only table whose trigger blocks DELETE as well as UPDATE, so there is no
--- repair short of an owner disabling the trigger and deleting a signed event. That row is exactly
--- what a downgrade after a vocabulary widening leaves behind, and widening cairn_node_roles() IS
--- how the vocabulary grows (ADR-0074). NOT VALID still checks every NEW row, which is the whole
+-- START — before an operator can reach the database to widen cairn_node_roles() again or drop the
+-- constraint. (Those two ARE the repair, and they are one line each; the earlier claim here that
+-- the only way out was disabling the append-only trigger and deleting a signed event was wrong —
+-- PR #627 review. The decision does not rest on it. Refusing to START is not a state a fleet node
+-- may enter over a vocabulary it once admitted, however easy the repair is to type, because the
+-- node is what an operator would be typing it into.) That row is exactly what a downgrade after a
+-- vocabulary widening leaves behind, and widening cairn_node_roles() IS how the vocabulary grows
+-- (ADR-0074). NOT VALID still checks every NEW row, which is the whole
 -- point of keeping the constraint (principle 12's floor); it only declines to re-litigate history
 -- this node already admitted.
 ALTER TABLE node_event DROP CONSTRAINT IF EXISTS node_event_role_check;
@@ -69,9 +97,14 @@ ALTER TABLE node_event ADD CONSTRAINT node_event_role_check
 -- NULL passes: role is optional on the wire, and the CHECK says so too.
 --
 -- THE VALUE IS ECHOED IN FULL, which is the deliberate exception to cairn_value_glimpse's habit
--- (PR #627 review, finding 6). That habit exists because a general value-refusing helper outlives
--- the assumption that its field holds nothing secret; a peer role is the opposite — a closed,
--- three-value public vocabulary this very sentence prints in full. Glimpsing it produced
+-- (PR #627 review, finding 6). Be precise about WHY, because the tempting reason is circular: it
+-- is NOT that the vocabulary is closed and public. The string echoed here is by definition one
+-- that is NOT in the vocabulary — it is arbitrary peer-controlled text out of
+-- `v_payload ->> 'role'`. The justification is that a wire-level ROUTING LABEL carries nothing
+-- secret by construction (unlike the key, token or wrapped DEK the glimpse habit exists to
+-- protect), and that 64 characters is too small to be an exfiltration or log-flooding channel.
+-- Note it reaches the PostgreSQL server log verbatim, newlines included, so a peer can forge a
+-- line THERE; the puller's own copy is flattened by Rust's `one_line()`. Glimpsing it produced
 -- `role "ups..." is not one of ... (upstream, downstream, peer)`, which hides the operator's own
 -- typo and, in the cross-version case this guard exists for, hides WHICH new vocabulary member
 -- the peer is using. Bounded at 64 characters so a hostile 8 MB field cannot fill the log, and the
@@ -250,11 +283,16 @@ BEGIN
     --
     -- THE PREMISE UNDER THE REMAINING CASTS, since the sentence above used to overclaim (PR #627
     -- review, finding 2): `(b -> 'hlc' ->> 'wall')::bigint`, `… 'counter')::int` and the NOT NULL
-    -- `node_origin` / `signer_key_id` are safe because `cairn_event::Hlc` types those fields
-    -- `i64`/`i32`/`String` with no serde default, so a body that cannot produce them fails
-    -- verification and never reaches here. That is a guarantee in ANOTHER CRATE. If those field
-    -- types ever loosen, these casts need `cairn_*_or_raise` too —
-    -- `node_door_input_guards.rs::the_hlc_casts_rest_on_cairn_events_types` pins the premise.
+    -- `node_origin` / `signer_key_id` are safe because `cairn_body` (extensions/cairn_pgx) parses
+    -- the body THROUGH the typed `cairn_event::EventBody`, whose `Hlc` types those fields
+    -- `i64`/`i32`/`String` with no serde default — so a body that cannot produce them fails CBOR
+    -- decode, fails verification, and never reaches here.
+    --
+    -- That is a guarantee TWO CRATES away, and the fragile half is not the field types: it is
+    -- `cairn_body`'s TYPED parse. A future forward-compatible parse to a generic CBOR value
+    -- (ADR-0012 additive evolution, ADR-0056 admit-uninterpreted — both live themes) would break
+    -- these casts with `Hlc` untouched. If either half moves, these casts need `cairn_*_or_raise`
+    -- too. `node_door_input_guards.rs::the_hlc_casts_rest_on_cairn_events_types` pins both halves.
     v_eid    := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'submit_node_event');
     v_signer := b ->> 'signer_key_id';
     v_payload := b -> 'payload';

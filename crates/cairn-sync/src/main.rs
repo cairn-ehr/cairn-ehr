@@ -6818,6 +6818,13 @@ mod tests {
             "55P03", // lock_not_available — the lock_timeout the tests below force
             "57014", // query_canceled (statement_timeout)
             "58030", // io_error underneath the database
+            // The two class-XX exceptions, claimed by FULL code (PR #627 review). Class XX is
+            // otherwise the adversarial-bytes case (XX000, a pgrx panic), but a corrupt page or
+            // index is this machine's disk and every row behind this one would meet it too.
+            // Held equal to cairn-node's list by sqlstate_classes_agree.rs; asserted here too,
+            // because that guard compares the two SETS and cannot see this crate's polarity.
+            "XX001", // data_corrupted
+            "XX002", // index_corrupted
         ] {
             assert!(
                 apply_failure_is_local(Some(local)),

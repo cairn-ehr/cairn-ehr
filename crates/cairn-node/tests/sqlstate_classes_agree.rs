@@ -82,8 +82,14 @@ fn the_node_and_clinical_planes_claim_the_same_local_sqlstates() {
     // Non-vacuity first: an empty extraction would make the equality below trivially true, which
     // is how a guard like this dies silently (the #586 shape — a source guard that stopped seeing
     // the code it guards).
+    // The inventory is 9 (seven classes + XX001/XX002). The floor is deliberately set just BELOW
+    // it rather than AT it (PR #627 review, second pass): at 9 a legitimate removal of one class
+    // would fail here, with a message telling the author to fix the GUARD, when what they want is
+    // the drift message below or no failure at all. Eight is far enough above a broken
+    // extractor's 0–2 to catch the #586 shape and far enough below the inventory to stay out of
+    // the way of a real edit. Raise it if the inventory grows a lot.
     assert!(
-        node.len() >= 5 && clinical.len() >= 5,
+        node.len() >= 8 && clinical.len() >= 8,
         "the extraction found too few classes to be believable — node: {node:?}, \
          clinical: {clinical:?}. The guard, not the code, is what to fix."
     );

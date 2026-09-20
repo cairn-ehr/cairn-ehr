@@ -426,6 +426,34 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 
+-- How much of a rejected value a refusal may reproduce — the ONE home for the rule, because
+-- there is now more than one caller (#621 added cairn_uuid_or_raise) and it is a habit worth
+-- keeping identical everywhere: node-ids and event-ids carry nothing secret today, but a
+-- general value-refusing helper outlives that assumption, and door errors land in logs that
+-- outlive the session.
+--
+-- At most HALF the value, and never more than 8 characters, then '...'. Capping at 8 alone is
+-- not enough — it silently degrades to the whole value for anything 8 characters or shorter,
+-- which is exactly the short-secret case the caps exist for (PR #371 review). Halving keeps the
+-- diagnosis intact where it matters: a '0x' prefix, a leading '-', a UUID's dashes all survive
+-- in the first characters.
+--
+-- The trailing '...' is truthful whenever there was anything to hide. The one exception is the
+-- EMPTY string, which glimpses to a bare '...' with nothing behind it (PR #627 review) —
+-- harmless, because every caller prints the length beside it and that says "0 chars".
+--
+-- DELIBERATELY NOT `STRICT`, and it returns NULL on NULL rather than a legible token: both
+-- callers test for NULL first and say "<field> is missing" in their own words, which is the
+-- better message. A caller that forgets renders `starts "<NULL>"` — so check NULL before
+-- calling, as the two below do.
+CREATE OR REPLACE FUNCTION cairn_value_glimpse(p_value TEXT)
+RETURNS TEXT LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT left(p_value, LEAST(8, length(p_value) / 2)) || '...';
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_value_glimpse(text) FROM PUBLIC;
+
 -- Decode a hex payload field, or refuse LEGIBLY (issue #228).
 --
 -- Node-plane payloads carry node-ids as hex strings, and three doors decode them:
@@ -486,25 +514,7 @@ REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 -- what a later door will use for a key, a token or a wrapped DEK, and door errors are
 -- written to logs that outlive the session. Length + prefix is also what a human debugging
 -- a buggy peer actually needs: it separates "truncated" from "wrong encoding" at a glance.
--- How much of a rejected value a refusal may reproduce: at most HALF of it, and never more
--- than 8 characters, followed by a '...' that is therefore always truthful because something
--- is always hidden. Capping at 8 alone is not enough — it silently degrades to the whole value
--- for anything 8 characters or shorter, which is exactly the short-secret case the caps exist
--- for (PR #371 review). Halving keeps the diagnosis intact where it matters: a '0x' prefix, a
--- leading '-', a UUID's dashes all survive in the first characters.
---
--- One home, because there is now more than one caller (#621 added cairn_uuid_or_raise) and the
--- rule is a habit worth keeping identical everywhere: node-ids and event-ids carry nothing
--- secret today, but a general value-refusing helper outlives that assumption and door errors
--- land in logs that outlive the session.
-CREATE OR REPLACE FUNCTION cairn_value_glimpse(p_value TEXT)
-RETURNS TEXT LANGUAGE sql IMMUTABLE
-SET search_path = public, pg_temp
-AS $$
-    SELECT left(p_value, LEAST(8, length(p_value) / 2)) || '...';
-$$;
-REVOKE EXECUTE ON FUNCTION cairn_value_glimpse(text) FROM PUBLIC;
-
+-- The rule for HOW MUCH it reproduces lives in cairn_value_glimpse, above.
 CREATE OR REPLACE FUNCTION cairn_decode_hex_or_raise(p_field TEXT, p_value TEXT, p_door TEXT)
 RETURNS BYTEA
 LANGUAGE plpgsql

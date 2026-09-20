@@ -365,11 +365,20 @@
 >     auto-release). Every operator sentence says so; do not let one drift back to "fix the cause".
 >     ⚠️ **The role CHECK is `NOT VALID` and must stay so:** the migrations replay on every connect,
 >     so a validating pair re-scans `node_event` each time and one row left by a downgrade after a
->     vocabulary widening stops the node STARTING, unrepairably (the table is append-only).
+>     vocabulary widening stops the node STARTING — before an operator can reach the database to
+>     widen `cairn_node_roles()` again or drop the constraint. (Those two ARE the repair, one line
+>     each; the branch review's "unrepairably" was too strong. The decision stands anyway: a fleet
+>     node may not refuse to START over a vocabulary it once admitted, however easy the repair is
+>     to type, because the node is what you would be typing it into.)
 >     **Known exception to "total":** `cairn_body` raises `22P05` before every guard on a NUL in any
 >     body string (**#628**) — the puller pens it, and a test pins only that the link keeps moving.
 >     Residuals: **#626** (the clinical plane still freezes on all of them), **#628**, **#629**,
->     **#605**, **#268**.
+>     **#605**, **#268**, and from the four-reviewer pass on the finished branch: **#630** (the
+>     pen dedupes by digest alone while its floor/`pending` are per-peer — pre-existing from #111,
+>     latent while `run` pulls one peer), **#631** (a bumped row keeps its original `reason`),
+>     **#632** (the claimed-local set misses door-confined codes like `P0004`/`21000`), **#633**
+>     (nothing pins the `USING ERRCODE` contract itself), **#634** (pen-at-quota, auto-release of
+>     this pen kind, and the deliberate NO-release-on-later-verdict invariant lack tests).
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is

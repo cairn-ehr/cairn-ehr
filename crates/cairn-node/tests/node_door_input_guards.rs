@@ -179,17 +179,29 @@ async fn no_node_door_casts_to_uuid_bare() {
 /// SQL lives in, which is precisely the kind of premise that rots silently (PR #627 review,
 /// finding 2).
 ///
-/// This is a COMPILE-TIME pin: loosening either field to `Option`, to a `serde_json::Value`, or to
-/// a wider integer stops this building, and whoever fixes it is standing in the file that tells
-/// them db/007 and db/009 now need `cairn_*_or_raise` on those casts too.
+/// This is a COMPILE-TIME pin on BOTH halves of the premise, which is the part the first version
+/// of this test got wrong (PR #627 review, second pass). Pinning `Hlc`'s field types alone is not
+/// enough: the load-bearing half is that `EventBody.hlc` IS an `Hlc` at all, i.e. that `cairn_body`
+/// parses the body through a typed struct. Swapping `EventBody.hlc` to a `serde_json::Value` for
+/// forward-compatibility — an entirely live theme here (ADR-0012 additive evolution, ADR-0056
+/// admit-uninterpreted) — would make those casts bare casts on peer-supplied text again while
+/// leaving `Hlc` untouched and this test green.
+///
+/// So both are pinned: loosening either field to `Option`, to a `serde_json::Value`, or to a wider
+/// integer stops this building, AND so does re-typing `EventBody.hlc`. Whoever fixes it is standing
+/// in the file that tells them db/007 and db/009 now need `cairn_*_or_raise` on those casts too.
 #[test]
 fn the_hlc_casts_rest_on_cairn_events_types() {
+    // Half one: the field types the casts assume.
     let _pin: fn(i64, i32, String) -> cairn_event::Hlc =
         |wall, counter, node_origin| cairn_event::Hlc {
             wall,
             counter,
             node_origin,
         };
+    // Half two: the body reaches the door TYPED, so those fields exist and are those types.
+    // `cairn_body` decodes an `EventBody`; if `hlc` stops being an `Hlc`, this stops compiling.
+    let _typed: fn(&cairn_event::EventBody) -> (i64, i32) = |b| (b.hlc.wall, b.hlc.counter);
 }
 
 /// The peer-role vocabulary has ONE source, and the table's CHECK reads it.
@@ -255,7 +267,8 @@ async fn the_role_check_declines_to_re_litigate_history() {
         !validated,
         "node_event_role_check must be NOT VALID: a validating constraint re-scans node_event on \
          every connect, so one row left by a downgrade after a vocabulary widening would stop this \
-         node STARTING, unrepairably (#627 review, finding 4)"
+         node STARTING before an operator can reach the database to widen the vocabulary again \
+         or drop the constraint (#627 review, finding 4)"
     );
 }
 
