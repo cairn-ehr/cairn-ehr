@@ -769,9 +769,11 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// that had work left to do, while a wrong `false` writes one legible, SQLSTATE-carrying
 /// line onto one row. The cheaper mistake is the one that keeps moving.
 ///
-/// `XX` (internal_error) is deliberately NOT claimed as local: a pgrx function panicking on
+/// `XX000` (internal_error) is deliberately NOT claimed as local: a pgrx function panicking on
 /// adversarial bytes raises it, and that is precisely the case that must not be able to
-/// wedge the pen.
+/// wedge the pen. Its two siblings `XX001`/`XX002` (data_corrupted / index_corrupted) ARE
+/// local — they are this machine's disk, not the row's content — and are claimed explicitly
+/// below, mirroring `cairn-node`'s `deterministic_apply_failure` (PR #627 review, finding 2).
 ///
 /// # Why a DELIBERATE refusal cannot be misread as local here
 ///
@@ -789,6 +791,10 @@ fn apply_failure_is_local(sqlstate: Option<&str>) -> bool {
         // No SQLSTATE at all: the statement never reached a verdict — a dropped
         // connection, a client-side decode failure. Nothing about the bytes was decided.
         None => true,
+        // The two corruption codes, claimed BEFORE the class match: class `XX` is otherwise the
+        // adversarial-bytes case, but a corrupt page or index is this node's disk and every row
+        // behind this one would meet it too (PR #627 review, finding 2).
+        Some("XX001") | Some("XX002") => true,
         // `get(..2)` rather than a slice: a code shorter than two characters (or one that
         // is not ASCII) answers `None` here and falls to `false`, which is the safe side.
         Some(code) => matches!(
@@ -6812,6 +6818,13 @@ mod tests {
             "55P03", // lock_not_available — the lock_timeout the tests below force
             "57014", // query_canceled (statement_timeout)
             "58030", // io_error underneath the database
+            // The two class-XX exceptions, claimed by FULL code (PR #627 review). Class XX is
+            // otherwise the adversarial-bytes case (XX000, a pgrx panic), but a corrupt page or
+            // index is this machine's disk and every row behind this one would meet it too.
+            // Held equal to cairn-node's list by sqlstate_classes_agree.rs; asserted here too,
+            // because that guard compares the two SETS and cannot see this crate's polarity.
+            "XX001", // data_corrupted
+            "XX002", // index_corrupted
         ] {
             assert!(
                 apply_failure_is_local(Some(local)),

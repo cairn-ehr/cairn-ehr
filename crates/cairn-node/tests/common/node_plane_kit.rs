@@ -87,6 +87,23 @@ pub fn node_event_spelled(
     wall: i64,
     payload: serde_json::Value,
 ) -> Vec<u8> {
+    node_event_with_hlc(sk, event_type, event_id, wall, 0, payload)
+}
+
+/// [`node_event_spelled`] with the HLC's COUNTER chosen too.
+///
+/// Every other builder here leaves the counter at 0, because only the wall matters to the doors'
+/// drift ceiling. The counter becomes interesting exactly once: `node_event_hlc_nonneg` is a CHECK
+/// over BOTH fields (#621), so a suite proving the door refuses a negative clock legibly has to be
+/// able to make each half negative on its own.
+pub fn node_event_with_hlc(
+    sk: &SigningKey,
+    event_type: &str,
+    event_id: &str,
+    wall: i64,
+    counter: i32,
+    payload: serde_json::Value,
+) -> Vec<u8> {
     let kid = key_hex(sk);
     let body = EventBody {
         event_id: event_id.to_string(),
@@ -95,7 +112,7 @@ pub fn node_event_spelled(
         schema_version: "node/1".into(),
         hlc: Hlc {
             wall,
-            counter: 0,
+            counter,
             node_origin: kid.clone(),
         },
         t_effective: None,
@@ -184,6 +201,33 @@ pub async fn call(c: &Client, door: &str, signed: &[u8]) -> Result<(), String> {
                 .map(|d| d.message().to_string())
                 .unwrap_or_else(|| e.to_string())
         })
+}
+
+/// A door's refusal, with the part a PROGRAM reads beside the part a human reads.
+///
+/// [`call`] returns the message alone, which is all a substitution test needs. #621 needs the
+/// SQLSTATE as well: the node puller routes on it (P0001 = a deliberate verdict, skip-and-advance;
+/// anything else = not a verdict), so a refusal carrying the wrong code is a wedged sync link even
+/// though its sentence reads perfectly.
+pub struct DoorRefusal {
+    pub sqlstate: String,
+    pub message: String,
+}
+
+/// Call a door expecting it to REFUSE, and return both halves of the refusal. Panics if the door
+/// accepted — a test that meant to see a refusal and saw an admission has learned nothing.
+pub async fn refusal(c: &Client, door: &str, signed: &[u8]) -> DoorRefusal {
+    let e = c
+        .execute(&format!("SELECT {door}($1)"), &[&signed])
+        .await
+        .expect_err("the door must REFUSE this event");
+    let db = e
+        .as_db_error()
+        .unwrap_or_else(|| panic!("{door} failed without a database error at all: {e}"));
+    DoorRefusal {
+        sqlstate: db.code().code().to_string(),
+        message: db.message().to_string(),
+    }
 }
 
 /// What `node_event` holds under `event_id` — its content address — or `None`.

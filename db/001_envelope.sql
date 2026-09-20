@@ -426,6 +426,34 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 
+-- How much of a rejected value a refusal may reproduce — the ONE home for the rule, because
+-- there is now more than one caller (#621 added cairn_uuid_or_raise) and it is a habit worth
+-- keeping identical everywhere: node-ids and event-ids carry nothing secret today, but a
+-- general value-refusing helper outlives that assumption, and door errors land in logs that
+-- outlive the session.
+--
+-- At most HALF the value, and never more than 8 characters, then '...'. Capping at 8 alone is
+-- not enough — it silently degrades to the whole value for anything 8 characters or shorter,
+-- which is exactly the short-secret case the caps exist for (PR #371 review). Halving keeps the
+-- diagnosis intact where it matters: a '0x' prefix, a leading '-', a UUID's dashes all survive
+-- in the first characters.
+--
+-- The trailing '...' is truthful whenever there was anything to hide. The one exception is the
+-- EMPTY string, which glimpses to a bare '...' with nothing behind it (PR #627 review) —
+-- harmless, because every caller prints the length beside it and that says "0 chars".
+--
+-- DELIBERATELY NOT `STRICT`, and it returns NULL on NULL rather than a legible token: both
+-- callers test for NULL first and say "<field> is missing" in their own words, which is the
+-- better message. A caller that forgets renders `starts "<NULL>"` — so check NULL before
+-- calling, as the two below do.
+CREATE OR REPLACE FUNCTION cairn_value_glimpse(p_value TEXT)
+RETURNS TEXT LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT left(p_value, LEAST(8, length(p_value) / 2)) || '...';
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_value_glimpse(text) FROM PUBLIC;
+
 -- Decode a hex payload field, or refuse LEGIBLY (issue #228).
 --
 -- Node-plane payloads carry node-ids as hex strings, and three doors decode them:
@@ -486,6 +514,7 @@ REVOKE EXECUTE ON FUNCTION cairn_node_hlc_merge(bigint, integer) FROM PUBLIC;
 -- what a later door will use for a key, a token or a wrapped DEK, and door errors are
 -- written to logs that outlive the session. Length + prefix is also what a human debugging
 -- a buggy peer actually needs: it separates "truncated" from "wrong encoding" at a glance.
+-- The rule for HOW MUCH it reproduces lives in cairn_value_glimpse, above.
 CREATE OR REPLACE FUNCTION cairn_decode_hex_or_raise(p_field TEXT, p_value TEXT, p_door TEXT)
 RETURNS BYTEA
 LANGUAGE plpgsql
@@ -499,14 +528,8 @@ BEGIN
         RAISE EXCEPTION '%: % is missing from the payload', p_door, p_field;
     END IF;
 
-    -- Show at most half the value, and never more than 8 characters (4 bytes) — then say
-    -- so with a trailing '...' that is ALWAYS truthful, because something is always
-    -- hidden. Capping at 8 alone is not enough: it silently degrades to the whole value
-    -- for anything 8 characters or shorter, which is precisely the short-secret case the
-    -- paragraph above says this exists to protect (PR #371 review). Halving keeps the
-    -- diagnosis intact where it matters — a '0x' prefix, a leading '-', a UUID's dashes
-    -- all survive in the first characters — while nothing short is ever reproduced whole.
-    v_prefix := left(p_value, LEAST(8, length(p_value) / 2)) || '...';
+    -- How much of the value the refusal may reproduce — see cairn_value_glimpse above.
+    v_prefix := cairn_value_glimpse(p_value);
 
     -- Check the SHAPE first, so the decode below cannot fail (see the header: this is
     -- db/034's idiom, not an EXCEPTION handler that would relabel an unrelated internal
@@ -530,6 +553,81 @@ BEGIN
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_decode_hex_or_raise(text, text, text) FROM PUBLIC;
+
+-- A UUID out of a signed body or payload, or a LEGIBLE P0001 refusal (#621).
+--
+-- WHY IT EXISTS. `(b ->> 'event_id')::uuid` is a bare cast on caller-supplied bytes, and a bare
+-- cast raises PostgreSQL's own `22P02` — with no door name, no field name, and, far worse, the
+-- wrong SQLSTATE. The node puller reads P0001 as *the door decided* (skip past it, re-offer it on
+-- a later sweep) and anything else as *the door never got to decide* (a deadlock, a timeout),
+-- which FREEZES that peer's cursor below the event and holds back every later event on the link,
+-- forever, with nothing penned and so no ack remedy. That is issue #228's failure one shape over:
+-- there a bare `decode()` in the 22 class froze a peer's pull permanently. So the P0001 here is a
+-- CONTRACT, exactly as it is for cairn_decode_hex_or_raise above — never add USING ERRCODE.
+--
+-- WHY pg_input_is_valid AND NOT A REGEX. Postgres's `::uuid` accepts more spellings than the
+-- canonical one (braces, and a hyphen after any group of four hex digits), and this node's log may
+-- already HOLD events under them. A validator narrower than the cast it replaces would refuse
+-- events that are already legal — the mirror image of the pen bypass PR #623's review found, where
+-- Rust's `uuid` crate was NARROWER than the door's `::uuid` and the gap became a bypass. Asking
+-- `pg_input_is_valid(v, 'uuid')` asks the very parser the cast on the next line will use, so there
+-- is no second grammar to drift. The shape is checked BEFORE the cast rather than caught after it,
+-- which is db/034's idiom and this file's rule: an EXCEPTION handler would relabel an unrelated
+-- internal error as bad caller input.
+--
+-- DELIBERATELY NOT `STRICT`, for cairn_decode_hex_or_raise's reason: a STRICT function returns
+-- NULL on NULL input without entering the body, handing a NOT NULL column an opaque constraint
+-- error instead of this named refusal. An OPTIONAL uuid field is the caller's business — see
+-- db/007's target_event_id, which asks only when the payload carries one.
+CREATE OR REPLACE FUNCTION cairn_uuid_or_raise(p_field TEXT, p_value TEXT, p_door TEXT)
+RETURNS UUID
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF p_value IS NULL THEN
+        RAISE EXCEPTION '%: % is missing from the event', p_door, p_field;
+    END IF;
+    IF NOT pg_input_is_valid(p_value, 'uuid') THEN
+        -- Characterised, never echoed whole (cairn_value_glimpse): the habit, not a leak fix.
+        RAISE EXCEPTION '%: % is not a valid UUID (% chars, starts "%")',
+            p_door, p_field, length(p_value), cairn_value_glimpse(p_value);
+    END IF;
+    RETURN p_value::uuid;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_uuid_or_raise(text, text, text) FROM PUBLIC;
+
+-- A non-negative HLC, or a LEGIBLE P0001 refusal (#621). The companion of cairn_node_hlc_merge
+-- below: that one MOVES the clock, this one refuses a clock that cannot be true.
+--
+-- node_event carries a `node_event_hlc_nonneg` CHECK over both halves, and a CHECK violation is
+-- `23514` — deterministic, repeated identically on every retry, and read by the puller as a
+-- possible transient fault. So a single negative counter from one buggy peer froze that link.
+-- Asked at the door instead, the same event is refused with the code that means *skip me*, and
+-- named: which door, which half, what it said.
+--
+-- It lives in db/001 for cairn_decode_hex_or_raise's reason (#198): cairn-sync loads a SUBSET of
+-- the migrations that includes this file but not db/007 or db/009, PL/pgSQL binds a call at first
+-- EXECUTION, and a helper declared beside today's callers is what turns a later clinical call
+-- site into a first-write outage. The name carries no plane for the same reason — the clinical
+-- door has the same raw casts (#626).
+CREATE OR REPLACE FUNCTION cairn_hlc_nonneg_or_raise(p_wall BIGINT, p_counter INTEGER, p_door TEXT)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    -- NULL is not negative, and it is not this guard's business: the columns are NOT NULL and
+    -- cairn_node_hlc_merge already fails closed on a NULL. Claiming it here would report a
+    -- missing clock as a negative one.
+    IF p_wall < 0 OR p_counter < 0 THEN
+        RAISE EXCEPTION '%: hlc must not be negative (wall %, counter %)',
+            p_door, p_wall, p_counter;
+    END IF;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_hlc_nonneg_or_raise(bigint, integer, text) FROM PUBLIC;
 
 -- A jsonb value coerced to a list, TOTALLY — this one never raises.
 --

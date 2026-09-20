@@ -17,15 +17,22 @@
 -- authored by nodes THIS puller does not (yet) trust, and refusing them is
 -- normal and self-healing (a later peer.added + a full sweep admits them). So
 -- pull_into pens ONLY the events that will NEVER apply without repair:
--- signature/context-unverifiable bytes, and — since #619 (ADR-0073) — a
--- SUBSTITUTION, a verifiable event refused with P0001 under an event_id this node
--- already holds with a different content address, whichever check raised the P0001
--- (a refusal with any other SQLSTATE freezes instead; the id is taken, so no
--- sweep, trust change or upgrade ever makes it apply). It keeps skip-and-sweep for
--- every other verifiable-but-refused event (untrusted author, or an event type
--- this node has no code for yet under the two-plane model: both resolve on a later
--- sweep). A transient DB/transport error freezes the cursor instead (retried next
--- cycle).
+-- signature/context-unverifiable bytes; — since #619 (ADR-0073) — a SUBSTITUTION,
+-- a verifiable event refused with P0001 under an event_id this node already holds
+-- with a different content address, whichever check raised the P0001 (the id is
+-- taken, so no sweep, trust change or upgrade ever makes it apply); and — since
+-- #621 (ADR-0074) — an apply that failed DETERMINISTICALLY without the door
+-- reaching a verdict, i.e. with a non-P0001 SQLSTATE that is nevertheless
+-- attributable to the bytes and so recurs identically on every retry (a cast, a
+-- CHECK violation, an XX000 out of a function fed adversarial bytes). It keeps
+-- skip-and-sweep for every other verifiable-but-refused event (untrusted author, or
+-- an event type this node has no code for yet under the two-plane model: both
+-- resolve on a later sweep). Only a failure LOCAL TO THIS NODE freezes the cursor
+-- instead (retried next cycle): a dropped connection, or SQLSTATE classes
+-- 08/40/42/53/55/57/58 plus XX001/XX002 — the list is
+-- crates/cairn-node/src/sync.rs::deterministic_apply_failure, held equal to
+-- cairn-sync's twin by sqlstate_classes_agree.rs. Before #621 EVERY non-P0001 code
+-- froze, which wedged a link permanently on bytes that could never apply.
 --
 -- THE RE-OFFER FLOOR (derived, not stored): quarantining an event records the
 -- serving-node `seq` it was refused at (`refused_seq`). Every subsequent pull
@@ -72,9 +79,22 @@ CREATE TABLE IF NOT EXISTS node_event_quarantine (
     -- The legible refusal reason AT QUARANTINE TIME: for unverifiable bytes, the
     -- verifier's reason (the cairn_verify_error vocabulary); for a substitution
     -- (#619), a reason beginning `substitution:` that names the event_id and both
-    -- content addresses (crates/cairn-node/src/sync/substitution.rs). An operator
-    -- must be able to see WHY the bytes were excluded without a debugger
-    -- (principle 4).
+    -- content addresses (crates/cairn-node/src/sync/substitution.rs); for a
+    -- deterministic no-verdict failure (#621, ADR-0074), a reason beginning `the
+    -- door did not reach a verdict` carrying the DATABASE's own words, SQLSTATE
+    -- included (legible_db_error) rather than the door's. An operator must be able
+    -- to see WHY the bytes were excluded without a debugger (principle 4).
+    --
+    -- AT QUARANTINE TIME is literal: a re-offer of the same bytes bumps seen_count
+    -- and last_seen but leaves this column alone, so if the SAME digest is refused
+    -- later for a DIFFERENT cause (bytes penned as unverifiable that a rebuilt
+    -- extension then verifies, only to fail a CHECK) the stored reason is the
+    -- original one and no longer describes the current exclusion. Issue #631.
+    --
+    -- HOW A ROW LEAVES: by the event APPLYING on a later offer (the only self-
+    -- release — unverifiable bytes reach it, a deterministic no-verdict failure
+    -- reaches it only if a later build admits the bytes, a substitution never can),
+    -- or by an operator ack. "Fix the cause" is NOT a release for the latter two.
     reason         TEXT        NOT NULL,
     first_seen     TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     last_seen      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
