@@ -222,3 +222,13 @@ dedupe is keyed on digest alone while its floor and `pending` are per-peer — p
 contract itself) and [#634](https://github.com/cairn-ehr/cairn-ehr/issues/634) (pen-at-quota,
 auto-release of this pen kind, and the deliberate *no*-release-on-later-verdict invariant all
 lack tests).
+
+> [!NOTE]
+> **Erratum E1 (2026-09-20, same day).** #630 above was closed as a **duplicate of
+> [#625](https://github.com/cairn-ehr/cairn-ehr/issues/625)**, which was filed a day earlier from
+> the PR #623 review and names the same root cause: `quarantine_node_event`'s dedupe is keyed on
+> `content_digest` alone while the re-offer floor, `pending` and the quota are all per-peer. The
+> two observations #630 added that #625 did not state — a second peer advancing with no floor of
+> its own, and this slice widening the set of events that reach that path — were moved onto #625
+> as a comment before closing. **Track the peer-blind pen at #625.** This ADR's text is immutable,
+> so the reference above stands; the erratum is the correction.
