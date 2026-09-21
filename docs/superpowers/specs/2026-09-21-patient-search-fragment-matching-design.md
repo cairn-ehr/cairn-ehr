@@ -85,7 +85,25 @@ Infix stays out; it can be added additively later if measurement shows it is nee
 **A minimum fragment length.** A one- or two-character prefix matches a large fraction of any
 population, which inflates the advisory candidate set and, worse, would write a large candidate list
 into a signed attestation if such a search ever preceded a registration. Minimum **3 characters**
-for the prefix disjunct; shorter tokens still participate in exact matching.
+for the prefix disjunct.
+
+**This must not make a short name unfindable, and the distinction is easy to implement wrongly.**
+The minimum gates the *prefix* disjunct only. Exact matching is a separate disjunct with no length
+rule, and both tokenisers already preserve short whole words: `SearchQuery::new` filters `parts` to
+length > 1 but applies **no length filter to `whole`**, and db/046 guards only `tok <> ''`. 1a's
+part projection inherits the same single-character (not two-character) drop. So:
+
+| Clerk types | Stored | Route | Found |
+|---|---|---|---|
+| `Wu` | `Wu` | exact | yes |
+| `Ng` | `Ng Wei` | exact, on the whitespace-split token | yes |
+| `Li` | `Li-Wong` | exact, on the 1a part `li` | yes |
+| `Wu` | `Wuang` | prefix — gated | no |
+
+Only the last row is refused, and it is the unselective case the minimum exists for. Two- and
+three-character surnames — common in romanised CJK and Vietnamese names — remain **fully findable by
+exact match**; they simply gain less from the fragment affordance, because for such a name the
+fragment is essentially the whole name. Nothing is lost relative to today.
 
 **The matcher does not widen.** The invariant needs sweep-paired ⊆ search-found, and widening only
 search keeps that true. Widening the matcher's blocking keys is a separate question with its own
@@ -128,7 +146,9 @@ charts — the anti-vacuity control for the exclusion above, and the test most l
 implementation.
 
 **1b.** A 3-character prefix finds a longer token; a 2-character one does not engage the prefix
-disjunct; a prefix matches at token start but not mid-token (pinning prefix-not-infix, so a later
+disjunct. **A two-character surname is still found by exact match** (`Wu` finds `Wu`; `Li` finds
+`Li-Wong` via 1a's part) — the test that separates "the minimum gates prefixes" from the wrong
+implementation, "the minimum gates short tokens", which passes every other test in this suite; a prefix matches at token start but not mid-token (pinning prefix-not-infix, so a later
 change to trigram is a deliberate decision rather than a drift). The index is actually used —
 asserted via the plan, not assumed, since an unusable index is the whole latency risk.
 
