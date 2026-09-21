@@ -44,13 +44,20 @@
 -- (Recorded here rather than only in the Rust tests, because a "drop the redundant
 -- DISTINCT" cleanup would happen in THIS file.)
 --
--- UPDATE (#636): the expiry named above has arrived, in the mild form. Pass 3's lateral now
--- UNIONs two token sources, so one patient_name row can yield the same token twice (a
--- single unpunctuated word is both a whole token and its own alphanumeric part). The
--- lateral's own UNION removes that, and the outer UNION removes anything it misses. What
--- is no longer true is the claim that "every possible duplicate is a within-branch
--- duplicate" holds for pass 3 INTERNALLY — so the per-branch DISTINCT is now doing real
--- work rather than being redundant belt. Keep all three dedups.
+-- UPDATE (#636): the expiry named above has NOT been tripped. It fires when a branch
+-- gains a non-literal `matched_pass` or a fourth pass is added with an overlapping label
+-- — neither has happened: `matched_pass` is still the single literal 'name' everywhere in
+-- pass 3, and the prefix arm added by slice 1b lives INSIDE pass 3 rather than being a new
+-- branch. Cross-branch collision is therefore still impossible, and the original mutual-
+-- redundancy argument — outer UNION alone suffices, per-branch DISTINCT alone suffices —
+-- stands unchanged.
+--
+-- The one genuinely new fact is narrower: pass 3's lateral now UNIONs two token sources,
+-- so a single patient_name row can yield the same token twice (an unpunctuated single word
+-- is both a whole token and its own alphanumeric part). That is a duplicate WITHIN pass 3,
+-- removed by the lateral's own UNION — a third dedup layer, inside the branch — and the
+-- outer UNION would catch it regardless, same as it always would have. None of the three
+-- dedups has become uniquely load-bearing; keep all three.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION cairn_search_candidates(
