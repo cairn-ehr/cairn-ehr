@@ -220,6 +220,59 @@ needs a materialised token table with its own reprojection cost, which is what
 [#637](https://github.com/cairn-ehr/cairn-ehr/issues/637) proposed for the wrong reason; it is now
 the right remaining candidate, on the right diagnosis, and it is a slice of its own.
 
+### Review round — the neutrality claim was false, and is now true
+
+**The parts-branch skip shipped with its guard reading a different string than the splitter it
+guards.** The guard tested `normalize(pn.value, NFC)`; the splitter two lines above it sees
+`lower(normalize(pn.value, NFC))`. `lower` is not class-preserving under full Unicode case mapping,
+and **exactly one code point in Unicode** exploits the gap: U+0130 `İ` (LATIN CAPITAL LETTER I WITH
+DOT ABOVE, ordinary in Turkish names) is `[:alnum:]`, but lowercases to `i` + U+0307 COMBINING DOT
+ABOVE, which is not. So `İnce` reads as unpunctuated to the guard and as punctuated to the splitter:
+the branch was skipped, `nce` was never projected, and a chart findable by `nce` on `main` was not
+findable after this slice. That falsifies the headline claim outright.
+
+Neither the 50k differential nor the contract suite could see it — the differential drew Latin-script
+Australian names, and the suite's thirteen separator probes stressed scripts, combining marks and
+whitespace but not case mapping. It also fires only under **full** case mapping: ICU-provider
+clusters do it, libc does not, and CI's `initdb` inherits libc — so it was live on every one of the
+maintainer's `cairn*` databases and invisible in CI. The worst possible split.
+
+Fixed by adding `lower(` to the guard. Four things now stand where a sampled probe stood:
+
+1. **`the_subset_argument_holds_for_every_unicode_code_point`** — the sampled probe is replaced by a
+   *proof*. The subset claim reduces to two facts about single characters (`\s` IS `[[:space:]]`; no
+   character is both `[:space:]` and `[:alnum:]`), and both are now checked over **all 1,114,111 code
+   points**, in ~0.6 s. A sample can only fail to find a counterexample; this enumerates the space in
+   which one could exist.
+2. **An `İnce` chart and an `nce` gesture** in the contract corpus — verified red before the fix and
+   green after.
+3. **The pinned-literal guard now pins the composed expression**, `lower(normalize(pn.value, NFC)) ~
+   …`, so dropping the `lower` fails independently of the corpus. Both detectors were confirmed to
+   fire by reverting the fix and re-running.
+4. **The end-to-end probe list keeps its sampled form** as belt to the proof's braces, with `İnce`
+   added — it is the layer that catches a defect in how the pieces are *composed* rather than in any
+   one class, which is the shape this defect actually had.
+
+**The measured figures above stand.** The fix makes the parts branch run for values it was wrongly
+skipping — U+0130-bearing names only, i.e. none of the Australian-name corpus the timings were taken
+on — so it moves no measured row. It does narrow the skip's *reach* slightly on a Turkish-heavy
+population, which is the correct trade and was never the measured case. The `One-Time Filter` plan
+shape the win depends on was re-checked with `lower(` in place and is unchanged.
+
+The same review round hardened the rig itself: a zero-row search can no longer pass the budget or
+supply the §5.11 floor figure. **The `李小` row above is very likely exactly that shape** — a CJK
+prefix against a pool of real Australian names — but *this plan cannot prove it either way*, because
+the table as recorded dropped the `Rows found` column the rig emits. That is the finding: the one
+signal that would settle it was generated and then discarded on the way into the evidence. The rig
+now prints `**NO ROWS — not a measurement of finding a chart**` in the verdict column itself, so a
+pasted table carries the fact even when the column is trimmed, and the next Pi run must keep the
+column. The SQLite
+pool path gained the short-draw guard the text-file path always had, the seeded population is now
+asserted rather than printed and **re-asserted after timing** (the rig writes to the shared
+`cairn_test` by default and takes no lock, so a concurrent `cargo test` truncating under it would
+have produced figures *better* than the truth), `psql` gained `-X`, and the per-sample process and
+authentication overhead is now measured by the rig instead of quoted from one hand-run.
+
 ### Filed from this slice
 
 [#641](https://github.com/cairn-ehr/cairn-ehr/issues/641) — found while checking task 4's subset

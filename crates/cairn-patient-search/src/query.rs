@@ -33,12 +33,20 @@ impl SearchQuery {
     /// Normalise raw operator input into the tokens db/046 pass 3 blocks on.
     ///
     /// TWO KINDS OF TOKEN PER WHITESPACE-DELIMITED WORD, not a single split — this is the
-    /// fix for a review-round Critical (#344): db/046 pass 3 tokenises the STORED name only
-    /// on whitespace (`regexp_split_to_table(..., '\s+')`, copied verbatim from the
-    /// matcher), so a hyphenated or apostrophe'd compound like "O'Brien-Smith" stays ONE
-    /// stored token — deliberately, because the same rule is what keeps a dash-joined §5.4
-    /// callsign ("unknown-ed-site1-...") from fragmenting into pieces that would match
-    /// every John Doe ever registered. If this side split on every non-alphanumeric
+    /// fix for a review-round Critical (#344): db/046 pass 3's WHOLE-TOKEN source tokenises
+    /// the STORED name only on whitespace (`regexp_split_to_table(..., '\s+')`, copied
+    /// verbatim from the matcher), so a hyphenated or apostrophe'd compound like
+    /// "O'Brien-Smith" stays ONE stored token there — deliberately, because the same rule is
+    /// what keeps a dash-joined §5.4 callsign ("unknown-ed-site1-...") from fragmenting into
+    /// pieces that would match every John Doe ever registered.
+    ///
+    /// (Since #636 that source is no longer the only one: pass 3 ALSO projects the stored
+    /// value's alphanumeric parts — for punctuated values only, since #639 — with its own
+    /// callsign guard. That makes the stored side mirror this one rather than contradict it,
+    /// and it does not change why this side emits two kinds of token: the intact stored token
+    /// still exists and still has to be matchable. See db/046's pass 3 for the stored half.)
+    ///
+    /// If this side split on every non-alphanumeric
     /// character (the old behaviour), a clerk typing a punctuated name — including typing
     /// it back EXACTLY as printed — would never produce a token equal to that intact stored
     /// one, and would silently fail to find the chart. So each word contributes:

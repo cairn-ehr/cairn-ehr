@@ -63,16 +63,52 @@
 > `db/046` swapped in place: **floor 1528.8 → 856.7 ms (−44%)**, worst case 2509.5 → **862.4 ms**
 > (−66%) of 5000 ms. **The spread collapsed from 981 ms to 14 ms** — query length no longer moves
 > the cost, which is #639's diagnosis confirmed and #637's refuted. Neutrality held three ways: a
-> standing contract test (14 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
+> standing contract test (16 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
 > **differential over 394 tokens / 14,447 rows — 0 lost, 0 gained**, and an executable subset
 > argument that asks the SERVER whether the character classes still coincide. **The rig is committed
 > this time** (`scripts/measure_patient_search.py` + tests in `rust.yml`): slice 1's was written on
-> the Pi and never came back. Durable rules are **trap 15**. **Filed:** **#641** (`[^[:alnum:]]+`
+> the Pi and never came back. Durable rules are **trap 15**.
+>
+> ⚠️ **AND THE NEUTRALITY CLAIM WAS FALSE WHEN FIRST PUSHED — REVIEW CAUGHT IT, ALL THREE
+> DEFENCES MISSED IT.** The parts-branch guard tested `normalize(pn.value, NFC)` while the splitter
+> it guards reads `lower(normalize(pn.value, NFC))`, and **exactly one code point in Unicode** uses
+> the gap: U+0130 `İ` is `[:alnum:]` but lowercases to `i` + U+0307 COMBINING DOT ABOVE, which is
+> not. `İnce` therefore read as unpunctuated to the guard and punctuated to the splitter — branch
+> skipped, `nce` never projected, a chart findable on `main` unfindable after. The 50k differential
+> drew **Latin-script** Australian names; the thirteen separator probes stressed scripts, combining
+> marks and whitespace but **not case mapping**; and it fires only under FULL case mapping, so it was
+> live on every `cairn*` database here (all ICU) and invisible in CI (libc `initdb`). Fixed with one
+> word. The sampled probe is now a **proof**: the claim reduces to two single-character facts and
+> both are checked over **all 1,114,111 code points in ~0.6 s**
+> (`the_subset_argument_holds_for_every_unicode_code_point`). Plus an `İnce` chart, an `nce` gesture,
+> and the pinned literal tightened to the composed expression — both detectors confirmed red by
+> reverting the fix. **Trap 16: a guard and the thing it guards must be asked about the SAME
+> STRING**, and a probe list is a sample, not an argument — if a claim reduces to a property of
+> character classes, enumerate the classes. **Filed:** **#641** (`[^[:alnum:]]+`
 > treats a combining mark as a separator, so slice 1a's parts branch cuts `अमित` to `अम` and a Thai
 > name at its tone marks — precision not recall, nothing becomes unfindable, but ADR-0014's shape one
-> level below #638). **What is left:** the whole-token `regexp_split_to_table` over every row, the
-> scan pass 3 has always been; cutting it needs the materialised token table #637 proposed for the
-> wrong reason — right candidate, right diagnosis now, a slice of its own.
+> level below #638) and **#643** (the rig times `count(*)`, not the row transfer the clerk waits
+> for — the scan is genuinely executed, but result-set size is exactly what the synthetic and real
+> pools differ by ~30× on; not fixed in-branch because changing what is timed breaks comparability
+> with the recorded before/after tables). #637 has been **commented** with the measurement that
+> refutes its diagnosis, since it stays open as the token-table tracking issue. **What is left:**
+> the whole-token `regexp_split_to_table` over every row, the scan pass 3 has always been; cutting
+> it needs the materialised token table #637 proposed for the wrong reason — right candidate, right
+> diagnosis now, a slice of its own.
+>
+> **The rig was hardened in the same round**, because four of its paths could exit 0 with a number
+> it never measured: a **zero-row search used to pass the budget AND could supply the §5.11 floor**
+> (§1.2 is *5 s to FIND A CHART*; the `李小` row against an Australian-name pool is very likely
+> exactly that, and the plan's table cannot prove it either way because the `Rows found` column was
+> dropped on the way in — restore it next run); the SQLite pool path had **no short-draw guard**
+> though the text-file path always did, and the maintainer's own 959 MB pool holds **two** tables
+> matching the discovery heuristic, `names` (6.5M rows) and `person` (**10**), resolved only by
+> `sqlite_master` order; the seeded population was printed and never asserted; and `--dbname`
+> defaults to the shared `cairn_test` with **no serial guard**, so a concurrent `cargo test`
+> truncating mid-run would have produced figures *better* than the truth. All four now refuse. Also
+> `-X` on psql (a `~/.psqlrc` `SET work_mem` silently re-plans every sample), empty psql output
+> raises instead of reading as `0`, and the per-sample process+auth overhead is measured rather than
+> quoted from one hand-run.
 >
 > **⇒ SLICE 2, THE FUNNEL UI, IS SPEC'D AND UNBUILT** —
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Workflow: browse by
@@ -212,7 +248,7 @@
 > **Fifteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
 > trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review —
 > **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615,
-> trap 13 by #619, trap 14 by #621 and trap 15 by #639.)
+> trap 13 by #619, trap 14 by #621, and traps 15 and 16 by #639.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -445,23 +481,44 @@
 >     `SELECT DISTINCT` and the outer `UNION` already remove. ⚠️ The file's dedup block is now down to
 >     **two** layers, and the one remaining sentence about the lateral says it is NOT a dedup: if a
 >     later change makes the branch `DISTINCT` non-load-bearing, duplicate rows reach the caller.
->     (c) **THE PARTS-BRANCH SKIP IS TESTED ON THE NORMALISED VALUE AND THAT IS NOT COSMETIC.**
->     `normalize(pn.value, NFC) ~ '[^[:alnum:][:space:]]'` asks about the string the splitter is
->     handed. Dropping the `normalize` is merely conservative (it runs the branch unnecessarily);
->     the dangerous direction is any predicate that skips the branch for a value whose NFC form DOES
->     carry punctuation. The subset argument is executable — `patient_search_equivalence.rs`'s
->     `skipping_the_parts_branch_can_never_drop_a_token` asks the SERVER over 13 probes, because a
->     locale or ICU version may move a character class underneath a deployment, and
->     `the_subset_probe_still_describes_the_query_db046_runs` fails if either separator class is
->     edited without re-deriving it.
+>     (c) **THE PARTS-BRANCH SKIP MUST BE TESTED ON `lower(normalize(pn.value, NFC))` — LOWERED AND
+>     NORMALISED, AND THE `lower` IS THE ONE THAT BIT.** The guard must ask about the exact string
+>     the splitter is handed. It shipped in review asking about `normalize(...)` alone, and **one
+>     code point in all of Unicode** walks through that gap: U+0130 `İ` is `[:alnum:]` but lowercases
+>     to `i` + U+0307 COMBINING DOT ABOVE, which is not — so `İnce` reads unpunctuated to the guard,
+>     punctuated to the splitter, the branch is skipped, and `nce` stops finding the chart. Dropping
+>     the `normalize` is merely conservative (the branch runs unnecessarily); dropping the `lower`
+>     LOSES A TOKEN. Fires only under FULL case mapping — ICU providers yes, libc no, so it was live
+>     on every local `cairn*` DB and invisible in CI.
+>     ⚠️ **A PROBE LIST IS A SAMPLE, NOT AN ARGUMENT.** The 13-value probe was green throughout,
+>     because it stressed scripts, combining marks and whitespace but not case mapping. If a claim
+>     reduces to a property of character classes, ENUMERATE THE CLASSES:
+>     `the_subset_argument_holds_for_every_unicode_code_point` now checks the two facts the whole
+>     subset argument rests on (`\s` IS `[[:space:]]`; nothing is both `[:space:]` and `[:alnum:]`)
+>     over **all 1,114,111 code points in ~0.6 s**. The sampled probe survives beside it as the layer
+>     that catches a bad COMPOSITION rather than a bad class — which is what this defect was — and
+>     `the_subset_probe_still_describes_the_query_db046_runs` pins the **composed** expression, so
+>     dropping the `lower` fails independently of any corpus.
 >     ⚠️ **A neutrality claim needs a test that can see a GAIN.** Every pre-#639 pass-3 test asserts a
 >     chart IS found, so a rewrite returning EXTRA charts passed all of them; the mutation that
 >     dropped the parts branch's callsign guard was caught only by a gesture expecting the EMPTY set.
+>     ⚠️ **AND A NEUTRALITY DIFFERENTIAL IS ONLY AS WIDE AS ITS CORPUS.** The 394-token / 14,447-row
+>     differential returned 0 lost / 0 gained and was *right about the names it drew* — all
+>     Latin-script Australian. It could not have found U+0130.
 >     **Re-measure with `scripts/measure_patient_search.py`, do not reason** — #637's diagnosis was
 >     reasoned, confident and wrong, and its remedy followed the wrong cause. Residuals: **#641**
->     (the parts branch cuts a Devanagari name at its vowel signs), **#640**, and the remaining
->     ~860 ms floor, which is the whole-token split over every row and needs #637's materialised
->     token table — for the right reason this time.
+>     (the parts branch cuts a Devanagari name at its vowel signs), **#640**, **#643** (the rig times
+>     `count(*)`, not the row transfer), and the remaining ~860 ms floor, which is the whole-token
+>     split over every row and needs #637's materialised token table — for the right reason this
+>     time.
+> 16. **⇒ A GUARD AND THE THING IT GUARDS MUST BE ASKED ABOUT THE SAME STRING (#639 review,
+>     2026-09-21).** Generalised from 15(c), because the shape is not about Unicode. Whenever a cheap
+>     predicate decides whether to run expensive work, the predicate and the work must read the
+>     *identical* expression — not a simplification of it, however obviously equivalent. Here the two
+>     differed by one `lower(`, agreed on every test value, and disagreed on exactly one input in the
+>     whole domain. The defence that works is pinning the COMPOSED expression as a literal (this
+>     repo's `include_str!` + `contains` idiom), not pinning its pieces: the piece-wise list was
+>     present, passing, and blind.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is

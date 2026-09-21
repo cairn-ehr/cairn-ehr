@@ -707,9 +707,9 @@ Design: `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-de
   the fence is required — a plain subquery is pulled back up and re-inlined, measured); **`UNION
   ALL` in the lateral** (the dedup sort per row removed a duplicate the branch `DISTINCT` and the
   outer `UNION` already remove twice over); and **the parts branch skipped for an unpunctuated
-  value** (for a value whose NFC form holds nothing outside `[[:alnum:][:space:]]` the two splits
-  coincide — Postgres's `\s` *is* `[[:space:]]` — and parts additionally drops length-1 tokens and
-  callsigns, so parts ⊆ whole).
+  value** (for a value whose **lowered** NFC form holds nothing outside `[[:alnum:][:space:]]` the
+  two splits coincide — Postgres's `\s` *is* `[[:space:]]` — and parts additionally drops length-1
+  tokens and callsigns, so parts ⊆ whole).
 - **Measured on the Pi 5 at 50,000 real Australian names**, same machine and seeded rows, `db/046`
   swapped in place: **floor 1528.8 → 856.7 ms (−44%, under a second)**, worst case 2509.5 →
   862.4 ms (−66%) against 5000 ms. **The spread collapses from 981 ms to 14 ms** — query length no
@@ -720,14 +720,39 @@ Design: `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-de
   numbers could be believed but not re-derived. `scripts/measure_patient_search.py` seeds, times and
   reports, with a `--dump-names` path that keeps the gigabyte SQLite pool on the workstation while
   the measurement happens where the budget applies; pure parts tested and riding `rust.yml`.
-- **Neutrality is held three ways, and they are not redundant.** A standing **contract** test
-  (`patient_search_equivalence.rs`: seven charts, fourteen gestures as EXACT sets, four expecting
+- **Neutrality is held four ways, and they are not redundant.** A standing **contract** test
+  (`patient_search_equivalence.rs`: eight charts, sixteen gestures as EXACT sets, four expecting
   the EMPTY set because a widening rewrite breaks those first; proven red under three mutations —
   the callsign-guard one *gained* a John Doe on `unknown`, a direction no existing test could see).
   A **differential** over 394 query tokens / 14,447 rows, 0 lost and 0 gained, which dies with the
-  branch. And an **executable subset argument** that asks the SERVER whether the character classes
-  still coincide, because a locale or ICU version may move one underneath a deployment.
-- **Filed:** [#641](https://github.com/cairn-ehr/cairn-ehr/issues/641) — `[^[:alnum:]]+` treats a
+  branch. An **exhaustive class proof** over all 1,114,111 Unicode code points. And an **end-to-end
+  probe list** over values a name can legitimately hold, which is the layer that catches a bad
+  composition rather than a bad class.
+- **⚠️ THE CLAIM WAS FALSE ON FIRST PUSH, AND ALL THREE ORIGINAL DEFENCES MISSED IT.** The
+  parts-branch guard tested `normalize(pn.value, NFC)` while the splitter it guards reads
+  `lower(normalize(pn.value, NFC))`. **Exactly one code point in Unicode** uses the gap: U+0130 `İ`
+  is `[:alnum:]` but lowercases to `i` + U+0307 COMBINING DOT ABOVE, which is not — so `İnce` read
+  as unpunctuated to the guard and punctuated to the splitter, the branch was skipped, `nce` was
+  never projected, and a chart findable on `main` was not findable after. The differential drew
+  Latin-script Australian names; the thirteen separator probes stressed scripts, combining marks and
+  whitespace but not case mapping; and it fires only under FULL case mapping, so it was live on
+  every local ICU database and invisible in libc CI. **Fixed with one word**, and the sampled probe
+  was promoted to a proof — the subset claim reduces to two single-character facts, now checked over
+  every code point in ~0.6 s. Plus an `İnce` chart, an `nce` gesture, and the pinned literal
+  tightened to the **composed** expression; both detectors confirmed red by reverting the fix.
+- **The rig was hardened in the same round.** Four paths could exit 0 with a number never measured:
+  a zero-row search passed the budget and could supply the §5.11 floor (§1.2 is *5 s to FIND a
+  chart*); the SQLite pool path lacked the short-draw guard the text-file path had, while the real
+  959 MB pool holds **two** tables matching its discovery heuristic — `names` (6.5M) and `person`
+  (**10**) — ordered only by creation; the seeded population was printed, never asserted; and
+  `--dbname` defaults to the shared `cairn_test` with no serial guard, so a concurrent `cargo test`
+  truncating mid-run would report figures *better* than the truth. All four now refuse, plus `-X` on
+  psql and a measured per-sample overhead.
+- **Filed:** [#643](https://github.com/cairn-ehr/cairn-ehr/issues/643) — the rig times `count(*)`,
+  not the row transfer the clerk waits for; the scan is genuinely executed, but result-set size is
+  exactly what the synthetic and real pools differ by ~30× on. Not fixed in-branch: changing what is
+  timed breaks comparability with the recorded before/after tables.
+  [#641](https://github.com/cairn-ehr/cairn-ehr/issues/641) — `[^[:alnum:]]+` treats a
   combining mark as a separator, so slice 1a's parts branch cuts a Devanagari name at its first
   vowel sign (`अमित` → `अम`) and a Thai name at its tone marks. Nothing becomes unfindable, so it is
   precision not recall — but it is ADR-0014's shape one level below #638 (#638 was the *gate*
