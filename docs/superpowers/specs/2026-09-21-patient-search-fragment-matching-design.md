@@ -70,14 +70,24 @@ projection** — the whole token only. The §5.4 John Doe subsystem already dist
 pass 3's existing comment notes callsigns are deliberately included in search but excluded from the
 matcher.
 
-### 1b — prefix matching (index change, budget re-measurement)
+### 1b — prefix matching (no index; the pass is already a scan)
 
 `mich` → `Michaelowski`. Exact equality cannot do this at all, so an index-backed prefix match is
 added as a fourth disjunct.
 
-**Prefix, not infix.** `LIKE 'mich%'` is served by a B-tree with `text_pattern_ops` on the same
-normalised-token expression, so it stays indexable — which is the property db/046 deliberately chose
-equality to preserve. Infix (`%esch%`) needs `pg_trgm`, a new extension dependency on every node
+**No index, because there is none to lose.** Planning corrected this: `patient_name` carries **no
+index at all**, and pass 3 already scans it with a lateral `regexp_split_to_table` over every value.
+Tokens produced by a set-returning function cannot be indexed without materialising them into a
+token table, so db/046's *"keeps the door open to an expression index"* is aspirational, not
+current. `starts_with(tok, q)` therefore costs the same scan `tok = q` costs today: **1b does not
+degrade the latency profile**, it changes the predicate applied after the split. A materialised
+token table is a separate slice with its own reprojection cost, to be opened only if Task 5's
+measurement demands it.
+
+**Prefix, not infix, and `starts_with` not `LIKE`.** `LIKE q || '%'` would be a wildcard-injection
+bug: `SearchQuery::new` trims only a word's EDGE punctuation, so an internal `%` or `_` survives
+into a query token and LIKE would read it as a wildcard. `starts_with` has no escaping surface and
+is what `LIKE 'x%'` optimises to. Infix (`%esch%`) needs `pg_trgm`, a new extension dependency on every node
 including Pi-class ones, for a case 1a already covers in its common form (the fragment a clerk types
 is usually the *start* of a name part, and after 1a each part of a compound is its own token).
 Infix stays out; it can be added additively later if measurement shows it is needed.
