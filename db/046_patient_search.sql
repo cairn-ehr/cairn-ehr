@@ -52,12 +52,23 @@
 -- redundancy argument — outer UNION alone suffices, per-branch DISTINCT alone suffices —
 -- stands unchanged.
 --
--- The one genuinely new fact is narrower: pass 3's lateral now UNIONs two token sources,
--- so a single patient_name row can yield the same token twice (an unpunctuated single word
--- is both a whole token and its own alphanumeric part). That is a duplicate WITHIN pass 3,
--- removed by the lateral's own UNION — a third dedup layer, inside the branch — and the
--- outer UNION would catch it regardless, same as it always would have. None of the three
--- dedups has become uniquely load-bearing; keep all three.
+-- The one genuinely new fact is narrower: pass 3's lateral combines two token sources, so a
+-- single patient_name row can yield the same token twice (an unpunctuated single word is
+-- both a whole token and its own alphanumeric part). That is a duplicate WITHIN pass 3.
+--
+-- UPDATE (#639): that duplicate used to be removed by the lateral's own `UNION` — a third
+-- dedup layer, inside the branch. It is now `UNION ALL`, because that layer was the only
+-- one of the three that cost anything (a sort of the overlap, per patient_name row, about
+-- 30% of pass 3's time) and it was removing a duplicate the other two already remove. The
+-- duplicate token now becomes a duplicate ROW and is collapsed by the branch's own
+-- `SELECT DISTINCT` — and by the outer UNION regardless, same as it always would have.
+--
+-- So the count is back to two, and the original argument is unchanged: each of the two
+-- alone would suffice, keeping both is free, and dropping either stops being safe the
+-- moment a branch gains a non-literal `matched_pass` or a fourth pass with an overlapping
+-- label. What is NO LONGER true is any sentence calling the lateral's combinator a dedup:
+-- if a change ever makes the branch `DISTINCT` non-load-bearing, the duplicate rows this
+-- now emits reach the caller.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION cairn_search_candidates(
@@ -175,7 +186,17 @@ AS $$
             SELECT w AS tok
               FROM regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS w
              WHERE w <> ''
-            UNION
+            -- `UNION ALL`, NOT `UNION` (#639). The two sources overlap heavily — an unpunctuated
+            -- single word is both a whole token and its own alphanumeric part — and `UNION` paid
+            -- for a dedup SORT of that overlap for EVERY `patient_name` row. Dropping the sort
+            -- measured about -30% on its own.
+            --
+            -- Nothing about the answer changes, and the reason is the dedup block at the top of
+            -- this file: a duplicate token here produces a duplicate ROW, which the branch's own
+            -- `SELECT DISTINCT pn.patient_id, 'name'` collapses — as does the outer `UNION`
+            -- between the three passes. The lateral's dedup was the THIRD of three layers over the
+            -- same duplicate, and it is the one that cost a sort per row.
+            UNION ALL
             -- Its alphanumeric PARTS (#636, slice 1a) — the mirror of what
             -- SearchQuery::new already emits on the query side, so a clerk typing one half
             -- of "Fyodorowksi-Eschenbacher" finds the chart. Single characters are dropped
