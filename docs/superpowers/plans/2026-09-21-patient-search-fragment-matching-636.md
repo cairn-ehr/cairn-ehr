@@ -587,3 +587,25 @@ but with real margin erosion on the exact-compound case (3.37 s of the 5 s budge
 see the report for why the longest query string, not the widest fragment, turned out to be the
 worst case, and an honest caveat on how this population size compares to a documented Pi-class
 ceiling (none exists in the spec).
+
+**Three caveats that must travel with these numbers (also recorded in #637 — cited, not deferred to
+it: restated here because this file, not the gitignored task report, is what survives).**
+
+1. **Hardware.** This was measured on Apple Silicon (Postgres.app), **not** Pi-class ARM. The 5 s
+   ceiling in `db/046_patient_search.sql` is stated for a Pi-class node, so what this run shows is
+   *"no breach on dev hardware,"* not *"the budget holds on the hardware the budget is about."* A
+   Pi5 re-run is the natural follow-on — the project already keeps a Pi5 rig as its
+   performance-floor smoke test (spike 0001).
+2. **Population provenance.** 605,392 rows / 603,005 patients was a figure **chosen** as a
+   generous stress level, not one sourced from any requirement. No documented Pi-class population
+   target exists anywhere in `docs/spec/` — searched `topology.md`, `deployment.md`, `vision.md`,
+   ADR-0001/0002/0016, and found only qualitative framing ("a handful of workstations," "a busy ED
+   runs on a department server, not a Pi"). Do not read 605k as a spec figure; it is this task's
+   stress choice.
+3. **The shape of the cost is counter-intuitive.** The worst case is the **long exact name**
+   (`Fyodorowksi-Eschenbacher`, 3.37 s / 67% of budget), not the unselective fragment (`smi`,
+   1.08 s / 22%). Pass 3's `starts_with` prefix arm runs against ~1.2 million generated tokens
+   regardless of how many rows end up matching, and costs more per token for a longer query string
+   — so **query length, not selectivity, is the dominant cost driver** in this pass. A stored name
+   longer than the `Fyodorowksi-Eschenbacher` fixture would cost proportionally more; 3.37 s is a
+   sample point on that curve, not a ceiling.
