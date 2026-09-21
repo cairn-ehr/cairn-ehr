@@ -568,13 +568,22 @@ git commit -m "docs(#636): the §1.2 measurement"
 
 ## Measurement results
 
-_Filled in by Task 5._
+Measured 2026-09-21 against `cairn_perf_636` (dropped afterward — not `cairn_test`), seeded via
+the matcher's existing synthetic generator (`cairn_matcher.eval.generator.generate_dataset`,
+300,000 entities) plus five named fixture patients so each query's match count is reasoned-about
+rather than accidental (3 Michaelowski-shaped names, a 3,000-strong Smith cohort at ~1% of
+population, one `Wu`, one `Fyodorowksi-Eschenbacher`). Full method, all 5 raw runs per query, and
+`EXPLAIN` plans in `.superpowers/sdd/2026-09-21-patient-search-fragment-matching-636/task-5-report.md`.
 
 | Search | Median (5 runs) | Budget |
 |---|---|---|
-| `mich` (selective fragment) | — | 5 s |
-| `smi` (unselective fragment) | — | 5 s |
-| `Wu` (exact, short) | — | 5 s |
-| `Fyodorowksi-Eschenbacher` (exact, compound) | — | 5 s |
+| `mich` (selective fragment) | 1177.6 ms | 5 s |
+| `smi` (unselective fragment) | 1075.8 ms | 5 s |
+| `Wu` (exact, short) | 680.1 ms | 5 s |
+| `Fyodorowksi-Eschenbacher` (exact, compound) | 3374.7 ms | 5 s |
 
-Population: `patient_name` rows = _—_.
+Population: `patient_name` rows = 605,392 (603,005 distinct patients). **Budget held for all four**,
+but with real margin erosion on the exact-compound case (3.37 s of the 5 s budget, ~67% consumed) —
+see the report for why the longest query string, not the widest fragment, turned out to be the
+worst case, and an honest caveat on how this population size compares to a documented Pi-class
+ceiling (none exists in the spec).
