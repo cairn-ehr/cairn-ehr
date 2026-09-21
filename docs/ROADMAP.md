@@ -716,6 +716,19 @@ Design: `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-de
   longer moves the cost, which is the signature of per-pair `normalize` being hoisted out, and
   #639's diagnosis confirmed against #637's. The `main` column reproduces slice 1's hand-run to
   within 4%.
+- **⇒ RE-RUN 2026-09-22 (with the `lower()` fix), AND TWO OF THE FIVE QUOTED GESTURES FIND NOTHING.**
+  `fyodorowksi-eschenbacher` is an invented name, `李小` a CJK prefix against an Australian pool:
+  **0 rows on both sides**, so neither measured §1.2's *find an existing chart* — and the headline
+  worst case was one of them. Inherited from slice 1 (its Pi log: `fitzherbert-brockholes … 2412.7 ms
+  found=0`). Re-measured with gestures drawn from the corpus — `unterfrancova-masna` (1 row), `天`
+  (2), `mich` (518), `smi` (421), `wu` (64): **floor 1528.4 → 883.3 ms**, under a second, so
+  **§5.11's no-spinner limb is met on a real search**; real worst case **2306.3 → 897.5 ms** of
+  5000; spread **777.9 → 14.6 ms**. The `main` column reproduces the original run to **0.3%**, which
+  vindicates rig and run together. **Rows found are identical before and after on all seven
+  gestures** — a free candidate-count neutrality check at 50k on the real pool, and the only one
+  covering the *fixed* `db/046`. All 52 migrations loaded cleanly on ARM into a fresh database.
+  ⚠️ **The fix's own cost is not separable from noise** (post-fix 883–918 ms over two runs, pre-fix
+  857–871, against ~2% measured run-to-run variance): cheap and plausibly free, but not proven so.
 - **⇒ THE RIG IS COMMITTED THIS TIME.** Slice 1's was written on the Pi and never came back, so its
   numbers could be believed but not re-derived. `scripts/measure_patient_search.py` seeds, times and
   reports, with a `--dump-names` path that keeps the gigabyte SQLite pool on the workstation while
