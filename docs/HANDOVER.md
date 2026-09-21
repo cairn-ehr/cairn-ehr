@@ -37,7 +37,35 @@
 > **#625** (the pen dedupes by digest across peers but counts `pending` per peer, so a penned rival
 > goes quiet when its first server leaves the pull set).
 >
-> **⇒ WHAT IS NEXT: NO DECIDED-AND-UNBUILT DR ITEM REMAINS**, and #621 is merged, so the node-plane
+> **⇒ #636 SLICE 1 IS BUILT: PATIENT SEARCH MATCHES FRAGMENTS** (2026-09-21, no ADR — it widens
+> `db/046`'s pass 3 within the existing §5.3/§5.8 contract; no migration, no `SCHEMA_GENERATION`
+> bump, no signed-body change). A clerk typing part of a name got **zero** results, indistinguishable
+> from *no such patient* — a §1.2 failure for *find an existing chart* and a duplicate-chart risk.
+> Two widenings, both strictly monotone (a reviewer proved it by running the old predicate `EXCEPT`
+> the new one over 27 query tokens: **zero rows lost, nine gained**): **1a** projects the alphanumeric
+> PARTS of stored punctuated tokens, so `Eschenbacher` finds `Fyodorowksi-Eschenbacher`; **1b** matches
+> a 3+ character PREFIX via `starts_with` (never `LIKE q || '%'` — `SearchQuery::new` trims only EDGE
+> punctuation, so an internal `%` survives and LIKE would read it as a wildcard). **The 3-char minimum
+> gates PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match; that is pinned.
+> **Callsigns are excluded from both new arms**, or one typed word surfaces every John Doe.
+> ⚠️ **The plan's own SQL had that bug on the prefix arm** and only Task 1's guard test caught it.
+> Residuals: **#637** (Pi-class measurement gap; no documented Pi-class population figure anywhere
+> in `docs/spec/`) · **#638** (the 3-char gate denies fragment search to CJK-script names entirely —
+> `李小` is 2 chars and gated; ADR-0014 cultural-capture shape) · **#639** (pass 3 is **5.6× slower**;
+> the cost is 1a's second split + repeated `normalize`, NOT the prefix arm — #637's diagnosis was
+> wrong and is corrected; three neutral changes recover ~80%) · **#640** (the two callsign guards
+> hardcode a literal the matcher deliberately binds as a synced frozenset).
+>
+> **⇒ SLICE 2, THE FUNNEL UI, IS SPEC'D AND UNBUILT** —
+> `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Workflow: browse by
+> fragment in a **scrollable** list; pick and the chart opens; if nothing fits, a data-entry screen
+> pre-filled from what was typed; once it holds a given name, surname and DOB the machine searches
+> **again, automatically**, and asks *could this be one of these?* **The attested search is that
+> commit-time one, not the browse search** — which is what frees the browse list to scroll (it
+> carries no signed claim) and makes query/displayed drift structurally impossible. Gender displays
+> and ranks but never excludes, client-side, so it never enters the signed `SearchQuery`.
+>
+> **⇒ NO DECIDED-AND-UNBUILT DR ITEM REMAINS**, and #621 is merged, so the node-plane
 > refusal work is closed out. Pick from below, or leave DR for the *Other build candidates*.
 > **Recommended: #620** — a wire-contract DECISION (content-addressing over bytes the signature does
 > not cover), and the only open item that can still change the wire; it needs a brainstorm before a
