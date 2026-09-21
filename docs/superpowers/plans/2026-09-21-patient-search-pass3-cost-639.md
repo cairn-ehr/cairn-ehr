@@ -153,4 +153,80 @@ below; a measurement on faster hardware does not discharge it. Cognitive load is
 
 ## Measurement results
 
-*(Task 5 fills this in.)*
+Rig: `scripts/measure_patient_search.py` (new with this slice — slice 1's equivalent was never
+committed, so its Pi numbers could be believed but not re-derived). Pure parts tested by
+`scripts/tests/measure_patient_search_test.py`, wired into `rust.yml`.
+
+### On the target hardware, which is the only run that judges the budget
+
+Raspberry Pi 5, aarch64, 4 cores, 8 GB, PostgreSQL 18.4, `cairn_pgx` 0.3.0, reached by
+`ssh -J dgx`. **50,000 `patient_name` rows drawn from the maintainer's real Australian name pool**
+(the same source slice 1 used), all 53 migrations loaded on ARM. Median of 5 runs after a warm-up.
+**Before and after differ in `db/046` and nothing else** — same machine, same database, same seeded
+rows, the function replaced in place between the two runs.
+
+| Search | Before (`main`) | After | Change |
+|---|---|---|---|
+| `fyodorowksi-eschenbacher` — long compound | 2509.5 ms | **862.4 ms** | **−66%** |
+| `mich` — selective fragment | 1669.7 ms | **870.9 ms** | −48% |
+| `smi` — unselective fragment | 1630.9 ms | **871.1 ms** | −47% |
+| `李小` — CJK 2-character prefix | 1607.0 ms | **866.6 ms** | −46% |
+| `wu` — exact short, below the byte gate | 1528.8 ms | **856.7 ms** | −44% |
+
+**The floor — the number §5.11 is about — falls from 1528.8 ms to 856.7 ms, under 1 s.** The worst
+case falls from 2509.5 ms to 862.4 ms against a 5000 ms budget.
+
+**The spread collapses from 981 ms to 14 ms, and that is the finding, not a footnote.** Before, a
+search cost measurably more for a longer query string; after, every gesture costs the same. That is
+the signature of per-pair `normalize` work being hoisted out, and it is #639's diagnosis confirmed
+against #637's: had the prefix arm been the driver, the long compound would still stand out.
+
+The `main` column reproduces slice 1's hand-run to within 4% (`wu` 1528.8 vs 1479, the compound
+2509.5 vs 2413), which is what licenses comparing the two runs at all.
+
+**Honest limits.** Rows are seeded straight into the `patient_name` projection, not authored as
+signed events — the same caveat slice 1 recorded; `cairn_search_candidates` reads nothing else, so
+this is the intended read path, and it says nothing about registration throughput. Each timing
+includes one `psql` process start, measured on that Pi at **31.9 ms**, ~4% of the post-change
+figure and ~2% of the pre-change one.
+
+### The neutrality claim, checked at 50k scale rather than argued
+
+The shipped function was installed a second time under a second name and the two were compared
+directly over the full seeded corpus — **394 query tokens** (25 hand-chosen gestures, ~300 real
+surnames straight out of the data, and ~100 three-byte prefixes of them), **14,447 candidate rows**:
+
+```
+LOST   (in old, not new): 0
+GAINED (in new, not old): 0
+```
+
+This is the reviewer's `EXCEPT`-both-ways method from slice 1, at 15× the token count, and it is
+evidence the standing test in `patient_search_equivalence.rs` cannot give on its own — that suite
+pins the CONTRACT on a seven-chart corpus, this compares the two implementations on a real one.
+Neither replaces the other: the differential dies with the branch, the contract test outlives it.
+
+### Dev-hardware run, for the record
+
+Apple Silicon M3 Max, Postgres 18 on :5532, the same 50,000 real names: floor **560.4 → 174.1 ms**,
+worst case **836.5 → 175.3 ms**. A larger proportional gain than the Pi's, which is why the Pi run
+is the one quoted against the budget.
+
+### What is left, and what would be needed to move it
+
+The remaining ~860 ms is the whole-token `regexp_split_to_table` over every `patient_name` row —
+the scan pass 3 has always been, and the one cost none of these three changes touches. Cutting it
+needs a materialised token table with its own reprojection cost, which is what
+[#637](https://github.com/cairn-ehr/cairn-ehr/issues/637) proposed for the wrong reason; it is now
+the right remaining candidate, on the right diagnosis, and it is a slice of its own.
+
+### Filed from this slice
+
+[#641](https://github.com/cairn-ehr/cairn-ehr/issues/641) — found while checking task 4's subset
+argument against the server rather than against the documentation: `[^[:alnum:]]+` treats a Unicode
+combining mark as a separator, so slice 1a's parts branch cuts a Devanagari name at its first vowel
+sign (`अमित` → `अम`) and a Thai name at its tone marks. Nothing becomes unfindable — the whole-token
+source keeps the name intact — so it is precision, not recall, and it does not block this slice.
+But it is ADR-0014's cultural-capture shape one level below #638: that was the *gate* encoding a
+Latin selectivity model, this is the *separator class* encoding a Latin orthographic one. Fixing it
+changes which candidates come back, which is exactly what this slice claims not to do.

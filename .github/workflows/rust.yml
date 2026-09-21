@@ -260,6 +260,13 @@ jobs:
       - name: scripts/measure_dr_restore.py parser tests (pure)
         run: python3 scripts/tests/measure_dr_restore_test.py
 
+      # The §1.2/§5.11 search rig (#639), for the same reason one line up: it produces the
+      # number db/046's 5 s budget and §5.11's "no spinner" limb are judged against, and a rig
+      # that quietly measures a smaller population, drops a name it cannot escape, or reports a
+      # worst case where the FLOOR was the question does not fail — it publishes.
+      - name: scripts/measure_patient_search.py pure tests
+        run: python3 scripts/tests/measure_patient_search_test.py
+
       # ---- system prerequisites: PostgreSQL + its server headers + libclang --------
       # postgresql-server-dev-N supplies pg_config and the server headers pgrx's
       # bindgen step needs; clang/libclang-dev supply the libclang bindgen links against
