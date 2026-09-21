@@ -37,26 +37,80 @@
 > **#625** (the pen dedupes by digest across peers but counts `pending` per peer, so a penned rival
 > goes quiet when its first server leaves the pull set).
 >
-> **⇒ #636 SLICE 1 IS BUILT: PATIENT SEARCH MATCHES FRAGMENTS** (2026-09-21, no ADR — it widens
+> **⇒ #636 SLICE 1 IS BUILT: PATIENT SEARCH MATCHES FRAGMENTS** (2026-09-21, no ADR — it widened
 > `db/046`'s pass 3 within the existing §5.3/§5.8 contract; no migration, no `SCHEMA_GENERATION`
-> bump, no signed-body change). A clerk typing part of a name got **zero** results, indistinguishable
-> from *no such patient* — a §1.2 failure for *find an existing chart* and a duplicate-chart risk.
-> Two widenings, both strictly monotone (a reviewer proved it by running the old predicate `EXCEPT`
-> the new one over 27 query tokens: **zero rows lost, nine gained**): **1a** projects the alphanumeric
-> PARTS of stored punctuated tokens, so `Eschenbacher` finds `Fyodorowksi-Eschenbacher`; **1b** matches
-> a 3+ character PREFIX via `starts_with` (never `LIKE q || '%'` — `SearchQuery::new` trims only EDGE
-> punctuation, so an internal `%` survives and LIKE would read it as a wildcard). **The 3-char minimum
-> gates PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match; that is pinned.
-> **Callsigns are excluded from both new arms**, or one typed word surfaces every John Doe.
-> ⚠️ **The plan's own SQL had that bug on the prefix arm** and only Task 1's guard test caught it.
-> Residuals: **#637** (**both halves now answered** — Pi-class population pinned at ~50,000 in spec
-> §8.1, and the Pi 5 measured: 5 s ceiling held, worst case 2525 ms. ⚠️ But the FLOOR is ~1500 ms on
-> EVERY search including one that finds nothing, so §5.11's *no spinner* limb is not met and #639
-> matters more than the worst case suggests) · **#638** (the 3-char gate denies fragment search to CJK-script names entirely —
-> `李小` is 2 chars and gated; ADR-0014 cultural-capture shape) · **#639** (pass 3 is **5.6× slower**;
-> the cost is 1a's second split + repeated `normalize`, NOT the prefix arm — #637's diagnosis was
-> wrong and is corrected; three neutral changes recover ~80%) · **#640** (the two callsign guards
-> hardcode a literal the matcher deliberately binds as a synced frozenset).
+> bump). **1a** projects the alphanumeric PARTS of stored punctuated tokens; **1b** matches a 3+
+> BYTE prefix via `starts_with` (never `LIKE q || '%'` — `SearchQuery::new` trims only EDGE
+> punctuation, so an internal `%` survives and LIKE would read it as a wildcard). Both strictly
+> monotone, proved by `EXCEPT` over 27 tokens: zero lost, nine gained. **The byte minimum gates
+> PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match — and **callsigns are excluded from
+> both new arms**, or one typed word surfaces every John Doe. ⚠️ **The plan's own SQL had that bug on
+> the prefix arm** and only the guard test caught it. Residuals: **#637** (answered — population
+> pinned at ~50,000 in spec §8.1, Pi measured) · **#638** (the gate counted CHARACTERS, so a CJK name
+> was findable only in full; **FIXED on `main` in cb43977c, issue CLOSED 2026-09-21** — it counts
+> BYTES now. ⚠️ This file and ROADMAP both listed it as open for a day after it was fixed: the docs
+> commits that followed did not pick it up) · **#639** (BUILT, below) · **#640** (the two callsign
+> guards hardcode a literal the matcher binds as a synced frozenset) · **#641** (see below).
+>
+> **⇒ #639 IS BUILT: THE SEARCH FLOOR IS UNDER A SECOND** (2026-09-21, PR
+> **[#642](https://github.com/cairn-ehr/cairn-ehr/pull/642)**, no ADR, no spec bump, no migration,
+> `SCHEMA_GENERATION` unchanged — `db/046` edited in place). Slice 1's budget headline was true and
+> beside the point: the 5 s ceiling held at 2413 ms, but **every search cost ~1500 ms including one
+> that found nothing**, so §5.11's *no spinner* limb was unmet and slice 2's UI re-searches as the
+> clerk types. Three changes, all semantically neutral: the query-token normalisation hoisted behind
+> an **`OFFSET 0` fence**, **`UNION ALL`** in the lateral, and **the parts branch skipped for an
+> unpunctuated value**. Measured on the Pi 5 at 50,000 real Australian names, same machine and rows,
+> `db/046` swapped in place: **floor 1528.8 → 856.7 ms (−44%)**, worst case 2509.5 → **862.4 ms**
+> (−66%) of 5000 ms. **The spread collapsed from 981 ms to 14 ms** — query length no longer moves
+> the cost, which is #639's diagnosis confirmed and #637's refuted. Neutrality held three ways: a
+> standing contract test (17 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
+> **differential over 394 tokens / 14,447 rows — 0 lost, 0 gained**, and an executable subset
+> argument that asks the SERVER whether the character classes still coincide. **The rig is committed
+> this time** (`scripts/measure_patient_search.py` + tests in `rust.yml`): slice 1's was written on
+> the Pi and never came back. Durable rules are **trap 15**.
+>
+> ⚠️ **AND THE NEUTRALITY CLAIM WAS FALSE WHEN FIRST PUSHED — REVIEW CAUGHT IT, ALL THREE
+> DEFENCES MISSED IT.** The parts-branch guard tested `normalize(pn.value, NFC)` while the splitter
+> it guards reads `lower(normalize(pn.value, NFC))`, and **exactly one code point in Unicode** uses
+> the gap: U+0130 `İ` is `[:alnum:]` but lowercases to `i` + U+0307 COMBINING DOT ABOVE, which is
+> not. `İnce` therefore read as unpunctuated to the guard and punctuated to the splitter — branch
+> skipped, `nce` never projected, a chart findable on `main` unfindable after. The 50k differential
+> drew **Latin-script** Australian names; the thirteen separator probes stressed scripts, combining
+> marks and whitespace but **not case mapping**; and it fires only under FULL case mapping, so it was
+> live on every `cairn*` database here (all ICU) and invisible in CI (libc `initdb`). Fixed with one
+> word. The sampled probe is now a **proof**: the claim reduces to two single-character facts and
+> both are checked over **all 1,114,111 code points in ~0.6 s**
+> (`the_subset_argument_holds_for_every_unicode_code_point`). Plus an `İnce` chart, an `nce` gesture,
+> and the pinned literal tightened to the composed expression — both detectors confirmed red by
+> reverting the fix, **under BOTH locale providers**. **Trap 16: a guard and the thing it guards
+> must be asked about the SAME STRING**, and a probe list is a sample, not an argument — if a claim
+> reduces to a property of character classes, enumerate the classes. **Trap 17: local PG is ICU, CI's
+> is libc, and `lower()` differs** — the first fix's regression test pinned the ICU answer and failed
+> CI; the row is now asked of the server, and a `cairn_test_libc` recipe is in trap 17. **Filed:** **#641** (`[^[:alnum:]]+`
+> treats a combining mark as a separator, so slice 1a's parts branch cuts `अमित` to `अम` and a Thai
+> name at its tone marks — precision not recall, nothing becomes unfindable, but ADR-0014's shape one
+> level below #638) and **#643** (the rig times `count(*)`, not the row transfer the clerk waits
+> for — the scan is genuinely executed, but result-set size is exactly what the synthetic and real
+> pools differ by ~30× on; not fixed in-branch because changing what is timed breaks comparability
+> with the recorded before/after tables). #637 has been **commented** with the measurement that
+> refutes its diagnosis, since it stays open as the token-table tracking issue. **What is left:**
+> the whole-token `regexp_split_to_table` over every row, the scan pass 3 has always been; cutting
+> it needs the materialised token table #637 proposed for the wrong reason — right candidate, right
+> diagnosis now, a slice of its own.
+>
+> **The rig was hardened in the same round**, because four of its paths could exit 0 with a number
+> it never measured: a **zero-row search used to pass the budget AND could supply the §5.11 floor**
+> (§1.2 is *5 s to FIND A CHART*; the `李小` row against an Australian-name pool is very likely
+> exactly that, and the plan's table cannot prove it either way because the `Rows found` column was
+> dropped on the way in — restore it next run); the SQLite pool path had **no short-draw guard**
+> though the text-file path always did, and the maintainer's own 959 MB pool holds **two** tables
+> matching the discovery heuristic, `names` (6.5M rows) and `person` (**10**), resolved only by
+> `sqlite_master` order; the seeded population was printed and never asserted; and `--dbname`
+> defaults to the shared `cairn_test` with **no serial guard**, so a concurrent `cargo test`
+> truncating mid-run would have produced figures *better* than the truth. All four now refuse. Also
+> `-X` on psql (a `~/.psqlrc` `SET work_mem` silently re-plans every sample), empty psql output
+> raises instead of reading as `0`, and the per-sample process+auth overhead is measured rather than
+> quoted from one hand-run.
 >
 > **⇒ SLICE 2, THE FUNNEL UI, IS SPEC'D AND UNBUILT** —
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Workflow: browse by
@@ -68,13 +122,16 @@
 > and ranks but never excludes, client-side, so it never enters the signed `SearchQuery`.
 >
 > **⇒ NO DECIDED-AND-UNBUILT DR ITEM REMAINS**, and #621 is merged, so the node-plane
-> refusal work is closed out. Pick from below, or leave DR for the *Other build candidates*.
-> **Recommended: #620** — a wire-contract DECISION (content-addressing over bytes the signature does
-> not cover), and the only open item that can still change the wire; it needs a brainstorm before a
-> plan, not a TDD slice. After it, **#626** (the clinical twin of #621 — the pattern is now built and
-> proven one plane over, so this is the cheapest real slice on the board) or the **registration/search
-> UI slice**. **#633** (nothing pins the `USING ERRCODE` contract that both planes' classification
-> rests on) is a small, high-value guard that could ride along with either.
+> refusal work is closed out. **Recommended, in order:** **slice 2, the funnel UI** — it is spec'd,
+> it is the first clinician-facing surface of the funnel, and #639 has just cleared the latency
+> objection that made it not worth building on (its background re-search was the failure scenario
+> #639 existed to prevent). Then **#620**, a wire-contract DECISION (content-addressing over bytes
+> the signature does not cover) and the only open item that can still change the wire — it needs a
+> brainstorm before a plan, not a TDD slice. Then **#626** (the clinical twin of #621; the pattern is
+> built and proven one plane over, so it is the cheapest real slice on the board). **#633** (nothing
+> pins the `USING ERRCODE` contract both planes' classification rests on) is a small, high-value
+> guard that could ride along with any of them. The search residuals **#640** and **#641** are both
+> small and both advisory-tier.
 >
 > - **Open decisions (none a patch):** **#575** (the minted recovery code still reaches stderr on both
 >   restore paths — re-deferred once) · **#602** (any client can set `cairn.remote_apply` and turn the
@@ -190,10 +247,10 @@
 > **#548**.
 
 > [!IMPORTANT]
-> **Fourteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
+> **Fifteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
 > trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review —
 > **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615,
-> trap 13 by #619 and trap 14 by #621.)
+> trap 13 by #619, trap 14 by #621, and traps 15–17 by #639.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -265,10 +322,10 @@
 >    catches that in the database too — do not read the floor as licence to drop the Rust check, which
 >    is what tells the operator WHY.
 > 9. **RETIRED — HISTORY, NOT ADVICE (#584 built, ADR-0070).** It warned that a key landing on an
->     already-admitted event opened the body and left the chart empty; **the door now projects a late
->     key, and `reproject_owed` is gone.** What survives as live advice: **do not remove the
->     `cairn_project_late_custody` calls or move them.** In BOTH doors they sit AFTER the substitution
->     guard (a rival body must never reach an applier) and both placements are test-pinned in
+>     already-admitted event opened the body and left the chart empty; the door now projects a late
+>     key and `reproject_owed` is gone. **What survives as live advice: do not remove the
+>     `cairn_project_late_custody` calls or move them.** In BOTH doors they sit AFTER the
+>     substitution guard (a rival body must never reach an applier), test-pinned in
 >     `late_custody_reaches_the_chart.rs`, each with its OWN positive control so a probe that stopped
 >     being registered cannot leave them passing vacuously. The strict door's POSTURE is pinned too:
 >     wrapping db/005's call in `cairn.remote_apply = 'on'` "to match db/020" turns a strict refusal
@@ -415,6 +472,75 @@
 >     **#632** (the claimed-local set misses door-confined codes like `P0004`/`21000`), **#633**
 >     (nothing pins the `USING ERRCODE` contract itself), **#634** (pen-at-quota, auto-release of
 >     this pen kind, and the deliberate NO-release-on-later-verdict invariant lack tests).
+> 15. **⇒ THREE THINGS IN `db/046`'s PASS 3 LOOK LIKE NOISE AND ARE EACH WORTH HUNDREDS OF
+>     MILLISECONDS ON A PI (#639, 2026-09-21).** All three are the kind a tidy-up deletes.
+>     (a) **`OFFSET 0` IS AN OPTIMISATION FENCE, NOT A LIMIT.** It is what stops the planner pulling
+>     the query-token subquery back up and re-inlining `lower(normalize(t, NFC))` at all three sites,
+>     per (stored token × query token) pair. **A plain subquery was measured and does not work** —
+>     removing the fence reinstates #639 while changing no result, so nothing fails.
+>     (b) **THE LATERAL IS `UNION ALL` ON PURPOSE.** "Surely that should be `UNION`, the two sources
+>     overlap" costs a dedup sort per `patient_name` row (~30%) to remove a duplicate the branch's own
+>     `SELECT DISTINCT` and the outer `UNION` already remove. ⚠️ The file's dedup block is now down to
+>     **two** layers, and the one remaining sentence about the lateral says it is NOT a dedup: if a
+>     later change makes the branch `DISTINCT` non-load-bearing, duplicate rows reach the caller.
+>     (c) **THE PARTS-BRANCH SKIP MUST BE TESTED ON `lower(normalize(pn.value, NFC))` — LOWERED AND
+>     NORMALISED, AND THE `lower` IS THE ONE THAT BIT.** The guard must ask about the exact string
+>     the splitter is handed. It shipped in review asking about `normalize(...)` alone, and **one
+>     code point in all of Unicode** walks through that gap: U+0130 `İ` is `[:alnum:]` but lowercases
+>     to `i` + U+0307 COMBINING DOT ABOVE, which is not — so `İnce` reads unpunctuated to the guard,
+>     punctuated to the splitter, the branch is skipped, and `nce` stops finding the chart. Dropping
+>     the `normalize` is merely conservative (the branch runs unnecessarily); dropping the `lower`
+>     LOSES A TOKEN. Fires only under FULL case mapping — ICU providers yes, libc no, so it was live
+>     on every local `cairn*` DB and invisible in CI.
+>     ⚠️ **A PROBE LIST IS A SAMPLE, NOT AN ARGUMENT.** The 13-value probe was green throughout,
+>     because it stressed scripts, combining marks and whitespace but not case mapping. If a claim
+>     reduces to a property of character classes, ENUMERATE THE CLASSES:
+>     `the_subset_argument_holds_for_every_unicode_code_point` now checks the two facts the whole
+>     subset argument rests on (`\s` IS `[[:space:]]`; nothing is both `[:space:]` and `[:alnum:]`)
+>     over **all 1,114,111 code points in ~0.6 s**. The sampled probe survives beside it as the layer
+>     that catches a bad COMPOSITION rather than a bad class — which is what this defect was — and
+>     `the_subset_probe_still_describes_the_query_db046_runs` pins the **composed** expression, so
+>     dropping the `lower` fails independently of any corpus.
+>     ⚠️ **A neutrality claim needs a test that can see a GAIN.** Every pre-#639 pass-3 test asserts a
+>     chart IS found, so a rewrite returning EXTRA charts passed all of them; the mutation that
+>     dropped the parts branch's callsign guard was caught only by a gesture expecting the EMPTY set.
+>     ⚠️ **AND A NEUTRALITY DIFFERENTIAL IS ONLY AS WIDE AS ITS CORPUS.** The 394-token / 14,447-row
+>     differential returned 0 lost / 0 gained and was *right about the names it drew* — all
+>     Latin-script Australian. It could not have found U+0130.
+>     **Re-measure with `scripts/measure_patient_search.py`, do not reason** — #637's diagnosis was
+>     reasoned, confident and wrong, and its remedy followed the wrong cause. Residuals: **#641**
+>     (the parts branch cuts a Devanagari name at its vowel signs), **#640**, **#643** (the rig times
+>     `count(*)`, not the row transfer), and the remaining ~860 ms floor, which is the whole-token
+>     split over every row and needs #637's materialised token table — for the right reason this
+>     time.
+> 16. **⇒ A GUARD AND THE THING IT GUARDS MUST BE ASKED ABOUT THE SAME STRING (#639 review,
+>     2026-09-21).** Generalised from 15(c), because the shape is not about Unicode. Whenever a cheap
+>     predicate decides whether to run expensive work, the predicate and the work must read the
+>     *identical* expression — not a simplification of it, however obviously equivalent. Here the two
+>     differed by one `lower(`, agreed on every test value, and disagreed on exactly one input in the
+>     whole domain. The defence that works is pinning the COMPOSED expression as a literal (this
+>     repo's `include_str!` + `contains` idiom), not pinning its pieces: the piece-wise list was
+>     present, passing, and blind.
+> 17. **⇒ LOCAL POSTGRES IS ICU, CI's IS libc, AND `lower()` IS NOT THE SAME FUNCTION ON BOTH
+>     (#639 review, 2026-09-22).** Every `cairn*` database on the dev Mac is `datlocprovider = 'i'`;
+>     CI's `initdb -D "$PGDATA" -U postgres --auth=trust` (`rust.yml`) inherits libc, `datlocprovider
+>     = 'c'`. Under ICU, `lower('İ')` applies **full** case mapping and yields TWO characters, `i` +
+>     U+0307; under libc it is **simple**, one-to-one, and yields plain `i`. So a name containing
+>     U+0130 genuinely has different pass-3 tokens on the two servers, and **both are correct**.
+>     ⚠️ **This cuts both ways and burned a CI run in each direction.** The U+0130 recall defect
+>     itself was live locally and invisible in CI. Then the regression test written for it pinned the
+>     ICU answer unconditionally, passed on every local database, and **failed in CI** — where `nce`
+>     had never been a token at all, before the rewrite or after, so neutrality held trivially.
+>     ⚠️ **A contract suite must derive such a row from the SERVER, not assume a provider**:
+>     `patient_search_equivalence.rs`'s `full_case_mapping` asks, and the gesture expects `[turkish]`
+>     or `[]` accordingly. The layering that results is the durable lesson — **the gesture bites
+>     where the defect is real (ICU), the composed-literal pin bites everywhere**, which is why the
+>     pin is not redundant with it.
+>     **To reproduce CI's locale locally** (this is how the fix was verified, and it takes seconds):
+>     `CREATE DATABASE cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE 'en_US.UTF-8'
+>     ENCODING UTF8;` then `CREATE EXTENSION cairn_pgx;` in it, and run the suite with
+>     `CAIRN_TEST_PG=…dbname=cairn_test_libc`. **Any test that touches case, collation or character
+>     classes should be run against both before pushing** — a local-only green is not evidence.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is

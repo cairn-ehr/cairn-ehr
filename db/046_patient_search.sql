@@ -52,12 +52,30 @@
 -- redundancy argument — outer UNION alone suffices, per-branch DISTINCT alone suffices —
 -- stands unchanged.
 --
--- The one genuinely new fact is narrower: pass 3's lateral now UNIONs two token sources,
--- so a single patient_name row can yield the same token twice (an unpunctuated single word
--- is both a whole token and its own alphanumeric part). That is a duplicate WITHIN pass 3,
--- removed by the lateral's own UNION — a third dedup layer, inside the branch — and the
--- outer UNION would catch it regardless, same as it always would have. None of the three
--- dedups has become uniquely load-bearing; keep all three.
+-- The one genuinely new fact is narrower: pass 3's lateral combines two token sources, so a
+-- single patient_name row can yield the same token twice. That is a duplicate WITHIN pass 3.
+--
+-- The shape of that duplicate is EXACTLY a punctuated value holding an unpunctuated word:
+-- `Smith, John` projects whole {`smith,`, `john`} and parts {`smith`, `john`}, so `john`
+-- arrives twice. It is NOT the "unpunctuated single word is its own alphanumeric part" case
+-- an earlier draft of this paragraph gave — since #639 an unpunctuated value never reaches
+-- the parts branch at all (see the skip guard below), so it cannot overlap with itself.
+--
+-- UPDATE (#639): that duplicate used to be removed by the lateral's own `UNION` — a third
+-- dedup layer, inside the branch. It is now `UNION ALL`, because that layer was the only
+-- one of the three that cost anything (a sort per patient_name row, measured at about 30%
+-- of pass 3's time WHEN MEASURED ALONE — the skip guard below later removed most of the
+-- second arm's rows, so the two gains do not simply add) and it was removing a duplicate
+-- the other two already remove. The duplicate token now becomes a duplicate ROW and is
+-- collapsed by the branch's own `SELECT DISTINCT` — and by the outer UNION regardless,
+-- same as it always would have.
+--
+-- So the count is back to two, and the original argument is unchanged: each of the two
+-- alone would suffice, keeping both is free, and dropping either stops being safe the
+-- moment a branch gains a non-literal `matched_pass` or a fourth pass with an overlapping
+-- label. What is NO LONGER true is any sentence calling the lateral's combinator a dedup:
+-- if a change ever makes the branch `DISTINCT` non-load-bearing, the duplicate rows this
+-- now emits reach the caller.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION cairn_search_candidates(
@@ -175,7 +193,18 @@ AS $$
             SELECT w AS tok
               FROM regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS w
              WHERE w <> ''
-            UNION
+            -- `UNION ALL`, NOT `UNION` (#639). The two sources overlap — a punctuated value
+            -- holding an unpunctuated word projects that word twice, `Smith, John` giving whole
+            -- {`smith,`, `john`} and parts {`smith`, `john`} — and `UNION` paid for a dedup SORT
+            -- of that overlap for EVERY `patient_name` row. Dropping the sort measured about -30%
+            -- on its own.
+            --
+            -- Nothing about the answer changes: the duplicate token becomes a duplicate ROW, which
+            -- the branch's own `SELECT DISTINCT pn.patient_id, 'name'` collapses. The full argument
+            -- — why that leaves TWO dedup layers rather than three, and what stops being true once
+            -- the lateral's combinator is no longer one of them — is in the dedup block at the top
+            -- of this file. Read it before removing either remaining layer.
+            UNION ALL
             -- Its alphanumeric PARTS (#636, slice 1a) — the mirror of what
             -- SearchQuery::new already emits on the query side, so a clerk typing one half
             -- of "Fyodorowksi-Eschenbacher" finds the chart. Single characters are dropped
@@ -188,14 +217,101 @@ AS $$
             -- the node. The query side keeps whole words for exactly this reason; this is
             -- the same guard on the other side. Pinned by
             -- `a_stored_callsign_is_not_fragmented_into_common_parts`.
+            -- ⚠️ KNOWN DEFECT IN THIS SEPARATOR CLASS, #641 — read it before "improving" the
+            -- split. `[^[:alnum:]]+` means "punctuation is whatever is not alphanumeric", which
+            -- is a LATIN orthographic model: a Unicode combining mark is not `[:alnum:]`, so a
+            -- Devanagari name is cut at its first vowel sign (`अमित` → `अम`) and a Thai name at
+            -- its tone marks, projecting truncated tokens that match too many charts. Nothing
+            -- becomes UNFINDABLE — the whole-token source above keeps the name intact — so it is
+            -- precision, not recall, which is why it was filed rather than fixed inside #639,
+            -- whose whole claim was that no candidate set changes. It is the same shape #638
+            -- closed one level up, where the GATE encoded a Latin selectivity model.
             SELECT p
               FROM regexp_split_to_table(lower(normalize(pn.value, NFC)),
                                          '[^[:alnum:]]+') AS p
              WHERE length(p) > 1
                AND pn.use_key <> 'callsign'
+               -- SKIP THIS WHOLE BRANCH FOR A VALUE THAT CARRIES NO PUNCTUATION (#639) — the
+               -- second `regexp_split_to_table` per `patient_name` row was the single biggest
+               -- cost in pass 3, and for most rows it produces nothing the whole-token source
+               -- above has not already produced.
+               --
+               -- ⚠️ WHY IT IS FAST, WHICH IS A SEPARATE FACT FROM WHY IT IS SAFE, and the more
+               -- fragile of the two. This qual references only `pn`, never the set-returning
+               -- function's own output `p`, so the planner can mark it PSEUDOCONSTANT for the
+               -- scan and gate the whole `Function Scan` behind a one-time filter:
+               --
+               --     ->  Result
+               --           One-Time Filter: ((pn.use_key <> 'callsign') AND (lower(...) ~ ...))
+               --           ->  Function Scan on regexp_split_to_table p
+               --
+               -- The split is then never executed for a skipped row. An edit that makes this
+               -- qual mention `p` — folding it into a combined predicate, say — or that hoists
+               -- it into the outer WHERE turns it into an ordinary filter APPLIED AFTER the
+               -- split, the `regexp_split_to_table` runs for every row again, and the measured
+               -- win silently vanishes WITH EVERY TEST STILL GREEN: the neutrality suite pins
+               -- the answer, and the answer does not change. Re-measure with
+               -- `scripts/measure_patient_search.py`, exactly as `OFFSET 0` below warns.
+               --
+               -- The subset argument, which is what makes this neutral rather than a gamble.
+               -- Let S be the string the splitters are handed. If S contains nothing outside
+               -- `[[:alnum:][:space:]]`, then splitting it on `[^[:alnum:]]+` (this branch) and
+               -- on `\s+` (the branch above) yield the SAME tokens: every character of S is
+               -- alnum or space, so this branch's separators are exactly S's space characters,
+               -- which are exactly the branch above's separators. That reduces the whole claim
+               -- to two facts about Postgres's regex classes — `\s` IS `[[:space:]]`, and NO
+               -- character is both `[:space:]` and `[:alnum:]` — and both are checked
+               -- EXHAUSTIVELY, over every Unicode code point, by
+               -- `the_subset_argument_holds_for_every_unicode_code_point`. This branch then
+               -- additionally drops length-1 tokens and excludes callsigns, so what it projects
+               -- is a SUBSET of what the whole-token source already did. Skipping it removes
+               -- nothing.
+               --
+               -- ⚠️ `lower(normalize(...))`, AND EVERY PART OF THAT IS LOAD-BEARING: the test
+               -- must be applied to the string the splitter below actually sees, which is
+               -- `lower(normalize(pn.value, NFC))` — S above. Both halves have bitten:
+               --
+               --   * dropping `normalize` would merely be conservative (a decomposed `e` +
+               --     U+0301 reads as non-alnum before NFC and alnum after, so the branch would
+               --     run unnecessarily rather than be skipped wrongly), but
+               --   * dropping `lower` IS A RECALL BUG, and this guard shipped with it briefly.
+               --     `lower` is not class-preserving under full Unicode case mapping: U+0130 `İ`
+               --     (LATIN CAPITAL LETTER I WITH DOT ABOVE, ordinary in Turkish names) is
+               --     `[:alnum:]`, but lowercases to `i` + U+0307 COMBINING DOT ABOVE, and a
+               --     combining mark is NOT `[:alnum:]`. So `İnce` looks unpunctuated before
+               --     lowering and carries a separator after it: the parts split projects `nce`,
+               --     the whole-token split does not, and skipping the branch loses a token that
+               --     found the chart. It is the ONLY such character in Unicode (the exhaustive
+               --     test above enumerates them, so this is measured, not asserted), and it fires
+               --     only under full case mapping — ICU providers do it, libc does not — which is
+               --     exactly the deployment-dependent drift this guard exists to survive.
+               --
+               -- Pinned three ways: the exhaustive class test named above; a `İnce` chart in
+               -- `patient_search_equivalence.rs`, whose `nce` gesture goes red if `lower` is
+               -- dropped from this line; and an unpunctuated multi-word name carrying a
+               -- SINGLE-CHARACTER word, kept by the whole-token source and dropped by this one,
+               -- so a version of this change that skipped the wrong branch loses a chart too.
+               AND lower(normalize(pn.value, NFC)) ~ '[^[:alnum:][:space:]]'
       ) AS toks
-      JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
-        ON toks.tok = lower(normalize(t, NFC))
+      -- NORMALISE EACH QUERY TOKEN ONCE, NOT ONCE PER COMPARISON (#639). `lower(normalize(t,
+      -- NFC))` used to be written out at all THREE sites below — the equality, the byte gate and
+      -- the prefix test — and Postgres evaluated it at each of them, for every (stored token x
+      -- query token) pair. `normalize`'s cost scales with string length, so a clerk typing a long
+      -- compound surname paid for it across the whole scan; that, and not the prefix arm, is what
+      -- #637's diagnosis mis-attributed. Hoisting it here measured 3121 ms -> 1896 ms on a 200k-row
+      -- `patient_name`.
+      --
+      -- `OFFSET 0` IS LOAD-BEARING AND IS NOT A LIMIT. It is Postgres's optimisation FENCE: without
+      -- it the planner pulls a plain subquery back up and re-inlines the expression at each site,
+      -- which measures as no improvement at all. That dead end was measured, not assumed. `OFFSET
+      -- 0` changes no row and no order — it skips zero rows — it only stops the pull-up.
+      --
+      -- Semantically free: `lower` and `normalize` are IMMUTABLE, so one evaluation per query token
+      -- yields the same string as one per pair.
+      JOIN (SELECT lower(normalize(t, NFC)) AS qt
+              FROM unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) AS t
+             OFFSET 0) AS q
+        ON toks.tok = q.qt
         -- PREFIX matching (#636, slice 1b), because a clerk types a fragment and picks from
         -- a list rather than typing a compound surname in full.
         --
@@ -250,8 +366,8 @@ AS $$
         -- such restriction. Pinned by `a_stored_callsign_is_not_fragmented_into_common_parts`
         -- (which predates this arm but caught the regression the moment this arm landed).
         OR (pn.use_key <> 'callsign'
-            AND octet_length(lower(normalize(t, NFC))) >= 3
-            AND starts_with(toks.tok, lower(normalize(t, NFC))))
+            AND octet_length(q.qt) >= 3
+            AND starts_with(toks.tok, q.qt))
      WHERE toks.tok <> ''
 $$;
 
