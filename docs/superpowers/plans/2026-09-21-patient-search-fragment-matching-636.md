@@ -632,3 +632,51 @@ it: restated here because this file, not the gitignored task report, is what sur
    only corrects the diagnosis so a Pi5 follow-on, or any future optimisation slice, is not planned
    against the wrong cause (the original text pointed at a heavy fix — a materialised token table
    with its own reprojection cost — when three one-line changes recover most of the regression).
+
+## Pi-class measurement — the real target hardware, at the real target size (2026-09-21)
+
+Run on **Raspberry Pi 5 Model B Rev 1.0**, aarch64, 4 cores, 8 GB, PostgreSQL 18.4, `cairn_pgx`
+0.3.0 — reached from this machine by `ssh -J dgx hherb@192.168.68.81`. All 53 migrations load
+cleanly on ARM. Population **50,000** patients, the figure pinned in
+[spec §8.1](../../spec/deployment.md). Median of 5 runs after a warm-up.
+
+| Search | Median | Rows found |
+|---|---|---|
+| `fyodorowksi-eschenbacher` — exact long compound | **2525 ms** | 2500 |
+| `mich` — selective Latin fragment | 1655 ms | 2500 |
+| `smi` — unselective Latin fragment | 1639 ms | 35000 |
+| `李小` — CJK 2-character prefix (#638) | 1593 ms | 2500 |
+| `wu` — exact short, below the byte gate | 1512 ms | 0 |
+
+**The 5 s ceiling holds: worst case 2525 ms, about 50% of budget.** This supersedes the Apple
+Silicon run for the purpose of judging §1.2 — that one measured the wrong machine at 12× the wrong
+population.
+
+### The number that matters is not the worst case, it is the FLOOR
+
+**Every search costs at least ~1500 ms, including one that finds nothing.** That is the scan: pass 3
+reads all of `patient_name` and runs a lateral `regexp_split_to_table` over every value, so the cost
+is paid before selectivity is even consulted. The spread from floor to worst case is only ~1000 ms,
+and it tracks query *length*, exactly as [#639](https://github.com/cairn-ehr/cairn-ehr/issues/639)
+found.
+
+So the "budget held" headline is true and slightly misleading. §1.2's 5 s ceiling is for *find an
+existing chart* and it is met. But [§5.11](../../spec/identity.md)'s other limb — *"type a few chars
+and enter, no spinner"* — is **not** met at 1.5 s: that is spinner territory on every keystroke-driven
+search, and slice 2's UI re-searches in the background as the clerk types. #639's three measured
+optimisations cut the floor, not just the tail, which makes them materially more valuable than the
+worst-case figure alone suggests.
+
+### Honest caveats about this seeding
+
+- Rows were inserted **directly into the `patient_name` projection**, not authored through the event
+  log. `cairn_search_candidates` reads only that table, so this measures the intended read path —
+  but it is not an end-to-end write-then-read test, and authoring 50k signed events on a Pi would
+  have measured the write path, which is not what is budgeted here.
+- **`wu` found 0 rows**, so that row does not verify short-name findability — the fixture generates
+  `Wu0`…`Wu96` as single tokens, which `wu` does not equal. It is still a useful **floor** reading
+  (the cost of a search that matches nothing), and short-name findability is pinned by
+  `a_two_character_surname_is_still_found_by_exact_match` instead.
+- **`smi` found 35,000 of 50,000** because the fixture makes most names `Smith John<i>`. A real
+  population is not 70% one surname, so treat that row as a deliberate worst-case stress on result
+  volume rather than a realistic query.
