@@ -214,6 +214,33 @@ AS $$
                                          '[^[:alnum:]]+') AS p
              WHERE length(p) > 1
                AND pn.use_key <> 'callsign'
+               -- SKIP THIS WHOLE BRANCH FOR A VALUE THAT CARRIES NO PUNCTUATION (#639) — the
+               -- second `regexp_split_to_table` per `patient_name` row was the single biggest
+               -- cost in pass 3, and for most rows it produces nothing the whole-token source
+               -- above has not already produced.
+               --
+               -- The subset argument, which is what makes this neutral rather than a gamble.
+               -- Consider a value whose NFC form contains nothing outside `[[:alnum:][:space:]]`.
+               -- Splitting it on `[^[:alnum:]]+` (this branch) and on `\s+` (the branch above)
+               -- then yield the SAME tokens, because Postgres's `\s` is exactly `[[:space:]]`,
+               -- so the two separator classes coincide on such a string. This branch then
+               -- additionally drops length-1 tokens and excludes callsigns, so what it projects
+               -- is a strict SUBSET of what the whole-token source already did. Skipping it
+               -- removes nothing.
+               --
+               -- ⚠️ TESTED ON THE NORMALISED VALUE, AND THAT IS NOT INTERCHANGEABLE WITH THE RAW
+               -- ONE. The splitter below sees `normalize(pn.value, NFC)`, so that is the string
+               -- the question is about. Testing `pn.value` instead would be merely conservative
+               -- — a decomposed `e` + U+0301 reads as non-alnum before NFC and alnum after, so
+               -- the raw test would run this branch unnecessarily rather than skip it wrongly —
+               -- but the exact form is both correct and what was measured. Do not "simplify" it
+               -- by dropping the `normalize`.
+               --
+               -- Pinned by `patient_search_equivalence.rs`, whose corpus holds an unpunctuated
+               -- multi-word name carrying a SINGLE-CHARACTER word: that word is kept by the
+               -- whole-token source and dropped by this one, so a version of this change that
+               -- skipped the wrong branch loses a chart the suite names.
+               AND normalize(pn.value, NFC) ~ '[^[:alnum:][:space:]]'
       ) AS toks
       -- NORMALISE EACH QUERY TOKEN ONCE, NOT ONCE PER COMPARISON (#639). `lower(normalize(t,
       -- NFC))` used to be written out at all THREE sites below — the equality, the byte gate and

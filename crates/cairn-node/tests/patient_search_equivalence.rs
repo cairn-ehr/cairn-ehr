@@ -363,3 +363,116 @@ async fn the_corpus_seeds_seven_distinct_charts() {
         "every seeded chart must hold a name row for pass 3 to tokenise"
     );
 }
+
+/// Values a name can legitimately hold, chosen to stress the separator classes rather than the
+/// clinical paths — scripts with combining marks, non-breaking and vertical whitespace, digits, and
+/// the punctuated forms the parts branch exists for.
+const SEPARATOR_PROBES: [&str; 13] = [
+    "Anne A Smith",
+    "李小明",
+    "Ng",
+    "  Wu  ",
+    "Patient 2",
+    "Иванов Иван",
+    "สมชาย ใจดี",
+    "Anne\u{00A0}Smith",
+    "Anne\u{000B}Smith",
+    "Jose\u{301} A\u{301}lvarez",
+    "O'Brien-Smith",
+    "Smith, John",
+    "Müller Groß",
+];
+
+/// The subset argument that makes #639's parts-branch skip neutral, evaluated instead of asserted.
+///
+/// db/046 skips the alphanumeric-parts branch for a value whose NFC form matches nothing outside
+/// `[[:alnum:][:space:]]`. The claim is that for such a value the parts split (`[^[:alnum:]]+`)
+/// yields a SUBSET of the whole-token split (`\s+`), so the branch contributes nothing and skipping
+/// it loses no chart. It rests on `\s` being exactly `[[:space:]]` in Postgres's regex flavour —
+/// documented, but the kind of documented fact that a locale, an ICU version or a server upgrade is
+/// entitled to move underneath a deployment.
+///
+/// So this asks the server directly, for every probe: **whenever the branch is skipped, is the
+/// subset claim true?** A `false` here means db/046's skip is dropping a token that nothing else
+/// projects — a chart that silently stops being findable, which is the duplicate-chart failure
+/// #636 exists to prevent.
+#[tokio::test]
+async fn skipping_the_parts_branch_can_never_drop_a_token() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    let mut skipped = 0;
+    for value in SEPARATOR_PROBES {
+        let row = c
+            .query_one(
+                "SELECT normalize($1, NFC) ~ '[^[:alnum:][:space:]]' AS branch_runs, \
+                 NOT EXISTS ( \
+                   SELECT 1 \
+                     FROM regexp_split_to_table(lower(normalize($1, NFC)), '[^[:alnum:]]+') p \
+                    WHERE length(p) > 1 \
+                      AND p NOT IN (SELECT w \
+                                      FROM regexp_split_to_table( \
+                                             lower(normalize($1, NFC)), '\\s+') w \
+                                     WHERE w <> '') \
+                 ) AS parts_subset_of_whole",
+                &[&value],
+            )
+            .await
+            .unwrap();
+        let branch_runs: bool = row.get(0);
+        let subset: bool = row.get(1);
+
+        if !branch_runs {
+            skipped += 1;
+            assert!(
+                subset,
+                "db/046 skips the parts branch for {value:?} (its NFC form holds nothing outside \
+                 [[:alnum:][:space:]]), but the parts split projects a token the whole-token split \
+                 does NOT — so the skip drops it and the chart stops being findable by it"
+            );
+        }
+    }
+
+    // Anti-vacuity: a probe set that no longer exercises the skipped path would pass this test
+    // while proving nothing. Eight of the thirteen probes carry no punctuation.
+    assert!(
+        skipped >= 8,
+        "only {skipped} probes exercised the SKIPPED path; the subset claim is untested below that"
+    );
+}
+
+/// db/046, embedded so the test above cannot go on proving something about a query the shipped
+/// function no longer runs.
+const DB046: &str = include_str!("../../../db/046_patient_search.sql");
+
+/// The three expressions the subset argument is about, exactly as db/046 must still spell them.
+///
+/// `skipping_the_parts_branch_can_never_drop_a_token` re-states db/046's predicate rather than
+/// calling the function, because the property is about the SQL the splitter is handed, which no
+/// call can expose. That is one invariant written twice — the shape this project distrusts — so
+/// this guard ties the copy to the original: change either separator class, or the punctuation
+/// test, and it fails and names the test that must be re-derived.
+#[test]
+fn the_subset_probe_still_describes_the_query_db046_runs() {
+    for expression in [
+        // the punctuation test that decides whether the parts branch runs at all
+        "normalize(pn.value, NFC) ~ '[^[:alnum:][:space:]]'",
+        // the parts separator class
+        "'[^[:alnum:]]+'",
+        // the whole-token separator class
+        r"'\s+'",
+    ] {
+        assert!(
+            DB046.contains(expression),
+            "db/046 no longer contains {expression:?}, so the subset argument in \
+             `skipping_the_parts_branch_can_never_drop_a_token` is about a query that is no \
+             longer run. Re-derive that argument against the new expression before editing this \
+             list — the claim it protects is that skipping the parts branch drops no token, and \
+             a dropped token is a chart that silently stops being findable."
+        );
+    }
+}
