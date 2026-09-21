@@ -14,7 +14,10 @@
 > `pg_input_is_valid` — the cast's OWN grammar, so no second parser can drift — plus
 > `cairn_hlc_nonneg_or_raise`, both db/001, and a role vocabulary that is ONE function the table's
 > CHECK itself calls), and **the puller pens** any remaining non-`P0001` failure whose SQLSTATE class
-> is not local. 13/13 mutations killed. **The severity in #621 and in the old ⇒ NEXT was overstated,
+> is not local. 15/15 mutations killed. **MERGED 2026-09-20 as PR
+> [#627](https://github.com/cairn-ehr/cairn-ehr/pull/627)**, all 14 checks green, after a
+> four-reviewer pass that found no defect in shipped behaviour and four documentation faults
+> (ADR-0074's "second review pass" section has them). **The severity in #621 and in the old ⇒ NEXT was overstated,
 > and the ADR says so:** `serve` streams only rows already in the serving peer's log, so an honest
 > peer on the same schema cannot serve one — the real triggers are a misbehaving peer (which wedges
 > only its own link and could stall it by going silent anyway) and **cross-version CHECK-vocabulary
@@ -34,11 +37,44 @@
 > **#625** (the pen dedupes by digest across peers but counts `pending` per peer, so a penned rival
 > goes quiet when its first server leaves the pull set).
 >
-> **⇒ WHAT IS NEXT: NO DECIDED-AND-UNBUILT DR ITEM REMAINS.** Pick from below, or leave DR for the
-> *Other build candidates*. **Recommended: #620** — a wire-contract DECISION (content-addressing over
-> bytes the signature does not cover), and the only open item that can still change the wire. After it,
-> **#626** (the clinical twin of #621; the pattern is now built and proven one plane over) or the
-> **registration/search UI slice**.
+> **⇒ #636 SLICE 1 IS BUILT: PATIENT SEARCH MATCHES FRAGMENTS** (2026-09-21, no ADR — it widens
+> `db/046`'s pass 3 within the existing §5.3/§5.8 contract; no migration, no `SCHEMA_GENERATION`
+> bump, no signed-body change). A clerk typing part of a name got **zero** results, indistinguishable
+> from *no such patient* — a §1.2 failure for *find an existing chart* and a duplicate-chart risk.
+> Two widenings, both strictly monotone (a reviewer proved it by running the old predicate `EXCEPT`
+> the new one over 27 query tokens: **zero rows lost, nine gained**): **1a** projects the alphanumeric
+> PARTS of stored punctuated tokens, so `Eschenbacher` finds `Fyodorowksi-Eschenbacher`; **1b** matches
+> a 3+ character PREFIX via `starts_with` (never `LIKE q || '%'` — `SearchQuery::new` trims only EDGE
+> punctuation, so an internal `%` survives and LIKE would read it as a wildcard). **The 3-char minimum
+> gates PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match; that is pinned.
+> **Callsigns are excluded from both new arms**, or one typed word surfaces every John Doe.
+> ⚠️ **The plan's own SQL had that bug on the prefix arm** and only Task 1's guard test caught it.
+> Residuals: **#637** (**both halves now answered** — Pi-class population pinned at ~50,000 in spec
+> §8.1, and the Pi 5 measured: 5 s ceiling held, worst case 2525 ms. ⚠️ But the FLOOR is ~1500 ms on
+> EVERY search including one that finds nothing, so §5.11's *no spinner* limb is not met and #639
+> matters more than the worst case suggests) · **#638** (the 3-char gate denies fragment search to CJK-script names entirely —
+> `李小` is 2 chars and gated; ADR-0014 cultural-capture shape) · **#639** (pass 3 is **5.6× slower**;
+> the cost is 1a's second split + repeated `normalize`, NOT the prefix arm — #637's diagnosis was
+> wrong and is corrected; three neutral changes recover ~80%) · **#640** (the two callsign guards
+> hardcode a literal the matcher deliberately binds as a synced frozenset).
+>
+> **⇒ SLICE 2, THE FUNNEL UI, IS SPEC'D AND UNBUILT** —
+> `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Workflow: browse by
+> fragment in a **scrollable** list; pick and the chart opens; if nothing fits, a data-entry screen
+> pre-filled from what was typed; once it holds a given name, surname and DOB the machine searches
+> **again, automatically**, and asks *could this be one of these?* **The attested search is that
+> commit-time one, not the browse search** — which is what frees the browse list to scroll (it
+> carries no signed claim) and makes query/displayed drift structurally impossible. Gender displays
+> and ranks but never excludes, client-side, so it never enters the signed `SearchQuery`.
+>
+> **⇒ NO DECIDED-AND-UNBUILT DR ITEM REMAINS**, and #621 is merged, so the node-plane
+> refusal work is closed out. Pick from below, or leave DR for the *Other build candidates*.
+> **Recommended: #620** — a wire-contract DECISION (content-addressing over bytes the signature does
+> not cover), and the only open item that can still change the wire; it needs a brainstorm before a
+> plan, not a TDD slice. After it, **#626** (the clinical twin of #621 — the pattern is now built and
+> proven one plane over, so this is the cheapest real slice on the board) or the **registration/search
+> UI slice**. **#633** (nothing pins the `USING ERRCODE` contract that both planes' classification
+> rests on) is a small, high-value guard that could ride along with either.
 >
 > - **Open decisions (none a patch):** **#575** (the minted recovery code still reaches stderr on both
 >   restore paths — re-deferred once) · **#602** (any client can set `cairn.remote_apply` and turn the
@@ -373,9 +409,9 @@
 >     **Known exception to "total":** `cairn_body` raises `22P05` before every guard on a NUL in any
 >     body string (**#628**) — the puller pens it, and a test pins only that the link keeps moving.
 >     Residuals: **#626** (the clinical plane still freezes on all of them), **#628**, **#629**,
->     **#605**, **#268**, and from the four-reviewer pass on the finished branch: **#630** (the
->     pen dedupes by digest alone while its floor/`pending` are per-peer — pre-existing from #111,
->     latent while `run` pulls one peer), **#631** (a bumped row keeps its original `reason`),
+>     **#605**, **#268**, and from the four-reviewer pass on the finished branch: **#625** (the
+>     peer-blind pen — it gained this pass's two extra findings; **#630** was filed for them and
+>     closed as its duplicate), **#631** (a bumped row keeps its original `reason`),
 >     **#632** (the claimed-local set misses door-confined codes like `P0004`/`21000`), **#633**
 >     (nothing pins the `USING ERRCODE` contract itself), **#634** (pen-at-quota, auto-release of
 >     this pen kind, and the deliberate NO-release-on-later-verdict invariant lack tests).

@@ -216,11 +216,16 @@ fn derivation_finds_the_expected_helpers() {
             // (`safety_overclaim.rs`): it builds a medication assert whose CLEAR `safety`
             // field is set VERBATIM, bypassing `apply_safety_rung`'s coarsening — the
             // hostile-client shape the door-side overclaim ledger exists to catch.
+            // `chart_named` joined in #636 Task 2 (fragment matching): `patient_search.rs`'s
+            // slice-1b tests and a later suite in the same plan both need "one chart with
+            // one name, nothing else" as setup, so it is promoted here rather than
+            // duplicated per-file (Ruling 1 of that plan's Task 2).
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
             "async fn assert_chart_grade(",
             "async fn attestation_count(",
+            "async fn chart_named(",
             "async fn content_address_of(",
             "async fn enroll_human(",
             "async fn enroll_human_with_role(",

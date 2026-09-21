@@ -14,6 +14,15 @@
 -- query -> set — so only the KEY EXTRACTION is shared. Convergence is tracked as issue #353;
 -- if you change a key here, check the matcher.
 --
+-- UPDATE (#636): search is now DELIBERATELY WIDER than the matcher on the name key — it
+-- matches stored token PARTS and 3+ character PREFIXES; the matcher's blocking keys are
+-- unchanged. This is safe in exactly one direction and only that one: the invariant this
+-- note protects is "a chart the sweep would pair is a chart this search finds"
+-- (sweep-paired ⊆ search-found), and widening search preserves it. NARROWING search, or
+-- widening the matcher without widening search, would break it. Made executable by
+-- crates/cairn-node/tests/patient_search_drift.rs. Widening the matcher to match is a
+-- separate question with its own recall/precision and sweep-cost evaluation (#353).
+--
 -- DELIBERATELY REDUNDANT DEDUPLICATION — read this before "cleaning it up". Each branch
 -- carries its own `SELECT DISTINCT` *and* the branches are combined with plain `UNION`
 -- (not `UNION ALL`), so every row is de-duplicated twice. That is on purpose and both
@@ -34,6 +43,21 @@
 -- re-derive this argument. The belt and the braces are both one word long.
 -- (Recorded here rather than only in the Rust tests, because a "drop the redundant
 -- DISTINCT" cleanup would happen in THIS file.)
+--
+-- UPDATE (#636): the expiry named above has NOT been tripped. It fires when a branch
+-- gains a non-literal `matched_pass` or a fourth pass is added with an overlapping label
+-- — neither has happened: `matched_pass` is still the single literal 'name' everywhere in
+-- pass 3, and the prefix arm added by slice 1b lives INSIDE pass 3 rather than being a new
+-- branch. Cross-branch collision is therefore still impossible, and the original mutual-
+-- redundancy argument — outer UNION alone suffices, per-branch DISTINCT alone suffices —
+-- stands unchanged.
+--
+-- The one genuinely new fact is narrower: pass 3's lateral now UNIONs two token sources,
+-- so a single patient_name row can yield the same token twice (an unpunctuated single word
+-- is both a whole token and its own alphanumeric part). That is a duplicate WITHIN pass 3,
+-- removed by the lateral's own UNION — a third dedup layer, inside the branch — and the
+-- outer UNION would catch it regardless, same as it always would have. None of the three
+-- dedups has become uniquely load-bearing; keep all three.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION cairn_search_candidates(
@@ -72,16 +96,26 @@ AS $$
     -- Pass 3: shared name token. Culture-neutral: EXACT token equality in ANY position, so
     -- a name typed in a different order still finds the chart, with no name-order model.
     --
-    -- KNOWN ASYMMETRY, issue #348 — the two sides no longer agree on edge punctuation.
-    -- This side splits on whitespace ONLY and keeps a token's edge punctuation verbatim;
-    -- `SearchQuery::new` (query side) TRIMS edge punctuation from each word. So a chart
-    -- registered as "Smith, John" — the registration-desk convention, and what
-    -- `register_patient` stores, raw and unparsed, by design — holds the token "smith,"
-    -- while a clerk typing the surname alone produces "smith", and they do not match. The
-    -- given-name token still matches, so it is a PARTIAL miss (safe direction: a false
-    -- split, never a false merge) and easy to miss when testing with a full name. Not fixed
-    -- here because this expression is copied verbatim from the matcher (see the DRIFT NOTE
-    -- above); fixing it is a joint decision with #353.
+    -- KNOWN ASYMMETRY, issue #348 — PARTIALLY CLOSED by #636 slice 1a; kept here (not
+    -- deleted) so a contributor triaging #348 lands on an accurate account instead of a
+    -- stale one. The structural asymmetry #348 named is still literally true: this side's
+    -- WHOLE-token source keeps a token's edge punctuation verbatim (deliberately — it is
+    -- copied verbatim from the matcher, see the DRIFT NOTE above, and a callsign needs its
+    -- punctuation intact, see the callsign comment below), while `SearchQuery::new` (query
+    -- side) TRIMS edge punctuation from its whole token. What #348 originally reported —
+    -- that a chart registered as "Smith, John" (the registration-desk convention;
+    -- `register_patient` stores it raw and unparsed, by design) holds the whole token
+    -- "smith," while a clerk typing the surname alone produces "smith", and the two do not
+    -- match — is NO LONGER TRUE. The parts source added by slice 1a splits "smith," on its
+    -- trailing punctuation into the alphanumeric part "smith", exactly equal to the
+    -- clerk's query token; `SearchQuery::new` independently emits the same whole+parts
+    -- split (its own #344 fix), so both sides now converge through the PARTS channel even
+    -- though the WHOLE-token channel stays asymmetric by design. What remains open under
+    -- #348: a query token that is neither an exact stored whole token NOR an alphanumeric
+    -- part of one — e.g. internal punctuation typed differently than it was stored — can
+    -- still miss. Narrower than the original report, not eliminated. Still the safe
+    -- direction when it happens (a false split, never a false merge). Joint widening of
+    -- the WHOLE-token channel, if ever wanted, remains a #353 decision.
     --
     -- READS `patient_name`, NOT `patient_name_current` — DELIBERATE, issue #349. This is
     -- the RETAINED name set, which INCLUDES values later struck by
@@ -100,15 +134,31 @@ AS $$
     -- decoration: without it a composed and a decomposed "José" are different tokens and the
     -- chart is silently unfindable.
     --
-    -- Exact equality, NOT `LIKE '%token%'`: a leading-wildcard match cannot use an index at
-    -- all, and the §1.2 paper-parity budget is 5 s to find an existing chart. Equality keeps the door open
-    -- to an expression index on the same expression when a node grows large enough to need
-    -- one.
+    -- Exact equality is no longer the whole story (#636 slice 1b added the PREFIX arm
+    -- below, via `starts_with`), but the reasoning against `LIKE '%token%'` is unchanged: a
+    -- LEADING wildcard cannot use an index at all, and the §1.2 paper-parity budget is 5 s
+    -- to find an existing chart. `starts_with(tok, prefix)` is NOT a leading-wildcard match
+    -- — it is the same shape as `LIKE 'x%'`, which CAN use an index — so this pass is still,
+    -- in principle, indexable.
     --
-    -- Callsigns ARE included here, unlike in the matcher (which excludes them via
-    -- `use_key <> ALL(...)`). Both are right: a callsign is not evidence of identity, so it
-    -- must not feed the scorer — but a clerk must be able to find the John Doe in front of
-    -- them.
+    -- In practice there is still no index: `patient_name` carries none with `value` as a
+    -- LEADING column (`patient_name_pkey` is `btree (patient_id, use_key, value)` — `value`
+    -- is indexed only as the PK's trailing column, which cannot serve a prefix scan), and
+    -- the tokens this pass matches against are the OUTPUT of a set-returning function
+    -- (`regexp_split_to_table`, inside the lateral), not a column — Postgres cannot index a
+    -- set-returning function's output without first materialising it into a real token
+    -- table (one row per patient per token) and indexing THAT. This pass has always been a
+    -- full scan; nothing here changes that. The paragraph above says the door remains open,
+    -- not that anyone has walked through it.
+    --
+    -- Callsigns ARE included here — in the WHOLE-token source only, unlike in the matcher
+    -- (which excludes them via `use_key <> ALL(...)`). The parts source and the prefix arm
+    -- below each carry their own `pn.use_key <> 'callsign'` guard and exclude them; see
+    -- those guards for why. Both stances are right: a callsign is not evidence of identity,
+    -- so it must not feed the scorer, and it must not let one typed fragment surface every
+    -- John Doe on the node — but a clerk must still be able to find the John Doe in front
+    -- of them by typing the callsign back in full, which only the whole-token source needs
+    -- to serve.
     --
     -- `tok <> ''` mirrors the matcher's own guard: the §4.2/§4.4 structural floor only
     -- requires a non-BLANK (trimmed) name, so a value with leading/trailing whitespace
@@ -119,10 +169,90 @@ AS $$
     -- typed evidence behind the match at all.
     SELECT DISTINCT pn.patient_id, 'name'::text
       FROM patient_name pn
-      CROSS JOIN LATERAL regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS tok
+      CROSS JOIN LATERAL (
+            -- The whole whitespace-delimited token, as before: this is what matches a
+            -- punctuated name typed back exactly as printed, and an intact callsign.
+            SELECT w AS tok
+              FROM regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS w
+             WHERE w <> ''
+            UNION
+            -- Its alphanumeric PARTS (#636, slice 1a) — the mirror of what
+            -- SearchQuery::new already emits on the query side, so a clerk typing one half
+            -- of "Fyodorowksi-Eschenbacher" finds the chart. Single characters are dropped
+            -- for the query side's reason: they cannot narrow a search and only inflate the
+            -- advisory set.
+            --
+            -- CALLSIGNS ARE EXCLUDED, and this is not optional. A callsign is
+            -- "Unknown-<class>-<site>-<date>-<tail>"; fragmenting it would project parts
+            -- like 'unknown' and 'ed', so one typed word would surface every John Doe on
+            -- the node. The query side keeps whole words for exactly this reason; this is
+            -- the same guard on the other side. Pinned by
+            -- `a_stored_callsign_is_not_fragmented_into_common_parts`.
+            SELECT p
+              FROM regexp_split_to_table(lower(normalize(pn.value, NFC)),
+                                         '[^[:alnum:]]+') AS p
+             WHERE length(p) > 1
+               AND pn.use_key <> 'callsign'
+      ) AS toks
       JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
-        ON tok = lower(normalize(t, NFC))
-     WHERE tok <> ''
+        ON toks.tok = lower(normalize(t, NFC))
+        -- PREFIX matching (#636, slice 1b), because a clerk types a fragment and picks from
+        -- a list rather than typing a compound surname in full.
+        --
+        -- `starts_with`, NOT `LIKE lower(...) || '%'`: SearchQuery::new trims only the EDGE
+        -- punctuation of a word, so an internal '%' or '_' survives into a query token and
+        -- would be read by LIKE as a wildcard. starts_with has no escaping surface and is
+        -- what LIKE 'x%' optimises to anyway.
+        --
+        -- MINIMUM 3 BYTES, and note WHAT it gates: the PREFIX arm only. Exact matching above
+        -- has no length rule, so a two-character surname ("Wu", "Ng") stays findable — only a
+        -- short prefix OF A LONGER token is refused, which is the unselective case this exists
+        -- for. A very short prefix matches a large fraction of any population; worse, if such a
+        -- search preceded a registration, that whole candidate list would be written into a
+        -- permanent signed attestation (ADR-0061).
+        --
+        -- BYTES, NOT CHARACTERS, and that word is the whole point (#638). This gate first
+        -- counted characters, and "three characters" is a selectivity proxy that holds for
+        -- LATIN SCRIPT ONLY. `李小明` is a complete name in three characters and projects
+        -- exactly one token — no whitespace to split, no punctuation to split — so a clerk
+        -- typing `李小` (surname plus the first given character, the natural narrowing gesture)
+        -- was gated at two characters, though `starts_with('李小明','李小')` is true and a
+        -- two-character Han prefix is FAR more selective than a three-character Latin one. That
+        -- left the failure this pass exists to prevent — zero results, indistinguishable from
+        -- *no such patient*, so the clerk creates a duplicate — intact for Han, Kana and
+        -- Hangul. ADR-0014 names that shape: one culture's model imposed on every culture.
+        --
+        -- `octet_length` fixes it without naming a single script, which is why it is preferred
+        -- over a Unicode-range test: UTF-8 spends 3 bytes on an ideograph and 1 on a Latin
+        -- letter, so byte length is a rough measure of INFORMATION CONTENT, which is what the
+        -- threshold was always reaching for. `mi` (2 bytes) stays gated; `mic`, `李` and `李小`
+        -- (3, 3 and 6) are admitted. A range test would have to be extended by hand for Thai,
+        -- Devanagari and every script after — the same capture, one level down.
+        --
+        -- HONEST LIMIT: 2-byte scripts (Cyrillic, Greek, Hebrew, Arabic) now admit a
+        -- two-CHARACTER prefix, which is looser than intended for them. That error is in the
+        -- safe direction — an extra candidate is dismissed, a missed one becomes a duplicate
+        -- chart — and it is the direction this whole pass is built to err in.
+        --
+        -- Pinned by `a_two_character_surname_is_still_found_by_exact_match` (short names stay
+        -- findable), `a_two_character_cjk_prefix_finds_the_chart` (the CJK gesture works) and
+        -- `a_two_byte_latin_prefix_is_still_gated` (the Latin case did not loosen).
+        --
+        -- `pn.use_key <> 'callsign'` here too, and this half is NOT in the slice-1b design
+        -- doc — it surfaced only when this arm was run against the existing test suite.
+        -- Without it, the parts source's own callsign guard above stops a callsign's PARTS
+        -- from being projected, but the whole-token source above still projects the intact
+        -- callsign deliberately, and `starts_with('unknown-ed-site1-...', 'unknown')` is
+        -- true: a clerk typing the leading word of any John Doe callsign would prefix-match
+        -- every John Doe on the node, exactly the hazard the parts-branch guard exists to
+        -- prevent, reopened from the whole-token side. Exact matching is UNAFFECTED — typing
+        -- the callsign in full still finds it, because the equality arm above carries no
+        -- such restriction. Pinned by `a_stored_callsign_is_not_fragmented_into_common_parts`
+        -- (which predates this arm but caught the regression the moment this arm landed).
+        OR (pn.use_key <> 'callsign'
+            AND octet_length(lower(normalize(t, NFC))) >= 3
+            AND starts_with(toks.tok, lower(normalize(t, NFC))))
+     WHERE toks.tok <> ''
 $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_search_candidates(text[], text, jsonb) FROM PUBLIC;

@@ -26,7 +26,8 @@ use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
 use cairn_node::{db, john_doe};
 use cairn_patient_search::{SearchQuery, TrustState};
 use common::{
-    cs, enroll_human, setup, submit_attested, submit_registration, submit_signed, EventSpec,
+    chart_named, cs, enroll_human, setup, submit_attested, submit_registration, submit_signed,
+    EventSpec,
 };
 use std::collections::BTreeSet;
 use tokio_postgres::Client;
@@ -1496,5 +1497,233 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
             .is_some_and(|r| r.starts_with("1 candidate")),
         "{:?}",
         list.incomplete_reason
+    );
+}
+
+/// A hyphenated compound surname is findable by EITHER half (#636, slice 1a).
+///
+/// `SearchQuery::new` already emits the parts of a punctuated word on the QUERY side; the stored
+/// side split on whitespace only, so `Fyodorowksi-Eschenbacher` was one token and typing either
+/// half found nothing. A clerk will not type the whole compound.
+#[tokio::test]
+async fn either_half_of_a_hyphenated_surname_finds_the_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
+    let full = "Fyodorowksi-Eschenbacher";
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body(full, Some("legal"), "patient-stated"),
+        render_name_twin(full, Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name assertion accepted");
+
+    for typed in ["eschenbacher", "fyodorowksi", "fyodorowksi-eschenbacher"] {
+        let rows = search_candidates(&c, Some(&[typed]), None, None).await;
+        assert!(
+            rows.iter().any(|(id, pass)| *id == p && pass == "name"),
+            "typing {typed:?} must find a chart stored as {full:?}; got {rows:?}"
+        );
+    }
+}
+
+/// A stored CALLSIGN is never fragmented — the anti-vacuity control for 1a.
+///
+/// The query side keeps whole words and drops single characters precisely so a John Doe callsign
+/// (`Unknown-<class>-<site>-<date>-<tail>`) cannot fragment into pieces matching every John Doe
+/// ever registered. Splitting the STORED side reintroduces that hazard from the other direction:
+/// without the `use_key <> 'callsign'` guard, a clerk typing `unknown` surfaces every John Doe on
+/// the node. A naive 1a passes every other test in this file and fails this one.
+#[tokio::test]
+async fn a_stored_callsign_is_not_fragmented_into_common_parts() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let (pid, call, _ord) = john_doe::register_john_doe(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .expect("john doe registration accepted by the floor");
+
+    // "unknown" is the callsign's leading part. It must not reach the chart.
+    let fragmented = search_candidates(&c, Some(&["unknown"]), None, None).await;
+    assert!(
+        !fragmented.iter().any(|(id, _)| *id == pid),
+        "typing 'unknown' must not surface a John Doe by fragmenting its callsign — that is \
+         every John Doe on the node in one advisory list; got {fragmented:?}"
+    );
+
+    // The callsign must still be findable AS PRINTED. This is the half that makes the
+    // exclusion safe rather than merely restrictive, and it duplicates the claim of
+    // `a_john_doe_callsign_chart_is_returned_by_its_callsign_token` on purpose: this test
+    // would otherwise pass if 1a broke callsign search entirely.
+    let token = call.to_lowercase();
+    let whole = search_candidates(&c, Some(&[token.as_str()]), None, None).await;
+    assert!(
+        whole.iter().any(|(id, _)| *id == pid),
+        "the intact callsign must still find the chart; got {whole:?}"
+    );
+}
+
+/// A three-character fragment finds a longer name (#636, slice 1b).
+#[tokio::test]
+async fn a_three_character_fragment_finds_a_longer_name() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let p = chart_named(&c, &sk, &kid, 0, "Samantha Michaelowski").await;
+
+    let hit = search_candidates(&c, Some(&["mich"]), None, None).await;
+    assert!(
+        hit.iter().any(|(id, _)| *id == p),
+        "'mich' must find Michaelowski; got {hit:?}"
+    );
+
+    // Prefix, NOT infix: 'chael' sits mid-token. Pinning this makes a later move to trigram
+    // search a deliberate decision rather than a silent drift.
+    let miss = search_candidates(&c, Some(&["chael"]), None, None).await;
+    assert!(
+        !miss.iter().any(|(id, _)| *id == p),
+        "a mid-token fragment must NOT match — this slice ships prefix matching only; got {miss:?}"
+    );
+}
+
+/// The 3-character minimum gates PREFIXES, never short NAMES (#636).
+///
+/// This is the distinction most likely to be implemented wrongly: gating short *tokens* instead of
+/// short *prefixes* passes every other test in this file and would make a two-character surname
+/// unfindable. Exact matching has no length rule.
+#[tokio::test]
+async fn a_two_character_surname_is_still_found_by_exact_match() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let wu = chart_named(&c, &sk, &kid, 0, "Wu").await;
+    let ng = chart_named(&c, &sk, &kid, 10, "Ng Wei").await;
+    let li = chart_named(&c, &sk, &kid, 20, "Li-Wong").await;
+    let wuang = chart_named(&c, &sk, &kid, 30, "Wuang").await;
+
+    let by_wu = search_candidates(&c, Some(&["wu"]), None, None).await;
+    assert!(
+        by_wu.iter().any(|(id, _)| *id == wu),
+        "'Wu' must find 'Wu' by EXACT match — the minimum gates prefixes, not names; got {by_wu:?}"
+    );
+    // The one refusal, and it is the unselective case the minimum exists for.
+    assert!(
+        !by_wu.iter().any(|(id, _)| *id == wuang),
+        "a two-character PREFIX of a longer token must not match; got {by_wu:?}"
+    );
+
+    let by_ng = search_candidates(&c, Some(&["ng"]), None, None).await;
+    assert!(
+        by_ng.iter().any(|(id, _)| *id == ng),
+        "'Ng' must find the whitespace-split token 'ng'; got {by_ng:?}"
+    );
+
+    let by_li = search_candidates(&c, Some(&["li"]), None, None).await;
+    assert!(
+        by_li.iter().any(|(id, _)| *id == li),
+        "'Li' must find 1a's part 'li' of 'Li-Wong'; got {by_li:?}"
+    );
+}
+
+/// A CJK-script name is findable by its natural narrowing gesture (#638).
+///
+/// The prefix gate counted CHARACTERS, and "three characters" is only a selectivity proxy for
+/// Latin script. `李小明` is a whole name in three characters and projects exactly ONE token from
+/// both sources — no whitespace to split on, no punctuation to split on. So a clerk typing `李小`
+/// (surname plus the first given character, the natural gesture) was gated at two characters, even
+/// though `starts_with('李小明','李小')` is true and a two-character Han prefix is HIGHLY selective
+/// — far more so than a three-character Latin one.
+///
+/// That left the exact failure this slice was written to fix — zero results, indistinguishable
+/// from *no such patient*, so the clerk creates a duplicate — intact for Han, Kana and Hangul.
+/// Under ADR-0014 that is cultural capture: one script's selectivity model imposed on every
+/// script.
+///
+/// The gate counts BYTES instead. UTF-8 spends 3 bytes on an ideograph and 1 on a Latin letter,
+/// so the same threshold admits `李` and `李小` while still refusing `mi` — culture-neutral by
+/// construction, because it names no script and so cannot privilege one.
+#[tokio::test]
+async fn a_two_character_cjk_prefix_finds_the_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let p = chart_named(&c, &sk, &kid, 0, "李小明").await;
+
+    for typed in ["李小", "李"] {
+        let rows = search_candidates(&c, Some(&[typed]), None, None).await;
+        assert!(
+            rows.iter().any(|(id, _)| *id == p),
+            "typing {typed:?} must find a chart stored as 李小明 — a Han prefix is selective at \
+             one or two characters, and gating it leaves the duplicate-chart failure this slice \
+             exists to fix intact for CJK script (#638); got {rows:?}"
+        );
+    }
+}
+
+/// The byte-counting gate must NOT loosen the Latin case it was built for (#638).
+///
+/// The companion of the test above, and the one that would catch an over-correction: `mi` is two
+/// Latin characters and two UTF-8 bytes, so it stays gated. If someone later "simplifies" the
+/// gate back to a character count, or drops it, this is what goes red.
+#[tokio::test]
+async fn a_two_byte_latin_prefix_is_still_gated() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let p = chart_named(&c, &sk, &kid, 0, "Michaelowski").await;
+
+    let gated = search_candidates(&c, Some(&["mi"]), None, None).await;
+    assert!(
+        !gated.iter().any(|(id, _)| *id == p),
+        "'mi' is two bytes and must stay gated — a two-character Latin prefix matches a large \
+         fraction of any population; got {gated:?}"
+    );
+    let allowed = search_candidates(&c, Some(&["mic"]), None, None).await;
+    assert!(
+        allowed.iter().any(|(id, _)| *id == p),
+        "'mic' is three bytes and must still match; got {allowed:?}"
     );
 }
