@@ -204,13 +204,39 @@ AS $$
         -- would be read by LIKE as a wildcard. starts_with has no escaping surface and is
         -- what LIKE 'x%' optimises to anyway.
         --
-        -- MINIMUM 3 CHARACTERS, and note WHAT it gates: the PREFIX arm only. Exact matching
-        -- above has no length rule, so a two-character surname ("Wu", "Ng") stays findable —
-        -- only a two-character prefix OF A LONGER token is refused, which is the unselective
-        -- case this exists for. A one- or two-character prefix matches a large fraction of
-        -- any population; worse, if such a search preceded a registration, that whole
-        -- candidate list would be written into a permanent signed attestation (ADR-0061).
-        -- Pinned by `a_two_character_surname_is_still_found_by_exact_match`.
+        -- MINIMUM 3 BYTES, and note WHAT it gates: the PREFIX arm only. Exact matching above
+        -- has no length rule, so a two-character surname ("Wu", "Ng") stays findable — only a
+        -- short prefix OF A LONGER token is refused, which is the unselective case this exists
+        -- for. A very short prefix matches a large fraction of any population; worse, if such a
+        -- search preceded a registration, that whole candidate list would be written into a
+        -- permanent signed attestation (ADR-0061).
+        --
+        -- BYTES, NOT CHARACTERS, and that word is the whole point (#638). This gate first
+        -- counted characters, and "three characters" is a selectivity proxy that holds for
+        -- LATIN SCRIPT ONLY. `李小明` is a complete name in three characters and projects
+        -- exactly one token — no whitespace to split, no punctuation to split — so a clerk
+        -- typing `李小` (surname plus the first given character, the natural narrowing gesture)
+        -- was gated at two characters, though `starts_with('李小明','李小')` is true and a
+        -- two-character Han prefix is FAR more selective than a three-character Latin one. That
+        -- left the failure this pass exists to prevent — zero results, indistinguishable from
+        -- *no such patient*, so the clerk creates a duplicate — intact for Han, Kana and
+        -- Hangul. ADR-0014 names that shape: one culture's model imposed on every culture.
+        --
+        -- `octet_length` fixes it without naming a single script, which is why it is preferred
+        -- over a Unicode-range test: UTF-8 spends 3 bytes on an ideograph and 1 on a Latin
+        -- letter, so byte length is a rough measure of INFORMATION CONTENT, which is what the
+        -- threshold was always reaching for. `mi` (2 bytes) stays gated; `mic`, `李` and `李小`
+        -- (3, 3 and 6) are admitted. A range test would have to be extended by hand for Thai,
+        -- Devanagari and every script after — the same capture, one level down.
+        --
+        -- HONEST LIMIT: 2-byte scripts (Cyrillic, Greek, Hebrew, Arabic) now admit a
+        -- two-CHARACTER prefix, which is looser than intended for them. That error is in the
+        -- safe direction — an extra candidate is dismissed, a missed one becomes a duplicate
+        -- chart — and it is the direction this whole pass is built to err in.
+        --
+        -- Pinned by `a_two_character_surname_is_still_found_by_exact_match` (short names stay
+        -- findable), `a_two_character_cjk_prefix_finds_the_chart` (the CJK gesture works) and
+        -- `a_two_byte_latin_prefix_is_still_gated` (the Latin case did not loosen).
         --
         -- `pn.use_key <> 'callsign'` here too, and this half is NOT in the slice-1b design
         -- doc — it surfaced only when this arm was run against the existing test suite.
@@ -224,7 +250,7 @@ AS $$
         -- such restriction. Pinned by `a_stored_callsign_is_not_fragmented_into_common_parts`
         -- (which predates this arm but caught the regression the moment this arm landed).
         OR (pn.use_key <> 'callsign'
-            AND length(lower(normalize(t, NFC))) >= 3
+            AND octet_length(lower(normalize(t, NFC))) >= 3
             AND starts_with(toks.tok, lower(normalize(t, NFC))))
      WHERE toks.tok <> ''
 $$;

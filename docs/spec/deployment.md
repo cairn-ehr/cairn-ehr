@@ -17,7 +17,7 @@ find an existing chart"* ([§5.11](identity.md), `db/046_patient_search.sql`) is
 
 | Profile | Expected patients |
 |---|---|
-| Rural clinic (off-grid), Pi-class | **~25,000** — a mid-sized cluster of small communities around a single medical outpost |
+| Rural clinic (off-grid), Pi-class | **~50,000** — a mid-sized cluster of small communities around a single medical outpost, with deliberate headroom above the ~25,000 such a cluster actually implies |
 
 The Pi-class figure is the load-bearing one, because Pi-class is the **performance floor**: it is the
 weakest tier that must still survive a full partition alone ([§8 topology](topology.md)), and it is

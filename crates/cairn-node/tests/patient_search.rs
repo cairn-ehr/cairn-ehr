@@ -1659,3 +1659,71 @@ async fn a_two_character_surname_is_still_found_by_exact_match() {
         "'Li' must find 1a's part 'li' of 'Li-Wong'; got {by_li:?}"
     );
 }
+
+/// A CJK-script name is findable by its natural narrowing gesture (#638).
+///
+/// The prefix gate counted CHARACTERS, and "three characters" is only a selectivity proxy for
+/// Latin script. `李小明` is a whole name in three characters and projects exactly ONE token from
+/// both sources — no whitespace to split on, no punctuation to split on. So a clerk typing `李小`
+/// (surname plus the first given character, the natural gesture) was gated at two characters, even
+/// though `starts_with('李小明','李小')` is true and a two-character Han prefix is HIGHLY selective
+/// — far more so than a three-character Latin one.
+///
+/// That left the exact failure this slice was written to fix — zero results, indistinguishable
+/// from *no such patient*, so the clerk creates a duplicate — intact for Han, Kana and Hangul.
+/// Under ADR-0014 that is cultural capture: one script's selectivity model imposed on every
+/// script.
+///
+/// The gate counts BYTES instead. UTF-8 spends 3 bytes on an ideograph and 1 on a Latin letter,
+/// so the same threshold admits `李` and `李小` while still refusing `mi` — culture-neutral by
+/// construction, because it names no script and so cannot privilege one.
+#[tokio::test]
+async fn a_two_character_cjk_prefix_finds_the_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let p = chart_named(&c, &sk, &kid, 0, "李小明").await;
+
+    for typed in ["李小", "李"] {
+        let rows = search_candidates(&c, Some(&[typed]), None, None).await;
+        assert!(
+            rows.iter().any(|(id, _)| *id == p),
+            "typing {typed:?} must find a chart stored as 李小明 — a Han prefix is selective at \
+             one or two characters, and gating it leaves the duplicate-chart failure this slice \
+             exists to fix intact for CJK script (#638); got {rows:?}"
+        );
+    }
+}
+
+/// The byte-counting gate must NOT loosen the Latin case it was built for (#638).
+///
+/// The companion of the test above, and the one that would catch an over-correction: `mi` is two
+/// Latin characters and two UTF-8 bytes, so it stays gated. If someone later "simplifies" the
+/// gate back to a character count, or drops it, this is what goes red.
+#[tokio::test]
+async fn a_two_byte_latin_prefix_is_still_gated() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let p = chart_named(&c, &sk, &kid, 0, "Michaelowski").await;
+
+    let gated = search_candidates(&c, Some(&["mi"]), None, None).await;
+    assert!(
+        !gated.iter().any(|(id, _)| *id == p),
+        "'mi' is two bytes and must stay gated — a two-character Latin prefix matches a large \
+         fraction of any population; got {gated:?}"
+    );
+    let allowed = search_candidates(&c, Some(&["mic"]), None, None).await;
+    assert!(
+        allowed.iter().any(|(id, _)| *id == p),
+        "'mic' is three bytes and must still match; got {allowed:?}"
+    );
+}

@@ -115,6 +115,16 @@ three-character surnames — common in romanised CJK and Vietnamese names — re
 exact match**; they simply gain less from the fragment affordance, because for such a name the
 fragment is essentially the whole name. Nothing is lost relative to today.
 
+> **Corrected 2026-09-21 (#638).** The paragraph above reasons only about *romanised* short
+> surnames, and the conclusion "the fragment is essentially the whole name" is false for names in
+> CJK **script**. `李小明` is a complete name in three characters and projects exactly one token, so
+> the natural gesture `李小` was gated at two characters — leaving the duplicate-chart failure this
+> slice exists to fix intact for Han, Kana and Hangul, which is ADR-0014's cultural-capture shape.
+> **The gate now counts BYTES (`octet_length`), not characters**, so `李` and `李小` are admitted
+> while `mi` stays gated — culture-neutral because it names no script. Honest limit: 2-byte scripts
+> (Cyrillic, Greek, Hebrew, Arabic) now admit a two-character prefix, an error in the safe
+> direction.
+
 **The matcher does not widen.** The invariant needs sweep-paired ⊆ search-found, and widening only
 search keeps that true. Widening the matcher's blocking keys is a separate question with its own
 evaluation (recall/precision, sweep cost) and is explicitly out of scope — but the DRIFT NOTE must
