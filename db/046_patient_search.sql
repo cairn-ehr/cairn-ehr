@@ -146,6 +146,36 @@ AS $$
       ) AS toks
       JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
         ON toks.tok = lower(normalize(t, NFC))
+        -- PREFIX matching (#636, slice 1b), because a clerk types a fragment and picks from
+        -- a list rather than typing a compound surname in full.
+        --
+        -- `starts_with`, NOT `LIKE lower(...) || '%'`: SearchQuery::new trims only the EDGE
+        -- punctuation of a word, so an internal '%' or '_' survives into a query token and
+        -- would be read by LIKE as a wildcard. starts_with has no escaping surface and is
+        -- what LIKE 'x%' optimises to anyway.
+        --
+        -- MINIMUM 3 CHARACTERS, and note WHAT it gates: the PREFIX arm only. Exact matching
+        -- above has no length rule, so a two-character surname ("Wu", "Ng") stays findable —
+        -- only a two-character prefix OF A LONGER token is refused, which is the unselective
+        -- case this exists for. A one- or two-character prefix matches a large fraction of
+        -- any population; worse, if such a search preceded a registration, that whole
+        -- candidate list would be written into a permanent signed attestation (ADR-0061).
+        -- Pinned by `a_two_character_surname_is_still_found_by_exact_match`.
+        --
+        -- `pn.use_key <> 'callsign'` here too, and this half is NOT in the slice-1b design
+        -- doc — it surfaced only when this arm was run against the existing test suite.
+        -- Without it, the guard above (line ~145) stops a callsign's PARTS from being
+        -- projected, but the WHOLE-token branch (line ~125) still projects the intact
+        -- callsign deliberately, and `starts_with('unknown-ed-site1-...', 'unknown')` is
+        -- true: a clerk typing the leading word of any John Doe callsign would prefix-match
+        -- every John Doe on the node, exactly the hazard the parts-branch guard exists to
+        -- prevent, reopened from the whole-token side. Exact matching is UNAFFECTED — typing
+        -- the callsign in full still finds it, because the equality arm above carries no
+        -- such restriction. Pinned by `a_stored_callsign_is_not_fragmented_into_common_parts`
+        -- (which predates this arm but caught the regression the moment this arm landed).
+        OR (pn.use_key <> 'callsign'
+            AND length(lower(normalize(t, NFC))) >= 3
+            AND starts_with(toks.tok, lower(normalize(t, NFC))))
      WHERE toks.tok <> ''
 $$;
 

@@ -34,6 +34,7 @@
 // test suite itself.
 #![allow(dead_code)]
 
+use cairn_event::demographics::{name_assertion_body, render_name_twin};
 use cairn_event::registration::{
     registration_assertion_body, render_registration_twin, RegistrationAssertion,
     RegistrationClass, SearchAttestationInput, SearchTerms, REGISTRATION_EVENT_TYPE,
@@ -504,6 +505,35 @@ pub async fn submit_registration(
     .await
     .expect("registration accepted");
     event_id
+}
+
+/// Seed one chart carrying `name` as a legal, patient-stated name assertion. Returns its
+/// patient id.
+///
+/// Promoted here (#636 Task 2) rather than left file-local: the fragment-matching suite and
+/// a second suite it grows both need "one chart with one name, nothing else" as setup, and
+/// the module header's rule is that identical scaffolding lives here once. `wall` orders the
+/// registration below the name assertion for the same reason [`submit_registration`] takes a
+/// `wall` at all — the birth act must predate the life.
+pub async fn chart_named(c: &Client, sk: &SigningKey, kid: &str, wall: i64, name: &str) -> Uuid {
+    let p = Uuid::now_v7();
+    submit_registration(c, sk, kid, p, wall).await;
+    submit_signed(
+        c,
+        sk,
+        kid,
+        EventSpec {
+            patient: p,
+            event_type: "demographic.field.asserted",
+            schema_version: "demographic.field/1",
+            payload: name_assertion_body(name, Some("legal"), "patient-stated"),
+            plaintext_twin: Some(render_name_twin(name, Some("legal"), "patient-stated")),
+            wall: wall + 1,
+        },
+    )
+    .await
+    .expect("name assertion accepted");
+    p
 }
 
 /// Register BOTH charts of a candidate/proposed pair (#345).

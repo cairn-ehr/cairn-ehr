@@ -26,7 +26,8 @@ use cairn_event::{ClockGrade, EventBody, Hlc, SigningKey};
 use cairn_node::{db, john_doe};
 use cairn_patient_search::{SearchQuery, TrustState};
 use common::{
-    cs, enroll_human, setup, submit_attested, submit_registration, submit_signed, EventSpec,
+    chart_named, cs, enroll_human, setup, submit_attested, submit_registration, submit_signed,
+    EventSpec,
 };
 use std::collections::BTreeSet;
 use tokio_postgres::Client;
@@ -1585,5 +1586,76 @@ async fn a_stored_callsign_is_not_fragmented_into_common_parts() {
     assert!(
         whole.iter().any(|(id, _)| *id == pid),
         "the intact callsign must still find the chart; got {whole:?}"
+    );
+}
+
+/// A three-character fragment finds a longer name (#636, slice 1b).
+#[tokio::test]
+async fn a_three_character_fragment_finds_a_longer_name() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let p = chart_named(&c, &sk, &kid, 0, "Samantha Michaelowski").await;
+
+    let hit = search_candidates(&c, Some(&["mich"]), None, None).await;
+    assert!(
+        hit.iter().any(|(id, _)| *id == p),
+        "'mich' must find Michaelowski; got {hit:?}"
+    );
+
+    // Prefix, NOT infix: 'chael' sits mid-token. Pinning this makes a later move to trigram
+    // search a deliberate decision rather than a silent drift.
+    let miss = search_candidates(&c, Some(&["chael"]), None, None).await;
+    assert!(
+        !miss.iter().any(|(id, _)| *id == p),
+        "a mid-token fragment must NOT match — this slice ships prefix matching only; got {miss:?}"
+    );
+}
+
+/// The 3-character minimum gates PREFIXES, never short NAMES (#636).
+///
+/// This is the distinction most likely to be implemented wrongly: gating short *tokens* instead of
+/// short *prefixes* passes every other test in this file and would make a two-character surname
+/// unfindable. Exact matching has no length rule.
+#[tokio::test]
+async fn a_two_character_surname_is_still_found_by_exact_match() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let wu = chart_named(&c, &sk, &kid, 0, "Wu").await;
+    let ng = chart_named(&c, &sk, &kid, 10, "Ng Wei").await;
+    let li = chart_named(&c, &sk, &kid, 20, "Li-Wong").await;
+    let wuang = chart_named(&c, &sk, &kid, 30, "Wuang").await;
+
+    let by_wu = search_candidates(&c, Some(&["wu"]), None, None).await;
+    assert!(
+        by_wu.iter().any(|(id, _)| *id == wu),
+        "'Wu' must find 'Wu' by EXACT match — the minimum gates prefixes, not names; got {by_wu:?}"
+    );
+    // The one refusal, and it is the unselective case the minimum exists for.
+    assert!(
+        !by_wu.iter().any(|(id, _)| *id == wuang),
+        "a two-character PREFIX of a longer token must not match; got {by_wu:?}"
+    );
+
+    let by_ng = search_candidates(&c, Some(&["ng"]), None, None).await;
+    assert!(
+        by_ng.iter().any(|(id, _)| *id == ng),
+        "'Ng' must find the whitespace-split token 'ng'; got {by_ng:?}"
+    );
+
+    let by_li = search_candidates(&c, Some(&["li"]), None, None).await;
+    assert!(
+        by_li.iter().any(|(id, _)| *id == li),
+        "'Li' must find 1a's part 'li' of 'Li-Wong'; got {by_li:?}"
     );
 }
