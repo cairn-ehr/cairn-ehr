@@ -190,6 +190,64 @@ this is the intended read path, and it says nothing about registration throughpu
 includes one `psql` process start, measured on that Pi at **31.9 ms**, ~4% of the post-change
 figure and ~2% of the pre-change one.
 
+### Re-run on the Pi, 2026-09-22 — WITH the `lower()` fix, and with gestures that find charts
+
+The table above was measured before the review round. This re-run repeats it on the same hardware
+with the fixed `db/046`, and adds two gestures drawn from the corpus itself, because the review found
+that **two of the five originally quoted gestures match nothing at all**.
+
+Raspberry Pi 5, aarch64, 4 cores, 8 GB, PostgreSQL 18.4 (Debian), `cairn_pgx` 0.3.0, cluster locale
+`en_GB.UTF-8` under the **libc** provider. All 52 migrations loaded cleanly on ARM into a fresh
+database. 50,000 names drawn from the real Australian pool. Median of 5 after a warm-up; `db/046`
+swapped in place between the two columns, nothing else changed.
+
+| Search | Rows found | Before (`main`) | After | Change |
+|---|---|---|---|---|
+| `unterfrancova-masna` — real long compound | 1 | 2306.3 ms | **883.3 ms** | **−62%** |
+| `mich` — selective fragment | 518 | 1669.8 ms | **897.5 ms** | −46% |
+| `smi` — unselective fragment | 421 | 1631.0 ms | **896.0 ms** | −45% |
+| `天` — real CJK surname, 3 bytes (#638) | 2 | 1566.2 ms | **897.9 ms** | −43% |
+| `wu` — exact short, below the byte gate | 64 | 1528.4 ms | **883.9 ms** | −42% |
+| `fyodorowksi-eschenbacher` | **0** | 2508.6 ms | 894.8 ms | *not a chart-finding measurement* |
+| `李小` | **0** | 1603.1 ms | 893.8 ms | *not a chart-finding measurement* |
+
+**The before column reproduces the original run to within 0.3%** (`wu` 1528.4 vs 1528.8, `mich`
+1669.8 vs 1669.7, the compound 2508.6 vs 2509.5). That is what licenses reading the two runs
+together, and it independently vindicates both the rig and the original measurement.
+
+**Two of the five gestures this slice has been quoting find nothing, and one of them was the
+headline.** `fyodorowksi-eschenbacher` is an invented name and `李小` is a CJK prefix against a pool
+of Australian names; both return zero rows on both sides. §1.2's budget is *5 s to **find an existing
+chart***, so neither measured it — they measured how fast pass 3 scans and comes back empty. This is
+inherited from slice 1, whose own log records `fitzherbert-brockholes … 2412.7 ms found=0` as *its*
+worst case. The rig now refuses to let such a row meet the budget or supply the floor.
+
+**On gestures that actually find charts:**
+
+- **Floor 1528.4 → 883.3 ms** — under a second, and inside §5.11's ~1000 ms limb. That limb is now
+  met, which is the whole point of the slice.
+- **Worst case 2306.3 → 897.5 ms** against the 5000 ms ceiling — and unlike the previous headline,
+  this one is a real search for a real chart.
+- **Spread 777.9 → 14.6 ms.** Query length no longer moves the cost, confirming the diagnosis on a
+  corpus where every gesture returns rows.
+
+**A neutrality check fell out for free:** the `Rows found` column is *identical* in both columns for
+all seven gestures (1, 518, 421, 2, 64, 0, 0). That is a before/after candidate-count comparison at
+50k scale on the real pool — weaker than the `EXCEPT`-both-ways differential, since equal counts are
+not equal sets, but it is independent of it and it covers the fixed `db/046`, which the original
+differential did not.
+
+**Honest limit on the fix's own cost.** Post-fix figures are 883–918 ms across two runs; the pre-fix
+run recorded 857–871 ms. A repeat of three gestures on the same database gave 902.0/902.5/917.7 ms
+against 883.3/883.9/897.5 ms, i.e. **run-to-run variance of about 2%** on this machine. The
+difference between the pre- and post-fix runs is of that same order, so **the `lower()` guard's cost
+is not separable from noise at this resolution — and it is not demonstrably zero either.** Adding a
+second `lower()` to a predicate already evaluated once per row should be cheap, and the `One-Time
+Filter` plan shape is unchanged, but this run does not prove it and does not claim to.
+
+**Per-sample overhead is now measured rather than quoted:** 31.9 / 31.7 / 31.8 ms across the three
+runs, independently reproducing the 31.9 ms the original plan recorded from a single hand-run.
+
 ### The neutrality claim, checked at 50k scale rather than argued
 
 The shipped function was installed a second time under a second name and the two were compared
@@ -260,13 +318,13 @@ population, which is the correct trade and was never the measured case. The `One
 shape the win depends on was re-checked with `lower(` in place and is unchanged.
 
 The same review round hardened the rig itself: a zero-row search can no longer pass the budget or
-supply the §5.11 floor figure. **The `李小` row above is very likely exactly that shape** — a CJK
-prefix against a pool of real Australian names — but *this plan cannot prove it either way*, because
-the table as recorded dropped the `Rows found` column the rig emits. That is the finding: the one
-signal that would settle it was generated and then discarded on the way into the evidence. The rig
-now prints `**NO ROWS — not a measurement of finding a chart**` in the verdict column itself, so a
-pasted table carries the fact even when the column is trimmed, and the next Pi run must keep the
-column. The SQLite
+supply the §5.11 floor figure. **The `李小` row above was exactly that shape, and so was the headline
+worst case** — confirmed by the 2026-09-22 re-run below, which reports `Rows found = 0` for both
+`李小` and `fyodorowksi-eschenbacher`. The original table could not show it, because it dropped the
+`Rows found` column the rig emits: the one signal that would have settled it was generated and then
+discarded on the way into the evidence. The rig now prints `**NO ROWS — not a measurement of finding
+a chart**` in the verdict column itself, so a pasted table carries the fact even when the column is
+trimmed. The SQLite
 pool path gained the short-draw guard the text-file path always had, the seeded population is now
 asserted rather than printed and **re-asserted after timing** (the rig writes to the shared
 `cairn_test` by default and takes no lock, so a concurrent `cargo test` truncating under it would
