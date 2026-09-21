@@ -209,6 +209,15 @@ AS $$
             -- the node. The query side keeps whole words for exactly this reason; this is
             -- the same guard on the other side. Pinned by
             -- `a_stored_callsign_is_not_fragmented_into_common_parts`.
+            -- ⚠️ KNOWN DEFECT IN THIS SEPARATOR CLASS, #641 — read it before "improving" the
+            -- split. `[^[:alnum:]]+` means "punctuation is whatever is not alphanumeric", which
+            -- is a LATIN orthographic model: a Unicode combining mark is not `[:alnum:]`, so a
+            -- Devanagari name is cut at its first vowel sign (`अमित` → `अम`) and a Thai name at
+            -- its tone marks, projecting truncated tokens that match too many charts. Nothing
+            -- becomes UNFINDABLE — the whole-token source above keeps the name intact — so it is
+            -- precision, not recall, which is why it was filed rather than fixed inside #639,
+            -- whose whole claim was that no candidate set changes. It is the same shape #638
+            -- closed one level up, where the GATE encoded a Latin selectivity model.
             SELECT p
               FROM regexp_split_to_table(lower(normalize(pn.value, NFC)),
                                          '[^[:alnum:]]+') AS p

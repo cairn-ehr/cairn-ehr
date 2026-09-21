@@ -382,20 +382,51 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
 - **⇒ FOUR DEFECTS WERE IN THE TASK BRIEFS, NOT THE IMPLEMENTATIONS:** brief code that was not rustfmt-clean; a gate invocation naming one of the three required DB variables; a leaf shape (`event_id` as TEXT) that would have left a shredded-event safety assertion **permanently vacuous**; and a key install placed where control flow could never reach it. **Root cause common to all four: the instructions were checked against what the code should do, never against the gates and control flow the project actually runs.** ⇒ **A plan that supplies verbatim code and commands must be run against the project's own gates before it is handed to anyone.**
 - **⇒ WHERE NO TEST CARRIES THE VALUE ACROSS THE DISK, THE ONE LINK THAT MATTERS IS PROVEN BY NOTHING.** `unwrap_secret` carries `#[serde(default)]`, so a `skip_serializing` mutant deserializes to `None` **silently** — before a populated round-trip test existed it left every DR test green and every restore keyless, this slice's own failure shape one layer down.
 
-**DR slice 2a — the shared, two-plane, append-only medium format (2026-08-31; no ADR, no spec bump, no migration — a pure crate, no DB; closes NOTHING, [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) stays open; new `crates/cairn-medium`, plus `crates/cairn-node`).** First of five pieces (2a–2e) that make ADR-0026 decision 2's *"clinical events back up as a cold peer"* true rather than aspirational. The full account is in the design doc and git; what outlives it:
+**DR slices 2a + 2b — the medium format and the transport seam (2026-08-31 / 09-02; no ADR, no spec
+bump, no migration, no DB change; closed NOTHING — [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500)
+stayed open for 2c/2d; 2b delivered **item 1 only** of [#101](https://github.com/cairn-ehr/cairn-ehr/issues/101);
+new `crates/cairn-medium` and `crates/cairn-wire`) — condensed 2026-09-21.** The first two of the five
+pieces; superseded in substance by 2c/2d below, and the full account is in the two design docs and git.
+**2a** lifted `medium.rs` into its own crate and defined revision **`CAIRNB3`**: no head block (an append
+costs ONE signature, not a file rewrite), one **global** chain in file order across both planes (the only
+way to see a cross-plane splice), a **torn tail is an interrupted append while an over-cap length prefix is
+corruption** and the two verdicts never collapse, an unknown plane tag carried as `Plane::Unknown(tag)`, and
+CAIRNB1/B2 parsing through untouched code forever. **2b** lifted the clinical wire types into `cairn-wire`
+and made `Transport` the one seam (`MediumTransport` makes a medium answer as a peer — ADR-0026's *"backup
+is a configuration of the sync daemon"*, mechanical; 2d did not in the end drive the puller through it).
+Paging is additive: the serving side fetches `limit + 1` because `rows.len() == limit` cannot tell *"the log
+ends here"* from *"there is one more we cut off"*, and `do_pull` commits cursor **and** quarantine floor after
+every page — that per-page durability, not the smaller frame, is #101 item 1's actual fix.
 
-- **What it built, condensed — the *why* is in the design doc.** `medium.rs` moved verbatim into `crates/cairn-medium` so `cairn-sync` could depend on the format without depending on a node application. New revision **`CAIRNB3`**: no head block, so appending costs **one signature** instead of a whole-file rewrite; one **global** chain in file order across both planes (the only way to see a cross-plane splice); a **torn tail is an interrupted append, not corruption**, while an over-cap length prefix IS corruption and the two verdicts never collapse; an unknown plane tag is carried as first-class `Plane::Unknown(tag)`; CAIRNB1/B2 parse through untouched code forever. **[#511](https://github.com/cairn-ehr/cairn-ehr/issues/511)** (custody newtypes) came out of it.
-- **⇒ THE REVIEW WAVE'S LESSON OUTLIVES THE SLICE.** A mutation audit found **19 of 19 single-line mutations surviving** — plane tags, magic, discriminants, chunk endianness, field order, record flag bits — because every test round-tripped through the same encoder/decoder pair. `src/wire_pins.rs` now pins each as **golden bytes** (re-run: 18/18 killed). Four confirmed false all-clears are closed by `health::assess`, the one composed verdict; `ChainReport::intact()` became `chain_intact()` so it cannot read as a whole-medium answer. **A round-trip test proves a codec is self-consistent, never that it is correct.**
-Spec: `docs/superpowers/specs/2026-08-31-dr-slice-2a-shared-two-plane-medium-design.md`. Plan: `docs/superpowers/plans/2026-08-31-dr-slice-2a-shared-two-plane-medium.md`.
+- **⇒ THREE LESSONS THAT OUTLIVE BOTH SLICES.** (1) A mutation audit found **19 of 19 single-line mutations
+  surviving** — plane tags, magic, discriminants, endianness, field order, flag bits — because every test
+  round-tripped through the same encoder/decoder pair; `wire_pins.rs` now pins each as **golden bytes**
+  (18/18 killed). **A round-trip test proves a codec is self-consistent, never that it is correct.** (2) The
+  page cursor is **not** the checkpoint cursor. (3) **Seven comments across four crates asserted a deferral
+  one slice had already retired** — a deferral is honest only while its precondition holds and nothing
+  watches for one expiring: **grep, do not recall.** 2b's whole-branch review also found two FALSE GREENS —
+  the nightly CAIRNB3 continuation arm had no identity guard, and a failed unwrap-key load still advanced
+  export coverage, so a kit read restorable while carrying no key.
+- **Opened and still open** (kept in full — condensing must never drop an open issue number):
+  [#511](https://github.com/cairn-ehr/cairn-ehr/issues/511) (custody newtypes — closed, its own entry below) ·
+  [#531](https://github.com/cairn-ehr/cairn-ehr/issues/531) · [#532](https://github.com/cairn-ehr/cairn-ehr/issues/532) ·
+  [#534](https://github.com/cairn-ehr/cairn-ehr/issues/534) (a freeze stops CONTENT convergence, not just the cursor) ·
+  [#535](https://github.com/cairn-ehr/cairn-ehr/issues/535) (paging removed the implicit bound on `applied_addresses`) ·
+  [#536](https://github.com/cairn-ehr/cairn-ehr/issues/536) (a DEK that fails to unwrap is counted nowhere) ·
+  [#537](https://github.com/cairn-ehr/cairn-ehr/issues/537) · [#538](https://github.com/cairn-ehr/cairn-ehr/issues/538) ·
+  [#556](https://github.com/cairn-ehr/cairn-ehr/issues/556) (`segment_commitment` does not bind
+  `attestation`/`attester_key`, so a stripped human-authorship token is silent on a medium — **time-limited:
+  free only until a release ships a CAIRNB3 writer**) · [#557](https://github.com/cairn-ehr/cairn-ehr/issues/557)
+  (the gap-probe budget starves the one fillable gap; `unfilled_gaps` reaches no operator) ·
+  [#558](https://github.com/cairn-ehr/cairn-ehr/issues/558) (the local-state version gate is unreachable, so an
+  older node calls a newer export corrupt mid-recovery) · [#559](https://github.com/cairn-ehr/cairn-ehr/issues/559)
+  (four operator messages naming the wrong remedy) · [#560](https://github.com/cairn-ehr/cairn-ehr/issues/560)
+  (`export_covers_seq` can over-claim by one in-flight write) · [#561](https://github.com/cairn-ehr/cairn-ehr/issues/561)
+  (test gaps, incl. an order-of-suites-flaky watermark property) · [#562](https://github.com/cairn-ehr/cairn-ehr/issues/562)
+  (the CodeQL `rust/cleartext-logging` triage) · [#563](https://github.com/cairn-ehr/cairn-ehr/issues/563)
+  (type-design hardening on the DR backup path).
 
-**DR slice 2b — the transport seam and the paged pull (2026-09-02; no ADR, no spec bump, no migration — no DB change at all; closes NOTHING, [#500](https://github.com/cairn-ehr/cairn-ehr/issues/500) stays open; delivers **item 1 only** of [#101](https://github.com/cairn-ehr/cairn-ehr/issues/101), so #101 itself stays open; opens [#531](https://github.com/cairn-ehr/cairn-ehr/issues/531), [#532](https://github.com/cairn-ehr/cairn-ehr/issues/532) and — from the whole-branch final review — [#534](https://github.com/cairn-ehr/cairn-ehr/issues/534) (a freeze now stops CONTENT convergence, not just the cursor), [#535](https://github.com/cairn-ehr/cairn-ehr/issues/535) (paging removed the implicit bound on `applied_addresses`), [#536](https://github.com/cairn-ehr/cairn-ehr/issues/536) (a DEK that fails to unwrap is counted nowhere), [#537](https://github.com/cairn-ehr/cairn-ehr/issues/537) (a failed pen release is permanent after printing once) and [#538](https://github.com/cairn-ehr/cairn-ehr/issues/538) (the byte tier discards the new error taxonomy); new `crates/cairn-wire`, plus `crates/cairn-sync`, `crates/cairn-event`, `crates/cairn-medium`).** Second of the five pieces; the full account is in the design doc and git.
-
-- **What it built, condensed.** New `crates/cairn-wire` carries the clinical-plane wire types and framing, lifted out of `cairn-sync`'s binary-only `main.rs`. **`Transport` is the one seam**: `MediumTransport` makes a CAIRNB3 medium answer as a peer, which is what makes ADR-0026's *"backup is a configuration of the sync daemon"* mechanical (2d in the end did not drive the puller through it — the derivation lives in `cairn-medium`; HANDOVER's open-threads DR bullet). Paging is additive (`limit`, `complete`); the serving side fetches `limit + 1` because `rows.len() == limit` cannot tell *"the log ends here"* from *"there is one more we cut off"*, and a wrong `complete: true` strands every event above it forever. `do_pull` commits its cursor **and** its quarantine floor after EVERY page — that per-page durability, not the smaller frame, is #101 item 1's actual fix.
-- **⇒ TWO RULES THAT OUTLIVE THE SLICE.** The page cursor is **not** the checkpoint cursor. And **seven comments across four crates asserted a deferral that one slice had retired** — a deferral is only honest while its stated precondition holds, and nothing in the repo watches for one expiring. **Grep, do not recall.**
-- **⇒ The whole-branch review found two criticals, both FALSE GREENS.** The CAIRNB3 continuation arm — the one that runs every night — had **no identity guard**. And a failed unwrap-key load still **advanced export coverage**, so a kit reported restorable while carrying no key to open anything.
-- **Opened by that review and ALL STILL OPEN** (kept in full — condensing must never drop an open issue number): **[#556](https://github.com/cairn-ehr/cairn-ehr/issues/556)** (`segment_commitment` does not bind `attestation`/`attester_key`, so a stripped human-authorship token is silent on a medium — **time-limited: free only until a release ships a CAIRNB3 writer**) · **[#557](https://github.com/cairn-ehr/cairn-ehr/issues/557)** (the gap-probe budget starves the one fillable gap, and `unfilled_gaps` reaches no operator surface) · **[#558](https://github.com/cairn-ehr/cairn-ehr/issues/558)** (the local-state version gate is unreachable, so an older node calls a newer export corrupt mid-recovery) · **[#559](https://github.com/cairn-ehr/cairn-ehr/issues/559)** (four operator messages naming the wrong remedy) · **[#560](https://github.com/cairn-ehr/cairn-ehr/issues/560)** (`export_covers_seq` can over-claim by one in-flight write: `MAX(seq)` and the bundle read are not one snapshot) · **[#561](https://github.com/cairn-ehr/cairn-ehr/issues/561)** (test gaps, including a plane-blind-watermark property that is order-of-suites flaky) · **[#562](https://github.com/cairn-ehr/cairn-ehr/issues/562)** (the CodeQL `rust/cleartext-logging` triage; dismissal is a Security-tab act) · **[#563](https://github.com/cairn-ehr/cairn-ehr/issues/563)** (type-design hardening on the DR backup path).
-
-Spec: `docs/superpowers/specs/2026-09-02-dr-slice-2b-transport-seam-and-paged-pull-design.md`. Plan: `docs/superpowers/plans/2026-09-02-dr-slice-2b-transport-seam-and-paged-pull.md`.
+Specs/plans: `2026-08-31-dr-slice-2a-shared-two-plane-medium-*.md`, `2026-09-02-dr-slice-2b-transport-seam-and-paged-pull-*.md`.
 
 **#511 — the custody newtypes: a public half can no longer be installed as a secret (2026-09-04; no ADR, no spec bump, no migration; closes [#511](https://github.com/cairn-ehr/cairn-ehr/issues/511); opens [#541](https://github.com/cairn-ehr/cairn-ehr/issues/541), [#543](https://github.com/cairn-ehr/cairn-ehr/issues/543), [#544](https://github.com/cairn-ehr/cairn-ehr/issues/544), [#545](https://github.com/cairn-ehr/cairn-ehr/issues/545)) — condensed 2026-09-14.** Every custody-plane key was a bare `[u8; 32]`, so installing a PUBLIC half as the unwrap secret compiled — the #495 shape one layer up. `crates/cairn-event/src/keys.rs` now carries **`Secret32`** (zeroizing, redacting `Debug`, constant-time `PartialEq` via `subtle` — promoted from a transitive dependency to a direct one, BSD-3-Clause, house rule 1) and **`PublicKey32`**; the three lines #511 reported are `compile_fail` doctests with a positive control. **It does NOT separate one secret role from another** — `Secret32::from_bytes(sk.to_bytes())` still compiles, and every such production call site is pinned per file and by count in `secret32_conversions_are_named.rs` (HANDOVER trap 5). The `CAIRNL1` wire field kept its CBOR array-of-uints encoding, pinned by `localstate_wire_pins.rs` frozen from the pre-newtype build (narrowing #508); `LocalState` got exactly two producers. **Lesson the review round added:** the entry's own count was asserted in six places over three different populations, and the guard the prose named pinned none of them — *a prose count with no mechanical pin is a stale count waiting to happen*; two `seal.rs` comments still asserted the coupling ADR-0066 deleted (the #530 pattern). #541: no CI job compiles `cairn_pgx`'s `pg_test` cfg. #543: the `Serialize`/`Debug` asymmetry has no guard. #544: `derive_kek` is the last un-newtyped secret. #545: `Drop` leaves `drafts`/`config` unwiped.
 
@@ -663,7 +694,54 @@ Design: `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-de
 - **The DRIFT NOTE's invariant is now executable** (`patient_search_drift.rs`): sweep-paired ⊆ search-found. Honest limit, stated in the file: it catches search being narrowed, **not** the matcher being widened, because the sweep's keys are a hand-copy of `_NAME_TOKENS_CTE`.
 - **Filed:** [#637](https://github.com/cairn-ehr/cairn-ehr/issues/637) — **both halves now answered**: the Pi-class population is pinned at ~50,000 in spec §8.1, and the Pi 5 itself has been measured (worst case 2525 ms of 5000 ms) · [#638](https://github.com/cairn-ehr/cairn-ehr/issues/638) — **FIXED and CLOSED** (cb43977c): the gate counted CHARACTERS, so `李小` was gated at two though `starts_with` would have matched, leaving the duplicate-chart failure intact for Han, Kana and Hangul (ADR-0014's cultural-capture shape). It counts BYTES (`octet_length`) now — culture-neutral because it names no script; `mi` stays gated, `李` and `李小` are admitted; two tests pin the CJK gesture and the unchanged Latin case · [#639](https://github.com/cairn-ehr/cairn-ehr/issues/639) (pass 3 is **5.6× slower**, and #637's diagnosis was wrong — the cost is 1a's second split plus `normalize` re-evaluated three times per pair, not the prefix arm; three semantically-neutral changes recover ~80%) · [#640](https://github.com/cairn-ehr/cairn-ehr/issues/640) (the callsign guards hardcode a literal the matcher binds as a CI-synced frozenset).
 
-**§1.2:** paper counterpart is the alphabetical index drawer. Steps: paper 3 → architecture-forced 2 → UI target 2 (slice 2). `M ≤ N`. Time + cognitive load: **verified on the real target** — Raspberry Pi 5, aarch64, PG 18.4, 50,000 patients (spec §8.1): 5 s ceiling held, worst case **2525 ms** (the long compound name — *not* the unselective fragment). But **every search costs ~1500 ms minimum, including one that finds nothing**, because pass 3 scans all of `patient_name` before selectivity is consulted — so §1.2's *find a chart* limb is met while §5.11's *no spinner* limb is not, and [#639](https://github.com/cairn-ehr/cairn-ehr/issues/639)'s optimisations cut that floor rather than the tail. All 53 migrations load cleanly on ARM. Design: `docs/superpowers/specs/2026-09-21-patient-search-fragment-matching-design.md`. Plan: `docs/superpowers/plans/2026-09-21-patient-search-fragment-matching-636.md`.
+**§1.2:** paper counterpart is the alphabetical index drawer. Steps: paper 3 → architecture-forced 2 → UI target 2 (slice 2). `M ≤ N`. Time + cognitive load: **verified on the real target** — Raspberry Pi 5, aarch64, PG 18.4, 50,000 patients (spec §8.1), all 53 migrations loading cleanly on ARM: 5 s ceiling held, worst case **2525 ms**. **But the floor, not the tail, was the finding** — every search cost ~1500 ms including one that found nothing, so §1.2's *find a chart* limb was met while §5.11's *no spinner* limb was not. Both are answered by the #639 entry below. Design/plan: `2026-09-21-patient-search-fragment-matching-{design,636}.md`.
+
+### 2026-09-21 — #639: pass 3's fixed per-row cost, and the floor under it
+
+- **The defect:** slice 1 made pass 3 **5.6× slower**, and the Pi measurement found the sharper
+  version — **every search cost ~1500 ms, including one that found nothing.** §1.2's 5 s ceiling was
+  met; **§5.11's *"type a few chars and enter, no spinner"* was not**, and slice 2's UI re-searches
+  as the clerk types. No ADR, no spec bump, no migration, no `SCHEMA_GENERATION` bump.
+- **Built, three changes to `db/046`:** the query-token normalisation hoisted behind an **`OFFSET 0`
+  optimisation fence** (it was evaluated at all three sites, per stored-token × query-token pair;
+  the fence is required — a plain subquery is pulled back up and re-inlined, measured); **`UNION
+  ALL` in the lateral** (the dedup sort per row removed a duplicate the branch `DISTINCT` and the
+  outer `UNION` already remove twice over); and **the parts branch skipped for an unpunctuated
+  value** (for a value whose NFC form holds nothing outside `[[:alnum:][:space:]]` the two splits
+  coincide — Postgres's `\s` *is* `[[:space:]]` — and parts additionally drops length-1 tokens and
+  callsigns, so parts ⊆ whole).
+- **Measured on the Pi 5 at 50,000 real Australian names**, same machine and seeded rows, `db/046`
+  swapped in place: **floor 1528.8 → 856.7 ms (−44%, under a second)**, worst case 2509.5 →
+  862.4 ms (−66%) against 5000 ms. **The spread collapses from 981 ms to 14 ms** — query length no
+  longer moves the cost, which is the signature of per-pair `normalize` being hoisted out, and
+  #639's diagnosis confirmed against #637's. The `main` column reproduces slice 1's hand-run to
+  within 4%.
+- **⇒ THE RIG IS COMMITTED THIS TIME.** Slice 1's was written on the Pi and never came back, so its
+  numbers could be believed but not re-derived. `scripts/measure_patient_search.py` seeds, times and
+  reports, with a `--dump-names` path that keeps the gigabyte SQLite pool on the workstation while
+  the measurement happens where the budget applies; pure parts tested and riding `rust.yml`.
+- **Neutrality is held three ways, and they are not redundant.** A standing **contract** test
+  (`patient_search_equivalence.rs`: seven charts, fourteen gestures as EXACT sets, four expecting
+  the EMPTY set because a widening rewrite breaks those first; proven red under three mutations —
+  the callsign-guard one *gained* a John Doe on `unknown`, a direction no existing test could see).
+  A **differential** over 394 query tokens / 14,447 rows, 0 lost and 0 gained, which dies with the
+  branch. And an **executable subset argument** that asks the SERVER whether the character classes
+  still coincide, because a locale or ICU version may move one underneath a deployment.
+- **Filed:** [#641](https://github.com/cairn-ehr/cairn-ehr/issues/641) — `[^[:alnum:]]+` treats a
+  combining mark as a separator, so slice 1a's parts branch cuts a Devanagari name at its first
+  vowel sign (`अमित` → `अम`) and a Thai name at its tone marks. Nothing becomes unfindable, so it is
+  precision not recall — but it is ADR-0014's shape one level below #638 (#638 was the *gate*
+  encoding a Latin selectivity model; this is the *separator class* encoding a Latin orthographic
+  one), and fixing it changes which candidates come back.
+- **What is left:** the whole-token `regexp_split_to_table` over every row — the scan pass 3 has
+  always been. Cutting it needs the materialised token table #637 proposed for the wrong reason;
+  right candidate, right diagnosis now, a slice of its own.
+
+**§1.2:** paper counterpart is the alphabetical index drawer (unchanged — no human act is added or
+removed). Steps: paper 3 → architecture-forced 2 → UI target 2. `M ≤ N`. Time + cognitive load:
+the 5 s ceiling was already met; **this slice answers the other limb** — §5.11's no-spinner floor,
+measured from 1528.8 ms to 856.7 ms on the target hardware. Plan (with the full tables):
+`docs/superpowers/plans/2026-09-21-patient-search-pass3-cost-639.md`.
 
 - **A four-reviewer pass on the finished branch** (general code, test coverage, silent failures, comment accuracy) found **no defect in shipped behaviour** and four documentation faults that would have outlived it, all fixed: db/001's ~70-line header — the one carrying the *"never add `USING ERRCODE`"* contract — had been orphaned above `cairn_value_glimpse`, leaving `cairn_decode_hex_or_raise` with none; db/022 still said *"a refusal with any other SQLSTATE freezes instead"* and listed two reason kinds; `sync.md` and the ADR index omitted `XX001`/`XX002`, documenting the pre-review behaviour as current; and `cairn_node_roles()` was the only helper with neither `SET search_path` nor a `REVOKE` — both now present **and explained** (the `SET` blocks SQL-function inlining so the CHECK cannot hold a constant-folded superseded vocabulary; the `REVOKE` is safe only while no non-owner role holds INSERT on `node_event`). Two rationales were corrected without behaviour change: class `42` is local because the **remedy** is local, not because it is transient, and the role value echoes in full because a routing label carries nothing secret — not because the vocabulary is closed. **Filed:** [#625](https://github.com/cairn-ehr/cairn-ehr/issues/625) gained the peer-blind-pen findings (a second peer advances with no floor of its own; this slice widens what reaches that path) — #630 was filed for them and closed as its duplicate · [#631](https://github.com/cairn-ehr/cairn-ehr/issues/631) (a bumped row keeps its original `reason`) · [#632](https://github.com/cairn-ehr/cairn-ehr/issues/632) (the claimed-local set misses door-confined codes) · [#633](https://github.com/cairn-ehr/cairn-ehr/issues/633) (nothing pins the `USING ERRCODE` contract itself — judged the highest-value missing mutation) · [#634](https://github.com/cairn-ehr/cairn-ehr/issues/634) (pen-at-quota, auto-release of this pen kind, and the deliberate NO-release invariant lack tests).
 

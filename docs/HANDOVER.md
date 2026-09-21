@@ -37,29 +37,42 @@
 > **#625** (the pen dedupes by digest across peers but counts `pending` per peer, so a penned rival
 > goes quiet when its first server leaves the pull set).
 >
-> **⇒ #636 SLICE 1 IS BUILT: PATIENT SEARCH MATCHES FRAGMENTS** (2026-09-21, no ADR — it widens
+> **⇒ #636 SLICE 1 IS BUILT: PATIENT SEARCH MATCHES FRAGMENTS** (2026-09-21, no ADR — it widened
 > `db/046`'s pass 3 within the existing §5.3/§5.8 contract; no migration, no `SCHEMA_GENERATION`
-> bump, no signed-body change). A clerk typing part of a name got **zero** results, indistinguishable
-> from *no such patient* — a §1.2 failure for *find an existing chart* and a duplicate-chart risk.
-> Two widenings, both strictly monotone (a reviewer proved it by running the old predicate `EXCEPT`
-> the new one over 27 query tokens: **zero rows lost, nine gained**): **1a** projects the alphanumeric
-> PARTS of stored punctuated tokens, so `Eschenbacher` finds `Fyodorowksi-Eschenbacher`; **1b** matches
-> a 3+ character PREFIX via `starts_with` (never `LIKE q || '%'` — `SearchQuery::new` trims only EDGE
-> punctuation, so an internal `%` survives and LIKE would read it as a wildcard). **The 3-char minimum
-> gates PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match; that is pinned.
-> **Callsigns are excluded from both new arms**, or one typed word surfaces every John Doe.
-> ⚠️ **The plan's own SQL had that bug on the prefix arm** and only Task 1's guard test caught it.
-> Residuals: **#637** (**both halves now answered** — Pi-class population pinned at ~50,000 in spec
-> §8.1, and the Pi 5 measured: 5 s ceiling held, worst case 2525 ms. ⚠️ But the FLOOR is ~1500 ms on
-> EVERY search including one that finds nothing, so §5.11's *no spinner* limb is not met and #639
-> matters more than the worst case suggests) · **#638 — FIXED ON `main` IN cb43977c, ISSUE CLOSED
-> 2026-09-21** (the gate counted CHARACTERS, so a CJK name was findable only in full; it counts
-> BYTES via `octet_length` now, which names no script — two tests pin the CJK gesture and that the
-> Latin case did not loosen. **This file and ROADMAP both listed it as open for a day after it was
-> fixed** — the docs commits that followed it did not pick it up) · **#639** (pass 3 is **5.6×
-> slower**; the cost is 1a's second split + repeated `normalize`, NOT the prefix arm — #637's
-> diagnosis was wrong and is corrected; three neutral changes recover ~80%) · **#640** (the two
-> callsign guards hardcode a literal the matcher deliberately binds as a synced frozenset).
+> bump). **1a** projects the alphanumeric PARTS of stored punctuated tokens; **1b** matches a 3+
+> BYTE prefix via `starts_with` (never `LIKE q || '%'` — `SearchQuery::new` trims only EDGE
+> punctuation, so an internal `%` survives and LIKE would read it as a wildcard). Both strictly
+> monotone, proved by `EXCEPT` over 27 tokens: zero lost, nine gained. **The byte minimum gates
+> PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match — and **callsigns are excluded from
+> both new arms**, or one typed word surfaces every John Doe. ⚠️ **The plan's own SQL had that bug on
+> the prefix arm** and only the guard test caught it. Residuals: **#637** (answered — population
+> pinned at ~50,000 in spec §8.1, Pi measured) · **#638** (the gate counted CHARACTERS, so a CJK name
+> was findable only in full; **FIXED on `main` in cb43977c, issue CLOSED 2026-09-21** — it counts
+> BYTES now. ⚠️ This file and ROADMAP both listed it as open for a day after it was fixed: the docs
+> commits that followed did not pick it up) · **#639** (BUILT, below) · **#640** (the two callsign
+> guards hardcode a literal the matcher binds as a synced frozenset) · **#641** (see below).
+>
+> **⇒ #639 IS BUILT: THE SEARCH FLOOR IS UNDER A SECOND** (2026-09-21, PR
+> **[#642](https://github.com/cairn-ehr/cairn-ehr/pull/642)**, no ADR, no spec bump, no migration,
+> `SCHEMA_GENERATION` unchanged — `db/046` edited in place). Slice 1's budget headline was true and
+> beside the point: the 5 s ceiling held at 2413 ms, but **every search cost ~1500 ms including one
+> that found nothing**, so §5.11's *no spinner* limb was unmet and slice 2's UI re-searches as the
+> clerk types. Three changes, all semantically neutral: the query-token normalisation hoisted behind
+> an **`OFFSET 0` fence**, **`UNION ALL`** in the lateral, and **the parts branch skipped for an
+> unpunctuated value**. Measured on the Pi 5 at 50,000 real Australian names, same machine and rows,
+> `db/046` swapped in place: **floor 1528.8 → 856.7 ms (−44%)**, worst case 2509.5 → **862.4 ms**
+> (−66%) of 5000 ms. **The spread collapsed from 981 ms to 14 ms** — query length no longer moves
+> the cost, which is #639's diagnosis confirmed and #637's refuted. Neutrality held three ways: a
+> standing contract test (14 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
+> **differential over 394 tokens / 14,447 rows — 0 lost, 0 gained**, and an executable subset
+> argument that asks the SERVER whether the character classes still coincide. **The rig is committed
+> this time** (`scripts/measure_patient_search.py` + tests in `rust.yml`): slice 1's was written on
+> the Pi and never came back. Durable rules are **trap 15**. **Filed:** **#641** (`[^[:alnum:]]+`
+> treats a combining mark as a separator, so slice 1a's parts branch cuts `अमित` to `अम` and a Thai
+> name at its tone marks — precision not recall, nothing becomes unfindable, but ADR-0014's shape one
+> level below #638). **What is left:** the whole-token `regexp_split_to_table` over every row, the
+> scan pass 3 has always been; cutting it needs the materialised token table #637 proposed for the
+> wrong reason — right candidate, right diagnosis now, a slice of its own.
 >
 > **⇒ SLICE 2, THE FUNNEL UI, IS SPEC'D AND UNBUILT** —
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Workflow: browse by
@@ -71,13 +84,16 @@
 > and ranks but never excludes, client-side, so it never enters the signed `SearchQuery`.
 >
 > **⇒ NO DECIDED-AND-UNBUILT DR ITEM REMAINS**, and #621 is merged, so the node-plane
-> refusal work is closed out. Pick from below, or leave DR for the *Other build candidates*.
-> **Recommended: #620** — a wire-contract DECISION (content-addressing over bytes the signature does
-> not cover), and the only open item that can still change the wire; it needs a brainstorm before a
-> plan, not a TDD slice. After it, **#626** (the clinical twin of #621 — the pattern is now built and
-> proven one plane over, so this is the cheapest real slice on the board) or the **registration/search
-> UI slice**. **#633** (nothing pins the `USING ERRCODE` contract that both planes' classification
-> rests on) is a small, high-value guard that could ride along with either.
+> refusal work is closed out. **Recommended, in order:** **slice 2, the funnel UI** — it is spec'd,
+> it is the first clinician-facing surface of the funnel, and #639 has just cleared the latency
+> objection that made it not worth building on (its background re-search was the failure scenario
+> #639 existed to prevent). Then **#620**, a wire-contract DECISION (content-addressing over bytes
+> the signature does not cover) and the only open item that can still change the wire — it needs a
+> brainstorm before a plan, not a TDD slice. Then **#626** (the clinical twin of #621; the pattern is
+> built and proven one plane over, so it is the cheapest real slice on the board). **#633** (nothing
+> pins the `USING ERRCODE` contract both planes' classification rests on) is a small, high-value
+> guard that could ride along with any of them. The search residuals **#640** and **#641** are both
+> small and both advisory-tier.
 >
 > - **Open decisions (none a patch):** **#575** (the minted recovery code still reaches stderr on both
 >   restore paths — re-deferred once) · **#602** (any client can set `cairn.remote_apply` and turn the
@@ -193,10 +209,10 @@
 > **#548**.
 
 > [!IMPORTANT]
-> **Fourteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
+> **Fifteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
 > trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review —
 > **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615,
-> trap 13 by #619 and trap 14 by #621.)
+> trap 13 by #619, trap 14 by #621 and trap 15 by #639.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -268,10 +284,10 @@
 >    catches that in the database too — do not read the floor as licence to drop the Rust check, which
 >    is what tells the operator WHY.
 > 9. **RETIRED — HISTORY, NOT ADVICE (#584 built, ADR-0070).** It warned that a key landing on an
->     already-admitted event opened the body and left the chart empty; **the door now projects a late
->     key, and `reproject_owed` is gone.** What survives as live advice: **do not remove the
->     `cairn_project_late_custody` calls or move them.** In BOTH doors they sit AFTER the substitution
->     guard (a rival body must never reach an applier) and both placements are test-pinned in
+>     already-admitted event opened the body and left the chart empty; the door now projects a late
+>     key and `reproject_owed` is gone. **What survives as live advice: do not remove the
+>     `cairn_project_late_custody` calls or move them.** In BOTH doors they sit AFTER the
+>     substitution guard (a rival body must never reach an applier), test-pinned in
 >     `late_custody_reaches_the_chart.rs`, each with its OWN positive control so a probe that stopped
 >     being registered cannot leave them passing vacuously. The strict door's POSTURE is pinned too:
 >     wrapping db/005's call in `cairn.remote_apply = 'on'` "to match db/020" turns a strict refusal
@@ -418,6 +434,34 @@
 >     **#632** (the claimed-local set misses door-confined codes like `P0004`/`21000`), **#633**
 >     (nothing pins the `USING ERRCODE` contract itself), **#634** (pen-at-quota, auto-release of
 >     this pen kind, and the deliberate NO-release-on-later-verdict invariant lack tests).
+> 15. **⇒ THREE THINGS IN `db/046`'s PASS 3 LOOK LIKE NOISE AND ARE EACH WORTH HUNDREDS OF
+>     MILLISECONDS ON A PI (#639, 2026-09-21).** All three are the kind a tidy-up deletes.
+>     (a) **`OFFSET 0` IS AN OPTIMISATION FENCE, NOT A LIMIT.** It is what stops the planner pulling
+>     the query-token subquery back up and re-inlining `lower(normalize(t, NFC))` at all three sites,
+>     per (stored token × query token) pair. **A plain subquery was measured and does not work** —
+>     removing the fence reinstates #639 while changing no result, so nothing fails.
+>     (b) **THE LATERAL IS `UNION ALL` ON PURPOSE.** "Surely that should be `UNION`, the two sources
+>     overlap" costs a dedup sort per `patient_name` row (~30%) to remove a duplicate the branch's own
+>     `SELECT DISTINCT` and the outer `UNION` already remove. ⚠️ The file's dedup block is now down to
+>     **two** layers, and the one remaining sentence about the lateral says it is NOT a dedup: if a
+>     later change makes the branch `DISTINCT` non-load-bearing, duplicate rows reach the caller.
+>     (c) **THE PARTS-BRANCH SKIP IS TESTED ON THE NORMALISED VALUE AND THAT IS NOT COSMETIC.**
+>     `normalize(pn.value, NFC) ~ '[^[:alnum:][:space:]]'` asks about the string the splitter is
+>     handed. Dropping the `normalize` is merely conservative (it runs the branch unnecessarily);
+>     the dangerous direction is any predicate that skips the branch for a value whose NFC form DOES
+>     carry punctuation. The subset argument is executable — `patient_search_equivalence.rs`'s
+>     `skipping_the_parts_branch_can_never_drop_a_token` asks the SERVER over 13 probes, because a
+>     locale or ICU version may move a character class underneath a deployment, and
+>     `the_subset_probe_still_describes_the_query_db046_runs` fails if either separator class is
+>     edited without re-deriving it.
+>     ⚠️ **A neutrality claim needs a test that can see a GAIN.** Every pre-#639 pass-3 test asserts a
+>     chart IS found, so a rewrite returning EXTRA charts passed all of them; the mutation that
+>     dropped the parts branch's callsign guard was caught only by a gesture expecting the EMPTY set.
+>     **Re-measure with `scripts/measure_patient_search.py`, do not reason** — #637's diagnosis was
+>     reasoned, confident and wrong, and its remedy followed the wrong cause. Residuals: **#641**
+>     (the parts branch cuts a Devanagari name at its vowel signs), **#640**, and the remaining
+>     ~860 ms floor, which is the whole-token split over every row and needs #637's materialised
+>     token table — for the right reason this time.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
