@@ -49,8 +49,10 @@
 > gates PREFIXES, never short NAMES** — `Wu` finds `Wu` by exact match; that is pinned.
 > **Callsigns are excluded from both new arms**, or one typed word surfaces every John Doe.
 > ⚠️ **The plan's own SQL had that bug on the prefix arm** and only Task 1's guard test caught it.
-> Residuals: **#637** (Pi-class measurement gap; no documented Pi-class population figure anywhere
-> in `docs/spec/`) · **#638** (the 3-char gate denies fragment search to CJK-script names entirely —
+> Residuals: **#637** (**both halves now answered** — Pi-class population pinned at ~50,000 in spec
+> §8.1, and the Pi 5 measured: 5 s ceiling held, worst case 2525 ms. ⚠️ But the FLOOR is ~1500 ms on
+> EVERY search including one that finds nothing, so §5.11's *no spinner* limb is not met and #639
+> matters more than the worst case suggests) · **#638** (the 3-char gate denies fragment search to CJK-script names entirely —
 > `李小` is 2 chars and gated; ADR-0014 cultural-capture shape) · **#639** (pass 3 is **5.6× slower**;
 > the cost is 1a's second split + repeated `normalize`, NOT the prefix arm — #637's diagnosis was
 > wrong and is corrected; three neutral changes recover ~80%) · **#640** (the two callsign guards
