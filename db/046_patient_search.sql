@@ -194,8 +194,25 @@ AS $$
              WHERE length(p) > 1
                AND pn.use_key <> 'callsign'
       ) AS toks
-      JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
-        ON toks.tok = lower(normalize(t, NFC))
+      -- NORMALISE EACH QUERY TOKEN ONCE, NOT ONCE PER COMPARISON (#639). `lower(normalize(t,
+      -- NFC))` used to be written out at all THREE sites below — the equality, the byte gate and
+      -- the prefix test — and Postgres evaluated it at each of them, for every (stored token x
+      -- query token) pair. `normalize`'s cost scales with string length, so a clerk typing a long
+      -- compound surname paid for it across the whole scan; that, and not the prefix arm, is what
+      -- #637's diagnosis mis-attributed. Hoisting it here measured 3121 ms -> 1896 ms on a 200k-row
+      -- `patient_name`.
+      --
+      -- `OFFSET 0` IS LOAD-BEARING AND IS NOT A LIMIT. It is Postgres's optimisation FENCE: without
+      -- it the planner pulls a plain subquery back up and re-inlines the expression at each site,
+      -- which measures as no improvement at all. That dead end was measured, not assumed. `OFFSET
+      -- 0` changes no row and no order — it skips zero rows — it only stops the pull-up.
+      --
+      -- Semantically free: `lower` and `normalize` are IMMUTABLE, so one evaluation per query token
+      -- yields the same string as one per pair.
+      JOIN (SELECT lower(normalize(t, NFC)) AS qt
+              FROM unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) AS t
+             OFFSET 0) AS q
+        ON toks.tok = q.qt
         -- PREFIX matching (#636, slice 1b), because a clerk types a fragment and picks from
         -- a list rather than typing a compound surname in full.
         --
@@ -250,8 +267,8 @@ AS $$
         -- such restriction. Pinned by `a_stored_callsign_is_not_fragmented_into_common_parts`
         -- (which predates this arm but caught the regression the moment this arm landed).
         OR (pn.use_key <> 'callsign'
-            AND octet_length(lower(normalize(t, NFC))) >= 3
-            AND starts_with(toks.tok, lower(normalize(t, NFC))))
+            AND octet_length(q.qt) >= 3
+            AND starts_with(toks.tok, q.qt))
      WHERE toks.tok <> ''
 $$;
 
