@@ -141,8 +141,10 @@ AS $$
     -- — it is the same shape as `LIKE 'x%'`, which CAN use an index — so this pass is still,
     -- in principle, indexable.
     --
-    -- In practice there is still no index: `patient_name` carries none on `value` at all,
-    -- and the tokens this pass matches against are the OUTPUT of a set-returning function
+    -- In practice there is still no index: `patient_name` carries none with `value` as a
+    -- LEADING column (`patient_name_pkey` is `btree (patient_id, use_key, value)` — `value`
+    -- is indexed only as the PK's trailing column, which cannot serve a prefix scan), and
+    -- the tokens this pass matches against are the OUTPUT of a set-returning function
     -- (`regexp_split_to_table`, inside the lateral), not a column — Postgres cannot index a
     -- set-returning function's output without first materialising it into a real token
     -- table (one row per patient per token) and indexing THAT. This pass has always been a
@@ -212,8 +214,8 @@ AS $$
         --
         -- `pn.use_key <> 'callsign'` here too, and this half is NOT in the slice-1b design
         -- doc — it surfaced only when this arm was run against the existing test suite.
-        -- Without it, the guard above (line ~185) stops a callsign's PARTS from being
-        -- projected, but the WHOLE-token branch (line ~166) still projects the intact
+        -- Without it, the parts source's own callsign guard above stops a callsign's PARTS
+        -- from being projected, but the whole-token source above still projects the intact
         -- callsign deliberately, and `starts_with('unknown-ed-site1-...', 'unknown')` is
         -- true: a clerk typing the leading word of any John Doe callsign would prefix-match
         -- every John Doe on the node, exactly the hazard the parts-branch guard exists to

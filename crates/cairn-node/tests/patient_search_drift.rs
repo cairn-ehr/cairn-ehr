@@ -30,7 +30,9 @@ const EXTRA_TABLES: [&str; 2] = ["patient_registration", "patient_name"];
 ///
 /// UUID / jsonb BINDING: `cairn-node` does not enable tokio-postgres's `with-uuid-1` or
 /// `with-serde_json-1` features, so the patient id is read back as `::text` and the
-/// identifiers argument is bound as a `text` literal cast with `$3::text::jsonb`.
+/// identifiers argument is bound as a `text` literal cast with `$3::text::jsonb`
+/// (never a bare `$3::jsonb`, which silently no-ops on an untyped parameter and would
+/// false-green this helper).
 async fn search_candidates(
     c: &tokio_postgres::Client,
     name_tokens: Option<&[&str]>,
@@ -93,8 +95,13 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
     for (name, id) in &seeded {
         // The sweep's blocking keys for this stored name, extracted exactly as
         // matcher/pipeline/db.py's _GROUPS_SQL does: whitespace split of the NFC-normalised,
-        // lower-cased value. Asked of the SERVER so the extraction cannot drift from the
-        // matcher's by being re-implemented in Rust here.
+        // lower-cased value. Asked of the SERVER — via `lower`/`normalize` — rather than
+        // computed in Rust so that at least the NORMALISATION SEMANTICS cannot drift from
+        // the matcher's (both sides ask Postgres, not two independent implementations of
+        // Unicode case-folding/NFC). This does NOT cover the EXPRESSION itself: the
+        // `regexp_split_to_table(lower(normalize($1, NFC)), '\s+')` below is still a
+        // hand-copy of `_NAME_TOKENS_CTE`, same as db/046's own comment — see the note on
+        // the assertion message below for what that leaves uncovered.
         let keys: Vec<String> = c
             .query(
                 "SELECT tok FROM regexp_split_to_table(lower(normalize($1, NFC)), '\\s+') AS tok \
@@ -118,7 +125,13 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
                 rows.iter().any(|(found, _)| found == id),
                 "the sweep would block {name:?} on key {k:?}, but a search for {k:?} does not \
                  find it — sweep-paired is no longer a subset of search-found (db/046 DRIFT \
-                 NOTE). Either search was narrowed, or the matcher was widened without it."
+                 NOTE), as things stand today. This proves search has not been narrowed away \
+                 from THIS test's key extraction — it does NOT prove the matcher was not \
+                 WIDENED instead: the `keys` computed above are a hand-copy of \
+                 matcher/pipeline/db.py's `_NAME_TOKENS_CTE`, not read from it, so if a future \
+                 change widens what the matcher extracts, this file's copy does not move, every \
+                 assertion here keeps passing, and the DRIFT NOTE hazard fires silently. Do not \
+                 over-trust a green run of this test on that half of the hazard."
             );
         }
     }

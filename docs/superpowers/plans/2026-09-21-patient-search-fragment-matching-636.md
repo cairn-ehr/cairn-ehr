@@ -602,10 +602,33 @@ it: restated here because this file, not the gitignored task report, is what sur
    ADR-0001/0002/0016, and found only qualitative framing ("a handful of workstations," "a busy ED
    runs on a department server, not a Pi"). Do not read 605k as a spec figure; it is this task's
    stress choice.
-3. **The shape of the cost is counter-intuitive.** The worst case is the **long exact name**
+3. **The shape of the cost is counter-intuitive — and the first diagnosis written here was wrong,
+   corrected by a later reviewer's measurement.** The worst case is the **long exact name**
    (`Fyodorowksi-Eschenbacher`, 3.37 s / 67% of budget), not the unselective fragment (`smi`,
-   1.08 s / 22%). Pass 3's `starts_with` prefix arm runs against ~1.2 million generated tokens
-   regardless of how many rows end up matching, and costs more per token for a longer query string
-   — so **query length, not selectivity, is the dominant cost driver** in this pass. A stored name
-   longer than the `Fyodorowksi-Eschenbacher` fixture would cost proportionally more; 3.37 s is a
-   sample point on that curve, not a ceiling.
+   1.08 s / 22%). This paragraph originally attributed that to pass 3's `starts_with` prefix arm
+   running against ~1.2 million generated tokens and costing more per token for a longer query
+   string. **That diagnosis is false.** A follow-up measurement reproduced the regression on a
+   query where `starts_with` never fires at all (`mich` against a 200k-row unpunctuated table:
+   411 ms before this slice, 2301 ms after — a 5.6× slowdown with the prefix arm never matching),
+   and `starts_with` short-circuits on the first byte mismatch, so a *longer* prefix is cheaper to
+   reject, not costlier — the opposite of what the original paragraph claimed.
+
+   The measured drivers are instead:
+   - **1a's second `regexp_split_to_table` plus the lateral's `UNION` dedup sort**, executed per
+     `patient_name` row — this is the bulk of the cost;
+   - **`lower(normalize(t, NFC))` re-evaluated three times per (stored-token × query-token) pair**
+     on the non-matching path (once for equality, once for `length(...)`, once for
+     `starts_with(...)`), and `normalize`'s cost scales with string length — which is why the long
+     compound name looked like a prefix-arm problem when the real cost was repeated normalisation
+     of a long string, not the prefix arm itself.
+
+   Three semantically-neutral changes were measured to recover about 80% of the regression
+   (3121 ms → 637 ms on the long-token case): hoisting the query-token normalisation behind an
+   `OFFSET 0` optimisation fence (a plain subquery does **not** work — the planner re-inlines it);
+   `UNION ALL` instead of `UNION` in the lateral, since the outer `SELECT DISTINCT patient_id`
+   already collapses duplicates; and skipping the parts branch entirely for a value containing no
+   punctuation, where the parts split is provably a subset of the whitespace split. None of these
+   three were applied in this slice — they are follow-on work, tracked separately — this paragraph
+   only corrects the diagnosis so a Pi5 follow-on, or any future optimisation slice, is not planned
+   against the wrong cause (the original text pointed at a heavy fix — a materialised token table
+   with its own reprojection cost — when three one-line changes recover most of the regression).
