@@ -1498,3 +1498,92 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
         list.incomplete_reason
     );
 }
+
+/// A hyphenated compound surname is findable by EITHER half (#636, slice 1a).
+///
+/// `SearchQuery::new` already emits the parts of a punctuated word on the QUERY side; the stored
+/// side split on whitespace only, so `Fyodorowksi-Eschenbacher` was one token and typing either
+/// half found nothing. A clerk will not type the whole compound.
+#[tokio::test]
+async fn either_half_of_a_hyphenated_surname_finds_the_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let p = Uuid::now_v7();
+    submit_registration(&c, &sk, &kid, p, 0).await;
+    let full = "Fyodorowksi-Eschenbacher";
+    submit_field(
+        &c,
+        &sk,
+        &kid,
+        p,
+        1,
+        name_assertion_body(full, Some("legal"), "patient-stated"),
+        render_name_twin(full, Some("legal"), "patient-stated"),
+    )
+    .await
+    .expect("name assertion accepted");
+
+    for typed in ["eschenbacher", "fyodorowksi", "fyodorowksi-eschenbacher"] {
+        let rows = search_candidates(&c, Some(&[typed]), None, None).await;
+        assert!(
+            rows.iter().any(|(id, pass)| *id == p && pass == "name"),
+            "typing {typed:?} must find a chart stored as {full:?}; got {rows:?}"
+        );
+    }
+}
+
+/// A stored CALLSIGN is never fragmented — the anti-vacuity control for 1a.
+///
+/// The query side keeps whole words and drops single characters precisely so a John Doe callsign
+/// (`Unknown-<class>-<site>-<date>-<tail>`) cannot fragment into pieces matching every John Doe
+/// ever registered. Splitting the STORED side reintroduces that hazard from the other direction:
+/// without the `use_key <> 'callsign'` guard, a clerk typing `unknown` surfaces every John Doe on
+/// the node. A naive 1a passes every other test in this file and fails this one.
+#[tokio::test]
+async fn a_stored_callsign_is_not_fragmented_into_common_parts() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let (pid, call, _ord) = john_doe::register_john_doe(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-07-03",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .expect("john doe registration accepted by the floor");
+
+    // "unknown" is the callsign's leading part. It must not reach the chart.
+    let fragmented = search_candidates(&c, Some(&["unknown"]), None, None).await;
+    assert!(
+        !fragmented.iter().any(|(id, _)| *id == pid),
+        "typing 'unknown' must not surface a John Doe by fragmenting its callsign — that is \
+         every John Doe on the node in one advisory list; got {fragmented:?}"
+    );
+
+    // The callsign must still be findable AS PRINTED. This is the half that makes the
+    // exclusion safe rather than merely restrictive, and it duplicates the claim of
+    // `a_john_doe_callsign_chart_is_returned_by_its_callsign_token` on purpose: this test
+    // would otherwise pass if 1a broke callsign search entirely.
+    let token = call.to_lowercase();
+    let whole = search_candidates(&c, Some(&[token.as_str()]), None, None).await;
+    assert!(
+        whole.iter().any(|(id, _)| *id == pid),
+        "the intact callsign must still find the chart; got {whole:?}"
+    );
+}

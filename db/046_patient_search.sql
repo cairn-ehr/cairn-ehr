@@ -119,10 +119,34 @@ AS $$
     -- typed evidence behind the match at all.
     SELECT DISTINCT pn.patient_id, 'name'::text
       FROM patient_name pn
-      CROSS JOIN LATERAL regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS tok
+      CROSS JOIN LATERAL (
+            -- The whole whitespace-delimited token, as before: this is what matches a
+            -- punctuated name typed back exactly as printed, and an intact callsign.
+            SELECT w AS tok
+              FROM regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS w
+             WHERE w <> ''
+            UNION
+            -- Its alphanumeric PARTS (#636, slice 1a) — the mirror of what
+            -- SearchQuery::new already emits on the query side, so a clerk typing one half
+            -- of "Fyodorowksi-Eschenbacher" finds the chart. Single characters are dropped
+            -- for the query side's reason: they cannot narrow a search and only inflate the
+            -- advisory set.
+            --
+            -- CALLSIGNS ARE EXCLUDED, and this is not optional. A callsign is
+            -- "Unknown-<class>-<site>-<date>-<tail>"; fragmenting it would project parts
+            -- like 'unknown' and 'ed', so one typed word would surface every John Doe on
+            -- the node. The query side keeps whole words for exactly this reason; this is
+            -- the same guard on the other side. Pinned by
+            -- `a_stored_callsign_is_not_fragmented_into_common_parts`.
+            SELECT p
+              FROM regexp_split_to_table(lower(normalize(pn.value, NFC)),
+                                         '[^[:alnum:]]+') AS p
+             WHERE length(p) > 1
+               AND pn.use_key <> 'callsign'
+      ) AS toks
       JOIN unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) t
-        ON tok = lower(normalize(t, NFC))
-     WHERE tok <> ''
+        ON toks.tok = lower(normalize(t, NFC))
+     WHERE toks.tok <> ''
 $$;
 
 REVOKE EXECUTE ON FUNCTION cairn_search_candidates(text[], text, jsonb) FROM PUBLIC;
