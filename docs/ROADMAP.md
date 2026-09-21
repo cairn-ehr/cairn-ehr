@@ -721,7 +721,7 @@ Design: `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-de
   reports, with a `--dump-names` path that keeps the gigabyte SQLite pool on the workstation while
   the measurement happens where the budget applies; pure parts tested and riding `rust.yml`.
 - **Neutrality is held four ways, and they are not redundant.** A standing **contract** test
-  (`patient_search_equivalence.rs`: eight charts, sixteen gestures as EXACT sets, four expecting
+  (`patient_search_equivalence.rs`: eight charts, seventeen gestures as EXACT sets, four expecting
   the EMPTY set because a widening rewrite breaks those first; proven red under three mutations —
   the callsign-guard one *gained* a John Doe on `unknown`, a direction no existing test could see).
   A **differential** over 394 query tokens / 14,447 rows, 0 lost and 0 gained, which dies with the

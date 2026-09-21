@@ -63,7 +63,7 @@
 > `db/046` swapped in place: **floor 1528.8 → 856.7 ms (−44%)**, worst case 2509.5 → **862.4 ms**
 > (−66%) of 5000 ms. **The spread collapsed from 981 ms to 14 ms** — query length no longer moves
 > the cost, which is #639's diagnosis confirmed and #637's refuted. Neutrality held three ways: a
-> standing contract test (16 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
+> standing contract test (17 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
 > **differential over 394 tokens / 14,447 rows — 0 lost, 0 gained**, and an executable subset
 > argument that asks the SERVER whether the character classes still coincide. **The rig is committed
 > this time** (`scripts/measure_patient_search.py` + tests in `rust.yml`): slice 1's was written on
