@@ -62,7 +62,22 @@
 > unpunctuated value**. Measured on the Pi 5 at 50,000 real Australian names, same machine and rows,
 > `db/046` swapped in place: **floor 1528.8 → 856.7 ms (−44%)**, worst case 2509.5 → **862.4 ms**
 > (−66%) of 5000 ms. **The spread collapsed from 981 ms to 14 ms** — query length no longer moves
-> the cost, which is #639's diagnosis confirmed and #637's refuted. Neutrality held three ways: a
+> the cost, which is #639's diagnosis confirmed and #637's refuted.
+>
+> ⚠️ **RE-RUN 2026-09-22 WITH THE FIX, AND TWO OF THOSE FIVE GESTURES FIND NOTHING.**
+> `fyodorowksi-eschenbacher` is an invented name and `李小` is a CJK prefix against an *Australian*
+> name pool: **both return 0 rows on both sides**, so neither measured §1.2's *find an existing
+> chart*. The headline worst case was one of them. Inherited from slice 1, whose own log on the Pi
+> reads `fitzherbert-brockholes … 2412.7 ms found=0`. Re-run with real gestures drawn from the
+> corpus (`unterfrancova-masna` 1 row, `天` 2, plus `mich` 518 / `smi` 421 / `wu` 64):
+> **floor 1528.4 → 883.3 ms (under a second, §5.11's limb MET), real worst case 2306.3 → 897.5 ms**
+> of 5000, spread **777.9 → 14.6 ms**. The `main` column reproduces the original to **0.3%**, which
+> vindicates both the rig and the first run. **Rows found are identical before and after on all
+> seven gestures** — a free neutrality check at 50k on the real pool, covering the FIXED `db/046`
+> that the original differential never saw. Per-sample overhead measured 31.9/31.7/31.8 ms across
+> three runs, reproducing the plan's single hand-run figure. ⚠️ **The fix's own cost is NOT
+> separable from noise**: post-fix 883–918 ms over two runs vs pre-fix 857–871, against ~2%
+> run-to-run variance measured on the same database. Cheap, plausibly free, not proven free. Neutrality held three ways: a
 > standing contract test (17 gestures as EXACT sets, 4 of them EMPTY, three mutations killed), a
 > **differential over 394 tokens / 14,447 rows — 0 lost, 0 gained**, and an executable subset
 > argument that asks the SERVER whether the character classes still coincide. **The rig is committed
