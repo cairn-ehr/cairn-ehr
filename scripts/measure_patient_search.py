@@ -130,7 +130,20 @@ def pool_names(sqlite_path: str, count: int) -> list[str]:
     — silently falling back to synthetic names would put a "real distribution" label on a
     figure that has none, which is the error #637's first measurement made about hardware.
     """
+    import re
     import sqlite3
+
+    def plain_identifier(name: str) -> str:
+        """Refuse anything that is not a bare identifier before it reaches a query.
+
+        The table and column names below are DISCOVERED from the pool file rather than fixed, so
+        they are interpolated (SQLite takes no bind parameter for an identifier). The pool is the
+        maintainer's own data file, not input — but a rig that only works on trusted input is one
+        nobody can point at an unfamiliar pool, and the check is one line.
+        """
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise SystemExit(f"{sqlite_path}: refusing to query non-identifier name {name!r}")
+        return name
 
     con = sqlite3.connect(sqlite_path)
     try:
@@ -140,11 +153,12 @@ def pool_names(sqlite_path: str, count: int) -> list[str]:
                 "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
             )
         ]
-        for table in tables:
+        for table in map(plain_identifier, tables):
             cols = [r[1].lower() for r in con.execute(f'PRAGMA table_info("{table}")')]
             given = next((c for c in cols if c in ("firstname", "given_name", "given", "first_name")), None)
             family = next((c for c in cols if c in ("surname", "family_name", "last_name", "lastname")), None)
             if given and family:
+                given, family = plain_identifier(given), plain_identifier(family)
                 rows = con.execute(
                     f'SELECT "{given}", "{family}" FROM "{table}" '
                     f"WHERE \"{family}\" IS NOT NULL AND \"{family}\" <> '' LIMIT ?",
