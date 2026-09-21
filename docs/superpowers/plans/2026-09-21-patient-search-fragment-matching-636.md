@@ -680,3 +680,51 @@ worst-case figure alone suggests.
 - **`smi` found 35,000 of 50,000** because the fixture makes most names `Smith John<i>`. A real
   population is not 70% one surname, so treat that row as a deliberate worst-case stress on result
   volume rather than a realistic query.
+
+### Re-run with a REAL Australian name distribution (2026-09-21)
+
+Same Pi 5, same 5 s budget, 50,378 rows drawn from the maintainer's synthetic-population pool
+(`~/src/SyntheticHealthData/synthetic_demographics.sqlite3`): **965,260 distinct surnames**,
+commonest surname 0.18% of the pool. Every query value below is **real, taken from the data**.
+
+| Search | Median | Found | Earlier synthetic run |
+|---|---|---|---|
+| `fitzherbert-brockholes` — real long compound, exact | **2413 ms** | **0** | 2525 ms |
+| `mich` — fragment | 1629 ms | 438 | 1655 ms |
+| `smi` — fragment | 1586 ms | 191 | 1639 ms |
+| `欧阳` — real CJK surname, 2 chars (#638) | 1561 ms | 5 | 1593 ms |
+| `wu` — exact short surname | 1479 ms | 16 | 1513 ms |
+
+**Budget held: worst case 2413 ms.**
+
+**Every timing landed within ~5% of the synthetic run**, despite 50,378 distinct values replacing
+about a dozen. A hypothesis stated before this run — that real token diversity would make the
+lateral's `UNION` dedup materially worse — is **disproved**.
+
+What the re-run *does* establish, which the synthetic run could only suggest:
+
+- **Result size is irrelevant to cost.** `smi` matched **191** rows here against **35,000** in the
+  synthetic run — a 180× change — and the time moved by 3%. The earlier run could only hint at this
+  because its fixture was ~70% one surname; now it is measured.
+- **The worst case found NOTHING.** `fitzherbert-brockholes` returned **zero rows** and was still
+  ~800 ms slower than everything else. So the cost is per-token comparison work against the query
+  string, with no relationship to output at all — [#639](https://github.com/cairn-ehr/cairn-ehr/issues/639)
+  confirmed twice over, on real data.
+- **The ~1500 ms floor is a property of the scan, not of the fixture.** It survived a complete change
+  of data shape.
+
+That makes #639's three optimisations target exactly the right thing: fixed per-row work that no
+query can avoid and no data distribution changes.
+
+**Caveats.** Rows were seeded directly into the `patient_name` projection (read path only, as
+before). The pool carries only **516 CJK-script surnames (0.008%)**, far below Australia's real
+Chinese-ancestry share, so a random 50k sample contained **exactly one** — CJK rows were topped up
+to 379 deliberately so the #638 query had something to find; that row is an injected cohort, not a
+natural-distribution result. And the labels "selective"/"unselective" proved backwards in real data:
+`mich` matched *more* than `smi` (438 vs 191), because `mich` also matches the very common given
+names Michael/Michelle while `smi` mostly reaches the surname Smith.
+
+**This pool may not be the current version** — the maintainer believes the complete database is
+ABS-modelled with gender/age/ethnicity distribution per region and carries diagnoses, allergies and
+medications; it is on an offline archive reachable from ~2026-10-05. Re-run then if a published
+figure is needed.
