@@ -82,9 +82,11 @@
 > both are checked over **all 1,114,111 code points in ~0.6 s**
 > (`the_subset_argument_holds_for_every_unicode_code_point`). Plus an `İnce` chart, an `nce` gesture,
 > and the pinned literal tightened to the composed expression — both detectors confirmed red by
-> reverting the fix. **Trap 16: a guard and the thing it guards must be asked about the SAME
-> STRING**, and a probe list is a sample, not an argument — if a claim reduces to a property of
-> character classes, enumerate the classes. **Filed:** **#641** (`[^[:alnum:]]+`
+> reverting the fix, **under BOTH locale providers**. **Trap 16: a guard and the thing it guards
+> must be asked about the SAME STRING**, and a probe list is a sample, not an argument — if a claim
+> reduces to a property of character classes, enumerate the classes. **Trap 17: local PG is ICU, CI's
+> is libc, and `lower()` differs** — the first fix's regression test pinned the ICU answer and failed
+> CI; the row is now asked of the server, and a `cairn_test_libc` recipe is in trap 17. **Filed:** **#641** (`[^[:alnum:]]+`
 > treats a combining mark as a separator, so slice 1a's parts branch cuts `अमित` to `अम` and a Thai
 > name at its tone marks — precision not recall, nothing becomes unfindable, but ADR-0014's shape one
 > level below #638) and **#643** (the rig times `count(*)`, not the row transfer the clerk waits
@@ -248,7 +250,7 @@
 > **Fifteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
 > trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review —
 > **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615,
-> trap 13 by #619, trap 14 by #621, and traps 15 and 16 by #639.)
+> trap 13 by #619, trap 14 by #621, and traps 15–17 by #639.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -519,6 +521,26 @@
 >     whole domain. The defence that works is pinning the COMPOSED expression as a literal (this
 >     repo's `include_str!` + `contains` idiom), not pinning its pieces: the piece-wise list was
 >     present, passing, and blind.
+> 17. **⇒ LOCAL POSTGRES IS ICU, CI's IS libc, AND `lower()` IS NOT THE SAME FUNCTION ON BOTH
+>     (#639 review, 2026-09-22).** Every `cairn*` database on the dev Mac is `datlocprovider = 'i'`;
+>     CI's `initdb -D "$PGDATA" -U postgres --auth=trust` (`rust.yml`) inherits libc, `datlocprovider
+>     = 'c'`. Under ICU, `lower('İ')` applies **full** case mapping and yields TWO characters, `i` +
+>     U+0307; under libc it is **simple**, one-to-one, and yields plain `i`. So a name containing
+>     U+0130 genuinely has different pass-3 tokens on the two servers, and **both are correct**.
+>     ⚠️ **This cuts both ways and burned a CI run in each direction.** The U+0130 recall defect
+>     itself was live locally and invisible in CI. Then the regression test written for it pinned the
+>     ICU answer unconditionally, passed on every local database, and **failed in CI** — where `nce`
+>     had never been a token at all, before the rewrite or after, so neutrality held trivially.
+>     ⚠️ **A contract suite must derive such a row from the SERVER, not assume a provider**:
+>     `patient_search_equivalence.rs`'s `full_case_mapping` asks, and the gesture expects `[turkish]`
+>     or `[]` accordingly. The layering that results is the durable lesson — **the gesture bites
+>     where the defect is real (ICU), the composed-literal pin bites everywhere**, which is why the
+>     pin is not redundant with it.
+>     **To reproduce CI's locale locally** (this is how the fix was verified, and it takes seconds):
+>     `CREATE DATABASE cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE 'en_US.UTF-8'
+>     ENCODING UTF8;` then `CREATE EXTENSION cairn_pgx;` in it, and run the suite with
+>     `CAIRN_TEST_PG=…dbname=cairn_test_libc`. **Any test that touches case, collation or character
+>     classes should be run against both before pushing** — a local-only green is not evidence.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is

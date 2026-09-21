@@ -740,6 +740,17 @@ Design: `docs/superpowers/specs/2026-09-15-late-custody-reaches-the-chart-584-de
   was promoted to a proof — the subset claim reduces to two single-character facts, now checked over
   every code point in ~0.6 s. Plus an `İnce` chart, an `nce` gesture, and the pinned literal
   tightened to the **composed** expression; both detectors confirmed red by reverting the fix.
+- **⚠️ AND THE REGRESSION TEST THEN FAILED CI, FOR THE MIRROR-IMAGE REASON.** Local Postgres is ICU
+  (`datlocprovider = 'i'`), CI's `initdb` inherits libc (`'c'`), and `lower()` is not the same
+  function on the two: ICU applies **full** case mapping (`lower('İ')` → `i` + U+0307, two
+  characters), libc applies **simple** (→ plain `i`). So on libc `İnce` lowercases to `ince`, the
+  two splits coincide, and `nce` was **never a token** — before the rewrite or after — making
+  neutrality hold trivially. The gesture had pinned the ICU answer unconditionally. It now asks the
+  server (`full_case_mapping`) and expects `[turkish]` or `[]` accordingly. **The layering is the
+  point: the gesture bites where the defect is real, the composed-literal pin bites everywhere** —
+  verified by reverting the fix under *both* providers, where ICU fails two tests and libc fails the
+  literal pin alone. Trap 17 carries the `cairn_test_libc` recipe for reproducing CI's locale in
+  seconds; any test touching case, collation or character classes should be run against both.
 - **The rig was hardened in the same round.** Four paths could exit 0 with a number never measured:
   a zero-row search passed the budget and could supply the §5.11 floor (§1.2 is *5 s to FIND a
   chart*); the SQLite pool path lacked the short-draw guard the text-file path had, while the real

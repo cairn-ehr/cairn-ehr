@@ -13,6 +13,14 @@
 //! regression test; `the_subset_argument_holds_for_every_unicode_code_point` is the reason no
 //! second such character can exist.
 //!
+//! ⚠️ **One row of this table is deployment-dependent, and it is asked of the server rather than
+//! assumed.** U+0130 only grows a combining mark under FULL Unicode case mapping — an ICU-provider
+//! database — so on a simple-case-mapping (libc) server `İnce` lowercases to plain `ince` and `nce`
+//! is not a token at all. Both answers are correct; see `full_case_mapping`. The `nce` gesture
+//! pinned the ICU answer unconditionally when first written, passed on every local database and
+//! failed in CI, which is the lesson: a contract suite must derive its expectation from the
+//! contract, and on this row the contract has a locale in it.
+//!
 //! **Why this suite exists rather than more cases in `patient_search.rs`.** Every test there asserts
 //! that a chart IS found (`rows.iter().any(...)`), which is the right shape for "this gesture must
 //! work" and the wrong shape for "nothing else changed": a rewrite that started returning EXTRA
@@ -205,6 +213,37 @@ async fn seed(c: &mut Client, sk: &SigningKey, kid: &str) -> Corpus {
     }
 }
 
+/// Does this server apply FULL Unicode case mapping, or the simple one-to-one kind?
+///
+/// The distinction has exactly one consequence for pass 3, and the `nce` gesture below turns on it.
+/// Under full case mapping — what an ICU-provider database does — `lower('İ')` is `i` + U+0307
+/// COMBINING DOT ABOVE, two characters, the second of which is not `[:alnum:]`. Under simple case
+/// mapping — libc, which is what a default `initdb` on the CI runner gives — `lower('İ')` is plain
+/// `i`, and the combining mark never appears.
+///
+/// So a chart named `İnce` genuinely has DIFFERENT tokens on the two, and both are correct:
+///
+/// | | lowered value | whole tokens | parts tokens | parts branch |
+/// |---|---|---|---|---|
+/// | ICU  | `i̇nce` | `{i̇nce}` | `{nce}` | runs |
+/// | libc | `ince`  | `{ince}`  | `{ince}` | skipped, and rightly |
+///
+/// **This is asked of the server rather than assumed, because assuming it is what broke the suite
+/// once already.** The `nce` gesture first shipped pinning the ICU answer unconditionally; it passed
+/// on every local database (all ICU) and failed in CI (libc) — where `nce` had never been a token at
+/// all, before the rewrite or after, so the neutrality claim held trivially. A contract suite must
+/// derive its expectation from the contract, and on this one row the contract depends on a property
+/// of the deployment.
+async fn full_case_mapping(c: &Client) -> bool {
+    c.query_one(
+        "SELECT lower(normalize('\u{130}', NFC)) ~ '[^[:alnum:][:space:]]' AS full_mapping",
+        &[],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
 /// What a clerk types, and the EXACT set of charts that must come back.
 ///
 /// `why` is not decoration: it is the contract each row is derived from, so a reviewer can check
@@ -236,7 +275,7 @@ fn tokens(typed: &[&str], expected: impl IntoIterator<Item = Uuid>, why: &'stati
 /// The table the whole suite is. Every arm of pass 3 appears at least once, and — the half that
 /// makes this a neutrality guard rather than a findability one — several gestures expect the EMPTY
 /// set, which is what a widening rewrite would break first.
-fn gestures(k: &Corpus) -> Vec<Gesture> {
+fn gestures(k: &Corpus, full_mapping: bool) -> Vec<Gesture> {
     vec![
         gesture(
             "smith",
@@ -280,18 +319,36 @@ fn gestures(k: &Corpus) -> Vec<Gesture> {
              and the lateral now emits it TWICE. Exactly one row must still reach the caller, \
              which `name_candidates` asserts on multiplicity before collapsing to a set.",
         ),
-        gesture(
-            "nce",
-            [k.turkish],
-            "THE U+0130 REGRESSION (#639 review). `İnce` lowercases to `i` + U+0307 COMBINING DOT \
-             ABOVE, and a combining mark is not `[:alnum:]`, so the parts split projects `nce` \
-             while the whole-token split projects only `i̇nce`. This chart is therefore reachable \
-             ONLY through the parts branch — and `db/046`'s skip guard must decide whether to run \
-             that branch by looking at the LOWERED value. A guard that tests the un-lowered \
-             `normalize(pn.value, NFC)` sees an unpunctuated string, skips the branch, and this \
-             gesture returns EMPTY: a chart that was findable by `nce` before the rewrite is not \
-             after it, which falsifies the whole neutrality claim.",
-        ),
+        if full_mapping {
+            gesture(
+                "nce",
+                [k.turkish],
+                "THE U+0130 REGRESSION (#639 review), on a server that applies FULL case mapping. \
+                 `İnce` lowercases to `i` + U+0307 COMBINING DOT ABOVE, and a combining mark is \
+                 not `[:alnum:]`, so the parts split projects `nce` while the whole-token split \
+                 projects only `i̇nce`. This chart is therefore reachable ONLY through the parts \
+                 branch — and `db/046`'s skip guard must decide whether to run that branch by \
+                 looking at the LOWERED value. A guard that tests the un-lowered \
+                 `normalize(pn.value, NFC)` sees an unpunctuated string, skips the branch, and \
+                 this gesture returns EMPTY: a chart findable by `nce` before the rewrite is not \
+                 after it, which falsifies the whole neutrality claim.",
+            )
+        } else {
+            gesture(
+                "nce",
+                [],
+                "EMPTY, and CORRECTLY so: this server applies SIMPLE case mapping, so `İnce` \
+                 lowercases to plain `ince`, the two splits coincide on it, and `nce` was never a \
+                 projected token — not before the rewrite and not after. Pass 3 cannot return a \
+                 chart by a token that does not exist, and neutrality holds here trivially. \
+                 ⚠️ This row therefore does NOT guard the U+0130 defect on such a server; on a \
+                 simple-case-mapping database the guard is \
+                 `the_subset_probe_still_describes_the_query_db046_runs`, which pins the composed \
+                 `lower(normalize(pn.value, NFC)) ~ …` as a literal and is locale-independent. \
+                 That layering is the point: the gesture bites where the defect is real, the \
+                 literal bites everywhere.",
+            )
+        },
         gesture(
             "李小",
             [k.cjk],
@@ -388,7 +445,8 @@ async fn every_typing_gesture_returns_exactly_the_charts_it_should() {
     // Collected rather than asserted one at a time: a rewrite that breaks several gestures should
     // report all of them in one run, not send the next session round the loop once per gesture.
     let mut failures: Vec<String> = Vec::new();
-    for g in gestures(&corpus) {
+    let full_mapping = full_case_mapping(&c).await;
+    for g in gestures(&corpus, full_mapping) {
         let got = name_candidates(&c, &g.typed).await;
         if got != g.expected {
             let lost: Vec<_> = g.expected.difference(&got).collect();
