@@ -40,10 +40,23 @@ assumes it.
 prefill from whatever was typed in step 1, so nothing is retyped.
 
 **Step 3 — the machine searches, automatically.** Once the form holds enough to identify a person —
-**a given name, a surname and a date of birth** — a search runs in the background over that
+**at least two name tokens and a date of birth** — a search runs in the background over that
 completed data. If it finds likely matches, it asks: *could this be one of these existing patients?*
 The clerk either recognises one (and that chart opens instead) or confirms none fit and registration
 proceeds.
+
+> **Revised 2026-09-22 (slice 2a).** This read "a given name, a surname and a date of birth" until
+> the plan for 2a met the code. That phrasing implies separate given/surname fields, which is *one
+> culture's name model* — the cultural capture ADR-0014 forbids — and it fails outright for a
+> mononymous patient, a patronymic, or Han name order. It also forced the raw name to be
+> *reassembled* from two boxes, and `cairn_node::patient::register::register_patient`'s own doc warns
+> that its `name` argument **must be the same typed string `SearchQuery` was built from**, with
+> nothing in the types to enforce it.
+>
+> So the form keeps **one free name field**, exactly as the CLI's `--name` does, and the trigger
+> counts whitespace-separated tokens. Same information content, no name model, and the drift
+> `register.rs` warns about becomes structurally impossible: one typed string feeds
+> `SearchQuery::new` and `register_patient` alike, never reassembled.
 
 This minimises keystrokes: the cheap fragment lookup catches the common case, and the expensive
 exact check happens once, automatically, on data the clerk has already typed for another reason.
@@ -100,12 +113,42 @@ never sent to `cairn_search_candidates`. A useful consequence — it never enter
 the signed attestation stays truthful about what actually narrowed the search, and no additive
 change to a signed body is needed.
 
+> **Split 2026-09-22 (slice 2a), and only half of this is built.** The decision has two limbs, and
+> the code can carry only one of them today.
+>
+> - The **negative** limb — sex never enters `SearchQuery`, so no candidate can be made invisible by
+>   it — is the safety content, and slice 2a honours it *by construction*: there is no sex field in
+>   the browse form at all, so there is nothing to exclude with. A test pins it.
+> - The **positive** limb — ordering and annotating — **cannot be built**, because
+>   `cairn_patient_search::Candidate` carries no sex. Its seven fields are `patient_id`,
+>   `display_name`, `age`, `trust`, `last_activity`, `locale`, `photo_ref`, and a round-trip test
+>   pins that count at seven precisely so that adding one is a deliberate act on a read path
+>   budgeted at *no spinner*. Deferred to
+>   [#645](https://github.com/cairn-ehr/cairn-ehr/issues/645), which states what an additive
+>   `Candidate.sex` would cost.
+
 ### 5. The wrong-chart affordance is possession, not a gate
 
 Opening a chart — by picking in step 1, recognising in step 3, or registering — lands on the same
 surface with a persistent identity header carrying name, DOB and identifier. A mis-pick stays
 visible at every later step rather than being caught at one moment. This restores the paper
 affordance the existing note names instead of adding a confirmation dialog, which §1.2 rejects.
+
+## Slicing (added 2026-09-22)
+
+The design is built in two slices, on the DR 2a/2b precedent, because the whole of it spans a new
+crate, two ports, a mock, an optional `--patient`, a new command module, the frontend, a drift-guard
+extension, a DB-gated attestation test and the §1.2 measurement.
+
+- **2a — the pure core.** Every rule in *Testing strategy → Pure*, as a new `cairn-gui-funnel`
+  crate, plus the two ports in `cairn-gui-data` and their mock implementation. No Tauri, no
+  database, no frontend. Mergeable on its own.
+- **2b — the surface.** The commands, the shell state, the frontend, the drift-guard extension, the
+  DB-gated attestation test, and the end-to-end §1.2 measurement this design owes.
+
+The seam is deliberate: 2a is where every *decision* on this page becomes an executable rule, and
+2b is wiring. A rule that cannot be stated without Tauri belongs in 2b; anything else belongs in 2a,
+where it is testable with no window and no database.
 
 ## Architecture
 
@@ -185,11 +228,13 @@ No editing a candidate before opening it. No change to the advisory matcher.
 
 ## Risks
 
-- **The step-3 trigger is a heuristic.** Requiring given name + surname + DOB is a guess at "enough
-  to identify a person". A mononymous patient, or one whose DOB is genuinely unknown, never trips it
-  — and registration must still be possible for them (principle 4: *unknown* is a first-class value).
+- **The step-3 trigger is a heuristic.** Requiring two name tokens + DOB is a guess at "enough to
+  identify a person". A mononymous patient, or one whose DOB is genuinely unknown, never trips it —
+  and registration must still be possible for them (principle 4: *unknown* is a first-class value).
   The trigger therefore cannot be the only path to the prompt; registering without a completed
-  trigger must run the search anyway, on whatever is there.
+  trigger must run the search anyway, on whatever is there. The token-minting search is the
+  **commit-time** one for exactly this reason: the trigger only decides whether it also runs
+  *early*, never whether it runs at all.
 - **The bounded prompt assumes few candidates.** True for full name plus DOB, but not guaranteed.
   If it is routinely incomplete, the cap is wrong and the design needs revisiting rather than
   quietly signing partial lists.
