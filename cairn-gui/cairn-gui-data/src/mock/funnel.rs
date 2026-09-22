@@ -184,7 +184,15 @@ impl MockData {
 
 impl PatientSearch for MockData {
     async fn search(&self, query: &SearchQuery, today: &str) -> Result<CandidateList, DataError> {
-        Ok(self.search_now(query, today))
+        // The armed failure (#660) is consumed INSIDE the async body, for the same reason
+        // `search_now` was split out at all: this port must do its work when AWAITED, never
+        // when the future is built. Taking it before the body would let a future that is
+        // built and dropped spend the failure, so the call a test meant to fail would
+        // quietly succeed.
+        match self.armed_failure() {
+            Some(e) => Err(e),
+            None => Ok(self.search_now(query, today)),
+        }
     }
 }
 
@@ -194,7 +202,15 @@ impl PatientRegistration for MockData {
         attested: AttestedSearch,
         name: Option<&str>,
     ) -> Result<Uuid, (DataError, AttestedSearch)> {
-        Ok(self.register_now(&attested, name))
+        // The attestation goes BACK inside the error, exactly as the live port does — and it
+        // is returned WITHOUT minting a patient, so a failed registration leaves no chart. A
+        // mock that dropped the attestation here would let every `--mock` test of the
+        // recovery walk pass while the real walk latched the token store, which is why #659
+        // and #660 belong to the same slice.
+        match self.armed_failure() {
+            Some(e) => Err((e, attested)),
+            None => Ok(self.register_now(&attested, name)),
+        }
     }
 }
 
@@ -587,6 +603,152 @@ mod tests {
                 .any(|p| p.uuid.to_string() == FIXTURE_UUID),
             "the long-standing fixture id must survive, or the demographics and note tabs \
              lose the patient their tests name"
+        );
+    }
+
+    // --- #660: `--mock` must be able to fail, or 2c's two sentences ship untested ---
+
+    /// A list with nothing on it — the "genuinely new patient" case, and all these tests need.
+    fn nothing_displayed() -> cairn_gui_funnel::PromptList {
+        bound_for_prompt(&CandidateList {
+            candidates: vec![],
+            incomplete: false,
+            incomplete_reason: None,
+        })
+    }
+
+    /// An armed failure is returned instead of the fixture answer, ONCE.
+    ///
+    /// One-shot rather than sticky: a sticky mock cannot express *"it failed, the clerk fixed
+    /// it, it worked"*, which is the only walk that exercises the recovery path at all.
+    #[tokio::test]
+    async fn an_armed_browse_failure_fires_once_and_then_the_fixtures_come_back() {
+        let data = MockData::with_fixtures();
+        data.fail_next(DataError::Unavailable("the node was unreachable".to_string()));
+
+        let first = data.search(&SearchQuery::new("mich", None, &[]), TODAY).await;
+        assert!(
+            matches!(&first, Err(DataError::Unavailable(t)) if t.contains("unreachable")),
+            "the armed failure must reach the caller verbatim — a mock that rewrote it would \
+             teach 2c's rendering the wrong sentence; got {first:?}"
+        );
+
+        assert_eq!(
+            found(&browse(&data, "mich").await),
+            ["Michaelowski, Samantha"],
+            "the NEXT call must answer from fixtures again"
+        );
+    }
+
+    /// A registration failure hands the attestation back, exactly as the live port does.
+    ///
+    /// This is the property the one-shot exists for: a mock that dropped the `AttestedSearch`
+    /// on the failing path would let every `--mock` test of the recovery walk pass while the
+    /// real walk latched the token store (#659).
+    #[tokio::test]
+    async fn an_armed_registration_failure_returns_the_attestation_it_was_given() {
+        let data = MockData::with_fixtures();
+        let mut store = TokenStore::new();
+        let token = store
+            .record(
+                SearchQuery::new("Nobody Here", Some("1990-01-01"), &[]),
+                nothing_displayed(),
+            )
+            .expect("a non-empty query");
+        let attested = store.take(token).expect("the only token");
+
+        data.fail_next(DataError::Refused("the floor said no".to_string()));
+        let outcome = data.register(attested, Some("Nobody Here")).await;
+
+        let Err((error, restored)) = store.settle(outcome) else {
+            panic!("an armed failure must reach the caller as a failure");
+        };
+        assert!(matches!(&error, DataError::Refused(t) if t.contains("the floor said no")));
+        assert_eq!(
+            restored,
+            cairn_gui_funnel::Restored::Kept,
+            "settling must put the search back, or the clerk is made to re-search after a \
+             failure that changed nothing"
+        );
+        assert!(
+            store.take(token).is_ok(),
+            "and the same token must still be redeemable for the retry"
+        );
+    }
+
+    /// A future that is BUILT and never awaited must not spend the armed failure.
+    ///
+    /// The same await-time property `search_now`/`register_now` were split out to preserve. If
+    /// the slot were consumed at call time, a dropped future would eat the failure and the
+    /// NEXT call — the one the test meant to fail — would quietly succeed.
+    #[tokio::test]
+    async fn building_a_future_and_dropping_it_does_not_spend_the_armed_failure() {
+        let data = MockData::with_fixtures();
+        data.fail_next(DataError::Unavailable("still armed".to_string()));
+
+        let q = SearchQuery::new("mich", None, &[]);
+        let never_awaited = data.search(&q, TODAY);
+        drop(never_awaited);
+
+        let result = data.search(&SearchQuery::new("mich", None, &[]), TODAY).await;
+        assert!(
+            matches!(&result, Err(DataError::Unavailable(t)) if t.contains("still armed")),
+            "the failure must still be armed for the first call that is actually AWAITED; got \
+             {result:?}"
+        );
+    }
+
+    /// THE WHOLE WALK, in `--mock`: register fails, the clerk edits, it succeeds.
+    ///
+    /// The design's *"Register fails. The form keeps its values."* — and the reason #660 asked
+    /// for a one-shot. Nothing else in this crate exercises
+    /// `record → take → settle(Err) → discard → record → take → settle(Ok)`.
+    #[tokio::test]
+    async fn a_failed_registration_is_recoverable_by_editing_and_registering_again() {
+        let data = MockData::with_fixtures();
+        let mut store = TokenStore::new();
+
+        let first = store
+            .record(
+                SearchQuery::new("Jon Mistyped", Some("1974-05-06"), &[]),
+                nothing_displayed(),
+            )
+            .expect("a non-empty query");
+        let attested = store.take(first).expect("the only token");
+        data.fail_next(DataError::Unavailable("a hiccup".to_string()));
+        assert!(store
+            .settle(data.register(attested, Some("Jon Mistyped")).await)
+            .is_err());
+
+        // The clerk corrects the spelling. The pre-edit search must not license the new
+        // registration — `discard` is what makes that structural rather than merely unlikely.
+        store.discard();
+        let second = store
+            .record(
+                SearchQuery::new("John Corrected", Some("1974-05-06"), &[]),
+                nothing_displayed(),
+            )
+            .expect("a non-empty query");
+        let retry = store.take(second).expect("the corrected search");
+        let id = store
+            .settle(data.register(retry, Some("John Corrected")).await)
+            .expect("the second attempt is not armed to fail");
+
+        assert!(!id.is_nil());
+        // Probed on the DISTINCTIVE token, not the whole typed name. The mock's name arm
+        // matches per token, so browsing "John Corrected" also returns the starting fixture
+        // "O'Brien-Smith, John" — wider recall than `db/046`, exactly as this module's header
+        // warns. Asserting the whole name here would be asserting the fixture rule, not the
+        // property under test.
+        assert_eq!(
+            found(&browse(&data, "Corrected").await),
+            ["John Corrected"],
+            "the chart the retry created must be findable, and under the CORRECTED name"
+        );
+        assert!(
+            found(&browse(&data, "Mistyped").await).is_empty(),
+            "and the failed attempt must have created NOTHING — a mock that minted a chart \
+             for a call it reported as failed would hide a duplicate-chart bug"
         );
     }
 }
