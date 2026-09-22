@@ -91,3 +91,25 @@ impl LiveData {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A compile-time claim 2c depends on and nothing else here would catch.
+    ///
+    /// Tauri's `manage`/`State` require `Send + Sync + 'static`, and so does holding this across
+    /// an `.await` in a command. Both hold today — `Mutex<Client>` is `Sync` because the mutex
+    /// is, and `SigningKey` is plain data — but neither is written down anywhere, and the
+    /// obvious "simplification" of swapping the tokio mutex for a `std` one takes `Send` away
+    /// from the guard rather than from the struct, so the failure would land in 2c as a wall of
+    /// lifetime errors inside a command body rather than here.
+    ///
+    /// A static assertion rather than a dependency on `static_assertions`: one function that is
+    /// never called is cheaper than a crate, and the error message names the bound directly.
+    #[test]
+    fn live_data_can_be_tauri_managed_state() {
+        fn assert_send_sync_static<T: Send + Sync + 'static>() {}
+        assert_send_sync_static::<LiveData>();
+    }
+}
