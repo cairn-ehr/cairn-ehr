@@ -60,7 +60,13 @@ pub struct SearchToken(u64);
 ///
 /// **There is no public constructor**, and that absence is the guarantee — see the module
 /// doc. Obtain one only from [`TokenStore::take`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// **Deliberately NOT `Clone`.** A caller who could keep a copy past a
+/// [`TokenStore::take`] would have an attestation the store no longer knows about, and could
+/// register with it twice — defeating the single-use property that stops two clicks on
+/// Register producing two charts. If a future caller seems to need a clone, it almost
+/// certainly wants a second `record` instead.
+#[derive(Debug, PartialEq, Eq)]
 pub struct AttestedSearch {
     token: SearchToken,
     query: SearchQuery,
@@ -193,8 +199,18 @@ impl TokenStore {
     /// The design's *"Register fails. The form keeps its values."* — a clerk must not be made
     /// to re-search because the database hiccuped. Its token is unchanged, so the form's held
     /// handle stays valid.
+    ///
+    /// **Does nothing if a newer search has landed in the meantime**, and that guard is not
+    /// cosmetic. The step-3 search runs in the background as the clerk edits, so a re-search
+    /// can complete while a registration is still in flight. Putting the older one back OVER
+    /// it would resurrect a search describing a form that no longer exists, and the form's own
+    /// (newer) token would then be refused as `Mismatched` — telling the clerk a newer search
+    /// had replaced theirs when in fact an older one had. Fail-closed either way; this makes
+    /// it also truthful.
     pub fn restore(&mut self, attested: AttestedSearch) {
-        self.held = Some(attested);
+        if self.held.is_none() {
+            self.held = Some(attested);
+        }
     }
 
     /// The form was edited: whatever is held no longer describes it.
@@ -312,6 +328,32 @@ mod tests {
         store.restore(attested);
         let again = store.take(token).expect("the retry must find its search");
         assert_eq!(again.token(), token);
+    }
+
+    #[test]
+    fn restoring_after_a_newer_search_landed_does_not_resurrect_the_older_one() {
+        // The step-3 search runs in the background as the clerk edits, so a re-search can
+        // complete while a registration is still in flight. If `restore` clobbered it, the
+        // form's own newer token would be refused and the clerk told a NEWER search had
+        // replaced theirs — when an older one had. Fail-closed either way; this is the half
+        // that makes it truthful.
+        let mut store = TokenStore::new();
+        let first = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        let taken = store.take(first).unwrap();
+        // …the background search lands while the registration is in flight…
+        let second = store.record(query("John Smith"), list_of(2)).unwrap();
+        // …and the registration then fails, putting its search back.
+        store.restore(taken);
+
+        assert_eq!(
+            store.take(first),
+            Err(TokenError::Mismatched),
+            "the stale search must not have been resurrected"
+        );
+        assert!(
+            store.take(second).is_ok(),
+            "the search the form is actually holding must survive"
+        );
     }
 
     #[test]
