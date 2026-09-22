@@ -918,7 +918,40 @@ any tree, no lockfile movement.** Closes
   [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662), which names the seven other `init`
   effects that are equally unpinned.
 
-- **Verification.** Fourteen mutations, each killing its intended test. The load-bearing one:
+- **The five-agent review round, same PR — and it found three false comments and a false issue.**
+  Three **Critical**, all one class: comments describing the *old* behaviour **without naming the
+  deleted function**, so the `ensure_registration_actor` grep could not see them — two of them
+  user-visible `--help` text still promising auto-enrolment. Then two claims about SQL that had
+  been read and misremembered: **`actor_current` does not exclude a superseded actor** (db/004 is
+  `op IN ('enroll','supersede')`; only `revoke` removes — harmless today, a live trap for the
+  rotate-key door, [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664)), and **"nothing
+  provisions" has a counterexample in the same binary** (`matcher_actor` enrols an agent from
+  `ApplyAutoCandidates`, [#663](https://github.com/cairn-ehr/cairn-ehr/issues/663)). The
+  unknown-standing catch-all's own rationale was **falsified by this PR** and now `bail!`s.
+  `init` no longer `?`s its enrolment — that call sits after everything irreversible, so a blip
+  printed *"failed"* for a node that was provisioned, and the re-run is refused by the custody
+  guard with a message about a different state.
+  [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662)'s **stated blocker was false** — the
+  behavioural `init` test needed no virgin database, only helpers already in the tree — so it was
+  written rather than deferred, and the issue corrected rather than quietly closed.
+- **What the review changed in the types.** `ActorStanding` gained **`Ambiguous`** and the SQL now
+  **counts** current rows rather than testing existence: `Enrolled` had to mean *exactly one*
+  actor, because two make db/005 null the `actor_id` of everything that key ever authors, and an
+  unattributable clinical event is worse than a refused one (principle 10). **`device_actor_enrolled`
+  was deleted** — its only justification was 2c's launch probe, and a boolean probe at launch
+  re-creates the dead end in the newest surface. `deliberate_refusal` is `pub(crate)` (declaring a
+  verdict is a claim only that crate can make) and `is_deliberate_refusal` became
+  `carries_refusal_marker`, because two siblings with the old name mean the **opposite** thing
+  about SQLSTATE.
+- **What the review measured as untested.** `dob_precision`'s own test asserted `is_err()` only —
+  mutating back to `bail!` passed the **entire** `cairn-node` gate, red only in the other cargo
+  tree. `data_error_from`'s marker arm had no pure test, so the newest rule needed a database. The
+  mock's documented *"one slot, not two"* was unpinned (two slots passed everything). And
+  **nothing stopped a sixteenth write command calling `enroll_device_actor`** — now
+  `enrolment_is_never_a_write_side_effect.rs`, in `pen_rows_leave_through_one_door.rs`'s idiom,
+  with an `ALLOWED` inventory of the two owner ceremonies and a sweep that fails if either stops.
+
+- **Verification.** Eighteen mutations, each killing its intended test. The load-bearing one:
   scoping `device_actor_enrolled` to `kind = 'device'` passes four of the five new enrolment tests
   and **mints a second `actor_current` row** for a key already enrolled as an `agent`, which nulls
   the `actor_id` of every event that key ever authors (db/005). The fifth catches it.

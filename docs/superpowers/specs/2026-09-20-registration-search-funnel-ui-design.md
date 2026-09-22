@@ -215,7 +215,8 @@ scope.)
 > surface touched it first is gone, and provisioning-as-a-write-path-side-effect (trap 2,
 > ADR-0066 decision 6) is now a rule rather than a preference.
 >
-> **What 2c owes:** `cairn_node::actor_enrolment::device_actor_enrolled` is public so
+> **What 2c owes:** `cairn_node::actor_enrolment::device_actor_standing` — a FOUR-state enum, not
+> a boolean, because a `true/false` launch probe re-creates the dead end it fixed — so
 > `build_live_state` can **probe at launch** and say so in the chrome — the same discipline it
 > already follows by loading the node key up front rather than discovering at sign-off that it can
 > never seal anything. That is #654's option 2. `LiveData` itself stays unchanged: its refusal is

@@ -30,11 +30,14 @@
 >
 > **⇒ AND THE ONE THING #661 DELIBERATELY LEFT 2c: THE LAUNCH-TIME PROBE.** `LiveData` is
 > unchanged — its refusal on an unprovisioned node is already correctly `Refused`, but making it
-> *actionable* means a sentence in the window's chrome, and that is rendering.
-> `cairn_node::actor_enrolment::device_actor_enrolled` is **public for exactly this**: 2c's
-> `build_live_state` probes it at launch and says so in the chrome, the same discipline it
-> already follows by loading the node key up front rather than discovering at sign-off that it
-> can never seal anything. That is #654's option 2, and 2c owes it.
+> *actionable* means a sentence in the window's chrome, and that is rendering. 2c's
+> `build_live_state` probes **`cairn_node::actor_enrolment::device_actor_standing`** at launch
+> and says so, the same discipline it already follows by loading the node key up front rather
+> than discovering at sign-off that it can never seal anything. That is #654's option 2.
+> **⚠️ `device_actor_standing`, NOT a boolean** — the `bool` accessor was deleted in #661's
+> review round precisely because a launch probe on `true/false` re-creates the dead end in the
+> newest surface: a `Retired` node would be told to run `enroll-device-actor`, which cannot help
+> it. **2c must match all four arms** and write a different sentence for each.
 >
 > **⇒ TWO THINGS 2c MUST GET RIGHT THAT 2b COULD ONLY NAME.**
 > - **`today` comes from the DATABASE, not the wall clock.** `PatientSearch::search` takes the
@@ -125,20 +128,44 @@
 >   resolves a signer by `signing_key_id` alone, so a key mapping to two `actor_current` rows
 >   nulls the `actor_id` of every event it ever authors (db/005). A `kind = 'device'` scope passes
 >   four of the enrolment tests and mints that second row.
-> - **⚠️ AN ACTOR'S STANDING IS THREE STATES, NOT TWO** (`ActorStanding::{Enrolled, NeverEnrolled,
->   Retired}`) — the #661 review's best finding. `actor_current` excludes revokes, so a **revoked**
+> - **⚠️ AN ACTOR'S STANDING IS FOUR STATES, NOT TWO** (`ActorStanding::{Enrolled, NeverEnrolled,
+>   Retired, Ambiguous}`) — the #661 review's best finding, twice over. `actor_current` excludes revokes, so a **revoked**
 >   key reads as *not enrolled*, and the obvious refusal sends the operator to
 >   `enroll-device-actor` — which db/004's `cairn_actor_id_key_conflict` then refuses as a
 >   **resurrection** with an opaque `P0001` (#152). Refusing the resurrection is CORRECT; sending
 >   them there is not. `Retired` has its own sentence: the remedy is a **new signing key**, which
 >   is a decision about accountability, not a command to run blind. **Whenever a state is derived
 >   from a view that filters, ask what the filtered-out rows look like from outside it.**
-> - **⇒ `cairn-node init` HAS NO BEHAVIOURAL TEST — #662.** Deleting its one `enroll_device_actor`
->   line left the whole workspace gate green while every fresh node silently lost the ability to
->   author. A **source guard** (`init_still_enrols_the_device_actor`, bounded to the `Init` arm
->   because `EnrollDeviceActor` calls the same function) catches deletion and nothing more. `init`
->   needs a **virgin database** — it refuses over a registered custody key — so a real test is a
->   rig of its own, and **seven other `init` effects are equally unpinned**.
+>   `Ambiguous` came from the same question asked about CARDINALITY: `Enrolled` tested *existence*,
+>   so a key mapping to TWO current actors read as fine, while db/005 nulls the `actor_id` of
+>   every event that key ever authors. It counts now, and refuses — an unattributable clinical
+>   event is worse than a refused one (principle 10).
+> - **⚠️ `actor_current` DOES NOT EXCLUDE A SUPERSEDED ACTOR, whatever a comment may say — #664.**
+>   db/004 is `WHERE ae.op IN ('enroll','supersede')`, so a supersede row is a *member* of the
+>   view and `DISTINCT ON … ORDER BY recorded_at DESC` picks it as current. **Only `revoke`
+>   removes.** Harmless today because no supersede door exists anywhere in the tree — but the
+>   slice that writes the rotate-key door MUST revisit `device_actor_standing`, or a superseded
+>   key keeps authoring at every write door.
+> - **⚠️ "NOTHING PROVISIONS" IS SCOPED TO THE NODE'S OWN DEVICE ACTOR — #663.**
+>   `matcher_actor::resolve_matcher_actor` still enrols a per-epoch `agent` from
+>   `ApplyAutoCandidates`, which is a write path. Arguably its own ceremony; named rather than
+>   hidden, because an absolute claim with a live counterexample is what gets cited to justify
+>   re-adding enrol-on-miss.
+> - **THE RULE IS NOW ENFORCED, NOT JUST STATED** — `crates/cairn-node/tests/
+>   enrolment_is_never_a_write_side_effect.rs` fails if any `Cmd::` arm outside `Init` and
+>   `EnrollDeviceActor` calls `enroll_device_actor`, and fails again if either of those two stops.
+>   **When it goes red, do not add your call site to `ALLOWED`** — ask whether it should be
+>   calling `require_device_actor`.
+> - **⇒ `cairn-node init` NOW HAS A BEHAVIOURAL TEST, AND #662's STATED BLOCKER WAS FALSE.**
+>   It claimed a virgin database was needed. It is not: `node_unwrap_key` is in `clinic_kit`'s
+>   truncation list, `local_node` is cleared by `reset_node_federation_tables`, and
+>   `--insecure-plaintext` skips the passphrase branch — the shape `restore_kit` already uses.
+>   The real blocker was that nobody had tried it. **Seven other `init` effects are still
+>   unpinned**, and the harness now proven makes each ~10 lines (#662).
+> - **⇒ `init` MUST NOT `?` ITS ENROLMENT.** That call sits after everything irreversible, so a
+>   `?` exits non-zero for a node that IS provisioned — and the operator's reasonable next move,
+>   re-running `init`, is refused by the custody-key guard with a message describing a different
+>   state. It warns and names `enroll-device-actor` instead.
 >
 > **Still open from 2b's review wave:** **#652** (the P0001 rule's three homes) · **#655** (the
 > `Unavailable` split, above) · **#656** (the missing CI-step guard, above) ·
