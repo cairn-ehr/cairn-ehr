@@ -841,7 +841,7 @@ and not claimed** — 2a exposes no runnable surface. Design:
 `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Plan:
 `docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2a.md`.
 
-### 2026-09-22 — funnel UI slice 2b: the live ports (draft PR #653)
+### 2026-09-22 — funnel UI slice 2b: the live ports (PR #653)
 
 - **The slice:** the funnel's **data path** — the rules 2a made executable, now acting on a real
   record. New crate `cairn-gui-live`, whose `LiveData` implements both ports over a
@@ -893,7 +893,7 @@ and not claimed** — 2a exposes no runnable surface. Design:
   catalogue** — every base table in `public` carrying a `patient_id` column, which every
   per-patient projection has and no seed table does — so a new clinical stream's projection is
   swept without anyone remembering this file.
-- **Nine DB-gated tests, six mutations, six killed** (M3 only by the test written for it after it
+- **Eight DB-gated tests across two suites, six mutations, six killed** (M3 only by the test written for it after it
   survived twice). The headline pair: `the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more`
   proves the signed body names the ids the **prompt** displayed, in display order, with the cap
   having bitten — which the root tree's `patient_register.rs` cannot, since it tests

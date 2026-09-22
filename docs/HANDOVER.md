@@ -4,11 +4,11 @@
 
 > [!NOTE]
 > **⇒ SLICE 2c IS THE NEXT SLICE: THE FUNNEL UI'S RUNNABLE SURFACE.**
-> Slice **2b is BUILT** (2026-09-22, draft PR **[#653](https://github.com/cairn-ehr/cairn-ehr/pull/653)**,
+> Slice **2b is BUILT** (2026-09-22, PR **[#653](https://github.com/cairn-ehr/cairn-ehr/pull/653)**,
 > no ADR, no spec version bump, no migration, `SCHEMA_GENERATION` unchanged, **nothing under
 > `crates/`**). 2b is the funnel's **data path**: a new `cairn-gui-live` crate whose `LiveData`
-> implements both ports over a real node connection, `DataError::Refused` (#648), and nine
-> DB-gated tests. Design:
+> implements both ports over a real node connection, `DataError::Refused` (#648), and eight
+> DB-gated tests across two suites. Design:
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md` (read its
 > *Slicing* section — 2b was split into 2b+2c there, with a dated note). Plan:
 > `docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2b-live-ports.md`.
@@ -634,7 +634,7 @@ that generalise past the slice that found them.
 
 ### 2026-09-22 — funnel UI slices 2a and 2b: the pure core, then the live ports
 
-2a merged as PR [#646](https://github.com/cairn-ehr/cairn-ehr/pull/646); 2b is draft PR
+2a merged as PR [#646](https://github.com/cairn-ehr/cairn-ehr/pull/646); 2b is PR
 [#653](https://github.com/cairn-ehr/cairn-ehr/pull/653). Both durable-rule sets are in ⇒ NEXT.
 What generalises past the slices:
 
