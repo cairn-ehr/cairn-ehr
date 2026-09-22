@@ -12,24 +12,23 @@ mod common;
 use cairn_gui_data::port::{PatientRegistration, PatientSearch};
 use cairn_gui_funnel::{bound_for_prompt, TokenStore, PROMPT_CAP};
 use cairn_gui_live::LiveData;
-use cairn_patient_search::{CandidateList, SearchQuery};
+use cairn_patient_search::SearchQuery;
 
 /// A fixed clock, so a displayed age never changes under the suite.
 const TODAY: &str = "2026-09-22";
 
-/// This node's origin id in the fixture. One character, as the root tree's registration suite
-/// uses: nothing here reads it back, it only has to be stable.
-const ORIGIN: &str = "n";
+/// The birth date every chart in this file is registered under, and the age it implies on
+/// [`TODAY`]. Written as a pair so the two cannot drift: an age assertion computed from a
+/// date the test also chose is the only way `today`'s passthrough is observable at all.
+const BORN: &str = "1991-03-04";
+const AGE_ON_TODAY: u32 = 35;
 
-/// An empty candidate list — what a browse search returns before anyone is registered, and
-/// what every registration in this file attests to except the one about bounding.
-fn nothing_found() -> CandidateList {
-    CandidateList {
-        candidates: vec![],
-        incomplete: false,
-        incomplete_reason: None,
-    }
-}
+/// This node's origin id in the fixture.
+///
+/// DISTINCTIVE on purpose. The root tree's suites use `"n"`, which is exactly the value a port
+/// that ignored its `Identity` and hardcoded something would pick — a fixture that cannot tell
+/// the right answer from the lazy one proves nothing when it passes.
+const ORIGIN: &str = "gui-live-origin";
 
 /// A search that matches nothing must be an EMPTY list, never an error.
 ///
@@ -42,7 +41,11 @@ async fn nobody_matched_is_an_empty_list_not_a_failure() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let (sk, _kid) = common::setup(&reader).await;
-    let live = LiveData::new(common::connect_for_live(&cs).await, sk, ORIGIN.to_string());
+    let live = LiveData::new(
+        common::connect_for_live(&cs).await,
+        sk,
+        &common::identity(ORIGIN),
+    );
 
     let query = SearchQuery::new("zzzznobodyzzzz", Some("1900-01-01"), &[]);
     let found = live
@@ -71,13 +74,17 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let (sk, _kid) = common::setup(&reader).await;
-    let live = LiveData::new(common::connect_for_live(&cs).await, sk, ORIGIN.to_string());
+    let live = LiveData::new(
+        common::connect_for_live(&cs).await,
+        sk,
+        &common::identity(ORIGIN),
+    );
 
     // The ONE typed string, feeding both the query and the asserted name — never reassembled
     // from separate given/family boxes, which is the name model ADR-0014 forbids and the
     // drift `register_patient`'s own doc warns it cannot enforce.
     let typed = "Ngaiterangi Waiariki";
-    let query = SearchQuery::new(typed, Some("1991-03-04"), &[]);
+    let query = SearchQuery::new(typed, Some(BORN), &[]);
 
     let before = live.search(&query, TODAY).await.expect("the browse search");
     assert!(
@@ -115,6 +122,35 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
         "the chart just registered must be findable by the NAME it was registered under — \
          got {ids:?}"
     );
+
+    // `today` REACHES THE DISPLAYED AGE, and until this assertion existed nothing made that
+    // observable. `TODAY` was threaded through every call in this file and its value was never
+    // read back, so substituting the port's own clock — `Utc::now()`, or `current_date` inside
+    // the query — passed the whole suite. Age beside a name is the primary human discriminator
+    // between two same-name charts on the step-3 prompt; a drifting one is how the clerk fails
+    // to recognise the chart that is already there.
+    let found = after
+        .candidates
+        .iter()
+        .find(|c| c.patient_id == created)
+        .expect("just asserted it is in the list");
+    let age = found
+        .age
+        .as_ref()
+        .expect("a chart registered with a full date of birth displays an age");
+    assert_eq!(
+        age.years, AGE_ON_TODAY,
+        "born {BORN}, asked as at {TODAY} — a different answer means the port substituted its \
+         own clock, and nothing on screen would say which one won"
+    );
+
+    // An exhaustive search that found everything is COMPLETE, and the signed body must say so.
+    // The negative half of the pair `the_stored_attestation_names_what_the_prompt_bounded…`
+    // asserts positively; together they stop `incomplete` being a constant.
+    assert!(
+        !common::stored_incomplete(&reader, created).await,
+        "nothing was withheld from this prompt, so the attestation must not claim it was"
+    );
 }
 
 /// THE TEST THIS FILE EXISTS FOR.
@@ -129,7 +165,11 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let (sk, _kid) = common::setup(&reader).await;
-    let live = LiveData::new(common::connect_for_live(&cs).await, sk, ORIGIN.to_string());
+    let live = LiveData::new(
+        common::connect_for_live(&cs).await,
+        sk,
+        &common::identity(ORIGIN),
+    );
 
     // Register more namesakes than the prompt can show, so that the raw list and the bounded
     // one cannot be the same value by accident.
@@ -139,7 +179,7 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
         let q = SearchQuery::new(&typed, Some("1970-01-01"), &[]);
         let mut store = TokenStore::new();
         let t = store
-            .record(q, bound_for_prompt(&nothing_found()))
+            .record(q, bound_for_prompt(&common::nothing_found()))
             .expect("a non-empty query mints a token");
         let a = store.take(t).expect("redeemable");
         live.register(a, Some(&typed))
@@ -200,5 +240,22 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
         stored.len(),
         PROMPT_CAP,
         "the bound must actually have bitten, or this test passed for the wrong reason"
+    );
+
+    // THE HONESTY FLAG BESIDE THE ROSTER, and the assertion this test was missing.
+    //
+    // The two above check WHICH ids were sworn to. Neither checks whether the body admits that
+    // others were hidden — and the ids alone cannot: `bound_for_prompt` returns a PREFIX of the
+    // raw list, so a port forwarding the node's raw `CandidateList` instead of the bounded
+    // `PromptList` stores the same first `PROMPT_CAP` ids and passes both. What it would also
+    // store is `incomplete: false`: a signed claim that this clerk saw every Kowalczyk in the
+    // system, when three were withheld from them. That is exactly the claim a later duplicate-
+    // chart inquiry would use to argue they should have spotted the duplicate.
+    assert!(
+        common::stored_incomplete(&reader, created).await,
+        "{} candidates were withheld from the prompt, so the signed attestation MUST say the \
+         list was incomplete — storing `false` here is the forensic record lying on the \
+         clerk's behalf",
+        raw.candidates.len() - PROMPT_CAP
     );
 }

@@ -151,16 +151,15 @@ jobs:
   # twice per CI run for no coverage that is not already obtained there.
   #
   # Everything else in this tree is pure (the view model, the session-key lock, the JS/Rust
-  # drift guard, the funnel's rules), and CAIRN_ALLOW_DB_SKIP below is the DECLARATION that the
-  # skip here is intended: `cairn-gui-live`'s `db_gate_ran` fails closed without it, so a
-  # developer who simply forgot to export CAIRN_TEST_PG is told, while this job is not (#442,
-  # #450).
+  # drift guard, the funnel's rules), and CAIRN_ALLOW_DB_SKIP — declared on the `cargo test`
+  # STEP below, not on this job — is the DECLARATION that the skip is intended:
+  # `cairn-gui-live`'s `db_gate_ran` fails closed without it, so a developer who simply forgot
+  # to export CAIRN_TEST_PG is told, while this job is not (#442, #450).
   gui:
     name: clippy + cargo test (cairn-gui)
     runs-on: ubuntu-24.04
     env:
       CARGO_TERM_COLOR: always
-      CAIRN_ALLOW_DB_SKIP: "1"
     steps:
       - uses: actions/checkout@v6
       - name: Install the pinned toolchain (+ rustfmt/clippy)
@@ -198,7 +197,14 @@ jobs:
       - name: clippy (cairn-gui, tests)
         run: cargo clippy --locked --manifest-path cairn-gui/Cargo.toml --workspace --tests -- -D warnings
 
+      # CAIRN_ALLOW_DB_SKIP rides THIS STEP, not the job, because this step is the only thing
+      # in the job that runs a test. Declaring it at job altitude would silently pre-authorise a
+      # skip for any future database-backed crate added to this tree — the #442 shape the guard
+      # exists to prevent. (`matcher.yml` states the same rule: declare it at the site that
+      # means it.)
       - name: cargo test (cairn-gui — view model, session lock, JS/Rust drift guard)
+        env:
+          CAIRN_ALLOW_DB_SKIP: "1"
         run: cargo test --locked --manifest-path cairn-gui/Cargo.toml --workspace
 
       # The cairn-gui half of the #439 doc gate. It lives here, not in the `doc` job, because
@@ -414,9 +420,16 @@ jobs:
       #
       # It is a SEPARATE cargo workspace (the root one `exclude`s it), so `cargo test
       # --workspace` above does not reach it: without this step the whole suite would
-      # self-skip and still print `ok`, which is the #442 failure. `db_gate_ran` in that crate
-      # fails closed if CAIRN_TEST_PG is unset and the run has not declared the skip, so a
-      # step deleted or renamed here does not pass in silence.
+      # self-skip and still print `ok`, which is the #442 failure.
+      #
+      # WHAT `db_gate_ran` DOES AND DOES NOT CATCH — an earlier version of this comment
+      # overstated it, so the limit is written down. It catches a CAIRN_TEST_PG that is set here
+      # but resolves EMPTY (a mistyped `env.PGPORT`, a renamed secret): the suite then self-skips
+      # and `db_gate_ran` fails, because this run did not declare the skip. It does NOT catch
+      # this step being DELETED — the `gui` job also builds `cairn-gui-live` as a workspace
+      # member and runs it under CAIRN_ALLOW_DB_SKIP=1, so the suites would skip green there and
+      # never execute here to complain. A guard only fires when it is invoked. Closing that is
+      # #656.
       - name: cargo test (cairn-gui-live — the funnel's ports against a real node)
         env:
           CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test

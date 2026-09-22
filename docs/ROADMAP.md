@@ -906,8 +906,10 @@ and not claimed** — 2a exposes no runnable surface. Design:
   builds it without WebKitGTK. `scripts/run-db-gated-tests.sh` runs the same line. The `gui` job
   declares `CAIRN_ALLOW_DB_SKIP=1` and its "every test in this tree is pure" comment is rewritten;
   a proportionate `db_gate_ran.rs` fails closed for anyone who has not declared it (#442, #450).
-- **Scope discipline: nothing under `crates/`**, so the gate was the ~2-minute `cairn-gui` one
-  rather than the ~2-hour root sweep. `git diff --name-only main...HEAD | grep '^crates/'` is empty.
+- **Scope discipline: as built, nothing under `crates/`**, so the gate was the ~2-minute
+  `cairn-gui` one rather than the ~2-hour root sweep. The review pass then added exactly one root
+  file — `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs`, a pure additive test with no
+  production code — so the root cost stayed a `clippy -p cairn-node --tests`.
 - **Found by self-review, before a window existed to hit it —
   [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).** `cairn-node patient-register`
   enrols its signing key as a `device` actor on first use (`ensure_registration_actor`);
@@ -922,7 +924,69 @@ and not claimed** — 2a exposes no runnable surface. Design:
   [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654) (above) ·
   [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652) (the P0001 rule's **third** home —
   `cairn-sync`, `cairn-node`'s `restore::clinical` and now `cairn-gui-live`; one public home in
-  `cairn_node::db_diagnosis` retires all three, and **#633**'s guard belongs with it).
+  `cairn_node::db_diagnosis` retires all three).
+
+**The review pass — five aspects (general, tests, silent failures, types, comments), and it earned
+its keep.** Every finding below was re-verified against the source before being acted on, and two
+of the five agents' claims were corrected in the process. Fixed in the PR:
+
+- **⚠️ [#633](https://github.com/cairn-ehr/cairn-ehr/issues/633) ADDRESSED — the P0001 contract was
+  held by prose and nothing else.** `USING ERRCODE` appears in `db/` only inside comments forbidding
+  it, and `cairn-sync`'s own doc asserts that fact as a premise for its routing — while three crates
+  route clinical verdicts on it. New `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs`
+  asserts it tree-wide, reusing `common/sql_text.rs`'s nesting-aware stripper (which #633 asked for,
+  and which also catches a `RAISE …` / `USING ERRCODE …` split across two lines — verified by
+  injecting exactly that). `ALLOWED` is empty; a second test proves the scan is not vacuous.
+- **A VACUOUS ATOMICITY TEST, AND THE MEASURED LIMIT OF ITS FIX.**
+  `a_refused_registration_creates_no_chart`'s `"not-a-date"` probe bailed in Rust ~70 lines before
+  `client.transaction()`, so deleting the transaction from `register_patient` left it green. Re-probed
+  with an unenrolled signer (which reaches `submit_event`) plus an explicit `Refused` assertion against
+  regression. **It still does not pin the multi-event rollback** — that signer refuses on the *first*
+  event, so autocommit passes; measured, not assumed. Filed
+  [#657](https://github.com/cairn-ehr/cairn-ehr/issues/657); no root-tree test pins it either.
+- **The signed `search.incomplete` flag was never read back.** The headline test checked *which* ids
+  were sworn to, and the ids cannot catch it — the bounded list is a prefix of the raw one, so a port
+  forwarding the node's raw `CandidateList` passed while storing `incomplete: false`: a signed claim
+  the clerk saw every namesake when three were withheld. Both polarities now asserted.
+- **`today`'s passthrough was unobservable.** `TODAY` was threaded through every call and never read
+  back, so any substituted clock passed. An age assertion pins it.
+- **`LiveData::new` took `node_origin: String` where `Identity` has four `String` fields** — and that
+  value becomes the HLC origin, i.e. causal order's third sort key and the tiebreaker between
+  concurrent demographic assertions, on append-only events. Now takes `&Identity`.
+- **`search`'s error path had no test at all**, so `.unwrap_or_else(|_| empty_list())` — the
+  "defensive" refactor `port.rs` forbids in as many words — passed the suite. On the step-3 prompt an
+  empty list *means* "create a new chart", so that mutation manufactures the duplicate the funnel
+  exists to prevent. New test; verified it fails under exactly that mutation and nothing else does.
+- **Nothing proved the single connection survives a refusal** (tokio-postgres sends its rollback
+  fire-and-forget). New test refuses at the door, then reads *and writes* on the same `Client`.
+- **Three wrong comments, each verified wrong:** the crate doc justified holding the node key with
+  ADR-0052 sealing/custody — but `register_patient` names neither and db/045's projection opens `IF
+  e.sealed THEN RETURN`; the reason is that the node *signs*. `funnel.rs` claimed `name`-matches-query
+  was true "by construction" — nothing ties them, and this crate's own tests deliberately diverge
+  them. The CI comment claimed `db_gate_ran` meant a deleted step "does not pass in silence" — it
+  does, because the `gui` job skips the same suites green (**#656**).
+- **`setup`'s TRUNCATE justification was false** — "per-patient projections all carry a `patient_id`"
+  fails for 40 base tables including the identity stream's (`patient_link` on `low`/`high`,
+  `chart_identity_state` on `subject`). Harmless here, a trap for the next suite: **#658**.
+- Smaller: `CAIRN_ALLOW_DB_SKIP` moved from job to step altitude; `sqlstate_of` returns `Option<&str>`
+  and no longer stops at a pg error carrying no `DbError`; the `USING ERRCODE` doc scoped to
+  *per-door* prose; `operator_chain`'s rendering described accurately ("every **distinct** layer") and
+  flagged as an **operator** string 2c must not paste into a form; `#[must_use]`'s real location
+  named; the script header's "WHAT IT RUNS" list; the crate rationale moved above `[package]`; the
+  `exclude`-enforces-layering claim corrected (it does not — review does).
+
+**Filed, and deliberately left open:** [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) (the
+`false` half of `refusal_is_deliberate` is not one thing: `42501`, `42P01` and class-23 are floor
+decisions that get a retry button — `cairn-sync` already solved this with `LocalDbFault`; decide it
+once in #652's home) · [#656](https://github.com/cairn-ehr/cairn-ehr/issues/656) ·
+[#657](https://github.com/cairn-ehr/cairn-ehr/issues/657) ·
+[#658](https://github.com/cairn-ehr/cairn-ehr/issues/658) ·
+[#659](https://github.com/cairn-ehr/cairn-ehr/issues/659) (**`TokenStore` has no settling
+combinator and `discard` does not clear `in_flight`**, so 2c's natural `.map_err(|(e, _)| e)?`
+latches the store shut with no recovery short of a window reload) ·
+[#660](https://github.com/cairn-ehr/cairn-ehr/issues/660) (the mock ports can never fail, so 2c's
+two-armed rendering has no `--mock` test path). **#651 and #654 gained the reachability arguments
+that make them 2c blockers rather than riders** (see their threads).
 
 **§1.2:** the benchmark is the design page's and **this slice does not move `M`** — the ports it
 builds are called by acts already counted (register paper 5 → forced 4 → target 4; find paper 3 →

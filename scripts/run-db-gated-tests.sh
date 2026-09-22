@@ -15,7 +15,10 @@
 #      (throwaway database; see that script's header), then
 #   2. the FULL workspace `cargo test` with CAIRN_TEST_PG/PG2/PG3 exported so
 #      the DB-gated suites actually run — they self-skip when the env is
-#      unset, so a plain `cargo test` is a strict SUBSET of this run.
+#      unset, so a plain `cargo test` is a strict SUBSET of this run, then
+#   3. `cargo test -p cairn-gui-live` in the cairn-gui tree, which the root
+#      workspace `exclude`s and step 2 therefore never reaches. See the block
+#      above that step for why only that one crate.
 #
 # Since #450 that subset is no longer SILENT: a `cargo test` without the three
 # variables fails `db_gate_actually_ran`, naming what is missing, rather than

@@ -70,11 +70,30 @@ pub async fn connect_for_live(cs: &str) -> Client {
 ///
 /// A hand-written list cannot be right for long, because a new clinical stream adds a
 /// projection and nothing points at this file. So the list is derived from the catalogue:
-/// **every base table in `public` carrying a `patient_id` column.** Per-patient projections
-/// all have one by construction; configuration and seed tables do not, so they are left alone
-/// — which matters, because truncating a seed table would break the floor rather than clean
-/// it. `event_log` is in the set too, and belongs there: it is the source every projection is
-/// derived from.
+/// **every base table in `public` carrying a `patient_id` column**, plus `actor_event`, which
+/// is named by hand because it is keyed on a signer rather than on a patient and the enrolment
+/// below would otherwise accumulate across runs. Configuration and seed tables carry no
+/// `patient_id` and are left alone — which matters, because truncating a seed table would
+/// break the floor rather than clean it. `event_log` is in the set and belongs there: it is
+/// the source every projection is derived from.
+///
+/// # ⚠️ What this does NOT clear, and why that is survivable rather than fine
+///
+/// *"Per-patient projections all carry a `patient_id`"* is the obvious next sentence and it
+/// is **false**. The identity stream keys its per-chart state on differently-named columns —
+/// `patient_link` on `low`/`high`, `chart_identity_state` on `subject` — and `chart_dispute`,
+/// `name_repudiation`, `match_proposal` and `recall_overlay` are in the same family;
+/// `event_dek`/`event_clear` key on `event_id`. None is touched here.
+///
+/// These two suites survive that: db/046 reads `patient_name` / `patient_demographic` /
+/// `patient_identifier` and never consults `patient_link`, and a v7 `patient_id` minted this
+/// run cannot collide with a link a previous run left. `hlc_state` is deliberately spared —
+/// a monotonic clock must not be reset.
+///
+/// **But the first suite in this tree that touches identity linking inherits #583's shape
+/// from its own predecessor run.** Widen the predicate (any base table with a uuid column in
+/// `patient_id`/`subject`/`low`/`high`) before writing that suite, rather than after debugging
+/// it. Tracked as [#658](https://github.com/cairn-ehr/cairn-ehr/issues/658).
 ///
 /// `quote_ident` rather than bare interpolation: the names come from `pg_class`, so they are
 /// real identifiers already, but quoting keeps the generated SQL obviously safe to a reader.
@@ -101,14 +120,50 @@ pub async fn setup(c: &Client) -> (SigningKey, String) {
     let seed: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(3));
     let sk = SigningKey::from_bytes(&seed);
     let kid = hex::encode(sk.verifying_key().to_bytes());
+    // Enrol as a `device` with role `registration-desk` — the SAME shape
+    // `ensure_registration_actor` gives the CLI's `patient-register`, and therefore the shape
+    // the reference window will carry once #654 decides how a GUI gets enrolled.
+    //
+    // The alternative (`agent` with a model/skill-epoch blob, which the root tree's `setup`
+    // uses) is what a matcher or an advisory agent is, not a registration desk. db/005's
+    // actor-kind gates all key on `kind = 'human'` today, so neither choice takes a different
+    // path — but the day registration is role-gated, a fixture standing in for the wrong kind
+    // keeps passing while the real window is refused.
     c.execute(
-        "SELECT enroll_actor('agent', \
-         '{\"model\":\"funnel-port-test\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+        "SELECT enroll_actor('device', \
+         '{\"role\":\"registration-desk\",\"node_key\":\"funnel-port-test\"}', $1)",
         &[&kid],
     )
     .await
     .expect("enrol the test signer");
     (sk, kid)
+}
+
+/// The node identity a `LiveData` is built with, carrying `origin` as its `node_id_hex`.
+///
+/// `LiveData::new` takes the whole `Identity` precisely so a caller cannot hand it
+/// `fingerprint` or `address` by mistake (see its doc), which means a test needs one too. The
+/// three unused fields are blank rather than plausible: nothing in this crate reads them, and
+/// a blank is honest where a fabricated hex string would invite someone to assert on it.
+pub fn identity(origin: &str) -> cairn_node::identity::Identity {
+    cairn_node::identity::Identity {
+        node_id_hex: origin.to_string(),
+        pubkey_hex: String::new(),
+        fingerprint: String::new(),
+        address: String::new(),
+    }
+}
+
+/// An empty candidate list — what a browse search returns before anyone is registered.
+///
+/// Shared because both suites need exactly this value and two copies of a fixture are two
+/// things to keep true.
+pub fn nothing_found() -> cairn_patient_search::CandidateList {
+    cairn_patient_search::CandidateList {
+        candidates: vec![],
+        incomplete: false,
+        incomplete_reason: None,
+    }
 }
 
 /// Read the RAW `search.displayed` array back out of the stored event body, in order.
@@ -137,6 +192,35 @@ pub async fn stored_displayed(c: &Client, patient: uuid::Uuid) -> Vec<uuid::Uuid
     ids.iter()
         .map(|s| uuid::Uuid::parse_str(s).expect("each element is a uuid string"))
         .collect()
+}
+
+/// Read the stored attestation's `incomplete` flag back — whether the signed body admits that
+/// the clerk was shown less than everything.
+///
+/// # Why this is not a detail
+///
+/// `displayed` says WHICH candidates were on screen; `incomplete` says whether that roster was
+/// the whole truth. `bound_for_prompt` sets it to `list.incomplete || withheld > 0` and
+/// `SearchAttestation::from_displayed` carries it straight into the signed body, so a
+/// registration made off an overflowing prompt must store `true`.
+///
+/// Without this read-back, a port forwarding the node's RAW `CandidateList` instead of the
+/// bounded `PromptList` passes every other assertion in this crate — the ids are a prefix of
+/// the raw list either way — while storing `incomplete: false`. That is a signed claim that
+/// the clerk saw a complete screenful when three namesakes were hidden from them, which is
+/// precisely the claim someone would later use to argue they should have spotted the
+/// duplicate. The roster and the honesty flag beside it have to be checked together.
+pub async fn stored_incomplete(c: &Client, patient: uuid::Uuid) -> bool {
+    let row = c
+        .query_one(
+            "SELECT (body -> 'search' ->> 'incomplete')::boolean \
+             FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'identity.registration.asserted'",
+            &[&patient.to_string()],
+        )
+        .await
+        .expect("the registration event");
+    row.get(0)
 }
 
 /// Read the stored attestation's QUERY back — the name tokens and the birth date the

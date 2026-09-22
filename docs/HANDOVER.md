@@ -7,8 +7,9 @@
 > Slice **2b is BUILT** (2026-09-22, PR **[#653](https://github.com/cairn-ehr/cairn-ehr/pull/653)**,
 > no ADR, no spec version bump, no migration, `SCHEMA_GENERATION` unchanged, **nothing under
 > `crates/`**). 2b is the funnel's **data path**: a new `cairn-gui-live` crate whose `LiveData`
-> implements both ports over a real node connection, `DataError::Refused` (#648), and eight
-> DB-gated tests across two suites. Design:
+> implements both ports over a real node connection, `DataError::Refused` (#648), and **nineteen
+> tests** (seven pure, ten DB-gated across two suites, two gate guards) — plus a five-aspect
+> review pass whose fixes are in the same PR (below). Design:
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md` (read its
 > *Slicing* section — 2b was split into 2b+2c there, with a dated note). Plan:
 > `docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2b-live-ports.md`.
@@ -27,7 +28,9 @@
 > - **`today` comes from the DATABASE, not the wall clock.** `PatientSearch::search` takes the
 >   caller's value and the port is forbidden to override it (an age whose value depends on which
 >   clock won, with nothing on screen saying which). `cairn-node`'s own CLI reads
->   `SELECT current_date::text`; the window must do the same.
+>   `SELECT current_date::text`; the window must do the same. The passthrough is now *observable* —
+>   the review found `TODAY` was threaded through every call and never read back, so any
+>   substituted clock passed; an age assertion now pins it.
 > - **#654 — the window's FIRST registration refuses on a node where `patient-register` was never
 >   run.** The CLI enrols its signing key as a `device` actor on first use
 >   (`ensure_registration_actor`); `LiveData` deliberately does not, because provisioning as a
@@ -52,21 +55,67 @@
 >   differs — 2c writes those two sentences.**
 > - **⚠️ THE P0001 RULE NOW HAS THREE HOMES** (`cairn-sync`, `cairn-node`'s `restore::clinical`,
 >   and `cairn-gui-live`'s `error.rs`). Change one, change all three. **#652** consolidates them
->   into one public home in `cairn_node::db_diagnosis`, and **#633**'s guard belongs with it.
+>   into one public home in `cairn_node::db_diagnosis`.
+> - **THE P0001 CONTRACT IS NOW ENFORCED TREE-WIDE, NOT JUST STATED** — `crates/cairn-node/tests/
+>   floor_refusals_carry_no_errcode.rs` asserts no `db/*.sql` carries `USING ERRCODE`, which
+>   **addresses #633** (its review pass found the contract was held by prose in two files and by
+>   nothing else, while three crates routed on it). Reuses `common/sql_text.rs`'s stripper, so it
+>   also catches a `RAISE …` / `USING ERRCODE …` split across two lines. `ALLOWED` is empty, and
+>   that is the finding.
+> - **⚠️ BUT THE `false` HALF OF THAT RULE IS NOT ONE THING — #655.** `42501` (a missing grant),
+>   `42P01` (schema never loaded) and class-23 are floor *decisions* carrying their own SQLSTATE,
+>   so they land in `Unavailable` and the window offers a retry that can never work. `cairn-sync`
+>   already solved this for itself (`LocalDbFault`); the GUI copied the binary predicate and left
+>   the split behind. Decide it **once**, in #652's shared home.
 > - **A DB-GATED SUITE IN THE `cairn-gui` TREE RUNS IN CI's `test` JOB**, not the `gui` job — the
 >   latter has no Postgres and would need `cairn_pgx` built twice per run. The `gui` job declares
->   `CAIRN_ALLOW_DB_SKIP=1`; `db_gate_ran.rs` fails closed for anyone who did not.
+>   `CAIRN_ALLOW_DB_SKIP=1` **on the `cargo test` step, not at job altitude** (job altitude would
+>   pre-authorise a skip for any future DB-backed crate added to that tree — #442's shape);
+>   `db_gate_ran.rs` fails closed for anyone who did not declare it.
+>   **⚠️ What that guard does NOT catch: the CI step being DELETED.** The `gui` job also builds
+>   `cairn-gui-live` as a workspace member and would skip it green, so the suites would never run
+>   to complain. A guard only fires when it is invoked. **#656.**
 > - **A TEST FIXTURE'S TRUNCATE LIST IS DERIVED, NOT COPIED.** Every base table in `public`
->   carrying a `patient_id` column — per-patient projections all have one, seed tables do not. The
->   hand-copied list left out `patient_name` and the suite passed once, then failed on the second
->   run with the previous run's patient still findable (#583's shape).
+>   carrying a `patient_id` column, plus `actor_event` by hand. The hand-copied list left out
+>   `patient_name` and the suite passed once, then failed on the second run with the previous
+>   run's patient still findable (#583's shape).
+>   **⚠️ The corollary "per-patient projections all have one" is FALSE, and the review measured
+>   it: 40 base tables have no `patient_id`**, including the identity stream's per-chart state
+>   (`patient_link` keys on `low`/`high`, `chart_identity_state` on `subject`, plus
+>   `chart_dispute` / `name_repudiation` / `match_proposal` / `recall_overlay`). Harmless for
+>   these two suites — db/046 never consults them and a v7 id cannot collide with a stale link —
+>   but **the first suite in this tree that touches identity linking inherits #583's shape from
+>   its own predecessor run. Widen the predicate first: #658.**
 >
 > **Filed by 2b and deliberately left open:** **#651** (a deterministic pre-flight refusal raised
 > in **Rust** — `register_patient`'s dob-shape check — carries no SQLSTATE, so it reads as an
 > outage; #648's harm one layer up, **pinned by a test that asserts today's wrong behaviour on
-> purpose**) · **#652** (above). Still open from 2a: **#645** (decision 4's display/rank half —
-> `Candidate` carries no sex) · **#647** · **#649** (`register`'s future has no cancellation
-> contract) · **#650** · **#355**.
+> purpose**) · **#652** (above).
+>
+> **⇒ FILED BY 2b's REVIEW PASS — #655–#660, and three of them should gate 2c:**
+> - **#651 is now argued as a 2c blocker, not a rider.** `trigger.rs` applies **no** date format
+>   check (correct, principle 4: a registrar is often told only a year), and db/046 pass 2 is a
+>   string compare — so `3/2/1980` *searches fine*, finds nothing, then fails `dob_precision` in
+>   Rust with no SQLSTATE. The clerk gets a retry button forever. On a desk with no date widget
+>   this is the **default** failure mode, and the GUI port is the only caller with nothing
+>   upstream of it (the CLI validates at its edge).
+> - **#659 — `TokenStore` has no settling combinator, and the natural idiom latches it shut.**
+>   `.map_err(|(e, _)| e)?` drops the attestation; `take` set `in_flight`, only `restore`/`commit`
+>   clear it, and **`discard` does not** (`invalidate` bumps the generation and leaves the flag),
+>   so editing the form does not recover — nothing short of rebuilding the store does. Add
+>   `TokenStore::settle(Result<…>)` before 2c writes its handler, so the short path is the
+>   correct one. Also decide there whether `AppState` or `LiveData` owns db/key/origin — `state.rs`
+>   already holds the same trio, and two of them can disagree.
+> - **#660 — the mock ports can never return `Err`**, so 2c's two-armed refusal/outage rendering
+>   has no `--mock` test path at all. Add an injectable one-shot failure before writing the
+>   sentences, not after.
+> - **#655** (the `Unavailable` split, above) · **#656** (the missing CI-step guard, above) ·
+>   **#657** (`register_patient`'s multi-event transaction rollback is untested in **both** trees —
+>   measured: replacing the transaction with autocommit leaves every suite green) · **#658** (the
+>   TRUNCATE predicate, above).
+>
+> Still open from 2a: **#645** (decision 4's display/rank half — `Candidate` carries no sex) ·
+> **#647** · **#649** (`register`'s future has no cancellation contract) · **#650** · **#355**.
 >
 > **The durable rules 2a established, condensed — all still hold:** the step-3 trigger is
 > **advisory, never a gate** (gating it would make a required field satisfiable only by
@@ -86,8 +135,9 @@
 > brainstorm before a plan, not a TDD slice. Then **#626** (the clinical twin of #621: db/020's
 > raw casts and `do_pull`'s single freeze arm have the identical permanent-freeze shape; kept out
 > by maintainer decision because db/020 is the 100k-event hot path, so taking it reverses that
-> call). **#633** is small, high-value, and now pairs naturally with **#652**. The search
-> residuals **#640** and **#641** are both small and advisory-tier.
+> call). **#633 is addressed** (see the durable rules above), so what pairs with **#652** now is
+> **#655** — the same rule's `false` half. The search residuals **#640** and **#641** are both
+> small and advisory-tier.
 >
 > **⇒ THE NODE-PLANE REFUSAL WORK IS CLOSED OUT, AND NO DECIDED-AND-UNBUILT DR ITEM REMAINS.**
 > **#621** merged as PR [#627](https://github.com/cairn-ehr/cairn-ehr/pull/627)
@@ -661,12 +711,18 @@ What generalises past the slices:
   matches on the date alone — which `register_patient` asserts from the QUERY whatever happens to
   `name`. A port dropping the typed name passed it. **Mutate against the sentence in the test's
   own name, not only against the code.**
-- **⇒ A COPIED FIXTURE TRUNCATE LIST IS A SECOND-RUN FAILURE WAITING.** The list copied from the
-  root tree omitted `patient_name`; a clean database hid it and the next run failed with the
-  previous run's patient still findable (#583's shape). It is now **derived from the catalogue** —
-  every base table in `public` with a `patient_id` column — so a new clinical stream's projection
-  is swept without anyone remembering this file. **Run a new DB suite three times before believing
-  it.**
+- **⇒ A COPIED FIXTURE TRUNCATE LIST IS A SECOND-RUN FAILURE WAITING — AND A DERIVED ONE CAN STILL
+  BE WRONG.** The list copied from the root tree omitted `patient_name`; a clean database hid it and
+  the next run failed with the previous run's patient still findable (#583's shape). It is now
+  **derived from the catalogue** — every base table in `public` with a `patient_id` column — so a
+  new clinical stream's projection is swept without anyone remembering this file. **Run a new DB
+  suite three times before believing it.**
+  But the *justification* written above the derivation — "per-patient projections all have one by
+  construction" — was **false, and the review pass measured it**: 40 base tables have no
+  `patient_id`, and the identity stream keys its per-chart state on `low`/`high`/`subject` instead.
+  **A derived list is only as good as the predicate, and a predicate stated as an obvious truth is
+  the one nobody checks** (#658). Generalises: when a fixture's doc says *"all X have Y by
+  construction"*, run the catalogue query before believing the sentence.
 - **⇒ WHERE A TRAIT IMPL MAY LIVE IS AN ARCHITECTURE FACT, NOT A PREFERENCE.** A live port could
   go neither in `cairn-gui-data` (no database driver, deliberately) nor in `/crates` (would invert
   ADR-0021 / §9.5). Hence a crate. **Both reasons are written into its manifest**, because the
@@ -674,11 +730,50 @@ What generalises past the slices:
 - **⇒ A NEW DB-GATED SUITE IN A NON-ROOT TREE RUNS NOWHERE UNTIL SOMEONE WIRES IT.** `cargo test
   --workspace` does not reach `cairn-gui`, and its CI job has no Postgres. The suite runs in the
   `test` job (which has `cairn_pgx` already) and in `run-db-gated-tests.sh`; the `gui` job
-  declares `CAIRN_ALLOW_DB_SKIP=1`, and a proportionate `db_gate_ran.rs` fails closed for everyone
-  who has not.
-- **⇒ A SLICE THAT HOLDS ITSELF TO ONE TREE KEEPS ITS GATE HONEST.** Nothing under `crates/`, so
-  the whole gate was the ~2-minute `cairn-gui` one rather than the ~2-hour root sweep. The one
-  change that wanted a root edit — the P0001 rule's third home — is **#652** instead.
+  declares `CAIRN_ALLOW_DB_SKIP=1` **on the step, not the job** — at job altitude it silently
+  pre-authorises a skip for the *next* DB-backed crate someone adds to that tree.
+- **⇒ A GUARD CANNOT DETECT NOT BEING INVOKED, AND CLAIMING OTHERWISE IS WORSE THAN THE GAP.** The
+  CI comment asserted that `db_gate_ran` meant *"a step deleted or renamed here does not pass in
+  silence."* It does not: delete the step and the `gui` job skips the same suites green, so the
+  guard never runs to object. It catches an **empty** `CAIRN_TEST_PG`, which is a narrower and real
+  thing. The gap is **#656**; the wrong sentence was the more dangerous half, because it tells the
+  next reader not to look. Same family as the 2026-08-19 lesson (*a guard defined over the list it
+  guards is not a guard*).
+- **⇒ A SLICE THAT HOLDS ITSELF TO ONE TREE KEEPS ITS GATE HONEST.** 2b as built touched nothing
+  under `crates/`, so its gate was the ~2-minute `cairn-gui` one rather than the ~2-hour root
+  sweep. The one change that wanted a root edit — the P0001 rule's third home — is **#652**
+  instead. (The review pass then added ONE root file, `floor_refusals_carry_no_errcode.rs`: a pure
+  additive test, no production code, so the root cost stayed a `clippy -p cairn-node --tests`.)
+
+**⇒ WHAT THE FIVE-ASPECT REVIEW PASS ADDED, and the four lessons worth carrying:**
+
+- **⇒ AN ATOMICITY TEST WHOSE PROBE NEVER REACHES THE SERVER IS DECORATION.**
+  `a_refused_registration_creates_no_chart` asserted a chart count across a refused registration —
+  with the `"not-a-date"` probe, which bails in Rust ~70 lines before `client.transaction()`. The
+  count was trivially unchanged; **deleting the transaction from `register_patient` left it
+  green.** Re-probed with an unenrolled signer so it crosses into `submit_event`, plus an explicit
+  `Refused` assertion so it cannot silently regress to a pre-flight bail again.
+  **And then the fix was measured too, which is the real lesson:** it *still* does not pin the
+  multi-event rollback, because an unenrolled signer refuses on the FIRST event, so there is no
+  prior write to undo. Autocommit still passes. Filed **#657** — and no test in the ROOT tree pins
+  it either. **Run the mutation your test claims to kill; a plausible fix is not a verified one.**
+- **⇒ A SIGNED FLAG THAT NOTHING READS BACK IS A CLAIM NOTHING CHECKS.** The headline attestation
+  test checked *which* ids were sworn to and never `incomplete` — and the ids alone cannot catch
+  it, because the bounded list is a PREFIX of the raw one. A port forwarding the node's raw
+  `CandidateList` passed every assertion while storing `incomplete: false`: a signed claim that the
+  clerk saw every namesake when three were hidden. Both polarities are now asserted, in two tests,
+  so the flag cannot be a constant.
+- **⇒ A CONSTANT THREADED THROUGH EVERY CALL AND NEVER READ BACK PROVES NOTHING.** `TODAY` was
+  passed to every `search` in the suite and no assertion observed it, so substituting the port's
+  own clock passed. An age assertion (`born 1991-03-04`, asked at `2026-09-22`, expect 35) makes
+  the passthrough observable. **Ask of every fixture constant: what assertion would change if this
+  value were ignored?**
+- **⇒ FOUR SAME-TYPED STRINGS IS AN API DEFECT EVEN WITH NO WRONG CALLER YET.** `LiveData::new`
+  took `node_origin: String` while `Identity` carries **four** `String` fields — and `node_origin`
+  becomes the HLC origin, i.e. the third sort key of causal order and the tiebreaker between
+  concurrent demographic assertions, on append-only events. It now takes `&Identity` and reads the
+  field itself. **When a value's blast radius is federation-wide merge order, take the struct, not
+  the string.**
 
 ### 2026-09-20 — #621: a deterministic door failure is a refusal, not a fault
 

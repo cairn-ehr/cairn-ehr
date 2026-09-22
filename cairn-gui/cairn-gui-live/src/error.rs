@@ -2,12 +2,31 @@
 //!
 //! # The contract this rests on
 //!
-//! Every refusal in the in-DB floor is a bare `RAISE EXCEPTION`, which PostgreSQL assigns
-//! SQLSTATE `P0001`. That is a **contract, not an accident of using `RAISE EXCEPTION`**:
-//! `db/001_envelope.sql` states it in the comment above `cairn_decode_hex_or_raise` (#228)
-//! and forbids `USING ERRCODE` on those refusals, because the node pull loop routes on it.
-//! Anything else — a dropped connection, a lock timeout, a serialization failure, a full
-//! disk — decided nothing at all.
+//! Every refusal the in-DB floor *raises* is a bare `RAISE EXCEPTION`, which PostgreSQL
+//! assigns SQLSTATE `P0001`. That is a **contract, not an accident of using `RAISE
+//! EXCEPTION`**, and it is stated per-door rather than tree-wide: `db/001_envelope.sql` says
+//! it above `cairn_decode_hex_or_raise` for the node-plane doors (#228) and
+//! `db/048_sensitivity_stream.sql` says it for the clinical apply door, each forbidding
+//! `USING ERRCODE` because a pull loop routes on it. The guard that makes that per-door prose
+//! true of every `db/*.sql` at once is
+//! `floor_refusals_carry_no_errcode.rs` in `crates/cairn-node/tests/` (#633). Anything else —
+//! a dropped connection, a lock timeout, a serialization failure, a full disk — decided
+//! nothing at all.
+//!
+//! **Two kinds of floor decision are deliberately outside this rule**, and both are reported
+//! as outages today:
+//!
+//! - a **constraint** violation (class `23`) or a **privilege** refusal (`42501`) is the floor
+//!   deciding — principle 12 counts RLS and constraints as part of it — but carries its own
+//!   SQLSTATE, not `P0001`. No path reachable from these two ports produces one today, which is
+//!   why this stays a binary rule for now — and
+//!   `a_constraint_or_privilege_refusal_is_not_yet_told_apart` pins the CLASSIFICATION so the
+//!   gap is a value in every run. (It does not pin the reachability; nothing does.)
+//! - a refusal raised **in Rust, before any statement reaches Postgres** — see below.
+//!
+//! Both belong to the same unanswered question — *the `false` half of `refusal_is_deliberate`
+//! is not one thing* — which `cairn-sync` already had to answer for itself (`LocalDbFault`).
+//! [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) carries it.
 //!
 //! Getting it backwards is a real defect in both directions. Calling an outage a refusal
 //! tells a clerk to change a form that was never the problem; calling a refusal an outage
@@ -20,9 +39,12 @@
 //! already calls itself *"A SECOND HOME … Keep the two identical"*. This is the third, and it
 //! is here rather than shared because consolidating them means changing `crates/`, which is a
 //! different slice's blast radius. **Filed as
-//! [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652)**, which also names #633 as the
-//! guard that belongs in the same shared home. Until it is done: if you change the rule,
-//! change all three. The drift costs a wrong verdict, not merely an inaccurate sentence.
+//! [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652)**. Until it is done: if you change
+//! the rule, change all three. The drift costs a wrong verdict, not merely an inaccurate
+//! sentence.
+//!
+//! What #652 should ALSO absorb is #655 — the `false` half above. Three copies of a rule that is
+//! only half right is the worse of the two problems.
 //!
 //! The three are not *quite* redundant, and the difference is worth knowing: the other two
 //! take an already-extracted `Option<&str>`, because their callers hold a
@@ -62,23 +84,45 @@ pub fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// one-directional: every refusal becomes an outage. Only a test against a real floor can
 /// catch it, which is why `tests/refusal_is_not_an_outage.rs` exists and why it must never be
 /// relaxed into asserting merely that the call failed.
-pub fn sqlstate_of(e: &anyhow::Error) -> Option<String> {
+///
+/// The `and_then` is INSIDE the `find_map` on purpose. A `tokio_postgres::Error` that carries
+/// no `DbError` (a client-side decode failure, say) must not end the walk: the layer that
+/// matters may be deeper. Hoisting it out — `find_map(downcast).and_then(as_db_error)` — reads
+/// the same and silently answers `None` for a chain whose verdict is one link further down.
+///
+/// Borrows rather than allocating: `SqlState::code` returns a `&str` tied to the `DbError`,
+/// which lives as long as `e` does.
+pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
     e.chain()
-        .find_map(|cause| cause.downcast_ref::<tokio_postgres::Error>())
-        .and_then(|pg| pg.as_db_error())
-        .map(|db| db.code().code().to_string())
+        .find_map(|cause| {
+            cause
+                .downcast_ref::<tokio_postgres::Error>()
+                .and_then(|pg| pg.as_db_error())
+        })
+        .map(|db| db.code().code())
 }
 
 /// Map a `cairn-node` orchestrator's failure onto the port's error type.
 ///
 /// The message is `cairn_node::db_diagnosis::operator_chain`'s rendering in both arms — one
-/// line, the server's message rendered exactly once, every context layer kept.
+/// line, the server's message rendered exactly once, every *distinct* context layer above the
+/// database error kept. (It is not a verbatim transcript: `operator_chain` collapses a layer
+/// whose text the layer above already ends with, and stops descending at the database error,
+/// because `legible_db_error` has already consumed that error's own source subtree.)
+///
 /// `commands.rs`'s rule 1: return the underlying text, never a generic string. An in-DB floor
 /// refusal is legible on purpose (§9.6), and the text is the only thing that tells the clerk
 /// what to change.
+///
+/// ⚠️ **This is an OPERATOR rendering, not a clerk-facing sentence.** `operator_chain` exists
+/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. The refusal a
+/// fresh node actually produces reads `submit_event: signer 9f3c… is not an enrolled,
+/// non-revoked actor [P0001]` — true, legible, and not a remedy. Slice 2c must not paste it
+/// raw into a form; resolving that is
+/// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).
 pub fn data_error_from(e: &anyhow::Error) -> DataError {
     let text = cairn_node::db_diagnosis::operator_chain(e);
-    if refusal_is_deliberate(sqlstate_of(e).as_deref()) {
+    if refusal_is_deliberate(sqlstate_of(e)) {
         DataError::Refused(text)
     } else {
         DataError::Unavailable(text)
@@ -89,8 +133,9 @@ pub fn data_error_from(e: &anyhow::Error) -> DataError {
 mod tests {
     use super::*;
 
-    /// The contract, pinned as a value. `db/001_envelope.sql` forbids `USING ERRCODE` on the
-    /// floor's refusals precisely so this one code identifies all of them.
+    /// The contract, pinned as a value. Every `db/*.sql` refusal is a bare `RAISE EXCEPTION`,
+    /// which `floor_refusals_carry_no_errcode.rs` enforces tree-wide (#633), so this one code
+    /// identifies all of them.
     #[test]
     fn a_bare_raise_exception_is_the_floors_verdict() {
         assert!(refusal_is_deliberate(Some("P0001")));
@@ -108,6 +153,31 @@ mod tests {
                 !refusal_is_deliberate(Some(code)),
                 "{code} is not a floor verdict — treating it as one would tell the clerk to \
                  change a form that was never the problem"
+            );
+        }
+    }
+
+    /// THE CLASSES THIS RULE KNOWINGLY GETS WRONG, pinned so the gap is a value rather than a
+    /// sentence in a doc.
+    ///
+    /// A constraint violation and a privilege refusal are the floor *deciding* — principle 12
+    /// counts RLS and constraints as part of the floor — and both are as deterministic as a
+    /// `RAISE`. They are classified as outages here because they carry their own SQLSTATE, so
+    /// a clerk meeting one is offered a retry that can never work. Nothing reachable from
+    /// these two ports produces one today; the sibling copy in `cairn-sync` already pins
+    /// `23514` for the same reason.
+    ///
+    /// **This test asserts today's behaviour, not the desired one** — the same treatment
+    /// `a_rust_side_pre_flight_refusal_is_not_yet_told_apart` gives the Rust-side half. When
+    /// [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) resolves the split, this
+    /// fails; invert it and delete this paragraph.
+    #[test]
+    fn a_constraint_or_privilege_refusal_is_not_yet_told_apart() {
+        for code in ["23514", "23505", "23502", "23503", "42501", "42P01"] {
+            assert!(
+                !refusal_is_deliberate(Some(code)),
+                "{code} classifies as an outage today (#655). If this now fails, the \
+                 `false`-half split has landed — invert the assertion."
             );
         }
     }

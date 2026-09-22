@@ -16,18 +16,26 @@
 //!
 //! # The window still signs nothing (§9.6)
 //!
-//! [`LiveData`] holds the NODE's key, because the node seals bodies and holds custody
-//! (ADR-0052). It does not hold the clinician's key: `register_patient` takes no human author,
-//! so a registration is not a per-write human-authored clinical act in the ADR-0053 sense
-//! today. When that changes, it changes in `cairn-node` first and this crate follows.
+//! [`LiveData`] holds the NODE's key because the node **signs** this act, and db/005's door
+//! resolves that signature to an enrolled, non-revoked actor before admitting anything. It
+//! does not hold the clinician's key: `register_patient` takes no human author, so a
+//! registration is not a per-write human-authored clinical act in the ADR-0053 sense today.
+//! When that changes, it changes in `cairn-node` first and this crate follows.
+//!
+//! **Sealing does not enter into it, and the distinction matters to anyone arriving from the
+//! medication stream.** A registration is an unsealed identity event — `register_patient`
+//! names neither a DEK nor custody, and `db/045`'s projection opens with `IF e.sealed THEN
+//! RETURN;`. ADR-0052's born-sealed bodies and the custody question they raise belong to
+//! clinical content, not to this path.
 pub mod error;
 mod funnel;
 
 use cairn_event::SigningKey;
+use cairn_node::identity::Identity;
 use tokio::sync::Mutex;
 use tokio_postgres::Client;
 
-/// One node connection, plus the identity every write is sealed under.
+/// One node connection, plus the identity every write is signed under.
 ///
 /// # Why `tokio::sync::Mutex` and not `std::sync::Mutex`
 ///
@@ -48,9 +56,11 @@ pub struct LiveData {
     db: Mutex<Client>,
     node_sk: SigningKey,
     /// Hex of `node_sk`'s verifying key. Derived ONCE, here, rather than per call, so the kid
-    /// a registration is sealed under cannot drift from the key that sealed it.
+    /// a registration is signed under cannot drift from the key that signed it.
     node_kid: String,
-    /// This node's origin id, as `cairn_node::identity::load_local` reports it.
+    /// This node's origin id — `Identity::node_id_hex`, and never one of its three siblings.
+    /// [`LiveData::new`] takes the whole `Identity` so that is true by construction; see its
+    /// doc for what a mis-picked field would do to causal order.
     node_origin: String,
 }
 
@@ -63,6 +73,17 @@ impl LiveData {
     /// "which node am I" question answered in ONE place per window: a `LiveData` that
     /// connected on its own could end up describing a different node than the rest of the
     /// window, and nothing on screen would say so.
+    ///
+    /// # Why the whole `Identity`, and not a `node_origin: String`
+    ///
+    /// `Identity` carries FOUR `String` fields — `node_id_hex`, `pubkey_hex`, `fingerprint`,
+    /// `address`. A `String` parameter accepts all four, and `""`, and compiles either way.
+    /// Only one is right: `node_origin` is what `register_patient` feeds to `next_hlc`, so it
+    /// becomes the HLC's origin — the third sort key of causal order (`db/001`) and the final
+    /// tiebreaker between two concurrent demographic assertions (`db/011`). A mis-picked
+    /// field therefore changes merge outcomes across the federation, silently, on events that
+    /// are append-only and can only ever be overlaid. Taking the whole value and reading the
+    /// field HERE makes the right answer the only available one.
     ///
     /// # ⚠️ It does NOT enrol the signing key, and the CLI does
     ///
@@ -81,13 +102,13 @@ impl LiveData {
     /// Resolving that asymmetry is
     /// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654), and it belongs to the slice
     /// that first puts this in front of a person.
-    pub fn new(db: Client, node_sk: SigningKey, node_origin: String) -> Self {
+    pub fn new(db: Client, node_sk: SigningKey, identity: &Identity) -> Self {
         let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
         Self {
             db: Mutex::new(db),
             node_sk,
             node_kid,
-            node_origin,
+            node_origin: identity.node_id_hex.clone(),
         }
     }
 }

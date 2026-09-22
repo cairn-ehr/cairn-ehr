@@ -1,3 +1,18 @@
+# WHY THIS IS A CRATE, and not a module in `cairn-gui-data`.
+#
+# `cairn-gui-data` owns the port TRAITS, and its own manifest states — deliberately — that it
+# pulls no database driver, so the pure rules and the `--mock` window can be built and tested
+# with no Postgres anywhere. The live implementations need `cairn-node` and `tokio-postgres`,
+# so they cannot go there without retracting that.
+#
+# Nor can they go in `/crates`: implementing a `cairn-gui` trait from a root crate would make
+# `crates/*` depend on `cairn-gui` — the direction the house forbids, reading ADR-0021 / §9.5's
+# "nothing above the event core sits on the inter-node path" down to a dependency rule (the
+# same line `cairn-gui/Cargo.toml` and `cairn-gui-data/Cargo.toml` already take). Note the
+# root workspace's `exclude` does NOT enforce that: it keeps this tree out of root builds and
+# lockfile unification, but a `/crates` crate could still path-depend on one of ours. The rule
+# is held by review, not by Cargo. A trait implementation must live with the trait or with the
+# type; here both roads lead to this workspace.
 [package]
 name = "cairn-gui-live"
 version = "0.1.0"
@@ -7,17 +22,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
-# WHY THIS IS A CRATE, and not a module in `cairn-gui-data`.
-#
-# `cairn-gui-data` owns the port TRAITS, and its own manifest states — deliberately — that it
-# pulls no database driver, so the pure rules and the `--mock` window can be built and tested
-# with no Postgres anywhere. The live implementations need `cairn-node` and `tokio-postgres`,
-# so they cannot go there without retracting that.
-#
-# Nor can they go in `/crates`: implementing a `cairn-gui` trait from a root crate would make
-# `crates/*` depend on `cairn-gui`, which is the ONE direction ADR-0021 / §9.5 forbids (it is
-# why this whole workspace is `exclude`d from the root one). A trait implementation must live
-# with the trait or with the type; here both roads lead to this workspace.
 cairn-gui-data = { path = "../cairn-gui-data" }
 cairn-gui-funnel = { path = "../cairn-gui-funnel" }
 cairn-node = { path = "../../crates/cairn-node" }
