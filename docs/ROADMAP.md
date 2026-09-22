@@ -806,7 +806,7 @@ paper 3 → forced 2 → target 2. `M ≤ N`. Time + cognitive load: the 5 s cei
   test pins its field count at seven so adding one is a deliberate act on a *no spinner* read path;
   the negative limb (nothing narrows on sex, so no chart can be hidden from the clerk about to
   duplicate it) is honoured structurally.
-- **20 mutations run across the four modules, 20 killed.** Two tests were weaker than they read and
+- **21 mutations run across the four modules, 21 killed.** Two tests were weaker than they read and
   were strengthened before mutating: one claimed to guard a short-circuit it cannot observe, the
   other accepted a blank-but-non-empty name.
 - **Filed:** [#645](https://github.com/cairn-ehr/cairn-ehr/issues/645) (decision 4's display/rank
