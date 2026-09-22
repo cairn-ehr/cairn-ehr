@@ -225,14 +225,23 @@ async fn a_revoked_actor_is_not_told_to_re_enrol_a_key_that_cannot_be_resurrecte
         .expect_err("a revoked key may not author");
     let rendered = format!("{e:#}");
     assert!(
-        !rendered.contains("enroll-device-actor"),
-        "the remedy for a NEVER-enrolled key is a dead end for a revoked one — db/004 refuses \
-         the resurrection with an opaque P0001, and the operator meets it while following our \
-         own advice; got: {rendered}"
+        rendered.contains("revoked") || rendered.contains("retired"),
+        "it must say what actually happened, not merely that the key is not enrolled; got: \
+         {rendered}"
+    );
+    // It DOES name `enroll-device-actor`, and must — the operator may have just been sent there
+    // by the never-enrolled refusal, so naming it in order to withdraw it is more use than
+    // silence. What it must not do is PRESCRIBE it: db/004 refuses that enroll as a
+    // resurrection (#152) with an opaque P0001, and the operator would meet it while following
+    // our own advice.
+    assert!(
+        rendered.contains("will NOT help"),
+        "the message must withdraw the other refusal's remedy in so many words, or an operator \
+         who read both is left to guess which one applies; got: {rendered}"
     );
     assert!(
-        rendered.contains("revoked") || rendered.contains("retired"),
-        "and it must say what actually happened; got: {rendered}"
+        rendered.contains("NEW signing key"),
+        "and it must name the remedy that DOES exist; got: {rendered}"
     );
 
     // And the command itself refuses in OUR words rather than letting db/004 raise its
