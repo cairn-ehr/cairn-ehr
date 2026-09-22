@@ -52,14 +52,29 @@
 //! `cairn-node` orchestrator, so it must dig the SQLSTATE out of a context chain first —
 //! which is [`sqlstate_of`], and is the part that can silently stop working.
 //!
-//! # What this rule does NOT cover
+//! # THE RULE HAS TWO DISCRIMINATORS, NOT ONE (#651, 2026-09-23)
 //!
-//! A refusal `cairn-node` raises **in Rust, before any statement reaches Postgres** — the
-//! date-of-birth shape check `register_patient` runs up front — is just as deterministic and
-//! carries no SQLSTATE at all, so it reaches the clerk as an outage.
-//! [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) has the argument and the two
-//! candidate fixes; `tests/refusal_is_not_an_outage.rs` pins today's behaviour so the gap is
-//! visible in every run rather than only in that issue.
+//! A verdict can be reached in two places, so [`data_error_from`] asks two questions and a
+//! `true` from either one means *refused*:
+//!
+//! 1. **The SQLSTATE is `P0001`** — the floor raised it, under the no-`USING ERRCODE` contract
+//!    described above.
+//! 2. **`cairn_node::db_diagnosis::is_deliberate_refusal` finds a marker on the chain** — the
+//!    node refused in Rust, before any statement reached Postgres.
+//!
+//! The second exists because the date-of-birth shape check `register_patient` runs up front is
+//! just as deterministic as anything the floor does — the same string refuses identically
+//! forever — and carried no SQLSTATE at all, so the most deterministic failure on the
+//! registration path reached the clerk as an outage. On a desk with no date widget that is the
+//! *default* failure mode: `3/2/1980` searches fine (the trigger applies no date format check,
+//! correctly — a registrar is often told only a year), finds nothing, then fails in Rust with a
+//! retry button that can never work. `tests/refusal_is_not_an_outage.rs` proves both arms
+//! against a real floor.
+//!
+//! **What is still NOT covered is the `false` half**, which is #655 above: a constraint
+//! violation, a privilege refusal (`42501`) and a never-loaded schema (`42P01`) are floor
+//! *decisions* carrying their own SQLSTATE, and they still land in `Unavailable`. Adding a
+//! second discriminator did not make the first one right.
 use cairn_gui_data::port::DataError;
 
 /// The SQLSTATE PostgreSQL assigns to a bare `RAISE EXCEPTION` in PL/pgSQL.
@@ -122,7 +137,12 @@ pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
 /// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).
 pub fn data_error_from(e: &anyhow::Error) -> DataError {
     let text = cairn_node::db_diagnosis::operator_chain(e);
-    if refusal_is_deliberate(sqlstate_of(e)) {
+    // TWO discriminators, complementary rather than alternative, because a verdict can be
+    // reached in two places. The floor's own refusals carry `P0001`; a refusal `cairn-node`
+    // raised in Rust before any statement reached Postgres carries no SQLSTATE at all and is
+    // MARKED instead (#651). Either one means the call was decided, not merely unlucky.
+    if refusal_is_deliberate(sqlstate_of(e)) || cairn_node::db_diagnosis::is_deliberate_refusal(e)
+    {
         DataError::Refused(text)
     } else {
         DataError::Unavailable(text)

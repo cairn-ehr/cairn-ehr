@@ -319,9 +319,130 @@ impl std::error::Error for LocalDbFault {
     }
 }
 
+/// A refusal this node raised **deliberately, in Rust, before any statement reached Postgres**.
+///
+/// # The question this answers
+///
+/// Every caller that renders a failure to a human has to decide one thing: was this a *verdict*
+/// about the call, or an *accident* that befell it? Getting it backwards does real harm in both
+/// directions — calling an outage a refusal tells a clerk to change a form that was never the
+/// problem, and calling a refusal an outage hands them a retry button for a verdict, which they
+/// will press.
+///
+/// For refusals the in-DB floor raises there is already an answer: a bare `RAISE EXCEPTION` is
+/// SQLSTATE `P0001`, which `db/001_envelope.sql` states is a contract and
+/// `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs` enforces across every
+/// `db/*.sql` (#633).
+///
+/// That answer is unavailable for a refusal raised **above** the database.
+/// [`crate::patient::register::dob_precision`] validates the shape of a date of birth up front,
+/// deliberately, so a malformed one refuses the whole call with zero side effects — no HLC tick,
+/// no partial chart (#350). That refusal is every bit as deterministic as the floor's: the same
+/// string refuses identically forever. But it carried no SQLSTATE anywhere in its chain, so it
+/// was **indistinguishable from a dropped connection** — and the clerk most likely to meet it is
+/// the one on a desk with no date widget who typed `3/2/1980`, searched fine, found nothing, and
+/// is then offered a retry that can never work. See
+/// [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651).
+///
+/// # Why a type and not a convention
+///
+/// The alternative #651 weighed was a marker layer or a sentinel string on the chain. A type
+/// with a private field, constructible only through [`deliberate_refusal`], means *"is this a
+/// verdict"* is answered by the compiler rather than by a convention — and a convention is
+/// precisely what #648 was trying to get away from.
+///
+/// # What it is NOT
+///
+/// It is not a claim that a failure carrying it is *safe*, and it is not a second error
+/// vocabulary competing with [`LocalDbFault`]. It is one bit — *this node decided this, and
+/// deciding it again will decide the same* — travelling beside a message already written for a
+/// human to read.
+#[derive(Debug)]
+pub struct DeliberateRefusal {
+    /// The operator/clerk-facing sentence. Private: the only way to build one is
+    /// [`deliberate_refusal`], so the marker cannot be attached to a message by accident.
+    message: String,
+}
+
+impl std::fmt::Display for DeliberateRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DeliberateRefusal {}
+
+/// Build a deterministic refusal as an `anyhow::Error`, ready to be `?`'d and contextualised.
+///
+/// Use this **only** where the refusal is genuinely deterministic: the same inputs refuse the
+/// same way forever, and nothing about the environment — a connection, a lock, a disk, a clock —
+/// took part in the decision. **A retry must be pointless by construction.** If a retry might
+/// work, this is the wrong constructor and an ordinary error is the honest answer; marking a
+/// transient failure as a verdict tells the clerk to change something that was already correct.
+pub fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(DeliberateRefusal {
+        message: message.into(),
+    })
+}
+
+/// Did this node deliberately refuse, above the database?
+///
+/// Walks the **whole** `anyhow` chain, for the same reason [`operator_chain`] and
+/// `cairn-gui-live`'s `sqlstate_of` do: every orchestrator adds `.context("…")` layers naming
+/// the operation, so a check that read only the outermost error would answer `false` for every
+/// refusal a real call site produces.
+///
+/// A `false` here means only *"not one of these"*. A caller must still ask the SQLSTATE question
+/// about the floor's own refusals — the two discriminators are complementary, not alternatives,
+/// and `cairn-gui-live`'s `data_error_from` consults both.
+pub fn is_deliberate_refusal(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|cause| cause.downcast_ref::<DeliberateRefusal>().is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- #651: a refusal raised in Rust is as much a verdict as one raised in the floor ---
+
+    /// The marker survives the `.context(…)` layers every orchestrator adds.
+    ///
+    /// This is the whole reason it walks the chain rather than reading the outermost error:
+    /// `register_patient` wraps its failures in context naming the operation, so a check that
+    /// looked only at the top would answer `false` for every refusal a real call site makes.
+    #[test]
+    fn a_deliberate_refusal_is_recognised_through_a_context_chain() {
+        let e = deliberate_refusal("birth date \"3/2/1980\" is not a recognised shape")
+            .context("asserting the date of birth")
+            .context("registering the patient");
+        assert!(
+            is_deliberate_refusal(&e),
+            "a verdict that stops being recognisable the moment an orchestrator adds context \
+             is a verdict nobody can act on"
+        );
+    }
+
+    /// An ordinary failure is NOT one, and this is the dangerous direction to get wrong.
+    ///
+    /// Calling an outage a refusal tells a clerk to change a form that was never the problem.
+    #[test]
+    fn an_ordinary_failure_is_not_a_deliberate_refusal() {
+        let e = anyhow::anyhow!("connection closed").context("registering the patient");
+        assert!(!is_deliberate_refusal(&e));
+    }
+
+    /// The refusal's own sentence reaches the operator rendering unchanged.
+    ///
+    /// §9.6: a refusal is legible on purpose, and its text is the only thing that tells the
+    /// clerk what to change. A Rust-side refusal is held to the same standard, so
+    /// `operator_chain` must still carry its words.
+    #[test]
+    fn a_deliberate_refusals_own_sentence_survives_into_the_operator_rendering() {
+        let e = deliberate_refusal("birth date \"3/2/1980\" is not a recognised shape")
+            .context("registering the patient");
+        assert!(operator_chain(&e).contains("not a recognised shape"));
+    }
 
     /// All four parts survive, and the SQLSTATE is bracketed so it can be grepped.
     #[test]
