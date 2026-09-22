@@ -3906,8 +3906,9 @@ async fn main() -> anyhow::Result<()> {
             // own DB clock (no date dependency — the DB is the integration substrate).
             let site = site.unwrap_or_else(|| id.node_id_hex.clone());
             let date: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
-            // Owner ceremony: make the signing key an enrolled actor so it may author the
-            // additive registration events (idempotent — enrolls only on first use).
+            // The node's key must ALREADY be an enrolled actor to author these events.
+            // This does not enrol it — nothing on a write path does, since #654. `init`
+            // provisions; `cairn-node enroll-device-actor` is the remedy the refusal names.
             cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
             let (pid, call, ordinal) = cairn_node::john_doe::register_john_doe(
                 &mut db,
@@ -3981,9 +3982,9 @@ async fn main() -> anyhow::Result<()> {
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
-            // Owner ceremony: make the signing key an enrolled actor so it may author the
-            // additive registration event (idempotent — enrolls only on first use), mirroring
-            // RegisterJohnDoe.
+            // The node's key must ALREADY be an enrolled actor to author this event. This
+            // does not enrol it — nothing on a write path does, since #654 — and the refusal
+            // names `cairn-node enroll-device-actor`. Mirrors RegisterJohnDoe.
             cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
 
             // THE SEARCH RUNS HERE, immediately before the write, over THIS process's own DB
@@ -4503,8 +4504,8 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            // Owner ceremony: the node key must be an enrolled actor to author the additive
-            // identify (idempotent — enrolls a `device` actor only on first use).
+            // The node key must ALREADY be an enrolled actor to author the additive identify.
+            // This does not enrol it — nothing on a write path does, since #654.
             cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
 
             // Load the human attester key + pre-check human-ness (legibility; the db/005 gate
@@ -5215,8 +5216,8 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            // Owner ceremony: the node key must be an enrolled actor to author the
-            // device-additive tombstone (idempotent; a no-op once already enrolled).
+            // The node key must ALREADY be an enrolled actor to author the device-additive
+            // tombstone. This does not enrol it — nothing on a write path does, since #654.
             // Harmless even on the attested path, where the human — not the node — ends
             // up as the tombstone's signer.
             cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
@@ -5447,7 +5448,6 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
         println!("! search incomplete: {reason}");
     }
 }
-
 
 /// Is this custody-load failure a PRESENT file we could not read, and if so what must the
 /// operator be told? **Pure.**

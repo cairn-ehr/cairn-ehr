@@ -35,6 +35,77 @@
 /// better — which is never a trade this project takes.
 const DEVICE_ACTOR_ROLE: &str = "registration-desk";
 
+/// Where this signing key stands with the actor registry.
+///
+/// **Three states, not two**, and the third is the one that bites. `actor_current` excludes
+/// revoked and superseded-away actors, so a key that *was* enrolled and has since been retired
+/// reads exactly like a key nobody ever enrolled — and the obvious remedy for the second is a
+/// dead end for the first. See [`ActorStanding::Retired`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorStanding {
+    /// Resolvable to a current actor. It may author.
+    Enrolled,
+    /// No row in the registry mentions this key at all. `enroll-device-actor` fixes it.
+    NeverEnrolled,
+    /// This key HAS registry history — enrolled once, then revoked or superseded away — and is
+    /// not current.
+    ///
+    /// **`enroll-device-actor` cannot fix this, and must not be offered.** db/004's
+    /// `cairn_actor_id_key_conflict` refuses a fresh enroll onto an `actor_id` carrying prior
+    /// revoke/supersede history, deliberately: a post-revoke enroll would outrank the revoke in
+    /// `actor_current`'s `(recorded_at, seq)` order and silently **resurrect a retired actor**
+    /// (#152). Refusing that is correct. Sending an operator there is not — they would meet an
+    /// opaque `P0001` about actor-id collisions while following the remedy we just gave them.
+    Retired,
+}
+
+/// Where does this key stand? One round trip, three answers.
+///
+/// The `actor_event` arm keys on `signing_key_id`, which only `enroll`/`supersede` rows carry —
+/// a `revoke` row has a NULL key by design (db/004) — so it answers *"was this key ever
+/// enrolled?"* rather than *"was it ever revoked?"*, which is the question that distinguishes
+/// `Retired` from `NeverEnrolled` once `actor_current` has already said "not now".
+pub async fn device_actor_standing(
+    db: &tokio_postgres::Client,
+    kid: &str,
+) -> anyhow::Result<ActorStanding> {
+    use anyhow::Context as _;
+    let standing: String = db
+        .query_one(
+            "SELECT CASE \
+               WHEN EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1) THEN 'enrolled' \
+               WHEN EXISTS(SELECT 1 FROM actor_event   WHERE signing_key_id = $1) THEN 'retired' \
+               ELSE 'never' END",
+            &[&kid],
+        )
+        .await
+        .context("checking where this node's key stands with the actor registry")?
+        .get(0);
+    Ok(match standing.as_str() {
+        "enrolled" => ActorStanding::Enrolled,
+        "retired" => ActorStanding::Retired,
+        // Fail towards the state with a remedy. The CASE above is total, so this arm is
+        // unreachable; treating an impossible answer as "never" offers a command that will
+        // simply refuse if it is wrong, which is the cheaper of the two mistakes.
+        _ => ActorStanding::NeverEnrolled,
+    })
+}
+
+/// The refusal for a key whose actor was retired. **Pure.**
+///
+/// Deliberately does **not** name `enroll-device-actor`: see [`ActorStanding::Retired`] for why
+/// that command cannot help, and what the operator meets if they try.
+pub fn retired_actor_refusal(kid: &str) -> anyhow::Error {
+    crate::db_diagnosis::deliberate_refusal(format!(
+        "this node's signing key {kid} was enrolled as an actor and has since been revoked or \
+         superseded, so it may not author clinical events. `cairn-node enroll-device-actor` \
+         will NOT help and is not the remedy: re-enrolling a retired actor id is refused on \
+         purpose, because it would silently resurrect the retired actor (issue #152). This \
+         node needs a NEW signing key, enrolled afresh — which is a decision about who is \
+         accountable for what this node writes, not a command to run blind."
+    ))
+}
+
 /// Is this signing key already resolvable to an authoring actor?
 ///
 /// # ⚠️ KIND-AGNOSTIC, AND THAT IS NOT AN OVERSIGHT
@@ -53,16 +124,9 @@ const DEVICE_ACTOR_ROLE: &str = "registration-desk";
 /// `build_live_state` already follows by loading the node key up front rather than discovering
 /// at sign-off that it can never seal anything.
 pub async fn device_actor_enrolled(db: &tokio_postgres::Client, kid: &str) -> anyhow::Result<bool> {
-    use anyhow::Context as _;
-    let enrolled: bool = db
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1)",
-            &[&kid],
-        )
-        .await
-        .context("checking whether this node's key is an enrolled actor")?
-        .get(0);
-    Ok(enrolled)
+    // Delegates rather than running its own `EXISTS`, so there is ONE definition of "enrolled"
+    // and the kind-agnostic argument above cannot be true of one query and false of the other.
+    Ok(device_actor_standing(db, kid).await? == ActorStanding::Enrolled)
 }
 
 /// Provision this key as a `device` actor. **Idempotent.** Returns whether it actually enrolled.
@@ -76,8 +140,13 @@ pub async fn device_actor_enrolled(db: &tokio_postgres::Client, kid: &str) -> an
 /// which one happened.
 pub async fn enroll_device_actor(db: &tokio_postgres::Client, kid: &str) -> anyhow::Result<bool> {
     use anyhow::Context as _;
-    if device_actor_enrolled(db, kid).await? {
-        return Ok(false);
+    match device_actor_standing(db, kid).await? {
+        ActorStanding::Enrolled => return Ok(false),
+        // Refuse HERE, in words an operator can act on, rather than letting db/004's
+        // `cairn_actor_id_key_conflict` raise its actor-id-collision message at somebody who
+        // only did what a previous refusal told them to (PR #661 review).
+        ActorStanding::Retired => return Err(retired_actor_refusal(kid)),
+        ActorStanding::NeverEnrolled => {}
     }
     let pinned = serde_json::json!({ "role": DEVICE_ACTOR_ROLE, "node_key": kid }).to_string();
     db.execute(
@@ -114,8 +183,11 @@ pub fn not_enrolled_refusal(kid: &str) -> anyhow::Error {
 /// miss would be `ensure_registration_actor` under a new name, and the asymmetry #654 closed
 /// would be back the moment anyone added a sixteenth write command.
 pub async fn require_device_actor(db: &tokio_postgres::Client, kid: &str) -> anyhow::Result<()> {
-    if device_actor_enrolled(db, kid).await? {
-        return Ok(());
+    match device_actor_standing(db, kid).await? {
+        ActorStanding::Enrolled => Ok(()),
+        ActorStanding::NeverEnrolled => Err(not_enrolled_refusal(kid)),
+        // A DIFFERENT sentence, because the remedy is different and the obvious one is a dead
+        // end. See `ActorStanding::Retired`.
+        ActorStanding::Retired => Err(retired_actor_refusal(kid)),
     }
-    Err(not_enrolled_refusal(kid))
 }

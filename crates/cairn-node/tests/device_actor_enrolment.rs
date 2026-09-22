@@ -11,7 +11,8 @@
 mod common;
 
 use cairn_node::actor_enrolment::{
-    device_actor_enrolled, enroll_device_actor, not_enrolled_refusal, require_device_actor,
+    device_actor_enrolled, device_actor_standing, enroll_device_actor, not_enrolled_refusal,
+    require_device_actor, ActorStanding,
 };
 use cairn_node::db;
 use cairn_node::db_diagnosis::is_deliberate_refusal;
@@ -166,5 +167,125 @@ async fn a_key_already_enrolled_under_another_kind_is_left_alone() {
         rows_for(&c, &kid).await,
         1,
         "a SECOND actor for one key nulls the actor_id of every event that key ever authors"
+    );
+}
+
+/// Revoke every actor this key is enrolled under, the way the registry's own suites do.
+///
+/// A `revoke` row carries a NULL `signing_key_id` by design (db/004), so it is written against
+/// the `actor_id` — which is why "has this key any history?" cannot be answered by looking at
+/// revoke rows alone.
+async fn revoke_every_actor_for(c: &tokio_postgres::Client, kid: &str) {
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op) \
+         SELECT DISTINCT actor_id, 'revoke' FROM actor_event WHERE signing_key_id = $1",
+        &[&kid],
+    )
+    .await
+    .expect("revoke the actors this key is enrolled under");
+}
+
+/// ⚠️ A REVOKED ACTOR MUST NOT BE SENT TO A COMMAND THAT CANNOT HELP IT.
+///
+/// `actor_current` excludes revoked actors, so a revoked key reads as *not enrolled* — and the
+/// obvious refusal would tell the operator to run `cairn-node enroll-device-actor`. That command
+/// **cannot work**: db/004's `cairn_actor_id_key_conflict` refuses a fresh enroll onto an
+/// `actor_id` with prior revoke/supersede history, deliberately, because a post-revoke enroll
+/// would outrank the revoke in `actor_current`'s order and silently **resurrect a retired actor**
+/// (#152).
+///
+/// Refusing the resurrection is correct. Sending the operator there is not: they would meet an
+/// opaque `P0001` about actor-id collisions while trying to follow the remedy the previous
+/// message gave them. The two states are therefore told apart, and the retired one says what
+/// actually happened.
+///
+/// Found by the PR #661 review.
+#[tokio::test]
+async fn a_revoked_actor_is_not_told_to_re_enrol_a_key_that_cannot_be_resurrected() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let _ = setup(&c, &[]).await;
+    let kid = a_key_id("revoked");
+
+    assert!(enroll_device_actor(&c, &kid).await.unwrap());
+    revoke_every_actor_for(&c, &kid).await;
+
+    assert_eq!(
+        device_actor_standing(&c, &kid).await.unwrap(),
+        ActorStanding::Retired,
+        "a revoked key is NOT the same state as a key nobody ever enrolled"
+    );
+
+    let e = require_device_actor(&c, &kid)
+        .await
+        .expect_err("a revoked key may not author");
+    let rendered = format!("{e:#}");
+    assert!(
+        !rendered.contains("enroll-device-actor"),
+        "the remedy for a NEVER-enrolled key is a dead end for a revoked one — db/004 refuses \
+         the resurrection with an opaque P0001, and the operator meets it while following our \
+         own advice; got: {rendered}"
+    );
+    assert!(
+        rendered.contains("revoked") || rendered.contains("retired"),
+        "and it must say what actually happened; got: {rendered}"
+    );
+
+    // And the command itself refuses in OUR words rather than letting db/004 raise its
+    // actor-id-collision message at somebody who only did what they were told.
+    let e = enroll_device_actor(&c, &kid)
+        .await
+        .expect_err("re-enrolling a retired key must not reach db/004's resurrection guard");
+    assert!(
+        is_deliberate_refusal(&e),
+        "it is a verdict — the same key is refused identically forever"
+    );
+}
+
+/// ⚠️ A SOURCE GUARD, BECAUSE `init` HAS NO BEHAVIOURAL TEST AND DELETING ONE LINE IS SILENT.
+///
+/// `Cmd::Init` calls `enroll_device_actor`, and that call is what keeps the paper-parity count
+/// at `M = 0` for an ordinary operator (#654): an initialised node can author immediately, so no
+/// write path has to provision to make that true. **Delete that line and the entire workspace
+/// gate still passes**, while every freshly-initialised node silently loses its ability to author
+/// until somebody runs `enroll-device-actor` — which they have no reason to suspect.
+///
+/// A behavioural test would need a VIRGIN database: `init` refuses over a registered custody key
+/// (`refuse_init_over_a_registered_custody_key`) and mints a signing key, an unwrap key and a
+/// local-state escrow, so it cannot run against the shared `cairn_test` fixture every other suite
+/// uses. Creating a scratch database per run is a rig of its own — filed as
+/// [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662) rather than faked, with the shape a
+/// real `cli_init.rs` would take and the seven other `init` effects it would also cover.
+///
+/// **What this guard does NOT catch**, stated so nobody mistakes it for the real thing: that the
+/// call is reached (it could sit behind a condition), that it is passed the right key, or that
+/// `enroll_device_actor` does what it says. It catches deletion, which is the failure the PR #661
+/// review actually named.
+///
+/// Found by the PR #661 review.
+#[test]
+fn init_still_enrols_the_device_actor() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("main.rs must be readable from the crate it belongs to");
+    let arm = src
+        .split_once("Cmd::Init {")
+        .expect("the Init arm must still exist")
+        .1;
+    // Bounded to this arm rather than the whole file: `enroll_device_actor` is also called by
+    // `Cmd::EnrollDeviceActor`, so an unbounded search would stay green with the `init` call
+    // gone — which is precisely the deletion this guard exists to catch.
+    let arm = &arm[..arm
+        .find("\n        Cmd::")
+        .expect("another subcommand must follow Init")];
+    assert!(
+        arm.contains("actor_enrolment::enroll_device_actor"),
+        "`cairn-node init` no longer enrols the node's device actor. If that removal was \
+         deliberate, note that it makes an ordinary operator run one extra command before their \
+         node can author anything — `M = 0` becomes `M = 1` in the §1.2 benchmark of #654 — and \
+         update that benchmark rather than deleting this guard. Init arm read:\n{arm}"
     );
 }

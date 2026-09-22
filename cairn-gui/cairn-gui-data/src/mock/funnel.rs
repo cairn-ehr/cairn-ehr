@@ -624,9 +624,13 @@ mod tests {
     #[tokio::test]
     async fn an_armed_browse_failure_fires_once_and_then_the_fixtures_come_back() {
         let data = MockData::with_fixtures();
-        data.fail_next(DataError::Unavailable("the node was unreachable".to_string()));
+        data.fail_next(DataError::Unavailable(
+            "the node was unreachable".to_string(),
+        ));
 
-        let first = data.search(&SearchQuery::new("mich", None, &[]), TODAY).await;
+        let first = data
+            .search(&SearchQuery::new("mich", None, &[]), TODAY)
+            .await;
         assert!(
             matches!(&first, Err(DataError::Unavailable(t)) if t.contains("unreachable")),
             "the armed failure must reach the caller verbatim — a mock that rewrote it would \
@@ -690,7 +694,9 @@ mod tests {
         let never_awaited = data.search(&q, TODAY);
         drop(never_awaited);
 
-        let result = data.search(&SearchQuery::new("mich", None, &[]), TODAY).await;
+        let result = data
+            .search(&SearchQuery::new("mich", None, &[]), TODAY)
+            .await;
         assert!(
             matches!(&result, Err(DataError::Unavailable(t)) if t.contains("still armed")),
             "the failure must still be armed for the first call that is actually AWAITED; got \

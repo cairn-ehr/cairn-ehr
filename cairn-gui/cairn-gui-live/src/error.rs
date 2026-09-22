@@ -141,8 +141,7 @@ pub fn data_error_from(e: &anyhow::Error) -> DataError {
     // reached in two places. The floor's own refusals carry `P0001`; a refusal `cairn-node`
     // raised in Rust before any statement reached Postgres carries no SQLSTATE at all and is
     // MARKED instead (#651). Either one means the call was decided, not merely unlucky.
-    if refusal_is_deliberate(sqlstate_of(e)) || cairn_node::db_diagnosis::is_deliberate_refusal(e)
-    {
+    if refusal_is_deliberate(sqlstate_of(e)) || cairn_node::db_diagnosis::is_deliberate_refusal(e) {
         DataError::Refused(text)
     } else {
         DataError::Unavailable(text)
