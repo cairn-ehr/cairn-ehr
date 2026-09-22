@@ -425,8 +425,13 @@ dependencies = [
 name = "cairn-gui-data"
 version = "0.1.0"
 dependencies = [
+ "cairn-gui-funnel",
  "cairn-gui-tab",
  "cairn-medication-view",
+ "cairn-patient-search",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
