@@ -8,8 +8,10 @@
 > — the funnel's **data path**: a `cairn-gui-live` crate whose `LiveData` implements both ports
 > over a real node connection, `DataError::Refused` (#648), nineteen tests. **And the four traps
 > 2b's review laid under 2c are CLOSED** (2026-09-23, PR
-> **[#661](https://github.com/cairn-ehr/cairn-ehr/pull/661)** — no ADR, no spec bump, no
-> migration, `SCHEMA_GENERATION` unchanged, no new dependency): **#659** (`TokenStore::settle`),
+> **[#661](https://github.com/cairn-ehr/cairn-ehr/pull/661)**, ready for review, 14/14 CI checks
+> green, full local `cargo test --workspace` 199 suites / 2213 tests / 0 failures — no ADR, no
+> spec bump, no migration, `SCHEMA_GENERATION` unchanged, no new dependency): **#659**
+> (`TokenStore::settle`),
 > **#660** (`MockData::fail_next`), **#651** (a Rust-side refusal is a verdict) and **#654** (one
 > enrolment rule). Design:
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md` (read its
