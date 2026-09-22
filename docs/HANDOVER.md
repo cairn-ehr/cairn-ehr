@@ -311,10 +311,10 @@
 > **#548**.
 
 > [!IMPORTANT]
-> **Fifteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
+> **Eighteen traps. Each is a step a next session takes in good faith.** (Five came from slice 1;
 > trap 5 was minted by #511, trap 7 by DR slice 2c, trap 8 by #578, trap 9 by the #582 review —
 > **retired by #584 and kept as history** — trap 10 by #584, trap 11 by #594, trap 12 by #615,
-> trap 13 by #619, trap 14 by #621, and traps 15–17 by #639.)
+> trap 13 by #619, trap 14 by #621, traps 15–17 by #639, and trap 18 by #661.)
 >
 > 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** — a pre-ADR-0066 node re-derives its old
 >    secret exactly once, inside `keystore::adopt_derived_unwrap_secret`, keeping its `event_dek` rows
@@ -605,6 +605,23 @@
 >     ENCODING UTF8;` then `CREATE EXTENSION cairn_pgx;` in it, and run the suite with
 >     `CAIRN_TEST_PG=…dbname=cairn_test_libc`. **Any test that touches case, collation or character
 >     classes should be run against both before pushing** — a local-only green is not evidence.
+> 18. **⇒ A TARGETED `cargo test --test X` REPORTING `ok` IS NOT PROOF — ONLY THE SWEEP IS
+>     (#661, 2026-09-23).** `device_actor_enrolment::a_revoked_actor_…` reported **`ok` twice** in
+>     one session against a source tree it contradicts: it asserted the refusal did NOT contain
+>     `enroll-device-actor`, while the refusal it was reading has contained that string since the
+>     commit that introduced both. The full `cargo test --workspace` sweep failed it; re-running
+>     the same targeted command afterwards then failed it **deterministically, three times**, with
+>     no source change in between.
+>     ⚠️ **The mechanism is unexplained** and is recorded that way rather than guessed at. The
+>     only shape that fits is a **stale test binary** — the targeted run executing something not
+>     built from the source on disk — which this tree is already known to be exposed to whenever
+>     another cargo or a running rust-analyzer is touching the shared `target/`. The old failure
+>     mode in that family is *loud* (a killed binary exits 101 with zero `test result: FAILED`
+>     lines); **this one is silent and green**, which is strictly worse.
+>     **What to do about it:** a targeted run is for the red→green loop, never for the claim that
+>     work is done. **Gate on the sweep**, and if a targeted suite has been green while you were
+>     editing the code under it, re-run it once more from a quiet tree before believing it. Use
+>     `CARGO_TARGET_DIR=/tmp/…` when an IDE is open.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
 (authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
