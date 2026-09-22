@@ -76,7 +76,7 @@ impl MockData {
     /// Private: arming is a caller's affordance, consuming is the ports' business. The ports
     /// call this *inside* their async bodies, never when the future is built — see the note
     /// above their impls.
-    pub(crate) fn armed_failure(&self) -> Option<DataError> {
+    fn armed_failure(&self) -> Option<DataError> {
         self.next_failure.lock().expect("the armed failure").take()
     }
 
