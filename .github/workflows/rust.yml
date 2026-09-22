@@ -144,8 +144,17 @@ jobs:
   # warning that a chart is INCOMPLETE — the exact ADR-0060 failure the slice exists to
   # prevent, arriving through a typo.
   #
-  # No Postgres: every test in this tree is pure (the view model, the session-key lock, the
-  # drift guard). The window's DB path is exercised through cairn-node, in the job below.
+  # Postgres: none here, and since the funnel's slice 2b ONE crate in this tree needs it.
+  # `cairn-gui-live` implements the funnel's ports over a real node connection, so its suites
+  # run in the `test` job below, which already has PostgreSQL 18 and the cairn_pgx extension
+  # installed. Standing a second cluster up in this job would mean building that extension
+  # twice per CI run for no coverage that is not already obtained there.
+  #
+  # Everything else in this tree is pure (the view model, the session-key lock, the JS/Rust
+  # drift guard, the funnel's rules), and CAIRN_ALLOW_DB_SKIP — declared on the `cargo test`
+  # STEP below, not on this job — is the DECLARATION that the skip is intended:
+  # `cairn-gui-live`'s `db_gate_ran` fails closed without it, so a developer who simply forgot
+  # to export CAIRN_TEST_PG is told, while this job is not (#442, #450).
   gui:
     name: clippy + cargo test (cairn-gui)
     runs-on: ubuntu-24.04
@@ -188,7 +197,14 @@ jobs:
       - name: clippy (cairn-gui, tests)
         run: cargo clippy --locked --manifest-path cairn-gui/Cargo.toml --workspace --tests -- -D warnings
 
+      # CAIRN_ALLOW_DB_SKIP rides THIS STEP, not the job, because this step is the only thing
+      # in the job that runs a test. Declaring it at job altitude would silently pre-authorise a
+      # skip for any future database-backed crate added to this tree — the #442 shape the guard
+      # exists to prevent. (`matcher.yml` states the same rule: declare it at the site that
+      # means it.)
       - name: cargo test (cairn-gui — view model, session lock, JS/Rust drift guard)
+        env:
+          CAIRN_ALLOW_DB_SKIP: "1"
         run: cargo test --locked --manifest-path cairn-gui/Cargo.toml --workspace
 
       # The cairn-gui half of the #439 doc gate. It lives here, not in the `doc` job, because
@@ -395,6 +411,29 @@ jobs:
       # stops covering the code it gated is worse than no gate.
       - name: cargo test (cairn-medication-view, fixtures feature)
         run: cargo test --locked -p cairn-medication-view --features fixtures
+
+      # ---- the cairn-gui tree's ONE database-backed crate ------------------------------
+      # `cairn-gui-live` implements the funnel's §5.3/§5.8 ports over a real node connection,
+      # so its suites need PostgreSQL + cairn_pgx — which this job has and the `gui` job
+      # deliberately does not. It does not depend on `tauri`, so `-p` builds it here without
+      # the WebKitGTK stack this job has no other reason to install.
+      #
+      # It is a SEPARATE cargo workspace (the root one `exclude`s it), so `cargo test
+      # --workspace` above does not reach it: without this step the whole suite would
+      # self-skip and still print `ok`, which is the #442 failure.
+      #
+      # WHAT `db_gate_ran` DOES AND DOES NOT CATCH — an earlier version of this comment
+      # overstated it, so the limit is written down. It catches a CAIRN_TEST_PG that is set here
+      # but resolves EMPTY (a mistyped `env.PGPORT`, a renamed secret): the suite then self-skips
+      # and `db_gate_ran` fails, because this run did not declare the skip. It does NOT catch
+      # this step being DELETED — the `gui` job also builds `cairn-gui-live` as a workspace
+      # member and runs it under CAIRN_ALLOW_DB_SKIP=1, so the suites would skip green there and
+      # never execute here to complain. A guard only fires when it is invoked. Closing that is
+      # #656.
+      - name: cargo test (cairn-gui-live — the funnel's ports against a real node)
+        env:
+          CAIRN_TEST_PG: host=127.0.0.1 port=${{ env.PGPORT }} user=postgres dbname=cairn_test
+        run: cargo test --locked --manifest-path cairn-gui/Cargo.toml -p cairn-gui-live
 
       # ---- SQL mirrors: db/tests/*.sql (#212) ----------------------------------------
       # These previously ran NOWHERE (the mechanism that manufactured the #182 twin-

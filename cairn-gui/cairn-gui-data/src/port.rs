@@ -34,18 +34,39 @@ pub struct NoteRef {
 
 /// Why a port could not answer.
 ///
-/// **There is deliberately no `Refused` variant yet, and that is a known gap —
-/// [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648).** A deterministic in-DB floor
-/// refusal (a term-less attested query at `db/045`, a chart whose first event is not its
-/// registration at `db/005` step 8b) is not an outage, and reporting it as `Unavailable`
-/// tells the clerk to retry something that cannot succeed. It also decides whether the caller
-/// should `TokenStore::restore` the attestation: right after an outage, pointless after a
-/// refusal. Nothing can be mapped until a live implementation of these ports exists, so the
-/// variant lands with them in slice 2b.
+/// The three variants are three different clinical facts, and the split that matters is
+/// [`DataError::Refused`] against [`DataError::Unavailable`] — the distinction
+/// [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648) asked for, landed here in slice
+/// 2b now that a live implementation exists to produce it.
+///
+/// - `NotFound` — no such chart. A true, exhaustive answer.
+/// - `Unavailable` — **nothing was decided.** A dropped connection, a lock timeout, a full
+///   disk. The very same call may well succeed on a retry, so the window offers one.
+/// - `Refused` — **the in-DB floor decided against this call and will decide the same way
+///   every time** (a term-less attested query at `db/045`; a chart whose first event is not
+///   its registration at `db/005` step 8b — #345 / ADR-0061). A retry cannot succeed, and
+///   offering one is a precise untruth on a wrong-chart-prevention surface (principle 4). The
+///   payload is the floor's own message: it is legible on purpose (§9.6), and it is the one
+///   thing that tells the clerk what to change.
+///
+/// # What a refusal does NOT change: the attestation still goes back
+///
+/// An earlier draft of this doc reasoned that the variant would also decide whether the caller
+/// calls `TokenStore::restore` — restore after an outage, pointless after a refusal.
+/// **Building it showed that to be wrong, and the reason is the token store's shape.**
+/// `restore` and `commit` are the two mandatory ends of every `take`; a caller that does
+/// neither latches the store closed and costs a window reload. After a refusal `commit` would
+/// be a lie (nothing was created), so `restore` is the only truthful end — and it is also the
+/// right one, because the clerk's next act is to EDIT the form, and editing calls `discard`,
+/// which destroys the doomed attestation on a new generation. A clerk who instead clicks
+/// Register again meets the same legible refusal, which is honest. So both arms restore; only
+/// the sentence on screen differs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataError {
     NotFound,
     Unavailable(String),
+    /// A deterministic in-DB floor verdict. See the enum doc: never retried, always legible.
+    Refused(String),
 }
 
 pub trait ClinicalData {
@@ -178,4 +199,38 @@ pub trait PatientRegistration {
         attested: AttestedSearch,
         name: Option<&str>,
     ) -> impl std::future::Future<Output = Result<uuid::Uuid, (DataError, AttestedSearch)>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refusal and an outage must not compare equal, and must not be reachable through one
+    /// arm. The window renders them with DIFFERENT advice — "try again" against "this cannot
+    /// succeed as typed" — so a caller that matched them together would hand a clerk a retry
+    /// button for a verdict (#648).
+    #[test]
+    fn a_refusal_is_not_an_outage() {
+        let refused = DataError::Refused("registration refused: no search terms".into());
+        let outage = DataError::Unavailable("connection closed".into());
+        assert_ne!(refused, outage);
+        assert!(
+            !matches!(refused, DataError::Unavailable(_)),
+            "a floor verdict must never arrive through the outage arm"
+        );
+    }
+
+    /// The variant carries the floor's own words, not a category label. `commands.rs`'s rule
+    /// 1 — return the underlying error text, never a generic string — is what makes an in-DB
+    /// refusal actionable (§9.6); a `Refused` with nothing in it would be the same silence
+    /// one variant over.
+    #[test]
+    fn a_refusal_carries_the_floors_own_words() {
+        let DataError::Refused(text) =
+            DataError::Refused("db/045: attested query has no terms".into())
+        else {
+            panic!("constructed as Refused");
+        };
+        assert!(text.contains("db/045"), "got: {text}");
+    }
 }

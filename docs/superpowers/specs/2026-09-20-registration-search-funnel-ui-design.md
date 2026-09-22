@@ -152,6 +152,24 @@ The seam is deliberate: 2a is where every *decision* on this page becomes an exe
 2b is wiring. A rule that cannot be stated without Tauri belongs in 2b; anything else belongs in 2a,
 where it is testable with no window and no database.
 
+> **Split again 2026-09-22, with the maintainer: 2b became 2b + 2c.** The list above put the
+> ports, the commands, the shell state, the frontend, the drift guard, the DB-gated attestation
+> test and the §1.2 measurement in one slice. The seam that actually exists is **testability**:
+> the ports are provable against a real floor today, and the measurement cannot be taken until a
+> runnable surface exists. So, on the same DR 2a/2b/2c/2d precedent:
+>
+> - **2b — the data path.** A new `cairn-gui-live` crate implementing both ports over a real
+>   node connection, `DataError::Refused` (#648), and the DB-gated proof that a registration
+>   attests what the **prompt bounded** rather than the node's raw answer. Nothing under
+>   `crates/`, nothing on screen.
+> - **2c — the window.** The commands, the shell state, `--patient` becoming optional, the
+>   frontend, the JS/Rust drift-guard extension, **the end-to-end §1.2 measurement this design
+>   owes** (in `--mock` *and* against a database), and narrowing `main.rs`'s *"Writes are
+>   refused in this mode"* to **clinical** writes.
+>
+> The measurement does not move: this page assigned it to the slice that first exposes a
+> runnable surface, and that is now 2c.
+
 ## Architecture
 
 **Ports (`cairn-gui-data`).** `ClinicalData` stays read-only. Two narrow traits beside it:
@@ -202,6 +220,26 @@ move. Plain JS in `src-ui/`, per the no-npm rule.
 - **Register fails.** The form keeps its values. `register_patient` validates the DOB shape before
   ticking any HLC, so a malformed date refuses the whole call with no partial chart.
 - **Session locked.** Routed through the existing `unlock`.
+
+> **Revised 2026-09-22 (slice 2b).** Three things the live ports settled, none of which this
+> section could have known before there was a floor to fail against.
+>
+> - **A failure is now three facts, not two.** `DataError` gained `Refused` (#648): the in-DB
+>   floor deciding against a call is not an outage, and offering a retry on a verdict is a
+>   precise untruth on a wrong-chart-prevention surface (principle 4). The discriminator is the
+>   SQLSTATE — a bare `RAISE EXCEPTION` is `P0001`, which `db/001_envelope.sql` states is a
+>   contract rather than an accident.
+> - **The refusal does NOT change what the caller does with the attestation**, though `port.rs`
+>   predicted it would. `restore` and `commit` are the two mandatory ends of every `take`;
+>   `commit` after a refusal would be a lie, and the clerk's next act — editing the form —
+>   `discard`s the doomed search on a new generation anyway. **Both arms restore; only the
+>   sentence on screen differs.** 2c writes those two sentences.
+> - ***"`register_patient` validates the DOB shape before ticking any HLC"* is true and has a
+>   consequence this page did not draw.** That validation happens in **Rust**, so its refusal
+>   carries no SQLSTATE at all and is today indistinguishable from a dropped connection —
+>   deterministic, verdict-shaped, and reported as an outage.
+>   [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) has the argument; a test pins the
+>   wrong behaviour so it is visible in every run rather than only in the issue.
 
 ## Paper-parity benchmark (§1.2)
 

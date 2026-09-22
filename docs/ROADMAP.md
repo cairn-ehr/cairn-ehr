@@ -760,119 +760,241 @@ paper 3 → forced 2 → target 2. `M ≤ N`. Time + cognitive load: the 5 s cei
 ### 2026-09-22 — funnel UI slice 2a: the pure core (PR #646)
 
 - **The slice:** every *decision* on the §5.3/§5.8 funnel design page becomes an executable rule,
-  testable with no window and no database, so 2b is wiring rather than judgement. New crate
-  `cairn-gui-funnel` in the `cairn-gui` workspace (no Tauri, no Postgres, no new third-party
-  dependency), plus the two ports in `cairn-gui-data` and a mock population implementing them.
-  **Split 2a/2b on the DR precedent** — the whole design spans a crate, two ports, a mock, an
-  optional `--patient`, a command module, the frontend, a drift-guard extension, a DB-gated test and
-  the §1.2 measurement.
-- **Built — `trigger.rs`:** when the machine runs the registration search *unasked*. **Advisory,
-  never a gate**, and that is the module's reason for existing: had it gated, a mononymous patient
-  or one whose DOB is genuinely unknown could not be registered without someone typing a name or a
-  date nobody knows — a required field satisfiable only by fabrication, and an act the paper desk
-  does not charge. `TokenStore::record` consults it for nothing, and a test in the *other* module
-  holds that open.
-- **Built — `prompt.rs`:** `PROMPT_CAP = 5`, pinned, because how many existing charts a clerk sees
-  before being allowed to create another is a clinical decision, not a layout detail. Viewport
-  tracking stays rejected (a signed record must not assert "this row was on screen", and no test can
-  pin it). **The load-bearing rule is that the two partialities never collapse** — the node could not
-  *read* some charts the search matched, and the prompt could not *show* some it returned; the second
-  is milder and commoner, so overwriting the first would delete the warning that teaches a clerk to
-  distrust a zero. `incomplete` may only ever be turned ON.
-- **Built — `token.rs`:** `AttestedSearch` has **no public constructor**; the only way to obtain one
-  is to put a search into a `TokenStore` and take it back by the token that search minted. The
-  design said `register` takes *"only that token"* — handing the port a value with no constructor is
-  the same guarantee in the type system, holding against a Rust caller too. `take` compares **first**
-  and removes only on a match (taking-then-checking would let a registration attest search B while
-  the clerk is looking at A, and would cost the live search on a mis-click).
-- **Reworked after review — custody is COUNTED, never inferred.** The first cut asked
-  `held.is_none()`, which is true both when a registration is in flight and when the clerk
-  invalidated the search by editing the form. Three defects followed, each reproduced with running
-  code: `restore` after `discard` **resurrected the discarded search** (register, fix the typo
-  mid-flight, the write fails, and the chart for *John* is born attesting a search for *Jon* — the
-  exact case `discard`'s own doc promised was impossible); a refused **empty-query `record` left the
-  stale search redeemable**, so a cleared form let the next patient's chart attest the previous
-  patient's search; and a background re-search landing **between two Register clicks** handed the
-  second click a fresh, valid token and produced **two charts** — a duplicate minted by the
-  duplicate-prevention machinery. Now `record`/refused-`record`/`discard` each bump a **generation**,
-  a taken attestation remembers its own and `restore` puts it back only onto that one, `take` sets an
-  **in-flight** flag, and `commit`/`restore` are the two mandatory ends of every `take`. Tokens moved
-  to a **process-global** counter so two windows cannot both mint token 0. `register` now **consumes**
-  the attestation and returns it inside its error — a borrow had left `!Clone` buying nothing, since
-  the caller kept the original and could simply call `register` twice.
-- **Reworked after review — only a `PromptList` can be attested.** `bound_for_prompt` had **zero call
-  sites** and `record` took any `CandidateList`; 2a's own end-to-end walk recorded the raw node list,
-  so the shortest path anyone would copy signed *forty displayed* for a prompt showing five. The
-  bounding is now a type with a private field and a single constructor, and `record` accepts nothing
-  else. It also stopped a bare `incomplete: true` with no prose from being handed to the clerk as the
-  milder truncation sentence alone.
-- **Built — the ports:** `PatientSearch` + `PatientRegistration`, split so the write surface is one
-  method wide. The **trait declares** `impl Future<…> + Send` rather than `async fn` (which raises
-  `async_fn_in_trait`, an error under CI's `-D warnings`, and promises no `Send`) — no `async-trait`
-  dependency, and **not dyn-compatible**, so 2b dispatches on the existing `is_mock()` branch. The
-  **impls** use plain `async fn`, which is what makes the work happen when awaited rather than when
-  the future is built: the first cut computed eagerly, so building a `register` future and dropping
-  it still minted a patient while a live implementation would have done nothing.
-- **Built — the mock population:** six fixtures, each a case that has broken something (multi-script
-  shaping, #636's `mich`, a hyphenated compound found by either half, apostrophe-and-hyphen, a
-  two-character name found by typing it whole (#638), and a John Doe browsable as identity-pending).
-  **Its matching rule is NOT `db/046`'s and its doc says so at length** — a fixture, wider in one
-  direction and narrower in another, which is why 2b's §1.2 measurement must **also** be taken
-  against a database, never against fixtures alone. **Reworked after review:** `FixturePatient.uuid`
-  is a parsed `Uuid`, because while it was a `String` a one-character typo dropped that patient out
-  of every search — through a `filter_map` over a fallible parse — while the list two lines below
-  still declared itself complete, which is the real `search.rs`'s *"never drop the candidate"* rule
-  inverted. A registration supplying no date of birth now records `"not recorded"` rather than `""`,
-  since a blank field reads as *not-yet-asked*.
-- **Two spec decisions met the code**, both recorded as dated revision notes on the design page
-  rather than edited away. **The trigger** was *"a given name, a surname and a date of birth"*,
-  implying separate fields — one culture's name model (ADR-0014), failing for a mononymous patient,
-  a patronymic or Han name order, and forcing the raw name to be *reassembled* when
-  `register_patient`'s own doc requires `name` to be the same typed string `SearchQuery` was built
-  from. Now *"two name tokens and a date of birth"* over **one free name field**, as the CLI already
-  is. **Decision 4's positive limb cannot be built** — `Candidate` carries no sex, and a round-trip
-  test pins its field count at seven so adding one is a deliberate act on a *no spinner* read path;
-  the negative limb (nothing narrows on sex, so no chart can be hidden from the clerk about to
-  duplicate it) is honoured structurally.
-- **21 mutations run across the four modules, 21 killed** — then a **full multi-agent review of the
-  PR found what those 21 did not cover.** Two tests were weaker than they read and were strengthened
-  before mutating (one claimed to guard a short-circuit it cannot observe, the other accepted a
-  blank-but-non-empty name); the review then found three live defects (above) plus a set of surviving
-  mutations, all now closed by tests: the truncation **off-by-one** (`withheld > 1` survived, because
-  no case ever withheld exactly one — a six-candidate list would have hidden one and called itself
-  complete), the **birth-date pass entirely unexercised** (every mock search passed `None`), the
-  **identifier system check** unpinned (no two fixtures shared a value, so comparing values alone
-  survived), a **three-token name**, a **year-only date of birth** (a rule demanding `YYYY-MM-DD`
-  survived, and would have excluded exactly the patients principle 4 is about), and the CJK test's
-  **ASCII space** (so `split_ascii_whitespace` survived, while an IME emits U+3000). Two weak
-  assertions were replaced: refusal text was pinned by `len() > 40`, and `AttestedSearch`'s whole
-  guarantee — no `Clone`, no public constructor — was pinned by nothing at all and is now structural.
-  Test count 112 → **133**.
+  testable with no window and no database, so the surface slices are wiring rather than judgement.
+  New crate `cairn-gui-funnel` (no Tauri, no Postgres, no new third-party dependency), plus the two
+  ports in `cairn-gui-data` and a mock population implementing them.
+- **`trigger.rs` — advisory, never a gate**, and that is the module's reason for existing. Had it
+  gated, a mononymous patient or one whose DOB is genuinely unknown could not be registered without
+  someone typing a name or a date nobody knows: a required field satisfiable only by fabrication.
+  `TokenStore::record` consults it for nothing, and a test in the *other* module holds that open.
+- **`prompt.rs` — `PROMPT_CAP = 5`, pinned**, because how many existing charts a clerk sees before
+  being allowed to create another is a clinical decision, not a layout detail. Viewport tracking
+  stays rejected (a signed record must not assert "this row was on screen"). **The load-bearing
+  rule is that the two partialities never collapse** — the node could not *read* some charts, the
+  prompt could not *show* others; the second is milder and commoner, so overwriting the first would
+  delete the warning that teaches a clerk to distrust a zero. `incomplete` may only ever go ON.
+- **`token.rs` — `AttestedSearch` has no public constructor.** The design said `register` takes
+  *"only that token"*; handing the port a value nothing else can build is the same guarantee in the
+  type system, and it holds against a Rust caller too. `take` compares **first** and removes only
+  on a match.
+- **Reworked after review — custody is COUNTED, never inferred from `Option::is_none()`.** That
+  predicate is true both mid-registration and after the clerk edited the form, and conflating them
+  produced three defects, each reproduced with running code: `restore` after `discard` resurrected
+  the discarded search (the *Jon* → *John* case `discard`'s own doc called impossible); a refused
+  empty-query `record` left the stale search redeemable, so a cleared form let the next patient's
+  chart attest the previous patient's search; and a background re-search landing **between two
+  Register clicks** handed the second click a fresh valid token and minted **two charts** — a
+  duplicate produced by the duplicate-prevention machinery. Now `record`/refused-`record`/`discard`
+  each bump a **generation**, a taken attestation remembers its own, `take` sets an **in-flight**
+  flag, and `commit`/`restore` are the two mandatory ends of every `take`. Tokens moved to a
+  **process-global** counter. `register` **consumes** the attestation and returns it inside its
+  error — a borrow left `!Clone` buying nothing.
+- **Reworked after review — only a `PromptList` can be attested.** `bound_for_prompt` had **zero
+  call sites**; 2a's own end-to-end walk recorded the raw node list, so the shortest path anyone
+  would copy signed *forty displayed* for a prompt showing five.
+- **The ports.** `PatientSearch` + `PatientRegistration`, split so the write surface is one method
+  wide. The **trait declares** `impl Future<…> + Send` rather than `async fn` (which raises
+  `async_fn_in_trait`, an error under `-D warnings`, and promises no `Send`) — no `async-trait`
+  dependency, and **not dyn-compatible**, so a window dispatches on the existing `is_mock()`
+  branch. The **impls** use plain `async fn`, which is what makes the work happen when awaited
+  rather than when the future is built.
+- **The mock population:** six fixtures, each a case that has broken something (multi-script
+  shaping, #636's `mich`, a hyphenated compound, apostrophe-and-hyphen, a two-character name
+  (#638), a John Doe browsable as identity-pending). **Its matching rule is NOT db/046's and its
+  doc says so at length** — which is why the §1.2 measurement must also be taken against a
+  database. `FixturePatient.uuid` is a parsed `Uuid`: while it was a `String`, a one-character typo
+  dropped that patient out of every search through a fallible parse while the list still declared
+  itself complete.
+- **Two spec decisions met the code**, both dated revision notes rather than edits. **The trigger**
+  was *"a given name, a surname and a date of birth"* — one culture's name model (ADR-0014),
+  failing for a mononymous patient, a patronymic or Han name order, and forcing the raw name to be
+  reassembled when `register_patient` requires `name` to be the string `SearchQuery` was built
+  from; now *"two name tokens and a date of birth"* over **one free name field**. **Decision 4's
+  positive limb cannot be built** — `Candidate` carries no sex and a round-trip test pins its field
+  count at seven; the negative limb (nothing narrows on sex) is honoured structurally.
+- **21 mutations run, 21 killed — then a full multi-agent review found what those 21 did not
+  cover**: three live defects (above) plus surviving mutations now closed by tests — the truncation
+  **off-by-one** (no case ever withheld exactly one), the **birth-date pass entirely unexercised**,
+  the **identifier system check** unpinned, a three-token name, a **year-only date of birth** (a
+  rule demanding `YYYY-MM-DD` survived, and would have excluded exactly the patients principle 4 is
+  about), and the CJK test's **ASCII space** (an IME emits U+3000). Refusal text had been pinned by
+  `len() > 40`, and `AttestedSearch`'s whole guarantee by nothing at all. Tests 112 → **133**.
 - **Filed:** [#645](https://github.com/cairn-ehr/cairn-ehr/issues/645) (decision 4's display/rank
   half — what an additive `Candidate.sex` plus a projection read would cost) ·
   [#647](https://github.com/cairn-ehr/cairn-ehr/issues/647) (`Demographics.sex` is a bare `String`,
-  so the port cannot say *not recorded* distinctly from a recorded value — principle 4, small) ·
-  [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648) (`DataError` cannot say *refused*, so a
-  deterministic floor refusal reads as an outage and invites a pointless retry — needs the live port,
-  so 2b's) · [#649](https://github.com/cairn-ehr/cairn-ehr/issues/649) (`register`'s future has no
-  cancellation contract: dropped after commit, the retry mints a duplicate because `register_patient`
-  generates its own id) · [#650](https://github.com/cairn-ehr/cairn-ehr/issues/650)
-  (`TriggerState::Waiting(vec![])` is representable and meaningless — low, and the newtype that
-  closes it costs test readability). **#355** already tracked the neighbouring
-  `SearchAttestation` gap: its three fields are `pub` and it derives `Deserialize`, so
-  `from_displayed` is a convention, not an enforcement — `token.rs` no longer rests its rationale on
-  it.
-- **Carry-over for 2b:** registering in `--mock` now succeeds into an in-memory set (without it the
-  *browse → nothing fits → register → prompt → commit* walk means nothing), which makes
-  `cairn-gui-tauri/src/main.rs`'s *"Writes are refused in this mode"* too broad. 2b must narrow it to
-  **clinical** writes.
+  so the port cannot say *not recorded* distinctly) ·
+  [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648) (**closed by 2b**) ·
+  [#649](https://github.com/cairn-ehr/cairn-ehr/issues/649) (`register`'s future has no
+  cancellation contract: dropped after commit, the retry mints a duplicate because
+  `register_patient` generates its own id) · [#650](https://github.com/cairn-ehr/cairn-ehr/issues/650)
+  (`TriggerState::Waiting(vec![])` is representable and meaningless — low). **#355** already tracked
+  the neighbouring `SearchAttestation` gap: its three fields are `pub` and it derives
+  `Deserialize`, so `from_displayed` is a convention, not an enforcement.
+- **Carry-over, still owed:** registering in `--mock` now succeeds into an in-memory set, which
+  makes `cairn-gui-tauri/src/main.rs`'s *"Writes are refused in this mode"* too broad — **2c** must
+  narrow it to **clinical** writes.
 
 **§1.2:** paper counterpart is the registration desk and the alphabetical index drawer. Steps:
 register paper 5 → forced 4 → target 4; find paper 3 → forced 2 → target 2. `M ≤ N` on both, and
 the advisory trigger is what keeps it there. Time + cognitive load: **not measurable in this slice
-and not claimed** — 2a exposes no runnable surface, and the end-to-end measurement is owed by 2b.
-Design: `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Plan:
+and not claimed** — 2a exposes no runnable surface. Design:
+`docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Plan:
 `docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2a.md`.
+
+### 2026-09-22 — funnel UI slice 2b: the live ports (PR #653)
+
+- **The slice:** the funnel's **data path** — the rules 2a made executable, now acting on a real
+  record. New crate `cairn-gui-live`, whose `LiveData` implements both ports over a
+  `tokio_postgres::Client` by delegating to `search_patients` (§5.8) and `register_patient`
+  (§5.3, ADR-0061). It adds no clinical logic. **2b was split again into 2b + 2c** with the
+  maintainer, on the DR 2a/2b/2c/2d precedent: the ports are provable against a real floor today,
+  and the §1.2 measurement cannot be taken until a runnable surface exists. A dated note on the
+  design page records the split; the measurement does not move.
+- **Where a live port may live is an architecture fact.** Not `cairn-gui-data` — its manifest
+  states, deliberately, that it pulls no database driver, which is what keeps the pure rules and
+  `--mock` buildable with no Postgres anywhere. Not `/crates` — a root crate implementing a
+  `cairn-gui` trait inverts the one direction ADR-0021 / §9.5 forbids. Both reasons are written
+  into the new manifest, because the next person will reach for the module first.
+- **Built — `DataError::Refused` (#648).** Three variants are three clinical facts. `Unavailable`
+  means **nothing was decided** and a retry may work; `Refused` means the in-DB floor decided and
+  will decide the same way every time, so offering a retry is a precise untruth on a
+  wrong-chart-prevention surface (principle 4). The discriminator is the SQLSTATE: a bare
+  `RAISE EXCEPTION` is `P0001`, which `db/001_envelope.sql` states is a **contract** rather than an
+  accident, forbidding `USING ERRCODE` on those refusals because the node pull loop routes on it.
+  `None` — no SQLSTATE at all — is never a verdict.
+- **A spec sentence met the code and lost.** `port.rs` predicted the variant would also decide
+  whether the caller calls `TokenStore::restore` (restore after an outage, pointless after a
+  refusal). It does not: `restore` and `commit` are the two mandatory ends of every `take`,
+  `commit` after a refusal would be a lie, and the clerk's next act — editing the form —
+  `discard`s the doomed attestation on a new generation anyway. **Both arms restore; only the
+  sentence on screen differs**, and 2c writes those two sentences. Recorded as a dated revision
+  note on the design page rather than edited away.
+- **Four things the database corrected, none of which reading would have found.**
+  1. *The obvious refusal probe is not a floor refusal.* A malformed date of birth is refused by
+     `register_patient` **in Rust**, before any statement reaches Postgres, so the error carries no
+     SQLSTATE. The probe is now an unenrolled signer, which db/005 refuses with a bare
+     `RAISE EXCEPTION`.
+  2. *That detour is itself a defect* — **#651**. A Rust-side pre-flight refusal is exactly as
+     deterministic as the floor's and reads as an outage today: #648's harm one layer above where
+     #648 was looking. A test asserts the **wrong** behaviour on purpose, so the gap is visible in
+     every run; when it is fixed that test fails, and the failure is the good news.
+  3. *The chain walk in `sqlstate_of` had no coverage at all.* Mutating `e.chain()` to
+     `e.chain().take(1)` survived every test in the crate **twice**, because the register path
+     happens to put the database error outermost — one `.context()` away, that mutation is the
+     whole defect. A `DbError` cannot be constructed by hand, so the test **borrows a real `P0001`
+     from the server** and buries it under two context layers.
+  4. *A test passed for a reason that was not the one in its name.* "…findable by the NAME it was
+     registered under" searched by name **and** date of birth, and db/046 pass 2 matches on the
+     date alone — which `register_patient` asserts from the query whatever happens to `name`. A
+     port dropping the typed name passed it.
+- **And a fifth, about the fixture.** `setup`'s truncate list, copied from the root tree, omitted
+  `patient_name` — the table pass 3 reads. A clean database hid it; the **second** run failed with
+  the previous run's patient still findable (**#583**'s shape). The list is now **derived from the
+  catalogue** — every base table in `public` carrying a `patient_id` column, which every
+  per-patient projection has and no seed table does — so a new clinical stream's projection is
+  swept without anyone remembering this file.
+- **Eight DB-gated tests across two suites, six mutations, six killed** (M3 only by the test written for it after it
+  survived twice). The headline pair: `the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more`
+  proves the signed body names the ids the **prompt** displayed, in display order, with the cap
+  having bitten — which the root tree's `patient_register.rs` cannot, since it tests
+  `register_patient` with whatever list it is handed; and
+  `a_sqlstate_is_found_under_context_layers_not_only_at_the_top` is the only thing standing between
+  a future `.context()` and every floor refusal silently becoming an outage.
+- **CI.** `cairn-gui` is a separate workspace, so `cargo test --workspace` never reaches it and its
+  own job has no Postgres — a DB suite there would have run **nowhere**. It runs in the `test` job,
+  which already has PG18 and `cairn_pgx`; `cairn-gui-live` does not depend on `tauri`, so `-p`
+  builds it without WebKitGTK. `scripts/run-db-gated-tests.sh` runs the same line. The `gui` job
+  declares `CAIRN_ALLOW_DB_SKIP=1` and its "every test in this tree is pure" comment is rewritten;
+  a proportionate `db_gate_ran.rs` fails closed for anyone who has not declared it (#442, #450).
+- **Scope discipline: as built, nothing under `crates/`**, so the gate was the ~2-minute
+  `cairn-gui` one rather than the ~2-hour root sweep. The review pass then added exactly one root
+  file — `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs`, a pure additive test with no
+  production code — so the root cost stayed a `clippy -p cairn-node --tests`.
+- **Found by self-review, before a window existed to hit it —
+  [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).** `cairn-node patient-register`
+  enrols its signing key as a `device` actor on first use (`ensure_registration_actor`);
+  `LiveData` deliberately does **not**, because enrolling an actor is provisioning and
+  provisioning as a write-path side effect is trap 2's shape (ADR-0066 decision 6 made
+  `ensure_unwrap_key` refuse for the same reason). So the reference window's **first**
+  registration on a node where the CLI never registered anyone is refused. Since #648 that is at
+  least legible and correctly classified rather than an outage inviting a retry — but it names a
+  key id, not a remedy, and the asymmetry means a node behaves differently depending on which
+  surface touched it first. A decision for 2c, not a patch.
+- **Filed:** [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) (above) ·
+  [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654) (above) ·
+  [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652) (the P0001 rule's **third** home —
+  `cairn-sync`, `cairn-node`'s `restore::clinical` and now `cairn-gui-live`; one public home in
+  `cairn_node::db_diagnosis` retires all three).
+
+**The review pass — five aspects (general, tests, silent failures, types, comments), and it earned
+its keep.** Every finding below was re-verified against the source before being acted on, and two
+of the five agents' claims were corrected in the process. Fixed in the PR:
+
+- **⚠️ [#633](https://github.com/cairn-ehr/cairn-ehr/issues/633) ADDRESSED — the P0001 contract was
+  held by prose and nothing else.** `USING ERRCODE` appears in `db/` only inside comments forbidding
+  it, and `cairn-sync`'s own doc asserts that fact as a premise for its routing — while three crates
+  route clinical verdicts on it. New `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs`
+  asserts it tree-wide, reusing `common/sql_text.rs`'s nesting-aware stripper (which #633 asked for,
+  and which also catches a `RAISE …` / `USING ERRCODE …` split across two lines — verified by
+  injecting exactly that). `ALLOWED` is empty; a second test proves the scan is not vacuous.
+- **A VACUOUS ATOMICITY TEST, AND THE MEASURED LIMIT OF ITS FIX.**
+  `a_refused_registration_creates_no_chart`'s `"not-a-date"` probe bailed in Rust ~70 lines before
+  `client.transaction()`, so deleting the transaction from `register_patient` left it green. Re-probed
+  with an unenrolled signer (which reaches `submit_event`) plus an explicit `Refused` assertion against
+  regression. **It still does not pin the multi-event rollback** — that signer refuses on the *first*
+  event, so autocommit passes; measured, not assumed. Filed
+  [#657](https://github.com/cairn-ehr/cairn-ehr/issues/657); no root-tree test pins it either.
+- **The signed `search.incomplete` flag was never read back.** The headline test checked *which* ids
+  were sworn to, and the ids cannot catch it — the bounded list is a prefix of the raw one, so a port
+  forwarding the node's raw `CandidateList` passed while storing `incomplete: false`: a signed claim
+  the clerk saw every namesake when three were withheld. Both polarities now asserted.
+- **`today`'s passthrough was unobservable.** `TODAY` was threaded through every call and never read
+  back, so any substituted clock passed. An age assertion pins it.
+- **`LiveData::new` took `node_origin: String` where `Identity` has four `String` fields** — and that
+  value becomes the HLC origin, i.e. causal order's third sort key and the tiebreaker between
+  concurrent demographic assertions, on append-only events. Now takes `&Identity`.
+- **`search`'s error path had no test at all**, so `.unwrap_or_else(|_| empty_list())` — the
+  "defensive" refactor `port.rs` forbids in as many words — passed the suite. On the step-3 prompt an
+  empty list *means* "create a new chart", so that mutation manufactures the duplicate the funnel
+  exists to prevent. New test; verified it fails under exactly that mutation and nothing else does.
+- **Nothing proved the single connection survives a refusal** (tokio-postgres sends its rollback
+  fire-and-forget). New test refuses at the door, then reads *and writes* on the same `Client`.
+- **Three wrong comments, each verified wrong:** the crate doc justified holding the node key with
+  ADR-0052 sealing/custody — but `register_patient` names neither and db/045's projection opens `IF
+  e.sealed THEN RETURN`; the reason is that the node *signs*. `funnel.rs` claimed `name`-matches-query
+  was true "by construction" — nothing ties them, and this crate's own tests deliberately diverge
+  them. The CI comment claimed `db_gate_ran` meant a deleted step "does not pass in silence" — it
+  does, because the `gui` job skips the same suites green (**#656**).
+- **`setup`'s TRUNCATE justification was false** — "per-patient projections all carry a `patient_id`"
+  fails for 40 base tables including the identity stream's (`patient_link` on `low`/`high`,
+  `chart_identity_state` on `subject`). Harmless here, a trap for the next suite: **#658**.
+- Smaller: `CAIRN_ALLOW_DB_SKIP` moved from job to step altitude; `sqlstate_of` returns `Option<&str>`
+  and no longer stops at a pg error carrying no `DbError`; the `USING ERRCODE` doc scoped to
+  *per-door* prose; `operator_chain`'s rendering described accurately ("every **distinct** layer") and
+  flagged as an **operator** string 2c must not paste into a form; `#[must_use]`'s real location
+  named; the script header's "WHAT IT RUNS" list; the crate rationale moved above `[package]`; the
+  `exclude`-enforces-layering claim corrected (it does not — review does).
+
+**Filed, and deliberately left open:** [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) (the
+`false` half of `refusal_is_deliberate` is not one thing: `42501`, `42P01` and class-23 are floor
+decisions that get a retry button — `cairn-sync` already solved this with `LocalDbFault`; decide it
+once in #652's home) · [#656](https://github.com/cairn-ehr/cairn-ehr/issues/656) ·
+[#657](https://github.com/cairn-ehr/cairn-ehr/issues/657) ·
+[#658](https://github.com/cairn-ehr/cairn-ehr/issues/658) ·
+[#659](https://github.com/cairn-ehr/cairn-ehr/issues/659) (**`TokenStore` has no settling
+combinator and `discard` does not clear `in_flight`**, so 2c's natural `.map_err(|(e, _)| e)?`
+latches the store shut with no recovery short of a window reload) ·
+[#660](https://github.com/cairn-ehr/cairn-ehr/issues/660) (the mock ports can never fail, so 2c's
+two-armed rendering has no `--mock` test path). **#651 and #654 gained the reachability arguments
+that make them 2c blockers rather than riders** (see their threads).
+
+**§1.2:** the benchmark is the design page's and **this slice does not move `M`** — the ports it
+builds are called by acts already counted (register paper 5 → forced 4 → target 4; find paper 3 →
+forced 2 → target 2). The one thing it could have added is a step and deliberately does not: a
+refusal now says *this cannot succeed as typed* instead of inviting a futile retry. Time +
+cognitive load: **owed by 2c**, which first exposes a runnable surface — in `--mock` *and* against
+a database, since the mock's matching rule is not db/046's. Plan:
+`docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2b-live-ports.md`.
 
 ---
 
