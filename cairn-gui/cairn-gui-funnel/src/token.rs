@@ -387,6 +387,65 @@ impl TokenStore {
         self.in_flight = false;
     }
 
+    /// Settle a registration's outcome: **the end of a [`TokenStore::take`] a caller reaches by
+    /// writing the SHORT thing, rather than the one they reach by remembering to.**
+    ///
+    /// # The trap this closes
+    ///
+    /// [`TokenStore::take`] has exactly two valid ends — [`TokenStore::commit`] and
+    /// [`TokenStore::restore`] — and the port hands the attested search back *inside* its error
+    /// precisely so that `restore` has the value it needs. That made the natural Rust idiom a
+    /// silent trap:
+    ///
+    /// ```ignore
+    /// let id = live.register(attested, name).await.map_err(|(e, _)| e)?;  // ← latches the store
+    /// ```
+    ///
+    /// It compiles with no warning. It discards the attestation during *destructuring*, so
+    /// `#[must_use]` cannot catch it — that lint fires on an unused expression result, not on a
+    /// field dropped in a pattern, and `Result` is `#[must_use]` already. And it leaves
+    /// `in_flight` set, so every later `take` returns [`TokenError::RegistrationInFlight`].
+    ///
+    /// The clerk cannot get out of that state either. [`TokenStore::discard`] — what editing
+    /// the form calls — bumps the generation and **deliberately does not clear `in_flight`**,
+    /// because clearing it there is how two clicks once produced two charts. So the recovery
+    /// gesture does not recover, and nothing short of rebuilding the store does.
+    ///
+    /// Routing the outcome through here makes the short path the correct one: the ergonomic
+    /// call is `store.settle(port_result)`, and `map_err(|(e, _)| e)` becomes the *longer*
+    /// thing to write. See [#659](https://github.com/cairn-ehr/cairn-ehr/issues/659).
+    ///
+    /// # Why the `Restored` is returned rather than swallowed
+    ///
+    /// The two failure outcomes need different words on screen. [`Restored::Kept`] means the
+    /// form's token is still redeemable and the clerk may simply press Register again;
+    /// [`Restored::SupersededAndDropped`] means a newer search landed or the clerk edited, so
+    /// there is nothing to retry *with* and the window must wait for the next search before it
+    /// offers Register at all. Collapsing them would leave a live Register button sitting over
+    /// a search that no longer exists.
+    ///
+    /// # Generic on purpose
+    ///
+    /// `T` and `E`, not `Uuid` and `DataError`. `DataError` lives in `cairn-gui-data`, which
+    /// already depends on this crate, so naming it here would invert that edge into a cycle and
+    /// the tree would not build. It is also the honest signature: a token store has no business
+    /// knowing what a failure *is*, only that one happened.
+    pub fn settle<T, E>(
+        &mut self,
+        outcome: Result<T, (E, AttestedSearch)>,
+    ) -> Result<T, (E, Restored)> {
+        match outcome {
+            Ok(value) => {
+                self.commit();
+                Ok(value)
+            }
+            // `restore` settles the in-flight registration whether or not it keeps the
+            // attestation, which is what makes this arm total: there is no path through
+            // `settle` that leaves the store latched.
+            Err((error, attested)) => Err((error, self.restore(attested))),
+        }
+    }
+
     /// The form was edited: whatever is held no longer describes it.
     ///
     /// Not an optimisation. A search for `Jon` must not license a registration of `John`, and
@@ -812,5 +871,89 @@ mod tests {
                 "AttestedSearch must have no public constructor, found `{constructor}`: {imp}"
             );
         }
+    }
+
+    // --- #659: settle is the only end of a `take` a caller can reach by accident ---
+
+    /// A success settles the store, so the NEXT registration is not refused.
+    ///
+    /// Without `settle`, the ergonomic `map_err(|(e, _)| e)?` leaves `in_flight` set and every
+    /// later `take` returns `RegistrationInFlight` — for the rest of the window's life.
+    #[test]
+    fn settling_a_success_leaves_the_store_ready_for_the_next_registration() {
+        let mut store = TokenStore::new();
+        let first = store.record(query("Aabria Iyengar"), list_of(1)).unwrap();
+        let attested = store.take(first).expect("the only token");
+        // The port consumed the attestation and answered `Ok` — which is exactly why the
+        // success arm has nothing to hand back, and exactly why forgetting to `commit` is so
+        // easy to do.
+        drop(attested);
+
+        let settled: Result<u8, (&str, Restored)> =
+            store.settle(Ok::<u8, (&str, AttestedSearch)>(7));
+        assert_eq!(settled.ok(), Some(7));
+
+        let second = store.record(query("Bilal Osei"), list_of(1)).unwrap();
+        assert!(
+            store.take(second).is_ok(),
+            "a settled success must not latch the store: every later registration is refused \
+             forever otherwise"
+        );
+    }
+
+    /// A failure settles it too, AND puts the attested search back for the retry.
+    ///
+    /// The design's *"Register fails. The form keeps its values."* — a clerk must not be made
+    /// to re-search because the database hiccuped.
+    #[test]
+    fn settling_a_failure_restores_the_search_and_keeps_its_token() {
+        let mut store = TokenStore::new();
+        let token = store.record(query("Chidi Anagonye"), list_of(2)).unwrap();
+        let attested = store.take(token).expect("the only token");
+
+        let settled: Result<u8, (&str, Restored)> =
+            store.settle(Err(("the node was unreachable", attested)));
+        let Err((message, restored)) = settled else {
+            panic!("a failed registration must settle as a failure");
+        };
+        assert_eq!(message, "the node was unreachable");
+        assert_eq!(restored, Restored::Kept);
+        assert!(
+            store.take(token).is_ok(),
+            "the SAME token must still be redeemable, or the form's held handle is a lie"
+        );
+    }
+
+    /// THE BUG #659 IS ACTUALLY ABOUT: the clerk edits while the registration is in flight.
+    ///
+    /// `discard` bumps the generation and deliberately leaves `in_flight` set, so the restore
+    /// is correctly refused as superseded — but the store must still be SETTLED, or editing
+    /// the form (the clerk's own recovery gesture) latches it shut and nothing short of
+    /// rebuilding the `TokenStore` recovers.
+    #[test]
+    fn settling_a_failure_the_clerk_has_already_edited_past_still_unlatches_the_store() {
+        let mut store = TokenStore::new();
+        let token = store.record(query("Jon Mistyped"), list_of(1)).unwrap();
+        let attested = store.take(token).expect("the only token");
+
+        store.discard(); // the clerk corrects the spelling while the write is in flight
+
+        let settled: Result<u8, (&str, Restored)> = store.settle(Err(("refused", attested)));
+        let Err((_, restored)) = settled else {
+            panic!("a failed registration must settle as a failure");
+        };
+        assert_eq!(
+            restored,
+            Restored::SupersededAndDropped,
+            "the pre-edit search must NOT come back — that is how a chart is born attesting a \
+             search for a different spelling of the name"
+        );
+
+        let fresh = store.record(query("John Corrected"), list_of(1)).unwrap();
+        assert!(
+            store.take(fresh).is_ok(),
+            "the store must be usable again: editing the form is the clerk's recovery gesture, \
+             and a gesture that latches the store breaks the very thing it is meant to fix"
+        );
     }
 }
