@@ -62,3 +62,15 @@ scripts/run-db-sql-tests.sh
 
 echo "== cargo test --workspace against ${CAIRN_TEST_PG}"
 cargo test --workspace
+
+# The cairn-gui tree is a SEPARATE cargo workspace (the root one `exclude`s it, so wry/tao
+# never enter cairn-node's dependency tree — ADR-0021 / §9.5), so the run above has never
+# covered a line of it. That was fine while every test there was pure. `cairn-gui-live` is
+# not: it drives the funnel's §5.3/§5.8 ports against this same database. Running it here is
+# what keeps the local sanctioned gate asking the same question CI's `test` job asks.
+#
+# `-p cairn-gui-live` rather than the whole GUI workspace on purpose — the rest of that tree
+# needs no database, and building tauri here would cost minutes for no extra answer. Its own
+# `db_gate_ran` fails closed if CAIRN_TEST_PG went missing, so a silent skip is not available.
+echo "== cargo test -p cairn-gui-live against ${CAIRN_TEST_PG}"
+cargo test --manifest-path cairn-gui/Cargo.toml -p cairn-gui-live
