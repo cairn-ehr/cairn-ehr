@@ -722,9 +722,16 @@ mod tests {
             .expect("a non-empty query");
         let attested = store.take(first).expect("the only token");
         data.fail_next(DataError::Unavailable("a hiccup".to_string()));
-        assert!(store
-            .settle(data.register(attested, Some("Jon Mistyped")).await)
-            .is_err());
+        // Assert the ARM and the custody, not merely that it failed: "the form keeps its
+        // values" is the claim under test, and `Restored::Kept` is the only thing that makes
+        // it true. A bare `is_err()` here would pass with the search silently dropped.
+        let Err((error, restored)) =
+            store.settle(data.register(attested, Some("Jon Mistyped")).await)
+        else {
+            panic!("the armed failure must reach the caller as a failure");
+        };
+        assert!(matches!(&error, DataError::Unavailable(t) if t.contains("a hiccup")));
+        assert_eq!(restored, cairn_gui_funnel::Restored::Kept);
 
         // The clerk corrects the spelling. The pre-edit search must not license the new
         // registration — `discard` is what makes that structural rather than merely unlikely.
