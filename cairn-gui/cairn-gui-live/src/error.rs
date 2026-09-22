@@ -19,15 +19,25 @@
 //! `restore::clinical::refusal_is_deliberate` are the other two, and the second one's own doc
 //! already calls itself *"A SECOND HOME … Keep the two identical"*. This is the third, and it
 //! is here rather than shared because consolidating them means changing `crates/`, which is a
-//! different slice's blast radius. **Filed as its own issue — see the HANDOVER entry for this
-//! slice.** Until it is done: if you change the rule, change all three. The drift costs a
-//! wrong verdict, not merely an inaccurate sentence.
+//! different slice's blast radius. **Filed as
+//! [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652)**, which also names #633 as the
+//! guard that belongs in the same shared home. Until it is done: if you change the rule,
+//! change all three. The drift costs a wrong verdict, not merely an inaccurate sentence.
 //!
 //! The three are not *quite* redundant, and the difference is worth knowing: the other two
 //! take an already-extracted `Option<&str>`, because their callers hold a
 //! `tokio_postgres::Error` directly. This crate's callers hold an `anyhow::Error` from a
 //! `cairn-node` orchestrator, so it must dig the SQLSTATE out of a context chain first —
 //! which is [`sqlstate_of`], and is the part that can silently stop working.
+//!
+//! # What this rule does NOT cover
+//!
+//! A refusal `cairn-node` raises **in Rust, before any statement reaches Postgres** — the
+//! date-of-birth shape check `register_patient` runs up front — is just as deterministic and
+//! carries no SQLSTATE at all, so it reaches the clerk as an outage.
+//! [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) has the argument and the two
+//! candidate fixes; `tests/refusal_is_not_an_outage.rs` pins today's behaviour so the gap is
+//! visible in every run rather than only in that issue.
 use cairn_gui_data::port::DataError;
 
 /// The SQLSTATE PostgreSQL assigns to a bare `RAISE EXCEPTION` in PL/pgSQL.
