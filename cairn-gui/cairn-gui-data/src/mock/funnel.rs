@@ -680,6 +680,43 @@ mod tests {
         );
     }
 
+    /// ONE slot, shared by both ports — the design `mock/mod.rs` argues for explicitly.
+    ///
+    /// Unpinned until the PR #661 review measured it: giving `search` and `register` a slot
+    /// each, both written by `fail_next`, left all the other tests green. The shared slot is
+    /// what makes "arm it immediately before the call you mean to fail" the only correct
+    /// usage — with two slots a test could arm one, fail on the other, and pass for the
+    /// wrong reason.
+    #[tokio::test]
+    async fn the_armed_failure_is_one_slot_shared_by_both_ports() {
+        let data = MockData::with_fixtures();
+        let mut store = TokenStore::new();
+        let token = store
+            .record(
+                SearchQuery::new("Shared Slot", Some("1991-02-03"), &[]),
+                nothing_displayed(),
+            )
+            .expect("a non-empty query");
+        let attested = store.take(token).expect("the only token");
+
+        data.fail_next(DataError::Unavailable("spent by the search".to_string()));
+
+        // The SEARCH consumes it...
+        assert!(data
+            .search(&SearchQuery::new("mich", None, &[]), TODAY)
+            .await
+            .is_err());
+
+        // ...so the REGISTER that follows must succeed. With a slot each it would fail here,
+        // and the test that armed it would never notice which port it had actually armed.
+        assert!(
+            store
+                .settle(data.register(attested, Some("Shared Slot")).await)
+                .is_ok(),
+            "the other port must find the slot already spent — one slot, not two"
+        );
+    }
+
     /// A future that is BUILT and never awaited must not spend the armed failure.
     ///
     /// The same await-time property `search_now`/`register_now` were split out to preserve. If

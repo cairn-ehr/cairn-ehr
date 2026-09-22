@@ -1590,9 +1590,10 @@ enum Cmd {
 
     /// Register an unidentified ("John Doe") patient (§5.4): mint a UUID, author a
     /// system-generated callsign name + the identity-pending marker so the chart renders
-    /// *unconfirmed*. Care can proceed against the printed UUID immediately. OWNER
-    /// ceremony: enrolls the node key as a `device` registration actor on first use (a
-    /// real clinical UI would attach the operating clerk's human actor instead).
+    /// *unconfirmed*. Care can proceed against the printed UUID immediately. REQUIRES the
+    /// node key to be an enrolled actor already — since #654 no write command provisions one;
+    /// run `cairn-node enroll-device-actor` if the refusal names it (a real clinical UI would
+    /// attach the operating clerk's human actor instead).
     RegisterJohnDoe {
         /// Care context for the callsign (e.g. ED, ward).
         #[arg(long, default_value = "ED")]
@@ -1805,9 +1806,10 @@ enum Cmd {
     ///   * `--kind mark|belongings|ems-context` — a free-text observation; requires
     ///     `--description`. Non-attachment: the observation is the text in the payload.
     ///
-    /// The photo and text flags are mutually exclusive (photo flags iff `--kind photo`). OWNER
-    /// ceremony: enrolls the node key as a registration actor on first use (a real UI attaches
-    /// the operating clerk's *human* actor).
+    /// The photo and text flags are mutually exclusive (photo flags iff `--kind photo`).
+    /// REQUIRES the node key to be an enrolled actor already — since #654 no write command
+    /// provisions one; run `cairn-node enroll-device-actor` if the refusal names it (a real UI
+    /// attaches the operating clerk's *human* actor).
     AssertIdentityEvidence {
         /// The patient UUID to record evidence on.
         patient: Uuid,
@@ -2267,7 +2269,28 @@ async fn main() -> anyhow::Result<()> {
             // node can author immediately, and NO write path has to provision to make that
             // true. A node that never ran `init` — one restored without its actor registry —
             // uses `cairn-node enroll-device-actor`, which every write refusal names.
-            cairn_node::actor_enrolment::enroll_device_actor(&db, &kid).await?;
+            //
+            // ⚠️ DELIBERATELY NOT `?`, and this is the whole reason the block exists.
+            // Everything above this line is IRREVERSIBLE: the signing key, the unwrap key and
+            // the local-state escrow are on disk, `cairn_register_unwrap_key` has run, and the
+            // node identity is provisioned. A `?` here would exit non-zero and never print
+            // `provisioned node …`, so an operator would read "init failed" for a node that is
+            // in fact fully provisioned — and their reasonable next move, re-running `init`,
+            // is REFUSED by `refuse_to_replace_existing_unwrap_key` and
+            // `refuse_init_over_a_registered_custody_key`, neither of which mentions the actual
+            // state. They would then be one short command away from a working node with nothing
+            // on screen saying so. That is the dead-end-remedy shape this release closed one
+            // subsystem over (`ActorStanding::Retired`), and it must not be reintroduced by an
+            // error-propagation reflex. (PR #661 review; found independently twice.)
+            if let Err(e) = cairn_node::actor_enrolment::enroll_device_actor(&db, &kid).await {
+                eprintln!(
+                    "WARNING: this node IS provisioned, but enrolling its device actor failed: \
+                     {e:#}\nThe node is usable and nothing needs undoing — run `cairn-node \
+                     enroll-device-actor` to finish. Do NOT re-run `init`: it will refuse over \
+                     the custody key this run already registered, and that refusal does not \
+                     describe this state."
+                );
+            }
             println!(
                 "provisioned node {node_id}\nfingerprint {}",
                 cairn_event::short_fingerprint(&kid)?

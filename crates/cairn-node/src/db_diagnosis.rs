@@ -374,18 +374,33 @@ impl std::error::Error for DeliberateRefusal {}
 
 /// Build a deterministic refusal as an `anyhow::Error`, ready to be `?`'d and contextualised.
 ///
+/// **`pub(crate)` on purpose.** Declaring that a failure is a VERDICT — that no retry can ever
+/// change it — is a claim only this crate is positioned to make, because only this crate knows
+/// which of its own pre-flight checks are deterministic. Keeping the mint in-crate turns "who
+/// may declare a verdict" into a compiler question rather than a doc question. Widening it is
+/// easy and should be a deliberate, argued act (PR #661 review).
+///
 /// Use this **only** where the refusal is genuinely deterministic: the same inputs refuse the
 /// same way forever, and nothing about the environment — a connection, a lock, a disk, a clock —
 /// took part in the decision. **A retry must be pointless by construction.** If a retry might
 /// work, this is the wrong constructor and an ordinary error is the honest answer; marking a
 /// transient failure as a verdict tells the clerk to change something that was already correct.
-pub fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
+pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),
     })
 }
 
 /// Did this node deliberately refuse, above the database?
+///
+/// # Named for the DISCRIMINATOR, not the conclusion — and that matters here
+///
+/// Two sibling predicates in this workspace are called *deliberate refusal* and mean the
+/// opposite thing about SQLSTATE: `cairn-gui-live::error::refusal_is_deliberate` and
+/// `cairn-sync`'s `is_deliberate_refusal` both test for **`P0001`**, while this one is true
+/// exactly when there is **no SQLSTATE at all**. A reader grepping the obvious name would find
+/// three functions and no way to tell which is which, so this one says what it inspects: a
+/// marker on the chain (PR #661 review).
 ///
 /// Walks the **whole** `anyhow` chain, for the same reason [`operator_chain`] and
 /// `cairn-gui-live`'s `sqlstate_of` do: every orchestrator adds `.context("…")` layers naming
@@ -395,7 +410,7 @@ pub fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
 /// A `false` here means only *"not one of these"*. A caller must still ask the SQLSTATE question
 /// about the floor's own refusals — the two discriminators are complementary, not alternatives,
 /// and `cairn-gui-live`'s `data_error_from` consults both.
-pub fn is_deliberate_refusal(e: &anyhow::Error) -> bool {
+pub fn carries_refusal_marker(e: &anyhow::Error) -> bool {
     e.chain()
         .any(|cause| cause.downcast_ref::<DeliberateRefusal>().is_some())
 }
@@ -417,7 +432,7 @@ mod tests {
             .context("asserting the date of birth")
             .context("registering the patient");
         assert!(
-            is_deliberate_refusal(&e),
+            carries_refusal_marker(&e),
             "a verdict that stops being recognisable the moment an orchestrator adds context \
              is a verdict nobody can act on"
         );
@@ -429,7 +444,7 @@ mod tests {
     #[test]
     fn an_ordinary_failure_is_not_a_deliberate_refusal() {
         let e = anyhow::anyhow!("connection closed").context("registering the patient");
-        assert!(!is_deliberate_refusal(&e));
+        assert!(!carries_refusal_marker(&e));
     }
 
     /// The refusal's own sentence reaches the operator rendering unchanged.

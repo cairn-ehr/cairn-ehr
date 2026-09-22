@@ -11,11 +11,11 @@
 mod common;
 
 use cairn_node::actor_enrolment::{
-    device_actor_enrolled, device_actor_standing, enroll_device_actor, not_enrolled_refusal,
-    require_device_actor, ActorStanding,
+    device_actor_standing, enroll_device_actor, not_enrolled_refusal, require_device_actor,
+    ActorStanding,
 };
 use cairn_node::db;
-use cairn_node::db_diagnosis::is_deliberate_refusal;
+use cairn_node::db_diagnosis::carries_refusal_marker;
 use common::{cs, setup};
 
 /// A distinct, deterministic key id per test, derived rather than written.
@@ -36,7 +36,7 @@ fn a_key_id(lineage: &str) -> String {
 }
 
 /// How many `actor_current` rows this key maps to. **ONE is the only safe answer** — see
-/// `device_actor_enrolled`'s doc for what two does to attribution.
+/// `ActorStanding::Ambiguous`'s doc for what two does to attribution.
 async fn rows_for(c: &tokio_postgres::Client, kid: &str) -> i64 {
     c.query_one(
         "SELECT count(*) FROM actor_current WHERE signing_key_id = $1",
@@ -55,7 +55,8 @@ async fn rows_for(c: &tokio_postgres::Client, kid: &str) -> i64 {
 /// which names `establish-unwrap-key`.
 #[test]
 fn the_refusal_names_the_command_that_fixes_it() {
-    let e = not_enrolled_refusal("9f3cdeadbeef");
+    let kid = a_key_id("refusal");
+    let e = not_enrolled_refusal(&kid);
     let rendered = format!("{e:#}");
     assert!(
         rendered.contains("enroll-device-actor"),
@@ -63,7 +64,7 @@ fn the_refusal_names_the_command_that_fixes_it() {
          own message left them — got: {rendered}"
     );
     assert!(
-        rendered.contains("9f3cdeadbeef"),
+        rendered.contains(&kid),
         "and it must still name the key, so an operator with several can tell which — got: \
          {rendered}"
     );
@@ -76,7 +77,9 @@ fn the_refusal_names_the_command_that_fixes_it() {
 /// running a command, so a retry button on it is the worst possible advice.
 #[test]
 fn the_refusal_is_a_deliberate_verdict_not_an_accident() {
-    assert!(is_deliberate_refusal(&not_enrolled_refusal("9f3cdeadbeef")));
+    assert!(carries_refusal_marker(&not_enrolled_refusal(&a_key_id(
+        "verdict"
+    ))));
 }
 
 /// On a node nobody provisioned, the requirement REFUSES rather than provisioning.
@@ -93,16 +96,19 @@ async fn an_unprovisioned_node_refuses_rather_than_enrolling_on_the_write_path()
     let _ = setup(&c, &[]).await;
     let kid = a_key_id("unprovisioned");
 
-    assert!(!device_actor_enrolled(&c, &kid).await.unwrap());
+    assert_eq!(
+        device_actor_standing(&c, &kid).await.unwrap(),
+        ActorStanding::NeverEnrolled
+    );
     let e = require_device_actor(&c, &kid)
         .await
         .expect_err("a write path must never provision");
     assert!(
-        is_deliberate_refusal(&e),
+        carries_refusal_marker(&e),
         "the refusal must be a verdict, or the window offers a retry for it"
     );
     assert!(
-        !device_actor_enrolled(&c, &kid).await.unwrap(),
+        device_actor_standing(&c, &kid).await.unwrap() == ActorStanding::NeverEnrolled,
         "REFUSING MUST NOT ENROL. A check with a side effect is precisely what #654 is about — \
          it is trap 2's shape, one subsystem over"
     );
@@ -156,7 +162,7 @@ async fn a_key_already_enrolled_under_another_kind_is_left_alone() {
     let (_sk, kid) = setup(&c, &[]).await;
 
     assert!(
-        device_actor_enrolled(&c, &kid).await.unwrap(),
+        device_actor_standing(&c, &kid).await.unwrap() == ActorStanding::Enrolled,
         "already-authoring means already enrolled, whatever kind it wears"
     );
     assert!(
@@ -250,7 +256,7 @@ async fn a_revoked_actor_is_not_told_to_re_enrol_a_key_that_cannot_be_resurrecte
         .await
         .expect_err("re-enrolling a retired key must not reach db/004's resurrection guard");
     assert!(
-        is_deliberate_refusal(&e),
+        carries_refusal_marker(&e),
         "it is a verdict — the same key is refused identically forever"
     );
 }
@@ -297,4 +303,86 @@ fn init_still_enrols_the_device_actor() {
          node can author anything — `M = 0` becomes `M = 1` in the §1.2 benchmark of #654 — and \
          update that benchmark rather than deleting this guard. Init arm read:\n{arm}"
     );
+}
+
+/// ⇒ THE BEHAVIOURAL TEST #662 SAID WAS BLOCKED. IT WAS NOT.
+///
+/// `init_still_enrols_the_device_actor` above is a source guard, and it was filed as the best
+/// available answer because a real test *"would need a VIRGIN database"* — `init` refuses over a
+/// registered custody key (`refuse_init_over_a_registered_custody_key`) and over an existing
+/// unwrap-key file, so it looked unable to run against the shared `cairn_test` fixture.
+///
+/// **That blocker was false, and the PR #661 review demonstrated it by running it.** The two
+/// pieces of state `init` refuses over are both clearable with helpers this tree already has:
+/// `node_unwrap_key` is in `clinic_kit`'s truncation list, and `local_node` is cleared by
+/// `cairn_node::db::reset_node_federation_tables`. With `--insecure-plaintext` there is no
+/// passphrase and no recovery code to feed — the same shape `restore_kit::restore_cli` already
+/// uses to drive a provisioning-class command against the shared database.
+///
+/// So this covers all three things the source guard's own doc honestly admits it cannot: that
+/// the call is **reached** (not behind a condition), that it is passed the **right key**, and
+/// that enrolment **actually happened**.
+#[tokio::test]
+async fn init_enrols_this_nodes_own_key_as_a_device_actor() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+
+    // Clear exactly what `init` refuses over, and nothing else.
+    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart, node_unwrap_key CASCADE")
+        .await
+        .unwrap();
+    db::reset_node_federation_tables(&c).await.unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("node.key");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_cairn-node"))
+        .args(["--conn", &base, "--key"])
+        .arg(&key)
+        .args([
+            "init",
+            "--name",
+            "init-enrolment-probe",
+            "--address",
+            "127.0.0.1:7999",
+            // No passphrase, no recovery code: that branch is taken before either is read.
+            "--insecure-plaintext",
+        ])
+        .output()
+        .expect("the binary Cargo just built must be runnable");
+    assert!(
+        out.status.success(),
+        "init must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The key `init` enrolled must be THIS node's signing key, not merely "some" actor — the
+    // source guard cannot tell those apart and that is half of why this test exists.
+    let seed = std::fs::read(&key).expect("init wrote a plaintext seed");
+    let sk = cairn_event::SigningKey::from_bytes(
+        &<[u8; 32]>::try_from(&seed[..32]).expect("an Ed25519 seed is 32 bytes"),
+    );
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+
+    assert_eq!(
+        device_actor_standing(&c, &kid).await.unwrap(),
+        ActorStanding::Enrolled,
+        "an initialised node must be able to author immediately — that is what keeps the §1.2 \
+         step count at M = 0 for an ordinary operator (#654). If this fails, every fresh node \
+         silently cannot write until somebody runs `enroll-device-actor`."
+    );
+    assert_eq!(
+        rows_for(&c, &kid).await,
+        1,
+        "and exactly one actor, or db/005 nulls the actor_id of everything it ever writes"
+    );
+
+    // Leave the shared database as we found it.
+    c.batch_execute("TRUNCATE event_log, actor_event, patient_chart, node_unwrap_key CASCADE")
+        .await
+        .unwrap();
+    db::reset_node_federation_tables(&c).await.unwrap();
 }

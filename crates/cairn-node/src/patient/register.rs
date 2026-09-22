@@ -885,10 +885,20 @@ mod tests {
             "",
             "1980-",
         ] {
+            let e = dob_precision(bad).expect_err(
+                "a shape that is not YYYY / YYYY-MM / YYYY-MM-DD must be refused, not silently \
+                 coerced to a guessed precision",
+            );
+            // AND it must be a VERDICT, not a bare error. Asserting only `is_err()` here let a
+            // mutation back to `anyhow::bail!` pass the ENTIRE `cairn-node` gate — the only
+            // thing that went red was a DB-gated suite in the OTHER cargo tree, which needs a
+            // full registration walk to prove a property of a pure function (#651, PR #661
+            // review). Without this line the clerk silently gets the retry button back on the
+            // default failure mode of the registration surface.
             assert!(
-                dob_precision(bad).is_err(),
-                "{bad:?} is not one of YYYY / YYYY-MM / YYYY-MM-DD and must be refused, not \
-                 silently coerced to a guessed precision"
+                crate::db_diagnosis::carries_refusal_marker(&e),
+                "{bad:?} is refused deterministically, so the refusal must carry the marker that \
+                 tells a caller it is a verdict rather than an outage"
             );
         }
     }

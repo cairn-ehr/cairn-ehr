@@ -19,7 +19,16 @@
 //! - **`cairn-node init` enrols**, so an initialised node costs its operator no new act.
 //! - **`cairn-node enroll-device-actor` is the named remedy** for a node that was not — most
 //!   obviously a node restored without its actor registry, since a restore never runs `init`.
-//! - **Every write path calls [`require_device_actor`] and refuses.** Nothing provisions.
+//! - **Every write path that authors as THIS NODE calls [`require_device_actor`] and refuses.**
+//!   Nothing provisions the node's own device actor.
+//!
+//! ⚠️ **That last sentence is scoped, and the scope is load-bearing.** One path in this same
+//! binary still enrols on first use: `matcher_actor::resolve_matcher_actor` mints a per-epoch
+//! `agent` actor from `Cmd::ApplyAutoCandidates`, which is a write path. That is arguably its
+//! own ceremony — a matcher epoch is an identity, not a node — but it IS the shape #654 is
+//! named after, so it is named here rather than left for someone to discover and cite as
+//! precedent for re-adding enrol-on-miss.
+//! [#663](https://github.com/cairn-ehr/cairn-ehr/issues/663) carries the question.
 //!
 //! # What an enrolled device actor is, and is not
 //!
@@ -38,17 +47,31 @@ const DEVICE_ACTOR_ROLE: &str = "registration-desk";
 /// Where this signing key stands with the actor registry.
 ///
 /// **Three states, not two**, and the third is the one that bites. `actor_current` excludes
-/// revoked and superseded-away actors, so a key that *was* enrolled and has since been retired
-/// reads exactly like a key nobody ever enrolled — and the obvious remedy for the second is a
-/// dead end for the first. See [`ActorStanding::Retired`].
+/// **revoked** actors, so a key that *was* enrolled and has since been revoked reads exactly
+/// like a key nobody ever enrolled — and the obvious remedy for the second is a dead end for
+/// the first. See [`ActorStanding::Retired`].
+///
+/// # ⚠️ SUPERSEDE IS NOT A RETIREMENT HERE, AND AN EARLIER VERSION OF THIS DOC SAID IT WAS
+///
+/// `actor_current` (db/004) is `WHERE ae.op IN ('enroll','supersede')` — a `supersede` row is a
+/// **member** of the view, written against the OLD `actor_id`, and `DISTINCT ON … ORDER BY
+/// recorded_at DESC` picks it as current. Only a `revoke` row removes an actor.
+///
+/// That costs nothing today because **there is no supersede door anywhere in the tree** (db/004's
+/// own HINT says *"rotate-key/supersede (no door yet)"*, and nothing inserts one). But the day
+/// the rotate-key door lands, a superseded key will read [`ActorStanding::Enrolled`] here and
+/// keep authoring. **Whoever writes that door must revisit this function** — do not trust a
+/// classification that was reasoned about a state the schema cannot yet reach.
+/// [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorStanding {
     /// Resolvable to a current actor. It may author.
     Enrolled,
     /// No row in the registry mentions this key at all. `enroll-device-actor` fixes it.
     NeverEnrolled,
-    /// This key HAS registry history — enrolled once, then revoked or superseded away — and is
-    /// not current.
+    /// This key HAS registry history — enrolled once, then **revoked** — and is not current.
+    /// (Not *superseded*: see the enum doc — a supersede row stays in `actor_current`, and no
+    /// supersede door exists yet.)
     ///
     /// **`enroll-device-actor` cannot fix this, and must not be offered.** db/004's
     /// `cairn_actor_id_key_conflict` refuses a fresh enroll onto an `actor_id` carrying prior
@@ -57,6 +80,21 @@ pub enum ActorStanding {
     /// (#152). Refusing that is correct. Sending an operator there is not — they would meet an
     /// opaque `P0001` about actor-id collisions while following the remedy we just gave them.
     Retired,
+    /// This key maps to **more than one** current actor — not a state anything may author under.
+    ///
+    /// `submit_event` resolves a signer by `signing_key_id` alone and sets `actor_id = NULL`
+    /// for **every** event a dual-mapped key authors node-wide (db/005,
+    /// `array_length(v_actor_ids, 1) = 1`) — silently and irreversibly destroying attribution.
+    /// So the honest answer is to refuse the write, not to let it through unattributed.
+    ///
+    /// Unreachable through the only enrol door that exists: db/004's
+    /// `cairn_key_actor_id_conflict` is whole-history and fails closed, and
+    /// `a_key_already_enrolled_under_another_kind_is_left_alone` pins the count at one. It is
+    /// classified anyway because db/004 explicitly anticipates a **future actor-sync apply
+    /// door** (ADR-0044 §3) that must mirror that check, and nothing in `cairn-node` would
+    /// notice if it did not — the same shape as
+    /// [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664).
+    Ambiguous,
 }
 
 /// Where does this key stand? One round trip, three answers.
@@ -72,10 +110,15 @@ pub async fn device_actor_standing(
     use anyhow::Context as _;
     let standing: String = db
         .query_one(
+            // COUNTS the current rows rather than testing existence, because `Enrolled` has to
+            // mean "resolves to exactly one actor" and not merely "appears in the view" — see
+            // `ActorStanding::Ambiguous` for what two rows do to attribution.
             "SELECT CASE \
-               WHEN EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1) THEN 'enrolled' \
-               WHEN EXISTS(SELECT 1 FROM actor_event   WHERE signing_key_id = $1) THEN 'retired' \
-               ELSE 'never' END",
+               WHEN c.n = 1 THEN 'enrolled' \
+               WHEN c.n > 1 THEN 'ambiguous' \
+               WHEN EXISTS(SELECT 1 FROM actor_event WHERE signing_key_id = $1) THEN 'retired' \
+               ELSE 'never' END \
+             FROM (SELECT count(*) AS n FROM actor_current WHERE signing_key_id = $1) c",
             &[&kid],
         )
         .await
@@ -84,10 +127,21 @@ pub async fn device_actor_standing(
     Ok(match standing.as_str() {
         "enrolled" => ActorStanding::Enrolled,
         "retired" => ActorStanding::Retired,
-        // Fail towards the state with a remedy. The CASE above is total, so this arm is
-        // unreachable; treating an impossible answer as "never" offers a command that will
-        // simply refuse if it is wrong, which is the cheaper of the two mistakes.
-        _ => ActorStanding::NeverEnrolled,
+        "never" => ActorStanding::NeverEnrolled,
+        "ambiguous" => ActorStanding::Ambiguous,
+        // ⚠️ FAIL CLOSED AND LOUD, not towards a guess. An earlier version of this arm fell
+        // through to `NeverEnrolled` on the argument that the CASE is total so the arm is
+        // unreachable, and that offering a command "that will simply refuse if it is wrong" is
+        // the cheaper mistake. **That argument is falsified by this module's own
+        // `ActorStanding::Retired`**: the command in question does not simply refuse, it refuses
+        // with db/004's opaque resurrection P0001 — the exact dead end `Retired` exists to
+        // close. So a fourth CASE label added later would silently reintroduce it. Unreachable
+        // today; an error costs nothing and cannot mislead an operator.
+        other => anyhow::bail!(
+            "actor standing {other:?} is not one this build understands — the SQL classification \
+             and this match have drifted apart, and guessing would hand the operator a remedy \
+             that may be a dead end"
+        ),
     })
 }
 
@@ -104,29 +158,6 @@ pub fn retired_actor_refusal(kid: &str) -> anyhow::Error {
          node needs a NEW signing key, enrolled afresh — which is a decision about who is \
          accountable for what this node writes, not a command to run blind."
     ))
-}
-
-/// Is this signing key already resolvable to an authoring actor?
-///
-/// # ⚠️ KIND-AGNOSTIC, AND THAT IS NOT AN OVERSIGHT
-///
-/// `submit_event` resolves a signer to an actor purely by `signing_key_id` — kind matters only
-/// for attestation — and if one key maps to **more than one** `actor_current` row it sets
-/// `actor_id = NULL` for **every** event that key authors node-wide (db/005,
-/// `array_length(v_actor_ids, 1) = 1`), silently and irreversibly degrading attribution.
-///
-/// A kind-scoped `AND kind = 'device'` guard would happily add a second actor to a key already
-/// enrolled as (say) a matcher `agent` or a `human`, tripping exactly that dual-mapping. Keying
-/// on `signing_key_id` alone means a key already usable for authoring is left untouched — never
-/// split into two actors.
-///
-/// Public because slice 2c's window probes it **at launch**, which is the same discipline
-/// `build_live_state` already follows by loading the node key up front rather than discovering
-/// at sign-off that it can never seal anything.
-pub async fn device_actor_enrolled(db: &tokio_postgres::Client, kid: &str) -> anyhow::Result<bool> {
-    // Delegates rather than running its own `EXISTS`, so there is ONE definition of "enrolled"
-    // and the kind-agnostic argument above cannot be true of one query and false of the other.
-    Ok(device_actor_standing(db, kid).await? == ActorStanding::Enrolled)
 }
 
 /// Provision this key as a `device` actor. **Idempotent.** Returns whether it actually enrolled.
@@ -146,6 +177,8 @@ pub async fn enroll_device_actor(db: &tokio_postgres::Client, kid: &str) -> anyh
         // `cairn_actor_id_key_conflict` raise its actor-id-collision message at somebody who
         // only did what a previous refusal told them to (PR #661 review).
         ActorStanding::Retired => return Err(retired_actor_refusal(kid)),
+        // Refuse rather than adding a THIRD row to a key that already maps to two.
+        ActorStanding::Ambiguous => return Err(ambiguous_actor_refusal(kid)),
         ActorStanding::NeverEnrolled => {}
     }
     let pinned = serde_json::json!({ "role": DEVICE_ACTOR_ROLE, "node_key": kid }).to_string();
@@ -177,6 +210,23 @@ pub fn not_enrolled_refusal(kid: &str) -> anyhow::Error {
     ))
 }
 
+/// The refusal for a key that maps to more than one current actor. **Pure.**
+///
+/// Refusing is the safe answer and letting it through is not: db/005 would accept the write and
+/// stamp `actor_id = NULL` on it, and on every other event this key ever authors. An event whose
+/// author cannot be named is worse than an event that was not written — the first is a silent,
+/// permanent hole in the accountability record (principle 10), the second is a message on screen.
+pub fn ambiguous_actor_refusal(kid: &str) -> anyhow::Error {
+    crate::db_diagnosis::deliberate_refusal(format!(
+        "this node's signing key {kid} maps to MORE THAN ONE current actor, so nothing it \
+         authors could be attributed to anyone (db/005 sets actor_id = NULL for every event a \
+         dual-mapped key writes, node-wide and irreversibly). Refusing rather than writing an \
+         unattributable clinical event. This should be unreachable through `enroll_actor`, so \
+         it means something wrote `actor_event` directly or a new apply door skipped db/004's \
+         `cairn_key_actor_id_conflict` — investigate before authoring anything on this node."
+    ))
+}
+
 /// Require an enrolled actor before a write, refusing if there is none. **Never provisions.**
 ///
 /// The whole point of this function is the thing it does *not* do. A check that enrolled on
@@ -189,5 +239,6 @@ pub async fn require_device_actor(db: &tokio_postgres::Client, kid: &str) -> any
         // A DIFFERENT sentence, because the remedy is different and the obvious one is a dead
         // end. See `ActorStanding::Retired`.
         ActorStanding::Retired => Err(retired_actor_refusal(kid)),
+        ActorStanding::Ambiguous => Err(ambiguous_actor_refusal(kid)),
     }
 }

@@ -30,7 +30,7 @@ async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
     // floor_enforced.rs, backup.rs). The node-genesis plane (`node_event`/`local_node`) never
     // touches `actor_current`, so reusing this same key for the clinical `agent` actor above
     // is safe — no dual-actor-mapping degradation (see `cairn_node::actor_enrolment::
-    // device_actor_enrolled`'s doc for why that guard exists, and why it is kind-AGNOSTIC).
+    // device_actor_standing`'s doc for why that guard exists, and why it is kind-AGNOSTIC).
     cairn_node::identity::provision(c, &sk, &kid, "test-node", "127.0.0.1:0")
         .await
         .unwrap();

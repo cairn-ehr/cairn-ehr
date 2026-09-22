@@ -79,11 +79,11 @@ async fn chart_count(c: &tokio_postgres::Client) -> i64 {
 /// identically until somebody enrols it), legible (the message names the key), and squarely
 /// the clerk's cue to fix the node rather than to click Register again.
 ///
-/// It is also not a hypothetical shape chosen for convenience. `cairn-node patient-register`
-/// enrols its key on first use and `LiveData` deliberately does not, so **this is exactly the
-/// refusal the reference window will meet on a node where the CLI never registered anyone** —
-/// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654), and `LiveData::new`'s doc has
-/// the argument for why the port must not provision its way out of it.
+/// It is also not a hypothetical shape chosen for convenience. **Since #654 no write path on
+/// either surface provisions an actor** — `cairn-node init` enrols and
+/// `cairn-node enroll-device-actor` is the remedy — so this is exactly the refusal the
+/// reference window meets on a node that was never provisioned. `LiveData::new`'s doc has the
+/// argument for why the port must not provision its way out of it.
 #[tokio::test]
 async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
     let Some(cs) = common::cs() else { return };
@@ -150,7 +150,7 @@ async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
 /// slice 2c builds, and before this it came with a retry button that could never work.
 ///
 /// **The mutation that kills this test:** remove the
-/// `|| cairn_node::db_diagnosis::is_deliberate_refusal(e)` arm from `data_error_from` and this
+/// `|| cairn_node::db_diagnosis::carries_refusal_marker(e)` arm from `data_error_from` and this
 /// goes back to `Unavailable`. Nothing else in either tree notices.
 #[tokio::test]
 async fn a_rust_side_pre_flight_refusal_is_refused_not_unavailable() {
