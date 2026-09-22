@@ -903,7 +903,22 @@ any tree, no lockfile movement.** Closes
   launch (#654's option 2). **#655 is untouched**: a second discriminator did not make the first
   one right.
 
-- **Verification.** Twelve mutations, each killing its intended test. The load-bearing one:
+- **The review pass, in the same PR — five findings, and one was a dead end.** Two rustfmt breaks
+  and four call-site comments still describing the deleted behaviour (*"idempotent, enrols only on
+  first use"*), which inverted the invariant #654 had just established. Then the one that
+  mattered: **a REVOKED device actor was indistinguishable from a never-enrolled one.**
+  `actor_current` excludes revokes, so a retired key read as *not enrolled* and the refusal sent
+  the operator to `enroll-device-actor`, which db/004's `cairn_actor_id_key_conflict` refuses as a
+  resurrection with an opaque `P0001` (#152). Refusing the resurrection is correct; sending them
+  there is not. Standing is now three states (`ActorStanding::{Enrolled, NeverEnrolled, Retired}`)
+  in one round trip, and `Retired`'s sentence says the remedy is a **new signing key** — a
+  decision about accountability, not a command. Fifth finding: **`init` has no behavioural test**
+  at all; deleting its one enrolment line left the gate green, so a bounded source guard was
+  added and the real rig filed as
+  [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662), which names the seven other `init`
+  effects that are equally unpinned.
+
+- **Verification.** Fourteen mutations, each killing its intended test. The load-bearing one:
   scoping `device_actor_enrolled` to `kind = 'device'` passes four of the five new enrolment tests
   and **mints a second `actor_current` row** for a key already enrolled as an `agent`, which nulls
   the `actor_id` of every event that key ever authors (db/005). The fifth catches it.

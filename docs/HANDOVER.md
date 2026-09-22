@@ -122,7 +122,21 @@
 >   subsystem over. **⚠️ And `device_actor_enrolled` is KIND-AGNOSTIC on purpose**: `submit_event`
 >   resolves a signer by `signing_key_id` alone, so a key mapping to two `actor_current` rows
 >   nulls the `actor_id` of every event it ever authors (db/005). A `kind = 'device'` scope passes
->   four of the five enrolment tests and mints that second row.
+>   four of the enrolment tests and mints that second row.
+> - **⚠️ AN ACTOR'S STANDING IS THREE STATES, NOT TWO** (`ActorStanding::{Enrolled, NeverEnrolled,
+>   Retired}`) — the #661 review's best finding. `actor_current` excludes revokes, so a **revoked**
+>   key reads as *not enrolled*, and the obvious refusal sends the operator to
+>   `enroll-device-actor` — which db/004's `cairn_actor_id_key_conflict` then refuses as a
+>   **resurrection** with an opaque `P0001` (#152). Refusing the resurrection is CORRECT; sending
+>   them there is not. `Retired` has its own sentence: the remedy is a **new signing key**, which
+>   is a decision about accountability, not a command to run blind. **Whenever a state is derived
+>   from a view that filters, ask what the filtered-out rows look like from outside it.**
+> - **⇒ `cairn-node init` HAS NO BEHAVIOURAL TEST — #662.** Deleting its one `enroll_device_actor`
+>   line left the whole workspace gate green while every fresh node silently lost the ability to
+>   author. A **source guard** (`init_still_enrols_the_device_actor`, bounded to the `Init` arm
+>   because `EnrollDeviceActor` calls the same function) catches deletion and nothing more. `init`
+>   needs a **virgin database** — it refuses over a registered custody key — so a real test is a
+>   rig of its own, and **seven other `init` effects are equally unpinned**.
 >
 > **Still open from 2b's review wave:** **#652** (the P0001 rule's three homes) · **#655** (the
 > `Unavailable` split, above) · **#656** (the missing CI-step guard, above) ·
