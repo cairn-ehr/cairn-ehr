@@ -207,6 +207,20 @@ search.
 project's 500-line guideline. (`cairn-gui-tab-medications/src/view.rs` is already 645 — noted, out of
 scope.)
 
+> **Added 2026-09-23 (PR #661): how the window gets an actor, and what 2c owes.** #654 asked
+> whether the reference window should provision a `device` actor the way the CLI silently did.
+> **Answer: neither surface does.** `cairn-node init` enrols, `cairn-node enroll-device-actor` is
+> the named remedy for a node that never ran `init`, and all fifteen CLI write subcommands now
+> refuse instead of provisioning — the asymmetry where a node's behaviour depended on which
+> surface touched it first is gone, and provisioning-as-a-write-path-side-effect (trap 2,
+> ADR-0066 decision 6) is now a rule rather than a preference.
+>
+> **What 2c owes:** `cairn_node::actor_enrolment::device_actor_enrolled` is public so
+> `build_live_state` can **probe at launch** and say so in the chrome — the same discipline it
+> already follows by loading the node key up front rather than discovering at sign-off that it can
+> never seal anything. That is #654's option 2. `LiveData` itself stays unchanged: its refusal is
+> already correctly classified, and making it *actionable* is rendering.
+
 **Shell and frontend.** The front door is a shell state, not a tab — a tab presupposes a patient.
 `--patient <uuid>` keeps working, so the timing runbook and the `--mock` accessibility pass do not
 move. Plain JS in `src-ui/`, per the no-npm rule.
@@ -240,6 +254,23 @@ move. Plain JS in `src-ui/`, per the no-npm rule.
 >   deterministic, verdict-shaped, and reported as an outage.
 >   [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) has the argument; a test pins the
 >   wrong behaviour so it is visible in every run rather than only in the issue.
+
+> **Resolved 2026-09-23 (slice 2c prerequisites, PR #661).** A Rust-side pre-flight refusal is now
+> a `cairn_node::db_diagnosis::DeliberateRefusal` and reaches the clerk as `Refused` (#651);
+> `data_error_from` asks two complementary questions — the SQLSTATE *and* the marker — and the test
+> that pinned the wrong behaviour expects the right one. **What is still wrong is the other half
+> of the rule (#655):** a constraint violation, a privilege refusal (`42501`) and a never-loaded
+> schema (`42P01`) are floor *decisions* carrying their own SQLSTATE, and they still land in
+> `Unavailable`. Adding a second discriminator did not make the first one right.
+>
+> Two more things the same PR settled, which this section owes 2c:
+>
+> - **`--mock` can fail now** (`MockData::fail_next`, #660), one shot at a time, so the two
+>   sentences 2c writes are testable in the mode the accessibility and timing passes run in — not
+>   only in a DB-gated suite that renders nothing.
+> - **`TokenStore::settle` is how a handler should end a `take`** (#659). Writing
+>   `.map_err(|(e, _)| e)?` instead drops the attestation and latches the store shut, and
+>   `discard` — the clerk's own recovery gesture — does not clear it.
 
 ## Paper-parity benchmark (§1.2)
 

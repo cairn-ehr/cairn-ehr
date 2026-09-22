@@ -841,6 +841,73 @@ and not claimed** — 2a exposes no runnable surface. Design:
 `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Plan:
 `docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2a.md`.
 
+### 2026-09-23 — slice 2c's four prerequisites (PR #661)
+
+**No ADR, no spec version bump, no migration, `SCHEMA_GENERATION` unchanged, no new dependency in
+any tree, no lockfile movement.** Closes
+[#659](https://github.com/cairn-ehr/cairn-ehr/issues/659),
+[#660](https://github.com/cairn-ehr/cairn-ehr/issues/660),
+[#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) and
+[#654](https://github.com/cairn-ehr/cairn-ehr/issues/654). Plan:
+`docs/superpowers/plans/2026-09-23-funnel-ui-slice-2c-prerequisites.md`.
+
+- **Why a slice of its own.** All four defects exist today and all four have exactly one consumer
+  — the slice 2c window that has not been written yet. Three of the issues say so themselves. It
+  is the cheapest possible moment to close them, and it keeps 2c's PR from spanning two cargo
+  trees with two gate profiles.
+
+- **#659 — `TokenStore::settle`.** `register` hands the attested search back *inside* its error
+  because `restore` needs exactly that value, which made `.map_err(|(e, _)| e)?` — the idiom 2c's
+  handler would have been written with — a silent trap: it drops the attestation during
+  **destructuring** (so `#[must_use]` cannot fire; that lint sees unused expression results, not
+  dropped pattern fields) and leaves `in_flight` set. `settle` commits on `Ok`, restores on `Err`,
+  and returns the `Restored` so the two failure outcomes keep different words on screen. Generic
+  on `T`/`E`: naming `DataError` would invert the `cairn-gui-data → cairn-gui-funnel` edge into a
+  cycle. **The other reading of #659 — clearing `in_flight` in `discard` — was rejected and the
+  code says why: that is how two clicks produced two charts.**
+
+- **#660 — `MockData::fail_next`.** `--mock` could produce neither `Refused` nor `Unavailable`, so
+  2c's two-armed rendering would have shipped with coverage only from a DB-gated suite that
+  renders nothing. One shared one-shot slot, consumed **inside** the async body so a
+  built-and-dropped future does not spend it — a property the plan's own mutation analysis
+  predicted would otherwise be unpinned, and it was, so it is a fourth test.
+
+- **#651 — `cairn_node::db_diagnosis::DeliberateRefusal`.** A malformed date of birth refuses in
+  Rust before any statement reaches Postgres, so it carried no SQLSTATE and reached the clerk as
+  an outage with a retry that can never work. **On a desk with no date widget that is the default
+  failure mode, not an edge case**: the trigger applies no date-format check (correctly —
+  principle 4), db/046 pass 2 is a string compare, so `3/2/1980` searches fine, finds nothing,
+  then fails in Rust. Shape 1 (a real type with a private field) rather than shape 2 (a marker
+  convention), because a convention is what #648 was getting away from. Its home is
+  `db_diagnosis` so **#652's consolidation finds the module already answering both halves**.
+  `data_error_from` now asks two complementary questions; the test that pinned the wrong answer
+  on purpose expects the right one. `dob_precision` turned out to be the only `bail!`/`anyhow!`
+  in `register.rs`, so the registration path is complete.
+
+- **#654 — one enrolment rule, and a finding the issue did not have.** The maintainer chose
+  *provisioning command + retire the CLI auto-enrolment*. **The issue understated its blast radius
+  by fifteen**: `ensure_registration_actor` was not `patient-register`'s helper but the CLI's
+  general device-actor bootstrap, called by `register-john-doe`, `patient-register`,
+  `sensitivity-assert`, both evidence commands, `identify-patient`, eight medication commands and
+  `shred` — its own doc called it *"the headless-node/CLI convenience"*. Retiring it from one
+  would have left fourteen provisioning silently. So all fifteen now `require_device_actor` and
+  refuse; **`cairn-node init` enrols** (so an ordinary operator gains no new act — `M = 0` in the
+  plan's §1.2 benchmark) and **`cairn-node enroll-device-actor`** is the named remedy for a node
+  that never ran `init`, most obviously one restored without its actor registry. The refusal is a
+  `DeliberateRefusal`, so it is a verdict, and it names the command the way `submit_event`'s
+  unwrap-key refusal names `establish-unwrap-key`.
+
+- **What #661 deliberately did NOT do.** `LiveData` is unchanged: making its refusal *actionable*
+  means a sentence in the window's chrome, which is rendering, and rendering is 2c's.
+  `device_actor_enrolled` is public **for exactly that** — 2c's `build_live_state` probes it at
+  launch (#654's option 2). **#655 is untouched**: a second discriminator did not make the first
+  one right.
+
+- **Verification.** Twelve mutations, each killing its intended test. The load-bearing one:
+  scoping `device_actor_enrolled` to `kind = 'device'` passes four of the five new enrolment tests
+  and **mints a second `actor_current` row** for a key already enrolled as an `agent`, which nulls
+  the `actor_id` of every event that key ever authors (db/005). The fifth catches it.
+
 ### 2026-09-22 — funnel UI slice 2b: the live ports (PR #653)
 
 - **The slice:** the funnel's **data path** — the rules 2a made executable, now acting on a real
@@ -980,13 +1047,9 @@ of the five agents' claims were corrected in the process. Fixed in the PR:
 decisions that get a retry button — `cairn-sync` already solved this with `LocalDbFault`; decide it
 once in #652's home) · [#656](https://github.com/cairn-ehr/cairn-ehr/issues/656) ·
 [#657](https://github.com/cairn-ehr/cairn-ehr/issues/657) ·
-[#658](https://github.com/cairn-ehr/cairn-ehr/issues/658) ·
-[#659](https://github.com/cairn-ehr/cairn-ehr/issues/659) (**`TokenStore` has no settling
-combinator and `discard` does not clear `in_flight`**, so 2c's natural `.map_err(|(e, _)| e)?`
-latches the store shut with no recovery short of a window reload) ·
-[#660](https://github.com/cairn-ehr/cairn-ehr/issues/660) (the mock ports can never fail, so 2c's
-two-armed rendering has no `--mock` test path). **#651 and #654 gained the reachability arguments
-that make them 2c blockers rather than riders** (see their threads).
+[#658](https://github.com/cairn-ehr/cairn-ehr/issues/658). **#659, #660, #651 and #654 were also
+filed here and are all CLOSED by PR [#661](https://github.com/cairn-ehr/cairn-ehr/pull/661)** — the
+entry below.
 
 **§1.2:** the benchmark is the design page's and **this slice does not move `M`** — the ports it
 builds are called by acts already counted (register paper 5 → forced 4 → target 4; find paper 3 →
