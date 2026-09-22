@@ -908,7 +908,18 @@ and not claimed** — 2a exposes no runnable surface. Design:
   a proportionate `db_gate_ran.rs` fails closed for anyone who has not declared it (#442, #450).
 - **Scope discipline: nothing under `crates/`**, so the gate was the ~2-minute `cairn-gui` one
   rather than the ~2-hour root sweep. `git diff --name-only main...HEAD | grep '^crates/'` is empty.
+- **Found by self-review, before a window existed to hit it —
+  [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).** `cairn-node patient-register`
+  enrols its signing key as a `device` actor on first use (`ensure_registration_actor`);
+  `LiveData` deliberately does **not**, because enrolling an actor is provisioning and
+  provisioning as a write-path side effect is trap 2's shape (ADR-0066 decision 6 made
+  `ensure_unwrap_key` refuse for the same reason). So the reference window's **first**
+  registration on a node where the CLI never registered anyone is refused. Since #648 that is at
+  least legible and correctly classified rather than an outage inviting a retry — but it names a
+  key id, not a remedy, and the asymmetry means a node behaves differently depending on which
+  surface touched it first. A decision for 2c, not a patch.
 - **Filed:** [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) (above) ·
+  [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654) (above) ·
   [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652) (the P0001 rule's **third** home —
   `cairn-sync`, `cairn-node`'s `restore::clinical` and now `cairn-gui-live`; one public home in
   `cairn_node::db_diagnosis` retires all three, and **#633**'s guard belongs with it).

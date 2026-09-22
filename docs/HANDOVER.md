@@ -23,6 +23,19 @@
 > design needs revisiting, not quieter signing), and whether the browse search needs
 > debouncing/supersession now that it re-searches as the clerk types.
 >
+> **⇒ TWO THINGS 2c MUST GET RIGHT THAT 2b COULD ONLY NAME.**
+> - **`today` comes from the DATABASE, not the wall clock.** `PatientSearch::search` takes the
+>   caller's value and the port is forbidden to override it (an age whose value depends on which
+>   clock won, with nothing on screen saying which). `cairn-node`'s own CLI reads
+>   `SELECT current_date::text`; the window must do the same.
+> - **#654 — the window's FIRST registration refuses on a node where `patient-register` was never
+>   run.** The CLI enrols its signing key as a `device` actor on first use
+>   (`ensure_registration_actor`); `LiveData` deliberately does not, because provisioning as a
+>   write-path side effect is trap 2's shape. The refusal is legible and correctly classified as
+>   `Refused` since #648 — but it names a key id, not a remedy, and the asymmetry (CLI provisions
+>   silently, GUI refuses) means a node behaves differently depending on which surface touched it
+>   first. **Needs a decision, not a patch.**
+>
 > **The durable rules 2b established — do not undo any of these:**
 > - **`cairn-gui-live` is where a port implementation that needs a database goes.** Not
 >   `cairn-gui-data` (its manifest states, deliberately, that it pulls no database driver, which

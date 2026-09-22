@@ -78,6 +78,12 @@ async fn chart_count(c: &tokio_postgres::Client) -> i64 {
 /// An unenrolled signer is the floor's own verdict: deterministic (the same key refuses
 /// identically until somebody enrols it), legible (the message names the key), and squarely
 /// the clerk's cue to fix the node rather than to click Register again.
+///
+/// It is also not a hypothetical shape chosen for convenience. `cairn-node patient-register`
+/// enrols its key on first use and `LiveData` deliberately does not, so **this is exactly the
+/// refusal the reference window will meet on a node where the CLI never registered anyone** —
+/// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654), and `LiveData::new`'s doc has
+/// the argument for why the port must not provision its way out of it.
 #[tokio::test]
 async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
     let Some(cs) = common::cs() else { return };

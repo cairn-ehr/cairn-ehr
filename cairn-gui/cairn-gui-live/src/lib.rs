@@ -63,6 +63,24 @@ impl LiveData {
     /// "which node am I" question answered in ONE place per window: a `LiveData` that
     /// connected on its own could end up describing a different node than the rest of the
     /// window, and nothing on screen would say so.
+    ///
+    /// # ⚠️ It does NOT enrol the signing key, and the CLI does
+    ///
+    /// `cairn-node patient-register` calls `ensure_registration_actor` first, which enrols an
+    /// unknown signing key as a `device` actor with role `registration-desk`. This does not,
+    /// deliberately: enrolling an actor is **provisioning**, and provisioning as a write-path
+    /// side effect is the shape trap 2 forbids (ADR-0066 decision 6 made `ensure_unwrap_key`
+    /// refuse rather than quietly provision, for the same reason). A GUI silently minting a
+    /// `device` actor on somebody's node is worse than the CLI doing it, not better.
+    ///
+    /// **So on a node where `patient-register` has never been run, the first registration
+    /// through this port is REFUSED** — db/005's *"signer … is not an enrolled, non-revoked
+    /// actor"*. Since #648 that arrives as [`cairn_gui_data::port::DataError::Refused`]
+    /// carrying the floor's own sentence, rather than as an outage inviting a pointless
+    /// retry, which is the right failure; but the message names a key id, not a remedy.
+    /// Resolving that asymmetry is
+    /// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654), and it belongs to the slice
+    /// that first puts this in front of a person.
     pub fn new(db: Client, node_sk: SigningKey, node_origin: String) -> Self {
         let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
         Self {
