@@ -170,7 +170,9 @@ mod tests {
         // a clerk cannot act on.
         let bounded = bound_for_prompt(&list_of(8, None), 5);
         assert!(bounded.incomplete);
-        let reason = bounded.incomplete_reason.expect("a reason, not a bare flag");
+        let reason = bounded
+            .incomplete_reason
+            .expect("a reason, not a bare flag");
         assert!(reason.contains('3'), "must name the count: {reason}");
     }
 

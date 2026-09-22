@@ -32,7 +32,9 @@
 //!   registration may attest to.
 
 pub mod prompt;
+pub mod token;
 pub mod trigger;
 
 pub use prompt::{bound_for_prompt, PROMPT_CAP};
+pub use token::{AttestedSearch, SearchToken, TokenError, TokenStore};
 pub use trigger::{trigger_state, MissingPart, TriggerState, MIN_NAME_TOKENS};

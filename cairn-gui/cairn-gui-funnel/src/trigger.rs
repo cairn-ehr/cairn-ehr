@@ -211,7 +211,10 @@ mod tests {
         // two tokens whether they are Latin, Han or Devanagari — and a Han name written
         // without a space is one token, which is the correct and honest answer: it is not
         // more identifying for being in another script.
-        assert_eq!(trigger_state("阿明娜 李", "1984-03-02"), TriggerState::Ready);
+        assert_eq!(
+            trigger_state("阿明娜 李", "1984-03-02"),
+            TriggerState::Ready
+        );
         assert_eq!(
             trigger_state("李小明", "1984-03-02"),
             TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1, need: 2 }])
