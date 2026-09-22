@@ -445,6 +445,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cairn-gui-live"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cairn-event",
+ "cairn-gui-data",
+ "cairn-gui-funnel",
+ "cairn-node",
+ "cairn-patient-search",
+ "hex",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
+]
+
+[[package]]
 name = "cairn-gui-manifest"
 version = "0.1.0"
 dependencies = [
