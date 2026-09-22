@@ -29,3 +29,139 @@ pub fn is_affirmative(value: &str) -> bool {
         "1" | "true" | "yes" | "on"
     )
 }
+
+/// Open the test database with its schema loaded, holding the cluster-wide advisory lock.
+///
+/// Returns `(reader, guard)`. The GUARD's only job is to hold `db::test_serial_guard`'s
+/// advisory lock (`0x4341524E`, the same key every root-tree DB suite takes) for as long as
+/// the test lives — bind it, never `_`, or the lock releases at the end of the statement and
+/// this suite can interleave its `TRUNCATE` with a concurrent root-tree run.
+///
+/// The `reader` is a SECOND connection with the schema replayed. It is separate from the one
+/// a `LiveData` will own, deliberately: `LiveData::db` is private and must stay so, and a test
+/// that needs to read a row back should open its own connection rather than grow an accessor
+/// into production code for a test's convenience.
+pub async fn connect(cs: &str) -> (Client, Client) {
+    let guard = cairn_node::db::test_serial_guard(cs)
+        .await
+        .expect("the cluster-wide test lock");
+    let reader = cairn_node::db::connect_and_load_schema(cs)
+        .await
+        .expect("schema-loaded connection");
+    (reader, guard)
+}
+
+/// A second schema-loaded connection, for the `LiveData` under test to own.
+pub async fn connect_for_live(cs: &str) -> Client {
+    cairn_node::db::connect_and_load_schema(cs)
+        .await
+        .expect("schema-loaded connection for the port")
+}
+
+/// Clear every per-patient projection, and enrol a signer.
+///
+/// # Why the table list is DERIVED and not written down
+///
+/// The first cut of this helper copied the root tree's five-table list and left out
+/// `patient_name` — the table db/046 pass 3 actually reads. Nothing failed on a clean
+/// database; it failed on the SECOND run, when a chart registered by the previous run was
+/// still findable and a test asserting "the fixture starts empty" saw last time's patient.
+/// That is #583's shape exactly: a DB-gated suite depending on state a predecessor left.
+///
+/// A hand-written list cannot be right for long, because a new clinical stream adds a
+/// projection and nothing points at this file. So the list is derived from the catalogue:
+/// **every base table in `public` carrying a `patient_id` column.** Per-patient projections
+/// all have one by construction; configuration and seed tables do not, so they are left alone
+/// — which matters, because truncating a seed table would break the floor rather than clean
+/// it. `event_log` is in the set too, and belongs there: it is the source every projection is
+/// derived from.
+///
+/// `quote_ident` rather than bare interpolation: the names come from `pg_class`, so they are
+/// real identifiers already, but quoting keeps the generated SQL obviously safe to a reader.
+pub async fn setup(c: &Client) -> (SigningKey, String) {
+    c.batch_execute(
+        "DO $$ \
+         DECLARE tables text; \
+         BEGIN \
+           SELECT string_agg(quote_ident(c.relname), ', ') INTO tables \
+           FROM pg_class c \
+           JOIN pg_namespace n ON n.oid = c.relnamespace \
+           JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'patient_id' \
+                              AND a.attnum > 0 AND NOT a.attisdropped \
+           WHERE n.nspname = 'public' AND c.relkind = 'r'; \
+           IF tables IS NULL THEN \
+             RAISE EXCEPTION 'no per-patient projection found — has the schema loaded?'; \
+           END IF; \
+           EXECUTE 'TRUNCATE ' || tables || ', actor_event CASCADE'; \
+         END $$;",
+    )
+    .await
+    .expect("truncate every per-patient projection");
+
+    let seed: [u8; 32] = std::array::from_fn(|i| (i as u8).wrapping_mul(11).wrapping_add(3));
+    let sk = SigningKey::from_bytes(&seed);
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+    c.execute(
+        "SELECT enroll_actor('agent', \
+         '{\"model\":\"funnel-port-test\",\"version\":\"1\",\"skill_epoch\":\"e\"}', $1)",
+        &[&kid],
+    )
+    .await
+    .expect("enrol the test signer");
+    (sk, kid)
+}
+
+/// Read the RAW `search.displayed` array back out of the stored event body, in order.
+///
+/// A query against `event_log.body`, NOT the `patient_registration` projection: the projection
+/// stores only `displayed_count` (deliberately — db/045's own comment on why two
+/// representations of one number is a lie waiting to happen), so the signed body is the only
+/// place the actual LIST can be read back from.
+///
+/// Goes through `::text` + `serde_json` because this tree does not enable tokio-postgres's
+/// `with-serde_json-1` feature — the project-wide convention. Copied from
+/// `crates/cairn-node/tests/patient_register.rs`, which is the AUTHORITY on the stored shape:
+/// the elements are uuid STRINGS, not native uuids, so they are parsed rather than bound.
+pub async fn stored_displayed(c: &Client, patient: uuid::Uuid) -> Vec<uuid::Uuid> {
+    let row = c
+        .query_one(
+            "SELECT (body -> 'search' -> 'displayed')::text AS displayed \
+             FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'identity.registration.asserted'",
+            &[&patient.to_string()],
+        )
+        .await
+        .expect("the registration event");
+    let raw: String = row.get(0);
+    let ids: Vec<String> = serde_json::from_str(&raw).expect("displayed is a JSON array");
+    ids.iter()
+        .map(|s| uuid::Uuid::parse_str(s).expect("each element is a uuid string"))
+        .collect()
+}
+
+/// Read the stored attestation's QUERY back — the name tokens and the birth date the
+/// registration swears it searched on.
+///
+/// The other half of ADR-0061's pair. `stored_displayed` proves the port reported the right
+/// candidates; without this, a port that attested the right LIST against somebody else's
+/// QUERY would pass every assertion in this crate. The two travel together inside one
+/// `AttestedSearch` precisely so they cannot disagree — this is what checks that the value
+/// reaching the signed body is still that pair.
+pub async fn stored_query(c: &Client, patient: uuid::Uuid) -> (Vec<String>, Option<String>) {
+    let row = c
+        .query_one(
+            "SELECT (body -> 'search' -> 'query' -> 'name_tokens')::text, \
+                    body -> 'search' -> 'query' ->> 'birth_date' \
+             FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'identity.registration.asserted'",
+            &[&patient.to_string()],
+        )
+        .await
+        .expect("the registration event");
+    let tokens: String = row.get(0);
+    let birth_date: Option<String> = row.get(1);
+    (
+        serde_json::from_str(&tokens).expect("name_tokens is a JSON array of strings"),
+        birth_date,
+    )
+}
