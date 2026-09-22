@@ -471,11 +471,14 @@ def measure_one(args: argparse.Namespace, patients: int) -> Measurement:
     )
     recovery_code = parse_recovery_code(init_out)
 
-    # 2. One real registration, to enroll the node's own `device` actor. That is
-    #    an owner ceremony living in the CLI (`ensure_registration_actor`), and
-    #    re-spelling it in the seeder would be a second copy of a ceremony — the
-    #    mirror-list defect class this repo keeps paying for. Cheaper to run the
-    #    shipped command once.
+    # 2. One real registration, as a smoke test of the whole write path.
+    #
+    #    It used to be here to ENROL the node's own `device` actor, which the CLI
+    #    did as a side effect of the first write (`ensure_registration_actor`).
+    #    Since #654 nothing provisions on a write path: `init` above enrols, and a
+    #    node that never ran `init` uses `cairn-node enroll-device-actor`. So this
+    #    no longer provisions anything — it proves the provisioned node can write,
+    #    which is worth one call before a 100k-event seed.
     run(
         [args.binary, "--conn", src_conn, "--key", str(node_key), "patient-register",
          "--name", "Seed Warmup", "--birth-date", "1970-01-01"],
