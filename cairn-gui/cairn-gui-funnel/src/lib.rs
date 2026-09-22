@@ -10,8 +10,10 @@
 //! searches unasked, and what a registration is permitted to swear it displayed.
 //!
 //! Those rules live here, in a crate with no window and no database, so that all of them are
-//! testable under a plain `cargo test` and none of them can be re-derived — differently — by
-//! whichever surface happens to need one. That is the same discipline `cairn-patient-search`
+//! testable with no fixture beyond a struct literal, and none of them can be re-derived —
+//! differently — by whichever surface happens to need one. (The `cairn-gui` workspace is
+//! `exclude`d from the root one, so its gate runs as
+//! `cargo test --manifest-path cairn-gui/Cargo.toml`, not as a plain root `cargo test`.) That is the same discipline `cairn-patient-search`
 //! states for the candidate model it owns, one layer down: *the surface that displays
 //! candidates and the act that attests to them must not be able to disagree.*
 //!
@@ -35,6 +37,6 @@ pub mod prompt;
 pub mod token;
 pub mod trigger;
 
-pub use prompt::{bound_for_prompt, PROMPT_CAP};
-pub use token::{AttestedSearch, SearchToken, TokenError, TokenStore};
+pub use prompt::{bound_for_prompt, PromptList, PROMPT_CAP};
+pub use token::{AttestedSearch, Restored, SearchToken, TokenError, TokenStore};
 pub use trigger::{trigger_state, MissingPart, TriggerState, MIN_NAME_TOKENS};

@@ -5,16 +5,19 @@
 //!
 //! Read this before trusting anything the mock finds. The real §5.8 semantics live in
 //! `cairn_search_candidates` (`db/046`) — three blocking passes deliberately mirroring the
-//! advisory matcher's, a byte-counted prefix minimum, callsign guards on both name arms, and
-//! Unicode normalisation on both sides — and they are pinned by the DB-gated tests in
-//! `crates/cairn-node/tests/patient_search.rs`.
+//! advisory matcher's, a prefix minimum counted in BYTES and gating the prefix arm only (so
+//! short names stay findable by exact match, #638), callsign guards on the parts and prefix
+//! sources but deliberately NOT on the whole-token one (a clerk must still find a John Doe by
+//! typing the callsign back in full), and Unicode normalisation on both sides — and they are
+//! pinned by the DB-gated tests in `crates/cairn-node/tests/patient_search.rs`.
 //!
 //! What follows is a *fixture*: a case-insensitive substring over the display name, an exact
 //! birth-date compare, and an exact identifier compare. It is enough to walk the workflow and
 //! deliberately not a second implementation of the real rule. A fixture that quietly claimed
 //! to be the matcher would teach an accessibility or timing pass expectations the real search
-//! does not meet — which is why the §1.2 measurement slice 2b owes must be taken against a
-//! database, never against this.
+//! does not meet — which is why the §1.2 measurement slice 2b owes must ALSO be taken against
+//! a database, never against this alone. (The design asks for both: in `--mock` and against a
+//! database.)
 //!
 //! Its recall is *wider* than the real search in one direction (substring, not prefix) and
 //! *narrower* in another (no normalisation, no part projection). Neither is a bug here. Both
@@ -74,11 +77,16 @@ fn matches(patient: &FixturePatient, query: &SearchQuery) -> bool {
 /// against a fixed date. An unparseable or reduced-precision birth date yields **no age**
 /// rather than a confident-looking number — `age_years` makes that decision, and it is
 /// principle 4 on a wrong-chart-prevention surface.
-fn as_candidate(patient: &FixturePatient, today: &str) -> Option<Candidate> {
-    Some(Candidate {
-        // A fixture with an unparseable uuid is a defect in the fixture table, not a
-        // runtime condition, so it drops out rather than panicking the window.
-        patient_id: Uuid::parse_str(&patient.uuid).ok()?,
+///
+/// Total: every fixture yields a candidate. Nothing here can drop a row.
+fn as_candidate(patient: &FixturePatient, today: &str) -> Candidate {
+    Candidate {
+        // Infallible: `FixturePatient.uuid` is a parsed `Uuid`. It used to be a String parsed
+        // here, and the `Option` that produced let a typo'd fixture DROP OUT of a candidate
+        // list that still called itself complete — a silently-missing chart on the one screen
+        // whose job is stopping a duplicate. Moving the parse into the fixture builder makes
+        // that a loud panic at window start instead of a wrong answer at the desk.
+        patient_id: patient.uuid,
         display_name: patient.display_name.clone(),
         age: age_years(&patient.birth_date, today).map(|years| Age {
             years,
@@ -88,7 +96,7 @@ fn as_candidate(patient: &FixturePatient, today: &str) -> Option<Candidate> {
         last_activity: None,
         locale: None,
         photo_ref: None,
-    })
+    }
 }
 
 impl MockData {
@@ -111,11 +119,14 @@ impl MockData {
             candidates: patients
                 .iter()
                 .filter(|p| matches(p, query))
-                .filter_map(|p| as_candidate(p, today))
+                .map(|p| as_candidate(p, today))
+                // `map`, never `filter_map`: a row that matched must appear. This was a
+                // `filter_map` over a fallible id parse, which could delete a matching chart
+                // while the two lines below still swore the list was complete.
                 .collect(),
-            // The fixture population is entirely readable by construction, so there is
-            // nothing to report as withheld. `bound_for_prompt` adds the display-side
-            // partiality later, if any.
+            // Now literally true, and true BY CONSTRUCTION rather than by assertion: every
+            // fixture that matches becomes a candidate, so there is no drop path that could
+            // withhold one. `bound_for_prompt` adds the display-side partiality later, if any.
             incomplete: false,
             incomplete_reason: None,
         }
@@ -136,13 +147,20 @@ impl MockData {
             .lock()
             .expect("fixture population")
             .push(FixturePatient {
-                uuid: id.to_string(),
+                uuid: id,
                 display_name,
                 // The port's `Demographics.sex` is a bare `String` and cannot say *unknown*
                 // distinctly from a recorded value. The funnel asks for no sex at all
                 // (design decision 4's negative limb), so this is literally true.
                 sex: "not recorded".to_string(),
-                birth_date: query.birth_date.clone().unwrap_or_default(),
+                // NAMED, not blank. `unwrap_or_default()` put an empty string here, which
+                // renders as an empty field — indistinguishable from *not-yet-asked* or from
+                // a rendering bug. Principle 4 wants those states distinct, and the two
+                // fields either side of this one already name their absence.
+                birth_date: query
+                    .birth_date
+                    .clone()
+                    .unwrap_or_else(|| "not recorded".to_string()),
                 identifiers: query.identifiers.clone(),
                 // A chart nobody has confirmed the identity of yet. Claiming `Confirmed`
                 // here would put a trust state on screen that no act has earned.
@@ -152,27 +170,31 @@ impl MockData {
     }
 }
 
+// Both ports do their work WHEN AWAITED, not when the future is built, and that is a
+// correctness property rather than a style preference. These were once written as a
+// synchronous call followed by `async move { Ok(value) }`, which performs the effect at CALL
+// time: building a `register` future and dropping it still minted a patient, while a live
+// implementation would have done nothing (its await IS the query). A 2b cancellation test
+// passing against the mock would then have proven nothing about the real one.
+//
+// `async fn` in the impl of an RPITIT trait method is allowed and is what clippy asks for
+// here; the declared `+ Send` bound is still checked against these bodies. They satisfy it
+// because the mutex guard is taken and dropped with no await point in between — see the
+// `search_now` / `register_now` split, which exists for exactly that reason.
+
 impl PatientSearch for MockData {
-    fn search(
-        &self,
-        query: &SearchQuery,
-        today: &str,
-    ) -> impl std::future::Future<Output = Result<CandidateList, DataError>> + Send {
-        // Computed BEFORE the async block, so the mutex guard is released before any await
-        // point exists. A guard held across one would make this future non-`Send`.
-        let list = self.search_now(query, today);
-        async move { Ok(list) }
+    async fn search(&self, query: &SearchQuery, today: &str) -> Result<CandidateList, DataError> {
+        Ok(self.search_now(query, today))
     }
 }
 
 impl PatientRegistration for MockData {
-    fn register(
+    async fn register(
         &self,
-        attested: &AttestedSearch,
+        attested: AttestedSearch,
         name: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<Uuid, DataError>> + Send {
-        let id = self.register_now(attested, name);
-        async move { Ok(id) }
+    ) -> Result<Uuid, (DataError, AttestedSearch)> {
+        Ok(self.register_now(&attested, name))
     }
 }
 
@@ -181,7 +203,7 @@ mod tests {
     use super::*;
     use crate::mock::fixtures::FIXTURE_UUID;
     use crate::port::ClinicalData;
-    use cairn_gui_funnel::TokenStore;
+    use cairn_gui_funnel::{bound_for_prompt, TokenStore};
 
     /// A fixed clock, so an age never changes under the test suite.
     const TODAY: &str = "2026-09-22";
@@ -316,10 +338,13 @@ mod tests {
         let mut store = TokenStore::new();
         let query = SearchQuery::new(typed, Some("1988-05-05"), &[]);
         let displayed = data.search(&query, TODAY).await.unwrap();
-        let token = store.record(query, displayed).unwrap();
+        // Bounded before recording, because `record` takes nothing else — which is what
+        // stops a prompt showing five from signing that it displayed forty.
+        let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
         let attested = store.take(token).unwrap();
 
-        let id = data.register(&attested, Some(typed)).await.unwrap();
+        let id = data.register(attested, Some(typed)).await.unwrap();
+        store.commit();
         let again = browse(&data, "bakhtiyarov").await;
         assert_eq!(
             again
@@ -341,10 +366,11 @@ mod tests {
         let mut store = TokenStore::new();
         let query = SearchQuery::new("", None, &[("MRN".into(), "77777".into())]);
         let displayed = data.search(&query, TODAY).await.unwrap();
-        let token = store.record(query, displayed).unwrap();
+        let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
         let attested = store.take(token).unwrap();
 
-        let id = data.register(&attested, Some("   ")).await.unwrap();
+        let id = data.register(attested, Some("   ")).await.unwrap();
+        store.commit();
         let found = data
             .search(
                 &SearchQuery::new("", None, &[("MRN".into(), "77777".into())]),
@@ -359,6 +385,161 @@ mod tests {
             "an absent name must read as absent, never as a blank a clerk cannot see: {:?}",
             found.candidates[0].display_name
         );
+    }
+
+    #[tokio::test]
+    async fn a_birth_date_alone_finds_the_chart_that_carries_it() {
+        // PASS 2 WAS ENTIRELY UNEXERCISED: every search in this suite passed `None` for the
+        // date, so deleting the birth-date arm of `matches` left the whole suite green. The
+        // list this produces is what a registration attests to as its displayed set, so a
+        // dead pass 2 understates what the clerk was shown.
+        let data = MockData::with_fixtures();
+        let list = data
+            .search(&SearchQuery::new("", Some("1979-11-20"), &[]), TODAY)
+            .await
+            .unwrap();
+        assert_eq!(found(&list), ["Michaelowski, Samantha"]);
+    }
+
+    #[tokio::test]
+    async fn a_reduced_precision_birth_date_matches_only_a_reduced_precision_stored_value() {
+        // The same trade `db/046` pass 2 makes: an exact string compare, so a year-only query
+        // matches a year-only stored value and nothing else. Narrower recall than a range
+        // search, never a WRONG match — and a registrar is frequently told only a year
+        // (principle 4).
+        let data = MockData::with_fixtures();
+        let by_year = data
+            .search(&SearchQuery::new("", Some("1975"), &[]), TODAY)
+            .await
+            .unwrap();
+        assert_eq!(found(&by_year), ["unknown-ed-site1-2026-07-03-00ab"]);
+
+        let invented_precision = data
+            .search(&SearchQuery::new("", Some("1975-01-01"), &[]), TODAY)
+            .await
+            .unwrap();
+        assert!(
+            invented_precision.candidates.is_empty(),
+            "a year must not silently become 1 January"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identifier_matches_only_within_its_own_system() {
+        // Dropping the SYSTEM from pass 1's comparison left the suite green, because no two
+        // fixtures share an identifier value. An MRN would then match a National id carrying
+        // the same digits — putting a different patient's chart in front of the clerk AND
+        // into the attested displayed list.
+        let data = MockData::with_fixtures();
+        let right_system = data
+            .search(
+                &SearchQuery::new("", None, &[("MRN".into(), "12345".into())]),
+                TODAY,
+            )
+            .await
+            .unwrap();
+        assert_eq!(right_system.candidates.len(), 1, "her MRN must find her");
+
+        let wrong_system = data
+            .search(
+                &SearchQuery::new("", None, &[("National".into(), "12345".into())]),
+                TODAY,
+            )
+            .await
+            .unwrap();
+        assert!(
+            wrong_system.candidates.is_empty(),
+            "12345 is her MRN, not her National id — matching it as one is a wrong chart"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_query_token_that_matches_is_enough_even_when_another_does_not() {
+        // The name pass is a DISJUNCTION. Every other search here uses a single token, so a
+        // conjunction would have passed the suite — and under it a clerk typing a middle name
+        // the chart does not carry gets zero results and creates a duplicate. The module doc
+        // calls a missed candidate "the dangerous direction"; this pins it.
+        let data = MockData::with_fixtures();
+        assert_eq!(
+            found(&browse(&data, "Samantha Jane Michaelowski").await),
+            ["Michaelowski, Samantha"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_chart_is_not_displayed_as_identity_pending() {
+        // The only trust assertion in this suite checked for `Unconfirmed`, so hard-coding
+        // that in `as_candidate` would have passed — showing every confirmed chart as
+        // identity-pending. That is alarm fatigue on the one flag that guards chart
+        // selection.
+        let data = MockData::with_fixtures();
+        let list = browse(&data, "mich").await;
+        assert_eq!(
+            list.candidates[0].trust,
+            cairn_patient_search::TrustState::Confirmed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_displayed_age_says_it_came_from_a_date_of_birth() {
+        // `basis` is the provenance label beside the number. Nothing pinned it, so "dob"
+        // could have become "estimated" — a displayed age claiming a provenance it does not
+        // have is the precise-untruth shape principle 4 forbids.
+        let data = MockData::with_fixtures();
+        let amina = browse(&data, "amina").await;
+        let age = amina.candidates[0]
+            .age
+            .as_ref()
+            .expect("a full date gives an age");
+        assert_eq!(age.basis, "dob");
+    }
+
+    #[tokio::test]
+    async fn a_fixture_registration_records_only_what_was_actually_supplied() {
+        // Three fabrications were all unpinned: a default birth date, a `Confirmed` trust
+        // state no act had earned, and a sex nobody supplied. Each would render as fact on
+        // the wrong-chart-prevention surface.
+        let data = MockData::with_fixtures();
+        let mut store = TokenStore::new();
+        let typed = "Ruslan Bakhtiyarov";
+        let query = SearchQuery::new(typed, None, &[("MRN".into(), "55555".into())]);
+        let displayed = data.search(&query, TODAY).await.unwrap();
+        let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
+        let id = data
+            .register(store.take(token).unwrap(), Some(typed))
+            .await
+            .unwrap();
+        store.commit();
+
+        let d = data.demographics(&id.to_string()).unwrap();
+        assert_eq!(
+            d.birth_date, "not recorded",
+            "no date was supplied, and a BLANK field would read as not-yet-asked"
+        );
+        assert_eq!(d.sex, "not recorded", "the funnel asks for no sex at all");
+        let candidate = browse(&data, "bakhtiyarov").await;
+        assert_eq!(
+            candidate.candidates[0].trust,
+            cairn_patient_search::TrustState::Unconfirmed,
+            "nobody has confirmed this identity yet"
+        );
+        assert!(
+            candidate.candidates[0].age.is_none(),
+            "no date of birth means no age, never an invented one"
+        );
+    }
+
+    #[test]
+    fn every_fixture_is_well_formed_and_distinctly_identified() {
+        // The fixture uuids are parsed in `patient()`, so a typo panics here rather than
+        // silently hiding a patient. This also pins that no two fixtures share an id, which
+        // would make one of them unreachable through `demographics`.
+        let population = crate::mock::fixtures::starting_population();
+        let mut ids: Vec<_> = population.iter().map(|p| p.uuid).collect();
+        let total = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "two fixtures share a uuid");
     }
 
     #[test]
@@ -401,7 +582,9 @@ mod tests {
             .iter()
             .any(|p| p.trust == cairn_patient_search::TrustState::Unconfirmed));
         assert!(
-            population.iter().any(|p| p.uuid == FIXTURE_UUID),
+            population
+                .iter()
+                .any(|p| p.uuid.to_string() == FIXTURE_UUID),
             "the long-standing fixture id must survive, or the demographics and note tabs \
              lose the patient their tests name"
         );

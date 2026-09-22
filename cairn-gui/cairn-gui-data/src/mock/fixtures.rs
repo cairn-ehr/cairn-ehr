@@ -14,7 +14,7 @@
 //!
 //! | Fixture | What it is here to exercise |
 //! |---|---|
-//! | `Amina أمينة अमीना 阿明娜` | multi-script shaping — the Spike 0004 IME pass |
+//! | `Amina أمينة अमीना 阿明娜` | multi-script shaping and IME entry, for the operator accessibility pass on the reference shell |
 //! | `Michaelowski, Samantha` | issue #636's headline case: `mich` must find her |
 //! | `Fyodorowksi-Eschenbacher, Katarzyna` | a hyphenated compound found by EITHER half |
 //! | `O'Brien-Smith, John` | apostrophe + hyphen, `SearchQuery::new`'s own worked case |
@@ -22,6 +22,7 @@
 //! | a §5.4 John Doe callsign | an identity-pending chart, which is exactly the one a clerk needs when the family arrives with a name |
 
 use cairn_patient_search::TrustState;
+use uuid::Uuid;
 
 /// One fixture patient — enough to be searched for, listed, and opened.
 ///
@@ -31,11 +32,22 @@ use cairn_patient_search::TrustState;
 /// `"not recorded"` into it and means it literally.
 #[derive(Debug, Clone)]
 pub struct FixturePatient {
-    pub uuid: String,
+    /// A parsed `Uuid`, not a `String`, and that is a correctness choice rather than tidiness.
+    /// While this was a string, a one-character typo in the table below made that patient
+    /// silently invisible to every search — `as_candidate` parsed it, failed, and dropped the
+    /// row — while `demographics` still answered for it. A fixture that cannot be found is
+    /// exactly the duplicate-creating failure the funnel exists to prevent, so the parse
+    /// happens once, in the private `patient` builder, where a typo is a loud panic at window
+    /// start.
+    pub uuid: Uuid,
     pub display_name: String,
     pub sex: String,
     /// ISO, and possibly reduced-precision — a registrar is frequently told only a year
-    /// (principle 4), and `SearchQuery` carries that shape through unparsed.
+    /// (principle 4), and `SearchQuery` carries that shape through unparsed. May also be the
+    /// literal `"not recorded"`, for a registration that supplied no date at all: an EMPTY
+    /// string here would render as a blank field, which reads as *not-yet-asked* or as a
+    /// rendering bug rather than as "no date of birth was recorded" (principle 4 again — the
+    /// same convention `sex` above follows).
     pub birth_date: String,
     pub identifiers: Vec<(String, String)>,
     pub trust: TrustState,
@@ -56,7 +68,9 @@ fn patient(
     trust: TrustState,
 ) -> FixturePatient {
     FixturePatient {
-        uuid: uuid.to_string(),
+        // `expect` on purpose: every argument is a literal in the table below, so a failure
+        // here is a typo a developer must see immediately, never a runtime condition.
+        uuid: Uuid::parse_str(uuid).expect("a fixture uuid must be a valid UUID"),
         display_name: display_name.to_string(),
         sex: sex.to_string(),
         birth_date: birth_date.to_string(),
@@ -73,7 +87,10 @@ pub fn starting_population() -> Vec<FixturePatient> {
     vec![
         patient(
             FIXTURE_UUID,
-            // Latin / Arabic / Devanagari / Han in one label feeds the IME/shaping pass.
+            // Latin / Arabic / Devanagari / Han in one label feeds the shaping and IME pass.
+            // (Spike 0004 passed the shaping limb, I1, on the since-retired iced surface; its
+            // IME limb I3 was never reached, so the obligation now sits with the operator
+            // accessibility pass on the Tauri shell rather than with that spike.)
             "Amina أمينة अमीना 阿明娜",
             "female",
             "1984-03-02",

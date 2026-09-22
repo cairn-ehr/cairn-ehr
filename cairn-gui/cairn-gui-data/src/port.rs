@@ -32,6 +32,16 @@ pub struct NoteRef {
     pub one_line: String,
 }
 
+/// Why a port could not answer.
+///
+/// **There is deliberately no `Refused` variant yet, and that is a known gap —
+/// [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648).** A deterministic in-DB floor
+/// refusal (a term-less attested query at `db/045`, a chart whose first event is not its
+/// registration at `db/005` step 8b) is not an outage, and reporting it as `Unavailable`
+/// tells the clerk to retry something that cannot succeed. It also decides whether the caller
+/// should `TokenStore::restore` the attestation: right after an outage, pointless after a
+/// refusal. Nothing can be mapped until a live implementation of these ports exists, so the
+/// variant lands with them in slice 2b.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataError {
     NotFound,
@@ -87,8 +97,14 @@ pub trait PatientSearch {
     /// `today` is the caller's clock as an ISO `YYYY-MM-DD` string, exactly as
     /// `cairn_node::patient::search::search_patients` takes it, and for the same reason: the
     /// age arithmetic shown beside a patient's name stays pure and the edge owns the clock.
-    /// The node's own CLI reads it from the DATABASE's `current_date`, never the operator's
-    /// wall clock, and a live implementation of this port should do the same.
+    ///
+    /// **The caller's value is the one used — this port never overrides it.** The node's own
+    /// CLI obtains that value by asking the DATABASE for `current_date` rather than reading
+    /// the operator's wall clock, and a live caller of this port should do the same; but that
+    /// is a rule about where the caller *gets* the date, not licence for an implementation to
+    /// substitute its own. An implementation that ignored the argument would make the age
+    /// beside a patient's name depend on which clock won, with nothing on screen saying
+    /// which.
     ///
     /// A failure must surface as `Err`, never as an empty list. "The search failed" and
     /// "nobody matched" are different answers, and only one of them is evidence of absence —
@@ -121,9 +137,45 @@ pub trait PatientRegistration {
     ///
     /// `None`, or blank after trimming, means nothing was typed — an identifier-only
     /// registration. No name is then asserted, rather than an empty one (principle 4).
+    ///
+    /// # It CONSUMES the attestation, and hands it back on failure
+    ///
+    /// `AttestedSearch` is deliberately not `Clone` so that one attested search cannot
+    /// create two charts. A *borrow* would have defeated that on its own — the caller keeps
+    /// the original and can simply call `register` twice, no copy required — so this takes
+    /// it by value, and the whole flow becomes linear:
+    ///
+    /// ```text
+    /// record -> take -> register(by value) -> Ok: commit
+    ///                                      -> Err: the search comes back -> restore
+    /// ```
+    ///
+    /// Returning it inside the error is not decoration: `TokenStore::restore` needs exactly
+    /// that value to put the search back after a failed write, and nothing else can obtain
+    /// one. An implementation that loses it has made the clerk re-search, which is the
+    /// *"Register fails. The form keeps its values."* requirement broken.
+    ///
+    /// # Cancellation is NOT specified, and that is tracked
+    ///
+    /// Dropping this future after the database has committed leaves the caller with neither
+    /// `Ok` nor `Err`, holding the attestation. The obvious recovery — restore and let the
+    /// clerk retry — mints a SECOND chart, because `register_patient` generates a fresh
+    /// `Uuid::now_v7()` per call. Until
+    /// [#649](https://github.com/cairn-ehr/cairn-ehr/issues/649) settles whether the id
+    /// becomes caller-supplied, treat this future as **cancellation-unsafe**: do not race it
+    /// against a timeout or a `select!`.
+    ///
+    /// # A live implementation and `&mut Client`
+    ///
+    /// Stated here so 2b does not discover it by fighting the compiler:
+    /// `cairn_node::patient::register::register_patient` takes `&mut Client`, while this
+    /// takes `&self` and must return a `Send` future. A `std::sync::Mutex` guard is not
+    /// `Send`, so a live implementation needs a `tokio::sync::Mutex` or a connection pool.
+    /// The mock's "compute before the async block" trick is NOT a general recipe — it works
+    /// only because a fixture has no await in it.
     fn register(
         &self,
-        attested: &AttestedSearch,
+        attested: AttestedSearch,
         name: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<uuid::Uuid, DataError>> + Send;
+    ) -> impl std::future::Future<Output = Result<uuid::Uuid, (DataError, AttestedSearch)>> + Send;
 }

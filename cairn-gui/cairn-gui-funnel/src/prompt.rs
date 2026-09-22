@@ -5,9 +5,10 @@
 //! The funnel has two searches and only one of them is attested. The browse search at step 1
 //! is a moving target — the clerk types fragments, edits freely, and scrolls a long list — so
 //! it carries no signed claim and is free to scroll. The step-3 search is the opposite: it
-//! runs once, automatically, over the finished registration data, and *that* pair of
-//! (query, displayed list) is what `cairn_patient_search::SearchAttestation` records
-//! permanently into the chart's birth act.
+//! runs automatically over the completed registration data, and the pair of
+//! (query, displayed list) from the run that preceded the commit is what
+//! `cairn_patient_search::SearchAttestation` records permanently into the chart's birth act.
+//! (It re-runs as the clerk edits — see [`crate::token`] — but only one run is ever attested.)
 //!
 //! So this list is a claim about what a human saw. `displayed` means *"the candidate ids that
 //! were on the screen"*, and it has to be literally true. Signing that forty were displayed
@@ -43,11 +44,15 @@ use cairn_patient_search::CandidateList;
 /// to create another — not a layout detail, so it is named and pinned by a test rather than
 /// buried in a slice expression.
 ///
-/// Five, because the prompt must fit without scrolling on the smallest screen the reference
-/// UI targets, together with its question and its two answers. If it turns out the prompt is
-/// *routinely* truncating, the cap is wrong and the design needs revisiting — quietly signing
-/// partial lists is the failure this whole module exists to prevent, not a state to get used
-/// to.
+/// Five is a **guess** at what fits without scrolling together with the question and its two
+/// answers — said plainly because there is no pinned minimum window size in the repo yet to
+/// derive it from, and dressing a guess in a precise-sounding justification is the shape
+/// principle 4 warns about. What makes the guess safe is that being wrong is *reported*: a
+/// truncating prompt says so, in the sentence below.
+///
+/// If it turns out the prompt is *routinely* truncating, the cap is wrong and the design needs
+/// revisiting — quietly signing partial lists is the failure this whole module exists to
+/// prevent, not a state to get used to. Slice 2b owes a truncation-frequency report.
 pub const PROMPT_CAP: usize = 5;
 
 /// How the prompt admits to candidates it did not show.
@@ -74,7 +79,55 @@ fn combine_reasons(from_node: Option<&str>, from_truncation: Option<String>) -> 
     }
 }
 
-/// Bound a node-returned list to what the prompt can truthfully claim it displayed.
+/// A candidate list that has been bounded to what a prompt can truthfully claim it showed.
+///
+/// # Why this is a type and not just a `CandidateList`
+///
+/// `TokenStore::record` freezes its list into the pair a registration attests to, and the
+/// rule above says `displayed` *"has to be literally true"*. But a bounded list and a raw
+/// node list are the same shape, so nothing stopped a caller passing the node's forty
+/// candidates straight into `record` and signing that forty were displayed when five were on
+/// screen — the precise untruth this whole module is written to forbid, reachable by the
+/// shortest path anyone would write.
+///
+/// So the bounding is in the type. [`bound_for_prompt`] is the only way to obtain a
+/// `PromptList`, and `record` accepts nothing else; the private field is what makes that
+/// stick. This is the same trick `SearchAttestation::from_displayed` plays one layer down,
+/// applied one layer up.
+///
+/// It bounds only what gets *signed*. The matching hazard in the node —
+/// `cairn_search_candidates` returning thousands of candidates for a common surname in the
+/// first place — is [#357](https://github.com/cairn-ehr/cairn-ehr/issues/357), and this type
+/// does not substitute for it: a prompt that truncates honestly is still a prompt that could
+/// not show the clerk the chart they needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptList(CandidateList);
+
+impl PromptList {
+    /// The bounded list, for the caller that has to render or sign it.
+    ///
+    /// Read-only on purpose: handing out `&mut` would let a caller extend the list after the
+    /// bounding that made it truthful.
+    pub fn as_list(&self) -> &CandidateList {
+        &self.0
+    }
+}
+
+/// Bound a node-returned list to what the step-3 prompt can truthfully claim it displayed.
+///
+/// Always bounds at [`PROMPT_CAP`], because the cap is a property of the prompt rather than
+/// of the call site: a caller that could choose its own bound could choose `usize::MAX` and
+/// be back where it started. The cap is exercised at other values through the private
+/// `bound_to`, which the tests below use to reach the edges.
+pub fn bound_for_prompt(list: &CandidateList) -> PromptList {
+    bound_to(list, PROMPT_CAP)
+}
+
+/// The bounding itself, at an arbitrary cap.
+///
+/// Private so [`PROMPT_CAP`] stays the only bound reachable from outside, but a free function
+/// with an explicit cap so the off-by-one, the exactly-at-the-cap and the zero cases are each
+/// testable without building a prompt.
 ///
 /// Total by construction: any `cap`, including zero, yields a list rather than a panic. A
 /// zero cap is useless but still honest — it reports that it showed nobody, which is a
@@ -82,18 +135,36 @@ fn combine_reasons(from_node: Option<&str>, from_truncation: Option<String>) -> 
 ///
 /// Order is preserved exactly. `SearchAttestation::from_displayed` reads the candidate vector
 /// in order, so a reorder here would silently change what gets signed.
-pub fn bound_for_prompt(list: &CandidateList, cap: usize) -> CandidateList {
+fn bound_to(list: &CandidateList, cap: usize) -> PromptList {
     let withheld = list.candidates.len().saturating_sub(cap);
-    CandidateList {
+    PromptList(CandidateList {
         candidates: list.candidates.iter().take(cap).cloned().collect(),
         // `incomplete` is the OR of the two partialities. It can only ever be turned ON here:
         // a list the node already called partial must never be laundered into a complete one
         // by fitting inside the cap.
+        //
+        // `node_reason` rather than `list.incomplete_reason` directly: a node that set the
+        // flag with no prose would otherwise hand the clerk ONLY the truncation sentence, so
+        // the milder cause would read as the whole story. The flag survives either way; this
+        // keeps the attribution too.
         incomplete: list.incomplete || withheld > 0,
         incomplete_reason: combine_reasons(
-            list.incomplete_reason.as_deref(),
+            node_reason(list),
             (withheld > 0).then(|| withheld_reason(withheld)),
         ),
+    })
+}
+
+/// What the node said about its own partiality, never silently nothing.
+///
+/// `CandidateList`'s doc says `incomplete_reason` is `Some` whenever `incomplete` — but that
+/// is a comment on a struct with public fields, not a type, and this is the one function whose
+/// stated job is keeping the two partialities distinct. A bare flag becomes a sentence rather
+/// than being dropped.
+fn node_reason(list: &CandidateList) -> Option<&str> {
+    match (list.incomplete, list.incomplete_reason.as_deref()) {
+        (true, None) => Some("the node reported this search was not exhaustive but gave no reason"),
+        (_, reason) => reason,
     }
 }
 
@@ -116,10 +187,21 @@ mod tests {
         }
     }
 
+    /// The common case: a node list whose partiality, if any, came with prose.
     fn list_of(n: u128, incomplete_reason: Option<&str>) -> CandidateList {
+        list_with(n, incomplete_reason.is_some(), incomplete_reason)
+    }
+
+    /// `incomplete` and its reason set INDEPENDENTLY.
+    ///
+    /// `list_of` derives the flag from the prose, which is the shape a well-behaved node
+    /// produces — and that made `incomplete: true` with no reason unreachable in every test,
+    /// hiding whether the bounding preserved a bare flag's attribution. It is a legal shape
+    /// (`CandidateList`'s fields are public), so it needs a builder that can express it.
+    fn list_with(n: u128, incomplete: bool, incomplete_reason: Option<&str>) -> CandidateList {
         CandidateList {
             candidates: (1..=n).map(candidate).collect(),
-            incomplete: incomplete_reason.is_some(),
+            incomplete,
             incomplete_reason: incomplete_reason.map(str::to_string),
         }
     }
@@ -140,26 +222,47 @@ mod tests {
         // starts claiming a partiality it does not have — and a warning that fires on every
         // screen is a warning nobody reads.
         let list = list_of(3, None);
-        let bounded = bound_for_prompt(&list, PROMPT_CAP);
-        assert_eq!(bounded, list);
+        assert_eq!(bound_for_prompt(&list).as_list(), &list);
     }
 
     #[test]
     fn a_list_exactly_the_size_of_the_cap_is_not_truncated() {
         // The off-by-one that would mark a full-but-complete prompt as partial.
         let list = list_of(PROMPT_CAP as u128, None);
-        let bounded = bound_for_prompt(&list, PROMPT_CAP);
-        assert!(!bounded.incomplete, "{:?}", bounded.incomplete_reason);
-        assert_eq!(bounded.candidates.len(), PROMPT_CAP);
+        let bounded = bound_for_prompt(&list);
+        assert!(
+            !bounded.as_list().incomplete,
+            "{:?}",
+            bounded.as_list().incomplete_reason
+        );
+        assert_eq!(bounded.as_list().candidates.len(), PROMPT_CAP);
+    }
+
+    #[test]
+    fn a_list_one_longer_than_the_cap_is_reported_as_truncated() {
+        // THE OTHER SIDE OF THAT BOUNDARY, and the one that was missing: every other test
+        // withholds 0, 3, 4 or 5 candidates, so `withheld > 0` could have been `withheld > 1`
+        // and stayed green. Under that mutation a six-candidate result shows five, hides ONE,
+        // and calls itself complete — and the one hidden candidate is exactly the duplicate
+        // the funnel exists to surface.
+        let bounded = bound_for_prompt(&list_of(PROMPT_CAP as u128 + 1, None));
+        assert_eq!(bounded.as_list().candidates.len(), PROMPT_CAP);
+        assert!(bounded.as_list().incomplete, "hiding one is still hiding");
+        let reason = bounded
+            .as_list()
+            .incomplete_reason
+            .clone()
+            .expect("a reason, not a bare flag");
+        assert!(reason.contains('1'), "must name the count: {reason}");
     }
 
     #[test]
     fn a_longer_list_keeps_the_first_cap_candidates_in_display_order() {
         // Order is the attestation's order — `SearchAttestation::from_displayed` reads this
         // vector in sequence — so a reorder here silently changes what gets signed.
-        let bounded = bound_for_prompt(&list_of(8, None), 3);
+        let bounded = bound_to(&list_of(8, None), 3);
         assert_eq!(
-            ids(&bounded),
+            ids(bounded.as_list()),
             vec![Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3)]
         );
     }
@@ -168,10 +271,12 @@ mod tests {
     fn truncating_marks_the_list_incomplete_and_says_how_many_were_withheld() {
         // ADR-0060 decision 2: reported, never implied. A bare `incomplete: true` is a flag
         // a clerk cannot act on.
-        let bounded = bound_for_prompt(&list_of(8, None), 5);
-        assert!(bounded.incomplete);
+        let bounded = bound_to(&list_of(8, None), 5);
+        assert!(bounded.as_list().incomplete);
         let reason = bounded
+            .as_list()
             .incomplete_reason
+            .clone()
             .expect("a reason, not a bare flag");
         assert!(reason.contains('3'), "must name the count: {reason}");
     }
@@ -183,9 +288,33 @@ mod tests {
         // returned. The first is the more serious and the less obvious, and replacing it
         // with the second deletes a warning the clerk needs in order to distrust a zero.
         let node_said = "2 charts could not be read";
-        let bounded = bound_for_prompt(&list_of(8, Some(node_said)), 5);
-        let reason = bounded.incomplete_reason.expect("a reason");
+        let bounded = bound_to(&list_of(8, Some(node_said)), 5);
+        let reason = bounded
+            .as_list()
+            .incomplete_reason
+            .clone()
+            .expect("a reason");
         assert!(reason.contains(node_said), "node's reason lost: {reason}");
+        assert!(reason.contains('3'), "truncation not reported: {reason}");
+    }
+
+    #[test]
+    fn a_bare_partiality_flag_from_the_node_keeps_its_own_attribution() {
+        // `incomplete: true` with no prose is a legal shape, and a truncating prompt used to
+        // hand the clerk ONLY the truncation sentence for it — so display truncation read as
+        // the whole story while the node had in fact also failed to read charts. The flag
+        // survived; the attribution did not. That is the same collapse this module forbids,
+        // arriving by a different door.
+        let bounded = bound_to(&list_with(8, true, None), 5);
+        let reason = bounded
+            .as_list()
+            .incomplete_reason
+            .clone()
+            .expect("a bare flag must still produce a sentence");
+        assert!(
+            reason.contains("not exhaustive"),
+            "the node's partiality must still be attributed: {reason}"
+        );
         assert!(reason.contains('3'), "truncation not reported: {reason}");
     }
 
@@ -194,10 +323,10 @@ mod tests {
         // The other direction of the same rule: `incomplete` may only ever be turned ON
         // here. A short list the node called partial must not be laundered into a complete
         // one just because it fitted.
-        let bounded = bound_for_prompt(&list_of(2, Some("1 chart could not be read")), PROMPT_CAP);
-        assert!(bounded.incomplete);
+        let bounded = bound_for_prompt(&list_of(2, Some("1 chart could not be read")));
+        assert!(bounded.as_list().incomplete);
         assert_eq!(
-            bounded.incomplete_reason.as_deref(),
+            bounded.as_list().incomplete_reason.as_deref(),
             Some("1 chart could not be read"),
             "nothing to add, so nothing should be added"
         );
@@ -208,10 +337,14 @@ mod tests {
         // Kept total rather than panicking, but it must never look like "found nothing":
         // the reason is what separates a search that matched nobody from a prompt that
         // showed nobody. Both display as an empty list; only one of them is an answer.
-        let bounded = bound_for_prompt(&list_of(4, None), 0);
-        assert!(bounded.candidates.is_empty());
-        assert!(bounded.incomplete);
-        let reason = bounded.incomplete_reason.expect("a reason");
+        let bounded = bound_to(&list_of(4, None), 0);
+        assert!(bounded.as_list().candidates.is_empty());
+        assert!(bounded.as_list().incomplete);
+        let reason = bounded
+            .as_list()
+            .incomplete_reason
+            .clone()
+            .expect("a reason");
         assert!(reason.contains('4'), "must name what it hid: {reason}");
     }
 
@@ -220,10 +353,10 @@ mod tests {
         // A genuine zero — nobody matched — is an exhaustive, true answer. Marking it
         // partial would teach a clerk to distrust the one result the funnel most needs them
         // to trust before they create a chart.
-        let bounded = bound_for_prompt(&list_of(0, None), PROMPT_CAP);
-        assert!(bounded.candidates.is_empty());
-        assert!(!bounded.incomplete);
-        assert_eq!(bounded.incomplete_reason, None);
+        let bounded = bound_for_prompt(&list_of(0, None));
+        assert!(bounded.as_list().candidates.is_empty());
+        assert!(!bounded.as_list().incomplete);
+        assert_eq!(bounded.as_list().incomplete_reason, None);
     }
 
     #[test]

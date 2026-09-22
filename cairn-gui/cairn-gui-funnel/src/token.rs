@@ -12,9 +12,15 @@
 //!
 //! So the dangerous bug is not a crash. It is a registration that swears to a search which
 //! never ran, or which ran for a different person. `cairn_patient_search::SearchAttestation`
-//! already closes half of this one layer down: it can only be *derived from* a displayed
-//! list, never constructed independently. This module closes the other half, at the boundary
-//! where a user interface could otherwise supply a query and a list that were never together.
+//! *states* the discipline one layer down — `from_displayed` is the one definition of what a
+//! registration attests to — but it does not enforce it: its three fields are `pub` and it
+//! derives `Deserialize`, so a determined caller can assemble one field by field
+//! ([#355](https://github.com/cairn-ehr/cairn-ehr/issues/355) tracks making it
+//! constructor-only; this module deliberately does not rely on it). The enforcement lives
+//! here, at the
+//! boundary where a user interface would otherwise supply a query and a list that were never
+//! together, and it is enforcement rather than convention because [`AttestedSearch`]'s fields
+//! are private and it has no public constructor.
 //!
 //! # How it is closed
 //!
@@ -32,20 +38,33 @@
 //!
 //! The browse search at step 1 cannot supply this pair — the clerk types fragments, edits
 //! freely, and scrolls — so its query and its displayed set are a moving target. The step-3
-//! search runs once, over the finished registration data, which is what makes query/displayed
-//! drift structurally impossible: the attested search runs on *whatever the clerk finally
-//! typed*, so the two cannot disagree. That is also why the browse list is free to scroll and
-//! this one is not ([`crate::prompt`]).
+//! search is different: it runs unasked over the completed registration data, and the pair a
+//! registration attests to is the one from the run that *preceded the commit*. That is what
+//! makes query/displayed drift structurally impossible — the attested search ran on whatever
+//! the clerk finally typed, so the two cannot disagree — and it is why the browse list is
+//! free to scroll and this one is not ([`crate::prompt`]).
+//!
+//! **Not "runs once".** It re-runs in the background as the clerk edits, which is precisely
+//! why [`TokenStore::record`] replaces what it holds, why [`TokenStore::discard`] exists, and
+//! why [`TokenStore::restore`] has to ask which generation it is putting a search back onto.
 //!
 //! # Why a `u64` counter and not a UUID
 //!
-//! The token never crosses a trust boundary: it goes to the window's own webview and comes
-//! back. A monotonic counter is unforgeable enough for that, adds no dependency and no source
-//! of randomness, and a window session will not approach JavaScript's 2^53 integer limit —
-//! one token per registration search, in a process a clerk restarts daily. If JavaScript ever
-//! did round one, [`TokenStore::take`] returns [`TokenError::Mismatched`] and the registration
-//! is refused. The failure is closed, which is the property that matters.
+//! The token goes to the window's own webview and comes back, and nothing about the search is
+//! recoverable from it. A monotonic counter adds no dependency and no source of randomness,
+//! and a session will not approach JavaScript's 2^53 integer limit — one token per
+//! registration search, in a process a clerk restarts daily. If JavaScript ever did round one,
+//! [`TokenStore::take`] returns [`TokenError::Mismatched`] and the registration is refused.
+//! The failure is closed, which is the property that matters.
+//!
+//! **What makes this safe is a precondition, not an absence of a trust boundary.** Nothing
+//! here depends on a token being unguessable — the guess space is tiny — so the property being
+//! relied on is that each store is reached only by the window it belongs to, and that no two
+//! stores mint the same token. The second half is why the counter is process-global (see
+//! `NEXT_TOKEN`); what a guessed token buys is bounded anyway: redeeming a search that
+//! really did run, in this process, for this form.
 
+use crate::prompt::PromptList;
 use cairn_patient_search::{CandidateList, SearchQuery};
 use serde::{Deserialize, Serialize};
 
@@ -66,11 +85,48 @@ pub struct SearchToken(u64);
 /// register with it twice — defeating the single-use property that stops two clicks on
 /// Register producing two charts. If a future caller seems to need a clone, it almost
 /// certainly wants a second `record` instead.
-#[derive(Debug, PartialEq, Eq)]
+///
+/// Because a borrow is as good as a copy for that purpose,
+/// [`crate::port`-shaped](TokenStore::take) write ports take this **by value**: see
+/// `cairn_gui_data::port::PatientRegistration::register`, which consumes it and hands it
+/// back inside its error so the only way to retry is through [`TokenStore::restore`].
+#[derive(PartialEq, Eq)]
 pub struct AttestedSearch {
     token: SearchToken,
+    /// The store's generation at the moment this was taken. [`TokenStore::restore`] puts it
+    /// back only if the store is still on that generation — which is what distinguishes
+    /// "nothing is held because I just took this" from "nothing is held because the clerk
+    /// edited the form". See `restore`'s doc for the failure that distinction prevents.
+    generation: u64,
     query: SearchQuery,
-    displayed: CandidateList,
+    displayed: PromptList,
+}
+
+/// Hand-written and **redacting on purpose**.
+///
+/// A derived `Debug` prints the query — the patient's name, date of birth and identifiers —
+/// and every displayed candidate's name, age and UUID. A single `log::debug!("{state:?}")`
+/// or a panicking `unwrap` in a command handler would then write a candidate list into a log
+/// file, which is a disclosure ADR-0006/§11.8 does not permit of clinical content, and it is
+/// a live `rust/cleartext-logging` sink shape besides.
+///
+/// The token, the generation and the candidate *count* are what custody bugs are debugged
+/// with; the content is reachable only through the accessors, deliberately.
+impl std::fmt::Debug for AttestedSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttestedSearch")
+            .field("token", &self.token)
+            .field("generation", &self.generation)
+            .field("query", &"<redacted>")
+            .field(
+                "displayed",
+                &format_args!(
+                    "<{} candidate(s), redacted>",
+                    self.displayed.as_list().candidates.len()
+                ),
+            )
+            .finish()
+    }
 }
 
 impl AttestedSearch {
@@ -87,8 +143,12 @@ impl AttestedSearch {
     /// The candidates that were on the screen, in display order. Feeds
     /// `SearchAttestation::from_displayed`, which is the one definition of what a
     /// registration swears to.
+    ///
+    /// A `&CandidateList` rather than a `&PromptList` because that is what
+    /// `from_displayed` takes, and because by this point the bounding has already happened:
+    /// the only way this list got here was through [`crate::prompt::bound_for_prompt`].
     pub fn displayed(&self) -> &CandidateList {
-        &self.displayed
+        self.displayed.as_list()
     }
 }
 
@@ -104,12 +164,20 @@ pub enum TokenError {
     /// Something is held, but it is not the search this token names — a newer search has
     /// superseded it.
     Mismatched,
+    /// A registration taken from this store has not settled yet.
+    ///
+    /// Two clicks on Register must not produce two charts, and removing the held search is
+    /// not sufficient on its own: the step-3 search runs in the background as the clerk
+    /// edits, so a re-search can land between the clicks and leave the second one a fresh,
+    /// redeemable token to spend. This refusal is what makes "at most one registration in
+    /// flight" a property of the store rather than a hope about the button's disabled state.
+    RegistrationInFlight,
 }
 
 impl std::fmt::Display for TokenError {
     /// The text a clerk sees. Each says what to DO, because a refusal a clerk cannot act on
-    /// is a dead end (§9.6 — an in-DB floor refusal is legible on purpose, and a refusal one
-    /// layer above it should be no worse).
+    /// is a dead end (§9.8 — a floor refusal fails closed *legibly* on purpose, and a refusal
+    /// one layer above it should be no worse).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenError::EmptyQuery => write!(
@@ -127,23 +195,73 @@ impl std::fmt::Display for TokenError {
                 "a newer search has replaced the one this registration was about to attest \
                  to. Answer the current prompt instead"
             ),
+            TokenError::RegistrationInFlight => write!(
+                f,
+                "this registration is already being saved — wait for it to finish rather \
+                 than registering again, or the same patient gets two charts"
+            ),
         }
     }
 }
 
 impl std::error::Error for TokenError {}
 
+/// The source of every [`SearchToken`] in this process.
+///
+/// **Process-global, not per-store, and that is load-bearing.** A counter living in the
+/// store would restart at zero for every `TokenStore`, so two windows would both mint token
+/// `0`; an attestation taken from one store could then be installed into the other by
+/// [`TokenStore::restore`] and redeemed by *its* form's own token `0` — registering patient
+/// B while attesting the search that was run for patient A. With one counter per process
+/// that cross-store confusion cannot be expressed: a foreign token simply never matches, so
+/// it fails closed as [`TokenError::Mismatched`].
+///
+/// `Relaxed` is sufficient: nothing orders other memory against this, and the only property
+/// required is that no two `fetch_add`s return the same value.
+static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What [`TokenStore::restore`] did with the attestation it was handed.
+///
+/// `#[must_use]` because the two outcomes need *different words on screen* — "your
+/// registration failed, press Register to try again" versus "a newer search has replaced
+/// yours, answer the prompt on screen" — and a caller that ignores the distinction will
+/// tell the clerk the wrong one. `restore` consumes the attestation either way: handing it
+/// back on rejection would re-open the double-registration hole that not being `Clone`
+/// exists to close.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restored {
+    /// Put back under its original token. The form's handle is valid and a retry will work.
+    Kept,
+    /// Dropped, because the form it described no longer exists — a newer search landed, or
+    /// the clerk edited the form while this registration was in flight.
+    SupersededAndDropped,
+}
+
 /// Custody of the one search a registration may currently attest to.
 ///
 /// Holds **at most one**, because the window has one registration form. A store that held
 /// several would need a policy for which one a token-less caller gets, and the only safe
 /// policy is "none" — so it holds one and answers by token.
+///
+/// # The two counters, and why `Option::is_none()` was not enough
+///
+/// `held.is_none()` is true in two states this store must tell apart: *"I just took the
+/// search for a registration in flight"* and *"the clerk invalidated it by editing the
+/// form"*. Restoring is right in the first and catastrophic in the second — it is the
+/// `Jon` → `John` resurrection [`TokenStore::discard`] promises to make impossible. So
+/// invalidation is counted, not inferred, and a taken attestation remembers the generation
+/// it belongs to.
 #[derive(Debug, Default)]
 pub struct TokenStore {
     held: Option<AttestedSearch>,
-    /// Never reused within a process, so a token from a superseded search can be told apart
-    /// from the current one rather than silently matching it.
-    next: u64,
+    /// Bumped by **every** act that invalidates what was held — a new `record`, a refused
+    /// empty-query `record`, and `discard`. A taken attestation may only be restored while
+    /// the store is still on the generation it was taken from.
+    generation: u64,
+    /// Set by [`TokenStore::take`], cleared by [`TokenStore::restore`] or
+    /// [`TokenStore::commit`]. See [`TokenError::RegistrationInFlight`].
+    in_flight: bool,
 }
 
 impl TokenStore {
@@ -151,7 +269,20 @@ impl TokenStore {
         Self::default()
     }
 
+    /// Drop whatever is held and move to a new generation.
+    ///
+    /// The single place invalidation happens, so that no path can forget to count it — the
+    /// bug that let a refused `record` leave a stale search redeemable.
+    fn invalidate(&mut self) {
+        self.held = None;
+        self.generation += 1;
+    }
+
     /// Record the search that just ran, replacing any earlier one, and mint its token.
+    ///
+    /// Takes a [`PromptList`], not a raw `CandidateList`: the list a registration attests to
+    /// must be the one that was actually on screen, so the bounding is not something a caller
+    /// can skip. See [`crate::prompt::PromptList`].
     ///
     /// Replacing is deliberate: the previous search described a form that no longer exists,
     /// so keeping it would only make it possible to attest to the wrong one.
@@ -163,15 +294,22 @@ impl TokenStore {
     pub fn record(
         &mut self,
         query: SearchQuery,
-        displayed: CandidateList,
+        displayed: PromptList,
     ) -> Result<SearchToken, TokenError> {
+        // Invalidate FIRST, before the empty-query refusal can return. Whatever was held
+        // describes a form that no longer exists the moment a new search runs over it, and
+        // that is just as true when the new form turns out to be unsearchable: a clerk who
+        // cleared the form has abandoned the search, so leaving it redeemable would let the
+        // NEXT patient's chart attest the PREVIOUS patient's search. An unsearchable form
+        // is an invalidation, not a no-op.
+        self.invalidate();
         if query.is_empty() {
             return Err(TokenError::EmptyQuery);
         }
-        let token = SearchToken(self.next);
-        self.next += 1;
+        let token = SearchToken(NEXT_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         self.held = Some(AttestedSearch {
             token,
+            generation: self.generation,
             query,
             displayed,
         });
@@ -184,13 +322,24 @@ impl TokenStore {
     /// charts off one attested search, so the second click finds nothing to attest and is
     /// refused. A registration that then fails puts it back with [`TokenStore::restore`].
     pub fn take(&mut self, token: SearchToken) -> Result<AttestedSearch, TokenError> {
+        // Refuse before looking at what is held. A registration already in flight means the
+        // clerk's second click must be refused even though a background re-search may have
+        // left a perfectly valid NEWER token for it to spend — which is precisely how two
+        // clicks produced two charts.
+        if self.in_flight {
+            return Err(TokenError::RegistrationInFlight);
+        }
         match self.held.as_ref().map(|held| held.token) {
             None => Err(TokenError::Absent),
             // Compare FIRST, remove only on a match. Taking whatever is held and checking
             // afterwards would discard the current search on a stale token — turning a
             // harmless mis-click into "search again".
             Some(held) if held != token => Err(TokenError::Mismatched),
-            Some(_) => Ok(self.held.take().expect("just matched")),
+            Some(_) => {
+                let attested = self.held.take().expect("just matched");
+                self.in_flight = true;
+                Ok(attested)
+            }
         }
     }
 
@@ -200,31 +349,59 @@ impl TokenStore {
     /// to re-search because the database hiccuped. Its token is unchanged, so the form's held
     /// handle stays valid.
     ///
-    /// **Does nothing if a newer search has landed in the meantime**, and that guard is not
-    /// cosmetic. The step-3 search runs in the background as the clerk edits, so a re-search
-    /// can complete while a registration is still in flight. Putting the older one back OVER
-    /// it would resurrect a search describing a form that no longer exists, and the form's own
-    /// (newer) token would then be refused as `Mismatched` — telling the clerk a newer search
-    /// had replaced theirs when in fact an older one had. Fail-closed either way; this makes
-    /// it also truthful.
-    pub fn restore(&mut self, attested: AttestedSearch) {
-        if self.held.is_none() {
-            self.held = Some(attested);
+    /// It settles the in-flight registration either way, so the clerk's next click is not
+    /// refused as [`TokenError::RegistrationInFlight`] forever.
+    ///
+    /// **Restores only onto the generation it was taken from**, and that guard is not
+    /// cosmetic — there are two distinct ways the form can move on underneath a registration
+    /// in flight, and both must reject the restore:
+    ///
+    /// - **A newer search landed.** The step-3 search runs in the background as the clerk
+    ///   edits, so a re-search can complete mid-flight. Putting the older one back OVER it
+    ///   would resurrect a search describing a form that no longer exists, and the form's own
+    ///   (newer) token would then be refused as `Mismatched` — telling the clerk a newer
+    ///   search had replaced theirs when in fact an older one had.
+    /// - **The clerk edited the form.** [`TokenStore::discard`] leaves nothing held, so a
+    ///   guard that asked only `held.is_none()` would cheerfully restore — resurrecting the
+    ///   very search `discard` exists to destroy. That is the `Jon` → `John` case: register,
+    ///   correct the typo mid-flight, the write fails, and the chart for `John` is born
+    ///   permanently attesting a search for `Jon`.
+    ///
+    /// Fail-closed in both; the generation check is what also makes it truthful.
+    pub fn restore(&mut self, attested: AttestedSearch) -> Restored {
+        self.in_flight = false;
+        if self.held.is_some() || attested.generation != self.generation {
+            return Restored::SupersededAndDropped;
         }
+        self.held = Some(attested);
+        Restored::Kept
+    }
+
+    /// The registration succeeded: settle it, so the next one is not refused.
+    ///
+    /// **A caller that forgets this leaves the store refusing every later `take`.** That is
+    /// deliberate — it fails closed, costing a window reload rather than minting a duplicate
+    /// chart — but it does mean [`TokenStore::commit`] and [`TokenStore::restore`] are the
+    /// two mandatory ends of every [`TokenStore::take`]. There is no third.
+    pub fn commit(&mut self) {
+        self.in_flight = false;
     }
 
     /// The form was edited: whatever is held no longer describes it.
     ///
     /// Not an optimisation. A search for `Jon` must not license a registration of `John`, and
-    /// discarding is how that stops being possible rather than being merely unlikely.
+    /// discarding is how that stops being possible rather than being merely unlikely — which
+    /// is why it counts a new generation rather than merely clearing the slot, so that a
+    /// registration failing mid-flight cannot put the discarded search back.
     pub fn discard(&mut self) {
-        self.held = None;
+        self.invalidate();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompt::bound_for_prompt;
     use cairn_patient_search::{Candidate, TrustState};
     use uuid::Uuid;
 
@@ -240,12 +417,16 @@ mod tests {
         }
     }
 
-    fn list_of(n: u128) -> CandidateList {
-        CandidateList {
+    /// A displayed list, bounded the only way `record` will accept.
+    ///
+    /// Note `n` may exceed `PROMPT_CAP`: the bounding is what keeps the attested list
+    /// truthful, and these tests are about custody rather than about the bounding.
+    fn list_of(n: u128) -> PromptList {
+        bound_for_prompt(&CandidateList {
             candidates: (1..=n).map(candidate).collect(),
             incomplete: false,
             incomplete_reason: None,
-        }
+        })
     }
 
     fn query(name: &str) -> SearchQuery {
@@ -275,7 +456,7 @@ mod tests {
         let token = store.record(q.clone(), list.clone()).unwrap();
         let attested = store.take(token).unwrap();
         assert_eq!(attested.query(), &q);
-        assert_eq!(attested.displayed(), &list);
+        assert_eq!(attested.displayed(), list.as_list());
     }
 
     #[test]
@@ -283,12 +464,56 @@ mod tests {
         // Double-submit protection. Two clicks on Register must not produce two charts off
         // one attested search — which would be a duplicate chart created BY the mechanism
         // that exists to prevent duplicate charts.
+        //
+        // While the first registration is still in flight the refusal is
+        // `RegistrationInFlight`, which is the more useful of the two truths: it tells the
+        // clerk to WAIT rather than to search again.
         let mut store = TokenStore::new();
         let token = store
             .record(query("Samantha Michaelowski"), list_of(1))
             .unwrap();
         assert!(store.take(token).is_ok());
+        assert_eq!(store.take(token), Err(TokenError::RegistrationInFlight));
+        // Once it has settled, the token is simply spent.
+        store.commit();
         assert_eq!(store.take(token), Err(TokenError::Absent));
+    }
+
+    #[test]
+    fn a_second_registration_cannot_be_taken_while_the_first_is_in_flight() {
+        // THE DOUBLE-SUBMIT HOLE THAT REMOVING THE HELD SEARCH DOES NOT CLOSE. The step-3
+        // search runs in the background as the clerk edits, so the clerk's last keystroke
+        // can land a re-search BETWEEN the two clicks — handing click 2 a fresh, perfectly
+        // valid token to spend while click 1's write is still in flight. Two charts, minted
+        // by the machinery whose whole job is preventing duplicate charts.
+        //
+        // The debounce window and the between-clicks window are the same order of
+        // magnitude, so this is not a theoretical race.
+        let mut store = TokenStore::new();
+        let first = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        let _in_flight = store.take(first).unwrap();
+        let second = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        assert_eq!(
+            store.take(second),
+            Err(TokenError::RegistrationInFlight),
+            "at most one registration may be in flight, whatever token is presented"
+        );
+    }
+
+    #[test]
+    fn a_settled_registration_frees_the_store_for_the_next_patient() {
+        // The other half of the in-flight guard: it must not be a one-shot latch. A clerk
+        // registers all day, and a store that refused every take after the first would be
+        // fail-closed but useless.
+        let mut store = TokenStore::new();
+        let first = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        store.take(first).unwrap();
+        store.commit();
+        let second = store.record(query("Amina Hassan"), list_of(0)).unwrap();
+        assert!(
+            store.take(second).is_ok(),
+            "a settled registration must not block the next one"
+        );
     }
 
     #[test]
@@ -325,7 +550,7 @@ mod tests {
             .record(query("Samantha Michaelowski"), list_of(2))
             .unwrap();
         let attested = store.take(token).unwrap();
-        store.restore(attested);
+        assert_eq!(store.restore(attested), Restored::Kept);
         let again = store.take(token).expect("the retry must find its search");
         assert_eq!(again.token(), token);
     }
@@ -343,7 +568,7 @@ mod tests {
         // …the background search lands while the registration is in flight…
         let second = store.record(query("John Smith"), list_of(2)).unwrap();
         // …and the registration then fails, putting its search back.
-        store.restore(taken);
+        assert_eq!(store.restore(taken), Restored::SupersededAndDropped);
 
         assert_eq!(
             store.take(first),
@@ -354,6 +579,94 @@ mod tests {
             store.take(second).is_ok(),
             "the search the form is actually holding must survive"
         );
+    }
+
+    #[test]
+    fn a_discarded_search_cannot_be_resurrected_by_a_failed_registration() {
+        // THE `Jon` -> `John` HOLE, through the `discard` door. `discard`'s own doc says a
+        // search for `Jon` must not license a registration of `John` — but a guard that
+        // only asks `held.is_none()` cannot tell "nothing held because I just took it"
+        // from "nothing held because the clerk edited the form".
+        //
+        // Reachable: click Register (take), correct the typo while the write is in flight
+        // (discard), the write fails (restore), click Register again. Without the
+        // generation check the store hands back the `Jon` search and the chart for `John`
+        // is born permanently attesting it.
+        let mut store = TokenStore::new();
+        let token = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        let attested = store.take(token).unwrap();
+        store.discard();
+        assert_eq!(
+            store.restore(attested),
+            Restored::SupersededAndDropped,
+            "a discarded search must be dropped, not put back"
+        );
+        assert_eq!(
+            store.take(token),
+            Err(TokenError::Absent),
+            "a search the clerk invalidated by editing must stay invalidated"
+        );
+    }
+
+    #[test]
+    fn clearing_the_form_invalidates_the_search_that_was_held() {
+        // `record`'s doc promises it replaces "any earlier one", because "keeping it would
+        // only make it possible to attest to the wrong one". The empty-query refusal must
+        // honour that promise rather than returning before `held` is touched: a clerk who
+        // clears the form has abandoned the search, and leaving it redeemable lets the next
+        // patient's chart attest the previous patient's search.
+        let mut store = TokenStore::new();
+        let token = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        assert_eq!(
+            store.record(SearchQuery::new("   ", None, &[]), list_of(0)),
+            Err(TokenError::EmptyQuery)
+        );
+        assert_eq!(
+            store.take(token),
+            Err(TokenError::Absent),
+            "an unsearchable form is an invalidation, not a no-op"
+        );
+    }
+
+    #[test]
+    fn a_token_is_never_reissued_after_a_discard() {
+        // The `next` counter's doc claims a token is "never reused". Non-reuse across a
+        // `take` was pinned; across a `discard` it was not, so a counter reset there would
+        // let token 0 from a discarded `Jon` search match token 0 of a later `John` search
+        // and be silently redeemed.
+        let mut store = TokenStore::new();
+        let first = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        store.discard();
+        let second = store.record(query("John Smith"), list_of(1)).unwrap();
+        assert_ne!(first, second, "a discarded token must not be reissued");
+        assert_eq!(store.take(first), Err(TokenError::Mismatched));
+    }
+
+    #[test]
+    fn two_attested_searches_can_never_be_in_flight_at_once() {
+        // The stronger form of "which of two restores wins?": with the in-flight guard the
+        // question cannot arise, because a second attestation can never be taken while the
+        // first is outstanding. Pinned so nobody removes the guard and reintroduces a race
+        // whose resolution would then depend on restore ORDER — something no caller
+        // controls.
+        let mut store = TokenStore::new();
+        let first = store.record(query("Jon Smith"), list_of(1)).unwrap();
+        let _older = store.take(first).unwrap();
+        let second = store.record(query("John Smith"), list_of(2)).unwrap();
+        assert_eq!(store.take(second), Err(TokenError::RegistrationInFlight));
+    }
+
+    #[test]
+    fn tokens_are_unique_across_stores_in_one_process() {
+        // The `next` doc says "never reused within a PROCESS". A per-store counter makes
+        // that false: two windows both mint token 0, and an attestation taken from one
+        // store then installs into the other and is redeemed by its form's own token 0 —
+        // registering patient B while attesting the search for patient A.
+        let mut a = TokenStore::new();
+        let mut b = TokenStore::new();
+        let from_a = a.record(query("Jon Smith"), list_of(1)).unwrap();
+        let from_b = b.record(query("John Smith"), list_of(1)).unwrap();
+        assert_ne!(from_a, from_b, "two stores must not mint the same token");
     }
 
     #[test]
@@ -418,10 +731,13 @@ mod tests {
     #[test]
     fn a_token_serializes_as_a_number_javascript_can_carry_exactly() {
         // The one place in this slice where a value leaves Rust's type system and comes
-        // back. JSON numbers are f64 in a webview, so a token beyond 2^53 would round and
-        // read back as a different token — which fails CLOSED (`Mismatched`), but would
-        // still cost a clerk their search. Pinned here so the claim in the module doc is
-        // checked rather than asserted.
+        // back, so what this genuinely pins is the ROUND TRIP: a `SearchToken` serialises as
+        // a bare JSON number and reads back as the same token.
+        //
+        // The `< 2^53` assertion is a sanity check on the shape, NOT evidence about session
+        // lifetime — this token comes from a fresh counter, so it is asserting that a small
+        // number is small. The lifetime claim in the module doc rests on the arithmetic
+        // there (one token per registration search, u64), not on this test.
         let mut store = TokenStore::new();
         let token = store.record(query("Some One"), list_of(0)).unwrap();
         let json = serde_json::to_string(&token).unwrap();
@@ -434,16 +750,67 @@ mod tests {
     }
 
     #[test]
-    fn every_refusal_says_what_to_do_about_it() {
-        // §9.6 applied one layer above the floor: a refusal a clerk cannot act on is a dead
-        // end. Each message names the remedy, not just the fault.
-        for err in [
-            TokenError::EmptyQuery,
-            TokenError::Absent,
-            TokenError::Mismatched,
-        ] {
+    fn every_refusal_names_its_own_remedy_and_no_two_read_alike() {
+        // §9.8 applied one layer above the floor: a refusal a clerk cannot act on is a dead
+        // end. This used to assert only `text.len() > 40`, which is a proxy for verbosity
+        // rather than for naming a remedy — collapsing all four arms into one generic
+        // "something went wrong, try again later" would have passed it, and a clerk hitting
+        // `Mismatched` would have been told to retype a name.
+        let cases = [
+            (TokenError::EmptyQuery, "type at least"),
+            (TokenError::Absent, "run again"),
+            (TokenError::Mismatched, "current prompt"),
+            (TokenError::RegistrationInFlight, "wait"),
+        ];
+        for (err, remedy) in cases {
             let text = err.to_string();
-            assert!(text.len() > 40, "too terse to act on: {text}");
+            assert!(
+                text.contains(remedy),
+                "{err:?} must name its remedy ({remedy:?}): {text}"
+            );
+        }
+        // And they must be four different sentences, not one message wearing four names.
+        let texts: std::collections::BTreeSet<String> =
+            cases.iter().map(|(e, _)| e.to_string()).collect();
+        assert_eq!(texts.len(), cases.len(), "two refusals read alike");
+    }
+
+    #[test]
+    fn the_attested_search_type_keeps_the_shape_its_guarantee_depends_on() {
+        // A STRUCTURAL GUARD, in the house style of `nothing_in_the_search_path_can_narrow_on_sex`
+        // and `crypto_sink_names_are_genuine.rs`. The module doc's central claim is that
+        // `AttestedSearch` has no public constructor and is not `Clone` — and nothing enforced
+        // it: adding `#[derive(Clone)]` or a `pub fn new` compiles and breaks no test, while
+        // silently re-opening "one attested search creates two charts".
+        let src = include_str!("token.rs");
+        let decl = src
+            .split_once("pub struct AttestedSearch {")
+            .expect("the struct must still be here")
+            .0;
+        let derives = decl
+            .rsplit_once("#[derive(")
+            .expect("a derive list above the struct")
+            .1;
+        let derives = &derives[..derives.find(')').expect("a closed derive list")];
+        for forbidden in ["Clone", "Copy", "Deserialize", "Default"] {
+            assert!(
+                !derives.contains(forbidden),
+                "AttestedSearch must not derive {forbidden} — it would let a caller keep or \
+                 forge an attestation the store no longer knows about. Derives: {derives}"
+            );
+        }
+        // No public constructor: every `pub fn` in the `impl AttestedSearch` block must be an
+        // accessor, never something handing back a `Self`.
+        let imp = src
+            .split_once("impl AttestedSearch {")
+            .expect("the impl block must still be here")
+            .1;
+        let imp = &imp[..imp.find("\n}").expect("a closed impl block")];
+        for constructor in ["-> Self", "-> AttestedSearch"] {
+            assert!(
+                !imp.contains(constructor),
+                "AttestedSearch must have no public constructor, found `{constructor}`: {imp}"
+            );
         }
     }
 }

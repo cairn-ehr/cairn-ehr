@@ -16,6 +16,7 @@ use crate::port::{ClinicalData, DataError, Demographics, NoteRef};
 use cairn_gui_tab::PatientRef;
 use fixtures::{FixturePatient, FIXTURE_UUID};
 use std::sync::Mutex;
+use uuid::Uuid;
 
 /// The fixture population, plus the one cross-reference note the note→pane demo needs.
 ///
@@ -44,12 +45,17 @@ impl MockData {
     }
 
     /// Look one patient up by id, cloning it out so no lock guard escapes.
+    ///
+    /// An unparseable id is simply not found, which is the honest answer: no chart can have
+    /// it. Parsing rather than comparing strings also makes the lookup insensitive to the
+    /// hyphenation and case a caller happens to use.
     fn find(&self, patient_uuid: &str) -> Option<FixturePatient> {
+        let wanted = Uuid::parse_str(patient_uuid).ok()?;
         self.patients
             .lock()
             .expect("fixture population")
             .iter()
-            .find(|p| p.uuid == patient_uuid)
+            .find(|p| p.uuid == wanted)
             .cloned()
     }
 }
@@ -59,7 +65,7 @@ impl ClinicalData for MockData {
         let patient = self.find(patient_uuid).ok_or(DataError::NotFound)?;
         Ok(Demographics {
             patient: PatientRef {
-                uuid: patient.uuid,
+                uuid: patient.uuid.to_string(),
                 display_name: patient.display_name,
             },
             sex: patient.sex,
@@ -73,10 +79,10 @@ impl ClinicalData for MockData {
         // `NotFound`. Those are different answers — "this chart has no cross-references" is
         // a real clinical state, and collapsing it into "no such patient" would make every
         // fixture but one look like it did not exist.
-        if self.find(patient_uuid).is_none() {
-            return Err(DataError::NotFound);
-        }
-        if patient_uuid == FIXTURE_UUID {
+        let patient = self.find(patient_uuid).ok_or(DataError::NotFound)?;
+        // Compare the PARSED ids, so the one fixture that carries notes is found however the
+        // caller spelled its uuid.
+        if patient.uuid.to_string() == FIXTURE_UUID {
             Ok(self.note_refs.clone())
         } else {
             Ok(Vec::new())

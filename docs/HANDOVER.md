@@ -9,7 +9,9 @@
 > `cairn-gui` workspace and `docs/`). 2a is the funnel's **pure core**: every *decision* on the
 > design page as an executable rule, in a new `cairn-gui-funnel` crate with no Tauri and no
 > database, plus the two ports in `cairn-gui-data` and a six-patient mock population. 21 mutations
-> run, 21 killed. **2b is the surface** — the Tauri commands, the shell state, an optional
+> run, 21 killed — then a **full multi-agent review of the PR found three more defects in
+> `TokenStore`, each reproduced with running code and all now fixed** (see *The durable rules*
+> below). **2b is the surface** — the Tauri commands, the shell state, an optional
 > `--patient`, the frontend, the JS/Rust drift-guard extension, the DB-gated attestation test, and
 > **the end-to-end §1.2 measurement this design owes**. Design:
 > `docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md` (read its *Slicing*
@@ -24,14 +26,46 @@
 > - **`AttestedSearch` has no public constructor.** The only way to get one is `TokenStore::take`.
 >   `take` compares the token FIRST and removes only on a match — taking-then-checking would let a
 >   registration attest search B while the clerk is looking at A, and would cost the live search on
->   a mis-click. It **removes**, so two clicks on Register cannot make two charts off one search.
+>   a mis-click. A **structural test** now pins the derive list and the absence of a constructor,
+>   because adding `#[derive(Clone)]` used to compile and break nothing.
+> - **⚠️ CUSTODY IS COUNTED, NEVER INFERRED FROM `Option::is_none()`.** This is the review's main
+>   lesson and the source of all three defects it found. `held.is_none()` is true both when a
+>   registration is in flight and when the clerk invalidated the search by editing the form, and
+>   conflating them resurrected a search for a *different person*. So: `record`, a refused
+>   empty-query `record`, and `discard` all bump a **generation**; a taken `AttestedSearch`
+>   remembers its generation and `restore` puts it back only onto that one; `take` sets an
+>   **in-flight** flag that only `restore` or the new `commit` clears. The three holes closed were
+>   (1) `restore` after `discard` resurrected the discarded search, (2) a refused empty-query
+>   `record` left the stale search redeemable, (3) a background re-search landing between two
+>   Register clicks handed the second click a fresh token and minted **two charts**.
+>   `commit`/`restore` are now the two mandatory ends of every `take` — forgetting one latches the
+>   store closed, which is deliberate (a window reload beats a duplicate chart).
+> - **Tokens come from a PROCESS-GLOBAL counter**, not a per-store field, so two windows cannot both
+>   mint token 0 and swap attestations between forms.
+> - **`register` CONSUMES the `AttestedSearch` and hands it back inside its error.** Not `Clone` was
+>   never enough on its own: a *borrow* let the caller keep the original and simply call `register`
+>   twice. The flow is now linear — `record → take → register(by value) → Ok: commit / Err: restore`.
 > - **The two partialities never collapse.** The node could not *read* some charts the search
 >   matched; the prompt could not *show* some it returned. `bound_for_prompt` keeps both reasons and
->   may only ever turn `incomplete` ON.
+>   may only ever turn `incomplete` ON — including when the node sets the flag with **no prose**,
+>   which used to hand the clerk only the milder truncation sentence.
+> - **Only a `PromptList` can be attested.** `bound_for_prompt` is its sole constructor and
+>   `TokenStore::record` accepts nothing else, so an unbounded node list cannot reach a signed
+>   attestation. Previously `bound_for_prompt` had **zero call sites** and 2a's own end-to-end walk
+>   recorded the raw list — a prompt showing five could have sworn it displayed forty.
 > - **Nothing in the search path narrows on sex** (design decision 4's negative limb), pinned
 >   structurally by `SearchQuery`'s field set.
 > - **The mock's matching rule is NOT `db/046`'s**, by design and at length in its doc. 2b's §1.2
->   measurement must be taken against a database, never against fixtures.
+>   measurement must **also** be taken against a database, never against fixtures alone (the design
+>   asks for both).
+> - **The mock never drops a row and never fabricates one.** `FixturePatient.uuid` is a parsed
+>   `Uuid`, so the fallible parse that could silently delete a matching chart from a list still
+>   calling itself complete is gone — a typo is now a loud panic at window start. A registration
+>   with no date of birth records `"not recorded"`, not `""`, because a blank field reads as
+>   *not-yet-asked*. Both ports do their work **when awaited**, not when the future is built, so a
+>   2b cancellation test against the mock means something.
+> - **Refusal text is pinned by CONTENT, not length.** The old assertion was `text.len() > 40`,
+>   which one generic message would have satisfied for all variants.
 >
 > ⚠️ **2b must narrow one sentence.** Registering in `--mock` now succeeds into an in-memory set
 > (without it the *browse → nothing fits → register → prompt → commit* walk means nothing), so
@@ -50,6 +84,16 @@
 > seven so adding one is a deliberate act on a *no spinner* read path. **Filed:** **#645** (that
 > display/rank half) · **#647** (`Demographics.sex` is a bare `String`, so the port cannot say *not
 > recorded* distinctly from a recorded value).
+>
+> **Filed by the 2a review and deliberately left open:** **#648** (`DataError` cannot say *refused*,
+> so a deterministic floor refusal reads as an outage and invites a pointless retry — needs the live
+> port, so it is 2b's) · **#649** (`register`'s future has no cancellation contract: a drop after
+> commit lets the retry mint a duplicate, since `register_patient` generates its own id — needs a
+> decision about caller-supplied ids) · **#650** (`TriggerState::Waiting(vec![])` is representable
+> and meaningless; low, and the newtype that closes it costs test readability). **#355** already
+> tracked the related `SearchAttestation` gap — its three fields are `pub` and it derives
+> `Deserialize`, so `from_displayed` is a convention rather than an enforcement; `token.rs` now says
+> so plainly instead of resting its rationale on it.
 >
 > **After 2b, recommended in order:** **#620**, a wire-contract DECISION (the COSE unprotected
 > header is hashed into the content address but lies outside the signature, so a relay can re-wrap

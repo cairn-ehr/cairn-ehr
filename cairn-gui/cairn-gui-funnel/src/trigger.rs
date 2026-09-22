@@ -58,14 +58,26 @@ pub const MIN_NAME_TOKENS: usize = 2;
 /// silence and distinct from a negative answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingPart {
-    /// Fewer name tokens than [`MIN_NAME_TOKENS`]. `have` travels with `need` because
-    /// "type more of the name" without saying how much more is a guessing game.
-    NameTokens { have: usize, need: usize },
+    /// Fewer name tokens than [`MIN_NAME_TOKENS`]. `have` travels with it because "type more
+    /// of the name" without saying how much more is a guessing game; the screen reads the
+    /// target from [`MIN_NAME_TOKENS`], which is public for exactly that.
+    ///
+    /// It does NOT carry its own `need`. A second copy of the threshold is a second source of
+    /// truth: a hand-built variant could tell the clerk "1 of 3" while the rule below used 2,
+    /// and `have >= need` was a representable, self-contradictory state ("waiting because you
+    /// have enough").
+    NameTokens { have: usize },
     /// No date of birth yet.
     BirthDate,
 }
 
 /// Whether the machine should search now, unasked — and if not, what it is waiting for.
+///
+/// `Waiting(vec![])` — *"not ready, and nothing is missing"* — is representable and
+/// meaningless, as is a duplicated part. Only [`trigger_state`] produces these today and it
+/// can emit neither, so the gap is filed rather than closed:
+/// [#650](https://github.com/cairn-ehr/cairn-ehr/issues/650) carries the non-empty-newtype
+/// shape and the readability cost that argues against it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerState {
     /// Enough is typed. Run the registration search in the background.
@@ -97,14 +109,16 @@ pub fn trigger_state(raw_name: &str, birth_date: &str) -> TriggerState {
 
     let have = name_token_count(raw_name);
     if have < MIN_NAME_TOKENS {
-        missing.push(MissingPart::NameTokens {
-            have,
-            need: MIN_NAME_TOKENS,
-        });
+        missing.push(MissingPart::NameTokens { have });
     }
     // Blank-after-trim counts as "nothing supplied", the same rule `SearchQuery::new` and
     // `register_patient` both apply to a birth date. A field holding only spaces must never
     // read as an answer.
+    //
+    // NON-EMPTINESS IS THE WHOLE TEST — no length, no format, no calendar check. A
+    // reduced-precision date is a first-class value everywhere else in this stack (a
+    // registrar is frequently told only a year, principle 4), so demanding a full
+    // `YYYY-MM-DD` here would quietly exclude exactly those patients from the early search.
     if birth_date.trim().is_empty() {
         missing.push(MissingPart::BirthDate);
     }
@@ -140,7 +154,7 @@ mod tests {
         // name" without saying how much more makes the clerk guess.
         assert_eq!(
             trigger_state("Michaelowski", "1984-03-02"),
-            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1, need: 2 }])
+            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1 }])
         );
     }
 
@@ -171,7 +185,7 @@ mod tests {
         assert_eq!(
             trigger_state("", ""),
             TriggerState::Waiting(vec![
-                MissingPart::NameTokens { have: 0, need: 2 },
+                MissingPart::NameTokens { have: 0 },
                 MissingPart::BirthDate,
             ])
         );
@@ -184,7 +198,7 @@ mod tests {
         // future switch cannot pass silently.
         assert_eq!(
             trigger_state("   ", "1984-03-02"),
-            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 0, need: 2 }])
+            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 0 }])
         );
     }
 
@@ -196,7 +210,7 @@ mod tests {
         // search would fire on half a person.
         assert_eq!(
             trigger_state("O'Brien-Smith", "1984-03-02"),
-            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1, need: 2 }])
+            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1 }])
         );
         // And the same surname with a given name beside it IS two tokens.
         assert_eq!(
@@ -217,7 +231,46 @@ mod tests {
         );
         assert_eq!(
             trigger_state("李小明", "1984-03-02"),
-            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1, need: 2 }])
+            TriggerState::Waiting(vec![MissingPart::NameTokens { have: 1 }])
+        );
+    }
+
+    #[test]
+    fn more_than_the_minimum_name_tokens_is_still_ready() {
+        // `have < MIN_NAME_TOKENS` could have been `have != MIN_NAME_TOKENS` and stayed
+        // green, because no test used a third token. Under that mutation any patient whose
+        // name is typed with a middle name silently never trips the trigger: no prompt, so
+        // the duplicate the funnel exists to catch is never shown.
+        assert_eq!(
+            trigger_state("John Ronald Reuel Tolkien", "1984-03-02"),
+            TriggerState::Ready
+        );
+    }
+
+    #[test]
+    fn a_year_only_birth_date_is_enough_to_search_unasked() {
+        // Every other test here uses a full date or a blank, so a rule demanding
+        // `YYYY-MM-DD` would have passed. A year is what a registrar is often told
+        // (principle 4) and is what the §5.4 John Doe fixture actually carries — those are
+        // the patients the early search would have silently stopped serving.
+        assert_eq!(trigger_state("Mei Wu", "1975"), TriggerState::Ready);
+        assert_eq!(trigger_state("Mei Wu", "1975-07"), TriggerState::Ready);
+    }
+
+    #[test]
+    fn an_ideographic_space_separates_name_tokens_like_any_other_space() {
+        // The non-Latin test above uses an ASCII space, so `split_ascii_whitespace` would
+        // have passed it — while a CJK IME routinely emits U+3000 IDEOGRAPHIC SPACE. Under
+        // that mutation the name is one token and the early search never fires, which is the
+        // cultural capture ADR-0014 forbids arriving as a whitespace bug.
+        assert_eq!(
+            trigger_state("\u{963f}\u{660e}\u{5a1c}\u{3000}\u{674e}", "1984-03-02"),
+            TriggerState::Ready
+        );
+        // And a non-breaking space, which is what a pasted Latin name often carries.
+        assert_eq!(
+            trigger_state("Samantha\u{a0}Michaelowski", "1984-03-02"),
+            TriggerState::Ready
         );
     }
 
@@ -230,7 +283,7 @@ mod tests {
         assert_eq!(
             trigger_state("Amina", ""),
             TriggerState::Waiting(vec![
-                MissingPart::NameTokens { have: 1, need: 2 },
+                MissingPart::NameTokens { have: 1 },
                 MissingPart::BirthDate,
             ])
         );

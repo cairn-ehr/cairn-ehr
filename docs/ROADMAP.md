@@ -784,18 +784,46 @@ paper 3 → forced 2 → target 2. `M ≤ N`. Time + cognitive load: the 5 s cei
   design said `register` takes *"only that token"* — handing the port a value with no constructor is
   the same guarantee in the type system, holding against a Rust caller too. `take` compares **first**
   and removes only on a match (taking-then-checking would let a registration attest search B while
-  the clerk is looking at A, and would cost the live search on a mis-click); `take` removes, so two
-  clicks on Register cannot produce two charts off one attested search.
+  the clerk is looking at A, and would cost the live search on a mis-click).
+- **Reworked after review — custody is COUNTED, never inferred.** The first cut asked
+  `held.is_none()`, which is true both when a registration is in flight and when the clerk
+  invalidated the search by editing the form. Three defects followed, each reproduced with running
+  code: `restore` after `discard` **resurrected the discarded search** (register, fix the typo
+  mid-flight, the write fails, and the chart for *John* is born attesting a search for *Jon* — the
+  exact case `discard`'s own doc promised was impossible); a refused **empty-query `record` left the
+  stale search redeemable**, so a cleared form let the next patient's chart attest the previous
+  patient's search; and a background re-search landing **between two Register clicks** handed the
+  second click a fresh, valid token and produced **two charts** — a duplicate minted by the
+  duplicate-prevention machinery. Now `record`/refused-`record`/`discard` each bump a **generation**,
+  a taken attestation remembers its own and `restore` puts it back only onto that one, `take` sets an
+  **in-flight** flag, and `commit`/`restore` are the two mandatory ends of every `take`. Tokens moved
+  to a **process-global** counter so two windows cannot both mint token 0. `register` now **consumes**
+  the attestation and returns it inside its error — a borrow had left `!Clone` buying nothing, since
+  the caller kept the original and could simply call `register` twice.
+- **Reworked after review — only a `PromptList` can be attested.** `bound_for_prompt` had **zero call
+  sites** and `record` took any `CandidateList`; 2a's own end-to-end walk recorded the raw node list,
+  so the shortest path anyone would copy signed *forty displayed* for a prompt showing five. The
+  bounding is now a type with a private field and a single constructor, and `record` accepts nothing
+  else. It also stopped a bare `incomplete: true` with no prose from being handed to the clerk as the
+  milder truncation sentence alone.
 - **Built — the ports:** `PatientSearch` + `PatientRegistration`, split so the write surface is one
-  method wide. `impl Future<…> + Send` rather than `async fn` (which raises `async_fn_in_trait`,
-  an error under CI's `-D warnings`, and promises no `Send`) — no `async-trait` dependency, and
-  **not dyn-compatible**, so 2b dispatches on the existing `is_mock()` branch.
+  method wide. The **trait declares** `impl Future<…> + Send` rather than `async fn` (which raises
+  `async_fn_in_trait`, an error under CI's `-D warnings`, and promises no `Send`) — no `async-trait`
+  dependency, and **not dyn-compatible**, so 2b dispatches on the existing `is_mock()` branch. The
+  **impls** use plain `async fn`, which is what makes the work happen when awaited rather than when
+  the future is built: the first cut computed eagerly, so building a `register` future and dropping
+  it still minted a patient while a live implementation would have done nothing.
 - **Built — the mock population:** six fixtures, each a case that has broken something (multi-script
   shaping, #636's `mich`, a hyphenated compound found by either half, apostrophe-and-hyphen, a
   two-character name found by typing it whole (#638), and a John Doe browsable as identity-pending).
   **Its matching rule is NOT `db/046`'s and its doc says so at length** — a fixture, wider in one
-  direction and narrower in another, which is why 2b's §1.2 measurement must be taken against a
-  database.
+  direction and narrower in another, which is why 2b's §1.2 measurement must **also** be taken
+  against a database, never against fixtures alone. **Reworked after review:** `FixturePatient.uuid`
+  is a parsed `Uuid`, because while it was a `String` a one-character typo dropped that patient out
+  of every search — through a `filter_map` over a fallible parse — while the list two lines below
+  still declared itself complete, which is the real `search.rs`'s *"never drop the candidate"* rule
+  inverted. A registration supplying no date of birth now records `"not recorded"` rather than `""`,
+  since a blank field reads as *not-yet-asked*.
 - **Two spec decisions met the code**, both recorded as dated revision notes on the design page
   rather than edited away. **The trigger** was *"a given name, a surname and a date of birth"*,
   implying separate fields — one culture's name model (ADR-0014), failing for a mononymous patient,
@@ -806,13 +834,34 @@ paper 3 → forced 2 → target 2. `M ≤ N`. Time + cognitive load: the 5 s cei
   test pins its field count at seven so adding one is a deliberate act on a *no spinner* read path;
   the negative limb (nothing narrows on sex, so no chart can be hidden from the clerk about to
   duplicate it) is honoured structurally.
-- **21 mutations run across the four modules, 21 killed.** Two tests were weaker than they read and
-  were strengthened before mutating: one claimed to guard a short-circuit it cannot observe, the
-  other accepted a blank-but-non-empty name.
+- **21 mutations run across the four modules, 21 killed** — then a **full multi-agent review of the
+  PR found what those 21 did not cover.** Two tests were weaker than they read and were strengthened
+  before mutating (one claimed to guard a short-circuit it cannot observe, the other accepted a
+  blank-but-non-empty name); the review then found three live defects (above) plus a set of surviving
+  mutations, all now closed by tests: the truncation **off-by-one** (`withheld > 1` survived, because
+  no case ever withheld exactly one — a six-candidate list would have hidden one and called itself
+  complete), the **birth-date pass entirely unexercised** (every mock search passed `None`), the
+  **identifier system check** unpinned (no two fixtures shared a value, so comparing values alone
+  survived), a **three-token name**, a **year-only date of birth** (a rule demanding `YYYY-MM-DD`
+  survived, and would have excluded exactly the patients principle 4 is about), and the CJK test's
+  **ASCII space** (so `split_ascii_whitespace` survived, while an IME emits U+3000). Two weak
+  assertions were replaced: refusal text was pinned by `len() > 40`, and `AttestedSearch`'s whole
+  guarantee — no `Clone`, no public constructor — was pinned by nothing at all and is now structural.
+  Test count 112 → **133**.
 - **Filed:** [#645](https://github.com/cairn-ehr/cairn-ehr/issues/645) (decision 4's display/rank
   half — what an additive `Candidate.sex` plus a projection read would cost) ·
   [#647](https://github.com/cairn-ehr/cairn-ehr/issues/647) (`Demographics.sex` is a bare `String`,
-  so the port cannot say *not recorded* distinctly from a recorded value — principle 4, small).
+  so the port cannot say *not recorded* distinctly from a recorded value — principle 4, small) ·
+  [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648) (`DataError` cannot say *refused*, so a
+  deterministic floor refusal reads as an outage and invites a pointless retry — needs the live port,
+  so 2b's) · [#649](https://github.com/cairn-ehr/cairn-ehr/issues/649) (`register`'s future has no
+  cancellation contract: dropped after commit, the retry mints a duplicate because `register_patient`
+  generates its own id) · [#650](https://github.com/cairn-ehr/cairn-ehr/issues/650)
+  (`TriggerState::Waiting(vec![])` is representable and meaningless — low, and the newtype that
+  closes it costs test readability). **#355** already tracked the neighbouring
+  `SearchAttestation` gap: its three fields are `pub` and it derives `Deserialize`, so
+  `from_displayed` is a convention, not an enforcement — `token.rs` no longer rests its rationale on
+  it.
 - **Carry-over for 2b:** registering in `--mock` now succeeds into an in-memory set (without it the
   *browse → nothing fits → register → prompt → commit* walk means nothing), which makes
   `cairn-gui-tauri/src/main.rs`'s *"Writes are refused in this mode"* too broad. 2b must narrow it to

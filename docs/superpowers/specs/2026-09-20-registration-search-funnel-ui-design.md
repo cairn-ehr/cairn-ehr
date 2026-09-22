@@ -75,8 +75,10 @@ This is the load-bearing decision, and it resolves what would otherwise be a dir
 `SearchAttestation { query, displayed }` is meaningful only as a matched pair from one
 `search_patients` call. The browse search cannot supply it: the clerk types fragments, edits freely,
 and browses a long list, so its query and its displayed set are a moving target. The step-3 search
-is the opposite — it runs once, automatically, over the finished registration data, and its results
-are shown in a bounded prompt.
+is the opposite — it runs automatically over the completed registration data, and its results are
+shown in a bounded prompt. (It *re-runs* as the clerk edits; what matters is that only **one** run —
+the one preceding the commit — is ever attested. Slice 2a found that the difference between "runs
+once" and "one run is attested" is exactly where the custody bugs live.)
 
 Two consequences follow, and both are why this design works:
 
@@ -162,6 +164,26 @@ pair it produced, held in `state.rs`. `register` takes only that token — never
 separate arguments — so the frontend cannot mint an attestation, and a UI bug fails to register
 rather than signing a false one. Editing the form after step 3 discards the token and re-runs the
 search.
+
+> **Sharpened 2026-09-22 (slice 2a review).** The shape above is right; three things about it turned
+> out to be load-bearing in ways the page did not say, so 2b should read these rather than the
+> sentences above alone.
+>
+> - **`register` takes the attested pair BY VALUE, not a token.** *"`register` takes only that
+>   token"* closes the frontend path, but a Rust caller holding the pair could still register twice.
+>   `register(attested: AttestedSearch, name) -> Result<Uuid, (DataError, AttestedSearch)>` consumes
+>   it and hands it back inside the error, so the flow is linear —
+>   `record → take → register → Ok: commit / Err: restore` — and the failing branch is the only way
+>   to get the value needed for a retry.
+> - **The attested list is its own type.** The list a registration swears it displayed must be the
+>   bounded one, and a bounded list is shape-identical to a raw node list, so the cap lived on the
+>   honour system. `bound_for_prompt` now returns a `PromptList` with a private field and
+>   `TokenStore::record` accepts nothing else.
+> - **"Editing the form discards the token" is necessary but not sufficient.** Discarding must also
+>   *prevent a later restore*: a registration failing while the clerk edits used to put the
+>   pre-edit search back, so a chart could be born attesting a search for a different spelling of
+>   the name. The store counts invalidations rather than inferring them from an empty slot, and
+>   refuses a second `take` while one registration is still in flight.
 
 **Commands.** A new module, not `commands.rs`: that file is already 456 lines and would cross the
 project's 500-line guideline. (`cairn-gui-tab-medications/src/view.rs` is already 645 — noted, out of
