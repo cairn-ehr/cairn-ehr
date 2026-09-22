@@ -1,54 +1,91 @@
-//! Fixture-backed ClinicalData for slice 1 (no node). One patient with a
-//! multi-script name to also feed the Spike 0004 shaping check.
+//! Fixture-backed ports — what `--mock` runs on.
+//!
+//! This is a **shipped mode, not a toy**: it is what the operator accessibility pass and the
+//! timing runbook use on a laptop, with no database anywhere. So the fixtures have to
+//! exercise the shapes that actually break things (see [`fixtures`]), and the ports have to
+//! behave honestly rather than conveniently.
+//!
+//! [`ClinicalData`] lives here; the two funnel ports are implemented in the private
+//! `funnel` submodule, whose doc explains — at length, and deliberately — why the fixture
+//! matching rule is **not** `db/046`'s and must not be generalised from.
+
+pub mod fixtures;
+mod funnel;
+
 use crate::port::{ClinicalData, DataError, Demographics, NoteRef};
 use cairn_gui_tab::PatientRef;
+use fixtures::{FixturePatient, FIXTURE_UUID};
+use std::sync::Mutex;
+use uuid::Uuid;
 
-const FIXTURE_UUID: &str = "00000000-0000-0000-0000-0000000000aa";
-
+/// The fixture population, plus the one cross-reference note the note→pane demo needs.
+///
+/// # Why the population is behind a `Mutex`
+///
+/// Registering in `--mock` mints a patient into this set so the next browse finds it — the
+/// only thing that makes the *browse → nothing fits → register → prompt → commit* walk mean
+/// anything. The ports take `&self` (they are read-shaped, and the real implementations will
+/// be), so the write needs interior mutability. A `std::sync::Mutex` rather than a `RefCell`
+/// because the window awaits these from a multi-threaded runtime; the lock is never held
+/// across an `await` (see the `funnel` submodule).
 pub struct MockData {
-    demographics: Demographics,
+    patients: Mutex<Vec<FixturePatient>>,
     note_refs: Vec<NoteRef>,
 }
 
 impl MockData {
     pub fn with_fixtures() -> Self {
-        let patient = PatientRef {
-            uuid: FIXTURE_UUID.to_string(),
-            // Latin / Arabic / Devanagari / Han in one label feeds the IME/shaping pass.
-            display_name: "Amina أمينة अमीना 阿明娜".to_string(),
-        };
         Self {
-            demographics: Demographics {
-                patient,
-                sex: "female".to_string(),
-                birth_date: "1984-03-02".to_string(),
-                identifiers: vec![
-                    ("MRN".to_string(), "12345".to_string()),
-                    ("National".to_string(), "QLD-998877".to_string()),
-                ],
-            },
+            patients: Mutex::new(fixtures::starting_population()),
             note_refs: vec![NoteRef {
                 id: "xray-2026-07-01".to_string(),
                 one_line: "Chest X-ray 2026-07-01 — no acute abnormality".to_string(),
             }],
         }
     }
+
+    /// Look one patient up by id, cloning it out so no lock guard escapes.
+    ///
+    /// An unparseable id is simply not found, which is the honest answer: no chart can have
+    /// it. Parsing rather than comparing strings also makes the lookup insensitive to the
+    /// hyphenation and case a caller happens to use.
+    fn find(&self, patient_uuid: &str) -> Option<FixturePatient> {
+        let wanted = Uuid::parse_str(patient_uuid).ok()?;
+        self.patients
+            .lock()
+            .expect("fixture population")
+            .iter()
+            .find(|p| p.uuid == wanted)
+            .cloned()
+    }
 }
 
 impl ClinicalData for MockData {
     fn demographics(&self, patient_uuid: &str) -> Result<Demographics, DataError> {
-        if patient_uuid == self.demographics.patient.uuid {
-            Ok(self.demographics.clone())
-        } else {
-            Err(DataError::NotFound)
-        }
+        let patient = self.find(patient_uuid).ok_or(DataError::NotFound)?;
+        Ok(Demographics {
+            patient: PatientRef {
+                uuid: patient.uuid.to_string(),
+                display_name: patient.display_name,
+            },
+            sex: patient.sex,
+            birth_date: patient.birth_date,
+            identifiers: patient.identifiers,
+        })
     }
 
     fn note_refs(&self, patient_uuid: &str) -> Result<Vec<NoteRef>, DataError> {
-        if patient_uuid == self.demographics.patient.uuid {
+        // A KNOWN patient with no notes gets an empty list; only an UNKNOWN one is
+        // `NotFound`. Those are different answers — "this chart has no cross-references" is
+        // a real clinical state, and collapsing it into "no such patient" would make every
+        // fixture but one look like it did not exist.
+        let patient = self.find(patient_uuid).ok_or(DataError::NotFound)?;
+        // Compare the PARSED ids, so the one fixture that carries notes is found however the
+        // caller spelled its uuid.
+        if patient.uuid.to_string() == FIXTURE_UUID {
             Ok(self.note_refs.clone())
         } else {
-            Err(DataError::NotFound)
+            Ok(Vec::new())
         }
     }
 
@@ -71,10 +108,7 @@ impl ClinicalData for MockData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::port::ClinicalData;
     use cairn_medication_view::{MedicationStatus, VouchState};
-
-    const FIXTURE_UUID: &str = "00000000-0000-0000-0000-0000000000aa";
 
     #[test]
     fn mock_returns_fixture_demographics() {
@@ -106,6 +140,22 @@ mod tests {
             !refs.is_empty(),
             "fixture provides a cross-reference for the note→pane demo"
         );
+    }
+
+    #[test]
+    fn a_known_patient_with_no_notes_has_none_rather_than_not_existing() {
+        // "This chart has no cross-references" and "there is no such chart" are different
+        // answers, and the second one about a patient who IS on file is a lie the window
+        // would render as an error.
+        let data = MockData::with_fixtures();
+        let other = data
+            .demographics("00000000-0000-0000-0000-0000000000bb")
+            .expect("a second fixture patient exists now");
+        assert!(data.note_refs(&other.patient.uuid).unwrap().is_empty());
+        assert!(matches!(
+            data.note_refs("00000000-0000-0000-0000-000000000099"),
+            Err(DataError::NotFound)
+        ));
     }
 
     /// The mock exists so the window runs with no database — what the operator

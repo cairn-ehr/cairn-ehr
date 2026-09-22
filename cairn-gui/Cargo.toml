@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "cairn-gui-tab",
     "cairn-gui-data",
+    "cairn-gui-funnel",
     "cairn-gui-manifest",
     "cairn-gui-shell",
     "cairn-gui-tauri",

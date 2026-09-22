@@ -18,3 +18,17 @@ cairn-gui-tab = { path = "../cairn-gui-tab" }
 # shared crate so the node binary does not carry demo clinical content; this is the crate
 # whose whole job is serving it.
 cairn-medication-view = { path = "../../crates/cairn-medication-view", features = ["fixtures"] }
+cairn-patient-search = { path = "../../crates/cairn-patient-search" }
+# The funnel's pure rules, in THIS workspace. `PatientRegistration` takes an
+# `AttestedSearch`, which has no public constructor — that is what makes it impossible
+# for any caller, frontend or Rust, to hand the write port a query and a candidate list
+# that were never together (see cairn-gui-funnel's `token` module).
+cairn-gui-funnel = { path = "../cairn-gui-funnel" }
+# The minted chart's id, which `register` hands back so the caller can open it.
+uuid = { version = "1", features = ["v7"] }
+
+[dev-dependencies]
+# TESTS ONLY. The funnel port tests are async (the ports return futures), and the
+# SearchQuery shape assertion serialises one to prove no field narrows on sex.
+tokio = { version = "1", features = ["rt", "macros"] }
+serde_json = "1"

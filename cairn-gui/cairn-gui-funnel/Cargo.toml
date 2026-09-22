@@ -1,0 +1,29 @@
+[package]
+name = "cairn-gui-funnel"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# A path dependency reaching OUT of this workspace into /crates. The direction is
+# GUI -> crates, which is the permitted one (ADR-0021 / §9.5 — nothing in /crates may
+# ever depend on cairn-gui). Safe to pull in here for the same reason
+# `cairn-gui-data` may take `cairn-medication-view`: the crate is `uuid` + `serde`
+# only, with no database driver and no clock, so nothing Postgres-shaped enters the
+# window through it.
+cairn-patient-search = { path = "../../crates/cairn-patient-search" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# TESTS ONLY. `SearchToken` crosses into the webview as JSON, and the claim that a
+# window session never approaches JavaScript's 2^53 integer limit is only worth making
+# if something actually serializes one. Already a workspace-wide dependency
+# (MIT/Apache-2.0, AGPL-compatible).
+serde_json = "1"
+# TESTS ONLY, same reasoning. A `Candidate` is keyed by a `Uuid`, so the fixtures the
+# bounding tests build need to mint distinguishable ones. The crate itself never names a
+# `Uuid` — it only carries lists of candidates through — so this stays off the real edge.
+uuid = "1"
