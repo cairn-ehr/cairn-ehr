@@ -26,6 +26,14 @@
 //! rule is a call-site question, and a call-site question is cheaper to answer by reading the
 //! source than by building a rig per caller.
 //!
+//! ⚠️ **What this guard CANNOT catch, stated so nobody mistakes it for the whole fix.** It sees
+//! source, so it sees only the route a caller *writes*. The other route to the same latched store
+//! is a `register` future that is **dropped** rather than awaited — window closed mid-write,
+//! webview reload, a `select!`, a timeout, a panic through the await. The `AttestedSearch` is then
+//! dropped inside the future, `in_flight` stays set, and `settle` is never reached. No source
+//! pattern is wrong; the caller simply never runs. That needs a `Drop` on `AttestedSearch`
+//! carrying the latch, and is [#669](https://github.com/cairn-ehr/cairn-ehr/issues/669).
+//!
 //! **Scope: shipped `src/` code in the `cairn-gui` tree only.** Tests legitimately use the idiom —
 //! several exist to prove what it costs — so flagging them would make the guard noise. Slice 2c's
 //! handler is shipped code, and it is the caller this exists for.

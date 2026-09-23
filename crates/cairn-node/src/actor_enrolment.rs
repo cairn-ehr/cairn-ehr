@@ -145,6 +145,13 @@ pub enum ActorStanding {
 
 /// Where does this key stand? One round trip, four answers.
 ///
+/// ⚠️ **The standing carries no SUBJECT**, so pairing it with the right key is caller discipline
+/// rather than a compiler fact: `device_actor_standing(db, kid_a)` returning `Retired` and
+/// `retired_actor_refusal(kid_b)` compiles and would hand an operator an identity-level remedy for
+/// the wrong key. Both call sites use one binding today.
+/// [#670](https://github.com/cairn-ehr/cairn-ehr/issues/670) carries the fix (return the kid
+/// beside the standing).
+///
 /// The `actor_event` arm keys on `signing_key_id`, which only `enroll`/`supersede` rows carry —
 /// a `revoke` row has a NULL key by design (db/004) — so it answers *"was this key ever
 /// enrolled?"* rather than *"was it ever revoked?"*, which is the question that distinguishes

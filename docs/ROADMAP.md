@@ -1008,6 +1008,21 @@ any tree, no lockfile movement.** Closes
   failure: `cairn-gui-tauri` builds a fresh `MockData` per command, so the §1.2 runbook must not
   be written against `fail_next` until a persistent one lands. The doc claimed the capability was
   delivered; it now says what is true.
+  [#669](https://github.com/cairn-ehr/cairn-ehr/issues/669) — **the latch route no source guard can
+  see**: a `register` future that is DROPPED (window closed mid-write, reload, `select!`, timeout,
+  a panic through the await) drops the `AttestedSearch` *inside* the future, so `in_flight` stays
+  set, `settle` is never reached, `discard` deliberately does not clear it, and the clerk reads
+  *"already being saved — wait for it to finish"* for the rest of the window's life with no gesture
+  that recovers. #649 covers the other half of the same root cause and its text **assumes the
+  caller still holds the attestation, which is false on a drop** — so the latch half was tracked
+  nowhere. The fix is a `Drop` on `AttestedSearch` carrying the latch, which also subsumes
+  `commit`'s inability to prove a `take` was outstanding.
+  [#670](https://github.com/cairn-ehr/cairn-ehr/issues/670) — four hardening items, all fail-closed
+  today: an `ActorStanding` carries **no subject**, so pairing it with the right key is caller
+  discipline (`standing(kid_a)` + `retired_actor_refusal(kid_b)` compiles); a cross-store `restore`
+  installs a foreign search and puts the wrong sentence on screen (redemption still fails closed);
+  `Enrolled` over-claims *"may author"*; and `strip_comment` **fails open** on a `//` inside a
+  string literal, unlike `enclosing_arm`.
 
 - **Smaller corrections.** The sibling-predicate note said "two … a reader would find three"; there
   are **four**, and the omitted one (`restore::clinical::refusal_is_deliberate`) is in the same

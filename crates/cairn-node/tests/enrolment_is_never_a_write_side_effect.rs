@@ -56,6 +56,11 @@ const ALLOWED: &[(&str, &str)] = &[
 ];
 
 /// Strip a line comment so a mention of the function in prose is not mistaken for a call.
+///
+/// ⚠️ Truncates at the FIRST `//`, so it **fails open** on a line carrying `//` inside a string
+/// literal (a URL in a `context` message) — unlike `enclosing_arm`, which fails closed. No line in
+/// the scanned trees has that shape today;
+/// [#670](https://github.com/cairn-ehr/cairn-ehr/issues/670) carries the tightening.
 fn strip_comment(line: &str) -> &str {
     match line.find("//") {
         Some(i) => &line[..i],

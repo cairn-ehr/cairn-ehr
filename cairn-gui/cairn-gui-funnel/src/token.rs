@@ -412,6 +412,9 @@ impl TokenStore {
     /// DIRECTION it fails in: the next `take` answers [`TokenError::Absent`], whose remedy is
     /// *"let the search run again"*. It cannot mint a chart. Losing a search costs a clerk one
     /// gesture; the behaviour this replaced cost a patient a duplicate chart.
+    /// The structural fix — a `Drop` on [`AttestedSearch`] carrying the latch — is
+    /// [#669](https://github.com/cairn-ehr/cairn-ehr/issues/669), which also covers the one
+    /// route to a latched store that no source guard can see: a dropped `register` future.
     pub fn commit(&mut self) {
         self.in_flight = false;
         self.invalidate();

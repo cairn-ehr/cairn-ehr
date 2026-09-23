@@ -114,6 +114,13 @@
 >   `cairn-gui-data → cairn-gui-funnel` edge into a cycle. **⚠️ `discard` still does NOT clear
 >   `in_flight`, and that is CORRECT** — clearing it there is how two clicks produced two charts.
 >   The fix was making every `take` reach `restore`/`commit`, not weakening the flag.
+>   **⚠️ AND ONE ROUTE TO A LATCHED STORE IS STILL OPEN, BY DESIGN OF THE SLICE — #669.** A
+>   `register` future that is **dropped** (window closed mid-write, reload, `select!`, timeout,
+>   panic through the await) drops the attestation *inside* the future, so no caller can settle and
+>   no source guard can see it. **#649 covers the other half and its text is WRONG about this one**
+>   — it assumes the caller still holds the attestation. The fix is a `Drop` on `AttestedSearch`
+>   carrying the latch, which fails SAFE (dropping releases the latch; `held` is still `None`, so
+>   the clerk gets `Absent` → *"search again"*, never a chart).
 >   **⚠️ AND A SUCCESS NOW `invalidate`s (second review round).** Clearing `in_flight` alone left
 >   a duplicate-chart path that three reviewers found independently: `record` has no `in_flight`
 >   guard (deliberately — the step-3 search re-runs in the background as the clerk types), so a
