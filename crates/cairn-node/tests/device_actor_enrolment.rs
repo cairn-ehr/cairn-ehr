@@ -18,6 +18,17 @@ use cairn_node::db;
 use cairn_node::db_diagnosis::carries_refusal_marker;
 use common::{cs, setup};
 
+/// Strip a line comment, so a call that has been commented OUT does not read as a live one.
+///
+/// The same helper `enrolment_is_never_a_write_side_effect.rs` carries, for the mirror reason —
+/// see `init_still_enrols_the_device_actor`.
+fn strip_comment(line: &str) -> &str {
+    match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    }
+}
+
 /// A distinct, deterministic key id per test, derived rather than written.
 ///
 /// Derived because a byte-array literal in a crypto-adjacent context trips CodeQL's
@@ -191,6 +202,92 @@ async fn revoke_every_actor_for(c: &tokio_postgres::Client, kid: &str) {
     .expect("revoke the actors this key is enrolled under");
 }
 
+/// Stage a key that maps to TWO current actors, the way a non-adjudicating door would.
+///
+/// `enroll_actor` refuses this outright since #166, and correctly — so the only way to reach
+/// the state is the way the real doors that produce it do: a direct `actor_event` INSERT.
+/// db/052's `restore_actor_registry` is the shipped one (it replays a medium's rows and
+/// deliberately bypasses db/004's collision guards), and ADR-0044 §3's future actor-sync apply
+/// door is the anticipated one. `actor_id` is computed exactly as those doors compute it,
+/// `cairn_actor_id(pinned)`, so the two rows are two genuinely distinct actors rather than a
+/// duplicate of one — the same staging `recall_epoch.rs` uses.
+async fn bind_key_to_a_second_actor(c: &tokio_postgres::Client, kid: &str, variant: &str) {
+    let pinned = format!("{{\"node_key\":\"{kid}\",\"variant\":\"{variant}\"}}");
+    c.execute(
+        "INSERT INTO actor_event (actor_id, op, kind, pinned, signing_key_id) \
+         VALUES (cairn_actor_id($1::text::jsonb), 'enroll', 'device', $1::text::jsonb, $2)",
+        &[&pinned, &kid],
+    )
+    .await
+    .expect("stage a dual-mapped key the way a non-adjudicating door would");
+}
+
+/// ⚠️ A KEY MAPPING TO TWO ACTORS MUST REFUSE, NOT WRITE AN EVENT NOBODY CAN BE HELD TO.
+///
+/// This is the worst outcome in the module and the only one that is silent: `submit_event`
+/// resolves a signer by `signing_key_id` alone and sets `actor_id = NULL` when that resolves to
+/// more than one row (db/005, `array_length(v_actor_ids, 1) = 1`). Not for one event — for
+/// **every event that key ever authors, node-wide, irreversibly**. An event whose author cannot
+/// be named is a permanent hole in the accountability record (principle 10), and unlike a
+/// refusal it puts nothing on screen.
+///
+/// **The mutation this kills, which is not hypothetical.** Rewrite `device_actor_standing`'s
+/// `CASE` to `WHEN EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1) THEN 'enrolled'`
+/// — the obvious simplification, and the exact shape the retired `ensure_registration_actor`
+/// used before #654. Every other test in this file stays green: none of them ever stages two
+/// rows, so `count(*) > 1` and `EXISTS` are indistinguishable to them. The `Ambiguous` branch
+/// and its refusal vanish in silence, and the next dual-mapped key writes unattributed events.
+///
+/// Reachable **today**, not only through a future door: see `ActorStanding::Ambiguous`.
+///
+/// Found by the PR #661 review (the branch had no test at all).
+#[tokio::test]
+async fn a_key_mapping_to_two_current_actors_refuses_rather_than_unattributing() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let _ = setup(&c, &[]).await;
+    let kid = a_key_id("ambiguous");
+
+    assert!(enroll_device_actor(&c, &kid).await.unwrap());
+    bind_key_to_a_second_actor(&c, &kid, "a-second-actor").await;
+    assert_eq!(
+        rows_for(&c, &kid).await,
+        2,
+        "the fixture must actually stage the dual mapping, or this test passes vacuously"
+    );
+
+    assert_eq!(
+        device_actor_standing(&c, &kid).await.unwrap(),
+        ActorStanding::Ambiguous,
+        "two current actors is NOT `Enrolled`: authoring under it destroys attribution silently"
+    );
+
+    let e = require_device_actor(&c, &kid)
+        .await
+        .expect_err("a dual-mapped key may not author");
+    let rendered = format!("{e:#}");
+    assert!(
+        carries_refusal_marker(&e),
+        "it is a verdict about this node's state, not an outage — offering a retry-now would \
+         be offering one that cannot work; got: {rendered}"
+    );
+    assert!(
+        rendered.contains("MORE THAN ONE"),
+        "the operator must be told to INVESTIGATE rather than to re-run a command: this is not \
+         a state any command fixes, and the words are how they know that; got: {rendered}"
+    );
+
+    // And the provisioning command refuses too, rather than adding a THIRD mapping on top.
+    assert!(
+        enroll_device_actor(&c, &kid).await.is_err(),
+        "enrolling again must not deepen an ambiguity it cannot resolve"
+    );
+}
+
 /// ⚠️ A REVOKED ACTOR MUST NOT BE SENT TO A COMMAND THAT CANNOT HELP IT.
 ///
 /// `actor_current` excludes revoked actors, so a revoked key reads as *not enrolled* — and the
@@ -269,17 +366,22 @@ async fn a_revoked_actor_is_not_told_to_re_enrol_a_key_that_cannot_be_resurrecte
 /// gate still passes**, while every freshly-initialised node silently loses its ability to author
 /// until somebody runs `enroll-device-actor` — which they have no reason to suspect.
 ///
-/// A behavioural test would need a VIRGIN database: `init` refuses over a registered custody key
-/// (`refuse_init_over_a_registered_custody_key`) and mints a signing key, an unwrap key and a
-/// local-state escrow, so it cannot run against the shared `cairn_test` fixture every other suite
-/// uses. Creating a scratch database per run is a rig of its own — filed as
-/// [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662) rather than faked, with the shape a
-/// real `cli_init.rs` would take and the seven other `init` effects it would also cover.
+/// ⚠️ **The "needs a virgin database" claim this doc used to make was FALSE, and the test that
+/// disproves it is in this same file.** `init` does refuse over a registered custody key, but a
+/// suite may truncate its way back to virgin state against the shared `cairn_test` fixture —
+/// which is what `init_enrols_this_nodes_own_key_as_a_device_actor` (below) now does, covering
+/// all three things this guard admits it cannot. #662's stated blocker was wrong; the issue
+/// stays open for `init`'s *seven other* unpinned effects, which is the part that is still true.
+///
+/// **This guard is kept anyway, for a different reason than it was written for:** it needs no
+/// database, so it runs on a `CAIRN_ALLOW_DB_SKIP=1` gate where the behavioural test silently
+/// skips — which is the gate a developer sees green before pushing (PR #661 review).
 ///
 /// **What this guard does NOT catch**, stated so nobody mistakes it for the real thing: that the
 /// call is reached (it could sit behind a condition), that it is passed the right key, or that
-/// `enroll_device_actor` does what it says. It catches deletion, which is the failure the PR #661
-/// review actually named.
+/// `enroll_device_actor` does what it says — `init_enrols_this_nodes_own_key_as_a_device_actor`
+/// covers all three, whenever a database is present. It catches deletion, which is the failure
+/// the PR #661 review actually named, on the gate that has no database.
 ///
 /// Found by the PR #661 review.
 #[test]
@@ -296,8 +398,18 @@ fn init_still_enrols_the_device_actor() {
     let arm = &arm[..arm
         .find("\n        Cmd::")
         .expect("another subcommand must follow Init")];
+    // Comment-stripped, like `enrolment_is_never_a_write_side_effect.rs`'s scan — and for the
+    // converse reason. There, a MENTION in prose must not read as a call; here, a call that has
+    // been COMMENTED OUT must not read as one either. Commenting a line out is the commonest
+    // way a line gets "deleted" while debugging, and this guard's whole job is catching the
+    // deletion (PR #661 review).
+    let arm_code: String = arm
+        .lines()
+        .map(strip_comment)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        arm.contains("actor_enrolment::enroll_device_actor"),
+        arm_code.contains("actor_enrolment::enroll_device_actor"),
         "`cairn-node init` no longer enrols the node's device actor. If that removal was \
          deliberate, note that it makes an ordinary operator run one extra command before their \
          node can author anything — `M = 0` becomes `M = 1` in the §1.2 benchmark of #654 — and \
@@ -381,6 +493,15 @@ async fn init_enrols_this_nodes_own_key_as_a_device_actor() {
     );
 
     // Leave the shared database as we found it.
+    //
+    // ⚠️ This does NOT run if an assertion above panics, and there is no `Drop` guard here on
+    // purpose: cleanup needs an await, `Drop` cannot have one, and no kit in this tree carries
+    // an async teardown to copy. What bounds the damage instead is the truncation at the TOP of
+    // this test — it begins from clean rather than trusting the previous run's exit — so a
+    // panicking run can only leak into a suite that both runs after it and does not reset
+    // `local_node` itself. `test_serial_guard` serialises but does not clean up. If a
+    // neighbouring suite ever starts failing for a reason that makes no sense, this is the
+    // first place to look (PR #661 review).
     c.batch_execute("TRUNCATE event_log, actor_event, patient_chart, node_unwrap_key CASCADE")
         .await
         .unwrap();

@@ -44,9 +44,25 @@ pub struct MockData {
     /// would be `cairn-gui-live`'s DB-gated suite, which tests the *classification* and
     /// renders nothing. See [#660](https://github.com/cairn-ehr/cairn-ehr/issues/660).
     ///
+    /// ⚠️ **The slot is not yet reachable from a running `--mock` window, and this doc used to
+    /// read as though it were.** Nothing arms it outside this crate's tests: there is no flag,
+    /// env var or Tauri command, and `cairn-gui-tauri` builds a fresh `MockData` per command,
+    /// so even a wired affordance would arm an instance dropped before the next call. Making
+    /// the two sentences genuinely producible under `--mock` needs a persistent `MockData` in
+    /// `AppState` — filed as [#668](https://github.com/cairn-ehr/cairn-ehr/issues/668). **Do
+    /// not write the §1.2 timing runbook or the accessibility pass against this until that
+    /// lands** (PR #661 review).
+    ///
     /// One slot shared by both ports, not one each: a test arms it immediately before the call
     /// it means to fail, and two slots would let it arm the wrong one and pass for the wrong
-    /// reason.
+    /// reason. The cost of that choice is real and is pinned by
+    /// `the_armed_failure_is_one_slot_shared_by_both_ports`: any funnel-port call in between
+    /// spends it, and a debounced re-search between arming and clicking Register is the
+    /// funnel's NORMAL behaviour — so once #668 makes this UI-driven, "arm then click Register"
+    /// will need re-examining.
+    ///
+    /// Scope: the **funnel** ports only. `ClinicalData`'s methods do not consult this slot, so
+    /// arming it before a `medications()` call leaves it silently unspent.
     next_failure: Mutex<Option<DataError>>,
 }
 

@@ -8,8 +8,10 @@
 > — the funnel's **data path**: a `cairn-gui-live` crate whose `LiveData` implements both ports
 > over a real node connection, `DataError::Refused` (#648), nineteen tests. **And the four traps
 > 2b's review laid under 2c are CLOSED** (2026-09-23, PR
-> **[#661](https://github.com/cairn-ehr/cairn-ehr/pull/661)**, ready for review, 14/14 CI checks
-> green, full local `cargo test --workspace` 199 suites / 2213 tests / 0 failures — no ADR, no
+> **[#661](https://github.com/cairn-ehr/cairn-ehr/pull/661)**, after **two** five-agent review
+> rounds — full local `cargo test --workspace` **200 suites / 2223 tests / 0 failures**, plus the
+> `cairn-gui` tree **23 suites / 167 tests / 0 failures** against a real database, and both trees
+> clean under `rustfmt`, `clippy -D warnings` and `cargo doc -D warnings` — no ADR, no
 > spec bump, no migration, `SCHEMA_GENERATION` unchanged, no new dependency): **#659**
 > (`TokenStore::settle`),
 > **#660** (`MockData::fail_next`), **#651** (a Rust-side refusal is a verdict) and **#654** (one
@@ -112,12 +114,30 @@
 >   `cairn-gui-data → cairn-gui-funnel` edge into a cycle. **⚠️ `discard` still does NOT clear
 >   `in_flight`, and that is CORRECT** — clearing it there is how two clicks produced two charts.
 >   The fix was making every `take` reach `restore`/`commit`, not weakening the flag.
+>   **⚠️ AND A SUCCESS NOW `invalidate`s (second review round).** Clearing `in_flight` alone left
+>   a duplicate-chart path that three reviewers found independently: `record` has no `in_flight`
+>   guard (deliberately — the step-3 search re-runs in the background as the clerk types), so a
+>   token minted mid-flight stayed redeemable after the write succeeded, and a second click
+>   minted a second chart for the patient just registered. `commit` now counts a generation:
+>   **a registration that succeeded CONSUMED the form, and nothing recorded against a consumed
+>   form may be redeemed.** A window that wants to register again searches again.
 > - **`--mock` CAN FAIL, ONE SHOT AT A TIME** (`MockData::fail_next`), and the slot is consumed
 >   **inside** the async body — a future that is built and dropped must not spend it, which is a
 >   test rather than a comment. The failing `register` arm returns the attestation and mints
 >   nothing, exactly as the live port behaves.
-> - **A VERDICT HAS TWO DISCRIMINATORS NOW**: `P0001` from the floor, and
+> - **A VERDICT HAS TWO DISCRIMINATORS AND A SCOPE NOW**: `P0001` from the floor, and
 >   `cairn_node::db_diagnosis::DeliberateRefusal` from Rust. `data_error_from` asks both.
+>   **⚠️ AND THE MARKER IS SPLIT (second review round): `RefusalScope::{Input, NodeState}`.**
+>   The constructor's own precondition — *"nothing about the environment took part; a retry must
+>   be pointless by construction"* — was true of `dob_precision` and false of the three
+>   `actor_enrolment` refusals, which are minted after a registry read. Both are verdicts (never
+>   `Unavailable`), but the way forward differs, so there is a third port variant:
+>   **`DataError::NotProvisioned`** — withhold the retry-now, show the remedy, keep a way to try
+>   again once an operator has acted. `Input` → `Refused` (no way forward but the form).
+>   **Asking the scope question FIRST is deliberate**, so a future third scope cannot fall
+>   through to `Unavailable`. **⚠️ The GUI still cannot MINT one — #665**: nothing in
+>   `cairn-gui-live` calls `require_device_actor`, so the window meets db/005's key-id sentence
+>   and classifies it `Refused`. The classifier is right; the call site is missing.
 >   **⚠️ #655 is UNCHANGED** — adding the second did not make the first right: `42501`, `42P01`
 >   and class-23 are floor *decisions* carrying their own SQLSTATE and still land in
 >   `Unavailable`. #652 should still gather the P0001 rule's three homes, and absorb #655 there.
@@ -140,12 +160,21 @@
 >   so a key mapping to TWO current actors read as fine, while db/005 nulls the `actor_id` of
 >   every event that key ever authors. It counts now, and refuses — an unattributable clinical
 >   event is worse than a refused one (principle 10).
-> - **⚠️ `actor_current` DOES NOT EXCLUDE A SUPERSEDED ACTOR, whatever a comment may say — #664.**
->   db/004 is `WHERE ae.op IN ('enroll','supersede')`, so a supersede row is a *member* of the
->   view and `DISTINCT ON … ORDER BY recorded_at DESC` picks it as current. **Only `revoke`
->   removes.** Harmless today because no supersede door exists anywhere in the tree — but the
->   slice that writes the rotate-key door MUST revisit `device_actor_standing`, or a superseded
->   key keeps authoring at every write door.
+> - **⚠️ WHAT A SUPERSEDED KEY CLASSIFIES AS IS UNDECIDED, AND db/004 CONTRADICTS ITSELF — #666,
+>   then #664.** An earlier version of this rule (and of `ActorStanding`'s doc) asserted that a
+>   superseded key reads `Enrolled` and keeps authoring. **That was wrong, and the second review
+>   round caught it three ways.** `device_actor_standing` keys on **`signing_key_id`**, not
+>   `actor_id`, so the outcome depends entirely on whether a `supersede` row carries a key — and
+>   db/004 says BOTH (line ~80: *"revoke and supersede rows carry no `signing_key_id`"*;
+>   line ~112: *"`op IN ('enroll','supersede')` … the key-bearing ops"*), with no per-`op` CHECK
+>   to settle it. Every branch is **fail-closed**: the key reads `Retired` (NULL or new-key
+>   convention) or `Ambiguous` (old-key convention). Neither reads `Enrolled`.
+>   **⚠️ The danger of the old wording was specific:** the natural fix for the symptom it
+>   described is to make the classifier consult `actor_id`/`superseded_by` — which is *how* a
+>   superseded key would get to keep authoring. **#666 settles the convention first; #664 then
+>   revisits the classifier.** And it is not purely future: db/052's `restore_actor_registry`
+>   replays `supersede` rows today and deliberately bypasses db/004's collision guards, so a
+>   restored node can carry them now.
 > - **⚠️ "NOTHING PROVISIONS" IS SCOPED TO THE NODE'S OWN DEVICE ACTOR — #663.**
 >   `matcher_actor::resolve_matcher_actor` still enrols a per-epoch `agent` from
 >   `ApplyAutoCandidates`, which is a write path. Arguably its own ceremony; named rather than
@@ -156,6 +185,13 @@
 >   `EnrollDeviceActor` calls `enroll_device_actor`, and fails again if either of those two stops.
 >   **When it goes red, do not add your call site to `ALLOWED`** — ask whether it should be
 >   calling `require_device_actor`.
+>   **⚠️ IT NOW SCANS EVERY SHIPPED `.rs` SURFACE, NOT `main.rs` (second review round).**
+>   `enroll_device_actor` is `pub` — `pub(crate)` is impossible, `main.rs` is a separate crate —
+>   so the reachable callers include `cairn-gui-live`, which is exactly where `LiveData::new`'s
+>   doc argues the temptation is worst. The `main.rs`-only version was blind to its own stated
+>   mutation; verified by injecting a GUI call. **Plus a count guard**: exactly **15**
+>   `require_device_actor` call sites, so a check that quietly VANISHES (reverting that command
+>   to db/005's no-remedy sentence) now fails.
 > - **⇒ `cairn-node init` NOW HAS A BEHAVIOURAL TEST, AND #662's STATED BLOCKER WAS FALSE.**
 >   It claimed a virgin database was needed. It is not: `node_unwrap_key` is in `clinic_kit`'s
 >   truncation list, `local_node` is cleared by `reset_node_federation_tables`, and
@@ -755,6 +791,29 @@ that generalise past the slice that found them.
 
 #659, #660, #651 and #654, all closed before the window that is their only consumer exists.
 Details in ROADMAP; the durable rules are in ⇒ NEXT. What generalises past the slice:
+
+- **⇒ A SECOND REVIEW ROUND ON ALREADY-REVIEWED WORK PAID FOR ITSELF, AND THE BEST FINDING NEEDED
+  THREE AGENTS TO CONVERGE.** The first round found five things; the second found a reachable
+  **duplicate-chart** path in the type the first round had just blessed (`commit` cleared
+  `in_flight` without invalidating, so a background re-search stayed redeemable after a successful
+  write), plus two **guards that guarded less than they claimed**, a `deliberate_refusal`
+  precondition breached by three of its four call sites, a supersede hazard documented **backwards
+  in three places in one file**, and an untested `ActorStanding::Ambiguous` branch that the obvious
+  SQL simplification deletes in silence. **The pattern: the first round checked whether the code
+  did what it said; the second checked whether what it said was true.** Those are different
+  questions, and the second one is where the review found actual reachable harm.
+- **⇒ EVERY CLAIM A TEST MAKES ABOUT A MUTATION WAS VERIFIED BY APPLYING THE MUTATION.** Four
+  times: the duplicate-chart test against the old `commit`, the `Ambiguous` test against the
+  `EXISTS` simplification (which left the other eight tests in that file green — exactly as
+  predicted), the widened provisioning guard against an injected `cairn-gui-live` call, and the
+  comment-stripping `init` guard against a commented-out line. **A guard whose mutation was never
+  applied is a guess.** Two of the four would have been wrong without it: the widened scan reported
+  its own function *declaration* as the first offender, and needed a `fn` exclusion.
+- **⇒ AN AGENT'S CLAIM ABOUT THE TREE IS ALSO A CLAIM, NOT A MEASUREMENT.** One reviewer
+  recommended copying "the tree's own pattern, a guard with a `Drop`" for a panic-unsafe fixture.
+  There is no such pattern — neither `clinic_kit` nor `restore_kit` has a `Drop` impl, and cleanup
+  here needs an `await`, which `Drop` cannot have. The bound was documented instead. Same lesson as
+  the #654 blast-radius one, one level up: **verify before acting, including on your own reviewers.**
 
 - **⇒ AN ISSUE'S OWN ACCOUNT OF ITS BLAST RADIUS IS A CLAIM, NOT A MEASUREMENT — GREP BEFORE
   PLANNING.** #654 said *"`cairn-node patient-register` calls `ensure_registration_actor`"*. One

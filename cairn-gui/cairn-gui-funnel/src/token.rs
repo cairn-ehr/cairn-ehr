@@ -256,11 +256,14 @@ pub enum Restored {
 pub struct TokenStore {
     held: Option<AttestedSearch>,
     /// Bumped by **every** act that invalidates what was held — a new `record`, a refused
-    /// empty-query `record`, and `discard`. A taken attestation may only be restored while
-    /// the store is still on the generation it was taken from.
+    /// empty-query `record`, `discard`, and a `commit` (a registration that succeeded consumed
+    /// the form). A taken attestation may only be restored while the store is still on the
+    /// generation it was taken from.
     generation: u64,
     /// Set by [`TokenStore::take`], cleared by [`TokenStore::restore`] or
-    /// [`TokenStore::commit`]. See [`TokenError::RegistrationInFlight`].
+    /// [`TokenStore::commit`] — and so by [`TokenStore::settle`], which is the end callers
+    /// should actually reach for and which delegates to exactly those two.
+    /// See [`TokenError::RegistrationInFlight`].
     in_flight: bool,
 }
 
@@ -383,8 +386,26 @@ impl TokenStore {
     /// deliberate — it fails closed, costing a window reload rather than minting a duplicate
     /// chart — but it does mean [`TokenStore::commit`] and [`TokenStore::restore`] are the
     /// two mandatory ends of every [`TokenStore::take`]. There is no third.
+    ///
+    /// # A success INVALIDATES, and that is the load-bearing half
+    ///
+    /// Clearing `in_flight` alone was not enough, and the gap was a duplicate chart. `record`
+    /// has no `in_flight` guard — deliberately, because the step-3 search re-runs in the
+    /// background as the clerk types, so a fresh token can be minted *while* a registration is
+    /// in flight. Clearing only the latch left that token redeemable after the write had
+    /// already succeeded, so a second click minted a second chart for the patient just
+    /// registered — the exact harm [`TokenError::RegistrationInFlight`] claims to make a
+    /// property of the store rather than a hope about a disabled button.
+    ///
+    /// So a success counts a generation: **the form has been consumed, and nothing recorded
+    /// against a consumed form may be redeemed.** A window that wants to register again
+    /// searches again — the same gesture the paper counterpart forces, and the same rule
+    /// [`TokenStore::discard`] already applied to an edit. Pinned by
+    /// `a_success_consumes_the_form_so_a_mid_flight_search_cannot_mint_a_second_chart`.
+    /// (PR #661 review, found independently by three reviewers.)
     pub fn commit(&mut self) {
         self.in_flight = false;
+        self.invalidate();
     }
 
     /// Settle a registration's outcome: **the end of a [`TokenStore::take`] a caller reaches by
@@ -898,6 +919,55 @@ mod tests {
             store.take(second).is_ok(),
             "a settled success must not latch the store: every later registration is refused \
              forever otherwise"
+        );
+    }
+
+    /// A registration that SUCCEEDED consumes the form, so a search that landed mid-flight
+    /// must not stay redeemable — otherwise one patient gets two charts.
+    ///
+    /// The walk, all through the public API and all of it ordinary:
+    ///
+    /// 1. the clerk clicks Register — `take` removes the held search and latches `in_flight`;
+    /// 2. the debounced step-3 search from their LAST keystroke lands while the write is in
+    ///    flight and calls `record`, which is legitimate and is why `record` has no
+    ///    `in_flight` guard — it is the same interleaving
+    ///    `restoring_after_a_newer_search_landed_does_not_resurrect_the_older_one` relies on;
+    ///    the store now holds a fresh, redeemable token;
+    /// 3. the write succeeds and the caller settles it.
+    ///
+    /// If step 3 only cleared the latch, a second click — a double-click, a doubled Enter, a
+    /// success handler slow enough for the clerk to press again — would `take` the token from
+    /// step 2 and mint a SECOND chart for the patient just registered. That is precisely the
+    /// harm [`TokenError::RegistrationInFlight`]'s doc claims is a property "of the store
+    /// rather than a hope about the button's disabled state"; before this test it was back to
+    /// being a hope the moment the registration succeeded.
+    ///
+    /// So a success `invalidate`s: the form has been consumed, and nothing recorded against a
+    /// consumed form may be redeemed. A window that wants to register again starts by
+    /// searching again, which is the same gesture the paper counterpart forces (PR #661
+    /// review, converged on independently by three reviewers).
+    #[test]
+    fn a_success_consumes_the_form_so_a_mid_flight_search_cannot_mint_a_second_chart() {
+        let mut store = TokenStore::new();
+        let first = store.record(query("Aabria Iyengar"), list_of(1)).unwrap();
+        let attested = store.take(first).expect("the only token");
+
+        // The background re-search lands WHILE the registration is in flight.
+        let mid_flight = store
+            .record(query("Aabria Iyengar"), list_of(1))
+            .expect("a background search may land mid-flight; `record` has no in_flight guard");
+
+        // The port consumed the attestation and answered `Ok`.
+        drop(attested);
+        let settled: Result<u8, (&str, Restored)> =
+            store.settle(Ok::<u8, (&str, AttestedSearch)>(7));
+        assert_eq!(settled.ok(), Some(7));
+
+        assert!(
+            matches!(store.take(mid_flight), Err(TokenError::Absent)),
+            "a token recorded while the registration was in flight must NOT survive that \
+             registration succeeding: redeeming it mints a second chart for the patient who \
+             was just registered"
         );
     }
 

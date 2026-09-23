@@ -923,8 +923,10 @@ any tree, no lockfile movement.** Closes
   deleted function**, so the `ensure_registration_actor` grep could not see them — two of them
   user-visible `--help` text still promising auto-enrolment. Then two claims about SQL that had
   been read and misremembered: **`actor_current` does not exclude a superseded actor** (db/004 is
-  `op IN ('enroll','supersede')`; only `revoke` removes — harmless today, a live trap for the
-  rotate-key door, [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664)), and **"nothing
+  `op IN ('enroll','supersede')`; only `revoke` removes — a live trap for the rotate-key door,
+  [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664); **⚠️ but the conclusion this round
+  drew from it — that a superseded key would read `Enrolled` and keep authoring — was itself
+  wrong, and the NEXT round caught it: see below**), and **"nothing
   provisions" has a counterexample in the same binary** (`matcher_actor` enrols an agent from
   `ApplyAutoCandidates`, [#663](https://github.com/cairn-ehr/cairn-ehr/issues/663)). The
   unknown-standing catch-all's own rationale was **falsified by this PR** and now `bail!`s.
@@ -943,6 +945,81 @@ any tree, no lockfile movement.** Closes
   verdict is a claim only that crate can make) and `is_deliberate_refusal` became
   `carries_refusal_marker`, because two siblings with the old name mean the **opposite** thing
   about SQLSTATE.
+
+- **The SECOND five-agent review round, same PR — and the headline is that three agents converged
+  on one duplicate-chart path nobody had seen.** `TokenStore::commit` cleared `in_flight` and
+  nothing else. But `record` has no `in_flight` guard — deliberately, because the step-3 search
+  re-runs in the background as the clerk types — so the walk `record(A) → take(A) →
+  record(B) → settle(Ok) → take(B)` succeeded, minting **a second chart for the patient just
+  registered**. `RegistrationInFlight`'s own doc claims that property is *"of the store rather
+  than a hope about the button's disabled state"*; after a success it was back to being a hope.
+  **`commit` now `invalidate`s**: a registration that succeeded consumed the form. The test fails
+  against the old code, which is how the walk was confirmed rather than argued.
+
+- **And the marker split, decided by the maintainer rather than assumed.** `deliberate_refusal`'s
+  documented precondition is *"nothing about the environment took part in the decision; a retry
+  must be pointless by construction"*. Three of its four call sites breached it: the
+  `actor_enrolment` refusals are minted **after** a registry read, and `not_enrolled_refusal`'s own
+  doc conceded *"until somebody enrols it"*. Both are verdicts — neither is ever `Unavailable` —
+  but the way forward differs, so the marker now carries **`RefusalScope::{Input, NodeState}`** and
+  the port gained a third variant, **`DataError::NotProvisioned`**: withhold the retry-now, show
+  the remedy, keep a way to try again once an operator has acted. `Input` keeps `Refused`. The
+  scope question is asked **first**, so a future third scope cannot fall through to `Unavailable`.
+
+- **Two guards that were guarding less than they claimed.**
+  `enrolment_is_never_a_write_side_effect.rs` read `src/main.rs` only, while `enroll_device_actor`
+  is `pub` and `cairn-gui-live` depends on `cairn-node` — so the mutation its own header names was
+  invisible in the one tree whose doc argues the temptation is worst. It now scans every shipped
+  `.rs` surface (`pub(crate)` is impossible: `main.rs` is a separate crate), verified by injecting
+  a GUI call, **plus a count guard pinning the fifteen `require_device_actor` sites** so a check
+  that silently vanishes fails. And `init_still_enrols_the_device_actor` did not strip comments
+  while its sibling did, so **commenting the line out kept it green** — the commonest way a line
+  gets "deleted" while debugging, and precisely the failure it exists to catch.
+
+- **`ActorStanding::Ambiguous` had no test at all, and is reachable TODAY.** Its doc called it
+  unreachable through "the only enrol door that exists" — but db/052's `restore_actor_registry`
+  replays a medium's `actor_event` rows and *deliberately* bypasses db/004's collision guards (it
+  validates shape, it does not re-adjudicate), so a restored node is the concrete place an
+  operator meets it. The `EXISTS`-instead-of-`count(*)` simplification — the shape the retired
+  `ensure_registration_actor` actually used — deletes the branch with **every other test in the
+  file still green**, which was verified by applying it. Now pinned.
+
+- **And the supersede hazard was documented backwards, three ways in one file.** The enum doc
+  asserted in capitals that a superseded key reads `Enrolled`; `Retired`'s parenthetical said
+  superseded is *not* `Retired`; and `retired_actor_refusal` — the sentence an **operator reads** —
+  said "revoked **or superseded**". The classifier keys on `signing_key_id`, not `actor_id`, so no
+  branch yields `Enrolled`: it is `Retired` or `Ambiguous` depending on a db/004 convention that
+  **db/004 states both ways** and no CHECK settles. The old wording was dangerous specifically
+  because the natural fix for the symptom it described is to consult `actor_id`/`superseded_by` —
+  which is *how* a superseded key would keep authoring.
+  [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666) settles the convention, then #664.
+
+- **Filed rather than fixed, with numbers this time.**
+  [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665) — the GUI cannot mint the
+  remedy-naming refusal, because nothing in `cairn-gui-live` calls `require_device_actor`; the
+  `NotProvisioned` classifier is right and the call site is missing, and `error.rs`'s admission of
+  this previously carried **no issue number** while every sibling deferral did (house rule 5).
+  [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666) — db/004's self-contradiction.
+  [#667](https://github.com/cairn-ehr/cairn-ehr/issues/667) — `init`'s swallowed-enrolment branch
+  is untested (the `SET ROLE`-without-`EXECUTE` seam is the way in), and it exits **0** with the
+  warning on stderr while `provisioned node …` goes to stdout; `init > provision.log` kept the
+  reassuring half, so a greppable `device actor: NOT ENROLLED` line now goes to stdout too.
+  [#668](https://github.com/cairn-ehr/cairn-ehr/issues/668) — `--mock` cannot actually arm a
+  failure: `cairn-gui-tauri` builds a fresh `MockData` per command, so the §1.2 runbook must not
+  be written against `fail_next` until a persistent one lands. The doc claimed the capability was
+  delivered; it now says what is true.
+
+- **Smaller corrections.** The sibling-predicate note said "two … a reader would find three"; there
+  are **four**, and the omitted one (`restore::clinical::refusal_is_deliberate`) is in the same
+  crate, while `cairn-gui-live` is in a different *workspace* than the note claimed. A `§9.6` tag
+  on a clerk-legibility claim was an inherited mis-attribution (§9.6 is "The validated submit
+  surface") and is corrected in both `db_diagnosis.rs` and `port.rs`. `port.rs`'s `DataError`
+  contract still said `Refused` means *"the in-DB floor decided"* and that the payload is *"the
+  floor's own message"* — false since #651, in an untouched file that is the contract a 2c
+  renderer reads. `photo_evidence.rs` pointed at a doc that no longer carried the kind-agnostic
+  argument. `init`'s comment listed the local-state escrow unconditionally though it is
+  `else`-branch only, and its warning named the custody guard when the unwrap-key guard fires
+  first.
 - **What the review measured as untested.** `dob_precision`'s own test asserted `is_err()` only —
   mutating back to `bail!` passed the **entire** `cairn-node` gate, red only in the other cargo
   tree. `data_error_from`'s marker arm had no pure test, so the newest rule needed a database. The

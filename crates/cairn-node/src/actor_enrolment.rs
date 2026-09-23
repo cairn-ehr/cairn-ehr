@@ -19,8 +19,16 @@
 //! - **`cairn-node init` enrols**, so an initialised node costs its operator no new act.
 //! - **`cairn-node enroll-device-actor` is the named remedy** for a node that was not — most
 //!   obviously a node restored without its actor registry, since a restore never runs `init`.
-//! - **Every write path that authors as THIS NODE calls [`require_device_actor`] and refuses.**
-//!   Nothing provisions the node's own device actor.
+//! - **Every CLI write path that authors as THIS NODE calls [`require_device_actor`] and
+//!   refuses.** Nothing provisions the node's own device actor.
+//!
+//! ⚠️ **"Every CLI write path" is literal, and the gap is the reference window.** All fifteen
+//! `require_device_actor` call sites are `Cmd::` arms in `main.rs`; `cairn-gui-live` calls it
+//! nowhere. The GUI still *refuses* on an unprovisioned node — db/005 sees to that — but it
+//! refuses in db/005's words, naming a key rather than this module's remedy. The
+//! provisioning asymmetry #654 closed is genuinely closed on both surfaces; the
+//! remedy-naming half is not, and is filed as
+//! [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665) (PR #661 review).
 //!
 //! ⚠️ **That last sentence is scoped, and the scope is load-bearing.** One path in this same
 //! binary still enrols on first use: `matcher_actor::resolve_matcher_actor` mints a per-epoch
@@ -46,23 +54,49 @@ const DEVICE_ACTOR_ROLE: &str = "registration-desk";
 
 /// Where this signing key stands with the actor registry.
 ///
-/// **Three states, not two**, and the third is the one that bites. `actor_current` excludes
-/// **revoked** actors, so a key that *was* enrolled and has since been revoked reads exactly
-/// like a key nobody ever enrolled — and the obvious remedy for the second is a dead end for
-/// the first. See [`ActorStanding::Retired`].
+/// **Four states, not two**, and the ones that bite are the two that look like `NeverEnrolled`
+/// and are not. `actor_current` excludes **revoked** actors, so a key that *was* enrolled and
+/// has since been revoked reads exactly like a key nobody ever enrolled — and the obvious remedy
+/// for the second is a dead end for the first. See [`ActorStanding::Retired`] and
+/// [`ActorStanding::Ambiguous`].
 ///
-/// # ⚠️ SUPERSEDE IS NOT A RETIREMENT HERE, AND AN EARLIER VERSION OF THIS DOC SAID IT WAS
+/// # ⚠️ WHAT A SUPERSEDED KEY CLASSIFIES AS IS UNDECIDED, BECAUSE db/004 CONTRADICTS ITSELF
 ///
-/// `actor_current` (db/004) is `WHERE ae.op IN ('enroll','supersede')` — a `supersede` row is a
-/// **member** of the view, written against the OLD `actor_id`, and `DISTINCT ON … ORDER BY
-/// recorded_at DESC` picks it as current. Only a `revoke` row removes an actor.
+/// This classification keys on **`signing_key_id`**, not on `actor_id`. So what a superseded key
+/// reads depends entirely on whether a `supersede` row carries a key — and db/004 says both:
 ///
-/// That costs nothing today because **there is no supersede door anywhere in the tree** (db/004's
-/// own HINT says *"rotate-key/supersede (no door yet)"*, and nothing inserts one). But the day
-/// the rotate-key door lands, a superseded key will read [`ActorStanding::Enrolled`] here and
-/// keep authoring. **Whoever writes that door must revisit this function** — do not trust a
-/// classification that was reasoned about a state the schema cannot yet reach.
-/// [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664).
+/// - around line 80 (`cairn_actor_id_key_conflict`): *"revoke and supersede rows carry no
+///   `signing_key_id`"*;
+/// - around line 112 (`cairn_key_actor_id_conflict`): *"`op IN ('enroll','supersede')` restricts
+///   to the key-bearing ops"*.
+///
+/// `actor_event.signing_key_id` is a bare nullable `TEXT` with no per-`op` CHECK, so the schema
+/// settles nothing. Working the branches through:
+///
+/// - **supersede carries NULL, or carries the NEW key** — the old key matches no `actor_current`
+///   row, the `actor_event` EXISTS arm fires on its surviving `enroll` row, and it reads
+///   [`ActorStanding::Retired`]. Fail-closed, but the remedy is wrong: `retired_actor_refusal`
+///   tells the operator their node needs a NEW signing key, which is an identity-level decision
+///   handed to somebody whose node is in a state the design considers normal.
+/// - **supersede carries the OLD key** (or a determinant bump that keeps the same key) — the key
+///   matches two view rows and reads [`ActorStanding::Ambiguous`], refusing every write on a
+///   legitimately rotated node.
+///
+/// **An earlier version of this doc asserted, in capitals, that a superseded key would read
+/// [`ActorStanding::Enrolled`] and keep authoring. There is no branch on which that happens**,
+/// and the claim is dangerous in a specific way: the natural "fix" for the symptom it described
+/// is to make this classifier consult `actor_id`/`superseded_by`, which is precisely how a
+/// superseded key *would* get to keep authoring. Every branch above is fail-closed today.
+///
+/// Note also that a supersede row is **replayable today** even though nothing authors one:
+/// db/052's `restore_actor_registry` accepts `op = 'supersede'` and deliberately bypasses
+/// db/004's collision guards (it replays, it does not re-adjudicate). So this is not purely a
+/// future concern — a restored node can carry supersede rows now.
+///
+/// Whoever writes the rotate-key door must settle the convention first
+/// ([#666](https://github.com/cairn-ehr/cairn-ehr/issues/666)) and then revisit this function
+/// ([#664](https://github.com/cairn-ehr/cairn-ehr/issues/664)). (PR #661 review, converged on by
+/// three reviewers.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActorStanding {
     /// Resolvable to a current actor. It may author.
@@ -70,8 +104,11 @@ pub enum ActorStanding {
     /// No row in the registry mentions this key at all. `enroll-device-actor` fixes it.
     NeverEnrolled,
     /// This key HAS registry history — enrolled once, then **revoked** — and is not current.
-    /// (Not *superseded*: see the enum doc — a supersede row stays in `actor_current`, and no
-    /// supersede door exists yet.)
+    ///
+    /// A *superseded* key may also land here, depending on a db/004 convention that is not yet
+    /// settled: see the enum doc and [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666).
+    /// That is why `retired_actor_refusal` says "revoked **or superseded**" — the message an
+    /// operator reads must not claim a precision the classification does not have.
     ///
     /// **`enroll-device-actor` cannot fix this, and must not be offered.** db/004's
     /// `cairn_actor_id_key_conflict` refuses a fresh enroll onto an `actor_id` carrying prior
@@ -87,17 +124,26 @@ pub enum ActorStanding {
     /// `array_length(v_actor_ids, 1) = 1`) — silently and irreversibly destroying attribution.
     /// So the honest answer is to refuse the write, not to let it through unattributed.
     ///
-    /// Unreachable through the only enrol door that exists: db/004's
+    /// Unreachable through the only **adjudicating** enrol door, `enroll_actor`: db/004's
     /// `cairn_key_actor_id_conflict` is whole-history and fails closed, and
-    /// `a_key_already_enrolled_under_another_kind_is_left_alone` pins the count at one. It is
-    /// classified anyway because db/004 explicitly anticipates a **future actor-sync apply
-    /// door** (ADR-0044 §3) that must mirror that check, and nothing in `cairn-node` would
-    /// notice if it did not — the same shape as
-    /// [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664).
+    /// `a_key_already_enrolled_under_another_kind_is_left_alone` pins the count at one.
+    ///
+    /// **But that is not the only door, and this state is reachable today.** db/052's
+    /// `restore_actor_registry` replays a medium's `actor_event` rows and *deliberately*
+    /// bypasses those collision guards — its own header says so, because re-adjudicating would
+    /// refuse the node's own legitimate revoke and supersede rows. It validates shape, not
+    /// consistency. So a restored node is the concrete place an operator meets this, and
+    /// `ambiguous_actor_refusal` names it. db/004 additionally anticipates a **future
+    /// actor-sync apply door** (ADR-0044 §3) that must mirror the check, and nothing in
+    /// `cairn-node` would notice if it did not.
+    ///
+    /// Pinned by `a_key_mapping_to_two_current_actors_refuses_rather_than_unattributing`
+    /// (PR #661 review: this branch had no test at all, and the obvious `EXISTS` simplification
+    /// deletes it with every other test still green).
     Ambiguous,
 }
 
-/// Where does this key stand? One round trip, three answers.
+/// Where does this key stand? One round trip, four answers.
 ///
 /// The `actor_event` arm keys on `signing_key_id`, which only `enroll`/`supersede` rows carry —
 /// a `revoke` row has a NULL key by design (db/004) — so it answers *"was this key ever
@@ -150,7 +196,7 @@ pub async fn device_actor_standing(
 /// Deliberately does **not** name `enroll-device-actor`: see [`ActorStanding::Retired`] for why
 /// that command cannot help, and what the operator meets if they try.
 pub fn retired_actor_refusal(kid: &str) -> anyhow::Error {
-    crate::db_diagnosis::deliberate_refusal(format!(
+    crate::db_diagnosis::node_state_refusal(format!(
         "this node's signing key {kid} was enrolled as an actor and has since been revoked or \
          superseded, so it may not author clinical events. `cairn-node enroll-device-actor` \
          will NOT help and is not the remedy: re-enrolling a retired actor id is refused on \
@@ -193,16 +239,22 @@ pub async fn enroll_device_actor(db: &tokio_postgres::Client, kid: &str) -> anyh
 
 /// The refusal a write path gives on an unprovisioned node. **Pure.**
 ///
-/// A [`crate::db_diagnosis::DeliberateRefusal`] (#651), because it is a verdict: the same key
-/// refuses identically until somebody enrols it, so a caller offering a retry would be offering
-/// one that can never work.
+/// A [`crate::db_diagnosis::DeliberateRefusal`] (#651) at
+/// [`crate::db_diagnosis::RefusalScope::NodeState`], because it is a verdict about the NODE
+/// rather than about the form: the same key refuses identically no matter how many times the
+/// call is retried unchanged, so offering a retry-now would be offering one that cannot work —
+/// **but the clerk's form was never wrong, and once an operator has run the named command the
+/// identical call succeeds.** That is the whole reason the scope exists: a surface must withhold
+/// the retry-now and still keep a way forward. Contrast
+/// [`crate::patient::register::dob_precision`], which is `Input` scope — nobody can make that
+/// one succeed (PR #661 review).
 ///
 /// It names the **command**, not only the key. `submit_event`'s own refusal — *"signer 9f3c… is
 /// not an enrolled, non-revoked actor"* — is true, legible, and tells nobody what to do about
 /// it; the precedent for naming the remedy is `submit_event`'s unwrap-key refusal, which names
 /// `establish-unwrap-key`.
 pub fn not_enrolled_refusal(kid: &str) -> anyhow::Error {
-    crate::db_diagnosis::deliberate_refusal(format!(
+    crate::db_diagnosis::node_state_refusal(format!(
         "this node's signing key {kid} is not enrolled as an actor, so it may not author \
          clinical events. Enrolling is provisioning, not a side effect of writing: run \
          `cairn-node enroll-device-actor` once on this node. (A node created by `cairn-node \
@@ -217,7 +269,7 @@ pub fn not_enrolled_refusal(kid: &str) -> anyhow::Error {
 /// author cannot be named is worse than an event that was not written — the first is a silent,
 /// permanent hole in the accountability record (principle 10), the second is a message on screen.
 pub fn ambiguous_actor_refusal(kid: &str) -> anyhow::Error {
-    crate::db_diagnosis::deliberate_refusal(format!(
+    crate::db_diagnosis::node_state_refusal(format!(
         "this node's signing key {kid} maps to MORE THAN ONE current actor, so nothing it \
          authors could be attributed to anyone (db/005 sets actor_id = NULL for every event a \
          dual-mapped key writes, node-wide and irreversibly). Refusing rather than writing an \

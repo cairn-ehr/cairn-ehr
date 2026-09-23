@@ -134,24 +134,39 @@ pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
 /// what to change.
 ///
 /// ⚠️ **This is an OPERATOR rendering, not a clerk-facing sentence.** `operator_chain` exists
-/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. The refusal a
-/// fresh node actually produces reads `submit_event: signer 9f3c… is not an enrolled,
-/// non-revoked actor [P0001]` — true, legible, and not a remedy. Slice 2c must not paste it
-/// raw into a form. #654 settled the enrolment RULE; what remains is that this rendering still
-/// hands on db/005's key-id sentence rather than the remedy-naming one
-/// `cairn_node::actor_enrolment::not_enrolled_refusal` now writes — which is slice 2c's
-/// launch-probe work, not #654.
+/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. Slice 2c must not
+/// paste it raw into a form.
+///
+/// ⚠️ **On an unprovisioned node this function still cannot reach the remedy-naming refusal,**
+/// and the reason is a missing call, not a missing classifier. The three
+/// `cairn_node::actor_enrolment` refusals are `NodeState`-scoped and map to
+/// [`DataError::NotProvisioned`] correctly — but nothing in `cairn-gui-live` calls
+/// `require_device_actor`, so the GUI never mints one. What it actually meets is db/005's own
+/// `submit_event: signer 9f3c… is not an enrolled, non-revoked actor [P0001]` — true, legible,
+/// carrying no marker, and therefore classified `Refused`: a verdict with no way forward, for a
+/// node state that has a one-command remedy. #654 settled the enrolment RULE; wiring the GUI
+/// write path to the remedy is filed as
+/// [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665).
 pub fn data_error_from(e: &anyhow::Error) -> DataError {
     let text = cairn_node::db_diagnosis::operator_chain(e);
     // TWO discriminators, complementary rather than alternative, because a verdict can be
     // reached in two places. The floor's own refusals carry `P0001`; a refusal `cairn-node`
     // raised in Rust before any statement reached Postgres carries no SQLSTATE at all and is
     // MARKED instead (#651). Either one means the call was decided, not merely unlucky.
-    if refusal_is_deliberate(sqlstate_of(e)) || cairn_node::db_diagnosis::carries_refusal_marker(e)
-    {
-        DataError::Refused(text)
-    } else {
-        DataError::Unavailable(text)
+    //
+    // The SCOPE question is asked FIRST, and only of the marked ones, because it is narrower:
+    // a marked refusal at `NodeState` scope is still a verdict, but the way forward is an
+    // operator command rather than an edit to the form, and `Refused` is rendered with no way
+    // forward but the form. Asking it first keeps the two questions in the right order — "is
+    // this a verdict" then "a verdict about what" — so a future third scope cannot silently
+    // fall through to `Unavailable` (PR #661 review).
+    match cairn_node::db_diagnosis::refusal_scope(e) {
+        Some(cairn_node::db_diagnosis::RefusalScope::NodeState) => DataError::NotProvisioned(text),
+        // `Input` scope, or no marker at all — fall through to the SQLSTATE question, which is
+        // the only one that can speak for the floor's own refusals.
+        Some(cairn_node::db_diagnosis::RefusalScope::Input) => DataError::Refused(text),
+        None if refusal_is_deliberate(sqlstate_of(e)) => DataError::Refused(text),
+        None => DataError::Unavailable(text),
     }
 }
 
@@ -209,6 +224,53 @@ mod tests {
                  date widget"
             ),
         }
+    }
+
+    /// A node-state verdict is NOT rendered as a dead end, and not as an outage either.
+    ///
+    /// The clerk's form was correct. Retrying the identical call is pointless, so `Unavailable`
+    /// — which earns a retry-now button — would be a precise untruth. But the way forward
+    /// exists and is one operator command away, so `Refused` — which slice 2c renders with no
+    /// way forward but editing the form — strands them just as badly, on a form that was never
+    /// the problem.
+    ///
+    /// **The mutation that kills this test:** collapse the scope arm in `data_error_from` back
+    /// into the single `Refused` answer. Both refusals still classify as verdicts and every
+    /// other test in both trees stays green — which is exactly how the two situations came to
+    /// share one rendering in the first place (PR #661 review).
+    #[test]
+    fn a_node_state_verdict_is_neither_a_dead_end_nor_an_outage() {
+        let e = cairn_node::actor_enrolment::not_enrolled_refusal("9f3c")
+            .context("registering the patient");
+        match data_error_from(&e) {
+            DataError::NotProvisioned(text) => assert!(
+                text.contains("enroll-device-actor"),
+                "the payload must name the command that makes this same call succeed — got: \
+                 {text}"
+            ),
+            other => panic!(
+                "an unprovisioned node must not reach the clerk as {other:?}: `Refused` offers \
+                 no way forward on a form that was correct, and `Unavailable` offers a \
+                 retry-now that will fail identically until an operator acts"
+            ),
+        }
+    }
+
+    /// The two scopes are told apart, not merely both marked.
+    ///
+    /// Without this, a `refusal_scope` that answered `NodeState` for everything marked would
+    /// pass the test above while sending a malformed date of birth to a rendering that implies
+    /// an operator can fix it.
+    #[test]
+    fn an_input_verdict_and_a_node_state_verdict_do_not_render_the_same() {
+        let input = cairn_node::patient::register::dob_precision("3/2/1980")
+            .expect_err("a malformed birth date refuses");
+        let node_state = cairn_node::actor_enrolment::not_enrolled_refusal("9f3c");
+        assert!(matches!(data_error_from(&input), DataError::Refused(_)));
+        assert!(matches!(
+            data_error_from(&node_state),
+            DataError::NotProvisioned(_)
+        ));
     }
 
     /// THE CLASSES THIS RULE KNOWINGLY GETS WRONG, pinned so the gap is a value rather than a

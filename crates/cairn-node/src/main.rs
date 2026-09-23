@@ -1398,8 +1398,10 @@ enum Cmd {
     },
     /// Enrol this node's signing key as a `device` actor, so it may author clinical events.
     /// IDEMPOTENT, and a one-time act. `init` already does this, so an ordinary node never
-    /// needs it; a node restored without its actor registry does, and every write command
-    /// refuses naming this one until it is run (#654).
+    /// needs it; a node restored without its actor registry does, and a write command on an
+    /// UNPROVISIONED node refuses naming this one (#654). A key whose actor was revoked, or
+    /// which maps to more than one actor, is a different state that this command cannot fix —
+    /// those refusals say so themselves.
     EnrollDeviceActor,
     /// Print this node's identity (node_id, pubkey, fingerprint, address).
     Identity,
@@ -2271,9 +2273,10 @@ async fn main() -> anyhow::Result<()> {
             // uses `cairn-node enroll-device-actor`, which every write refusal names.
             //
             // ⚠️ DELIBERATELY NOT `?`, and this is the whole reason the block exists.
-            // Everything above this line is IRREVERSIBLE: the signing key, the unwrap key and
-            // the local-state escrow are on disk, `cairn_register_unwrap_key` has run, and the
-            // node identity is provisioned. A `?` here would exit non-zero and never print
+            // Everything above this line is IRREVERSIBLE: the signing key and the unwrap key
+            // are on disk (plus a local-state escrow on the sealed branch — the
+            // `--insecure-plaintext` branch mints no escrow), `cairn_register_unwrap_key` has
+            // run, and the node identity is provisioned. A `?` here would exit non-zero and never print
             // `provisioned node …`, so an operator would read "init failed" for a node that is
             // in fact fully provisioned — and their reasonable next move, re-running `init`,
             // is REFUSED by `refuse_to_replace_existing_unwrap_key` and
@@ -2287,9 +2290,24 @@ async fn main() -> anyhow::Result<()> {
                     "WARNING: this node IS provisioned, but enrolling its device actor failed: \
                      {e:#}\nThe node is usable and nothing needs undoing — run `cairn-node \
                      enroll-device-actor` to finish. Do NOT re-run `init`: it will refuse over \
-                     the custody key this run already registered, and that refusal does not \
-                     describe this state."
+                     the unwrap key this run just wrote (and, failing that, over the custody \
+                     key it registered), and neither refusal describes this state."
                 );
+                // ⚠️ AND ON STDOUT, because the warning above is not enough on its own.
+                //
+                // The exit status is deliberately 0 — see the block above for why a `?` here
+                // strands the operator worse. But that means the only signal was a line on
+                // STDERR, and `cairn-node init > provision.log` is the ordinary idiom: it keeps
+                // the reassuring `provisioned node …` and discards the warning entirely. A
+                // wrapper, installer or `init && …` chain then records an unqualified success
+                // for a node that cannot author, and the next signal is a clinical write
+                // refusing at a desk.
+                //
+                // One greppable line on the same stream as the success line closes that,
+                // without reintroducing the dead end a non-zero exit would create. Machine
+                // visibility is what was missing, not loudness (PR #661 review; a distinct
+                // exit code is the other answer and is a contract change — #667).
+                println!("device actor: NOT ENROLLED — run `cairn-node enroll-device-actor`");
             }
             println!(
                 "provisioned node {node_id}\nfingerprint {}",

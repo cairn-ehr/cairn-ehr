@@ -42,12 +42,23 @@ pub struct NoteRef {
 /// - `NotFound` — no such chart. A true, exhaustive answer.
 /// - `Unavailable` — **nothing was decided.** A dropped connection, a lock timeout, a full
 ///   disk. The very same call may well succeed on a retry, so the window offers one.
-/// - `Refused` — **the in-DB floor decided against this call and will decide the same way
-///   every time** (a term-less attested query at `db/045`; a chart whose first event is not
-///   its registration at `db/005` step 8b — #345 / ADR-0061). A retry cannot succeed, and
-///   offering one is a precise untruth on a wrong-chart-prevention surface (principle 4). The
-///   payload is the floor's own message: it is legible on purpose (§9.6), and it is the one
-///   thing that tells the clerk what to change.
+/// - `Refused` — **something decided against this call and will decide the same way every
+///   time.** Two layers can decide, and this variant covers both (#651): the **in-DB floor** (a
+///   term-less attested query at `db/045`; a chart whose first event is not its registration at
+///   `db/005` step 8b — #345 / ADR-0061), and a **`cairn-node` pre-flight check that refuses in
+///   Rust before any statement reaches Postgres** — a malformed date of birth, which the floor
+///   never sees. A retry cannot succeed, and offering one is a precise untruth on a
+///   wrong-chart-prevention surface (principle 4). The payload is whichever layer decided: the
+///   floor's own message, or the orchestrator's own sentence. Both are legible on purpose, and
+///   the text is the one thing that tells the clerk what to change.
+/// - `NotProvisioned` — **this node decided against the call, and the form was never the
+///   problem.** Also a verdict, not an accident: retrying the identical call is pointless, so
+///   this is emphatically not an `Unavailable`. But it is pointless *until an operator runs the
+///   command the payload names*, at which point the same call succeeds — so a window must
+///   withhold the retry-now that `Unavailable` earns, show the remedy, and keep a way to try
+///   again once it is done. Rendering it as `Refused` strands a clerk whose form was correct;
+///   rendering it as `Unavailable` hides the remedy behind a retry that will keep failing.
+///   Carried by `cairn_node::db_diagnosis::RefusalScope::NodeState` (PR #661 review).
 ///
 /// # What a refusal does NOT change: the attestation still goes back
 ///
@@ -65,8 +76,13 @@ pub struct NoteRef {
 pub enum DataError {
     NotFound,
     Unavailable(String),
-    /// A deterministic in-DB floor verdict. See the enum doc: never retried, always legible.
+    /// A deterministic verdict — from the in-DB floor, or from a `cairn-node` pre-flight check
+    /// that refuses before Postgres sees the call. See the enum doc: never retried, always
+    /// legible, and the payload is whichever layer decided.
     Refused(String),
+    /// A verdict about this NODE's provisioning state, not about the call. See the enum doc:
+    /// never retried *as is*, but the payload names a command that makes the same call succeed.
+    NotProvisioned(String),
 }
 
 pub trait ClinicalData {

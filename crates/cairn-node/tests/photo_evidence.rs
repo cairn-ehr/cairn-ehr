@@ -29,8 +29,10 @@ async fn setup(c: &Client) -> (cairn_event::SigningKey, String) {
     // every other identity-using test in this suite follows (e.g. genesis_hlc.rs,
     // floor_enforced.rs, backup.rs). The node-genesis plane (`node_event`/`local_node`) never
     // touches `actor_current`, so reusing this same key for the clinical `agent` actor above
-    // is safe — no dual-actor-mapping degradation (see `cairn_node::actor_enrolment::
-    // device_actor_standing`'s doc for why that guard exists, and why it is kind-AGNOSTIC).
+    // is safe — no dual-actor-mapping degradation. See `ActorStanding::Ambiguous`'s doc for
+    // what a dual mapping does to attribution and why the check is kind-AGNOSTIC: the standing
+    // query carries no `AND kind = 'device'`, deliberately, because db/005 resolves a signer by
+    // `signing_key_id` alone and does not care what kind the actor is.
     cairn_node::identity::provision(c, &sk, &kid, "test-node", "127.0.0.1:0")
         .await
         .unwrap();
