@@ -29,9 +29,11 @@
 //! clinical content, not to this path.
 pub mod error;
 mod funnel;
+pub mod node;
 
 use cairn_event::SigningKey;
 use cairn_node::identity::Identity;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_postgres::Client;
 
@@ -45,15 +47,18 @@ use tokio_postgres::Client;
 /// async block" trick is not available here, because the whole body is awaits. The port doc in
 /// `cairn-gui-data` states this so it is not rediscovered by fighting the compiler.
 ///
-/// # One connection, not a pool
+/// # One connection, not a pool — and SHARED with the chart
 ///
 /// The funnel is one clerk at one keyboard; there is no concurrency worth pooling for, and a
-/// mutex makes the borrow rules explicit at every call site. If a later slice puts two windows
+/// mutex makes the borrow rules explicit at every call site. The window's chart commands read
+/// through the SAME connection ([`LiveData::sharing`]), so "which node am I" is answered once
+/// per window rather than once per connection. If a later slice puts two windows
 /// on one `LiveData`, the second one waits — which is correct rather than merely acceptable:
 /// `register_patient` ticks this node's HLC, and two registrations interleaving inside one
 /// connection is not a thing to be clever about.
 pub struct LiveData {
-    db: Mutex<Client>,
+    /// `Arc` so the window's chart commands can hold the same connection (see above).
+    db: Arc<Mutex<Client>>,
     node_sk: SigningKey,
     /// Hex of `node_sk`'s verifying key. Derived ONCE, here, rather than per call, so the kid
     /// a registration is signed under cannot drift from the key that signed it.
@@ -97,22 +102,44 @@ impl LiveData {
     /// provisions, `cairn-node enroll-device-actor` is the named remedy for a node that never
     /// ran `init`, and every write path on both surfaces now refuses.
     ///
-    /// **So on a node that was never provisioned, the first registration
-    /// through this port is REFUSED** — db/005's *"signer … is not an enrolled, non-revoked
-    /// actor"*. Since #648 that arrives as [`cairn_gui_data::port::DataError::Refused`]
-    /// carrying the floor's own sentence, rather than as an outage inviting a pointless
-    /// retry, which is the right failure; but the message names a key id, not a remedy.
-    /// Resolving that asymmetry is
-    /// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654), and it belongs to the slice
-    /// that first puts this in front of a person.
+    /// **So on a node that was never provisioned, a registration through this port is
+    /// REFUSED** — db/005's *"signer … is not an enrolled, non-revoked actor"*, arriving as
+    /// [`cairn_gui_data::port::DataError::Refused`] (#648). That sentence names a key id, not a
+    /// remedy, so the window does not rely on it: it probes [`LiveData::standing`] at launch and
+    /// asks [`LiveData::require_provisioned`] before each registration, which refuses as
+    /// `NotProvisioned` naming the remedy (#654 option 2, #665; see `node.rs`).
     pub fn new(db: Client, node_sk: SigningKey, identity: &Identity) -> Self {
+        Self::sharing(Arc::new(Mutex::new(db)), node_sk, identity)
+    }
+
+    /// As [`LiveData::new`], over a connection the caller also holds.
+    ///
+    /// The reference window uses this: its medication commands read through the same
+    /// connection the funnel writes through, so one window describes one node. Everything
+    /// [`LiveData::new`]'s doc says about `identity` and enrolment applies unchanged.
+    pub fn sharing(db: Arc<Mutex<Client>>, node_sk: SigningKey, identity: &Identity) -> Self {
         let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
         Self {
-            db: Mutex::new(db),
+            db,
             node_sk,
             node_kid,
             node_origin: identity.node_id_hex.clone(),
         }
+    }
+
+    /// The connection this port uses, for a caller that must read through the same one.
+    ///
+    /// A production accessor, not a test convenience: tests read rows back on a connection
+    /// of their own (`tests/common`'s `connect`), as that helper's doc asks.
+    pub fn connection(&self) -> Arc<Mutex<Client>> {
+        self.db.clone()
+    }
+
+    /// Hex of this node's verifying key — the key [`LiveData::standing`] asks about. The
+    /// window's launch-probe sentence must name THIS key (#670: a standing carries no subject,
+    /// so pairing it with the right key is the caller's job).
+    pub fn node_kid(&self) -> &str {
+        &self.node_kid
     }
 }
 
