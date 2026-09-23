@@ -190,9 +190,10 @@ mod tests {
     /// cheapest proof of the newest rule needed a database (PR #661 review). It does not.
     #[test]
     fn a_marked_refusal_is_a_verdict_even_with_no_database_in_sight() {
-        use anyhow::Context as _;
         // Built the way an orchestrator builds one: the marker at the bottom, operation context
-        // layered above it, and no `tokio_postgres::Error` anywhere in the chain.
+        // layered above it, and no `tokio_postgres::Error` anywhere in the chain. (`context` is
+        // an INHERENT method on `anyhow::Error`, so no trait import — one here is an unused
+        // import, which CI's clippy denies.)
         let e = cairn_node::patient::register::dob_precision("3/2/1980")
             .expect_err("a malformed birth date refuses")
             .context("registering the patient");

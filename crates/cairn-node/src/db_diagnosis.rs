@@ -347,7 +347,9 @@ impl std::error::Error for LocalDbFault {
 /// # Why a type and not a convention
 ///
 /// The alternative #651 weighed was a marker layer or a sentinel string on the chain. A type
-/// with a private field, constructible only through [`deliberate_refusal`], means *"is this a
+/// with a private field, constructible only through `deliberate_refusal` (crate-private, so the
+/// link is deliberately plain text — see that function for why the mint is narrow), means
+/// *"is this a
 /// verdict"* is answered by the compiler rather than by a convention — and a convention is
 /// precisely what #648 was trying to get away from.
 ///
@@ -360,7 +362,8 @@ impl std::error::Error for LocalDbFault {
 #[derive(Debug)]
 pub struct DeliberateRefusal {
     /// The operator/clerk-facing sentence. Private: the only way to build one is
-    /// [`deliberate_refusal`], so the marker cannot be attached to a message by accident.
+    /// `deliberate_refusal` (crate-private), so the marker cannot be attached to a message by
+    /// accident, and cannot be attached at all from outside this crate.
     message: String,
 }
 
