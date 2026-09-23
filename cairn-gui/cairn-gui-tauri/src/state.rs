@@ -170,7 +170,8 @@ pub struct AppState {
     pub node_sk: Option<cairn_event::SigningKey>,
     pub node_origin: String,
     /// The chart this window is open on, if any — `None` shows the front door (the funnel).
-    /// Chart commands read it only through `AppState::open_patient` (`funnel::window`).
+    /// Chart commands resolve it only through `AppState::displayed_patient` (`funnel::window`),
+    /// which also checks it against the chart the webview is showing — never on its own.
     pub chart: tokio::sync::Mutex<Option<crate::funnel::window::OpenChart>>,
     /// Where the funnel searches and registers — mock or live, fixed at launch.
     pub funnel_backend: crate::funnel::backend::FunnelBackend,

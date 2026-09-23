@@ -55,8 +55,9 @@ impl PatientRegistration for LiveData {
         //
         // The invariant that `name` is the raw typed string the query was built from belongs
         // to the WINDOW: one name field feeding `SearchQuery::new` and this argument alike.
-        // That is what `port.rs` means by "the funnel satisfies it by construction", and it
-        // lands with slice 2c.
+        // That is what `port.rs` means by "the funnel satisfies it by construction", and since
+        // slice 2c it is `cairn_gui_funnel::FunnelSession`'s job: the name is stored with the
+        // search it ran on and handed back bound to it (`NamedAttestation`).
         let outcome = cairn_node::patient::register::register_patient(
             &mut db,
             &self.node_sk,

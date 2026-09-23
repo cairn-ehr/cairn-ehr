@@ -23,8 +23,8 @@
   </head>
   <body>
     <main>
-      <!-- Whether this node may write at all (the launch probe, #654). Above everything,
-           because it qualifies every act on both surfaces. -->
+      <!-- Whether this node may write at all (the launch probe, #654), or why the window could
+           not start. Above everything, because it qualifies every act on both surfaces. -->
       <p id="provisioning" role="status" hidden></p>
 
       <section id="front-door" aria-labelledby="find-heading" hidden>
@@ -51,12 +51,15 @@
           <label for="reg-dob">Date of birth — YYYY, YYYY-MM or YYYY-MM-DD, or leave blank if unknown</label>
           <input id="reg-dob" type="text" />
           <p id="prompt-status" role="status" aria-live="polite"></p>
+          <!-- Why the step-3 search is partial. OUTSIDE #prompt on purpose: a partial search
+               that showed nobody hides #prompt, and that is exactly when the reason must still
+               be read — "not finished" and "nobody matched" lead to opposite acts. -->
+          <p id="prompt-incomplete" hidden></p>
 
           <!-- The step-3 prompt. It does NOT scroll: a registration attests exactly these rows
                as displayed, so every row must actually be visible. -->
           <section id="prompt" aria-labelledby="prompt-heading" hidden>
             <h3 id="prompt-heading">Could this be one of these existing patients?</h3>
-            <p id="prompt-incomplete" hidden></p>
             <ol id="prompt-list"></ol>
           </section>
 

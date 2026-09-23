@@ -19,6 +19,10 @@ of by chart age — by asking one question per sampled patient:
 Each sampled patient plays that existing chart; the query is built from its own stored name and
 date of birth, exactly as the window builds one (`FormSnapshot::query`).
 
+With `--perturb dob` the query instead carries a MIS-TYPED date of birth (`perturb_dob`: day
+and month swapped, or the year off by one) — the realistic imperfect duplicate, for which the
+DOB pass no longer matches and ranking has only the name to go on.
+
 # What it measures, and what it does not
 
 **The candidate SET and its ORDER, not timings.** Rows go straight into the two projections
@@ -38,9 +42,12 @@ real `cairn_search_candidates`.
     uv run --no-project python scripts/measure_prompt_truncation.py --self-test
     uv run --no-project python scripts/measure_prompt_truncation.py --dbname cairn_test \\
         --rows 50000 --name-pool ~/src/SyntheticHealthData/synthetic_demographics.sqlite3
+    # the same, with each query's date of birth mis-typed:
+    uv run --no-project python scripts/measure_prompt_truncation.py --dbname cairn_test \\
+        --rows 50000 --perturb dob
 
 Requires `psql` and a cluster with the schema loaded; reuses `measure_patient_search.py`'s
-`psql`/`scalar`/`pool_names` helpers rather than a second copy of them.
+`psql`/`scalar`/`pool_names`/`quote_literal` helpers rather than a second copy of them.
 """
 
 from __future__ import annotations
@@ -125,7 +132,7 @@ def perturb_dob(dob: str) -> str:
     still a different valid date, otherwise the year off by one.
 
     The exact-duplicate arm answers "is the chart shown when everything was typed right?". This
-    arm answers the harder question the funnel exists for (final review #7): the existing chart
+    arm answers the harder question the funnel exists for (PR #674 review #7): the existing chart
     now shares only the NAME pass, ties with everyone else sharing a name token, and falls back to
     chart-age order within that tie.
     """
@@ -231,7 +238,7 @@ def self_test() -> int:
     sql = seed_sql([("00000000-0000-0000-0000-000000000001", "O'Brien Ann", "1980")])
     assert "'O''Brien Ann'" in sql[0] and "'1980'" in sql[1]
     assert "ARRAY['ann','brien','o''brien']" in batch_query_sql([("x", "O'Brien Ann", "1980")])
-    # The perturbed-DOB arm: the realistic imperfect duplicate (final review #7).
+    # The perturbed-DOB arm: the realistic imperfect duplicate (PR #674 review #7).
     assert perturb_dob("1980-03-07") == "1980-07-03", "day <= 12: swap day and month"
     assert perturb_dob("1980-03-03") == "1981-03-03", "day == month: a swap changes nothing"
     assert perturb_dob("1980-03-20") == "1981-03-20", "day > 12: the swap is not a date"
@@ -279,13 +286,16 @@ def main() -> int:
         people.append((pid, name, dob))
 
     cleanup(conn)
-    # Chunked, as measure_patient_search.py does: one 50,000-row statement passed to `psql -c`
-    # would exceed the OS argument-size limit (1 MiB on macOS).
-    for i in range(0, len(people), 5000):
-        for sql in seed_sql(people[i : i + 5000]):
-            psql(conn, sql)
-    before = scalar(conn, f"SELECT count(*) FROM patient_name WHERE asserted_origin = '{ORIGIN}'")
+    # Seeding sits INSIDE the try, so a failure part-way through it is cleaned up too rather than
+    # leaving up to `--rows` rows under ORIGIN until the next run's up-front cleanup.
     try:
+        # Chunked, as measure_patient_search.py does: one 50,000-row statement passed to `psql -c`
+        # would exceed the OS argument-size limit (1 MiB on macOS).
+        for i in range(0, len(people), 5000):
+            for sql in seed_sql(people[i : i + 5000]):
+                psql(conn, sql)
+        count_sql = f"SELECT count(*) FROM patient_name WHERE asserted_origin = '{ORIGIN}'"
+        before = scalar(conn, count_sql)
         samples = rng.sample(people, args.samples)
         queried = (
             [(pid, name, perturb_dob(dob)) for pid, name, dob in samples]
@@ -293,7 +303,7 @@ def main() -> int:
             else samples
         )
         out = psql(conn, batch_query_sql(queried))
-        after = scalar(conn, f"SELECT count(*) FROM patient_name WHERE asserted_origin = '{ORIGIN}'")
+        after = scalar(conn, count_sql)
         if before != after or int(before) != len(people):
             raise SystemExit(f"population changed mid-run ({before} -> {after}); refusing to report")
         rows: dict[int, list[tuple[str, int]]] = {i: [] for i in range(len(samples))}

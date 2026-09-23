@@ -66,6 +66,34 @@ pub enum Recorded {
     Stale,
 }
 
+/// A search taken for registration, still bound to the raw name it ran on.
+///
+/// The fields are private and there is no public constructor: the only way to get one is
+/// [`FunnelSession::take_for_register`], so a `NamedAttestation` always pairs a query with
+/// the exact string that query was built from. Split it (`into_parts`) only at the port call.
+#[derive(Debug)]
+pub struct NamedAttestation {
+    attested: AttestedSearch,
+    raw_name: String,
+}
+
+impl NamedAttestation {
+    /// The name field exactly as typed when the search ran.
+    pub fn raw_name(&self) -> &str {
+        &self.raw_name
+    }
+
+    /// The query the attested search ran on.
+    pub fn query(&self) -> &SearchQuery {
+        self.attested.query()
+    }
+
+    /// The attestation and its name, for the port call — the one place they are split.
+    pub fn into_parts(self) -> (AttestedSearch, String) {
+        (self.attested, self.raw_name)
+    }
+}
+
 /// Custody of one window's registration search, and the name it ran on.
 #[derive(Debug, Default)]
 pub struct FunnelSession {
@@ -86,7 +114,7 @@ impl FunnelSession {
     ///
     /// A webview that reloads restarts its own counter at zero while this floor survives, so
     /// every search it sent would be dropped as stale and Register would go quiet. It reads this
-    /// at start-up and resumes above it.
+    /// at start-up and resumes FROM it — an equal revision is accepted by `record`.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -98,6 +126,14 @@ impl FunnelSession {
     /// costs is one re-search — while the revision floor only ever rises.
     pub fn edited(&mut self, revision: u64) {
         self.revision = self.revision.max(revision);
+        self.discard();
+    }
+
+    /// Forget the held search (and its name) without touching the revision floor.
+    ///
+    /// What resetting the form needs — closing a chart returns the clerk to an empty front
+    /// door, whose next search starts afresh.
+    pub fn discard(&mut self) {
         self.store.discard();
         self.name_for = None;
     }
@@ -126,20 +162,29 @@ impl FunnelSession {
 
     /// Take the search `token` names for a registration, WITH the raw name it ran on.
     ///
-    /// Every successful take must reach [`FunnelSession::settle`] — the same two-ended
-    /// contract [`TokenStore::take`] has.
+    /// Returned as one [`NamedAttestation`] rather than a `(search, name)` pair, so the binding
+    /// between the two survives past this session: a caller cannot hand the port a different
+    /// name without first deliberately splitting the value (`into_parts`), which only the port
+    /// call does. Every successful take must reach [`FunnelSession::settle`] — the same
+    /// two-ended contract [`TokenStore::take`] has.
     pub fn take_for_register(
         &mut self,
         token: SearchToken,
-    ) -> Result<(AttestedSearch, String), TokenError> {
+    ) -> Result<NamedAttestation, TokenError> {
         let attested = self.store.take(token)?;
         match &self.name_for {
-            Some((held, name)) if *held == token => Ok((attested, name.clone())),
+            Some((held, name)) if *held == token => Ok(NamedAttestation {
+                attested,
+                raw_name: name.clone(),
+            }),
             // Unreachable while `record` is the only writer of both halves. If it is ever
             // reached, put the search back and refuse rather than register a chart with no
-            // name — the refusal's remedy ("let the search run again") is always safe.
+            // name — the refusal's remedy ("let the search run again") is always safe. The
+            // debug assertion makes "unreachable" CHECKED in every test run rather than merely
+            // asserted by this comment: nothing was in flight, so the search must go back Kept.
             _ => {
-                let _ = self.store.restore(attested);
+                let restored = self.store.restore(attested);
+                debug_assert_eq!(restored, Restored::Kept, "a take with no name beside it");
                 Err(TokenError::Absent)
             }
         }
@@ -214,9 +259,9 @@ mod tests {
         let mut s = FunnelSession::new();
         let f = form(1, "  John   Smith ", "1980-01-01");
         let t = current(&mut s, &f, 1);
-        let (attested, name) = s.take_for_register(t).unwrap();
-        assert_eq!(name, "  John   Smith ");
-        assert_eq!(attested.query(), &f.query());
+        let taken = s.take_for_register(t).unwrap();
+        assert_eq!(taken.raw_name(), "  John   Smith ");
+        assert_eq!(taken.query(), &f.query());
     }
 
     /// Review Focus 1: "Jon Smith" is searched, corrected to "John Smith" and searched again,
@@ -230,7 +275,7 @@ mod tests {
                 .unwrap(),
             Recorded::Stale
         );
-        let (attested, name) = s.take_for_register(newer).unwrap();
+        let (attested, name) = s.take_for_register(newer).unwrap().into_parts();
         assert_eq!(name, "John Smith");
         assert_eq!(
             attested.displayed().candidates[0].patient_id,
@@ -292,24 +337,66 @@ mod tests {
     fn a_failed_registration_keeps_the_name_with_the_search() {
         let mut s = FunnelSession::new();
         let t = current(&mut s, &form(1, "John Smith", "1980"), 1);
-        let (attested, _) = s.take_for_register(t).unwrap();
+        let (attested, _) = s.take_for_register(t).unwrap().into_parts();
         let out: Result<(), (&str, Restored)> = s.settle(Err(("db down", attested)));
         assert_eq!(out.unwrap_err().1, Restored::Kept);
-        let (_, name) = s
+        let again = s
             .take_for_register(t)
             .expect("a Kept search is redeemable again");
-        assert_eq!(name, "John Smith");
+        assert_eq!(again.raw_name(), "John Smith");
     }
 
     #[test]
     fn a_successful_registration_consumes_the_form() {
         let mut s = FunnelSession::new();
         let t = current(&mut s, &form(1, "John Smith", "1980"), 1);
-        let (_attested, _) = s.take_for_register(t).unwrap();
-        // The port consumed the attestation on success, so `Ok` carries no value back.
+        let _taken = s.take_for_register(t).unwrap();
+        // The port consumed the attestation on success, so `Ok` carries no ATTESTATION back —
+        // only the port's own value (here 7), which `settle` passes through untouched.
         let ok: Result<u8, (&str, Restored)> = s.settle(Ok(7));
         assert_eq!(ok.unwrap(), 7);
         assert_eq!(s.take_for_register(t).unwrap_err(), TokenError::Absent);
+    }
+
+    /// A background search lands WHILE a registration is being saved, and the save then fails.
+    /// The failed search is superseded (never offered for retry), and the newer search is
+    /// redeemable with ITS OWN name — never the name of the search that was in flight.
+    #[test]
+    fn a_search_landing_mid_registration_supersedes_it_and_keeps_its_own_name() {
+        let mut s = FunnelSession::new();
+        let t1 = current(&mut s, &form(1, "Jon Smith", "1980"), 1);
+        let (attested, _) = s.take_for_register(t1).unwrap().into_parts();
+        let t2 = current(&mut s, &form(2, "John Smith", "1980"), 2);
+        let out: Result<(), (&str, Restored)> = s.settle(Err(("db down", attested)));
+        assert_eq!(out.unwrap_err().1, Restored::SupersededAndDropped);
+        let taken = s.take_for_register(t2).expect("the newer search is held");
+        assert_eq!(taken.raw_name(), "John Smith");
+        assert_eq!(taken.query(), &form(2, "John Smith", "1980").query());
+    }
+
+    /// An edit WHILE a registration is being saved, and the save then fails: the in-flight
+    /// search described a form that no longer exists, so it must be dropped — never Kept, which
+    /// would tell the clerk "Press Register again" on a search for the pre-edit form.
+    #[test]
+    fn an_edit_mid_registration_drops_the_search_when_the_save_fails() {
+        let mut s = FunnelSession::new();
+        let t1 = current(&mut s, &form(1, "Jon Smith", "1980"), 1);
+        let (attested, _) = s.take_for_register(t1).unwrap().into_parts();
+        s.edited(2);
+        let out: Result<(), (&str, Restored)> = s.settle(Err(("db down", attested)));
+        assert_eq!(out.unwrap_err().1, Restored::SupersededAndDropped);
+        assert_eq!(s.take_for_register(t1).unwrap_err(), TokenError::Absent);
+    }
+
+    /// `discard` forgets the held search without touching the revision floor — what closing a
+    /// chart (and so resetting the form) needs.
+    #[test]
+    fn discard_forgets_the_search_and_keeps_the_floor() {
+        let mut s = FunnelSession::new();
+        let t = current(&mut s, &form(4, "John Smith", "1980"), 1);
+        s.discard();
+        assert_eq!(s.take_for_register(t).unwrap_err(), TokenError::Absent);
+        assert_eq!(s.revision(), 4);
     }
 
     #[test]

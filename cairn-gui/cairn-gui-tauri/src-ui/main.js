@@ -22,6 +22,15 @@ const LOCK_POLL_MS = 10_000;
  */
 let displayedPatient = null;
 
+/**
+ * The chart whose medication list is actually DRAWN in the table — set by `render`, cleared by
+ * `clearChart`. Sign-off and cease send THIS, not `displayedPatient`: they act on the list the
+ * clinician reviewed. If a late read for chart A were ever drawn under chart B's header (the
+ * guard in `refresh` is what prevents that), the command would name A, and the backend — with B
+ * open — would refuse it rather than sign B on the strength of A's list.
+ */
+let renderedPatient = null;
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -110,7 +119,8 @@ function renderRow(row) {
   return rows;
 }
 
-function render(view) {
+function render(view, patient) {
+  renderedPatient = patient;
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -136,6 +146,7 @@ function render(view) {
  * header — not even for the moment a read is in flight, and not after a read that failed.
  */
 function clearChart() {
+  renderedPatient = null;
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
@@ -153,7 +164,7 @@ async function refresh() {
     const view = await invoke("med_list", { patientId: patient });
     // A read for a chart the clinician has since left is dropped, never rendered.
     if (patient !== displayedPatient) return;
-    render(view);
+    render(view, patient);
   } catch (e) {
     if (patient !== displayedPatient) return;
     say("Could not read the chart: " + e);
@@ -184,8 +195,12 @@ function reportSignOff(report) {
 }
 
 async function signOff() {
+  if (renderedPatient === null) {
+    say("No medication list is on screen to sign off.");
+    return;
+  }
   try {
-    reportSignOff(await invoke("sign_off", { patientId: displayedPatient }));
+    reportSignOff(await invoke("sign_off", { patientId: renderedPatient }));
   } catch (e) {
     say("Sign-off failed: " + e);
   }
@@ -197,7 +212,7 @@ async function cease(groupId, reason) {
     const report = await invoke("cease", {
       groupId: groupId,
       reason: reason,
-      patientId: displayedPatient,
+      patientId: renderedPatient,
     });
     let text = "Stopped " + report.ceased + " thread(s) of this drug.";
     if (report.failed.length > 0) {

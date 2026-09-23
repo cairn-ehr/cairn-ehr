@@ -12,7 +12,7 @@
 //!
 //! # The three kinds of retry advice
 //!
-//! [`Retry`] is the §648 split carried to the screen. An outage (`Unavailable`) decided
+//! [`Retry`] is the #648 split carried to the screen. An outage (`Unavailable`) decided
 //! nothing, so the same act may succeed now. A verdict (`Refused`) will decide the same way
 //! every time, so a retry button would be a precise untruth — the clerk's way forward is to
 //! change what was typed. A node-state verdict (`NotProvisioned`) is pointless to retry until
@@ -22,7 +22,7 @@ use cairn_gui_funnel::{MissingPart, Restored, TokenError, TriggerState, MIN_NAME
 use cairn_node::actor_enrolment::{
     ambiguous_actor_refusal, not_enrolled_refusal, retired_actor_refusal, ActorStanding,
 };
-use cairn_patient_search::Candidate;
+use cairn_patient_search::{Candidate, TrustState};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -177,14 +177,75 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
 /// Said out loud because the prompt appears while the clerk is still typing, and because it
 /// changes what the Register button MEANS: from "search first" to "none of these". A clerk who
 /// is never told either has not been shown the list the registration will swear they saw.
-pub fn prompt_summary(shown: usize) -> String {
-    if shown == 0 {
-        "No existing chart matched what is typed. Registering will record that search.".to_string()
-    } else {
-        format!(
-            "{shown} existing patient(s) might be this person — listed below. Pressing Register \
+///
+/// `incomplete` is the bounded list's own flag (the node's partiality or the cap's). It decides
+/// the wording, not only a separate note: "No existing chart matched" licenses a new chart, so
+/// a search that did not finish must never say it (principle 4) — even when it showed nobody,
+/// which is exactly when the list, and anything nested in it, is hidden.
+pub fn prompt_summary(shown: usize, incomplete: bool) -> String {
+    match (shown, incomplete) {
+        (0, false) => {
+            "No existing chart matched what is typed. Registering will record that search."
+                .to_string()
+        }
+        (0, true) => "The search did not finish, and showed nobody — this is NOT a \"no match\" \
+                      (the reason follows). Registering now records that incomplete search."
+            .to_string(),
+        (n, false) => format!(
+            "{n} existing patient(s) might be this person — listed below. Pressing Register \
              now means none of these."
-        )
+        ),
+        (n, true) => format!(
+            "{n} existing patient(s) might be this person — listed below, but the list is not \
+             complete (the reason follows). Pressing Register now means none of these."
+        ),
+    }
+}
+
+/// The sentence that announces a browse answer — the step-1 twin of [`prompt_summary`].
+///
+/// Browse attests nothing, but a clerk who reads "No existing chart matched" here goes on to
+/// register, so the same rule holds: a partial answer never reads as a complete one.
+pub fn browse_summary(shown: usize, incomplete: bool) -> String {
+    match (shown, incomplete) {
+        (0, false) => "No existing chart matched.".to_string(),
+        (0, true) => {
+            "The search did not finish, and showed nobody — this is NOT a \"no match\".".to_string()
+        }
+        (n, false) => format!("{n} existing chart(s) found."),
+        (n, true) => format!("{n} existing chart(s) found — the list is not complete."),
+    }
+}
+
+/// A Register that arrived while a chart was already open — "This is them" was clicked while
+/// the registration was on its way. The clerk's LAST act was recognising an existing patient,
+/// so nothing is written behind that chart.
+pub fn register_behind_open_chart_view(open: &ChartHeaderView) -> ErrorView {
+    ErrorView {
+        text: format!(
+            "Nothing was registered: you had already opened the chart of {} (chart {}). To \
+             register a new patient, return to the front door first.",
+            open.name, open.patient_id
+        ),
+        retry: Retry::Never,
+    }
+}
+
+/// A registration that COMMITTED after the clerk had opened another chart. The new chart
+/// exists and cannot be un-made (append-only); the window stays on the chart the clerk chose
+/// and says, rather than silently switching, that the new one may be a duplicate of it.
+pub fn registered_behind_open_chart_view(
+    registered: &ChartHeaderView,
+    open: &ChartHeaderView,
+) -> ErrorView {
+    ErrorView {
+        text: format!(
+            "A new chart was registered for {} (chart {}) while you opened the chart of {} \
+             (chart {}). You are still on {}'s chart. If that is this patient, the new chart is \
+             a duplicate — report it so the two can be linked.",
+            registered.name, registered.patient_id, open.name, open.patient_id, open.name
+        ),
+        retry: Retry::Never,
     }
 }
 
@@ -241,8 +302,11 @@ pub fn header_from_candidate(c: &Candidate) -> ChartHeaderView {
 
 /// The header for a chart just registered: what was typed, with absence named.
 ///
-/// Trust is `unconfirmed` — a chart nobody has confirmed the identity of yet, the same state
-/// the mock registers into. Claiming more would put a trust state on screen no act earned.
+/// Trust is what the NODE reports for an ordinary registration: `confirmed`. That is db/024's
+/// vocabulary, where `unconfirmed` is the identity-pending (John-Doe) state opened only by a
+/// registration carrying a `basis` — which the funnel's registration never does. Showing
+/// `unconfirmed` here once put a trust state on the header that the next browse of the same
+/// chart contradicted (PR #674 review); the mock registers into the same state for that reason.
 pub fn header_from_registration(
     id: Uuid,
     raw_name: &str,
@@ -260,7 +324,7 @@ pub fn header_from_registration(
             Some(d) => format!("born {d}"),
             None => "date of birth not recorded".to_string(),
         },
-        trust: "unconfirmed".to_string(),
+        trust: TrustState::Confirmed.as_str().to_string(),
     }
 }
 
@@ -352,6 +416,11 @@ pub(crate) mod tests {
     fn retry_advice_crosses_to_the_webview_as_snake_case() {
         let json = serde_json::to_value(Retry::AfterOperator).unwrap();
         assert_eq!(json, serde_json::json!("after_operator"));
+        // `funnel.js` compares against "now" to keep a search for the retry.
+        assert_eq!(
+            serde_json::to_value(Retry::Now).unwrap(),
+            serde_json::json!("now")
+        );
     }
 
     #[test]
@@ -366,16 +435,44 @@ pub(crate) mod tests {
         assert_eq!(waiting_sentence(&trigger_state("John Smith", "1980")), None);
     }
 
-    /// Final review #6: a screen-reader clerk must HEAR that possible matches appeared, and what
+    /// PR #674 review #6: a screen-reader clerk must HEAR that possible matches appeared, and what
     /// the Register button now means — the prompt is otherwise silent while they type.
     #[test]
     fn the_prompt_announces_how_many_matches_and_what_register_now_means() {
-        let some = prompt_summary(3);
+        let some = prompt_summary(3, false);
         assert!(some.contains('3'), "{some}");
         assert!(some.contains("none of these"), "{some}");
-        let none = prompt_summary(0);
+        let none = prompt_summary(0, false);
         assert!(none.contains("No existing chart matched"), "{none}");
         assert!(none.contains("record that search"), "{none}");
+    }
+
+    /// Principle 4 on the one sentence that licenses a new chart: a search that showed nobody
+    /// but did NOT finish must never be announced as "nobody matched" (PR #674 review).
+    #[test]
+    fn a_partial_search_that_shows_nobody_never_reads_as_no_match() {
+        let s = prompt_summary(0, true);
+        assert!(!s.contains("No existing chart matched"), "{s}");
+        assert!(s.contains("NOT"), "{s}");
+        let b = browse_summary(0, true);
+        assert!(!b.contains("No existing chart matched"), "{b}");
+        assert!(b.contains("NOT"), "{b}");
+    }
+
+    /// A partial list with rows says it is partial IN the announcement, not only in the
+    /// separate note — a screen-reader clerk hears the live region, and may hear only that.
+    #[test]
+    fn a_partial_list_with_rows_says_so_in_its_announcement() {
+        assert!(prompt_summary(2, true).contains("not complete"));
+        assert!(browse_summary(2, true).contains("not complete"));
+        assert!(!browse_summary(2, false).contains("not complete"));
+    }
+
+    /// The browse announcement, from Rust like every other sentence on this screen.
+    #[test]
+    fn the_browse_announces_how_many_charts_it_found() {
+        assert!(browse_summary(4, false).contains('4'));
+        assert!(browse_summary(0, false).contains("No existing chart matched"));
     }
 
     #[test]
@@ -402,7 +499,9 @@ pub(crate) mod tests {
         let h = header_from_registration(id, "Mary Poppins", Some("1910"));
         assert_eq!(h.name, "Mary Poppins");
         assert_eq!(h.born, "born 1910");
-        assert_eq!(h.trust, "unconfirmed");
+        // What the node reports for an ordinary registration — never the identity-pending
+        // (John-Doe) state, which a standard registration does not open (db/024).
+        assert_eq!(h.trust, TrustState::Confirmed.as_str());
         assert_eq!(h.patient_id, id.to_string());
     }
 

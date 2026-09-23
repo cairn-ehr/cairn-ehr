@@ -782,7 +782,7 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   `patient_id`), but that predicate misses identity-stream tables (#658). The `cairn-gui` DB suites
   run in CI's `test` job; the `gui` job declares the skip on the step, not the job.
 - **2c's prerequisites** ([#661](https://github.com/cairn-ehr/cairn-ehr/pull/661), two five-agent
-  review rounds). `TokenStore::settle` (#659: the only sanctioned end of a `take`; a success now
+  review rounds). `TokenStore::settle` (#659: the sanctioned end of a `take` for callers; a success now
   INVALIDATES, closing a duplicate-chart path three reviewers found independently);
   `MockData::fail_next` (#660); `DeliberateRefusal` + `RefusalScope::{Input, NodeState}` →
   `Refused` / `DataError::NotProvisioned` (#651); **one enrolment rule** (#654 — `init` enrols,
@@ -821,13 +821,26 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   #664 / #666 (what a superseded key classifies as; db/004 contradicts itself) · #665 (the
   orchestrator-level half) · #667 · #668 (the arming affordance + typed slots) · #669 (a dropped
   `register` future latches the store) · #670 (three representable invalid states) · #671 · #672 ·
-  #673 · #675 (four small front-door gaps from 2c's review). Also cited: #442, #450, #583, #636, #638.
+  #673 · #648 (open on GitHub though 2b built the `Refused` split — confirm) · #676 (the clerk reads
+  `operator_chain` text) · #677 (the read guard lives only in JS). Also cited: #442, #450, #583,
+  #636, #638.
 - **2c's whole-branch review** found one Critical — with charts now switching, a sign-off signed
   whichever chart was OPEN while the previous patient's list could still be on screen — fixed by
   binding `med_list`/`sign_off`/`cease` to the displayed chart id (`AppState::displayed_patient`)
   and clearing the view on every switch; five Importants in the Register bookkeeping and the
   prompt's announcement, all fixed; and the measurement-scope finding that led to the `--perturb
   dob` arm. Minors → #675.
+- **A third five-agent review** (same day) found no live Critical but three things the funnel exists
+  to prevent, all fixed: a registration landing after "This is them" silently moved the window
+  onto the new duplicate (now refused before the write, and never switched after it); the new
+  chart's header said `unconfirmed`, the John-Doe state, while the node reports `confirmed` (header
+  and mock now match the node); and a partial search that showed nobody could be announced as
+  "No existing chart matched" (both announcements now come from Rust and take the list's
+  incompleteness; browse keeps a bare `incomplete` flag via `node_reason`). Also: the chart
+  commands got `*_impl` + not-on-screen tests, sign-off sends the chart DRAWN, `NamedAttestation`
+  keeps the name bound to its search to the port, the prompt is tested past `PROMPT_CAP` against
+  what the registration attests, and #675's four items. Filed: #676, #677; four type items
+  appended to #670.
 - **§1.2:** register paper 5 → forced 4 → target 4 (3 when the prompt is empty); find 3 → 2 → 2.
   `M ≤ N`. The mononymous path costs one click more: the first Register searches and shows. The
   machine half is measured (above, and #639's search figures); the stopwatch half (find ≤ 5 s,

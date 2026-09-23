@@ -12,7 +12,8 @@
 //! # Where each piece lives
 //!
 //! - [`window`] — the window's state for the funnel: which chart is open, the mock
-//!   constructor, and the one accessor every chart command asks.
+//!   constructor, and `AppState::displayed_patient` — the one accessor every chart command
+//!   asks, which acts only on the chart the webview is showing.
 //! - [`backend`] — mock or live, dispatched on the mode the window launched in.
 //! - [`commands`] — the Tauri commands: thin forwarders onto plain `*_impl` functions, so the
 //!   whole front-door walk is testable against `--mock` with no Tauri runtime.

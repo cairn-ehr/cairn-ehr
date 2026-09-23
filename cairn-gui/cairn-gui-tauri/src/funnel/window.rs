@@ -47,11 +47,15 @@ impl AppState {
         }
     }
 
-    /// The chart every chart command acts on — or a refusal when the front door is showing.
+    /// The chart that is open — or a refusal when the front door is showing.
     ///
-    /// Read afresh per command: a chart command must never act on a patient the window has
-    /// since closed (Review Focus 5).
-    pub async fn open_patient(&self) -> Result<Uuid, String> {
+    /// NOT what a chart command acts on: that is [`AppState::displayed_patient`], which also
+    /// checks this against the chart the webview is showing. This is its building block, and
+    /// deliberately visible only inside `funnel` (the front door's own commands and tests), so a
+    /// new chart command in `crate::commands` cannot reach for it and skip the screen check.
+    /// Read afresh per call: nothing may act on a patient the window has since closed (the
+    /// plan's Review Focus 5).
+    pub(in crate::funnel) async fn open_patient(&self) -> Result<Uuid, String> {
         self.chart
             .lock()
             .await
@@ -63,7 +67,7 @@ impl AppState {
     /// The open chart, provided it is the one the SCREEN is showing — what every chart command
     /// acts on.
     ///
-    /// # Why the webview must say which chart it means (final review, Critical #1)
+    /// # Why the webview must say which chart it means (PR #674 review, Critical #1)
     ///
     /// Before slice 2c a window had one patient for its whole life, so "the open chart" and "the
     /// chart on screen" could not differ. Now the clerk switches charts, and the two can differ
@@ -103,7 +107,7 @@ impl AppState {
 mod tests {
     use super::*;
 
-    /// Review Focus follow-up (final review, Critical #1): a chart command must act on the chart
+    /// Review Focus follow-up (PR #674 review, Critical #1): a chart command must act on the chart
     /// the SCREEN shows, never merely on whichever chart is open by the time it runs.
     #[tokio::test]
     async fn a_chart_command_is_bound_to_the_chart_on_screen() {

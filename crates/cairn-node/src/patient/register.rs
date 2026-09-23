@@ -420,9 +420,11 @@ pub fn build_identifier_body(
 /// function's TYPES enforces that — a caller could structurally attest a search for "Smith"
 /// while asserting the name "Jones", and this function would sign both without complaint
 /// (the twelfth founding principle again: the type system permits the illegal state; only a
-/// disciplined caller prevents it). The one real caller, `main.rs`'s `PatientRegister`
-/// handler, satisfies this by construction — `name` and `query` are built from the SAME
-/// `name: String` CLI argument, one line apart — but a future caller must preserve that.
+/// disciplined caller prevents it). Two callers today, each satisfying it by construction:
+/// `main.rs`'s `PatientRegister` handler builds `name` and `query` from the SAME `name: String`
+/// CLI argument, one line apart; and the reference window (`cairn-gui-live`'s registration
+/// port) is handed both by `cairn_gui_funnel::FunnelSession`, which stores the raw name WITH
+/// the search it ran on. A future caller must preserve that.
 ///
 /// Returns the minted `patient_id`; care can proceed against it immediately, as with
 /// `register_john_doe`.

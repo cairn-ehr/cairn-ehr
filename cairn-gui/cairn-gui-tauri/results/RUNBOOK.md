@@ -191,12 +191,20 @@ whether the duplicate survives,
 [`2026-09-23-funnel-prompt-truncation.md`](2026-09-23-funnel-prompt-truncation.md)).
 
 **Seed.** On the node from section 0, register a handful of charts the operator can look for
-(no `enroll-human` needed: registration is signed by the node's own key):
+(no `enroll-human` needed: registration is signed by the node's own key). Each has its OWN date
+of birth: with one shared date, every chart matches step 3's query on the date pass, John and
+Mary Smith tie, and John comes first only because he was registered first — step 3 would then
+pass without ranking doing anything.
 
 ```bash
-for n in "Samantha Michaelowski" "John Smith" "Mary Smith" "Wei Ling Chen"; do
-    $NODE patient-register --name "$n" --birth-date 1975-02-02 --confirm-new
-done
+while IFS='|' read -r n dob; do
+    $NODE patient-register --name "$n" --birth-date "$dob" --confirm-new
+done <<'SEED'
+Samantha Michaelowski|1975-02-02
+John Smith|1968-11-30
+Mary Smith|1981-04-17
+Wei Ling Chen|1990-08-09
+SEED
 ```
 
 **Launch WITHOUT `--patient`**, so the window opens on the front door. Once live, then once with
@@ -217,9 +225,12 @@ right name.
    are NOT on file, answer the prompt ("None of these — register a new patient"). Budget
    **≤ 20 s**. Paper *N* = 5; architecture *M* = 4 (type fragment, read list, complete the
    form, answer the prompt); *K* = 3 when the prompt is empty.
-3. **Register someone already on file.** Type `John Smith` / `1975-02-02` in the register form.
-   The prompt must show that chart FIRST; pick it ("This is them — open chart"). Record whether
-   it was first. This is the wrong-duplicate case the prompt exists for.
+3. **Register someone already on file.** Type `John Smith` / `1968-11-30` in the register form.
+   The prompt must show that chart FIRST — it matches on the name AND the date, Mary Smith on the
+   name only — then pick it ("This is them — open chart"). Record whether it was first. This is
+   the wrong-duplicate case the prompt exists for. (Four seeded charts never reach the cap of
+   five, so this step exercises the ranking, not the truncation; the truncation rate is the
+   measured figure linked above.)
 
 **Accessibility, same pass:** the browse list and the prompt rows announce name, age and
 identity state in one utterance; each prompt row's text includes "This is them"; opening a chart

@@ -1,9 +1,14 @@
 // The front door: the §5.3/§5.8 search-before-create funnel (slice 2c).
 //
-// Like main.js, this file renders and decides nothing clinical. Every sentence it shows comes
-// from Rust (`funnel::view`, under `cargo test`), and every rule — when the machine searches
-// unasked, how many candidates the prompt may show, which search a registration attests — is
-// one layer down in `cairn-gui-funnel`. What this file DOES own is bookkeeping about time:
+// Like main.js, this file decides nothing clinical. Every sentence about what a SEARCH found or
+// what a failure means comes from Rust (`funnel::view`, under `cargo test`) — including both
+// "nobody matched" announcements, the one wording that licenses a new chart — and every rule
+// (when the machine searches unasked, how many candidates the prompt may show, which search a
+// registration attests) is one layer down in `cairn-gui-funnel`. The few sentences written
+// HERE are about this file's own bookkeeping — an answer dropped as stale, the read guard, an
+// edit made during a save, an IPC failure with no Rust text — and the fixture-mode note.
+//
+// What this file DOES own is bookkeeping about time:
 //
 // REVISIONS. Every edit of the register form increments `registerRevision`, tells the backend
 // (`form_edited`, which discards the held search), and forgets the held token AT ONCE — so a
@@ -12,8 +17,15 @@
 // searches run in the background as the clerk types, and two in flight can finish in either
 // order. The backend enforces the same rule (`FunnelSession`); this is the display half.
 //
-// Loaded after main.js as a classic script, so `el`, `refresh`, `say` and `invoke` are shared
-// globals.
+// SOFT POLICY. The read guard (PROMPT_READ_GUARD_MS) and disabling the candidate rows while a
+// registration saves are UI policy in the ADR-0021 sense: another front-end may choose
+// differently. The backend's own backstop for the second is `register_impl` refusing to write,
+// or to switch charts, once a chart is open. Whether the read guard should move below the UI is
+// #677.
+//
+// Loaded after main.js as a classic script, so these are shared globals: `el`, `setMessage`,
+// `refresh`, `clearChart`, `say` and `invoke` (read), and `displayedPatient` (WRITTEN here —
+// it is how every chart command names the chart on screen, `AppState::displayed_patient`).
 "use strict";
 
 /** How long typing must pause before a search runs (ms). */
@@ -23,7 +35,7 @@ const SEARCH_DEBOUNCE_MS = 250;
  * How long a freshly arrived step-3 prompt must have been on screen before a click on Register
  * may register off it (ms). The background search can land just before the clerk's click and
  * flip the button's meaning from "search first" to "none of these" under the pointer; without
- * this, a registration would swear to rows nobody had time to read (final review #2). A click
+ * this, a registration would swear to rows nobody had time to read (PR #674 review #2). A click
  * inside the window is treated as "show me", never as "register".
  */
 const PROMPT_READ_GUARD_MS = 800;
@@ -36,6 +48,12 @@ let heldToken = null;
 let registering = false;
 /** When the held token's prompt was rendered (ms since epoch), for PROMPT_READ_GUARD_MS. */
 let promptShownAt = 0;
+/** Whether the prompt on screen listed anyone — what the Register button's label must say. */
+let promptHadRows = false;
+/** Set when the form is edited while a registration is being saved: that edit is NOT saved. */
+let editedDuringSave = false;
+/** The fixture-mode note, kept so the provisioning line can be reset to it after a success. */
+let mockNote = "";
 
 /** A debounced `fn`, with `.cancel()` so a forced search can pre-empt a pending one. */
 function debounce(fn) {
@@ -51,7 +69,7 @@ function debounce(fn) {
 /**
  * The text of a failure. Rust sends an `ErrorView`; a failure raised by the IPC layer itself
  * arrives as a bare string with no `.text`, and must still SAY something — a blank status after
- * a failed search reads as "nobody matched" (final review #5).
+ * a failed search reads as "nobody matched" (PR #674 review #5).
  */
 function failureText(failure) {
   return (failure && failure.text) || "The window could not reach its backend: " + String(failure);
@@ -62,14 +80,31 @@ function failureText(failure) {
  * accessible name too: a sighted clerk and a screen-reader user are told the same thing, and
  * nobody has to guess that clicking a name opens that chart.
  */
-function candidateItem(cand, verb) {
+function candidateItem(cand, verb, statusFor) {
   const li = document.createElement("li");
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = verb + ": " + cand.name + " — " + cand.age + " — identity " + cand.trust;
-  button.addEventListener("click", () => openChart(cand.patient_id));
+  button.dataset.candidate = "true";
+  // Not clickable while a registration saves: "This is them" after "none of these" is already
+  // on its way would race two contradictory acts (see setCandidatesEnabled).
+  button.disabled = registering;
+  button.addEventListener("click", () => openChart(cand.patient_id, statusFor));
   li.append(button);
   return li;
+}
+
+/**
+ * Enable or disable every candidate row on the front door. Disabled while a registration saves:
+ * the clerk has just said "none of these", and a click on one of them before the save lands
+ * would leave the window between a chart they recognised and a new chart they created. The
+ * backend refuses to write (or to switch charts) behind an open chart regardless; this keeps
+ * the contradiction from being clickable at all.
+ */
+function setCandidatesEnabled(enabled) {
+  for (const button of document.querySelectorAll("button[data-candidate]")) {
+    button.disabled = !enabled;
+  }
 }
 
 // ---- Step 1: browse ----------------------------------------------------------------------
@@ -93,11 +128,11 @@ async function runBrowse() {
     if (browseView.revision !== browseRevision) return; // a newer browse is on its way
     setMessage(el("browse-incomplete"), browseView.incomplete_reason);
     list.replaceChildren(
-      ...browseView.candidates.map((cand) => candidateItem(cand, "Open chart")),
+      ...browseView.candidates.map((cand) => candidateItem(cand, "Open chart", "browse-status")),
     );
-    el("browse-status").textContent = browseView.candidates.length
-      ? browseView.candidates.length + " existing chart(s) found."
-      : "No existing chart matched.";
+    // From Rust (`view::browse_summary`): "nobody matched" and "the search did not finish"
+    // lead to opposite acts, so neither is worded here.
+    el("browse-status").textContent = browseView.summary;
   } catch (failure) {
     if (revision !== browseRevision) return;
     // A failure is shown AS a failure and the old list is cleared: an empty-looking list
@@ -124,36 +159,65 @@ function setRegisterButton(label, enabled) {
   button.disabled = !enabled;
 }
 
+/** Hide the prompt and everything that qualifies it. */
+function hidePrompt() {
+  el("prompt").hidden = true;
+  setMessage(el("prompt-incomplete"), "");
+  promptHadRows = false;
+}
+
 /** The form changed: whatever search was on screen no longer describes it. */
 function onRegisterEdited() {
   registerRevision += 1;
   heldToken = null;
-  el("prompt").hidden = true;
+  hidePrompt();
+  // The announcement said what Register MEANT for the old search ("none of these"); left in
+  // place it is a false sentence in the live region until the next search lands.
+  el("prompt-status").textContent = "";
   el("register-outcome").textContent = "";
-  setRegisterButton("Register new patient", true);
-  void invoke("form_edited", { revision: registerRevision });
+  if (registering) {
+    // The save in flight is for the form as it was; this edit will not be in it. Keep the
+    // button disabled (a click would do nothing) and say so when the save lands.
+    editedDuringSave = true;
+  } else {
+    setRegisterButton("Register new patient", true);
+  }
+  invoke("form_edited", { revision: registerRevision }).catch((failure) => {
+    // Safe to continue — the token above is already forgotten, and the backend's revision floor
+    // drops a search for the old form — but never silent.
+    el("prompt-status").textContent = failureText(failure);
+  });
   debouncedPrompt();
 }
 
 function renderPrompt(prompt) {
   // The waiting sentence, or the prompt's own announcement (from Rust, `prompt_summary`), in
   // the live status region — so a screen-reader clerk HEARS that matches appeared and what
-  // Register now means (final review #6).
+  // Register now means (PR #674 review #6).
   el("prompt-status").textContent = prompt.waiting || prompt.summary || "";
   heldToken = prompt.token;
   if (heldToken === null) {
-    el("prompt").hidden = true;
+    hidePrompt();
     return;
   }
   promptShownAt = Date.now();
-  // Partiality BEFORE the rows it qualifies.
+  // Partiality BEFORE the rows it qualifies — and OUTSIDE the prompt section, so it is shown
+  // even when the search showed nobody and the section is hidden: that is exactly the case in
+  // which "partial" and "nobody matched" must not be confused.
   setMessage(el("prompt-incomplete"), prompt.incomplete_reason);
   el("prompt-list").replaceChildren(
-    ...prompt.candidates.map((cand) => candidateItem(cand, "This is them — open chart")),
+    ...prompt.candidates.map((cand) =>
+      candidateItem(cand, "This is them — open chart", "prompt-status"),
+    ),
   );
-  const any = prompt.candidates.length > 0;
-  el("prompt").hidden = !any;
-  setRegisterButton(any ? "None of these — register a new patient" : "Register new patient", true);
+  promptHadRows = prompt.candidates.length > 0;
+  el("prompt").hidden = !promptHadRows;
+  setRegisterButton(registerLabel(), true);
+}
+
+/** What the Register button means while a search is held: "none of these", or plain register. */
+function registerLabel() {
+  return promptHadRows ? "None of these — register a new patient" : "Register new patient";
 }
 
 async function runPrompt(force) {
@@ -161,7 +225,7 @@ async function runPrompt(force) {
   try {
     const prompt = await invoke("prompt_search", { form, force });
     if (prompt.stale || prompt.revision !== registerRevision) {
-      // A search the clerk ASKED for must never end in silence (final review #3).
+      // A search the clerk ASKED for must never end in silence (PR #674 review #3).
       if (force && form.revision === registerRevision) {
         el("prompt-status").textContent =
           "The form changed while searching. Press Register again to search what is typed now.";
@@ -174,7 +238,7 @@ async function runPrompt(force) {
     // No token after a failed search: registering without its search is what ADR-0061
     // forbids, so Register runs the search again rather than proceeding.
     heldToken = null;
-    el("prompt").hidden = true;
+    hidePrompt();
     el("prompt-status").textContent = failureText(failure);
   }
 }
@@ -195,31 +259,57 @@ async function onRegister(event) {
     return;
   }
   if (Date.now() - promptShownAt < PROMPT_READ_GUARD_MS) {
-    // The prompt arrived under the pointer: this click is "show me", not "register".
+    // The search answer arrived under the pointer: this click is "show me", not "register".
+    // Worded for both shapes of answer — a list of rows, or a sentence that nobody matched.
     el("register-outcome").textContent =
-      "The list above has just changed. Read it, then press Register again.";
+      "The search result above has just changed. Read it, then press Register again.";
     return;
   }
   const sent = heldToken;
   registering = true;
+  editedDuringSave = false;
   setRegisterButton("Saving…", false);
+  setCandidatesEnabled(false);
   try {
     const header = await invoke("register", { token: sent });
     heldToken = null;
+    // The form this registration consumed is gone: a prompt answer still in flight for it must
+    // be dropped as stale, not set a token on the hidden front door (#675 item 4).
+    registerRevision += 1;
+    // A registration succeeded, so this node may write: an operator warning from launch (or
+    // from an earlier refusal) is no longer true, and a stale warning teaches clerks to
+    // ignore the line.
+    setMessage(el("provisioning"), mockNote);
+    const lostEdit = editedDuringSave;
     enterChart(header);
+    if (lostEdit) {
+      say(
+        "You edited the form after pressing Register; that edit was NOT saved. This chart " +
+          "was registered as the form read when you pressed Register — check the name and " +
+          "date of birth above.",
+      );
+    }
   } catch (failure) {
-    el("register-outcome").textContent = failureText(failure);
+    const text = failureText(failure);
+    el("register-outcome").textContent = text;
+    // A refusal that arrives while a chart is open (the clerk opened one mid-save) must be
+    // read ON that chart: the front door and its outcome line are hidden.
+    if (displayedPatient !== null) say(text);
     if (!(failure && failure.retry === "now") && heldToken === sent) {
       // A verdict, a dropped search, or an operator's job: this token cannot help. Forget it
       // — but only if no newer search replaced it during the save — and leave Register
       // USABLE: the next click searches again and shows the answer, and the one after that
-      // registers. Never a disabled button with advice the clerk cannot follow (final review #4).
+      // registers. Never a disabled button with advice the clerk cannot follow.
       heldToken = null;
+      promptHadRows = false;
     }
     if (failure && failure.retry === "after_operator") setMessage(el("provisioning"), failure.text);
-    setRegisterButton("Register new patient", true);
+    // A kept search still means what its prompt said ("none of these"); say so again.
+    setRegisterButton(heldToken === null ? "Register new patient" : registerLabel(), true);
   } finally {
     registering = false;
+    editedDuringSave = false;
+    setCandidatesEnabled(true);
   }
 }
 
@@ -234,7 +324,7 @@ function showIdentity(header) {
 
 function enterChart(header) {
   // Bind first, clear second, read third: from this line on, every chart command names THIS
-  // chart, and nothing of the previous one is on screen (final review, Critical #1).
+  // chart, and nothing of the previous one is on screen (PR #674 review, Critical #1).
   displayedPatient = header.patient_id;
   clearChart();
   el("front-door").hidden = true;
@@ -248,11 +338,13 @@ function enterChart(header) {
   heading.focus();
 }
 
-async function openChart(patientId) {
+/** Open a listed chart; a refusal is shown next to the list it was clicked in (`statusId`). */
+async function openChart(patientId, statusId) {
+  if (registering) return; // the rows are disabled; this is the belt to those braces
   try {
     enterChart(await invoke("open_chart", { patientId }));
   } catch (refusal) {
-    el("browse-status").textContent = String(refusal);
+    el(statusId).textContent = String(refusal);
   }
 }
 
@@ -271,7 +363,14 @@ async function closeChart() {
   displayedPatient = null;
   clearChart();
   say("");
-  await invoke("close_chart");
+  try {
+    await invoke("close_chart");
+  } catch (failure) {
+    // Stay on the (now empty) chart view and SAY so, rather than leaving a blank view with a
+    // "Loading…" button and no word. Every chart command is already refused: nothing is displayed.
+    say("Could not return to the front door: " + failureText(failure));
+    return;
+  }
   el("chart-view").hidden = true;
   el("front-door").hidden = false;
   resetFrontDoor();
@@ -281,11 +380,20 @@ async function closeChart() {
 // ---- Start -------------------------------------------------------------------------------
 
 async function boot() {
-  const status = await invoke("funnel_status");
-  // Resume above the backend's revision floor: after a reload this counter would otherwise
-  // restart at 0 and every search would be dropped as stale (final review #3).
-  registerRevision = status.revision;
-  const mockNote = status.mock
+  let status;
+  try {
+    status = await invoke("funnel_status");
+  } catch (failure) {
+    // The front door starts hidden; without this the clerk would see an empty window.
+    setMessage(el("provisioning"), "This window could not start: " + failureText(failure));
+    return;
+  }
+  // Resume FROM the backend's revision floor (an equal revision is accepted): after a reload this
+  // counter would otherwise restart at 0 and every search would be dropped as stale. `max`,
+  // because the clerk may already have typed — and announced higher revisions — before this
+  // answer arrived; lowering the counter then would make every search look stale.
+  registerRevision = Math.max(registerRevision, status.revision);
+  mockNote = status.mock
     ? "Fixture data — patients registered here live only as long as this window."
     : "";
   setMessage(el("provisioning"), [status.provisioning, mockNote].filter(Boolean).join(" "));

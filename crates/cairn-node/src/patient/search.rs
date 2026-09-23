@@ -239,7 +239,8 @@ async fn read_candidate_ids<C: GenericClient + Sync>(
 ///
 /// **Known limit, stated rather than hidden:** the name pass counts ONCE however many name
 /// tokens matched, so for a "John Smith" query "John Brown" and "John Smith" tie at equal
-/// passes and fall back to chart age.
+/// passes and fall back to chart age — absent a DOB match (a query DOB matching only one of
+/// them breaks the tie in its favour).
 fn rank_by_passes_matched(mut rows: Vec<(Uuid, i64)>) -> Vec<Uuid> {
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     rows.into_iter().map(|(id, _)| id).collect()

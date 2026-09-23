@@ -160,8 +160,9 @@ fn bound_to(list: &CandidateList, cap: usize) -> PromptList {
 /// `CandidateList`'s doc says `incomplete_reason` is `Some` whenever `incomplete` — but that
 /// is a comment on a struct with public fields, not a type, and this is the one function whose
 /// stated job is keeping the two partialities distinct. A bare flag becomes a sentence rather
-/// than being dropped.
-fn node_reason(list: &CandidateList) -> Option<&str> {
+/// than being dropped. Public because every list a clerk reads needs it — the unbounded browse
+/// list as much as the prompt (PR #674 review found browse dropping a bare flag).
+pub fn node_reason(list: &CandidateList) -> Option<&str> {
     match (list.incomplete, list.incomplete_reason.as_deref()) {
         (true, None) => Some("the node reported this search was not exhaustive but gave no reason"),
         (_, reason) => reason,

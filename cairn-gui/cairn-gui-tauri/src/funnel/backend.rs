@@ -6,7 +6,7 @@
 //! cannot later disagree with itself — the reasoning `AppState::is_mock` already carries.
 use cairn_gui_data::mock::MockData;
 use cairn_gui_data::port::{DataError, PatientRegistration, PatientSearch};
-use cairn_gui_funnel::AttestedSearch;
+use cairn_gui_funnel::{AttestedSearch, NamedAttestation};
 use cairn_gui_live::LiveData;
 use cairn_patient_search::{CandidateList, SearchQuery};
 use std::time::SystemTime;
@@ -40,23 +40,27 @@ impl FunnelBackend {
 
     /// Register, handing the port the raw typed name the attested search ran on.
     ///
+    /// Takes the [`NamedAttestation`] whole and splits it only here, at the port call: the
+    /// name cannot be swapped for another on the way from the session to the node.
+    ///
     /// ⚠️ Cancellation-unsafe (#649, #669): never race this against a timeout or `select!`.
     pub async fn register(
         &self,
-        attested: AttestedSearch,
-        name: &str,
+        taken: NamedAttestation,
     ) -> Result<Uuid, (DataError, AttestedSearch)> {
+        let (attested, name) = taken.into_parts();
         match self {
-            FunnelBackend::Mock(mock) => mock.register(attested, Some(name)).await,
-            FunnelBackend::Live(live) => live.register(attested, Some(name)).await,
+            FunnelBackend::Mock(mock) => mock.register(attested, Some(&name)).await,
+            FunnelBackend::Live(live) => live.register(attested, Some(&name)).await,
         }
     }
 
-    /// Refuse, naming the remedy, unless this node may write (#665). The mock always may: it
-    /// writes to nothing.
+    /// Refuse, naming the remedy, unless this node may write (#665). The mock always may — it
+    /// writes to nothing — unless a test armed a `NotProvisioned`, which is how the order of
+    /// this check against taking the search is tested.
     pub async fn require_provisioned(&self) -> Result<(), DataError> {
         match self {
-            FunnelBackend::Mock(_) => Ok(()),
+            FunnelBackend::Mock(mock) => mock.require_provisioned().await,
             FunnelBackend::Live(live) => live.require_provisioned().await,
         }
     }

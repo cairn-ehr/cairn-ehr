@@ -1,7 +1,13 @@
-//! The window's five chart commands (the front door's are in `funnel::commands`). Each one
-//! is a thin adapter: it resolves state, calls a `cairn-node` function, and maps the result.
-//! No clinical logic lives here — that is all in `cairn-medication-view` and
-//! `cairn-gui-tab-medications`, under `cargo test`.
+//! The chart surface's five commands (the front door's are in `funnel::commands`): three act
+//! on a chart (`med_list`, `sign_off`, `cease`) and two on the signing session (`unlock`,
+//! `lock_state`). Each one is a thin adapter: it resolves state, calls a `cairn-node` function,
+//! and maps the result. No clinical logic lives here — that is all in `cairn-medication-view`
+//! and `cairn-gui-tab-medications`, under `cargo test`.
+//!
+//! The three chart commands are one-line `#[tauri::command]` forwarders onto plain
+//! `*_impl(&AppState, …)` functions — the same split `funnel::commands` uses — so that the one
+//! rule a wrong-chart defect would break (act only on the chart on SCREEN,
+//! `AppState::displayed_patient`) is tested against `AppState::mock` with no Tauri runtime.
 //!
 //! # Two rules every command in this file follows
 //!
@@ -27,10 +33,14 @@ pub async fn med_list(
     state: tauri::State<'_, AppState>,
     patient_id: String,
 ) -> Result<MedListView, String> {
+    med_list_impl(&state, &patient_id).await
+}
+
+pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<MedListView, String> {
     // Bound to the chart the webview is showing (`AppState::displayed_patient`): a read for a
     // chart the clerk has since left must not be rendered under the next one's header.
-    let patient = state.displayed_patient(&patient_id).await?;
-    Ok(build_view(&read_chart_of(&state, patient).await?))
+    let patient = state.displayed_patient(patient_id).await?;
+    Ok(build_view(&read_chart_of(state, patient).await?))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -122,7 +132,7 @@ pub async fn lock_state(state: tauri::State<'_, AppState>) -> Result<LockState, 
 }
 
 /// What one sign-off gesture did — and, just as important, what it did not do.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct SignOffReport {
     pub signed: usize,
     /// Lines that still need a signature and deliberately did not get one.
@@ -142,6 +152,15 @@ pub async fn sign_off(
     state: tauri::State<'_, AppState>,
     patient_id: String,
 ) -> Result<SignOffReport, String> {
+    sign_off_impl(&state, &patient_id).await
+}
+
+pub async fn sign_off_impl(state: &AppState, patient_id: &str) -> Result<SignOffReport, String> {
+    // FIRST: the chart the clinician was LOOKING AT when they pressed the button, and only if
+    // it is still the open one — never "whatever is open now" (see
+    // `AppState::displayed_patient`). First so that no other refusal can mask this one, and so
+    // it is testable in fixture mode.
+    let patient = state.displayed_patient(patient_id).await?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -152,9 +171,6 @@ pub async fn sign_off(
         // a gesture silently do nothing.
         .ok_or("your signing key is locked — unlock it to sign off")?;
     let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
-    // The chart the clinician was LOOKING AT when they pressed the button, and only if it is
-    // still the open one — never "whatever is open now" (see `AppState::displayed_patient`).
-    let patient = state.displayed_patient(&patient_id).await?;
 
     // Timed around the WRITE only. The clinician's reading time is measured by the operator
     // runbook, not here: capturing it would mean timing how long someone spent thinking.
@@ -184,7 +200,7 @@ pub async fn sign_off(
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
 
-    record_timing(&state, "signoff", outcome.attested.len(), elapsed_ms).await;
+    record_timing(state, "signoff", outcome.attested.len(), elapsed_ms).await;
 
     Ok(SignOffReport {
         signed: outcome.attested.len(),
@@ -206,7 +222,7 @@ pub async fn sign_off(
 }
 
 /// What one cease gesture did to a group's member threads.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct CeaseReport {
     pub ceased: usize,
     /// Member threads whose cessation failed, named individually. ADR-0060 again: one
@@ -233,6 +249,19 @@ pub async fn cease(
     reason: String,
     patient_id: String,
 ) -> Result<CeaseReport, String> {
+    cease_impl(&state, &patient_id, &group_id, &reason).await
+}
+
+pub async fn cease_impl(
+    state: &AppState,
+    patient_id: &str,
+    group_id: &str,
+    reason: &str,
+) -> Result<CeaseReport, String> {
+    // Asked ONCE, and FIRST, for the whole gesture: every member thread is stopped on the same
+    // chart, even if the clerk closes it while the loop below is running — and only if it is
+    // the chart the clinician was looking at (`AppState::displayed_patient`).
+    let patient = state.displayed_patient(patient_id).await?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -245,10 +274,6 @@ pub async fn cease(
         );
     }
     let group: Uuid = group_id.parse().map_err(|_| "not a medication id")?;
-    // Asked ONCE for the whole gesture: every member thread is stopped on the same chart, even
-    // if the clerk closes it while the loop below is running — and only if it is the chart the
-    // clinician was looking at (`AppState::displayed_patient`).
-    let patient = state.displayed_patient(&patient_id).await?;
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
@@ -259,7 +284,7 @@ pub async fn cease(
     // Which threads make up this displayed line. Read rather than trusted from the caller:
     // the webview knows only the group id it was rendered with, and a reconciled group's
     // membership is a clinical fact the node owns.
-    let chart = read_chart_of(&state, patient).await?;
+    let chart = read_chart_of(state, patient).await?;
     let members: Vec<Uuid> = chart
         .rows
         .iter()
@@ -310,17 +335,14 @@ pub async fn cease(
         }
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    record_timing(&state, "cease", 1, elapsed_ms).await;
+    record_timing(state, "cease", 1, elapsed_ms).await;
 
     Ok(CeaseReport { ceased, failed })
 }
 
 /// Read one named chart, from the node or from fixtures. Callers resolve WHICH chart through
 /// `AppState::displayed_patient` first; this only reads.
-async fn read_chart_of(
-    state: &tauri::State<'_, AppState>,
-    patient: Uuid,
-) -> Result<PatientMedicationList, String> {
+async fn read_chart_of(state: &AppState, patient: Uuid) -> Result<PatientMedicationList, String> {
     let Some(db) = state.db.as_ref() else {
         use cairn_gui_data::port::ClinicalData;
         return cairn_gui_data::mock::MockData::with_fixtures()
@@ -338,12 +360,7 @@ async fn read_chart_of(
 /// Timing is observability. A metric that can turn a successful clinical act into a
 /// reported failure is a metric that has been allowed to matter more than the act — so the
 /// error goes to stderr and the caller is never told.
-async fn record_timing(
-    state: &tauri::State<'_, AppState>,
-    kind: &str,
-    items: usize,
-    elapsed_ms: i32,
-) {
+async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i32) {
     let Some(db) = state.db.as_ref() else { return };
     let db = db.lock().await;
     if let Err(e) = cairn_node::ui_timing::record_gesture(&*db, kind, items, elapsed_ms).await {
@@ -462,6 +479,58 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    // ---- Each chart command acts only on the chart on SCREEN (PR #674 review, Critical
+    // #1). `AppState::displayed_patient` is tested on its own in `funnel::window`; these pin
+    // that every command actually CALLS it — a refactor back to "whatever chart is open" would
+    // otherwise stay green while signing chart B on the strength of a review of chart A.
+
+    fn open_on_the_fixture_chart() -> (AppState, String) {
+        let fixture: Uuid = cairn_gui_data::mock::fixtures::FIXTURE_UUID
+            .parse()
+            .unwrap();
+        (AppState::mock(Some(fixture)), fixture.to_string())
+    }
+
+    fn another_chart() -> String {
+        Uuid::from_u128(424_242).to_string()
+    }
+
+    #[tokio::test]
+    async fn the_medication_list_reads_only_the_chart_on_screen() {
+        let (state, on_screen) = open_on_the_fixture_chart();
+        med_list_impl(&state, &on_screen)
+            .await
+            .expect("the chart on screen is read");
+        let err = med_list_impl(&state, &another_chart()).await.unwrap_err();
+        assert!(err.contains("not the chart"), "{err}");
+    }
+
+    /// Checked FIRST, before fixture mode or the key: whatever else would refuse, a sign-off
+    /// naming a chart that is not on screen is refused for THAT reason.
+    #[tokio::test]
+    async fn sign_off_refuses_a_chart_that_is_not_on_screen() {
+        let (state, _) = open_on_the_fixture_chart();
+        let err = sign_off_impl(&state, &another_chart()).await.unwrap_err();
+        assert!(err.contains("not the chart"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn cease_refuses_a_chart_that_is_not_on_screen() {
+        let (state, _) = open_on_the_fixture_chart();
+        let err = cease_impl(&state, &another_chart(), &another_chart(), "allergy")
+            .await
+            .unwrap_err();
+        assert!(err.contains("not the chart"), "{err}");
+    }
+
+    /// With the right chart, fixture mode's own refusal is what the clinician reads.
+    #[tokio::test]
+    async fn a_write_on_the_chart_on_screen_meets_the_fixture_refusal() {
+        let (state, on_screen) = open_on_the_fixture_chart();
+        let err = sign_off_impl(&state, &on_screen).await.unwrap_err();
+        assert!(err.contains("fixture mode"), "{err}");
     }
 
     /// The other direction, for the two fields where silence is the dangerous failure.

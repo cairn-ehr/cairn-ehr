@@ -18,16 +18,17 @@
 //! register clicked with no token yet --------> prompt_search(form, force=true) first
 //! ```
 use crate::funnel::view::{
-    candidate_view, header_from_candidate, header_from_registration, prompt_summary,
-    register_error_view, search_error_view, token_error_view, waiting_sentence, CandidateView,
-    ChartHeaderView, ErrorView,
+    browse_summary, candidate_view, header_from_candidate, header_from_registration,
+    prompt_summary, register_behind_open_chart_view, register_error_view,
+    registered_behind_open_chart_view, search_error_view, token_error_view, waiting_sentence,
+    CandidateView, ChartHeaderView, ErrorView,
 };
 use crate::funnel::window::OpenChart;
 use crate::state::AppState;
 use cairn_gui_funnel::{
-    bound_for_prompt, trigger_state, FormSnapshot, Recorded, Restored, SearchToken,
+    bound_for_prompt, node_reason, trigger_state, FormSnapshot, Recorded, Restored, SearchToken,
 };
-use cairn_patient_search::Candidate;
+use cairn_patient_search::{Candidate, CandidateList};
 use serde::Serialize;
 
 /// What the front door needs at launch, and after any reload.
@@ -39,7 +40,7 @@ pub struct FunnelStatus {
     /// The chart already open (`--patient`), if any.
     pub chart: Option<ChartHeaderView>,
     /// The highest register-form revision the backend has seen — a reloaded webview resumes
-    /// above it (see `FunnelSession::revision`).
+    /// from it (see `FunnelSession::revision`).
     pub revision: u64,
 }
 
@@ -48,7 +49,25 @@ pub struct FunnelStatus {
 pub struct BrowseView {
     pub revision: u64,
     pub candidates: Vec<CandidateView>,
+    /// The announcement (`view::browse_summary`) — from Rust, so "nobody matched" and "the
+    /// search did not finish" cannot be confused by a sentence no test pins.
+    pub summary: String,
     pub incomplete_reason: Option<String>,
+}
+
+/// A browse answer as the webview renders it — pure, so the incompleteness rule is testable
+/// without a backend.
+///
+/// The reason goes through `node_reason`, exactly as the prompt's does: a node that set the
+/// `incomplete` flag with no prose must still reach the clerk as partial, never as whole.
+pub fn browse_view(revision: u64, list: &CandidateList) -> BrowseView {
+    let incomplete_reason = node_reason(list).map(str::to_string);
+    BrowseView {
+        revision,
+        candidates: list.candidates.iter().map(candidate_view).collect(),
+        summary: browse_summary(list.candidates.len(), incomplete_reason.is_some()),
+        incomplete_reason,
+    }
 }
 
 /// One step-3 answer.
@@ -93,11 +112,40 @@ async fn remember_shown(state: &AppState, candidates: &[Candidate]) {
 }
 
 /// Open a chart: set it, forget the lists that led here.
+///
+/// Known imprecision: `chart` and `shown` are two locks, so a browse still in flight can
+/// re-populate `shown` just after the clear. Bounded harm — opening a chart attests nothing,
+/// and `open_chart` still only opens a row some list really returned.
 async fn open(state: &AppState, chart: OpenChart) -> ChartHeaderView {
     let header = chart.header.clone();
     *state.chart.lock().await = Some(chart);
     state.shown.lock().await.clear();
     header
+}
+
+/// Open a chart that was just REGISTERED — unless the clerk opened another one while it saved.
+///
+/// Check-and-set under one hold of the chart lock, so nothing can open a chart between the
+/// check and the set. If a chart is already open, the clerk's last act was choosing it ("This
+/// is them" clicked during "Saving…"), and silently replacing it with the new chart — same typed
+/// name, easy to miss — would put them on a probable duplicate. So the window stays put and the
+/// refusal names the new chart (PR #674 review).
+async fn open_after_registering(
+    state: &AppState,
+    patient: uuid::Uuid,
+    header: ChartHeaderView,
+) -> Result<ChartHeaderView, ErrorView> {
+    let mut chart = state.chart.lock().await;
+    if let Some(open) = chart.as_ref() {
+        return Err(registered_behind_open_chart_view(&header, &open.header));
+    }
+    *chart = Some(OpenChart {
+        patient,
+        header: header.clone(),
+    });
+    drop(chart);
+    state.shown.lock().await.clear();
+    Ok(header)
 }
 
 pub async fn funnel_status_impl(state: &AppState) -> FunnelStatus {
@@ -122,11 +170,7 @@ pub async fn browse_impl(state: &AppState, form: FormSnapshot) -> Result<BrowseV
         .await
         .map_err(|e| search_error_view(&e))?;
     remember_shown(state, &list.candidates).await;
-    Ok(BrowseView {
-        revision: form.revision,
-        candidates: list.candidates.iter().map(candidate_view).collect(),
-        incomplete_reason: list.incomplete_reason.clone(),
-    })
+    Ok(browse_view(form.revision, &list))
 }
 
 /// Step 3: the registration search, over what the register form holds.
@@ -162,7 +206,7 @@ pub async fn prompt_search_impl(
                 waiting: None,
                 stale: false,
                 token: Some(token),
-                summary: Some(prompt_summary(bounded.candidates.len())),
+                summary: Some(prompt_summary(bounded.candidates.len(), bounded.incomplete)),
                 candidates: bounded.candidates.iter().map(candidate_view).collect(),
                 incomplete_reason: bounded.incomplete_reason,
             })
@@ -181,34 +225,45 @@ pub async fn prompt_search_impl(
 
 /// "None of these — register a new patient."
 ///
-/// Order is load-bearing: the provisioning check runs BEFORE the attestation leaves the store,
-/// so an unprovisioned node refuses with the search intact; `take` and `settle` each hold the
-/// session lock briefly and never across the write, so a background prompt search can still
-/// land mid-write (the case `TokenStore::commit`'s invalidate exists for).
+/// Order is load-bearing:
+///
+/// 1. **No chart may be open.** Register is a front-door act; if a chart is open, the clerk
+///    recognised an existing patient ("This is them") while this was on its way, and nothing
+///    is written.
+/// 2. **The provisioning check** runs BEFORE the attestation leaves the store, so an
+///    unprovisioned node refuses with the search intact.
+/// 3. `take` and `settle` each hold the session lock briefly and never across the write, so a
+///    background prompt search can still land mid-write (the case `TokenStore::commit`'s
+///    invalidate exists for).
+/// 4. The new chart opens only if the front door is still showing (`open_after_registering`).
 ///
 /// ⚠️ Cancellation-unsafe (#649, #669): nothing may race this against a timeout or `select!`.
 pub async fn register_impl(
     state: &AppState,
     token: SearchToken,
 ) -> Result<ChartHeaderView, ErrorView> {
+    if let Some(open) = state.chart.lock().await.as_ref() {
+        return Err(register_behind_open_chart_view(&open.header));
+    }
     state
         .funnel_backend
         .require_provisioned()
         .await
         .map_err(|e| register_error_view(&e, Restored::Kept))?;
-    let (attested, name) = state
+    let taken = state
         .funnel
         .lock()
         .await
         .take_for_register(token)
         .map_err(token_error_view)?;
-    let birth_date = attested.query().birth_date.clone();
-    let outcome = state.funnel_backend.register(attested, &name).await;
+    let name = taken.raw_name().to_string();
+    let birth_date = taken.query().birth_date.clone();
+    let outcome = state.funnel_backend.register(taken).await;
     let settled = state.funnel.lock().await.settle(outcome);
     match settled {
         Ok(patient) => {
             let header = header_from_registration(patient, &name, birth_date.as_deref());
-            Ok(open(state, OpenChart { patient, header }).await)
+            open_after_registering(state, patient, header).await
         }
         Err((error, restored)) => Err(register_error_view(&error, restored)),
     }
@@ -220,7 +275,11 @@ pub async fn open_chart_impl(
     patient_id: &str,
 ) -> Result<ChartHeaderView, String> {
     let refusal = || "that chart was not in a list on screen — search again".to_string();
-    let patient: uuid::Uuid = patient_id.parse().map_err(|_| refusal())?;
+    // Only a webview bug sends an unparseable id; say THAT, so whoever debugs it is not sent
+    // looking for a list problem.
+    let patient: uuid::Uuid = patient_id.parse().map_err(|_| {
+        format!("the window could not read the chart id {patient_id:?} — search again")
+    })?;
     let candidate = state
         .shown
         .lock()
@@ -242,11 +301,11 @@ pub async fn open_chart_impl(
 pub async fn close_chart_impl(state: &AppState) {
     *state.chart.lock().await = None;
     state.shown.lock().await.clear();
-    // Revision 0 never raises the floor; it only discards.
-    state.funnel.lock().await.edited(0);
+    state.funnel.lock().await.discard();
 }
 
-// ---- The Tauri forwarders. Argument names are what `funnel.js` sends (camelCase). ----
+// ---- The Tauri forwarders. Tauri maps `funnel.js`'s camelCase keys (`patientId`) onto these
+// snake_case parameters (`patient_id`). ----
 
 #[tauri::command]
 pub async fn funnel_status(state: tauri::State<'_, AppState>) -> Result<FunnelStatus, ()> {
@@ -303,6 +362,7 @@ mod tests {
     use super::*;
     use crate::funnel::view::Retry;
     use cairn_gui_data::port::DataError;
+    use cairn_gui_funnel::TokenError;
 
     use crate::commands::tests::fields_read_in;
     use crate::funnel::view::tests::sample_candidate;
@@ -335,11 +395,14 @@ mod tests {
             ("cand", serde_json::to_value(&cand).unwrap()),
             (
                 "browseView",
-                serde_json::to_value(BrowseView {
-                    revision: 0,
-                    candidates: vec![],
-                    incomplete_reason: None,
-                })
+                serde_json::to_value(browse_view(
+                    0,
+                    &CandidateList {
+                        candidates: vec![],
+                        incomplete: false,
+                        incomplete_reason: None,
+                    },
+                ))
                 .unwrap(),
             ),
             (
@@ -374,6 +437,7 @@ mod tests {
     fn funnel_js_reads_both_incompleteness_reports_and_the_retry_advice() {
         let js = include_str!("../../src-ui/funnel.js");
         assert!(fields_read_in(js, "browseView").contains("incomplete_reason"));
+        assert!(fields_read_in(js, "browseView").contains("summary"));
         assert!(fields_read_in(js, "prompt").contains("incomplete_reason"));
         assert!(fields_read_in(js, "prompt").contains("stale"));
         assert!(fields_read_in(js, "failure").contains("retry"));
@@ -488,10 +552,17 @@ mod tests {
             .token
             .unwrap();
         register_impl(&state, t).await.unwrap();
-        assert!(
-            register_impl(&state, t).await.is_err(),
+        close_chart_impl(&state).await;
+        let second = register_impl(&state, t).await.unwrap_err();
+        // THE token refusal — not a provisioning or mock failure that would pass for the wrong
+        // reason — and no second chart behind it.
+        assert_eq!(
+            second,
+            token_error_view(TokenError::Absent),
             "one search, one chart"
         );
+        let found = browse_impl(&state, f(2, "byron", "")).await.unwrap();
+        assert_eq!(found.candidates.len(), 1, "{found:?}");
     }
 
     #[tokio::test]
@@ -503,7 +574,10 @@ mod tests {
             .token
             .unwrap();
         form_edited_impl(&state, 2).await;
-        assert!(register_impl(&state, t).await.is_err());
+        assert_eq!(
+            register_impl(&state, t).await.unwrap_err(),
+            token_error_view(TokenError::Absent)
+        );
     }
 
     #[tokio::test]
@@ -573,7 +647,7 @@ mod tests {
         assert_eq!(status.chart.unwrap().patient_id, id.to_string());
     }
 
-    /// Final review #3: a reloaded webview restarts its revision counter at 0 while the backend's
+    /// PR #674 review #3: a reloaded webview restarts its revision counter at 0 while the backend's
     /// floor survives, so every search would come back stale and Register would go dead with no
     /// word. The status reports the floor so the webview can resume above it.
     #[tokio::test]
@@ -588,7 +662,7 @@ mod tests {
         assert!(!p.stale && p.token.is_some(), "{p:?}");
     }
 
-    /// Final review #6, the command half: a minted prompt carries its announcement.
+    /// PR #674 review #6, the command half: a minted prompt carries its announcement.
     #[tokio::test]
     async fn a_minted_prompt_carries_its_summary() {
         let state = AppState::mock(None);
@@ -604,5 +678,201 @@ mod tests {
         close_chart_impl(&state).await;
         assert!(state.open_patient().await.is_err());
         assert!(funnel_status_impl(&state).await.chart.is_none());
+    }
+
+    /// Closing the chart resets the form, so a search held for it must not survive to be
+    /// attested by the next registration.
+    #[tokio::test]
+    async fn closing_the_chart_discards_a_held_search() {
+        let state = AppState::mock(None);
+        let t = prompt_search_impl(&state, f(1, "Ada Byron", "1815"), false)
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        close_chart_impl(&state).await;
+        assert_eq!(
+            register_impl(&state, t).await.unwrap_err(),
+            token_error_view(TokenError::Absent)
+        );
+    }
+
+    /// Register one fixture patient through the whole walk and return to the front door.
+    async fn register_through_the_walk(state: &AppState, rev: u64, name: &str) -> uuid::Uuid {
+        let p = prompt_search_impl(state, f(rev, name, ""), true)
+            .await
+            .unwrap();
+        let header = register_impl(state, p.token.expect("a token"))
+            .await
+            .unwrap();
+        close_chart_impl(state).await;
+        header.patient_id.parse().unwrap()
+    }
+
+    /// WHAT IS SHOWN IS WHAT IS SIGNED, end to end (PR #674 review). More candidates than the
+    /// prompt may show: the prompt carries exactly `PROMPT_CAP` rows and says it is partial,
+    /// and the registration attests exactly those rows, in that order — not the unbounded list.
+    #[tokio::test]
+    async fn the_prompt_is_bounded_and_the_registration_attests_exactly_its_rows() {
+        let state = AppState::mock(None);
+        let mut rev = 0;
+        for i in 0..=cairn_gui_funnel::PROMPT_CAP {
+            rev += 1;
+            register_through_the_walk(&state, rev, &format!("Zanzibar Kin{i}")).await;
+        }
+        rev += 1;
+        let p = prompt_search_impl(&state, f(rev, "Zanzibar Newcomer", ""), true)
+            .await
+            .unwrap();
+        assert_eq!(p.candidates.len(), cairn_gui_funnel::PROMPT_CAP, "{p:?}");
+        assert!(
+            p.incomplete_reason.is_some(),
+            "a truncated prompt must say so"
+        );
+        let shown: Vec<uuid::Uuid> = p
+            .candidates
+            .iter()
+            .map(|c| c.patient_id.parse().unwrap())
+            .collect();
+        let header = register_impl(&state, p.token.unwrap()).await.unwrap();
+        let attested = state
+            .mock_data()
+            .unwrap()
+            .attested_display(header.patient_id.parse().unwrap());
+        assert_eq!(attested, Some(shown));
+    }
+
+    /// A candidate the cap withheld was never on screen, so it can never be opened.
+    #[tokio::test]
+    async fn a_candidate_the_cap_withheld_cannot_be_opened() {
+        let state = AppState::mock(None);
+        let mut registered = Vec::new();
+        let mut rev = 0;
+        for i in 0..=cairn_gui_funnel::PROMPT_CAP {
+            rev += 1;
+            registered
+                .push(register_through_the_walk(&state, rev, &format!("Zanzibar Kin{i}")).await);
+        }
+        rev += 1;
+        let p = prompt_search_impl(&state, f(rev, "Zanzibar Newcomer", ""), true)
+            .await
+            .unwrap();
+        let withheld = registered
+            .iter()
+            .find(|id| !p.candidates.iter().any(|c| c.patient_id == id.to_string()))
+            .expect("one more than the cap was registered");
+        assert!(open_chart_impl(&state, &withheld.to_string())
+            .await
+            .is_err());
+    }
+
+    /// The header over a chart just registered must agree with what the next search says of the
+    /// same chart — two trust states on screen for one chart is a precise untruth on the very
+    /// affordance that prevents wrong-chart acts (PR #674 review).
+    #[tokio::test]
+    async fn a_registered_charts_header_agrees_with_the_next_browse() {
+        let state = AppState::mock(None);
+        let p = prompt_search_impl(&state, f(1, "Zebedee Quixote", "1990-05-05"), false)
+            .await
+            .unwrap();
+        let header = register_impl(&state, p.token.unwrap()).await.unwrap();
+        close_chart_impl(&state).await;
+        let found = browse_impl(&state, f(2, "quixote", "")).await.unwrap();
+        let row = found
+            .candidates
+            .iter()
+            .find(|c| c.patient_id == header.patient_id)
+            .unwrap();
+        assert_eq!(header.trust, row.trust);
+    }
+
+    /// "This is them" was clicked while a Register was still on its way: the chart the clerk
+    /// RECOGNISED is open, so the registration must not go ahead behind it (PR #674 review).
+    #[tokio::test]
+    async fn a_registration_arriving_after_a_chart_was_opened_is_refused_unsaved() {
+        let state = AppState::mock(None);
+        let p = prompt_search_impl(&state, f(1, "Samantha Michaelowski", "1975"), true)
+            .await
+            .unwrap();
+        let recognised = p.candidates[0].patient_id.clone();
+        open_chart_impl(&state, &recognised).await.unwrap();
+        let err = register_impl(&state, p.token.unwrap()).await.unwrap_err();
+        assert_eq!(err.retry, Retry::Never);
+        assert!(err.text.contains("Nothing was registered"), "{}", err.text);
+        assert_eq!(state.open_patient().await.unwrap().to_string(), recognised);
+        assert_eq!(state.mock_data().unwrap().registered_count(), 0);
+    }
+
+    /// The same race, one step later: the registration was already saving when the clerk
+    /// opened a chart, and it commits. The window must stay on the chart the clerk chose — and
+    /// SAY that a new chart now exists, because it may be a duplicate of the one on screen.
+    #[tokio::test]
+    async fn a_registration_committing_after_a_chart_was_opened_leaves_the_clerk_on_it() {
+        let a = uuid::Uuid::from_u128(1);
+        let state = AppState::mock(Some(a));
+        let new = uuid::Uuid::from_u128(2);
+        let err = open_after_registering(
+            &state,
+            new,
+            header_from_registration(new, "Ada Byron", Some("1815")),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.retry, Retry::Never);
+        assert!(err.text.contains(&new.to_string()), "{}", err.text);
+        assert!(err.text.contains("duplicate"), "{}", err.text);
+        assert_eq!(
+            state.open_patient().await.unwrap(),
+            a,
+            "still on the chart the clerk chose"
+        );
+    }
+
+    /// Review Focus: the provisioning check runs BEFORE the search is taken, so a node that may
+    /// not write refuses with the search intact — and the same search registers once an
+    /// operator has acted.
+    #[tokio::test]
+    async fn an_unprovisioned_node_refuses_with_the_search_intact() {
+        let state = AppState::mock(None);
+        let t = prompt_search_impl(&state, f(1, "Ada Byron", "1815"), false)
+            .await
+            .unwrap()
+            .token
+            .unwrap();
+        state
+            .mock_data()
+            .unwrap()
+            .fail_next(DataError::NotProvisioned("enrol this node".into()));
+        let err = register_impl(&state, t).await.unwrap_err();
+        assert_eq!(err.retry, Retry::AfterOperator);
+        register_impl(&state, t)
+            .await
+            .expect("the search was never taken, so it still registers");
+    }
+
+    /// An id the webview could not have sent from a list says so, rather than blaming the list.
+    #[tokio::test]
+    async fn an_unreadable_chart_id_is_named_as_unreadable() {
+        let state = AppState::mock(None);
+        let err = open_chart_impl(&state, "not-a-uuid").await.unwrap_err();
+        assert!(err.contains("could not read"), "{err}");
+    }
+
+    /// Browse carries the node's bare `incomplete` flag through even with no prose, and its
+    /// announcement comes from Rust.
+    #[test]
+    fn a_bare_incomplete_flag_reaches_the_browse_view() {
+        let list = cairn_patient_search::CandidateList {
+            candidates: vec![],
+            incomplete: true,
+            incomplete_reason: None,
+        };
+        let v = browse_view(1, &list);
+        assert!(v.incomplete_reason.is_some(), "{v:?}");
+        assert!(
+            !v.summary.contains("No existing chart matched"),
+            "{}",
+            v.summary
+        );
     }
 }

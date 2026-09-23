@@ -18,8 +18,8 @@ cargo run --release -p cairn-gui-tauri -- \
 ```
 
 At launch against a real node the window asks whether this node's key may write (all four
-`ActorStanding` answers). A "no" does not stop it opening, since reading needs no actor; the front door
-says what an operator must do instead.
+`ActorStanding` answers). A "no" does not stop it opening, since reading needs no actor; the line above
+both surfaces (the front door and the chart) says what an operator must do instead.
 
 ## Where the decisions live
 

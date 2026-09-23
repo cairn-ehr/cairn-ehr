@@ -61,9 +61,11 @@
 >   resurrection refusal (#152). Pair the standing with the key it was probed for (#670).
 > - **Every sentence and its retry advice lives in `funnel/view.rs`** (`Retry::{Now, AfterOperator,
 >   Never}`). A failed search says NOT-a-no-match in capitals. A refusal and an outage are different
->   clinical facts (#648); the discriminators are `P0001` from the floor and `DeliberateRefusal`
+>   clinical facts (#648 — still OPEN on GitHub although 2b built the split: confirm and close it,
+>   or name what remains); the discriminators are `P0001` from the floor and `DeliberateRefusal`
 >   from Rust, with `RefusalScope::NodeState` → `NotProvisioned`.
-> - **`TokenStore::settle` is the only end of a `take`**; a success INVALIDATES (a mid-flight
+> - **`TokenStore::settle` is the sanctioned end of a `take` for callers** (`FunnelSession`'s
+>   defensive branch calls `restore` itself); a success INVALIDATES (a mid-flight
 >   re-search must not mint a second chart); `discard` deliberately does NOT clear `in_flight`.
 >   **A dropped `register` future still latches the store (#669), and `register` is
 >   cancellation-unsafe (#649): never race it against a timeout or `select!`.**
@@ -88,8 +90,15 @@
 > **Open from the funnel run:** #355 · #645 · #647 · #649 · #650 · #652 · #655 · #656 · #657
 > (multi-event rollback untested in both trees) · #658 · #662 (seven `init` effects unpinned) ·
 > #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 · #671 ·
-> #672 (identifier entry) · #673 (the header shows age, not DOB) · #675 (four small front-door
-> gaps from 2c's review).
+> #672 (identifier entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads
+> `operator_chain` text, `[P0001]` included) · #677 (the 800 ms read guard lives only in JS — a
+> soft-policy-or-floor decision). #675's four gaps were fixed in PR #674's third review round.
+>
+> **⇒ Hold these two rules from that round.** A chart command acts on the chart DRAWN
+> (`renderedPatient` in `main.js`), resolved in Rust only through `AppState::displayed_patient`
+> — `open_patient` is now private to `funnel`, and each chart command has a `*_impl` pinned by a
+> not-on-screen test. And a registration never writes, or switches charts, behind an open chart
+> (`register_impl` + `open_after_registering`): "This is them" during "Saving…" wins.
 >
 > **⇒ THE NODE PLANE AND DR ARE CLOSED OUT; NO DECIDED-AND-UNBUILT ITEM REMAINS.** Newest first:
 > #621 (PR #627, [ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md):
@@ -110,7 +119,8 @@
 >   `pen_rows_leave_through_one_door.rs`). `requeue` and `restore` share exit 3. #585: nothing reads
 >   Postgres notices.
 > - **`verify-backup` (#567, PR #588)** fails `backup SHORT` only on evidence. ⚠️ Operators: run it
->   AFTER the nightly `backup`. Residuals #551 · #589 · #590 · #591 · #592.
+>   AFTER the nightly `backup`. Residuals #551 · #553 (an unmarked foreign legacy medium can still
+>   be destroyed by succession) · #589 · #590 · #591 · #592.
 > - **#527/#562's triage note is false**; the real fix is **#575** (the minted recovery code
 >   reaches stderr). A retry after a crashed restore must move the installed `<key>.unwrap` aside
 >   first (**#596**; test 19).
@@ -808,7 +818,7 @@ workspace); `poc/` is frozen historical spikes.
   through `MediumTransport`** (the pure `within(verified_through) → sort by source_seq` derivation
   lives in `cairn-medium`), and **the per-peer quarantine quota does not apply to a restore-originated
   pen** (pinned at volume by `restore_pen_is_uncapped.rs`). Open issues the chain filed: **#549**,
-  **#551**, **#552**, **#525**, **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module),
+  **#551**, **#552**, **#553**, **#525**, **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module),
   **#531**/**#329** (decompose `cairn-sync/src/main.rs` — a maintainer decision on which to keep),
   **#532**, **#534**, **#535**, **#536**, **#537**, **#538**, **#556**–**#563**, **#569**, **#575**,
   **#589**–**#592**, **#596**–**#599**, **#602**–**#611**, **#613**, **#616**, **#617**,

@@ -44,14 +44,12 @@ pub struct MockData {
     /// would be `cairn-gui-live`'s DB-gated suite, which tests the *classification* and
     /// renders nothing. See [#660](https://github.com/cairn-ehr/cairn-ehr/issues/660).
     ///
-    /// ⚠️ **The slot is not yet reachable from a running `--mock` window, and this doc used to
-    /// read as though it were.** Nothing arms it outside this crate's tests: there is no flag,
-    /// env var or Tauri command, and `cairn-gui-tauri` builds a fresh `MockData` per command,
-    /// so even a wired affordance would arm an instance dropped before the next call. Making
-    /// the two sentences genuinely producible under `--mock` needs a persistent `MockData` in
-    /// `AppState` — filed as [#668](https://github.com/cairn-ehr/cairn-ehr/issues/668). **Do
-    /// not write the §1.2 timing runbook or the accessibility pass against this until that
-    /// lands** (PR #661 review).
+    /// ⚠️ **The slot is not yet reachable from a running `--mock` window.** Since slice 2c the
+    /// window holds ONE `MockData` for its whole life (`FunnelBackend::Mock`), so an armed
+    /// failure would now survive to the next command — but nothing arms it outside tests:
+    /// there is no flag, env var or Tauri command. That remaining half is
+    /// [#668](https://github.com/cairn-ehr/cairn-ehr/issues/668). **Do not write the §1.2
+    /// timing runbook or the accessibility pass against this until it lands** (PR #661 review).
     ///
     /// One slot shared by both ports, not one each: a test arms it immediately before the call
     /// it means to fail, and two slots would let it arm the wrong one and pass for the wrong
@@ -64,6 +62,10 @@ pub struct MockData {
     /// Scope: the **funnel** ports only. `ClinicalData`'s methods do not consult this slot, so
     /// arming it before a `medications()` call leaves it silently unspent.
     next_failure: Mutex<Option<DataError>>,
+    /// What each registration minted here swore it displayed: the candidate ids, in display
+    /// order. The live node keeps this inside the signed registration event; the mock keeps it
+    /// here so a window test can check that the rows on screen ARE the rows attested.
+    attested_displays: Mutex<Vec<(Uuid, Vec<Uuid>)>>,
 }
 
 impl MockData {
@@ -75,6 +77,45 @@ impl MockData {
                 one_line: "Chest X-ray 2026-07-01 — no acute abnormality".to_string(),
             }],
             next_failure: Mutex::new(None),
+            attested_displays: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The candidate ids the registration of `patient` attested as displayed, in display
+    /// order — `None` for a chart this mock did not register.
+    pub fn attested_display(&self, patient: Uuid) -> Option<Vec<Uuid>> {
+        self.attested_displays
+            .lock()
+            .expect("the attested displays")
+            .iter()
+            .find(|(id, _)| *id == patient)
+            .map(|(_, shown)| shown.clone())
+    }
+
+    /// How many charts this mock has registered — a test's check that a refused registration
+    /// wrote nothing.
+    pub fn registered_count(&self) -> usize {
+        self.attested_displays
+            .lock()
+            .expect("the attested displays")
+            .len()
+    }
+
+    /// Refuse unless this node may write — the mock's mirror of
+    /// `cairn_gui_live::LiveData::require_provisioned`, which the window calls BEFORE taking a
+    /// search for registration.
+    ///
+    /// A fixture node is always provisioned, except that an armed `NotProvisioned` is spent
+    /// here. ONLY that one: a failure armed for the next search or write must reach the call
+    /// it was armed for, not be swallowed by the pre-check in front of it.
+    pub async fn require_provisioned(&self) -> Result<(), DataError> {
+        let mut armed = self.next_failure.lock().expect("the armed failure");
+        match armed.take() {
+            Some(e @ DataError::NotProvisioned(_)) => Err(e),
+            other => {
+                *armed = other;
+                Ok(())
+            }
         }
     }
 

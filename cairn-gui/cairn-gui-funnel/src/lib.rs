@@ -40,7 +40,7 @@ pub mod session;
 pub mod token;
 pub mod trigger;
 
-pub use prompt::{bound_for_prompt, PromptList, PROMPT_CAP};
-pub use session::{FormSnapshot, FunnelSession, Recorded};
+pub use prompt::{bound_for_prompt, node_reason, PromptList, PROMPT_CAP};
+pub use session::{FormSnapshot, FunnelSession, NamedAttestation, Recorded};
 pub use token::{AttestedSearch, Restored, SearchToken, TokenError, TokenStore};
 pub use trigger::{trigger_state, MissingPart, TriggerState, MIN_NAME_TOKENS};
