@@ -797,7 +797,9 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   disjunction, and `search_patients` ordered candidates by chart age, so the five-row prompt a
   registration SIGNS showed the five OLDEST charts. Over 50,000 real names an existing duplicate was
   among them **20%** of the time. `search_patients` now ranks by passes matched, then chart age
-  (order only; set, wire and attestation unchanged): **500/500**, first every time. The prompt still
+  (order only; set, wire and attestation unchanged): an exact duplicate **500/500**, first every
+  time — but a duplicate typed with a WRONG date of birth is still shown only **20%** of the time,
+  ranked or not (`--perturb dob`; the name pass counts once however many tokens matched). The prompt still
   truncates on **92%** of registrations, which is the design's own "cap is wrong" condition →
   [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671) (an ADR-level question; it touches a
   signed body). Evidence: `cairn-gui/cairn-gui-tauri/results/2026-09-23-funnel-prompt-truncation.md`,

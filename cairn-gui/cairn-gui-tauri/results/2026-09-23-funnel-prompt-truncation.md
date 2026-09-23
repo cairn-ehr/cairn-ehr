@@ -37,6 +37,24 @@ distribution is what matters here, and this copy's is realistic.
 | Existing chart in the five shown — ranked by passes matched (2c) | **500 / 500**, median position 1 |
 | Searches with > 5 candidates matching ≥ 2 passes | **0** |
 
+## Result — the duplicate typed with a WRONG date of birth (`--perturb dob`)
+
+Same population and pool; each sampled patient is searched with its own name but a mis-typed date
+of birth (day and month swapped when that is a different valid date, otherwise the year off by
+one — `perturb_dob`). This is the harder case the funnel exists for, added after the whole-branch
+review pointed out that the arm above only ever measures EXACT duplicates.
+
+| Measure | Value |
+|---|---|
+| Candidates per search | median 103.5, p90 365, max 968 |
+| Prompt truncated (> 5) | 457 / 500 |
+| Existing chart in the five shown — chart-age order | **100 / 500 (20%)**, median position 36 |
+| Existing chart in the five shown — ranked by passes matched | **100 / 500 (20%)**, median position 36 |
+
+**Ranking does nothing for this case**, and that is structural: with the date wrong the existing
+chart matches only the NAME pass, and the name pass counts ONCE however many name tokens matched,
+so it ties with every chart sharing any one token and falls back to chart-age order.
+
 ## Result — synthetic common names (worst case)
 
 No pool: names drawn with a 1/rank skew from ~40 common given names × ~50 common surnames, so
@@ -52,17 +70,20 @@ shared tokens are far more frequent than in reality.
 
 ## What it means
 
-1. **The ranking was necessary, and it works.** In chart-age order the prompt would have hidden
-   an existing duplicate **four times in five** with real names. Ranked, the duplicate was first
-   in every search.
+1. **The ranking was necessary, and it works for EXACT duplicates only.** In chart-age order the
+   prompt hid an exactly-typed existing duplicate **four times in five**; ranked, it was first in
+   every search. **A duplicate typed with a wrong date of birth is still hidden four times in
+   five, ranked or not** (the second table). Ranking within the name pass by how many name tokens
+   matched is the obvious next lever, and it is #671's to decide.
 2. **The cap truncates routinely: the design's revisit condition has fired.** 92% of
    registrations would sign `incomplete: true`, so the flag no longer distinguishes a prompt that
    could have shown the duplicate from one that could not. Filed as
    [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671), a design/ADR question because it
    touches a signed body. `PROMPT_CAP` is unchanged here, deliberately.
-3. **The lead for #671:** no search had more than five candidates matching two or more passes.
-   A prompt that shows every strong candidate and states the single-pass remainder as withheld
-   *by rule* would be complete in the sense that matters.
+3. **For #671, a lead and a warning.** No search had more than five candidates matching two or
+   more passes. But a prompt that showed only those and withheld the single-pass remainder "by
+   rule" would withhold **exactly the wrong-DOB duplicate**. That rule is not safe as stated; any
+   design must be measured against the `--perturb dob` arm.
 
 ## Reproduce
 
@@ -70,6 +91,8 @@ shared tokens are far more frequent than in reality.
 uv run --no-project python scripts/measure_prompt_truncation.py --self-test
 uv run --no-project python scripts/measure_prompt_truncation.py --dbname cairn_test --rows 50000 \
     --samples 500 --name-pool ~/src/SyntheticHealthData/synthetic_demographics.sqlite3
+uv run --no-project python scripts/measure_prompt_truncation.py --dbname cairn_test --rows 50000 \
+    --samples 500 --perturb dob --name-pool ~/src/SyntheticHealthData/synthetic_demographics.sqlite3
 uv run --no-project python scripts/measure_prompt_truncation.py --dbname cairn_test --rows 50000 \
     --samples 500    # synthetic worst case
 ```

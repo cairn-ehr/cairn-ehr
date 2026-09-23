@@ -120,6 +120,21 @@ def rank(rows: list[tuple[str, int]]) -> list[str]:
     return [pid for pid, _ in sorted(rows, key=lambda r: (-r[1], r[0]))]
 
 
+def perturb_dob(dob: str) -> str:
+    """The date of birth a registrar mis-hears or mis-types: day and month swapped when that is
+    still a different valid date, otherwise the year off by one.
+
+    The exact-duplicate arm answers "is the chart shown when everything was typed right?". This
+    arm answers the harder question the funnel exists for (final review #7): the existing chart
+    now shares only the NAME pass, ties with everyone else sharing a name token, and falls back to
+    chart-age order within that tie.
+    """
+    year, month, day = (int(x) for x in dob.split("-"))
+    if day <= 12 and day != month:
+        return f"{year:04d}-{day:02d}-{month:02d}"
+    return f"{year + 1:04d}-{month:02d}-{day:02d}"
+
+
 def position(order: list[str], pid: str) -> int:
     """1-based position of `pid` in `order`."""
     return order.index(pid) + 1
@@ -216,6 +231,10 @@ def self_test() -> int:
     sql = seed_sql([("00000000-0000-0000-0000-000000000001", "O'Brien Ann", "1980")])
     assert "'O''Brien Ann'" in sql[0] and "'1980'" in sql[1]
     assert "ARRAY['ann','brien','o''brien']" in batch_query_sql([("x", "O'Brien Ann", "1980")])
+    # The perturbed-DOB arm: the realistic imperfect duplicate (final review #7).
+    assert perturb_dob("1980-03-07") == "1980-07-03", "day <= 12: swap day and month"
+    assert perturb_dob("1980-03-03") == "1981-03-03", "day == month: a swap changes nothing"
+    assert perturb_dob("1980-03-20") == "1981-03-20", "day > 12: the swap is not a date"
     print("self-test: ok")
     return 0
 
@@ -230,6 +249,12 @@ def main() -> int:
     ap.add_argument("--samples", type=int, default=500, help="step-3 searches to run")
     ap.add_argument("--name-pool", default=None, help="SQLite pool of real names")
     ap.add_argument("--seed", type=int, default=20260923)
+    ap.add_argument(
+        "--perturb",
+        choices=["none", "dob"],
+        default="none",
+        help="'dob': query each sampled patient with a mis-typed date of birth (see perturb_dob)",
+    )
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:
@@ -262,7 +287,12 @@ def main() -> int:
     before = scalar(conn, f"SELECT count(*) FROM patient_name WHERE asserted_origin = '{ORIGIN}'")
     try:
         samples = rng.sample(people, args.samples)
-        out = psql(conn, batch_query_sql(samples))
+        queried = (
+            [(pid, name, perturb_dob(dob)) for pid, name, dob in samples]
+            if args.perturb == "dob"
+            else samples
+        )
+        out = psql(conn, batch_query_sql(queried))
         after = scalar(conn, f"SELECT count(*) FROM patient_name WHERE asserted_origin = '{ORIGIN}'")
         if before != after or int(before) != len(people):
             raise SystemExit(f"population changed mid-run ({before} -> {after}); refusing to report")
@@ -278,6 +308,7 @@ def main() -> int:
         summary.update(
             population=len(people),
             pool=args.name_pool or "synthetic (Zipf-skewed common names)",
+            perturb=args.perturb,
             cap=PROMPT_CAP,
         )
         print(json.dumps(summary, indent=2))

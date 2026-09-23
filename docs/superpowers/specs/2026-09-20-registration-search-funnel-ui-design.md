@@ -356,11 +356,14 @@ No editing a candidate before opening it. No change to the advisory matcher.
 > existing duplicate was among them in only 20% of registrations. Two responses:
 >
 > - **Built in 2c (maintainer decision):** `search_patients` ranks by passes matched, then chart
->   age. The duplicate was first in 500 of 500 searches. Order only; the set, the wire and the
->   attestation shape are unchanged.
+>   age. An EXACTLY-typed duplicate was first in 500 of 500 searches. Order only; the set, the
+>   wire and the attestation shape are unchanged. **A duplicate typed with a wrong date of birth
+>   is still shown only 20% of the time, ranked or not**: it matches only the name pass, which
+>   counts once however many name tokens matched.
 > - **Not built, filed as [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671):** the prompt
 >   still truncates on 92% of registrations, so the signed `incomplete` flag carries almost no
 >   signal. That is this bullet's revisit condition, and it needs an ADR-level decision because
->   it touches a signed body. No search had more than five candidates matching two or more passes,
->   which is the lead. Evidence:
+>   it touches a signed body. No search had more than five candidates matching two or more
+>   passes, but withholding single-pass candidates would withhold exactly the wrong-DOB
+>   duplicate. Evidence:
 >   `cairn-gui/cairn-gui-tauri/results/2026-09-23-funnel-prompt-truncation.md`.

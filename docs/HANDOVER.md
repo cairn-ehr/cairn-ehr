@@ -17,7 +17,10 @@
 >    fixed the SAFETY half (see the rule below: the duplicate now comes first, 500/500); the
 >    ATTESTATION half is the design's own "cap is wrong" condition and touches a signed body, so it
 >    is a **brainstorm → ADR**, not a TDD slice. The lead: no search had more than five candidates
->    matching ≥ 2 passes. **Do not change `PROMPT_CAP` to make the number look better.**
+>    matching ≥ 2 passes — **but withholding single-pass candidates would hide exactly the duplicate
+>    typed with a WRONG date of birth**, which ranking does not help either (shown 20% of the time,
+>    ranked or not; `--perturb dob`). The more promising lever is ranking WITHIN the name pass by
+>    how many name tokens matched. **Do not change `PROMPT_CAP` to make the number look better.**
 > 2. **The human acts 2c exposed** (an agent cannot do them): runbook §8's stopwatch figures (find
 >    ≤ 5 s, register ≤ 20 s, live AND `--mock`) and the front-door accessibility checks, recorded
 >    in a dated copy of `results/TEMPLATE.md`. See also *Four things still owed are HUMAN acts* below.
@@ -33,9 +36,10 @@
 > dated notes and ROADMAP's 2a → 2c entry):
 > - **`search_patients` RANKS BY PASSES MATCHED, THEN CHART AGE** (`rank_by_passes_matched`).
 >   `db/046` is a disjunction, so in plain id order the five-row prompt showed the five OLDEST
->   charts: the duplicate was among them in 20% of registrations. "Simplifying" the sort back to
->   `ids.sort()` reinstates that silently; `patient_search_ranking.rs` fails on it. The name pass
->   counts once however many tokens matched (a documented tie, #671's to settle).
+>   charts: an exact duplicate was among them in 20% of registrations (ranked: 100%). "Simplifying"
+>   the sort back to `ids.sort()` reinstates that silently; `patient_search_ranking.rs` fails on
+>   it. **It does NOT help a duplicate typed with a wrong DOB** (still 20%): the name pass counts
+>   once however many tokens matched — #671's to settle.
 > - **The raw typed name travels WITH its token** (`FunnelSession`); `register` takes only the
 >   token. A search for an older form revision is DROPPED, never recorded over a newer one; the
 >   webview forgets its held token synchronously on every edit.
