@@ -17,6 +17,11 @@ cairn-node = { path = "../../crates/cairn-node" }
 cairn-event = { path = "../../crates/cairn-event" }
 cairn-medication-view = { path = "../../crates/cairn-medication-view" }
 cairn-gui-data = { path = "../cairn-gui-data" }
+# The funnel (slice 2c): its pure rules, the live ports over this node, and the candidate
+# model both of those speak. All in-tree path crates — no new external dependency.
+cairn-gui-funnel = { path = "../cairn-gui-funnel" }
+cairn-gui-live = { path = "../cairn-gui-live" }
+cairn-patient-search = { path = "../../crates/cairn-patient-search" }
 cairn-gui-tab = { path = "../cairn-gui-tab" }
 cairn-gui-tab-medications = { path = "../cairn-gui-tabs/cairn-gui-tab-medications" }
 tauri = { version = "2", features = [] }

@@ -20,6 +20,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+// Temporary: the funnel's view functions land one commit before the commands that call
+// them. Removed by the next commit of slice 2c.
+#[allow(dead_code)]
+mod funnel;
 mod state;
 
 use clap::Parser;
