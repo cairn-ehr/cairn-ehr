@@ -26,7 +26,7 @@
 
 ## Measured — whole gesture, by stopwatch
 
-Excludes finding the patient (`--patient` at launch; §5.3/§5.8 funnel unbuilt).
+Excludes finding the patient (`--patient` at launch). Finding it is timed separately, in *Front door* below.
 
 | Gesture | n | median | p95 | Provisional budget | Inside? |
 |---|---|---|---|---|---|
@@ -65,6 +65,25 @@ Screen reader + version: \_\_\_\_ · Keyboard only: yes / no
 | Every control Tab-reachable, focus ring visible | | |
 | "Will be signed" identifiable without colour | | |
 | "Ceased" identifiable without colour | | |
+
+## Front door — find or register (§5.3/§5.8, runbook §8)
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? | Observed K |
+|---|---|---|---|---|---|---|---|
+| Find an existing chart (fragment → pick → header shows the name) | live | | | | ≤ 5 s | | |
+| Find an existing chart | `--mock` | | | | ≤ 5 s | | |
+| Register a new patient (first keystroke → new chart open) | live | | | | ≤ 20 s | | |
+| Register a new patient | `--mock` | | | | ≤ 20 s | | |
+
+Register someone already on file (`John Smith` / `1975-02-02`): was that chart **first** in the
+prompt? **yes / no**
+
+| Front-door accessibility check | Verdict | Notes |
+|---|---|---|
+| A candidate row announces name, age and identity state in one utterance | | |
+| A prompt row's text includes "This is them" | | |
+| Opening a chart moves focus to the patient's name | | |
+| A failed search is announced as a failure, never as "no match" | | |
 
 ## Verdict
 

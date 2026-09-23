@@ -14,6 +14,23 @@ const { invoke } = window.__TAURI__.core;
 /** How often the window re-checks whether the held key has re-locked (ms). */
 const LOCK_POLL_MS = 10_000;
 
+/**
+ * The chart id this window is DISPLAYING, set by funnel.js when a chart opens and cleared when
+ * it closes. Every chart command sends it, and the backend refuses unless it is the open chart:
+ * a sign-off must sign what the clinician was looking at, never whatever happens to be open by
+ * the time the command runs (`AppState::displayed_patient`).
+ */
+let displayedPatient = null;
+
+/**
+ * The chart whose medication list is actually DRAWN in the table — set by `render`, cleared by
+ * `clearChart`. Sign-off and cease send THIS, not `displayedPatient`: they act on the list the
+ * clinician reviewed. If a late read for chart A were ever drawn under chart B's header (the
+ * guard in `refresh` is what prevents that), the command would name A, and the backend — with B
+ * open — would refuse it rather than sign B on the strength of A's list.
+ */
+let renderedPatient = null;
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -102,7 +119,8 @@ function renderRow(row) {
   return rows;
 }
 
-function render(view) {
+function render(view, patient) {
+  renderedPatient = patient;
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -122,10 +140,33 @@ function render(view) {
   setMessage(el("empty-message"), view.empty_message);
 }
 
+/**
+ * Empty the chart view: no rows, no warnings, and a sign-off button that cannot fire. Called
+ * whenever the chart changes, so one patient's list is never on screen under another patient's
+ * header — not even for the moment a read is in flight, and not after a read that failed.
+ */
+function clearChart() {
+  renderedPatient = null;
+  el("med-rows").replaceChildren();
+  setMessage(el("chart-incomplete"), "");
+  setMessage(el("chart-withheld"), "");
+  el("chart-warnings").hidden = true;
+  setMessage(el("empty-message"), "");
+  const button = el("sign-off");
+  button.disabled = true;
+  button.textContent = "Loading…";
+}
+
 async function refresh() {
+  const patient = displayedPatient;
+  if (patient === null) return;
   try {
-    render(await invoke("med_list"));
+    const view = await invoke("med_list", { patientId: patient });
+    // A read for a chart the clinician has since left is dropped, never rendered.
+    if (patient !== displayedPatient) return;
+    render(view, patient);
   } catch (e) {
+    if (patient !== displayedPatient) return;
     say("Could not read the chart: " + e);
   }
 }
@@ -154,8 +195,12 @@ function reportSignOff(report) {
 }
 
 async function signOff() {
+  if (renderedPatient === null) {
+    say("No medication list is on screen to sign off.");
+    return;
+  }
   try {
-    reportSignOff(await invoke("sign_off"));
+    reportSignOff(await invoke("sign_off", { patientId: renderedPatient }));
   } catch (e) {
     say("Sign-off failed: " + e);
   }
@@ -164,7 +209,11 @@ async function signOff() {
 
 async function cease(groupId, reason) {
   try {
-    const report = await invoke("cease", { groupId: groupId, reason: reason });
+    const report = await invoke("cease", {
+      groupId: groupId,
+      reason: reason,
+      patientId: renderedPatient,
+    });
     let text = "Stopped " + report.ceased + " thread(s) of this drug.";
     if (report.failed.length > 0) {
       text +=
@@ -218,7 +267,9 @@ el("unlock-form").addEventListener("submit", async (event) => {
   }
 });
 
-void refresh();
+// No `refresh()` here: whether a chart is showing at all is the front door's decision
+// (funnel.js), which calls `refresh()` when it opens one. `refresh` and `say` stay globals —
+// both files are classic scripts sharing one scope, loaded main.js first.
 void pollLock();
 // The key re-locks on a timer in the backend; the window must not learn about it only when
 // a signature is refused (state is ambient, never modal).

@@ -22,13 +22,14 @@
 //! - **Every CLI write path that authors as THIS NODE calls [`require_device_actor`] and
 //!   refuses.** Nothing provisions the node's own device actor.
 //!
-//! ⚠️ **"Every CLI write path" is literal, and the gap is the reference window.** All fifteen
-//! `require_device_actor` call sites are `Cmd::` arms in `main.rs`; `cairn-gui-live` calls it
-//! nowhere. The GUI still *refuses* on an unprovisioned node — db/005 sees to that — but it
-//! refuses in db/005's words, naming a key rather than this module's remedy. The
-//! provisioning asymmetry #654 closed is genuinely closed on both surfaces; the
-//! remedy-naming half is not, and is filed as
-//! [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665) (PR #661 review).
+//! ⚠️ **"Every CLI write path" is literal; the reference window asks separately.** All fifteen
+//! `main.rs` call sites are `Cmd::` arms. Since funnel UI slice 2c the window asks too —
+//! `cairn_gui_live::LiveData::require_provisioned`, called by its register command before a
+//! registration takes its attestation, plus a launch-time [`device_actor_standing`] probe whose
+//! sentence the window shows — so a clerk meets this module's remedy rather than db/005's key
+//! id ([#665](https://github.com/cairn-ehr/cairn-ehr/issues/665)). Whether the check should
+//! instead live in the `register_patient` orchestrator, covering every surface at once, is the
+//! question #665 still carries.
 //!
 //! ⚠️ **That last sentence is scoped, and the scope is load-bearing.** One path in this same
 //! binary still enrols on first use: `matcher_actor::resolve_matcher_actor` mints a per-epoch

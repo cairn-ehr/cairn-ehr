@@ -162,10 +162,27 @@ impl MockData {
                     .clone()
                     .unwrap_or_else(|| "not recorded".to_string()),
                 identifiers: query.identifiers.clone(),
-                // A chart nobody has confirmed the identity of yet. Claiming `Confirmed`
-                // here would put a trust state on screen that no act has earned.
-                trust: cairn_patient_search::TrustState::Unconfirmed,
+                // What the NODE reports for an ordinary registration. In db/024's vocabulary
+                // `unconfirmed` is the identity-pending (John-Doe) state, opened only by a
+                // registration carrying a `basis`; a standard registration carries none
+                // (`register.rs`: `a_standard_body_carries_the_attestation_and_no_basis`), has
+                // no `chart_trust` row, and so reads back `confirmed`. This mock once said
+                // `Unconfirmed` here, and the window's header then showed a trust state the
+                // real node never records (PR #674 review).
+                trust: cairn_patient_search::TrustState::Confirmed,
             });
+        self.attested_displays
+            .lock()
+            .expect("the attested displays")
+            .push((
+                id,
+                attested
+                    .displayed()
+                    .candidates
+                    .iter()
+                    .map(|c| c.patient_id)
+                    .collect(),
+            ));
         id
     }
 }
@@ -512,9 +529,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_fixture_registration_records_only_what_was_actually_supplied() {
-        // Three fabrications were all unpinned: a default birth date, a `Confirmed` trust
-        // state no act had earned, and a sex nobody supplied. Each would render as fact on
-        // the wrong-chart-prevention surface.
+        // Two fabrications were unpinned: a default birth date and a sex nobody supplied. Each
+        // would render as fact on the wrong-chart-prevention surface. The trust state is pinned
+        // too — to what the NODE reports, since a mock that disagrees with the node teaches the
+        // accessibility pass a vocabulary the real window never shows.
         let data = MockData::with_fixtures();
         let mut store = TokenStore::new();
         let typed = "Ruslan Bakhtiyarov";
@@ -536,8 +554,10 @@ mod tests {
         let candidate = browse(&data, "bakhtiyarov").await;
         assert_eq!(
             candidate.candidates[0].trust,
-            cairn_patient_search::TrustState::Unconfirmed,
-            "nobody has confirmed this identity yet"
+            cairn_patient_search::TrustState::Confirmed,
+            "what the node reports for an ordinary registration (db/024: `unconfirmed` is the \
+             identity-pending John-Doe state, opened only by a `basis`) — a mock that said \
+             otherwise would put two trust states on screen for one kind of chart"
         );
         assert!(
             candidate.candidates[0].age.is_none(),
@@ -800,5 +820,48 @@ mod tests {
             "and the failed attempt must have created NOTHING — a mock that minted a chart \
              for a call it reported as failed would hide a duplicate-chart bug"
         );
+    }
+
+    /// What a registration swore it displayed is kept, per patient, so a window test can
+    /// check that the rows the clerk SAW are exactly the rows the registration attests.
+    #[tokio::test]
+    async fn a_registration_remembers_exactly_the_rows_it_attested() {
+        let data = MockData::with_fixtures();
+        let mut store = TokenStore::new();
+        let query = SearchQuery::new("Samantha Michaelowski", None, &[]);
+        let displayed = data.search(&query, TODAY).await.unwrap();
+        let shown: Vec<Uuid> = displayed.candidates.iter().map(|c| c.patient_id).collect();
+        assert!(!shown.is_empty(), "the fixture must display somebody");
+        let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
+        let id = data
+            .register(store.take(token).unwrap(), Some("Samantha Michaelowski"))
+            .await
+            .unwrap();
+        store.commit();
+        assert_eq!(data.attested_display(id), Some(shown));
+        assert_eq!(data.attested_display(Uuid::from_u128(1)), None);
+    }
+
+    /// The mock's provisioning check mirrors `LiveData::require_provisioned`: it spends an armed
+    /// `NotProvisioned` — and ONLY that, so a failure armed for the next search or write is not
+    /// silently consumed by the pre-check in front of it.
+    #[tokio::test]
+    async fn the_provisioning_check_spends_only_an_armed_not_provisioned() {
+        let data = MockData::with_fixtures();
+        data.require_provisioned().await.unwrap();
+        data.fail_next(DataError::NotProvisioned("enrol this node".into()));
+        assert!(matches!(
+            data.require_provisioned().await,
+            Err(DataError::NotProvisioned(t)) if t.contains("enrol")
+        ));
+        data.require_provisioned().await.expect("one-shot");
+        data.fail_next(DataError::Unavailable("gone".into()));
+        data.require_provisioned()
+            .await
+            .expect("not its failure to spend");
+        assert!(data
+            .search(&SearchQuery::new("mich", None, &[]), TODAY)
+            .await
+            .is_err());
     }
 }

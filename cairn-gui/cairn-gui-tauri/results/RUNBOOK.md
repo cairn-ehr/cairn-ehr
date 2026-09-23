@@ -6,10 +6,11 @@ rendered → unsigned lines signed **≤ 15 s** for a 5-drug list, one cease **�
 machine: an honest data point, not a study.
 
 **Explicitly excluded: finding the patient.** The window launches with `--patient <uuid>`
-and there is no patient picker in this slice (the §5.3/§5.8 search-before-create funnel is
-unbuilt). Every recorded run must repeat that exclusion, because the paper counterpart —
-picking the right chart off a trolley — is a real act with a real wrong-chart hazard, and a
-figure that quietly omits it would flatter the architecture.
+so sections 1–7 time the chart gestures alone. Every recorded run of those sections must repeat
+that exclusion, because the paper counterpart — picking the right chart off a trolley — is a
+real act with a real wrong-chart hazard, and a figure that quietly omits it would flatter the
+architecture. **Finding the patient is measured separately, in section 8** (the §5.3/§5.8
+funnel, built in slice 2c).
 
 **The accessibility pass is a separate act.** It is a live screen-reader run (VoiceOver on
 macOS, Orca on Linux, NVDA on Windows) against the same window, recorded in the same file.
@@ -181,3 +182,60 @@ number you measured, whatever it is.** If the observed p95 falls outside the pro
 15 s / 5 s budget, that is the finding — file an issue and write it down. Adjusting the
 budget to match the result would make the benchmark unfalsifiable, which is the one thing
 §1.2 cannot afford.
+
+## 8. The front door: find or register a patient (§5.3/§5.8, slice 2c)
+
+The funnel's own §1.2 figure. **The stopwatch half is a human act**: the machine half is already
+measured (search latency, #639's figures in ROADMAP; how often the step-3 prompt truncates and
+whether the duplicate survives,
+[`2026-09-23-funnel-prompt-truncation.md`](2026-09-23-funnel-prompt-truncation.md)).
+
+**Seed.** On the node from section 0, register a handful of charts the operator can look for
+(no `enroll-human` needed: registration is signed by the node's own key). Each has its OWN date
+of birth: with one shared date, every chart matches step 3's query on the date pass, John and
+Mary Smith tie, and John comes first only because he was registered first — step 3 would then
+pass without ranking doing anything.
+
+```bash
+while IFS='|' read -r n dob; do
+    $NODE patient-register --name "$n" --birth-date "$dob" --confirm-new
+done <<'SEED'
+Samantha Michaelowski|1975-02-02
+John Smith|1968-11-30
+Mary Smith|1981-04-17
+Wei Ling Chen|1990-08-09
+SEED
+```
+
+**Launch WITHOUT `--patient`**, so the window opens on the front door. Once live, then once with
+`--mock` (same gestures; the mock's matching rule is not db/046's, so the two figures are
+reported separately and never merged):
+
+```bash
+cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY"
+cargo run --release -p cairn-gui-tauri -- --mock
+```
+
+Start the stopwatch at the first keystroke, and stop it when the identity header shows the
+right name.
+
+1. **Find an existing chart.** Type a fragment (`mich`), pick the row. Budget **≤ 5 s**.
+   Paper *N* = 3 (ask details, flip drawer, pull card); architecture *M* = 2 (type, pick).
+2. **Register a new patient.** In the register form, type a full name and date of birth that
+   are NOT on file, answer the prompt ("None of these — register a new patient"). Budget
+   **≤ 20 s**. Paper *N* = 5; architecture *M* = 4 (type fragment, read list, complete the
+   form, answer the prompt); *K* = 3 when the prompt is empty.
+3. **Register someone already on file.** Type `John Smith` / `1968-11-30` in the register form.
+   The prompt must show that chart FIRST — it matches on the name AND the date, Mary Smith on the
+   name only — then pick it ("This is them — open chart"). Record whether it was first. This is
+   the wrong-duplicate case the prompt exists for. (Four seeded charts never reach the cap of
+   five, so this step exercises the ranking, not the truncation; the truncation rate is the
+   measured figure linked above.)
+
+**Accessibility, same pass:** the browse list and the prompt rows announce name, age and
+identity state in one utterance; each prompt row's text includes "This is them"; opening a chart
+moves focus to the patient's name; a failed search is announced as a failure, never as "no
+match".
+
+Record in the template's *Front door* section. A figure outside its budget is the finding: file
+it, do not adjust the budget.

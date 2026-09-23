@@ -24,7 +24,7 @@
 //! needs a window to express is a rule no test can pin cheaply, which is the whole reason for
 //! the split.
 //!
-//! # The three rules
+//! # The four rules
 //!
 //! - [`trigger`] — when the machine runs the registration search *unasked*. **Advisory, never
 //!   a gate.**
@@ -32,11 +32,15 @@
 //!   did not.
 //! - [`token`] — the pairing of a query with the list it produced, which is the only thing a
 //!   registration may attest to.
+//! - [`session`] — one window's form: the raw typed name kept beside its token, and searches
+//!   for a form that has since been edited dropped rather than recorded.
 
 pub mod prompt;
+pub mod session;
 pub mod token;
 pub mod trigger;
 
-pub use prompt::{bound_for_prompt, PromptList, PROMPT_CAP};
+pub use prompt::{bound_for_prompt, node_reason, PromptList, PROMPT_CAP};
+pub use session::{FormSnapshot, FunnelSession, NamedAttestation, Recorded};
 pub use token::{AttestedSearch, Restored, SearchToken, TokenError, TokenStore};
 pub use trigger::{trigger_state, MissingPart, TriggerState, MIN_NAME_TOKENS};

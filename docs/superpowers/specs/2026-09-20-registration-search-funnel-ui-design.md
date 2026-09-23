@@ -222,6 +222,30 @@ scope.)
 > never seal anything. That is #654's option 2. `LiveData` itself stays unchanged: its refusal is
 > already correctly classified, and making it *actionable* is rendering.
 
+> **Built 2026-09-23 (slice 2c), and where it departs from the page above.**
+>
+> - **The registration form is one name field + date of birth only** (maintainer decision). No
+>   identifier entry: it needs a system picker this page puts out of scope
+>   ([#672](https://github.com/cairn-ehr/cairn-ehr/issues/672)).
+> - **The raw typed name travels WITH its token** (`cairn_gui_funnel::FunnelSession`). `register`
+>   takes only the token; the name it registers is the one the attested search ran on, so the
+>   Rust side cannot pass a second name. Searches carry the webview's edit revision, and one for
+>   an older revision is dropped instead of replacing a newer search.
+> - **The provisioning check is the window's, not the port's.** `LiveData::require_provisioned`
+>   runs before a registration takes its attestation (#665). `PatientRegistration::register` is
+>   unchanged, so the port suites still reach db/005's refusal inside the transaction.
+> - **The identity header shows AGE, not date of birth, for a picked chart**, because `Candidate`
+>   carries no DOB ([#673](https://github.com/cairn-ehr/cairn-ehr/issues/673)); a registered chart
+>   shows the typed DOB, and a `--patient` launch says its name was not read.
+> - **Only a candidate that some list on screen showed can be opened**, so the webview cannot open
+>   an arbitrary id.
+> - **The prompt read guard is SOFT POLICY** (maintainer decision, 2026-09-23,
+>   [#677](https://github.com/cairn-ehr/cairn-ehr/issues/677)). For 800 ms after a step-3 result
+>   lands, a click on Register counts as "show me", not "register", so a registration does not swear
+>   to rows that appeared under the pointer. It lives in `funnel.js` only: it is ergonomics in the
+>   ADR-0021 sense, and another front-end may choose a different interval or none. It is not part of
+>   what the attestation asserts, so the floor and `FunnelSession` do not enforce it.
+
 **Shell and frontend.** The front door is a shell state, not a tab — a tab presupposes a patient.
 `--patient <uuid>` keeps working, so the timing runbook and the `--mock` accessibility pass do not
 move. Plain JS in `src-ui/`, per the no-npm rule.
@@ -330,3 +354,22 @@ No editing a candidate before opening it. No change to the advisory matcher.
 - **The bounded prompt assumes few candidates.** True for full name plus DOB, but not guaranteed.
   If it is routinely incomplete, the cap is wrong and the design needs revisiting rather than
   quietly signing partial lists.
+
+> **Measured 2026-09-23 (slice 2c): it is routinely incomplete, and the assumption was false for a
+> structural reason.** `db/046` is a DISJUNCTION (any name token OR the exact DOB), so a
+> full-name-plus-DOB search returned a median of 103.5 candidates over 50,000 real names, and
+> `search_patients` ordered them by chart age: the prompt showed the five OLDEST charts, and an
+> existing duplicate was among them in only 20% of registrations. Two responses:
+>
+> - **Built in 2c (maintainer decision):** `search_patients` ranks by passes matched, then chart
+>   age. An EXACTLY-typed duplicate was first in 500 of 500 searches. Order only; the set, the
+>   wire and the attestation shape are unchanged. **A duplicate typed with a wrong date of birth
+>   is still shown only 20% of the time, ranked or not**: it matches only the name pass, which
+>   counts once however many name tokens matched.
+> - **Not built, filed as [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671):** the prompt
+>   still truncates on 92% of registrations, so the signed `incomplete` flag carries almost no
+>   signal. That is this bullet's revisit condition, and it needs an ADR-level decision because
+>   it touches a signed body. No search had more than five candidates matching two or more
+>   passes, but withholding single-pass candidates would withhold exactly the wrong-DOB
+>   duplicate. Evidence:
+>   `cairn-gui/cairn-gui-tauri/results/2026-09-23-funnel-prompt-truncation.md`.

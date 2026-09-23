@@ -134,19 +134,20 @@ pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
 /// what to change.
 ///
 /// ⚠️ **This is an OPERATOR rendering, not a clerk-facing sentence.** `operator_chain` exists
-/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. Slice 2c must not
-/// paste it raw into a form.
+/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. Slice 2c's window
+/// nonetheless shows it inside its own sentences (`cairn-gui-tauri`'s `funnel::view`), so a
+/// floor refusal reaches the clerk with its `[P0001]` attached — a known gap, not a kept rule:
+/// the fix is a clerk rendering produced beside `operator_chain` in `db_diagnosis`, filed as
+/// [#676](https://github.com/cairn-ehr/cairn-ehr/issues/676).
 ///
-/// ⚠️ **On an unprovisioned node this function still cannot reach the remedy-naming refusal,**
-/// and the reason is a missing call, not a missing classifier. The three
-/// `cairn_node::actor_enrolment` refusals are `NodeState`-scoped and map to
-/// [`DataError::NotProvisioned`] correctly — but nothing in `cairn-gui-live` calls
-/// `require_device_actor`, so the GUI never mints one. What it actually meets is db/005's own
-/// `submit_event: signer 9f3c… is not an enrolled, non-revoked actor [P0001]` — true, legible,
-/// carrying no marker, and therefore classified `Refused`: a verdict with no way forward, for a
-/// node state that has a one-command remedy. #654 settled the enrolment RULE; wiring the GUI
-/// write path to the remedy is filed as
-/// [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665).
+/// **On an unprovisioned node the remedy-naming refusal is reached through
+/// [`LiveData::require_provisioned`](crate::LiveData::require_provisioned)**, which the window
+/// calls before a registration. The three `cairn_node::actor_enrolment` refusals are
+/// `NodeState`-scoped and map here to [`DataError::NotProvisioned`]. A caller that skips that
+/// pre-check still meets db/005's own `submit_event: signer 9f3c… is not an enrolled,
+/// non-revoked actor [P0001]` — true, carrying no marker, and so classified `Refused`. (The port
+/// suites reach that floor with an unenrolled signer because the pre-check lives in the window,
+/// not in the port — see `node.rs`, #665.)
 pub fn data_error_from(e: &anyhow::Error) -> DataError {
     let text = cairn_node::db_diagnosis::operator_chain(e);
     // TWO discriminators, complementary rather than alternative, because a verdict can be

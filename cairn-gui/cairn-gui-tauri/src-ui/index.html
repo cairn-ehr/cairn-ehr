@@ -4,66 +4,126 @@
   reference UI moved off iced (spike 0004), so nothing here is a div pretending to be a
   control: a table is a <table>, a heading is an <h*>, a button is a <button>.
 
-  DOM ORDER IS CLINICAL. The chart-level warnings sit ABOVE the table, because a screen
-  reader moves through this document linearly and a warning that the chart is missing a drug
-  is useless after the reader has already been told what the chart contains. That mirrors
-  the accessibility contract asserted in Rust (cairn-gui-tab-medications).
+  DOM ORDER IS CLINICAL. Warnings sit ABOVE whatever they qualify, because a screen reader
+  moves through this document linearly: a warning that a list is incomplete, or that the chart
+  is missing a drug, is useless after the reader has already been told what it contains. That
+  mirrors the accessibility contract asserted in Rust (cairn-gui-tab-medications).
+
+  TWO SURFACES, ONE AT A TIME. The front door (#front-door) is the §5.3/§5.8 funnel: find a
+  chart, or register one only if nothing fits. The chart (#chart-view) always opens under the
+  identity header — the wrong-chart affordance is possession, visible at every later step, never
+  a confirmation dialog (principle 3).
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Cairn — Medications</title>
+    <title>Cairn</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <main>
-      <h1 id="patient-heading">Medications</h1>
+      <!-- Whether this node may write at all (the launch probe, #654), or why the window could
+           not start. Above everything, because it qualifies every act on both surfaces. -->
+      <p id="provisioning" role="status" hidden></p>
 
-      <!-- Who is signed in, and whether a key is held. Ambient, never modal: the clinician
-           should see the lock, not discover it when a signature is refused. -->
-      <section id="session" aria-labelledby="session-heading">
-        <h2 id="session-heading" class="visually-hidden">Signing key</h2>
-        <p id="lock-state" role="status" aria-live="polite">Checking signing key…</p>
-        <form id="unlock-form" hidden>
-          <label for="passphrase">Passphrase for your signing key</label>
-          <input id="passphrase" type="password" autocomplete="current-password" />
-          <button id="unlock" type="submit">Unlock</button>
+      <section id="front-door" aria-labelledby="find-heading" hidden>
+        <h1 id="find-heading">Find a patient</h1>
+
+        <form id="browse-form" autocomplete="off">
+          <label for="browse-name">Part of a name</label>
+          <input id="browse-name" type="text" />
+          <label for="browse-dob">Date of birth (optional)</label>
+          <input id="browse-dob" type="text" placeholder="YYYY-MM-DD" />
+        </form>
+        <!-- Partiality and failure BEFORE the list, never after it. -->
+        <p id="browse-status" role="status" aria-live="polite"></p>
+        <p id="browse-incomplete" hidden></p>
+        <!-- The browse list scrolls: it carries no signed claim. -->
+        <ul id="browse-list" aria-label="Existing charts matching this search"></ul>
+
+        <h2 id="register-heading">Not on file? Register a new patient</h2>
+        <form id="register-form" aria-labelledby="register-heading" autocomplete="off">
+          <!-- ONE free name field: no given/family split, which is one culture's name model
+               (ADR-0014). The same typed string is searched and registered. -->
+          <label for="reg-name">Name, as the patient gives it</label>
+          <input id="reg-name" type="text" />
+          <label for="reg-dob">Date of birth — YYYY, YYYY-MM or YYYY-MM-DD, or leave blank if unknown</label>
+          <input id="reg-dob" type="text" />
+          <p id="prompt-status" role="status" aria-live="polite"></p>
+          <!-- Why the step-3 search is partial. OUTSIDE #prompt on purpose: a partial search
+               that showed nobody hides #prompt, and that is exactly when the reason must still
+               be read — "not finished" and "nobody matched" lead to opposite acts. -->
+          <p id="prompt-incomplete" hidden></p>
+
+          <!-- The step-3 prompt. It does NOT scroll: a registration attests exactly these rows
+               as displayed, so every row must actually be visible. -->
+          <section id="prompt" aria-labelledby="prompt-heading" hidden>
+            <h3 id="prompt-heading">Could this be one of these existing patients?</h3>
+            <ol id="prompt-list"></ol>
+          </section>
+
+          <button id="register" type="submit">Register new patient</button>
+          <p id="register-outcome" role="status" aria-live="polite"></p>
         </form>
       </section>
 
-      <!-- The two ADR-0060 reports. Empty and hidden when there is nothing to say: a
-           warning that fires on every chart is a warning nobody reads. -->
-      <section id="chart-warnings" aria-labelledby="warnings-heading" hidden>
-        <h2 id="warnings-heading">Warnings about this chart</h2>
-        <p id="chart-incomplete" hidden></p>
-        <p id="chart-withheld" hidden></p>
+      <section id="chart-view" hidden>
+        <!-- Who this chart belongs to, on screen for as long as the chart is. -->
+        <header id="identity" aria-label="Patient on this chart">
+          <h1 id="patient-heading">Medications</h1>
+          <p id="identity-born"></p>
+          <p id="identity-trust"></p>
+          <p id="identity-id"></p>
+          <button id="close-chart" type="button">Find another patient</button>
+        </header>
+
+        <!-- Who is signed in, and whether a key is held. Ambient, never modal: the clinician
+             should see the lock, not discover it when a signature is refused. -->
+        <section id="session" aria-labelledby="session-heading">
+          <h2 id="session-heading" class="visually-hidden">Signing key</h2>
+          <p id="lock-state" role="status" aria-live="polite">Checking signing key…</p>
+          <form id="unlock-form" hidden>
+            <label for="passphrase">Passphrase for your signing key</label>
+            <input id="passphrase" type="password" autocomplete="current-password" />
+            <button id="unlock" type="submit">Unlock</button>
+          </form>
+        </section>
+
+        <!-- The two ADR-0060 reports. Empty and hidden when there is nothing to say: a
+             warning that fires on every chart is a warning nobody reads. -->
+        <section id="chart-warnings" aria-labelledby="warnings-heading" hidden>
+          <h2 id="warnings-heading">Warnings about this chart</h2>
+          <p id="chart-incomplete" hidden></p>
+          <p id="chart-withheld" hidden></p>
+        </section>
+
+        <table id="med-table">
+          <caption>
+            Current and ceased medications, with the clinician responsible for each
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Medication</th>
+              <th scope="col">Dose</th>
+              <th scope="col">Status</th>
+              <th scope="col">Signature</th>
+              <th scope="col">Stop this drug</th>
+            </tr>
+          </thead>
+          <tbody id="med-rows"></tbody>
+        </table>
+
+        <p id="empty-message"></p>
+
+        <button id="sign-off" type="button">Loading…</button>
+
+        <!-- Outcomes land here rather than in a dialog: an act's result is information, and a
+             box the clinician must dismiss is a step paper never charges them (principle 3). -->
+        <p id="outcome" role="status" aria-live="polite"></p>
       </section>
-
-      <table id="med-table">
-        <caption>
-          Current and ceased medications, with the clinician responsible for each
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Medication</th>
-            <th scope="col">Dose</th>
-            <th scope="col">Status</th>
-            <th scope="col">Signature</th>
-            <th scope="col">Stop this drug</th>
-          </tr>
-        </thead>
-        <tbody id="med-rows"></tbody>
-      </table>
-
-      <p id="empty-message"></p>
-
-      <button id="sign-off" type="button">Loading…</button>
-
-      <!-- Outcomes land here rather than in a dialog: an act's result is information, and a
-           box the clinician must dismiss is a step paper never charges them (principle 3). -->
-      <p id="outcome" role="status" aria-live="polite"></p>
     </main>
     <script src="main.js"></script>
+    <script src="funnel.js"></script>
   </body>
 </html>

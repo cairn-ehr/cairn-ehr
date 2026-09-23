@@ -177,15 +177,16 @@ fn trust_state_from_db(trust_state: &str) -> TrustState {
     }
 }
 
-/// Call `cairn_search_candidates` once and return the DISTINCT patient ids it names, sorted
-/// for determinism (UUIDv7 sorts close to chart-creation order, so this is a stable and
-/// meaningful order, not an arbitrary one — the same reasoning `medication/read.rs` gives
-/// for sorting query results in Rust rather than depending on database order).
+/// Call `cairn_search_candidates` once and return the DISTINCT patient ids it names, ranked
+/// strongest-first — see [`rank_by_passes_matched`] for the order and why it exists. The
+/// order is computed in Rust rather than depended on from the database, the same reasoning
+/// `medication/read.rs` gives for sorting query results itself.
 ///
 /// One chart can legitimately appear on more than one row (matched by more than one pass —
 /// see `a_chart_matching_two_passes_returns_one_row_per_pass` in this crate's `db/046`
-/// tests), so this is where the query -> ONE candidate collapse happens; every read below
-/// operates on this already-deduplicated id list.
+/// tests), so this is where the query -> ONE candidate collapse happens, and the number of
+/// rows collapsed is exactly the strength the ranking reads. Every read below operates on
+/// this already-deduplicated id list.
 async fn read_candidate_ids<C: GenericClient + Sync>(
     client: &C,
     query: &SearchQuery,
@@ -200,18 +201,49 @@ async fn read_candidate_ids<C: GenericClient + Sync>(
 
     let rows = client
         .query(
-            "SELECT DISTINCT patient_id::text AS patient_id \
-             FROM cairn_search_candidates($1, $2, $3::text::jsonb)",
+            // db/046's outer UNION dedups on (patient_id, matched_pass), so one patient comes
+            // back once per pass it matched. Counting per patient therefore counts the DISTINCT
+            // passes it matched (1..=3); the `DISTINCT` inside the count states that rather
+            // than relying on it.
+            "SELECT patient_id::text AS patient_id, count(DISTINCT matched_pass) AS passes \
+             FROM cairn_search_candidates($1, $2, $3::text::jsonb) \
+             GROUP BY patient_id",
             &[&query.name_tokens, &birth_date, &identifiers_json],
         )
         .await?;
 
-    let mut ids: Vec<Uuid> = rows
+    let rows: Vec<(Uuid, i64)> = rows
         .iter()
-        .map(|row| row.get::<_, String>("patient_id").parse::<Uuid>())
-        .collect::<Result<_, _>>()?;
-    ids.sort();
-    Ok(ids)
+        .map(|row| {
+            let id = row.get::<_, String>("patient_id").parse::<Uuid>()?;
+            Ok((id, row.get::<_, i64>("passes")))
+        })
+        .collect::<Result<_, uuid::Error>>()?;
+    Ok(rank_by_passes_matched(rows))
+}
+
+/// Order candidates strongest-first: more `db/046` passes matched, then id (UUIDv7, so chart
+/// age) as a stable tie-break.
+///
+/// # Why this exists (funnel UI slice 2c, 2026-09-23)
+///
+/// `cairn_search_candidates` is a DISJUNCTION of three passes, so a full-name-plus-DOB search
+/// returns everyone sharing ANY name token or the birth date. The funnel's step-3 prompt
+/// shows — and a registration then signs — only the first `PROMPT_CAP` of them
+/// (`cairn_gui_funnel::bound_for_prompt`), and in plain id order those were the OLDEST charts:
+/// the recently-registered duplicate the prompt exists to catch sat hundreds of rows down.
+///
+/// Pass count is the cheapest honest strength signal: it is already in db/046's output, it
+/// reorders without adding or removing a candidate (so the drift invariant *sweep-paired ⊆
+/// search-found* is untouched), and it needs no new `Candidate` field.
+///
+/// **Known limit, stated rather than hidden:** the name pass counts ONCE however many name
+/// tokens matched, so for a "John Smith" query "John Brown" and "John Smith" tie at equal
+/// passes and fall back to chart age — absent a DOB match (a query DOB matching only one of
+/// them breaks the tie in its favour).
+fn rank_by_passes_matched(mut rows: Vec<(Uuid, i64)>) -> Vec<Uuid> {
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    rows.into_iter().map(|(id, _)| id).collect()
 }
 
 /// The §4.2 display-winner name for each candidate, or the John Doe callsign — whichever
@@ -444,4 +476,32 @@ async fn read_photo_refs<C: GenericClient + Sync>(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The step-3 prompt shows the FIRST five candidates (`bound_for_prompt`), and `db/046` is a
+    /// disjunction — a registration search for "John Smith 1980-01-01" returns every John, every
+    /// Smith and everyone born that day. Ordered by id alone (chart-creation order) the five
+    /// shown are the five OLDEST charts, and the duplicate that matters is withheld. Ranking by
+    /// how many passes a chart matched puts the chart that shares name AND birth date first.
+    #[test]
+    fn a_chart_matching_more_passes_ranks_first_whatever_its_age() {
+        let old = Uuid::from_u128(1);
+        let newer = Uuid::from_u128(2);
+        let newest = Uuid::from_u128(3);
+        let ranked = rank_by_passes_matched(vec![(old, 1), (newest, 1), (newer, 2)]);
+        assert_eq!(ranked, vec![newer, old, newest]);
+    }
+
+    /// Ties keep the old, stable order — id ascending — so the ranking adds a key and changes
+    /// nothing a single-pass browse ever showed.
+    #[test]
+    fn equal_pass_counts_keep_id_order() {
+        let a = Uuid::from_u128(10);
+        let b = Uuid::from_u128(20);
+        assert_eq!(rank_by_passes_matched(vec![(b, 1), (a, 1)]), vec![a, b]);
+    }
 }

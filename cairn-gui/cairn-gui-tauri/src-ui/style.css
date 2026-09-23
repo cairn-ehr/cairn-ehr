@@ -178,3 +178,51 @@ tr[data-flag="true"] td {
   margin-top: 0.75rem;
   color: var(--muted);
 }
+
+/* ---- The front door (slice 2c) ---- */
+
+/* The browse list SCROLLS: it carries no signed claim, so a long answer may run off-screen. */
+#browse-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding-left: 0;
+  list-style: none;
+}
+
+/* The step-3 prompt NEVER scrolls: a registration attests exactly these rows as displayed, so
+   every one of them must be on screen (design decision 3). At most PROMPT_CAP rows arrive. */
+#prompt-list {
+  overflow: visible;
+}
+
+#browse-list button,
+#prompt-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 0.15rem 0;
+}
+
+#browse-form label,
+#register-form label {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+/* The identity header: the wrong-chart affordance, so it must be unmistakable. */
+#identity {
+  border-bottom: 2px solid currentColor;
+  margin-bottom: 1rem;
+}
+
+#provisioning {
+  font-weight: bold;
+}
+
+/* A visible focus ring on every control, for keyboard-only use. */
+button:focus-visible,
+input:focus-visible,
+h1:focus-visible {
+  outline: 3px solid Highlight;
+  outline-offset: 2px;
+}
