@@ -239,6 +239,12 @@ scope.)
 >   shows the typed DOB, and a `--patient` launch says its name was not read.
 > - **Only a candidate that some list on screen showed can be opened**, so the webview cannot open
 >   an arbitrary id.
+> - **The prompt read guard is SOFT POLICY** (maintainer decision, 2026-09-23,
+>   [#677](https://github.com/cairn-ehr/cairn-ehr/issues/677)). For 800 ms after a step-3 result
+>   lands, a click on Register counts as "show me", not "register", so a registration does not swear
+>   to rows that appeared under the pointer. It lives in `funnel.js` only: it is ergonomics in the
+>   ADR-0021 sense, and another front-end may choose a different interval or none. It is not part of
+>   what the attestation asserts, so the floor and `FunnelSession` do not enforce it.
 
 **Shell and frontend.** The front door is a shell state, not a tab — a tab presupposes a patient.
 `--patient <uuid>` keeps working, so the timing runbook and the `--mock` accessibility pass do not

@@ -20,8 +20,10 @@
 // SOFT POLICY. The read guard (PROMPT_READ_GUARD_MS) and disabling the candidate rows while a
 // registration saves are UI policy in the ADR-0021 sense: another front-end may choose
 // differently. The backend's own backstop for the second is `register_impl` refusing to write,
-// or to switch charts, once a chart is open. Whether the read guard should move below the UI is
-// #677.
+// or to switch charts, once a chart is open. The read guard has NO backend twin, by maintainer
+// decision (2026-09-23, #677): how long a result must be on screen before a click counts is
+// ergonomics, and a front-end that picks another number — or none — is not thereby broken.
+// Do not move it into `FunnelSession` without reopening that decision.
 //
 // Loaded after main.js as a classic script, so these are shared globals: `el`, `setMessage`,
 // `refresh`, `clearChart`, `say` and `invoke` (read), and `displayedPatient` (WRITTEN here —

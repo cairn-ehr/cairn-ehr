@@ -61,8 +61,7 @@
 >   resurrection refusal (#152). Pair the standing with the key it was probed for (#670).
 > - **Every sentence and its retry advice lives in `funnel/view.rs`** (`Retry::{Now, AfterOperator,
 >   Never}`). A failed search says NOT-a-no-match in capitals. A refusal and an outage are different
->   clinical facts (#648 — still OPEN on GitHub although 2b built the split: confirm and close it,
->   or name what remains); the discriminators are `P0001` from the floor and `DeliberateRefusal`
+>   clinical facts (#648, closed 2026-09-23; the non-`P0001` remainder is #655); the discriminators are `P0001` from the floor and `DeliberateRefusal`
 >   from Rust, with `RefusalScope::NodeState` → `NotProvisioned`.
 > - **`TokenStore::settle` is the sanctioned end of a `take` for callers** (`FunnelSession`'s
 >   defensive branch calls `restore` itself); a success INVALIDATES (a mid-flight
@@ -91,8 +90,9 @@
 > (multi-event rollback untested in both trees) · #658 · #662 (seven `init` effects unpinned) ·
 > #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 · #671 ·
 > #672 (identifier entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads
-> `operator_chain` text, `[P0001]` included) · #677 (the 800 ms read guard lives only in JS — a
-> soft-policy-or-floor decision). #675's four gaps were fixed in PR #674's third review round.
+> `operator_chain` text, `[P0001]` included). #675's four gaps were fixed in PR #674's third review
+> round. **Decided 2026-09-23 (#677):** the 800 ms prompt read guard is SOFT POLICY and stays in
+> `funnel.js` only; do not move it into `FunnelSession` without reopening that decision.
 >
 > **⇒ Hold these two rules from that round.** A chart command acts on the chart DRAWN
 > (`renderedPatient` in `main.js`), resolved in Rust only through `AppState::displayed_patient`

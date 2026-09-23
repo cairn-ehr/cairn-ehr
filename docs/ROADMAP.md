@@ -821,9 +821,9 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   #664 / #666 (what a superseded key classifies as; db/004 contradicts itself) · #665 (the
   orchestrator-level half) · #667 · #668 (the arming affordance + typed slots) · #669 (a dropped
   `register` future latches the store) · #670 (three representable invalid states) · #671 · #672 ·
-  #673 · #648 (open on GitHub though 2b built the `Refused` split — confirm) · #676 (the clerk reads
-  `operator_chain` text) · #677 (the read guard lives only in JS). Also cited: #442, #450, #583,
-  #636, #638.
+  #673 · #676 (the clerk reads `operator_chain` text). Also cited: #442, #450, #583, #636, #638.
+  Decided and closed 2026-09-23: #648 (the `Refused` split, built in 2b; the non-`P0001` remainder
+  is #655) and #677 (the prompt read guard is soft policy and stays in `funnel.js`).
 - **2c's whole-branch review** found one Critical — with charts now switching, a sign-off signed
   whichever chart was OPEN while the previous patient's list could still be on screen — fixed by
   binding `med_list`/`sign_off`/`cease` to the displayed chart id (`AppState::displayed_patient`)
