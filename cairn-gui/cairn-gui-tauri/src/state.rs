@@ -160,15 +160,28 @@ impl SessionKey {
 pub struct AppState {
     /// `None` in fixture mode: `--mock` runs with no database at all, which is what makes
     /// the operator accessibility pass and the timing runbook possible on a laptop.
-    pub db: Option<tokio::sync::Mutex<tokio_postgres::Client>>,
+    ///
+    /// `Arc` because the funnel's live port reads and writes through the SAME connection
+    /// (`cairn_gui_live::LiveData::sharing`), so the window describes one node.
+    pub db: Option<std::sync::Arc<tokio::sync::Mutex<tokio_postgres::Client>>>,
     /// The NODE's key — holds custody of every sealed body (ADR-0052) regardless of who
     /// signed the content. Distinct from the clinician's key in `session`. `None` in
     /// fixture mode.
     pub node_sk: Option<cairn_event::SigningKey>,
     pub node_origin: String,
-    /// The chart this window is open on. Set once at launch (`--patient`); there is no
-    /// patient picker in this slice.
-    pub patient: uuid::Uuid,
+    /// The chart this window is open on, if any — `None` shows the front door (the funnel).
+    /// Chart commands read it only through `AppState::open_patient` (`funnel::window`).
+    pub chart: tokio::sync::Mutex<Option<crate::funnel::window::OpenChart>>,
+    /// Where the funnel searches and registers — mock or live, fixed at launch.
+    pub funnel_backend: crate::funnel::backend::FunnelBackend,
+    /// Custody of the registration form's attested search and the name it ran on.
+    pub funnel: tokio::sync::Mutex<cairn_gui_funnel::FunnelSession>,
+    /// Every candidate a list on screen has shown since the chart last changed, by id — the
+    /// only charts `open_chart` will open, and where their header text comes from.
+    pub shown:
+        tokio::sync::Mutex<std::collections::HashMap<uuid::Uuid, cairn_patient_search::Candidate>>,
+    /// The launch probe's sentence (#654 option 2), when this node may not write.
+    pub provisioning: Option<String>,
     /// Path to the clinician's sealed key file, unsealed on `unlock`. `None` in fixture
     /// mode, where there is nothing to sign.
     pub attester_key_path: Option<std::path::PathBuf>,
@@ -230,14 +243,9 @@ mod tests {
     /// A state holding nothing but a session — enough to exercise the two accessors, which
     /// is where the lock's real behaviour lives.
     fn state_holding(session: Option<SessionKey>) -> AppState {
-        AppState {
-            db: None,
-            node_sk: None,
-            node_origin: String::new(),
-            patient: uuid::Uuid::nil(),
-            attester_key_path: None,
-            session: tokio::sync::Mutex::new(session),
-        }
+        let state = AppState::mock(None);
+        *state.session.try_lock().expect("uncontended") = session;
+        state
     }
 
     /// A held key is what makes the whole-list gesture cost ONE act, so how long it is

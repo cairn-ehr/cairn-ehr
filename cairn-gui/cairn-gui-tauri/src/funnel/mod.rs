@@ -11,9 +11,17 @@
 //!
 //! # Where each piece lives
 //!
+//! - [`window`] — the window's state for the funnel: which chart is open, the mock
+//!   constructor, and the one accessor every chart command asks.
+//! - [`backend`] — mock or live, dispatched on the mode the window launched in.
+//! - [`commands`] — the Tauri commands: thin forwarders onto plain `*_impl` functions, so the
+//!   whole front-door walk is testable against `--mock` with no Tauri runtime.
 //! - [`view`] — every sentence the clerk reads and every payload the webview renders, as pure
 //!   functions. No Tauri, no database: this is where the rules about WORDING are tested.
 //!
 //! The rules about the funnel itself (the trigger, the bounded prompt, token custody, the
 //! session) are one layer down in `cairn-gui-funnel`; nothing here re-derives them.
+pub mod backend;
+pub mod commands;
 pub mod view;
+pub mod window;

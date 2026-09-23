@@ -1,5 +1,5 @@
-//! The window's five commands. Each one is a thin adapter: it resolves state, calls a
-//! `cairn-node` function, and maps the result. No clinical logic lives here — that is all
+//! The window's five chart commands (the front door's are in `funnel::commands`). Each one
+//! is a thin adapter: it resolves state, calls a `cairn-node` function, and maps the result. No clinical logic lives here — that is all
 //! in `cairn-medication-view` and `cairn-gui-tab-medications`, under `cargo test`.
 //!
 //! # Two rules every command in this file follows
@@ -142,6 +142,7 @@ pub async fn sign_off(state: tauri::State<'_, AppState>) -> Result<SignOffReport
         // a gesture silently do nothing.
         .ok_or("your signing key is locked — unlock it to sign off")?;
     let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
+    let patient = state.open_patient().await?;
 
     // Timed around the WRITE only. The clinician's reading time is measured by the operator
     // runbook, not here: capturing it would mean timing how long someone spent thinking.
@@ -164,7 +165,7 @@ pub async fn sign_off(state: tauri::State<'_, AppState>) -> Result<SignOffReport
             node_sk,
             &state.node_origin,
             &params,
-            state.patient,
+            patient,
         )
         .await
         .map_err(|e| format!("{e:#}"))?
@@ -231,6 +232,9 @@ pub async fn cease(
         );
     }
     let group: Uuid = group_id.parse().map_err(|_| "not a medication id")?;
+    // Asked ONCE for the whole gesture: every member thread is stopped on the same chart, even
+    // if the clerk closes it while the loop below is running.
+    let patient = state.open_patient().await?;
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
@@ -241,7 +245,7 @@ pub async fn cease(
     // Which threads make up this displayed line. Read rather than trusted from the caller:
     // the webview knows only the group id it was rendered with, and a reconciled group's
     // membership is a clinical fact the node owns.
-    let chart = read_chart(&state).await?;
+    let chart = read_chart_of(&state, patient).await?;
     let members: Vec<Uuid> = chart
         .rows
         .iter()
@@ -279,7 +283,7 @@ pub async fn cease(
             node_sk,
             &node_kid,
             &state.node_origin,
-            state.patient,
+            patient,
             medication_id,
             &input,
             Some(&author),
@@ -297,16 +301,26 @@ pub async fn cease(
     Ok(CeaseReport { ceased, failed })
 }
 
-/// Read the chart, from the node or from fixtures.
+/// Read the OPEN chart, from the node or from fixtures. Refuses when no chart is open.
 async fn read_chart(state: &tauri::State<'_, AppState>) -> Result<PatientMedicationList, String> {
+    let patient = state.open_patient().await?;
+    read_chart_of(state, patient).await
+}
+
+/// Read one named chart. Split out so `cease` can read the chart it already resolved rather
+/// than asking which chart is open a second time mid-gesture.
+async fn read_chart_of(
+    state: &tauri::State<'_, AppState>,
+    patient: Uuid,
+) -> Result<PatientMedicationList, String> {
     let Some(db) = state.db.as_ref() else {
         use cairn_gui_data::port::ClinicalData;
         return cairn_gui_data::mock::MockData::with_fixtures()
-            .medications(&state.patient.to_string())
+            .medications(&patient.to_string())
             .map_err(|e| format!("{e:?}"));
     };
     let db = db.lock().await;
-    cairn_node::medication::read::list_patient_medications(&*db, state.patient)
+    cairn_node::medication::read::list_patient_medications(&*db, patient)
         .await
         .map_err(|e| format!("{e:#}"))
 }
