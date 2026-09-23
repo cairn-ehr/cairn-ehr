@@ -85,16 +85,19 @@ impl LiveData {
     /// are append-only and can only ever be overlaid. Taking the whole value and reading the
     /// field HERE makes the right answer the only available one.
     ///
-    /// # ⚠️ It does NOT enrol the signing key, and the CLI does
+    /// # ⚠️ It does NOT enrol the signing key — AND NEITHER DOES THE CLI ANY MORE (#654)
     ///
-    /// `cairn-node patient-register` calls `ensure_registration_actor` first, which enrols an
-    /// unknown signing key as a `device` actor with role `registration-desk`. This does not,
-    /// deliberately: enrolling an actor is **provisioning**, and provisioning as a write-path
-    /// side effect is the shape trap 2 forbids (ADR-0066 decision 6 made `ensure_unwrap_key`
-    /// refuse rather than quietly provision, for the same reason). A GUI silently minting a
-    /// `device` actor on somebody's node is worse than the CLI doing it, not better.
+    /// Enrolling an actor is **provisioning**, and provisioning as a write-path side effect is
+    /// the shape trap 2 forbids (ADR-0066 decision 6 made `ensure_unwrap_key` refuse rather
+    /// than quietly provision, for the same reason). This port never did it.
     ///
-    /// **So on a node where `patient-register` has never been run, the first registration
+    /// Until #654 the CLI *did*: a private `ensure_registration_actor` enrolled an unknown
+    /// signing key as a `device` actor on first use, at fifteen write subcommands. That made a
+    /// node's behaviour depend on which surface touched it first. It is gone. `cairn-node init`
+    /// provisions, `cairn-node enroll-device-actor` is the named remedy for a node that never
+    /// ran `init`, and every write path on both surfaces now refuses.
+    ///
+    /// **So on a node that was never provisioned, the first registration
     /// through this port is REFUSED** — db/005's *"signer … is not an enrolled, non-revoked
     /// actor"*. Since #648 that arrives as [`cairn_gui_data::port::DataError::Refused`]
     /// carrying the floor's own sentence, rather than as an outage inviting a pointless

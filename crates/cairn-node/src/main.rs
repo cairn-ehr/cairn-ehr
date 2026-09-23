@@ -1396,6 +1396,13 @@ enum Cmd {
         #[arg(long, env = "CAIRN_KEY_PASSPHRASE")]
         passphrase: Option<String>,
     },
+    /// Enrol this node's signing key as a `device` actor, so it may author clinical events.
+    /// IDEMPOTENT, and a one-time act. `init` already does this, so an ordinary node never
+    /// needs it; a node restored without its actor registry does, and a write command on an
+    /// UNPROVISIONED node refuses naming this one (#654). A key whose actor was revoked, or
+    /// which maps to more than one actor, is a different state that this command cannot fix —
+    /// those refusals say so themselves.
+    EnrollDeviceActor,
     /// Print this node's identity (node_id, pubkey, fingerprint, address).
     Identity,
     /// Generate a signed pairing offer (base64) for out-of-band exchange.
@@ -1585,9 +1592,10 @@ enum Cmd {
 
     /// Register an unidentified ("John Doe") patient (§5.4): mint a UUID, author a
     /// system-generated callsign name + the identity-pending marker so the chart renders
-    /// *unconfirmed*. Care can proceed against the printed UUID immediately. OWNER
-    /// ceremony: enrolls the node key as a `device` registration actor on first use (a
-    /// real clinical UI would attach the operating clerk's human actor instead).
+    /// *unconfirmed*. Care can proceed against the printed UUID immediately. REQUIRES the
+    /// node key to be an enrolled actor already — since #654 no write command provisions one;
+    /// run `cairn-node enroll-device-actor` if the refusal names it (a real clinical UI would
+    /// attach the operating clerk's human actor instead).
     RegisterJohnDoe {
         /// Care context for the callsign (e.g. ED, ward).
         #[arg(long, default_value = "ED")]
@@ -1800,9 +1808,10 @@ enum Cmd {
     ///   * `--kind mark|belongings|ems-context` — a free-text observation; requires
     ///     `--description`. Non-attachment: the observation is the text in the payload.
     ///
-    /// The photo and text flags are mutually exclusive (photo flags iff `--kind photo`). OWNER
-    /// ceremony: enrolls the node key as a registration actor on first use (a real UI attaches
-    /// the operating clerk's *human* actor).
+    /// The photo and text flags are mutually exclusive (photo flags iff `--kind photo`).
+    /// REQUIRES the node key to be an enrolled actor already — since #654 no write command
+    /// provisions one; run `cairn-node enroll-device-actor` if the refusal names it (a real UI
+    /// attaches the operating clerk's *human* actor).
     AssertIdentityEvidence {
         /// The patient UUID to record evidence on.
         patient: Uuid,
@@ -2256,6 +2265,50 @@ async fn main() -> anyhow::Result<()> {
             .await?;
             eprintln!("unwrap key established at {}", unwrap_path.display());
             let node_id = cairn_node::identity::provision(&db, &sk, &kid, &name, &address).await?;
+            // Provision the authoring actor HERE, while this is unambiguously an owner
+            // ceremony and the key is already in hand. Doing it here is what keeps the
+            // paper-parity count at M = 0 for an ordinary operator (#654): an initialised
+            // node can author immediately, and NO write path has to provision to make that
+            // true. A node that never ran `init` — one restored without its actor registry —
+            // uses `cairn-node enroll-device-actor`, which every write refusal names.
+            //
+            // ⚠️ DELIBERATELY NOT `?`, and this is the whole reason the block exists.
+            // Everything above this line is IRREVERSIBLE: the signing key and the unwrap key
+            // are on disk (plus a local-state escrow on the sealed branch — the
+            // `--insecure-plaintext` branch mints no escrow), `cairn_register_unwrap_key` has
+            // run, and the node identity is provisioned. A `?` here would exit non-zero and never print
+            // `provisioned node …`, so an operator would read "init failed" for a node that is
+            // in fact fully provisioned — and their reasonable next move, re-running `init`,
+            // is REFUSED by `refuse_to_replace_existing_unwrap_key` and
+            // `refuse_init_over_a_registered_custody_key`, neither of which mentions the actual
+            // state. They would then be one short command away from a working node with nothing
+            // on screen saying so. That is the dead-end-remedy shape this release closed one
+            // subsystem over (`ActorStanding::Retired`), and it must not be reintroduced by an
+            // error-propagation reflex. (PR #661 review; found independently twice.)
+            if let Err(e) = cairn_node::actor_enrolment::enroll_device_actor(&db, &kid).await {
+                eprintln!(
+                    "WARNING: this node IS provisioned, but enrolling its device actor failed: \
+                     {e:#}\nThe node is usable and nothing needs undoing — run `cairn-node \
+                     enroll-device-actor` to finish. Do NOT re-run `init`: it will refuse over \
+                     the unwrap key this run just wrote (and, failing that, over the custody \
+                     key it registered), and neither refusal describes this state."
+                );
+                // ⚠️ AND ON STDOUT, because the warning above is not enough on its own.
+                //
+                // The exit status is deliberately 0 — see the block above for why a `?` here
+                // strands the operator worse. But that means the only signal was a line on
+                // STDERR, and `cairn-node init > provision.log` is the ordinary idiom: it keeps
+                // the reassuring `provisioned node …` and discards the warning entirely. A
+                // wrapper, installer or `init && …` chain then records an unqualified success
+                // for a node that cannot author, and the next signal is a clinical write
+                // refusing at a desk.
+                //
+                // One greppable line on the same stream as the success line closes that,
+                // without reintroducing the dead end a non-zero exit would create. Machine
+                // visibility is what was missing, not loudness (PR #661 review; a distinct
+                // exit code is the other answer and is a contract change — #667).
+                println!("device actor: NOT ENROLLED — run `cairn-node enroll-device-actor`");
+            }
             println!(
                 "provisioned node {node_id}\nfingerprint {}",
                 cairn_event::short_fingerprint(&kid)?
@@ -2314,6 +2367,22 @@ async fn main() -> anyhow::Result<()> {
             // silently clobber a working escrow that protects already-written exports.
             establish_local_state_escrow(&cli.key, &op, &code, false)?;
             println!("local-state escrow established.");
+        }
+        Cmd::EnrollDeviceActor => {
+            // An OWNER ceremony, so the same interactive key load every write command uses:
+            // the runtime `cairn_agent` role deliberately cannot call `enroll_actor`.
+            let sk = load_signing_key(&cli.key, true)?;
+            let kid = hex::encode(sk.verifying_key().to_bytes());
+            // `connect_and_load_schema`, not `connect`, for the same reason
+            // `EstablishUnwrapKey` below gives: this is a provisioning command, and one of
+            // the states it exists to repair is a database that does not yet carry the
+            // function it is about to call.
+            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            if cairn_node::actor_enrolment::enroll_device_actor(&db, &kid).await? {
+                println!("enrolled this node's key {kid} as a device actor");
+            } else {
+                println!("this node's key {kid} is already an enrolled actor — nothing to do");
+            }
         }
         Cmd::EstablishUnwrapKey { passphrase } => {
             use cairn_node::keystore::{key_at_rest_state, KeyAtRest};
@@ -3878,9 +3947,10 @@ async fn main() -> anyhow::Result<()> {
             // own DB clock (no date dependency — the DB is the integration substrate).
             let site = site.unwrap_or_else(|| id.node_id_hex.clone());
             let date: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
-            // Owner ceremony: make the signing key an enrolled actor so it may author the
-            // additive registration events (idempotent — enrolls only on first use).
-            ensure_registration_actor(&db, &kid).await?;
+            // The node's key must ALREADY be an enrolled actor to author these events.
+            // This does not enrol it — nothing on a write path does, since #654. `init`
+            // provisions; `cairn-node enroll-device-actor` is the remedy the refusal names.
+            cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
             let (pid, call, ordinal) = cairn_node::john_doe::register_john_doe(
                 &mut db,
                 &sk,
@@ -3953,10 +4023,10 @@ async fn main() -> anyhow::Result<()> {
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
             let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
-            // Owner ceremony: make the signing key an enrolled actor so it may author the
-            // additive registration event (idempotent — enrolls only on first use), mirroring
-            // RegisterJohnDoe.
-            ensure_registration_actor(&db, &kid).await?;
+            // The node's key must ALREADY be an enrolled actor to author this event. This
+            // does not enrol it — nothing on a write path does, since #654 — and the refusal
+            // names `cairn-node enroll-device-actor`. Mirrors RegisterJohnDoe.
+            cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
 
             // THE SEARCH RUNS HERE, immediately before the write, over THIS process's own DB
             // connection — never a result an operator retyped from an earlier `patient-search`
@@ -4026,7 +4096,7 @@ async fn main() -> anyhow::Result<()> {
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
             let event_id = cairn_node::sensitivity::assert_sensitivity(
                 &mut db,
                 &sk,
@@ -4333,7 +4403,7 @@ async fn main() -> anyhow::Result<()> {
                 .get(0);
             let observed_year =
                 cairn_node::evidence::resolve_observed_year(observed_year, current_year)?;
-            ensure_registration_actor(&db, &kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
 
             // Clinical sanity bound on the human-entered estimate: a real apparent age and
             // its tolerance are both well under a human lifespan. Rejecting absurd input here
@@ -4394,7 +4464,7 @@ async fn main() -> anyhow::Result<()> {
             let kid = hex::encode(sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
 
             match route {
                 EvidenceRoute::Photo {
@@ -4475,9 +4545,9 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            // Owner ceremony: the node key must be an enrolled actor to author the additive
-            // identify (idempotent — enrolls a `device` actor only on first use).
-            ensure_registration_actor(&db, &node_kid).await?;
+            // The node key must ALREADY be an enrolled actor to author the additive identify.
+            // This does not enrol it — nothing on a write path does, since #654.
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
 
             // Load the human attester key + pre-check human-ness (legibility; the db/005 gate
             // is the real enforcement). Held so the borrows live across identify_patient.
@@ -4543,7 +4613,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::AssertMedicationInput {
                 term: &term,
                 coding: cairn_node::medication::coding_from_parts(
@@ -4589,7 +4659,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::CeaseMedicationInput {
                 stopped: stopped.as_deref(),
                 stopped_precision: stopped_precision.as_deref(),
@@ -4629,7 +4699,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::ChangeDoseInput {
                 dose_amount: dose_amount.as_deref(),
                 dose_unit: dose_unit.as_deref(),
@@ -4675,7 +4745,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             let corrects =
                 cairn_node::medication::resolve_correction_target(&db, medication_id, target)
                     .await?;
@@ -4721,7 +4791,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             // coding_from_parts is all-or-nothing; None means no --coding-* flag was
             // given at all, which for THIS verb is the caller having asked to code
             // nothing — refuse it here rather than at the DB floor.
@@ -4766,7 +4836,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             // None here is exactly what a --strike wants. A command line can still spell
             // both or neither, so this is where those are refused — coding_claim_from_parts
             // collapses the two independent switches into the ONE claim a correction is
@@ -4811,7 +4881,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::ReconcileInput {
                 provenance: &provenance,
                 reason: reason.as_deref(),
@@ -4849,7 +4919,7 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             let input = cairn_node::medication::ReconcileInput {
                 provenance: &provenance,
                 reason: reason.as_deref(),
@@ -5187,11 +5257,11 @@ async fn main() -> anyhow::Result<()> {
             let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
             let mut db = cairn_node::db::connect(&cli.conn).await?;
             let id = cairn_node::identity::load_local(&db).await?;
-            // Owner ceremony: the node key must be an enrolled actor to author the
-            // device-additive tombstone (idempotent; a no-op once already enrolled).
+            // The node key must ALREADY be an enrolled actor to author the device-additive
+            // tombstone. This does not enrol it — nothing on a write path does, since #654.
             // Harmless even on the attested path, where the human — not the node — ends
             // up as the tombstone's signer.
-            ensure_registration_actor(&db, &node_kid).await?;
+            cairn_node::actor_enrolment::require_device_actor(&db, &node_kid).await?;
             // Build a throwaway AttestFlags value purely to reuse the existing
             // resolve_attester/attest_params machinery verbatim (same functions every
             // medication verb uses): `basis`/`note` are hardcoded absent because a
@@ -5418,40 +5488,6 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
             .unwrap_or("(no reason given)");
         println!("! search incomplete: {reason}");
     }
-}
-
-/// Ensure the node's signing key is enrolled as an actor that may author the additive §5.4
-/// John-Doe registration events. Enrolls a `device` actor ONLY when this key is not already
-/// enrolled under ANY kind. An owner ceremony — the runtime `cairn_agent` role deliberately
-/// cannot enroll. A real clinical UI would attach the operating clerk's *human* actor
-/// instead; this device-key path is the headless-node/CLI convenience.
-///
-/// The existence check is deliberately kind-AGNOSTIC. `submit_event` resolves a signer to an
-/// actor purely by `signing_key_id` (kind matters only for attestation), and if one key maps
-/// to MORE than one `actor_current` row it sets `actor_id = NULL` for EVERY event that key
-/// authors node-wide (db/005 `array_length(v_actor_ids, 1) = 1`), silently and irreversibly
-/// degrading attribution. A kind-scoped `AND kind = 'device'` guard would happily add a
-/// second actor to a key already enrolled as (say) a matcher `agent` or a `human`, tripping
-/// exactly that dual-mapping. Keying on `signing_key_id` alone means a key already usable for
-/// authoring is left untouched — never split into two actors.
-async fn ensure_registration_actor(db: &tokio_postgres::Client, kid: &str) -> anyhow::Result<()> {
-    let already: bool = db
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM actor_current WHERE signing_key_id = $1)",
-            &[&kid],
-        )
-        .await?
-        .get(0);
-    if !already {
-        let pinned =
-            serde_json::json!({ "role": "registration-desk", "node_key": kid }).to_string();
-        db.execute(
-            "SELECT enroll_actor('device', $1::text::jsonb, $2)",
-            &[&pinned, &kid],
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 /// Is this custody-load failure a PRESENT file we could not read, and if so what must the

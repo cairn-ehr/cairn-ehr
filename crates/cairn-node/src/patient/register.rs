@@ -128,6 +128,16 @@ pub const REGISTRATION_DEMOGRAPHIC_PROVENANCE: &str = "registrar-entered";
 /// stop the *precision label* from being fabricated. Used both here (`register_patient`,
 /// before any HLC tick) and at the CLI edge (`main.rs`, before any I/O) — ONE function, so
 /// the two call sites can never silently drift into different opinions of "valid".
+///
+/// Its refusal is a [`crate::db_diagnosis::DeliberateRefusal`], not a bare `anyhow!`, and that
+/// matters to exactly one caller today. `cairn-gui-live` maps a `cairn-node` orchestrator's
+/// failure onto the window's error type by asking whether it was a *verdict* or an *accident*,
+/// and the only discriminator it had was the SQLSTATE — which this refusal, raised before any
+/// statement reaches Postgres, does not have. So the most deterministic failure on the whole
+/// registration path reached the clerk as an outage with a retry button that could never work,
+/// and on a desk with no date widget (`3/2/1980` searches fine, finds nothing, then fails here)
+/// that is the DEFAULT failure mode.
+/// [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651).
 pub fn dob_precision(value: &str) -> anyhow::Result<&'static str> {
     fn all_digits(s: &str, len: usize) -> bool {
         s.len() == len && s.bytes().all(|b| b.is_ascii_digit())
@@ -136,10 +146,10 @@ pub fn dob_precision(value: &str) -> anyhow::Result<&'static str> {
         [y] if all_digits(y, 4) => Ok("year"),
         [y, m] if all_digits(y, 4) && all_digits(m, 2) => Ok("month"),
         [y, m, d] if all_digits(y, 4) && all_digits(m, 2) && all_digits(d, 2) => Ok("day"),
-        _ => anyhow::bail!(
+        _ => Err(crate::db_diagnosis::deliberate_refusal(format!(
             "birth date {value:?} is not a recognised shape (expected YYYY, YYYY-MM, or \
              YYYY-MM-DD) — refusing rather than asserting a precision nobody actually gave"
-        ),
+        ))),
     }
 }
 
@@ -875,10 +885,20 @@ mod tests {
             "",
             "1980-",
         ] {
+            let e = dob_precision(bad).expect_err(
+                "a shape that is not YYYY / YYYY-MM / YYYY-MM-DD must be refused, not silently \
+                 coerced to a guessed precision",
+            );
+            // AND it must be a VERDICT, not a bare error. Asserting only `is_err()` here let a
+            // mutation back to `anyhow::bail!` pass the ENTIRE `cairn-node` gate — the only
+            // thing that went red was a DB-gated suite in the OTHER cargo tree, which needs a
+            // full registration walk to prove a property of a pure function (#651, PR #661
+            // review). Without this line the clerk silently gets the retry button back on the
+            // default failure mode of the registration surface.
             assert!(
-                dob_precision(bad).is_err(),
-                "{bad:?} is not one of YYYY / YYYY-MM / YYYY-MM-DD and must be refused, not \
-                 silently coerced to a guessed precision"
+                crate::db_diagnosis::carries_refusal_marker(&e),
+                "{bad:?} is refused deterministically, so the refusal must carry the marker that \
+                 tells a caller it is a verdict rather than an outage"
             );
         }
     }

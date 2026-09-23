@@ -13,20 +13,17 @@
 //! a dropped connection, a lock timeout, a serialization failure, a full disk — decided
 //! nothing at all.
 //!
-//! **Two kinds of floor decision are deliberately outside this rule**, and both are reported
-//! as outages today:
+//! **One kind of floor decision is still deliberately outside this rule and reported as an
+//! outage:** a **constraint** violation (class `23`) or a **privilege** refusal (`42501`) is the
+//! floor deciding — principle 12 counts RLS and constraints as part of it — but carries its own
+//! SQLSTATE, not `P0001`. No path reachable from these two ports produces one today, and
+//! `a_constraint_or_privilege_refusal_is_not_yet_told_apart` pins the CLASSIFICATION so the gap
+//! is a value in every run. (It does not pin the reachability; nothing does.) That is the
+//! unanswered *`false` half* of the rule, which `cairn-sync` already had to answer for itself
+//! (`LocalDbFault`): [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) carries it.
 //!
-//! - a **constraint** violation (class `23`) or a **privilege** refusal (`42501`) is the floor
-//!   deciding — principle 12 counts RLS and constraints as part of it — but carries its own
-//!   SQLSTATE, not `P0001`. No path reachable from these two ports produces one today, which is
-//!   why this stays a binary rule for now — and
-//!   `a_constraint_or_privilege_refusal_is_not_yet_told_apart` pins the CLASSIFICATION so the
-//!   gap is a value in every run. (It does not pin the reachability; nothing does.)
-//! - a refusal raised **in Rust, before any statement reaches Postgres** — see below.
-//!
-//! Both belong to the same unanswered question — *the `false` half of `refusal_is_deliberate`
-//! is not one thing* — which `cairn-sync` already had to answer for itself (`LocalDbFault`).
-//! [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) carries it.
+//! **A refusal raised in Rust, before any statement reaches Postgres, USED to be the second
+//! member of that list and no longer is** — see the two-discriminator section below (#651).
 //!
 //! Getting it backwards is a real defect in both directions. Calling an outage a refusal
 //! tells a clerk to change a form that was never the problem; calling a refusal an outage
@@ -52,14 +49,36 @@
 //! `cairn-node` orchestrator, so it must dig the SQLSTATE out of a context chain first —
 //! which is [`sqlstate_of`], and is the part that can silently stop working.
 //!
-//! # What this rule does NOT cover
+//! # THE RULE HAS TWO DISCRIMINATORS, NOT ONE (#651, 2026-09-23)
 //!
-//! A refusal `cairn-node` raises **in Rust, before any statement reaches Postgres** — the
-//! date-of-birth shape check `register_patient` runs up front — is just as deterministic and
-//! carries no SQLSTATE at all, so it reaches the clerk as an outage.
-//! [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) has the argument and the two
-//! candidate fixes; `tests/refusal_is_not_an_outage.rs` pins today's behaviour so the gap is
-//! visible in every run rather than only in that issue.
+//! A verdict can be reached in two places, so [`data_error_from`] asks two questions and a
+//! `true` from either one means *refused*:
+//!
+//! 1. **The SQLSTATE is `P0001`** — the floor raised it, under the no-`USING ERRCODE` contract
+//!    described above.
+//! 2. **`cairn_node::db_diagnosis::carries_refusal_marker` finds a marker on the chain** — the
+//!    node refused in Rust, before any statement reached Postgres.
+//!
+//! The second exists because the date-of-birth shape check `register_patient` runs up front is
+//! just as deterministic as anything the floor does — the same string refuses identically
+//! forever — and carried no SQLSTATE at all, so the most deterministic failure on the
+//! registration path reached the clerk as an outage. On a desk with no date widget that is the
+//! *default* failure mode: `3/2/1980` searches fine (the trigger applies no date format check,
+//! correctly — a registrar is often told only a year), finds nothing, then fails in Rust with a
+//! retry button that can never work. `tests/refusal_is_not_an_outage.rs` proves both arms
+//! against a real floor.
+//!
+//! **What is still NOT covered is the `false` half**, which is #655 above: a constraint
+//! violation (class `23`) and a privilege refusal (`42501`) are floor *decisions* carrying their
+//! own SQLSTATE, and they still land in `Unavailable`. Adding a second discriminator did not
+//! make the first one right.
+//!
+//! (An earlier draft of this paragraph also listed `42P01`. That is a mis-scoping worth not
+//! repeating: a never-loaded schema is an ENVIRONMENT fault, not a floor decision — `Unavailable`
+//! is the right answer for it, and retrying after somebody loads the schema is exactly what
+//! should happen. `cairn-node`'s own `db_diagnosis` module doc calls it *"the schema never loaded
+//! here"* for the same reason. The pre-existing test below does exercise `42P01`, but only as one
+//! of a list of codes that are not `P0001`.)
 use cairn_gui_data::port::DataError;
 
 /// The SQLSTATE PostgreSQL assigns to a bare `RAISE EXCEPTION` in PL/pgSQL.
@@ -115,17 +134,39 @@ pub fn sqlstate_of(e: &anyhow::Error) -> Option<&str> {
 /// what to change.
 ///
 /// ⚠️ **This is an OPERATOR rendering, not a clerk-facing sentence.** `operator_chain` exists
-/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. The refusal a
-/// fresh node actually produces reads `submit_event: signer 9f3c… is not an enrolled,
-/// non-revoked actor [P0001]` — true, legible, and not a remedy. Slice 2c must not paste it
-/// raw into a form; resolving that is
-/// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).
+/// for a one-line-per-event operator log and appends the bracketed SQLSTATE. Slice 2c must not
+/// paste it raw into a form.
+///
+/// ⚠️ **On an unprovisioned node this function still cannot reach the remedy-naming refusal,**
+/// and the reason is a missing call, not a missing classifier. The three
+/// `cairn_node::actor_enrolment` refusals are `NodeState`-scoped and map to
+/// [`DataError::NotProvisioned`] correctly — but nothing in `cairn-gui-live` calls
+/// `require_device_actor`, so the GUI never mints one. What it actually meets is db/005's own
+/// `submit_event: signer 9f3c… is not an enrolled, non-revoked actor [P0001]` — true, legible,
+/// carrying no marker, and therefore classified `Refused`: a verdict with no way forward, for a
+/// node state that has a one-command remedy. #654 settled the enrolment RULE; wiring the GUI
+/// write path to the remedy is filed as
+/// [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665).
 pub fn data_error_from(e: &anyhow::Error) -> DataError {
     let text = cairn_node::db_diagnosis::operator_chain(e);
-    if refusal_is_deliberate(sqlstate_of(e)) {
-        DataError::Refused(text)
-    } else {
-        DataError::Unavailable(text)
+    // TWO discriminators, complementary rather than alternative, because a verdict can be
+    // reached in two places. The floor's own refusals carry `P0001`; a refusal `cairn-node`
+    // raised in Rust before any statement reached Postgres carries no SQLSTATE at all and is
+    // MARKED instead (#651). Either one means the call was decided, not merely unlucky.
+    //
+    // The SCOPE question is asked FIRST, and only of the marked ones, because it is narrower:
+    // a marked refusal at `NodeState` scope is still a verdict, but the way forward is an
+    // operator command rather than an edit to the form, and `Refused` is rendered with no way
+    // forward but the form. Asking it first keeps the two questions in the right order — "is
+    // this a verdict" then "a verdict about what" — so a future third scope cannot silently
+    // fall through to `Unavailable` (PR #661 review).
+    match cairn_node::db_diagnosis::refusal_scope(e) {
+        Some(cairn_node::db_diagnosis::RefusalScope::NodeState) => DataError::NotProvisioned(text),
+        // `Input` scope, or no marker at all — fall through to the SQLSTATE question, which is
+        // the only one that can speak for the floor's own refusals.
+        Some(cairn_node::db_diagnosis::RefusalScope::Input) => DataError::Refused(text),
+        None if refusal_is_deliberate(sqlstate_of(e)) => DataError::Refused(text),
+        None => DataError::Unavailable(text),
     }
 }
 
@@ -157,6 +198,81 @@ mod tests {
         }
     }
 
+    /// The SECOND discriminator, as a pure test (#651).
+    ///
+    /// `data_error_from`'s marker arm is the one the PR that added it names as its load-bearing
+    /// mutation, and until this test existed it was proved ONLY by a DB-gated suite — so the
+    /// cheapest proof of the newest rule needed a database (PR #661 review). It does not.
+    #[test]
+    fn a_marked_refusal_is_a_verdict_even_with_no_database_in_sight() {
+        // Built the way an orchestrator builds one: the marker at the bottom, operation context
+        // layered above it, and no `tokio_postgres::Error` anywhere in the chain. (`context` is
+        // an INHERENT method on `anyhow::Error`, so no trait import — one here is an unused
+        // import, which CI's clippy denies.)
+        let e = cairn_node::patient::register::dob_precision("3/2/1980")
+            .expect_err("a malformed birth date refuses")
+            .context("registering the patient");
+        match data_error_from(&e) {
+            DataError::Refused(text) => assert!(
+                text.contains("not a recognised shape"),
+                "the orchestrator's own sentence is what tells the clerk WHAT to change — got: \
+                 {text}"
+            ),
+            other => panic!(
+                "a deterministic Rust-side refusal must not reach the clerk as {other:?} — that \
+                 is a retry button on a verdict, on the default failure mode of a desk with no \
+                 date widget"
+            ),
+        }
+    }
+
+    /// A node-state verdict is NOT rendered as a dead end, and not as an outage either.
+    ///
+    /// The clerk's form was correct. Retrying the identical call is pointless, so `Unavailable`
+    /// — which earns a retry-now button — would be a precise untruth. But the way forward
+    /// exists and is one operator command away, so `Refused` — which slice 2c renders with no
+    /// way forward but editing the form — strands them just as badly, on a form that was never
+    /// the problem.
+    ///
+    /// **The mutation that kills this test:** collapse the scope arm in `data_error_from` back
+    /// into the single `Refused` answer. Both refusals still classify as verdicts and every
+    /// other test in both trees stays green — which is exactly how the two situations came to
+    /// share one rendering in the first place (PR #661 review).
+    #[test]
+    fn a_node_state_verdict_is_neither_a_dead_end_nor_an_outage() {
+        let e = cairn_node::actor_enrolment::not_enrolled_refusal("9f3c")
+            .context("registering the patient");
+        match data_error_from(&e) {
+            DataError::NotProvisioned(text) => assert!(
+                text.contains("enroll-device-actor"),
+                "the payload must name the command that makes this same call succeed — got: \
+                 {text}"
+            ),
+            other => panic!(
+                "an unprovisioned node must not reach the clerk as {other:?}: `Refused` offers \
+                 no way forward on a form that was correct, and `Unavailable` offers a \
+                 retry-now that will fail identically until an operator acts"
+            ),
+        }
+    }
+
+    /// The two scopes are told apart, not merely both marked.
+    ///
+    /// Without this, a `refusal_scope` that answered `NodeState` for everything marked would
+    /// pass the test above while sending a malformed date of birth to a rendering that implies
+    /// an operator can fix it.
+    #[test]
+    fn an_input_verdict_and_a_node_state_verdict_do_not_render_the_same() {
+        let input = cairn_node::patient::register::dob_precision("3/2/1980")
+            .expect_err("a malformed birth date refuses");
+        let node_state = cairn_node::actor_enrolment::not_enrolled_refusal("9f3c");
+        assert!(matches!(data_error_from(&input), DataError::Refused(_)));
+        assert!(matches!(
+            data_error_from(&node_state),
+            DataError::NotProvisioned(_)
+        ));
+    }
+
     /// THE CLASSES THIS RULE KNOWINGLY GETS WRONG, pinned so the gap is a value rather than a
     /// sentence in a doc.
     ///
@@ -167,8 +283,10 @@ mod tests {
     /// these two ports produces one today; the sibling copy in `cairn-sync` already pins
     /// `23514` for the same reason.
     ///
-    /// **This test asserts today's behaviour, not the desired one** — the same treatment
-    /// `a_rust_side_pre_flight_refusal_is_not_yet_told_apart` gives the Rust-side half. When
+    /// **This test asserts today's behaviour, not the desired one.** The Rust-side half got
+    /// the same treatment until #651 fixed it, and
+    /// `a_rust_side_pre_flight_refusal_is_refused_not_unavailable` is what that test became —
+    /// which is the precedent for this one. When
     /// [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) resolves the split, this
     /// fails; invert it and delete this paragraph.
     #[test]

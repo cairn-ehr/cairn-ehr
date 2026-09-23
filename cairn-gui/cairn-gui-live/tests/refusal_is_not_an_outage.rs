@@ -69,20 +69,21 @@ async fn chart_count(c: &tokio_postgres::Client) -> i64 {
 ///
 /// **Why this probe and not a malformed date of birth**, which was the obvious first choice
 /// and is written down here so the next reader does not repeat it: `register_patient`
-/// validates the date-of-birth SHAPE in Rust, before any statement reaches Postgres, and
-/// returns a plain `anyhow!`. There is no SQLSTATE in that error at all, so it arrives as
-/// `Unavailable` — see `a_rust_side_pre_flight_refusal_is_not_yet_told_apart` below, which
-/// pins that gap rather than leaving it to be rediscovered.
+/// validates the date-of-birth SHAPE in Rust, before any statement reaches Postgres. There is
+/// no SQLSTATE in that error at all, so THIS test would prove nothing about the SQLSTATE walk:
+/// since #651 it is classified by the second discriminator instead — see
+/// `a_rust_side_pre_flight_refusal_is_refused_not_unavailable` below, which is the arm that
+/// proves the marker, while this one is the arm that proves the chain walk.
 ///
 /// An unenrolled signer is the floor's own verdict: deterministic (the same key refuses
 /// identically until somebody enrols it), legible (the message names the key), and squarely
 /// the clerk's cue to fix the node rather than to click Register again.
 ///
-/// It is also not a hypothetical shape chosen for convenience. `cairn-node patient-register`
-/// enrols its key on first use and `LiveData` deliberately does not, so **this is exactly the
-/// refusal the reference window will meet on a node where the CLI never registered anyone** —
-/// [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654), and `LiveData::new`'s doc has
-/// the argument for why the port must not provision its way out of it.
+/// It is also not a hypothetical shape chosen for convenience. **Since #654 no write path on
+/// either surface provisions an actor** — `cairn-node init` enrols and
+/// `cairn-node enroll-device-actor` is the remedy — so this is exactly the refusal the
+/// reference window meets on a node that was never provisioned. `LiveData::new`'s doc has the
+/// argument for why the port must not provision its way out of it.
 #[tokio::test]
 async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
     let Some(cs) = common::cs() else { return };
@@ -130,25 +131,29 @@ async fn a_deterministic_floor_refusal_is_refused_not_unavailable() {
     restore_and_expect_kept(&mut store, returned);
 }
 
-/// A KNOWN GAP, PINNED RATHER THAN LEFT SILENT — [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651).
+/// THE SECOND DISCRIMINATOR, proved against a real floor — [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651).
 ///
 /// `register_patient` refuses some inputs in Rust, before any statement reaches Postgres: the
 /// date-of-birth shape is validated up front precisely so a malformed one refuses the whole
 /// call with zero side effects (no HLC tick, no partial chart). Those refusals are every bit
 /// as deterministic as the floor's — the same string refuses identically forever — but they
-/// carry no SQLSTATE, so `data_error_from` cannot tell them from a dropped connection and
-/// reports `Unavailable`.
+/// carry **no SQLSTATE**, so the `P0001` rule the test above proves cannot see them at all.
 ///
-/// The clerk is therefore invited to retry a registration that can never succeed, which is the
-/// exact harm #648 describes, one layer above where #648 was looking. Fixing it needs a
-/// decision in `cairn-node` (a typed error, or a refusal marker on the `anyhow` chain), not a
-/// patch here — this crate has nothing to read. See #651 for both candidate shapes.
+/// Until #651 they reached the clerk as `Unavailable`, and this test pinned that wrong answer
+/// on purpose. It now pins the right one: `cairn_node::db_diagnosis::DeliberateRefusal` marks
+/// the refusal and `data_error_from` consults **both** discriminators.
 ///
-/// **This test asserts today's WRONG behaviour on purpose, so the gap is visible in the diff
-/// and in every run.** When it is fixed, this test fails, and that failure is the good news:
-/// flip it to expect `Refused` and delete this paragraph.
+/// **Why this is the arm that mattered most.** The trigger applies no date format check, and
+/// correctly so — a registrar is often told only a year (principle 4) — and db/046's pass 2 is
+/// a string compare. So on a desk with no date widget, `3/2/1980` searches fine, finds nothing,
+/// and then fails here. That is not an edge case; it is the DEFAULT failure mode of the surface
+/// slice 2c builds, and before this it came with a retry button that could never work.
+///
+/// **The mutation that kills this test:** remove the
+/// `|| cairn_node::db_diagnosis::carries_refusal_marker(e)` arm from `data_error_from` and this
+/// goes back to `Unavailable`. Nothing else in either tree notices.
 #[tokio::test]
-async fn a_rust_side_pre_flight_refusal_is_not_yet_told_apart() {
+async fn a_rust_side_pre_flight_refusal_is_refused_not_unavailable() {
     let Some(cs) = common::cs() else { return };
     let (reader, _guard) = common::connect(&cs).await;
     let (sk, _kid) = common::setup(&reader).await;
@@ -169,16 +174,18 @@ async fn a_rust_side_pre_flight_refusal_is_not_yet_told_apart() {
         .expect_err("a malformed date of birth must refuse the whole call");
     restore_and_expect_kept(&mut store, returned);
 
-    let DataError::Unavailable(text) = &err else {
+    let DataError::Refused(text) = &err else {
         panic!(
-            "this now reports {err:?} rather than `Unavailable` — which is the FIX landing. \
-             Change this test to expect `Refused` and remove the gap note in its doc."
+            "a malformed date of birth is a VERDICT: the same string refuses identically \
+             forever, so offering a retry for it is the harm #648 describes, one layer above \
+             where #648 was looking (#651). Got {err:?}"
         );
     };
     assert!(
         text.contains("not a recognised shape"),
-        "the message is still the orchestrator's own, which is the one thing that is right \
-         about this arm today — got: {text}"
+        "and the orchestrator's own message is the only thing that tells the clerk WHAT to \
+         change — a correctly-classified refusal that does not say why is the same silence \
+         one variant over; got: {text}"
     );
 }
 

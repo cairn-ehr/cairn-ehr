@@ -121,8 +121,9 @@ pub async fn setup(c: &Client) -> (SigningKey, String) {
     let sk = SigningKey::from_bytes(&seed);
     let kid = hex::encode(sk.verifying_key().to_bytes());
     // Enrol as a `device` with role `registration-desk` — the SAME shape
-    // `ensure_registration_actor` gives the CLI's `patient-register`, and therefore the shape
-    // the reference window will carry once #654 decides how a GUI gets enrolled.
+    // `cairn_node::actor_enrolment::enroll_device_actor` gives, which since #654 is the one
+    // enrolment path both surfaces use (`cairn-node init` and `cairn-node enroll-device-actor`
+    // call it; nothing on a write path does).
     //
     // The alternative (`agent` with a model/skill-epoch blob, which the root tree's `setup`
     // uses) is what a matcher or an advisory agent is, not a registration desk. db/005's
