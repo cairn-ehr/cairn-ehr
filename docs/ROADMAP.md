@@ -757,447 +757,73 @@ report figures *better* than the truth.
 paper 3 → forced 2 → target 2. `M ≤ N`. Time + cognitive load: the 5 s ceiling held throughout, and
 **§5.11's no-spinner limb is now met on a real search**. Plans (with the full tables):
 `2026-09-21-patient-search-fragment-matching-636.md`, `2026-09-21-patient-search-pass3-cost-639.md`.
-### 2026-09-22 — funnel UI slice 2a: the pure core (PR #646)
+### 2026-09-22 → 09-23 — the funnel UI, slices 2a → 2c (PRs #646, #653, #661, #674)
 
-- **The slice:** every *decision* on the §5.3/§5.8 funnel design page becomes an executable rule,
-  testable with no window and no database, so the surface slices are wiring rather than judgement.
-  New crate `cairn-gui-funnel` (no Tauri, no Postgres, no new third-party dependency), plus the two
-  ports in `cairn-gui-data` and a mock population implementing them.
-- **`trigger.rs` — advisory, never a gate**, and that is the module's reason for existing. Had it
-  gated, a mononymous patient or one whose DOB is genuinely unknown could not be registered without
-  someone typing a name or a date nobody knows: a required field satisfiable only by fabrication.
-  `TokenStore::record` consults it for nothing, and a test in the *other* module holds that open.
-- **`prompt.rs` — `PROMPT_CAP = 5`, pinned**, because how many existing charts a clerk sees before
-  being allowed to create another is a clinical decision, not a layout detail. Viewport tracking
-  stays rejected (a signed record must not assert "this row was on screen"). **The load-bearing
-  rule is that the two partialities never collapse** — the node could not *read* some charts, the
-  prompt could not *show* others; the second is milder and commoner, so overwriting the first would
-  delete the warning that teaches a clerk to distrust a zero. `incomplete` may only ever go ON.
-- **`token.rs` — `AttestedSearch` has no public constructor.** The design said `register` takes
-  *"only that token"*; handing the port a value nothing else can build is the same guarantee in the
-  type system, and it holds against a Rust caller too. `take` compares **first** and removes only
-  on a match.
-- **Reworked after review — custody is COUNTED, never inferred from `Option::is_none()`.** That
-  predicate is true both mid-registration and after the clerk edited the form, and conflating them
-  produced three defects, each reproduced with running code: `restore` after `discard` resurrected
-  the discarded search (the *Jon* → *John* case `discard`'s own doc called impossible); a refused
-  empty-query `record` left the stale search redeemable, so a cleared form let the next patient's
-  chart attest the previous patient's search; and a background re-search landing **between two
-  Register clicks** handed the second click a fresh valid token and minted **two charts** — a
-  duplicate produced by the duplicate-prevention machinery. Now `record`/refused-`record`/`discard`
-  each bump a **generation**, a taken attestation remembers its own, `take` sets an **in-flight**
-  flag, and `commit`/`restore` are the two mandatory ends of every `take`. Tokens moved to a
-  **process-global** counter. `register` **consumes** the attestation and returns it inside its
-  error — a borrow left `!Clone` buying nothing.
-- **Reworked after review — only a `PromptList` can be attested.** `bound_for_prompt` had **zero
-  call sites**; 2a's own end-to-end walk recorded the raw node list, so the shortest path anyone
-  would copy signed *forty displayed* for a prompt showing five.
-- **The ports.** `PatientSearch` + `PatientRegistration`, split so the write surface is one method
-  wide. The **trait declares** `impl Future<…> + Send` rather than `async fn` (which raises
-  `async_fn_in_trait`, an error under `-D warnings`, and promises no `Send`) — no `async-trait`
-  dependency, and **not dyn-compatible**, so a window dispatches on the existing `is_mock()`
-  branch. The **impls** use plain `async fn`, which is what makes the work happen when awaited
-  rather than when the future is built.
-- **The mock population:** six fixtures, each a case that has broken something (multi-script
-  shaping, #636's `mich`, a hyphenated compound, apostrophe-and-hyphen, a two-character name
-  (#638), a John Doe browsable as identity-pending). **Its matching rule is NOT db/046's and its
-  doc says so at length** — which is why the §1.2 measurement must also be taken against a
-  database. `FixturePatient.uuid` is a parsed `Uuid`: while it was a `String`, a one-character typo
-  dropped that patient out of every search through a fallible parse while the list still declared
-  itself complete.
-- **Two spec decisions met the code**, both dated revision notes rather than edits. **The trigger**
-  was *"a given name, a surname and a date of birth"* — one culture's name model (ADR-0014),
-  failing for a mononymous patient, a patronymic or Han name order, and forcing the raw name to be
-  reassembled when `register_patient` requires `name` to be the string `SearchQuery` was built
-  from; now *"two name tokens and a date of birth"* over **one free name field**. **Decision 4's
-  positive limb cannot be built** — `Candidate` carries no sex and a round-trip test pins its field
-  count at seven; the negative limb (nothing narrows on sex) is honoured structurally.
-- **21 mutations run, 21 killed — then a full multi-agent review found what those 21 did not
-  cover**: three live defects (above) plus surviving mutations now closed by tests — the truncation
-  **off-by-one** (no case ever withheld exactly one), the **birth-date pass entirely unexercised**,
-  the **identifier system check** unpinned, a three-token name, a **year-only date of birth** (a
-  rule demanding `YYYY-MM-DD` survived, and would have excluded exactly the patients principle 4 is
-  about), and the CJK test's **ASCII space** (an IME emits U+3000). Refusal text had been pinned by
-  `len() > 40`, and `AttestedSearch`'s whole guarantee by nothing at all. Tests 112 → **133**.
-- **Filed:** [#645](https://github.com/cairn-ehr/cairn-ehr/issues/645) (decision 4's display/rank
-  half — what an additive `Candidate.sex` plus a projection read would cost) ·
-  [#647](https://github.com/cairn-ehr/cairn-ehr/issues/647) (`Demographics.sex` is a bare `String`,
-  so the port cannot say *not recorded* distinctly) ·
-  [#648](https://github.com/cairn-ehr/cairn-ehr/issues/648) (**closed by 2b**) ·
-  [#649](https://github.com/cairn-ehr/cairn-ehr/issues/649) (`register`'s future has no
-  cancellation contract: dropped after commit, the retry mints a duplicate because
-  `register_patient` generates its own id) · [#650](https://github.com/cairn-ehr/cairn-ehr/issues/650)
-  (`TriggerState::Waiting(vec![])` is representable and meaningless — low). **#355** already tracked
-  the neighbouring `SearchAttestation` gap: its three fields are `pub` and it derives
-  `Deserialize`, so `from_displayed` is a convention, not an enforcement.
-- **Carry-over, still owed:** registering in `--mock` now succeeds into an in-memory set, which
-  makes `cairn-gui-tauri/src/main.rs`'s *"Writes are refused in this mode"* too broad — **2c** must
-  narrow it to **clinical** writes.
+The §5.3/§5.8 search-before-create funnel as the reference window's front door. Design:
+`docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md` (its dated notes are
+the record of where each slice met the code); plans `docs/superpowers/plans/2026-09-2{2,3}-*funnel*`.
+No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
 
-**§1.2:** paper counterpart is the registration desk and the alphabetical index drawer. Steps:
-register paper 5 → forced 4 → target 4; find paper 3 → forced 2 → target 2. `M ≤ N` on both, and
-the advisory trigger is what keeps it there. Time + cognitive load: **not measurable in this slice
-and not claimed** — 2a exposes no runnable surface. Design:
-`docs/superpowers/specs/2026-09-20-registration-search-funnel-ui-design.md`. Plan:
-`docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2a.md`.
-
-### 2026-09-23 — slice 2c's four prerequisites (PR #661)
-
-**No ADR, no spec version bump, no migration, `SCHEMA_GENERATION` unchanged, no new dependency in
-any tree, no lockfile movement.** Closes
-[#659](https://github.com/cairn-ehr/cairn-ehr/issues/659),
-[#660](https://github.com/cairn-ehr/cairn-ehr/issues/660),
-[#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) and
-[#654](https://github.com/cairn-ehr/cairn-ehr/issues/654). Plan:
-`docs/superpowers/plans/2026-09-23-funnel-ui-slice-2c-prerequisites.md`.
-
-- **Why a slice of its own.** All four defects exist today and all four have exactly one consumer
-  — the slice 2c window that has not been written yet. Three of the issues say so themselves. It
-  is the cheapest possible moment to close them, and it keeps 2c's PR from spanning two cargo
-  trees with two gate profiles.
-
-- **#659 — `TokenStore::settle`.** `register` hands the attested search back *inside* its error
-  because `restore` needs exactly that value, which made `.map_err(|(e, _)| e)?` — the idiom 2c's
-  handler would have been written with — a silent trap: it drops the attestation during
-  **destructuring** (so `#[must_use]` cannot fire; that lint sees unused expression results, not
-  dropped pattern fields) and leaves `in_flight` set. `settle` commits on `Ok`, restores on `Err`,
-  and returns the `Restored` so the two failure outcomes keep different words on screen. Generic
-  on `T`/`E`: naming `DataError` would invert the `cairn-gui-data → cairn-gui-funnel` edge into a
-  cycle. **The other reading of #659 — clearing `in_flight` in `discard` — was rejected and the
-  code says why: that is how two clicks produced two charts.**
-
-- **#660 — `MockData::fail_next`.** `--mock` could produce neither `Refused` nor `Unavailable`, so
-  2c's two-armed rendering would have shipped with coverage only from a DB-gated suite that
-  renders nothing. One shared one-shot slot, consumed **inside** the async body so a
-  built-and-dropped future does not spend it — a property the plan's own mutation analysis
-  predicted would otherwise be unpinned, and it was, so it is a fourth test.
-
-- **#651 — `cairn_node::db_diagnosis::DeliberateRefusal`.** A malformed date of birth refuses in
-  Rust before any statement reaches Postgres, so it carried no SQLSTATE and reached the clerk as
-  an outage with a retry that can never work. **On a desk with no date widget that is the default
-  failure mode, not an edge case**: the trigger applies no date-format check (correctly —
-  principle 4), db/046 pass 2 is a string compare, so `3/2/1980` searches fine, finds nothing,
-  then fails in Rust. Shape 1 (a real type with a private field) rather than shape 2 (a marker
-  convention), because a convention is what #648 was getting away from. Its home is
-  `db_diagnosis` so **#652's consolidation finds the module already answering both halves**.
-  `data_error_from` now asks two complementary questions; the test that pinned the wrong answer
-  on purpose expects the right one. `dob_precision` turned out to be the only `bail!`/`anyhow!`
-  in `register.rs`, so the registration path is complete.
-
-- **#654 — one enrolment rule, and a finding the issue did not have.** The maintainer chose
-  *provisioning command + retire the CLI auto-enrolment*. **The issue understated its blast radius
-  by fifteen**: `ensure_registration_actor` was not `patient-register`'s helper but the CLI's
-  general device-actor bootstrap, called by `register-john-doe`, `patient-register`,
-  `sensitivity-assert`, both evidence commands, `identify-patient`, eight medication commands and
-  `shred` — its own doc called it *"the headless-node/CLI convenience"*. Retiring it from one
-  would have left fourteen provisioning silently. So all fifteen now `require_device_actor` and
-  refuse; **`cairn-node init` enrols** (so an ordinary operator gains no new act — `M = 0` in the
-  plan's §1.2 benchmark) and **`cairn-node enroll-device-actor`** is the named remedy for a node
-  that never ran `init`, most obviously one restored without its actor registry. The refusal is a
-  `DeliberateRefusal`, so it is a verdict, and it names the command the way `submit_event`'s
-  unwrap-key refusal names `establish-unwrap-key`.
-
-- **What #661 deliberately did NOT do.** `LiveData` is unchanged: making its refusal *actionable*
-  means a sentence in the window's chrome, which is rendering, and rendering is 2c's.
-  `device_actor_enrolled` is public **for exactly that** — 2c's `build_live_state` probes it at
-  launch (#654's option 2). **#655 is untouched**: a second discriminator did not make the first
-  one right.
-
-- **The review pass, in the same PR — five findings, and one was a dead end.** Two rustfmt breaks
-  and four call-site comments still describing the deleted behaviour (*"idempotent, enrols only on
-  first use"*), which inverted the invariant #654 had just established. Then the one that
-  mattered: **a REVOKED device actor was indistinguishable from a never-enrolled one.**
-  `actor_current` excludes revokes, so a retired key read as *not enrolled* and the refusal sent
-  the operator to `enroll-device-actor`, which db/004's `cairn_actor_id_key_conflict` refuses as a
-  resurrection with an opaque `P0001` (#152). Refusing the resurrection is correct; sending them
-  there is not. Standing is now three states (`ActorStanding::{Enrolled, NeverEnrolled, Retired}`)
-  in one round trip, and `Retired`'s sentence says the remedy is a **new signing key** — a
-  decision about accountability, not a command. Fifth finding: **`init` has no behavioural test**
-  at all; deleting its one enrolment line left the gate green, so a bounded source guard was
-  added and the real rig filed as
-  [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662), which names the seven other `init`
-  effects that are equally unpinned.
-
-- **The five-agent review round, same PR — and it found three false comments and a false issue.**
-  Three **Critical**, all one class: comments describing the *old* behaviour **without naming the
-  deleted function**, so the `ensure_registration_actor` grep could not see them — two of them
-  user-visible `--help` text still promising auto-enrolment. Then two claims about SQL that had
-  been read and misremembered: **`actor_current` does not exclude a superseded actor** (db/004 is
-  `op IN ('enroll','supersede')`; only `revoke` removes — a live trap for the rotate-key door,
-  [#664](https://github.com/cairn-ehr/cairn-ehr/issues/664); **⚠️ but the conclusion this round
-  drew from it — that a superseded key would read `Enrolled` and keep authoring — was itself
-  wrong, and the NEXT round caught it: see below**), and **"nothing
-  provisions" has a counterexample in the same binary** (`matcher_actor` enrols an agent from
-  `ApplyAutoCandidates`, [#663](https://github.com/cairn-ehr/cairn-ehr/issues/663)). The
-  unknown-standing catch-all's own rationale was **falsified by this PR** and now `bail!`s.
-  `init` no longer `?`s its enrolment — that call sits after everything irreversible, so a blip
-  printed *"failed"* for a node that was provisioned, and the re-run is refused by the custody
-  guard with a message about a different state.
-  [#662](https://github.com/cairn-ehr/cairn-ehr/issues/662)'s **stated blocker was false** — the
-  behavioural `init` test needed no virgin database, only helpers already in the tree — so it was
-  written rather than deferred, and the issue corrected rather than quietly closed.
-- **What the review changed in the types.** `ActorStanding` gained **`Ambiguous`** and the SQL now
-  **counts** current rows rather than testing existence: `Enrolled` had to mean *exactly one*
-  actor, because two make db/005 null the `actor_id` of everything that key ever authors, and an
-  unattributable clinical event is worse than a refused one (principle 10). **`device_actor_enrolled`
-  was deleted** — its only justification was 2c's launch probe, and a boolean probe at launch
-  re-creates the dead end in the newest surface. `deliberate_refusal` is `pub(crate)` (declaring a
-  verdict is a claim only that crate can make) and `is_deliberate_refusal` became
-  `carries_refusal_marker`, because two siblings with the old name mean the **opposite** thing
-  about SQLSTATE.
-
-- **The SECOND five-agent review round, same PR — and the headline is that three agents converged
-  on one duplicate-chart path nobody had seen.** `TokenStore::commit` cleared `in_flight` and
-  nothing else. But `record` has no `in_flight` guard — deliberately, because the step-3 search
-  re-runs in the background as the clerk types — so the walk `record(A) → take(A) →
-  record(B) → settle(Ok) → take(B)` succeeded, minting **a second chart for the patient just
-  registered**. `RegistrationInFlight`'s own doc claims that property is *"of the store rather
-  than a hope about the button's disabled state"*; after a success it was back to being a hope.
-  **`commit` now `invalidate`s**: a registration that succeeded consumed the form. The test fails
-  against the old code, which is how the walk was confirmed rather than argued.
-
-- **And the marker split, decided by the maintainer rather than assumed.** `deliberate_refusal`'s
-  documented precondition is *"nothing about the environment took part in the decision; a retry
-  must be pointless by construction"*. Three of its four call sites breached it: the
-  `actor_enrolment` refusals are minted **after** a registry read, and `not_enrolled_refusal`'s own
-  doc conceded *"until somebody enrols it"*. Both are verdicts — neither is ever `Unavailable` —
-  but the way forward differs, so the marker now carries **`RefusalScope::{Input, NodeState}`** and
-  the port gained a third variant, **`DataError::NotProvisioned`**: withhold the retry-now, show
-  the remedy, keep a way to try again once an operator has acted. `Input` keeps `Refused`. The
-  scope question is asked **first**, so a future third scope cannot fall through to `Unavailable`.
-
-- **Two guards that were guarding less than they claimed.**
-  `enrolment_is_never_a_write_side_effect.rs` read `src/main.rs` only, while `enroll_device_actor`
-  is `pub` and `cairn-gui-live` depends on `cairn-node` — so the mutation its own header names was
-  invisible in the one tree whose doc argues the temptation is worst. It now scans every shipped
-  `.rs` surface (`pub(crate)` is impossible: `main.rs` is a separate crate), verified by injecting
-  a GUI call, **plus a count guard pinning the fifteen `require_device_actor` sites** so a check
-  that silently vanishes fails. And `init_still_enrols_the_device_actor` did not strip comments
-  while its sibling did, so **commenting the line out kept it green** — the commonest way a line
-  gets "deleted" while debugging, and precisely the failure it exists to catch.
-
-- **`ActorStanding::Ambiguous` had no test at all, and is reachable TODAY.** Its doc called it
-  unreachable through "the only enrol door that exists" — but db/052's `restore_actor_registry`
-  replays a medium's `actor_event` rows and *deliberately* bypasses db/004's collision guards (it
-  validates shape, it does not re-adjudicate), so a restored node is the concrete place an
-  operator meets it. The `EXISTS`-instead-of-`count(*)` simplification — the shape the retired
-  `ensure_registration_actor` actually used — deletes the branch with **every other test in the
-  file still green**, which was verified by applying it. Now pinned.
-
-- **And the supersede hazard was documented backwards, three ways in one file.** The enum doc
-  asserted in capitals that a superseded key reads `Enrolled`; `Retired`'s parenthetical said
-  superseded is *not* `Retired`; and `retired_actor_refusal` — the sentence an **operator reads** —
-  said "revoked **or superseded**". The classifier keys on `signing_key_id`, not `actor_id`, so no
-  branch yields `Enrolled`: it is `Retired` or `Ambiguous` depending on a db/004 convention that
-  **db/004 states both ways** and no CHECK settles. The old wording was dangerous specifically
-  because the natural fix for the symptom it described is to consult `actor_id`/`superseded_by` —
-  which is *how* a superseded key would keep authoring.
-  [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666) settles the convention, then #664.
-
-- **Filed rather than fixed, with numbers this time.**
-  [#665](https://github.com/cairn-ehr/cairn-ehr/issues/665) — the GUI cannot mint the
-  remedy-naming refusal, because nothing in `cairn-gui-live` calls `require_device_actor`; the
-  `NotProvisioned` classifier is right and the call site is missing, and `error.rs`'s admission of
-  this previously carried **no issue number** while every sibling deferral did (house rule 5).
-  [#666](https://github.com/cairn-ehr/cairn-ehr/issues/666) — db/004's self-contradiction.
-  [#667](https://github.com/cairn-ehr/cairn-ehr/issues/667) — `init`'s swallowed-enrolment branch
-  is untested (the `SET ROLE`-without-`EXECUTE` seam is the way in), and it exits **0** with the
-  warning on stderr while `provisioned node …` goes to stdout; `init > provision.log` kept the
-  reassuring half, so a greppable `device actor: NOT ENROLLED` line now goes to stdout too.
-  [#668](https://github.com/cairn-ehr/cairn-ehr/issues/668) — `--mock` cannot actually arm a
-  failure: `cairn-gui-tauri` builds a fresh `MockData` per command, so the §1.2 runbook must not
-  be written against `fail_next` until a persistent one lands. The doc claimed the capability was
-  delivered; it now says what is true.
-  [#669](https://github.com/cairn-ehr/cairn-ehr/issues/669) — **the latch route no source guard can
-  see**: a `register` future that is DROPPED (window closed mid-write, reload, `select!`, timeout,
-  a panic through the await) drops the `AttestedSearch` *inside* the future, so `in_flight` stays
-  set, `settle` is never reached, `discard` deliberately does not clear it, and the clerk reads
-  *"already being saved — wait for it to finish"* for the rest of the window's life with no gesture
-  that recovers. #649 covers the other half of the same root cause and its text **assumes the
-  caller still holds the attestation, which is false on a drop** — so the latch half was tracked
-  nowhere. The fix is a `Drop` on `AttestedSearch` carrying the latch, which also subsumes
-  `commit`'s inability to prove a `take` was outstanding.
-  [#670](https://github.com/cairn-ehr/cairn-ehr/issues/670) — four hardening items, all fail-closed
-  today: an `ActorStanding` carries **no subject**, so pairing it with the right key is caller
-  discipline (`standing(kid_a)` + `retired_actor_refusal(kid_b)` compiles); a cross-store `restore`
-  installs a foreign search and puts the wrong sentence on screen (redemption still fails closed);
-  `Enrolled` over-claims *"may author"*; and `strip_comment` **fails open** on a `//` inside a
-  string literal, unlike `enclosing_arm`.
-
-- **Smaller corrections.** The sibling-predicate note said "two … a reader would find three"; there
-  are **four**, and the omitted one (`restore::clinical::refusal_is_deliberate`) is in the same
-  crate, while `cairn-gui-live` is in a different *workspace* than the note claimed. A `§9.6` tag
-  on a clerk-legibility claim was an inherited mis-attribution (§9.6 is "The validated submit
-  surface") and is corrected in both `db_diagnosis.rs` and `port.rs`. `port.rs`'s `DataError`
-  contract still said `Refused` means *"the in-DB floor decided"* and that the payload is *"the
-  floor's own message"* — false since #651, in an untouched file that is the contract a 2c
-  renderer reads. `photo_evidence.rs` pointed at a doc that no longer carried the kind-agnostic
-  argument. `init`'s comment listed the local-state escrow unconditionally though it is
-  `else`-branch only, and its warning named the custody guard when the unwrap-key guard fires
-  first.
-- **What the review measured as untested.** `dob_precision`'s own test asserted `is_err()` only —
-  mutating back to `bail!` passed the **entire** `cairn-node` gate, red only in the other cargo
-  tree. `data_error_from`'s marker arm had no pure test, so the newest rule needed a database. The
-  mock's documented *"one slot, not two"* was unpinned (two slots passed everything). And
-  **nothing stopped a sixteenth write command calling `enroll_device_actor`** — now
-  `enrolment_is_never_a_write_side_effect.rs`, in `pen_rows_leave_through_one_door.rs`'s idiom,
-  with an `ALLOWED` inventory of the two owner ceremonies and a sweep that fails if either stops.
-
-- **Verification.** Eighteen mutations, each killing its intended test. The load-bearing one:
-  scoping `device_actor_enrolled` to `kind = 'device'` passes four of the five new enrolment tests
-  and **mints a second `actor_current` row** for a key already enrolled as an `agent`, which nulls
-  the `actor_id` of every event that key ever authors (db/005). The fifth catches it.
-
-### 2026-09-22 — funnel UI slice 2b: the live ports (PR #653)
-
-- **The slice:** the funnel's **data path** — the rules 2a made executable, now acting on a real
-  record. New crate `cairn-gui-live`, whose `LiveData` implements both ports over a
-  `tokio_postgres::Client` by delegating to `search_patients` (§5.8) and `register_patient`
-  (§5.3, ADR-0061). It adds no clinical logic. **2b was split again into 2b + 2c** with the
-  maintainer, on the DR 2a/2b/2c/2d precedent: the ports are provable against a real floor today,
-  and the §1.2 measurement cannot be taken until a runnable surface exists. A dated note on the
-  design page records the split; the measurement does not move.
-- **Where a live port may live is an architecture fact.** Not `cairn-gui-data` — its manifest
-  states, deliberately, that it pulls no database driver, which is what keeps the pure rules and
-  `--mock` buildable with no Postgres anywhere. Not `/crates` — a root crate implementing a
-  `cairn-gui` trait inverts the one direction ADR-0021 / §9.5 forbids. Both reasons are written
-  into the new manifest, because the next person will reach for the module first.
-- **Built — `DataError::Refused` (#648).** Three variants are three clinical facts. `Unavailable`
-  means **nothing was decided** and a retry may work; `Refused` means the in-DB floor decided and
-  will decide the same way every time, so offering a retry is a precise untruth on a
-  wrong-chart-prevention surface (principle 4). The discriminator is the SQLSTATE: a bare
-  `RAISE EXCEPTION` is `P0001`, which `db/001_envelope.sql` states is a **contract** rather than an
-  accident, forbidding `USING ERRCODE` on those refusals because the node pull loop routes on it.
-  `None` — no SQLSTATE at all — is never a verdict.
-- **A spec sentence met the code and lost.** `port.rs` predicted the variant would also decide
-  whether the caller calls `TokenStore::restore` (restore after an outage, pointless after a
-  refusal). It does not: `restore` and `commit` are the two mandatory ends of every `take`,
-  `commit` after a refusal would be a lie, and the clerk's next act — editing the form —
-  `discard`s the doomed attestation on a new generation anyway. **Both arms restore; only the
-  sentence on screen differs**, and 2c writes those two sentences. Recorded as a dated revision
-  note on the design page rather than edited away.
-- **Four things the database corrected, none of which reading would have found.**
-  1. *The obvious refusal probe is not a floor refusal.* A malformed date of birth is refused by
-     `register_patient` **in Rust**, before any statement reaches Postgres, so the error carries no
-     SQLSTATE. The probe is now an unenrolled signer, which db/005 refuses with a bare
-     `RAISE EXCEPTION`.
-  2. *That detour is itself a defect* — **#651**. A Rust-side pre-flight refusal is exactly as
-     deterministic as the floor's and reads as an outage today: #648's harm one layer above where
-     #648 was looking. A test asserts the **wrong** behaviour on purpose, so the gap is visible in
-     every run; when it is fixed that test fails, and the failure is the good news.
-  3. *The chain walk in `sqlstate_of` had no coverage at all.* Mutating `e.chain()` to
-     `e.chain().take(1)` survived every test in the crate **twice**, because the register path
-     happens to put the database error outermost — one `.context()` away, that mutation is the
-     whole defect. A `DbError` cannot be constructed by hand, so the test **borrows a real `P0001`
-     from the server** and buries it under two context layers.
-  4. *A test passed for a reason that was not the one in its name.* "…findable by the NAME it was
-     registered under" searched by name **and** date of birth, and db/046 pass 2 matches on the
-     date alone — which `register_patient` asserts from the query whatever happens to `name`. A
-     port dropping the typed name passed it.
-- **And a fifth, about the fixture.** `setup`'s truncate list, copied from the root tree, omitted
-  `patient_name` — the table pass 3 reads. A clean database hid it; the **second** run failed with
-  the previous run's patient still findable (**#583**'s shape). The list is now **derived from the
-  catalogue** — every base table in `public` carrying a `patient_id` column, which every
-  per-patient projection has and no seed table does — so a new clinical stream's projection is
-  swept without anyone remembering this file.
-- **Eight DB-gated tests across two suites, six mutations, six killed** (M3 only by the test written for it after it
-  survived twice). The headline pair: `the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more`
-  proves the signed body names the ids the **prompt** displayed, in display order, with the cap
-  having bitten — which the root tree's `patient_register.rs` cannot, since it tests
-  `register_patient` with whatever list it is handed; and
-  `a_sqlstate_is_found_under_context_layers_not_only_at_the_top` is the only thing standing between
-  a future `.context()` and every floor refusal silently becoming an outage.
-- **CI.** `cairn-gui` is a separate workspace, so `cargo test --workspace` never reaches it and its
-  own job has no Postgres — a DB suite there would have run **nowhere**. It runs in the `test` job,
-  which already has PG18 and `cairn_pgx`; `cairn-gui-live` does not depend on `tauri`, so `-p`
-  builds it without WebKitGTK. `scripts/run-db-gated-tests.sh` runs the same line. The `gui` job
-  declares `CAIRN_ALLOW_DB_SKIP=1` and its "every test in this tree is pure" comment is rewritten;
-  a proportionate `db_gate_ran.rs` fails closed for anyone who has not declared it (#442, #450).
-- **Scope discipline: as built, nothing under `crates/`**, so the gate was the ~2-minute
-  `cairn-gui` one rather than the ~2-hour root sweep. The review pass then added exactly one root
-  file — `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs`, a pure additive test with no
-  production code — so the root cost stayed a `clippy -p cairn-node --tests`.
-- **Found by self-review, before a window existed to hit it —
-  [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654).** `cairn-node patient-register`
-  enrols its signing key as a `device` actor on first use (`ensure_registration_actor`);
-  `LiveData` deliberately does **not**, because enrolling an actor is provisioning and
-  provisioning as a write-path side effect is trap 2's shape (ADR-0066 decision 6 made
-  `ensure_unwrap_key` refuse for the same reason). So the reference window's **first**
-  registration on a node where the CLI never registered anyone is refused. Since #648 that is at
-  least legible and correctly classified rather than an outage inviting a retry — but it names a
-  key id, not a remedy, and the asymmetry means a node behaves differently depending on which
-  surface touched it first. A decision for 2c, not a patch.
-- **Filed:** [#651](https://github.com/cairn-ehr/cairn-ehr/issues/651) (above) ·
-  [#654](https://github.com/cairn-ehr/cairn-ehr/issues/654) (above) ·
-  [#652](https://github.com/cairn-ehr/cairn-ehr/issues/652) (the P0001 rule's **third** home —
-  `cairn-sync`, `cairn-node`'s `restore::clinical` and now `cairn-gui-live`; one public home in
-  `cairn_node::db_diagnosis` retires all three).
-
-**The review pass — five aspects (general, tests, silent failures, types, comments), and it earned
-its keep.** Every finding below was re-verified against the source before being acted on, and two
-of the five agents' claims were corrected in the process. Fixed in the PR:
-
-- **⚠️ [#633](https://github.com/cairn-ehr/cairn-ehr/issues/633) ADDRESSED — the P0001 contract was
-  held by prose and nothing else.** `USING ERRCODE` appears in `db/` only inside comments forbidding
-  it, and `cairn-sync`'s own doc asserts that fact as a premise for its routing — while three crates
-  route clinical verdicts on it. New `crates/cairn-node/tests/floor_refusals_carry_no_errcode.rs`
-  asserts it tree-wide, reusing `common/sql_text.rs`'s nesting-aware stripper (which #633 asked for,
-  and which also catches a `RAISE …` / `USING ERRCODE …` split across two lines — verified by
-  injecting exactly that). `ALLOWED` is empty; a second test proves the scan is not vacuous.
-- **A VACUOUS ATOMICITY TEST, AND THE MEASURED LIMIT OF ITS FIX.**
-  `a_refused_registration_creates_no_chart`'s `"not-a-date"` probe bailed in Rust ~70 lines before
-  `client.transaction()`, so deleting the transaction from `register_patient` left it green. Re-probed
-  with an unenrolled signer (which reaches `submit_event`) plus an explicit `Refused` assertion against
-  regression. **It still does not pin the multi-event rollback** — that signer refuses on the *first*
-  event, so autocommit passes; measured, not assumed. Filed
-  [#657](https://github.com/cairn-ehr/cairn-ehr/issues/657); no root-tree test pins it either.
-- **The signed `search.incomplete` flag was never read back.** The headline test checked *which* ids
-  were sworn to, and the ids cannot catch it — the bounded list is a prefix of the raw one, so a port
-  forwarding the node's raw `CandidateList` passed while storing `incomplete: false`: a signed claim
-  the clerk saw every namesake when three were withheld. Both polarities now asserted.
-- **`today`'s passthrough was unobservable.** `TODAY` was threaded through every call and never read
-  back, so any substituted clock passed. An age assertion pins it.
-- **`LiveData::new` took `node_origin: String` where `Identity` has four `String` fields** — and that
-  value becomes the HLC origin, i.e. causal order's third sort key and the tiebreaker between
-  concurrent demographic assertions, on append-only events. Now takes `&Identity`.
-- **`search`'s error path had no test at all**, so `.unwrap_or_else(|_| empty_list())` — the
-  "defensive" refactor `port.rs` forbids in as many words — passed the suite. On the step-3 prompt an
-  empty list *means* "create a new chart", so that mutation manufactures the duplicate the funnel
-  exists to prevent. New test; verified it fails under exactly that mutation and nothing else does.
-- **Nothing proved the single connection survives a refusal** (tokio-postgres sends its rollback
-  fire-and-forget). New test refuses at the door, then reads *and writes* on the same `Client`.
-- **Three wrong comments, each verified wrong:** the crate doc justified holding the node key with
-  ADR-0052 sealing/custody — but `register_patient` names neither and db/045's projection opens `IF
-  e.sealed THEN RETURN`; the reason is that the node *signs*. `funnel.rs` claimed `name`-matches-query
-  was true "by construction" — nothing ties them, and this crate's own tests deliberately diverge
-  them. The CI comment claimed `db_gate_ran` meant a deleted step "does not pass in silence" — it
-  does, because the `gui` job skips the same suites green (**#656**).
-- **`setup`'s TRUNCATE justification was false** — "per-patient projections all carry a `patient_id`"
-  fails for 40 base tables including the identity stream's (`patient_link` on `low`/`high`,
-  `chart_identity_state` on `subject`). Harmless here, a trap for the next suite: **#658**.
-- Smaller: `CAIRN_ALLOW_DB_SKIP` moved from job to step altitude; `sqlstate_of` returns `Option<&str>`
-  and no longer stops at a pg error carrying no `DbError`; the `USING ERRCODE` doc scoped to
-  *per-door* prose; `operator_chain`'s rendering described accurately ("every **distinct** layer") and
-  flagged as an **operator** string 2c must not paste into a form; `#[must_use]`'s real location
-  named; the script header's "WHAT IT RUNS" list; the crate rationale moved above `[package]`; the
-  `exclude`-enforces-layering claim corrected (it does not — review does).
-
-**Filed, and deliberately left open:** [#655](https://github.com/cairn-ehr/cairn-ehr/issues/655) (the
-`false` half of `refusal_is_deliberate` is not one thing: `42501`, `42P01` and class-23 are floor
-decisions that get a retry button — `cairn-sync` already solved this with `LocalDbFault`; decide it
-once in #652's home) · [#656](https://github.com/cairn-ehr/cairn-ehr/issues/656) ·
-[#657](https://github.com/cairn-ehr/cairn-ehr/issues/657) ·
-[#658](https://github.com/cairn-ehr/cairn-ehr/issues/658). **#659, #660, #651 and #654 were also
-filed here and are all CLOSED by PR [#661](https://github.com/cairn-ehr/cairn-ehr/pull/661)** — the
-entry below.
-
-**§1.2:** the benchmark is the design page's and **this slice does not move `M`** — the ports it
-builds are called by acts already counted (register paper 5 → forced 4 → target 4; find paper 3 →
-forced 2 → target 2). The one thing it could have added is a step and deliberately does not: a
-refusal now says *this cannot succeed as typed* instead of inviting a futile retry. Time +
-cognitive load: **owed by 2c**, which first exposes a runnable surface — in `--mock` *and* against
-a database, since the mock's matching rule is not db/046's. Plan:
-`docs/superpowers/plans/2026-09-22-registration-search-funnel-ui-slice-2b-live-ports.md`.
+- **2a — the pure core** ([#646](https://github.com/cairn-ehr/cairn-ehr/pull/646)). New crate
+  `cairn-gui-funnel`: the step-3 **trigger** (two whitespace name tokens + a DOB — **advisory,
+  never a gate**, and over ONE free name field, because given/surname is one culture's model,
+  ADR-0014), the bounded **prompt** (`PROMPT_CAP = 5`; only a `PromptList` can be attested; the
+  node's and the prompt's partialities never collapse) and the **token** (`AttestedSearch` has no
+  public constructor, is not `Clone`, and is consumed by `register`; custody is COUNTED — a
+  generation plus an in-flight latch — never inferred from `Option::is_none()`). The two ports
+  (`PatientSearch`, `PatientRegistration`) and a six-fixture mock whose matching rule is
+  deliberately NOT db/046's. 21/21 mutations killed.
+- **2b — the live ports** ([#653](https://github.com/cairn-ehr/cairn-ehr/pull/653)). New crate
+  `cairn-gui-live` (not `cairn-gui-data`, which stays driver-free; not `/crates`, which would invert
+  ADR-0021). `DataError::Refused` (#648): a floor verdict (`P0001`) is not an outage. BOTH error
+  arms restore the attestation; only the sentence differs. DB-gated proof that a registration
+  attests the BOUNDED list, `incomplete` asserted in both polarities, `today` made observable by an
+  age assertion. The truncate list is derived from the catalogue (every base table with a
+  `patient_id`), but that predicate misses identity-stream tables (#658). The `cairn-gui` DB suites
+  run in CI's `test` job; the `gui` job declares the skip on the step, not the job.
+- **2c's prerequisites** ([#661](https://github.com/cairn-ehr/cairn-ehr/pull/661), two five-agent
+  review rounds). `TokenStore::settle` (#659: the only sanctioned end of a `take`; a success now
+  INVALIDATES, closing a duplicate-chart path three reviewers found independently);
+  `MockData::fail_next` (#660); `DeliberateRefusal` + `RefusalScope::{Input, NodeState}` →
+  `Refused` / `DataError::NotProvisioned` (#651); **one enrolment rule** (#654 — `init` enrols,
+  `enroll-device-actor` is the remedy, all fifteen CLI write commands `require_device_actor`; the
+  issue understated its own blast radius by fourteen call sites). `ActorStanding` is FOUR states
+  (`Enrolled`, `NeverEnrolled`, `Retired` — a revoked key, whose remedy is a new key, never
+  `enroll-device-actor` (#152) — and `Ambiguous`). Guards: `enrolment_is_never_a_write_side_effect.rs`
+  (every shipped `.rs`), `floor_refusals_carry_no_errcode.rs` (addresses #633). `init` gained its
+  first behavioural test (#662's stated blocker was false).
+- **2c — the window** ([#674](https://github.com/cairn-ehr/cairn-ehr/pull/674)).
+  **Found in planning, measured, and changed below the GUI (maintainer decision):** `db/046` is a
+  disjunction, and `search_patients` ordered candidates by chart age, so the five-row prompt a
+  registration SIGNS showed the five OLDEST charts. Over 50,000 real names an existing duplicate was
+  among them **20%** of the time. `search_patients` now ranks by passes matched, then chart age
+  (order only; set, wire and attestation unchanged): **500/500**, first every time. The prompt still
+  truncates on **92%** of registrations, which is the design's own "cap is wrong" condition →
+  [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671) (an ADR-level question; it touches a
+  signed body). Evidence: `cairn-gui/cairn-gui-tauri/results/2026-09-23-funnel-prompt-truncation.md`,
+  rig `scripts/measure_prompt_truncation.py`.
+  **Built:** `FunnelSession` (the raw typed name travels WITH its token, and a search for an older
+  form revision is dropped); `LiveData::{sharing, require_provisioned, standing, today}` (one
+  connection for chart and funnel; the remedy-naming refusal BEFORE the attestation leaves the store,
+  addressing #665 at the window; the four-state launch probe, #654 option 2; `today` from the
+  database); the `funnel/` module in `cairn-gui-tauri` (every sentence + retry advice in `view.rs`,
+  a persistent mock — half of #668 — and seven commands tested against `AppState::mock`);
+  `--patient` optional; only a candidate some list showed can be opened; `index.html` + `funnel.js`
+  with a second, mutation-checked JS/Rust drift guard; runbook §8. Registration form = name + DOB
+  only (maintainer decision; identifier entry → [#672](https://github.com/cairn-ehr/cairn-ehr/issues/672));
+  the header shows age, not DOB, for a picked chart ([#673](https://github.com/cairn-ehr/cairn-ehr/issues/673)).
+- **Still open from the whole run:** #355 · #645 · #647 · #649 (register's cancellation contract) ·
+  #650 · #652 (the P0001 rule's three homes) · #655 (`42501`/`42P01`/class-23 land in
+  `Unavailable`) · #656 (nothing notices the CI step being deleted) · #657 (multi-event rollback
+  untested in both trees) · #658 · #663 (`resolve_matcher_actor` still enrols on a write path) ·
+  #664 / #666 (what a superseded key classifies as; db/004 contradicts itself) · #665 (the
+  orchestrator-level half) · #667 · #668 (the arming affordance + typed slots) · #669 (a dropped
+  `register` future latches the store) · #670 (three representable invalid states) · #671 · #672 ·
+  #673. Also cited: #442, #450, #583, #636, #638.
+- **§1.2:** register paper 5 → forced 4 → target 4 (3 when the prompt is empty); find 3 → 2 → 2.
+  `M ≤ N`. The mononymous path costs one click more: the first Register searches and shows. The
+  machine half is measured (above, and #639's search figures); the stopwatch half (find ≤ 5 s,
+  register ≤ 20 s) is a **human act**, runbook §8.
 
 ---
 
