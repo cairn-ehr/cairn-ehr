@@ -18,9 +18,9 @@
 //! register clicked with no token yet --------> prompt_search(form, force=true) first
 //! ```
 use crate::funnel::view::{
-    candidate_view, header_from_candidate, header_from_registration, register_error_view,
-    search_error_view, token_error_view, waiting_sentence, CandidateView, ChartHeaderView,
-    ErrorView,
+    candidate_view, header_from_candidate, header_from_registration, prompt_summary,
+    register_error_view, search_error_view, token_error_view, waiting_sentence, CandidateView,
+    ChartHeaderView, ErrorView,
 };
 use crate::funnel::window::OpenChart;
 use crate::state::AppState;
@@ -38,6 +38,9 @@ pub struct FunnelStatus {
     pub provisioning: Option<String>,
     /// The chart already open (`--patient`), if any.
     pub chart: Option<ChartHeaderView>,
+    /// The highest register-form revision the backend has seen — a reloaded webview resumes
+    /// above it (see `FunnelSession::revision`).
+    pub revision: u64,
 }
 
 /// One browse answer. `revision` echoes the request's, so the webview drops a late answer.
@@ -61,6 +64,8 @@ pub struct PromptView {
     pub token: Option<SearchToken>,
     /// Exactly the bounded list a registration would attest — what is shown IS what is signed.
     pub candidates: Vec<CandidateView>,
+    /// The sentence announcing this prompt, present whenever `token` is (`view::prompt_summary`).
+    pub summary: Option<String>,
     pub incomplete_reason: Option<String>,
 }
 
@@ -73,6 +78,7 @@ impl PromptView {
             stale: false,
             token: None,
             candidates: vec![],
+            summary: None,
             incomplete_reason: None,
         }
     }
@@ -99,6 +105,7 @@ pub async fn funnel_status_impl(state: &AppState) -> FunnelStatus {
         mock: state.is_mock(),
         provisioning: state.provisioning.clone(),
         chart: state.chart.lock().await.as_ref().map(|c| c.header.clone()),
+        revision: state.funnel.lock().await.revision(),
     }
 }
 
@@ -155,6 +162,7 @@ pub async fn prompt_search_impl(
                 waiting: None,
                 stale: false,
                 token: Some(token),
+                summary: Some(prompt_summary(bounded.candidates.len())),
                 candidates: bounded.candidates.iter().map(candidate_view).collect(),
                 incomplete_reason: bounded.incomplete_reason,
             })
@@ -319,6 +327,7 @@ mod tests {
                     mock: true,
                     provisioning: None,
                     chart: Some(header.clone()),
+                    revision: 0,
                 })
                 .unwrap(),
             ),
@@ -562,6 +571,31 @@ mod tests {
         let status = funnel_status_impl(&state).await;
         assert!(status.mock);
         assert_eq!(status.chart.unwrap().patient_id, id.to_string());
+    }
+
+    /// Final review #3: a reloaded webview restarts its revision counter at 0 while the backend's
+    /// floor survives, so every search would come back stale and Register would go dead with no
+    /// word. The status reports the floor so the webview can resume above it.
+    #[tokio::test]
+    async fn the_status_reports_the_revision_floor_so_a_reload_can_resume() {
+        let state = AppState::mock(None);
+        form_edited_impl(&state, 7).await;
+        let status = funnel_status_impl(&state).await;
+        assert_eq!(status.revision, 7);
+        let p = prompt_search_impl(&state, f(status.revision + 1, "Ada Byron", "1815"), false)
+            .await
+            .unwrap();
+        assert!(!p.stale && p.token.is_some(), "{p:?}");
+    }
+
+    /// Final review #6, the command half: a minted prompt carries its announcement.
+    #[tokio::test]
+    async fn a_minted_prompt_carries_its_summary() {
+        let state = AppState::mock(None);
+        let p = prompt_search_impl(&state, f(1, "Samantha Michaelowski", "1975"), false)
+            .await
+            .unwrap();
+        assert!(p.summary.unwrap().contains("none of these"));
     }
 
     #[tokio::test]

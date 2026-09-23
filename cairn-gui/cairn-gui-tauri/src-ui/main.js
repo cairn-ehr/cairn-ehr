@@ -14,6 +14,14 @@ const { invoke } = window.__TAURI__.core;
 /** How often the window re-checks whether the held key has re-locked (ms). */
 const LOCK_POLL_MS = 10_000;
 
+/**
+ * The chart id this window is DISPLAYING, set by funnel.js when a chart opens and cleared when
+ * it closes. Every chart command sends it, and the backend refuses unless it is the open chart:
+ * a sign-off must sign what the clinician was looking at, never whatever happens to be open by
+ * the time the command runs (`AppState::displayed_patient`).
+ */
+let displayedPatient = null;
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -122,10 +130,32 @@ function render(view) {
   setMessage(el("empty-message"), view.empty_message);
 }
 
+/**
+ * Empty the chart view: no rows, no warnings, and a sign-off button that cannot fire. Called
+ * whenever the chart changes, so one patient's list is never on screen under another patient's
+ * header — not even for the moment a read is in flight, and not after a read that failed.
+ */
+function clearChart() {
+  el("med-rows").replaceChildren();
+  setMessage(el("chart-incomplete"), "");
+  setMessage(el("chart-withheld"), "");
+  el("chart-warnings").hidden = true;
+  setMessage(el("empty-message"), "");
+  const button = el("sign-off");
+  button.disabled = true;
+  button.textContent = "Loading…";
+}
+
 async function refresh() {
+  const patient = displayedPatient;
+  if (patient === null) return;
   try {
-    render(await invoke("med_list"));
+    const view = await invoke("med_list", { patientId: patient });
+    // A read for a chart the clinician has since left is dropped, never rendered.
+    if (patient !== displayedPatient) return;
+    render(view);
   } catch (e) {
+    if (patient !== displayedPatient) return;
     say("Could not read the chart: " + e);
   }
 }
@@ -155,7 +185,7 @@ function reportSignOff(report) {
 
 async function signOff() {
   try {
-    reportSignOff(await invoke("sign_off"));
+    reportSignOff(await invoke("sign_off", { patientId: displayedPatient }));
   } catch (e) {
     say("Sign-off failed: " + e);
   }
@@ -164,7 +194,11 @@ async function signOff() {
 
 async function cease(groupId, reason) {
   try {
-    const report = await invoke("cease", { groupId: groupId, reason: reason });
+    const report = await invoke("cease", {
+      groupId: groupId,
+      reason: reason,
+      patientId: displayedPatient,
+    });
     let text = "Stopped " + report.ceased + " thread(s) of this drug.";
     if (report.failed.length > 0) {
       text +=

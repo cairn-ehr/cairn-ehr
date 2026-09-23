@@ -19,19 +19,42 @@
 /** How long typing must pause before a search runs (ms). */
 const SEARCH_DEBOUNCE_MS = 250;
 
+/**
+ * How long a freshly arrived step-3 prompt must have been on screen before a click on Register
+ * may register off it (ms). The background search can land just before the clerk's click and
+ * flip the button's meaning from "search first" to "none of these" under the pointer; without
+ * this, a registration would swear to rows nobody had time to read (final review #2). A click
+ * inside the window is treated as "show me", never as "register".
+ */
+const PROMPT_READ_GUARD_MS = 800;
+
 let browseRevision = 0;
 let registerRevision = 0;
 /** The token of the step-3 search on screen, or null when Register may not use one. */
 let heldToken = null;
 /** True while a registration is being saved, so a second click cannot start another. */
 let registering = false;
+/** When the held token's prompt was rendered (ms since epoch), for PROMPT_READ_GUARD_MS. */
+let promptShownAt = 0;
 
+/** A debounced `fn`, with `.cancel()` so a forced search can pre-empt a pending one. */
 function debounce(fn) {
   let timer = null;
-  return () => {
+  const run = () => {
     clearTimeout(timer);
     timer = setTimeout(fn, SEARCH_DEBOUNCE_MS);
   };
+  run.cancel = () => clearTimeout(timer);
+  return run;
+}
+
+/**
+ * The text of a failure. Rust sends an `ErrorView`; a failure raised by the IPC layer itself
+ * arrives as a bare string with no `.text`, and must still SAY something — a blank status after
+ * a failed search reads as "nobody matched" (final review #5).
+ */
+function failureText(failure) {
+  return (failure && failure.text) || "The window could not reach its backend: " + String(failure);
 }
 
 /**
@@ -81,7 +104,7 @@ async function runBrowse() {
     // after a failed search reads as "nobody matched" (principle 4).
     list.replaceChildren();
     setMessage(el("browse-incomplete"), "");
-    el("browse-status").textContent = failure.text;
+    el("browse-status").textContent = failureText(failure);
   }
 }
 
@@ -113,12 +136,16 @@ function onRegisterEdited() {
 }
 
 function renderPrompt(prompt) {
-  el("prompt-status").textContent = prompt.waiting || "";
+  // The waiting sentence, or the prompt's own announcement (from Rust, `prompt_summary`), in
+  // the live status region — so a screen-reader clerk HEARS that matches appeared and what
+  // Register now means (final review #6).
+  el("prompt-status").textContent = prompt.waiting || prompt.summary || "";
   heldToken = prompt.token;
   if (heldToken === null) {
     el("prompt").hidden = true;
     return;
   }
+  promptShownAt = Date.now();
   // Partiality BEFORE the rows it qualifies.
   setMessage(el("prompt-incomplete"), prompt.incomplete_reason);
   el("prompt-list").replaceChildren(
@@ -126,10 +153,6 @@ function renderPrompt(prompt) {
   );
   const any = prompt.candidates.length > 0;
   el("prompt").hidden = !any;
-  if (!any) {
-    el("prompt-status").textContent =
-      "No existing chart matched what is typed. Registering will record that search.";
-  }
   setRegisterButton(any ? "None of these — register a new patient" : "Register new patient", true);
 }
 
@@ -137,7 +160,14 @@ async function runPrompt(force) {
   const form = registerForm();
   try {
     const prompt = await invoke("prompt_search", { form, force });
-    if (prompt.stale || prompt.revision !== registerRevision) return;
+    if (prompt.stale || prompt.revision !== registerRevision) {
+      // A search the clerk ASKED for must never end in silence (final review #3).
+      if (force && form.revision === registerRevision) {
+        el("prompt-status").textContent =
+          "The form changed while searching. Press Register again to search what is typed now.";
+      }
+      return;
+    }
     renderPrompt(prompt);
   } catch (failure) {
     if (form.revision !== registerRevision) return;
@@ -145,7 +175,7 @@ async function runPrompt(force) {
     // forbids, so Register runs the search again rather than proceeding.
     heldToken = null;
     el("prompt").hidden = true;
-    el("prompt-status").textContent = failure.text;
+    el("prompt-status").textContent = failureText(failure);
   }
 }
 
@@ -158,29 +188,36 @@ async function onRegister(event) {
   if (heldToken === null) {
     // Nothing searched yet for this form (the trigger is advisory: a mononymous patient or an
     // unknown date of birth never trips it). Search now and SHOW the answer; the clerk's next
-    // click is the act. Never register on the strength of a search nobody saw.
+    // click is the act. Never register on the strength of a search nobody saw. A pending
+    // background search is cancelled first, so two searches at one revision cannot race.
+    debouncedPrompt.cancel();
     await runPrompt(true);
     return;
   }
+  if (Date.now() - promptShownAt < PROMPT_READ_GUARD_MS) {
+    // The prompt arrived under the pointer: this click is "show me", not "register".
+    el("register-outcome").textContent =
+      "The list above has just changed. Read it, then press Register again.";
+    return;
+  }
+  const sent = heldToken;
   registering = true;
   setRegisterButton("Saving…", false);
   try {
-    const header = await invoke("register", { token: heldToken });
+    const header = await invoke("register", { token: sent });
     heldToken = null;
     enterChart(header);
   } catch (failure) {
-    el("register-outcome").textContent = failure.text;
-    if (failure.retry === "now") {
-      // The search was kept; the same click may succeed.
-      setRegisterButton("Register new patient", true);
-    } else {
-      // A verdict, a dropped search, or an operator's job: pressing the same button with the
-      // same token cannot help. Register stays usable only by searching again (after an
-      // operator has acted, or once the form is changed).
+    el("register-outcome").textContent = failureText(failure);
+    if (!(failure && failure.retry === "now") && heldToken === sent) {
+      // A verdict, a dropped search, or an operator's job: this token cannot help. Forget it
+      // — but only if no newer search replaced it during the save — and leave Register
+      // USABLE: the next click searches again and shows the answer, and the one after that
+      // registers. Never a disabled button with advice the clerk cannot follow (final review #4).
       heldToken = null;
-      setRegisterButton("Register new patient", failure.retry === "after_operator");
-      if (failure.retry === "after_operator") setMessage(el("provisioning"), failure.text);
     }
+    if (failure && failure.retry === "after_operator") setMessage(el("provisioning"), failure.text);
+    setRegisterButton("Register new patient", true);
   } finally {
     registering = false;
   }
@@ -196,6 +233,10 @@ function showIdentity(header) {
 }
 
 function enterChart(header) {
+  // Bind first, clear second, read third: from this line on, every chart command names THIS
+  // chart, and nothing of the previous one is on screen (final review, Critical #1).
+  displayedPatient = header.patient_id;
+  clearChart();
   el("front-door").hidden = true;
   el("chart-view").hidden = false;
   showIdentity(header);
@@ -227,6 +268,9 @@ function resetFrontDoor() {
 }
 
 async function closeChart() {
+  displayedPatient = null;
+  clearChart();
+  say("");
   await invoke("close_chart");
   el("chart-view").hidden = true;
   el("front-door").hidden = false;
@@ -238,6 +282,9 @@ async function closeChart() {
 
 async function boot() {
   const status = await invoke("funnel_status");
+  // Resume above the backend's revision floor: after a reload this counter would otherwise
+  // restart at 0 and every search would be dropped as stale (final review #3).
+  registerRevision = status.revision;
   const mockNote = status.mock
     ? "Fixture data — patients registered here live only as long as this window."
     : "";

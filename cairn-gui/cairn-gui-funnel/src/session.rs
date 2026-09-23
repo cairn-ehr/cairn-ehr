@@ -82,6 +82,15 @@ impl FunnelSession {
         Self::default()
     }
 
+    /// The highest form revision seen so far.
+    ///
+    /// A webview that reloads restarts its own counter at zero while this floor survives, so
+    /// every search it sent would be dropped as stale and Register would go quiet. It reads this
+    /// at start-up and resumes above it.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// The clerk edited the form: whatever is held no longer describes it.
     ///
     /// Discards unconditionally, even for a revision older than one already seen (an edit
@@ -243,6 +252,17 @@ mod tests {
             s.record(&form(5, "John", "1980"), prompt(1)).unwrap(),
             Recorded::Current(_)
         ));
+    }
+
+    #[test]
+    fn the_revision_floor_is_readable_and_only_rises() {
+        let mut s = FunnelSession::new();
+        assert_eq!(s.revision(), 0);
+        s.edited(4);
+        s.edited(2);
+        assert_eq!(s.revision(), 4);
+        let _ = s.record(&form(9, "John Smith", "1980"), prompt(1)).unwrap();
+        assert_eq!(s.revision(), 9);
     }
 
     #[test]

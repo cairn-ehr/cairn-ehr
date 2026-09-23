@@ -1,6 +1,7 @@
 //! The window's five chart commands (the front door's are in `funnel::commands`). Each one
-//! is a thin adapter: it resolves state, calls a `cairn-node` function, and maps the result. No clinical logic lives here — that is all
-//! in `cairn-medication-view` and `cairn-gui-tab-medications`, under `cargo test`.
+//! is a thin adapter: it resolves state, calls a `cairn-node` function, and maps the result.
+//! No clinical logic lives here — that is all in `cairn-medication-view` and
+//! `cairn-gui-tab-medications`, under `cargo test`.
 //!
 //! # Two rules every command in this file follows
 //!
@@ -22,8 +23,14 @@ use zeroize::Zeroizing;
 /// fresh from the projections, and nothing on screen is ever replaced without the clinician
 /// asking for it.
 #[tauri::command]
-pub async fn med_list(state: tauri::State<'_, AppState>) -> Result<MedListView, String> {
-    Ok(build_view(&read_chart(&state).await?))
+pub async fn med_list(
+    state: tauri::State<'_, AppState>,
+    patient_id: String,
+) -> Result<MedListView, String> {
+    // Bound to the chart the webview is showing (`AppState::displayed_patient`): a read for a
+    // chart the clerk has since left must not be rendered under the next one's header.
+    let patient = state.displayed_patient(&patient_id).await?;
+    Ok(build_view(&read_chart_of(&state, patient).await?))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -131,7 +138,10 @@ pub struct SignOffReport {
 
 /// Sign off every unsigned or stale drug on the chart — the ONE gesture (#288).
 #[tauri::command]
-pub async fn sign_off(state: tauri::State<'_, AppState>) -> Result<SignOffReport, String> {
+pub async fn sign_off(
+    state: tauri::State<'_, AppState>,
+    patient_id: String,
+) -> Result<SignOffReport, String> {
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -142,7 +152,9 @@ pub async fn sign_off(state: tauri::State<'_, AppState>) -> Result<SignOffReport
         // a gesture silently do nothing.
         .ok_or("your signing key is locked — unlock it to sign off")?;
     let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
-    let patient = state.open_patient().await?;
+    // The chart the clinician was LOOKING AT when they pressed the button, and only if it is
+    // still the open one — never "whatever is open now" (see `AppState::displayed_patient`).
+    let patient = state.displayed_patient(&patient_id).await?;
 
     // Timed around the WRITE only. The clinician's reading time is measured by the operator
     // runbook, not here: capturing it would mean timing how long someone spent thinking.
@@ -219,6 +231,7 @@ pub async fn cease(
     state: tauri::State<'_, AppState>,
     group_id: String,
     reason: String,
+    patient_id: String,
 ) -> Result<CeaseReport, String> {
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
@@ -233,8 +246,9 @@ pub async fn cease(
     }
     let group: Uuid = group_id.parse().map_err(|_| "not a medication id")?;
     // Asked ONCE for the whole gesture: every member thread is stopped on the same chart, even
-    // if the clerk closes it while the loop below is running.
-    let patient = state.open_patient().await?;
+    // if the clerk closes it while the loop below is running — and only if it is the chart the
+    // clinician was looking at (`AppState::displayed_patient`).
+    let patient = state.displayed_patient(&patient_id).await?;
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
@@ -301,14 +315,8 @@ pub async fn cease(
     Ok(CeaseReport { ceased, failed })
 }
 
-/// Read the OPEN chart, from the node or from fixtures. Refuses when no chart is open.
-async fn read_chart(state: &tauri::State<'_, AppState>) -> Result<PatientMedicationList, String> {
-    let patient = state.open_patient().await?;
-    read_chart_of(state, patient).await
-}
-
-/// Read one named chart. Split out so `cease` can read the chart it already resolved rather
-/// than asking which chart is open a second time mid-gesture.
+/// Read one named chart, from the node or from fixtures. Callers resolve WHICH chart through
+/// `AppState::displayed_patient` first; this only reads.
 async fn read_chart_of(
     state: &tauri::State<'_, AppState>,
     patient: Uuid,

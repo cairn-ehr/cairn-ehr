@@ -172,6 +172,22 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
     ))
 }
 
+/// The sentence that announces a step-3 prompt, for sighted and screen-reader clerks alike.
+///
+/// Said out loud because the prompt appears while the clerk is still typing, and because it
+/// changes what the Register button MEANS: from "search first" to "none of these". A clerk who
+/// is never told either has not been shown the list the registration will swear they saw.
+pub fn prompt_summary(shown: usize) -> String {
+    if shown == 0 {
+        "No existing chart matched what is typed. Registering will record that search.".to_string()
+    } else {
+        format!(
+            "{shown} existing patient(s) might be this person — listed below. Pressing Register \
+             now means none of these."
+        )
+    }
+}
+
 /// One candidate as a list row shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CandidateView {
@@ -348,6 +364,18 @@ pub(crate) mod tests {
             "advisory, never a gate: {s}"
         );
         assert_eq!(waiting_sentence(&trigger_state("John Smith", "1980")), None);
+    }
+
+    /// Final review #6: a screen-reader clerk must HEAR that possible matches appeared, and what
+    /// the Register button now means — the prompt is otherwise silent while they type.
+    #[test]
+    fn the_prompt_announces_how_many_matches_and_what_register_now_means() {
+        let some = prompt_summary(3);
+        assert!(some.contains('3'), "{some}");
+        assert!(some.contains("none of these"), "{some}");
+        let none = prompt_summary(0);
+        assert!(none.contains("No existing chart matched"), "{none}");
+        assert!(none.contains("record that search"), "{none}");
     }
 
     #[test]
