@@ -349,7 +349,7 @@ async fn record_timing(
 // away from rendering the same clinician as two different-looking ids.
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
@@ -358,7 +358,12 @@ mod tests {
     /// Extracted by scanning for `<binding>.<identifier>` rather than by hand, so the guard
     /// below cannot rot into a list nobody updates.
     fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
-        let js = include_str!("../src-ui/main.js");
+        fields_read_in(include_str!("../src-ui/main.js"), binding)
+    }
+
+    /// Every field `js` reads off `binding` — the scanner itself, shared with the front
+    /// door's drift guard in `funnel::commands`, which scans `funnel.js`.
+    pub(crate) fn fields_read_in(js: &str, binding: &str) -> BTreeSet<String> {
         let needle = format!("{binding}.");
         let mut found = BTreeSet::new();
         for (index, _) in js.match_indices(&needle) {

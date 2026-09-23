@@ -218,7 +218,9 @@ el("unlock-form").addEventListener("submit", async (event) => {
   }
 });
 
-void refresh();
+// No `refresh()` here: whether a chart is showing at all is the front door's decision
+// (funnel.js), which calls `refresh()` when it opens one. `refresh` and `say` stay globals —
+// both files are classic scripts sharing one scope, loaded main.js first.
 void pollLock();
 // The key re-locks on a timer in the backend; the window must not learn about it only when
 // a signature is refused (state is ambient, never modal).

@@ -263,7 +263,7 @@ pub fn header_opened_by_id(id: Uuid) -> ChartHeaderView {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cairn_gui_funnel::trigger_state;
     use cairn_patient_search::{Age, TrustState};

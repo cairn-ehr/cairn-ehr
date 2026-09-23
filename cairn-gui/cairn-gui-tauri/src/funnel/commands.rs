@@ -296,6 +296,81 @@ mod tests {
     use crate::funnel::view::Retry;
     use cairn_gui_data::port::DataError;
 
+    use crate::commands::tests::fields_read_in;
+    use crate::funnel::view::tests::sample_candidate;
+    use crate::funnel::view::{candidate_view, header_opened_by_id};
+    use std::collections::BTreeSet;
+
+    /// THE FRONT DOOR'S DRIFT GUARD — the same guard `commands.rs` keeps for `main.js`.
+    ///
+    /// `funnel.js` is untyped, so a Rust field rename does not break the build: it renders
+    /// `undefined`. On this screen that is not cosmetic. `incomplete_reason` undefined is a
+    /// partial list shown as whole; `retry` undefined is a Register button left live on a
+    /// verdict. So every field the JS reads must exist in the payload the Rust sends.
+    #[test]
+    fn funnel_js_reads_no_field_the_backend_does_not_send() {
+        let js = include_str!("../../src-ui/funnel.js");
+        let header = header_opened_by_id(uuid::Uuid::nil());
+        let cand = candidate_view(&sample_candidate());
+        let payloads: [(&str, serde_json::Value); 6] = [
+            (
+                "status",
+                serde_json::to_value(FunnelStatus {
+                    mock: true,
+                    provisioning: None,
+                    chart: Some(header.clone()),
+                })
+                .unwrap(),
+            ),
+            ("header", serde_json::to_value(&header).unwrap()),
+            ("cand", serde_json::to_value(&cand).unwrap()),
+            (
+                "browseView",
+                serde_json::to_value(BrowseView {
+                    revision: 0,
+                    candidates: vec![],
+                    incomplete_reason: None,
+                })
+                .unwrap(),
+            ),
+            (
+                "prompt",
+                serde_json::to_value(PromptView::saying(0, String::new())).unwrap(),
+            ),
+            (
+                "failure",
+                serde_json::to_value(ErrorView {
+                    text: String::new(),
+                    retry: Retry::Now,
+                })
+                .unwrap(),
+            ),
+        ];
+        for (binding, value) in payloads {
+            let available: BTreeSet<String> = value.as_object().unwrap().keys().cloned().collect();
+            let read = fields_read_in(js, binding);
+            assert!(!read.is_empty(), "funnel.js no longer reads `{binding}` at all — rename the binding in this guard, don't delete it");
+            for field in read {
+                assert!(
+                    available.contains(&field),
+                    "funnel.js reads `{binding}.{field}`, which the backend does not send. \
+                     Available: {available:?}"
+                );
+            }
+        }
+    }
+
+    /// The other direction, for the fields whose SILENCE is the dangerous failure.
+    #[test]
+    fn funnel_js_reads_both_incompleteness_reports_and_the_retry_advice() {
+        let js = include_str!("../../src-ui/funnel.js");
+        assert!(fields_read_in(js, "browseView").contains("incomplete_reason"));
+        assert!(fields_read_in(js, "prompt").contains("incomplete_reason"));
+        assert!(fields_read_in(js, "prompt").contains("stale"));
+        assert!(fields_read_in(js, "failure").contains("retry"));
+        assert!(fields_read_in(js, "status").contains("provisioning"));
+    }
+
     fn f(rev: u64, name: &str, dob: &str) -> FormSnapshot {
         FormSnapshot {
             revision: rev,
