@@ -47,6 +47,15 @@
 >   `PatientRegistration::register`: the port suites use an unenrolled signer to reach db/005
 >   INSIDE the transaction, and a pre-check in the port would leave those proofs green and empty.
 > - **Only a candidate some list on screen showed can be opened** (`AppState::shown`).
+> - **EVERY CHART COMMAND NAMES THE CHART ON SCREEN** (`AppState::displayed_patient`) — the
+>   2c review's Critical. With charts switching, "the open chart" and "the chart on screen" can
+>   differ while a read is in flight; a sign-off that resolved only the open chart signed patient
+>   B on the strength of a review of patient A's list. `med_list`/`sign_off`/`cease` carry the
+>   displayed id and refuse a mismatch; the webview clears the chart view on every switch and
+>   drops a late read. **Never let a new chart command resolve `open_patient()` alone.**
+> - **A click within 800 ms of a step-3 prompt landing is "show me", never "register"**
+>   (`PROMPT_READ_GUARD_MS`): the background search can flip the button's meaning under the
+>   pointer. `funnel_status` reports the revision floor so a reloaded webview resumes above it.
 > - **The launch probe matches all four `ActorStanding` arms** and reuses `cairn-node`'s own refusal
 >   sentences. Never a boolean: a `Retired` key sent to `enroll-device-actor` meets db/004's
 >   resurrection refusal (#152). Pair the standing with the key it was probed for (#670).
@@ -79,7 +88,8 @@
 > **Open from the funnel run:** #355 · #645 · #647 · #649 · #650 · #652 · #655 · #656 · #657
 > (multi-event rollback untested in both trees) · #658 · #662 (seven `init` effects unpinned) ·
 > #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 · #671 ·
-> #672 (identifier entry) · #673 (the header shows age, not DOB).
+> #672 (identifier entry) · #673 (the header shows age, not DOB) · #675 (four small front-door
+> gaps from 2c's review).
 >
 > **⇒ THE NODE PLANE AND DR ARE CLOSED OUT; NO DECIDED-AND-UNBUILT ITEM REMAINS.** Newest first:
 > #621 (PR #627, [ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md):
@@ -556,6 +566,14 @@ the PR). Executed inline, one whole-branch review. What generalises:
   over `src-ui/` with a stand-in `invoke` returning Rust-shaped payloads exercised the JS
   revision/token bookkeeping end to end. What it cannot catch is a Tauri-IPC-only defect (argument
   casing), which stays the human pass's.
+- **⇒ THE REVIEW'S CRITICAL WAS A PROPERTY THE SLICE ITSELF CREATED.** Before 2c a window had one
+  patient for life, so "open chart" = "chart on screen" was true by construction and nothing
+  needed to say so. Making `--patient` optional silently broke that invariant for three
+  pre-existing commands. **When a slice makes a constant variable, audit every reader of it** —
+  the new code was careful; the old code it made unsafe was not re-read. And the reviewer's
+  measurement-scope finding (exact duplicates only) was confirmed by adding the arm, which showed
+  ranking does nothing for a wrong-DOB duplicate: **measure the case the feature exists for, not
+  the easy one.**
 - **⇒ A SWEEP WITHOUT ALL THREE DB STRINGS IS NOT A SWEEP.** Setting only `CAIRN_TEST_PG` let every
   multi-node suite self-skip; `db_gate_actually_ran` refused it, correctly. Use
   `scripts/run-db-gated-tests.sh` (with a scratch `CARGO_TARGET_DIR`).

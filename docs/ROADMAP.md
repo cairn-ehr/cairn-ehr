@@ -821,7 +821,13 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   #664 / #666 (what a superseded key classifies as; db/004 contradicts itself) · #665 (the
   orchestrator-level half) · #667 · #668 (the arming affordance + typed slots) · #669 (a dropped
   `register` future latches the store) · #670 (three representable invalid states) · #671 · #672 ·
-  #673. Also cited: #442, #450, #583, #636, #638.
+  #673 · #675 (four small front-door gaps from 2c's review). Also cited: #442, #450, #583, #636, #638.
+- **2c's whole-branch review** found one Critical — with charts now switching, a sign-off signed
+  whichever chart was OPEN while the previous patient's list could still be on screen — fixed by
+  binding `med_list`/`sign_off`/`cease` to the displayed chart id (`AppState::displayed_patient`)
+  and clearing the view on every switch; five Importants in the Register bookkeeping and the
+  prompt's announcement, all fixed; and the measurement-scope finding that led to the `--perturb
+  dob` arm. Minors → #675.
 - **§1.2:** register paper 5 → forced 4 → target 4 (3 when the prompt is empty); find 3 → 2 → 2.
   `M ≤ N`. The mononymous path costs one click more: the first Register searches and shows. The
   machine half is measured (above, and #639's search figures); the stopwatch half (find ≤ 5 s,
