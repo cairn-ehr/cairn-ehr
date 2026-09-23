@@ -403,6 +403,15 @@ impl TokenStore {
     /// [`TokenStore::discard`] already applied to an edit. Pinned by
     /// `a_success_consumes_the_form_so_a_mid_flight_search_cannot_mint_a_second_chart`.
     /// (PR #661 review, found independently by three reviewers.)
+    ///
+    /// **The trade, stated rather than left to be discovered.** Neither this method nor
+    /// [`TokenStore::settle`]'s `Ok` arm can prove a [`TokenStore::take`] was outstanding — the
+    /// success arm carries no attestation, because a successful port call consumed it. So a
+    /// caller that commits without having taken now destroys a held search as well as clearing a
+    /// latch that was never set. That is misuse either way, and the important part is the
+    /// DIRECTION it fails in: the next `take` answers [`TokenError::Absent`], whose remedy is
+    /// *"let the search run again"*. It cannot mint a chart. Losing a search costs a clerk one
+    /// gesture; the behaviour this replaced cost a patient a duplicate chart.
     pub fn commit(&mut self) {
         self.in_flight = false;
         self.invalidate();
