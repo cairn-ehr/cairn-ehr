@@ -43,15 +43,24 @@ pub struct RankKey {
     pub dob_near_miss: bool,
 }
 
-/// How many DISTINCT `query_tokens` appear among the tokens of ANY of `stored_names`.
+/// How many DISTINCT plain `query_tokens` appear among the tokens of ANY of `stored_names`.
 ///
 /// `stored_names` are the chart's retained names, already lowercased and NFC-normalised by
-/// Postgres; each is tokenised by [`name_tokens`] — the SAME rule the query was — so a
-/// punctuated compound matches by its whole form and by its parts alike.
+/// Postgres; each is tokenised by [`name_tokens`] — the SAME rule the query was.
+///
+/// **Only PLAIN tokens (every character alphanumeric) are counted.** [`name_tokens`] emits a
+/// punctuated word three ways — "mary-jane" plus "mary" and "jane" — so counting every token
+/// let a hyphenated given name score three against a surname's one, and "Mary-Jane Brown"
+/// tied the real "Mary Jane Smith" duplicate (final review, #671). Both sides emit a
+/// punctuated word's parts, so a whole form's match is always also a match of its parts:
+/// skipping the whole form loses nothing and counts each part once.
 pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize {
     let stored: HashSet<String> = stored_names.iter().flat_map(|n| name_tokens(n)).collect();
-    let distinct_query: HashSet<&String> = query_tokens.iter().collect();
-    distinct_query
+    let distinct_plain_query: HashSet<&String> = query_tokens
+        .iter()
+        .filter(|t| t.chars().all(char::is_alphanumeric))
+        .collect();
+    distinct_plain_query
         .into_iter()
         .filter(|t| stored.contains(*t))
         .count()
@@ -149,9 +158,21 @@ mod tests {
 
     #[test]
     fn stored_names_are_tokenised_by_the_query_rule() {
-        // "o'brien-smith" stored whole must match the query's whole token AND its parts.
+        // A punctuated compound stored whole still matches by its parts: "brien" and "smith".
         let q = crate::query::name_tokens("O'Brien-Smith");
-        assert_eq!(tokens_matched(&q, &s(&["o'brien-smith ann"])), q.len());
+        assert_eq!(tokens_matched(&q, &s(&["o'brien-smith ann"])), 2);
+    }
+
+    /// Final review #2: a punctuated query word yields its whole form AND its parts, so counting
+    /// every token let a hyphenated GIVEN name outweigh a matched surname — "Mary-Jane Brown"
+    /// tied the real "Mary Jane Smith" duplicate. Only plain (all-alphanumeric) tokens count;
+    /// both sides emit a punctuated word's parts, so nothing a whole form matched is lost.
+    #[test]
+    fn a_hyphenated_given_name_does_not_outweigh_a_matched_surname() {
+        let q = crate::query::name_tokens("Mary-Jane Smith");
+        let duplicate = tokens_matched(&q, &s(&["mary jane smith"]));
+        let other = tokens_matched(&q, &s(&["mary-jane brown"]));
+        assert!(duplicate > other, "duplicate {duplicate} must beat {other}");
     }
 
     #[test]

@@ -26,6 +26,11 @@ use uuid::Uuid;
 /// name tokens matched. ADR-0075 added the two keys under it: name tokens matched, and a DOB
 /// near-miss. Ranking only reorders — the drift invariant *sweep-paired ⊆ search-found* is
 /// untouched — and it needs no new `Candidate` field.
+///
+/// One asymmetry, deliberate: name tokens are counted over EVERY retained name (repudiated
+/// included, #349), but the near-miss compares against the ONE date of birth `read_dob`
+/// projects, so a chart whose DOB was later corrected is scored against the corrected value
+/// only. Ordering only; widening it would mean reading the DOB assertion history.
 pub(super) fn rank_keys(
     passes: &[(Uuid, u32)],
     query_tokens: &[String],

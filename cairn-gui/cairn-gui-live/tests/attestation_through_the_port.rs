@@ -145,11 +145,11 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
     );
 
     // An exhaustive search that found everything is COMPLETE, and the signed body must say so.
-    // The negative half of the pair `the_stored_attestation_names_what_the_prompt_bounded…`
-    // asserts positively; together they stop `incomplete` being a constant.
+    // The positive half is `a_search_that_could_not_read_a_chart_still_signs_incomplete`;
+    // together they stop `incomplete` being a constant (ADR-0075).
     assert!(
         !common::stored_incomplete(&reader, created).await,
-        "nothing was withheld from this prompt, so the attestation must not claim it was"
+        "the search read every chart it matched, so the attestation must not call it partial"
     );
 }
 

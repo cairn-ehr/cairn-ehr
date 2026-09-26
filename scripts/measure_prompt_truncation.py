@@ -105,6 +105,10 @@ def synthetic_population(count: int, rng: random.Random) -> list[str]:
 def query_tokens(raw_name: str) -> list[str]:
     """The Python twin of `cairn_patient_search::SearchQuery::new`'s name tokeniser.
 
+    Known drift, rig-only: Python's `str.isalnum` excludes combining vowel signs (Mn/Mc) that
+    Rust's `char::is_alphanumeric` includes (e.g. Devanagari), so such names would tokenise
+    differently here. The current name pool is Latin-script; revisit before using another.
+
     Per whitespace-delimited word: the whole word with edge punctuation trimmed, lowercased;
     plus its alphanumeric parts longer than one character, lowercased. Sorted and deduplicated.
     """
@@ -145,13 +149,14 @@ def rank(rows: list[Row]) -> list[str]:
 
 
 def tokens_matched(query: list[str], stored_names: list[str]) -> int:
-    """Twin of `cairn_patient_search::tokens_matched`: DISTINCT query tokens found among the tokens
-    of any stored name, each stored name tokenised by the query's own rule (`query_tokens`)
-    after the NFC + lowercase normalisation Postgres applies in `search_rank.rs`."""
+    """Twin of `cairn_patient_search::tokens_matched`: DISTINCT PLAIN (all-alphanumeric) query
+    tokens found among the tokens of any stored name, each stored name tokenised by the query's
+    own rule (`query_tokens`) after the NFC + lowercase normalisation Postgres applies in
+    `search_rank.rs`. Plain only, so a hyphenated word's whole form and parts count once each."""
     stored: set[str] = set()
     for name in stored_names:
         stored.update(query_tokens(unicodedata.normalize("NFC", name).lower()))
-    return sum(1 for t in set(query) if t in stored)
+    return sum(1 for t in set(query) if t.isalnum() and t in stored)
 
 
 def parse_ymd(value: str) -> tuple[int, int, int] | None:
@@ -323,6 +328,8 @@ def self_test() -> int:
     assert tokens_matched(["john", "smith"], ["john brown"]) == 1
     assert tokens_matched(["john", "john"], ["john smith"]) == 1
     assert tokens_matched(["john"], []) == 0
+    q = query_tokens("Mary-Jane Smith")
+    assert tokens_matched(q, ["Mary Jane Smith"]) > tokens_matched(q, ["Mary-Jane Brown"])
     assert is_dob_near_miss("1980-03-07", "1980-07-03")
     assert is_dob_near_miss("1980-03-07", "1979-03-07")
     assert is_dob_near_miss("1967-05-20", "1976-05-20")

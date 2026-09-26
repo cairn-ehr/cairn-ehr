@@ -199,6 +199,12 @@ pub fn prompt_summary(shown: usize, withheld: usize, incomplete: bool) -> String
                             \"no match\" (the reason follows). Registering now records that \
                             incomplete search."
             .to_string(),
+        // Showed nobody because everything was CUT: never the "no match" sentence, which
+        // licenses a new chart. Unreachable with a cap of five; kept safe if that changes.
+        0 if withheld > 0 => format!(
+            "{withheld} existing patient(s) matched but none could be shown here — type more to \
+             narrow before registering."
+        ),
         0 => "No existing chart matched what is typed. Registering will record that search."
             .to_string(),
         n if withheld > 0 => format!(
@@ -490,6 +496,16 @@ pub(crate) mod tests {
         let s = prompt_summary(5, 3, true);
         assert!(s.contains("5 closest of 8"), "{s}");
         assert!(s.contains("not complete"), "{s}");
+    }
+
+    /// Final review #3: a prompt that showed nobody because everything was CUT must never say
+    /// "No existing chart matched" — that sentence licenses a new chart. Unreachable with
+    /// today's cap of five, and pinned so it stays safe if the cap ever changes.
+    #[test]
+    fn a_prompt_cut_to_nobody_never_reads_as_no_match() {
+        let s = prompt_summary(0, 4, false);
+        assert!(!s.contains("No existing chart matched"), "{s}");
+        assert!(s.contains('4'), "{s}");
     }
 
     /// Review focus 5: the one sentence that licenses a new chart is unchanged.
