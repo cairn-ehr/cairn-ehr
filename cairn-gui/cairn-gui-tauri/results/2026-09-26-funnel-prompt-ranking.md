@@ -73,6 +73,11 @@ twins are everywhere (median 7,576 candidates per search).
    grades the rule on its own test. The `dob-any` and `both-any` arms are the controls, and the
    conclusions above lean on them.
 
+**Re-run after the final review's fix** (`tokens_matched` now counts only plain tokens, so a
+hyphenated word counts once per part): all eight arms reproduced the figures above exactly. The
+real-name pool is almost entirely unpunctuated, so this rig does not exercise that fix — the unit
+test `a_hyphenated_given_name_does_not_outweigh_a_matched_surname` does.
+
 ## Latency of the two new reads
 
 `search_patients` gained two reads: every retained name of the candidates, and the query's
