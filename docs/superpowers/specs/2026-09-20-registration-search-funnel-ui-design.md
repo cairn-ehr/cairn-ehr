@@ -95,7 +95,9 @@ It is the attested list, so *"the candidate ids that were on the screen"* must b
 Signing that 40 were displayed when 3 were visible is a precise untruth (principle 4), and it is
 exactly the claim someone would later use to argue the clerk should have seen the duplicate. The
 prompt shows at most what fits without scrolling; beyond that it is marked `incomplete` with its
-reason.
+reason. *(Superseded by [ADR-0075](../../spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md):
+beyond the cap the rest are counted as `withheld` and shown on screen, never signed; `incomplete`
+means only that the search was partial.)*
 
 This is cheap here in a way it would not have been for the browse list: a search over a full name
 plus date of birth returns few candidates by construction.
@@ -325,7 +327,7 @@ your head, since the header is always visible.
 TDD throughout.
 
 **Pure.** The step-3 trigger rule (given name + surname + DOB present); the bounded prompt's cap and
-`incomplete` derivation; gender ranking never dropping a candidate; token pairing, and an edit
+`incomplete` derivation (since ADR-0075: its `withheld` count, `incomplete` copied from the node); gender ranking never dropping a candidate; token pairing, and an edit
 discarding the token.
 
 **Mock port.** The whole funnel with no database: browse, scroll, pick; and browse, no fit, register,
@@ -378,5 +380,6 @@ No editing a candidate before opening it. No change to the advisory matcher.
 > #671): this bullet's revisit condition is RETIRED.** The prompt is a best-effort nudge and
 > truncation is its normal state; duplicates are expected and repaired by `link`. `incomplete`
 > means only that the search was partial (ADR-0061's meaning); truncation is shown on screen, not
-> signed. Ranking gains name-tokens-matched and a DOB near-miss key. Design:
+> signed. Ranking gains ADR-0075 decision 5's keys: an identifier match, a callsign typed whole, name
+> tokens matched, a DOB near-miss and an exact-token tie-break. Design:
 > `2026-09-26-step3-prompt-is-a-nudge-671-design.md`.

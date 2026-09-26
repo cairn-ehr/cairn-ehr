@@ -1,7 +1,8 @@
 //! `search_patients` ranks a chart that matched MORE `db/046` passes above older charts that
 //! matched fewer — the order the funnel's bounded step-3 prompt shows and a registration signs
 //! (funnel UI slice 2c) — and, within equal passes, by ADR-0075's keys: an identifier match,
-//! then name tokens matched (exactly or as a typed prefix), then a DOB near-miss. Real Postgres, gated on `$CAIRN_TEST_PG`, serialized cluster-wide via
+//! then a §5.4 callsign typed whole, then name tokens matched (exactly or as a typed prefix),
+//! then a DOB near-miss. Real Postgres, gated on `$CAIRN_TEST_PG`, serialized cluster-wide via
 //! `db::test_serial_guard` like every suite in this directory.
 //!
 //! Why a suite of its own rather than one more test in `patient_search.rs`: that file is
@@ -292,6 +293,54 @@ async fn a_callsign_is_not_split_into_name_tokens_for_ranking() {
         ids,
         vec![namesake, jd],
         "a callsign's parts are not name tokens: {list:?}"
+    );
+}
+
+/// Review of #678 (Critical): the reverse of the test above. A clerk re-finds the John Doe in
+/// front of them by typing its §5.4 callsign back WHOLE from the wristband, and db/046 finds it
+/// that way. But the typed callsign also carries its part "ed", which matches every plain "Ed …"
+/// on the node — and the ranking used to leave callsigns out entirely, so the exact John Doe
+/// scored zero tokens against their one and was cut from the prompt by six namesakes.
+#[tokio::test]
+async fn a_callsign_typed_whole_outranks_namesakes_of_its_parts() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    // Six OLDER charts named "Ed …" — more than the prompt's cap of five.
+    for i in 0..6 {
+        chart_named(&c, &sk, &kid, 10 * i, &format!("Ed Other{i}")).await;
+    }
+    let (jd, call, _ord) = john_doe::register_john_doe(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-09-26",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .expect("john doe registration accepted by the floor");
+
+    let query = SearchQuery::new(&call, None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+
+    assert_eq!(
+        list.candidates.len(),
+        7,
+        "the typed callsign's part \"ed\" finds every Ed, so the SET is all seven: {list:?}"
+    );
+    assert_eq!(
+        list.candidates[0].patient_id, jd,
+        "the John Doe whose callsign was typed whole must come first: {list:?}"
     );
 }
 

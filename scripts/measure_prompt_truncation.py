@@ -25,8 +25,9 @@ DOB pass no longer matches; ranking then has the name tokens and ADR-0075's DOB 
 
 # What it measures, and what it does not
 
-**The candidate SET and its ORDER, not timings.** Rows go straight into the two projections
-`cairn_search_candidates` reads (`patient_name`, and `patient_demographic`'s dob row), as
+**The candidate SET and its ORDER, not timings.** Rows go straight into the three projections
+`cairn_search_candidates` reads (`patient_name`, `patient_demographic`'s dob row, and one MRN per
+chart in `patient_identifier`), as
 `measure_patient_search.py` does for names, so this says nothing about write throughput. Ids
 are assigned in insertion order, so "id order" really is chart-creation order — the order
 `search_patients` used before slice 2c. The population is shuffled first, so a sampled patient's
@@ -176,7 +177,8 @@ def tokens_matched(query: list[str], stored_names: list[str], prefix: bool = Tru
 
     A query token matches a stored token as db/046's name pass matches it: equal, or — at least
     `MIN_PREFIX_BYTES` UTF-8 bytes long — a prefix of it (#636, #638; review of #678). The rig
-    seeds no callsigns, so `search_rank.rs`'s callsign exclusion has nothing to twin here.
+    seeds no callsigns, so `RankKey::callsign_matched` (a §5.4 callsign typed whole) is false for
+    every candidate here and `Row` leaves it out; `rank` is otherwise the Rust order.
     `prefix=False` is the exact-only count: ADR-0075's first version (kept for `rank_v1`), and
     `rank`'s final tie-break (twin of `tokens_exactly_matched`)."""
     stored: set[str] = set()
@@ -465,7 +467,7 @@ def self_test() -> int:
     assert tokens_matched(["wu", "li"], ["wu li"]) == 2
     # The order as first reviewed counted exact tokens only — kept for the before/after figures.
     assert tokens_matched(["alex", "nguyen"], ["alexander nguyen"], prefix=False) == 1
-    # Rows are (id, passes, identifier matched, tokens matched, DOB near-miss).
+    # Rows are (id, passes, identifier matched, tokens matched, DOB near-miss, exact tokens).
     assert rank([("1", 1, False, 2, True, 2), ("2", 2, False, 0, False, 0)]) == ["2", "1"]
     assert rank([("1", 1, False, 1, False, 1), ("2", 1, False, 2, False, 2)]) == ["2", "1"]
     assert rank([("1", 1, False, 2, False, 2), ("2", 1, False, 2, True, 2)]) == ["2", "1"]
@@ -562,7 +564,12 @@ def main() -> int:
         conn += ["-U", args.user]
 
     rng = random.Random(args.seed)
-    names = pool_names(args.name_pool, args.rows) if args.name_pool else synthetic_population(args.rows, rng)
+    # `spread=True`: a representative sample of the pool, not its namesake-heavy first rows.
+    names = (
+        pool_names(args.name_pool, args.rows, spread=True)
+        if args.name_pool
+        else synthetic_population(args.rows, rng)
+    )
     rng.shuffle(names)
     base = 0x0190_0000_0000_7000_8000_0000_0000_0000
     people = []
@@ -586,12 +593,15 @@ def main() -> int:
         before = scalar(conn, count_sql)
         samples = rng.sample(people, args.samples)
         mrns: list[str | None] = [None] * len(samples)
-        unperturbed = 0
+        # Indices of searches whose name could not be perturbed as the arm asks and were sent
+        # as-is — an EASIER search, so the arm is also reported without them (`perturbed_only`).
+        unperturbed_at: set[int] = set()
         if args.perturb == "short-any":
             queried = []
-            for pid, name, dob in samples:
+            for i, (pid, name, dob) in enumerate(samples):
                 short = perturb_given_prefix(name, rng)
-                unperturbed += short is None
+                if short is None:
+                    unperturbed_at.add(i)
                 queried.append((pid, short or name, perturb_dob_any(dob, rng)))
         elif args.perturb == "ident":
             # A different chart's name — the nickname-plus-married-surname case, with a namesake
@@ -609,9 +619,10 @@ def main() -> int:
             # The surname typo, then the arm's date. Evaluated in this order so the RNG draws — and
             # so the samples — match every earlier run of these arms.
             queried = []
-            for pid, name, dob in samples:
+            for i, (pid, name, dob) in enumerate(samples):
                 typo = perturb_name(name, rng)
-                unperturbed += typo is None
+                if typo is None:
+                    unperturbed_at.add(i)
                 if args.perturb == "name":
                     q_dob = dob
                 elif args.perturb == "both":
@@ -662,13 +673,17 @@ def main() -> int:
         if missing and args.perturb not in ("name", "both", "both-any"):
             raise SystemExit(f"{len(missing)} searches did not find their own chart; the rig is wrong")
         summary = summarise(results, PROMPT_CAP)
+        perturbed = [r for i, r in enumerate(results) if i not in unperturbed_at]
         summary.update(
             population=len(people),
             pool=args.name_pool or "synthetic (Zipf-skewed common names)",
             perturb=args.perturb,
             cap=PROMPT_CAP,
             # Searches whose name could not be perturbed as the arm asks, and were sent as-is.
-            unperturbed=unperturbed,
+            unperturbed=len(unperturbed_at),
+            # The arm's figures over the searches that WERE perturbed, so the headline is not
+            # flattered by the easier as-is ones (review of PR #678).
+            perturbed_only=summarise(perturbed, PROMPT_CAP) if unperturbed_at and perturbed else None,
         )
         print(json.dumps(summary, indent=2))
     finally:

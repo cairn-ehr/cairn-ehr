@@ -524,7 +524,7 @@ pub(crate) mod tests {
     fn a_prompt_cut_to_nobody_never_reads_as_no_match() {
         let s = prompt_summary(&counts(0, 4, false));
         assert!(!s.contains("No existing chart matched"), "{s}");
-        assert!(s.contains('4'), "{s}");
+        assert!(s.contains("4 existing patient(s) matched"), "{s}");
     }
 
     /// Exactly the cap and nothing cut: no "closest of" — the list IS every match.

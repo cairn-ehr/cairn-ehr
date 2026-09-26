@@ -10,10 +10,12 @@
 > made to browse, so **accept duplicates and make repair (`link`) easy** — the safety measure is how
 > fast a duplicate is FOUND. So: `search.incomplete` means only that the SEARCH was partial
 > (ADR-0061's meaning, restored; no wire change); being cut to five is `PromptList::withheld`, shown
-> on screen as *"… the 5 closest of N matches, listed below; type more to narrow"* and never signed; ranking gained **name tokens matched** and a **DOB
-> near-miss**. Measured over 50,000 real names: every single slip (wrong DOB, surname typo) is now
-> in the five 500/500; a surname typo AND a simply wrong DOB 203/500 — that residue is the repair
-> path's (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`).
+> on screen as *"… the 5 closest of N matches, listed below; type more to narrow"* and never signed; ranking gained an **identifier match**, a **callsign
+> typed whole**, **name tokens matched**, a **DOB near-miss** and an exact-token tie-break
+> (ADR-0075 decision 5). Measured over 50,000 real names: every single slip (wrong DOB, surname
+> typo) is now in the five 500/500; a surname typo AND a simply wrong DOB 203/500 — that residue is
+> the repair path's (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`).
+> ⚠️ Those names were the pool's namesake-heavy FIRST 50,000 rows; the representative re-run is **#685**.
 >
 > **⇒ NEXT, in order:**
 > 0. **PR #678: every review finding is fixed or filed; re-review, then merge.** Fixed (each test-first,
@@ -25,6 +27,18 @@
 >    (`CandidateList` as one sum type, a wire decision), **#684** (a DOB compared and stored as typed:
 >    a SET gap the ranking fix cannot reach). Not taken, a product call: saying "closest" when the
 >    ranking is a heuristic ("strongest" was suggested).
+>    **Third review round (2026-09-26, five specialist reviewers):** fixed test-first — a §5.4
+>    callsign typed WHOLE ranked its John Doe below every "Ed …" (the callsign's part "ed" matched
+>    them; the callsign itself was read nowhere) → new `callsign_matched` key; the two unpinned key
+>    precedences (tokens over near-miss, tokens over exact-tokens); DOB edge tests; `rank_keys` takes
+>    only the birth date, not the whole query; `try_get` on the pass read; the rig's head-of-table
+>    name draw (→ spread draw, blank names excluded, `perturbed_only`). Filed: **#685** (re-run every
+>    real-name arm on the spread draw — clearing `cairn_test`'s fixtures needs the maintainer's
+>    permission; ADR-0075 and the results doc state the limit meanwhile), **#686** (a partial DOB
+>    consistent with the typed one gets no ranking credit — a weighting decision), **#687** (CI does
+>    not run the rigs' `--self-test`); findings added to **#682** (NFD/Turkish DB tests), **#683**
+>    (the dropped stray reason) and **#684** (an unparseable typed DOB is silently ignored while the
+>    prompt says "closest of").
 > 1. **The repair path — brainstorm first, with the maintainer:** **#679** (commit-time local
 >    duplicate check by the §5.2 matcher), **#680** (duplicate worklist), **#681** (link gesture —
 >    show each chart's allergies/active meds at link time, the window's hazard). ADR-0075 decision 2
@@ -42,11 +56,13 @@
 >
 > **⇒ THE FUNNEL'S DURABLE RULES — do not undo any of these** (full text: the design page's
 > dated notes and ROADMAP's 2a → 2c entry):
-> - **`search_patients` RANKS BY SIX KEYS** (`cairn_patient_search::rank_candidates`, inputs read
->   in `patient/search_rank.rs`): passes matched → identifier matched → name tokens matched
->   (exact OR a ≥3-byte typed prefix, as `db/046` matches; callsigns never split) → DOB near-miss
->   → tokens matched EXACTLY → chart age (the identifier, prefix and exact keys all from the #678
->   review). It only REORDERS. Dropping the identifier key
+> - **`search_patients` RANKS BY SEVEN KEYS** (`cairn_patient_search::rank_candidates`, inputs read
+>   in `patient/search_rank.rs`): passes matched → identifier matched → a §5.4 callsign typed
+>   WHOLE → name tokens matched (exact OR a ≥3-byte typed prefix, as `db/046` matches; callsigns
+>   never split) → DOB near-miss → tokens matched EXACTLY → chart age (the identifier, callsign,
+>   prefix and exact keys all from the #678 review). It only REORDERS. Dropping the callsign key
+>   sinks a John Doe re-found by its whole callsign below every "Ed …" (the callsign's part
+>   matches them; its whole form is counted nowhere else). Dropping the identifier key
 >   buries a chart found only by its MRN below every namesake; dropping the prefix arm ties an
 >   "Alex"-typed "Alexander" with every namesake. `db/046` is a disjunction, so in plain id order the prompt showed the
 >   OLDEST charts; "simplifying" back to `ids.sort()` or to passes-only fails

@@ -1,8 +1,11 @@
 # The funnel's step-3 prompt: how often it truncates, and whether the duplicate survives — 2026-09-23
 
 > **Superseded in part by [2026-09-26-funnel-prompt-ranking.md](2026-09-26-funnel-prompt-ranking.md)**
-> (ADR-0075, #671): truncation is now the prompt's normal state, and the ranking gained name
-> tokens matched and a DOB near-miss. The figures below remain the 2c baseline.
+> (ADR-0075, #671): truncation is now the prompt's normal state, and the ranking gained ADR-0075
+> decision 5's keys (an identifier match, a callsign typed whole, name tokens matched, a DOB
+> near-miss, an exact-token tie-break). The figures below remain the 2c baseline. They were drawn
+> from the name pool's first 50,000 rows, which over-represent common surnames about fourfold;
+> a representative re-run is [#685](https://github.com/cairn-ehr/cairn-ehr/issues/685).
 
 **Why this was measured.** The registration window shows at most `PROMPT_CAP` (5) candidates in
 its step-3 prompt, and the new chart's birth act attests exactly those rows as displayed

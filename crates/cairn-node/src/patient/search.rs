@@ -89,14 +89,21 @@ pub async fn search_patients<C: GenericClient + Sync>(
     };
     let dobs = read_dob(client, &ids).await?;
     // ADR-0075: rank BEFORE assembling, so `candidates` below is built in display order.
-    // `rank_candidates` only reorders — every id read above is still in `ids` afterwards.
+    // `rank_candidates` only reorders — `ranked_ids` holds exactly the ids read above, and every
+    // read and the assembly after it use `ranked_ids`, so the list is built in display order.
     let retained = read_retained_names(client, &ids).await?;
     let query_tokens = normalise_query_tokens(client, &query.name_tokens).await?;
-    let ids = rank_candidates(rank_keys(&passes, &query_tokens, query, &retained, &dobs));
-    let trust_states = read_trust_states(client, &ids).await?;
-    let last_activity = read_last_activity(client, &ids).await?;
-    let locales = read_locale(client, &ids).await?;
-    let photo_refs = read_photo_refs(client, &ids).await?;
+    let ranked_ids = rank_candidates(rank_keys(
+        &passes,
+        &query_tokens,
+        query.birth_date.as_deref(),
+        &retained,
+        &dobs,
+    ));
+    let trust_states = read_trust_states(client, &ranked_ids).await?;
+    let last_activity = read_last_activity(client, &ranked_ids).await?;
+    let locales = read_locale(client, &ranked_ids).await?;
+    let photo_refs = read_photo_refs(client, &ranked_ids).await?;
 
     // The one field a candidate cannot honestly render as `None`: `Candidate::display_name`
     // is a plain `String`, not `Option<String>`, because a nameless row on a search results
@@ -105,7 +112,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
     // and correctly to `None` — that is an honest "unknown", not a read failure, and must
     // NOT itself flip `incomplete` (see the John-Doe test: no `patient_chart` row is normal).
     let mut unreadable_names = 0usize;
-    let candidates: Vec<Candidate> = ids
+    let candidates: Vec<Candidate> = ranked_ids
         .iter()
         .map(|id| {
             let display_name = match names.get(id) {
@@ -233,9 +240,11 @@ async fn read_candidate_passes<C: GenericClient + Sync>(
         .iter()
         .map(|row| {
             Ok(MatchedPasses {
-                id: row.get::<_, String>("patient_id").parse::<Uuid>()?,
-                passes: passes_from_db(row.get::<_, i64>("passes"))?,
-                identifier_matched: row.get::<_, bool>("identifier_matched"),
+                // `try_get`, not `get`: `get` PANICS on a NULL or a changed type, and this is
+                // the read `passes_from_db` exists to make fail loudly as an error instead.
+                id: row.try_get::<_, String>("patient_id")?.parse::<Uuid>()?,
+                passes: passes_from_db(row.try_get::<_, i64>("passes")?)?,
+                identifier_matched: row.try_get::<_, bool>("identifier_matched")?,
             })
         })
         .collect::<anyhow::Result<_>>()?;

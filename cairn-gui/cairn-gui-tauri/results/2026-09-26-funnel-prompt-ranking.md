@@ -4,10 +4,12 @@
 (#671) made the step-3 prompt a best-effort nudge: it shows the five closest charts, and being cut
 is its normal state. That leaves the ORDER as the one lever that helps the person at the desk
 without asking them for anything. `search_patients` now ranks by passes matched, then an
-**identifier match**, then **name tokens matched** (exactly or as a typed prefix of at least 3
-bytes, as `db/046` matches them), then a **DOB near-miss** (day/month swapped, year ±1, the year's
-last two digits transposed), then **exactly-matched tokens**, then chart age
-(`cairn_patient_search::rank`). The identifier key, the prefix rule and the exact-token tie-break
+**identifier match**, then a **§5.4 callsign typed whole**, then **name tokens matched** (exactly or
+as a typed prefix of at least 3 bytes, as `db/046` matches them), then a **DOB near-miss** (day/month
+swapped, year ±1, the year's last two digits transposed, or the same date written differently),
+then **exactly-matched tokens**, then chart age (`cairn_patient_search::rank`). The rig seeds no
+callsigns, so the callsign key (added in the review's third round) is false throughout and cannot
+move any figure below. The identifier key, the prefix rule and the exact-token tie-break
 came from the PR #678 review; the tables below report the order as first reviewed and the final
 one side by side. The 2026-09-23 run
 ([2026-09-23-funnel-prompt-truncation.md](2026-09-23-funnel-prompt-truncation.md)) found the
@@ -25,10 +27,20 @@ help.
 | Population | 50,000 (spec §8.1), rows straight into `patient_name` + `patient_demographic` + one MRN each in `patient_identifier` |
 | Dates of birth | uniform 1930–2025, day ≤ 28, seeded (`--seed 20260923`) |
 | Searches | 500 sampled patients, each searched for as a duplicate registration |
-| Name pool | `~/src/SyntheticHealthData/synthetic_demographics.sqlite3` (real Australian names; ⚠️ not the current generator version — the name distribution is what matters and this copy's is realistic) |
+| Name pool | `~/src/SyntheticHealthData/synthetic_demographics.sqlite3` (real Australian names; ⚠️ not the current generator version — the name distribution is what matters and this copy's is realistic). ⚠️ **Drawn from the pool's FIRST 50,000 rows**, which hold ~4× the table's share of its commonest surnames (Smith 0.72% vs 0.18%); see the limit below |
 
 **The question per search:** someone ALREADY on file is being registered again. Is their existing
 chart among the five the prompt shows?
+
+> [!WARNING]
+> **Stated limit: these real-name figures come from an unrepresentative draw.** `pool_names` took
+> the pool's first 50,000 rows, which over-represent common surnames about fourfold (review of PR
+> #678). More namesakes means bigger candidate sets and more competition for the five, so the
+> figures are likely *conservative* — but they are not the figures for the population described.
+> The rig now draws every k-th row across the table (`pool_names(..., spread=True)`) and reports
+> each arm over only the searches it actually perturbed (`perturbed_only`); the re-run, and the
+> correction of every figure quoted from this file, is
+> [#685](https://github.com/cairn-ehr/cairn-ehr/issues/685).
 
 ## Result — real names
 
@@ -87,7 +99,7 @@ twins are everywhere (median 7,576 candidates per search, max 20,547).
    is false for a one-token typo, and the ADR was corrected before merge. What cannot be found is a
    name with every token misspelt; this rig does not model it.
 3. **Where the prompt stops helping — the repair path's territory:**
-   - a surname typo together with a date of birth that is simply wrong (`both-any`): **204/500**
+   - a surname typo together with a date of birth that is simply wrong (`both-any`): **203/500**
      (41%) — the chart is left with one given-name token and nothing to break the tie;
    - a population with many exact full-name twins and a wrong DOB (synthetic `dob-any`):
      **72/500** — no order can pick the right John Smith without the date.
@@ -105,8 +117,9 @@ so the rig does not exercise those two fixes; the unit tests
 `a_word_whose_parts_do_not_stand_for_it_counts_whole` and
 `the_same_date_written_differently_is_a_near_miss` do.
 
-**Earlier re-run, after the final review's fix** (`tokens_matched` now counts only plain tokens, so a
-hyphenated word counts once per part): all eight arms reproduced the figures of the first run
+**Earlier re-run, after the final review's fix** (`tokens_matched` then counted only plain tokens —
+a rule since replaced by `is_represented_by_its_parts`, see the re-run above — so a hyphenated word
+counted once per part): all eight arms reproduced the figures of the first run
 exactly. The
 real-name pool is almost entirely unpunctuated, so this rig does not exercise that fix — the unit
 test `a_hyphenated_given_name_does_not_outweigh_a_matched_surname` does.
