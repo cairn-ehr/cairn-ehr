@@ -373,3 +373,10 @@ No editing a candidate before opening it. No change to the advisory matcher.
 >   passes, but withholding single-pass candidates would withhold exactly the wrong-DOB
 >   duplicate. Evidence:
 >   `cairn-gui/cairn-gui-tauri/results/2026-09-23-funnel-prompt-truncation.md`.
+
+> **Decided 2026-09-26 ([ADR-0075](../../spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md),
+> #671): this bullet's revisit condition is RETIRED.** The prompt is a best-effort nudge and
+> truncation is its normal state; duplicates are expected and repaired by `link`. `incomplete`
+> means only that the search was partial (ADR-0061's meaning); truncation is shown on screen, not
+> signed. Ranking gains name-tokens-matched and a DOB near-miss key. Design:
+> `2026-09-26-step3-prompt-is-a-nudge-671-design.md`.
