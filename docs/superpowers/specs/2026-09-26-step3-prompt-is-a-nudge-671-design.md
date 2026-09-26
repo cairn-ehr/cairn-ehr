@@ -57,8 +57,10 @@ gesture — is the next design thread, filed as issues here, not built.
 A pure function in `cairn-patient-search` (`rank_candidates`), ordering by:
 
 1. **Passes matched**, descending (today's key).
-2. **Name tokens matched**, descending — how many DISTINCT query tokens equal a whole token of any of
-   the candidate's retained, non-repudiated names, compared lowercased and NFC-normalised.
+2. **Name tokens matched**, descending — how many DISTINCT query tokens equal a token of any of
+   the candidate's RETAINED names (`patient_name`, repudiated values included — the same set
+   `db/046` searches, deliberately, #349), both sides tokenised by `SearchQuery::new`'s rule and
+   compared lowercased and NFC-normalised (normalisation done by Postgres, as `db/046` does it).
 3. **DOB near-miss**, true first — both the query DOB and the candidate's are full ISO
    `YYYY-MM-DD`, they differ, and the candidate's is the query's with day and month swapped, or the
    year ±1, or the year's last two digits transposed (1967↔1976). Partial-precision dates never
