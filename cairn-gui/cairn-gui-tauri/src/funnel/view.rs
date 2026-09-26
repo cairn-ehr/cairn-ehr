@@ -18,7 +18,9 @@
 //! change what was typed. A node-state verdict (`NotProvisioned`) is pointless to retry until
 //! an operator has acted, and then succeeds.
 use cairn_gui_data::port::DataError;
-use cairn_gui_funnel::{MissingPart, Restored, TokenError, TriggerState, MIN_NAME_TOKENS};
+use cairn_gui_funnel::{
+    MissingPart, PromptCounts, Restored, TokenError, TriggerState, MIN_NAME_TOKENS,
+};
 use cairn_node::actor_enrolment::{
     ambiguous_actor_refusal, not_enrolled_refusal, retired_actor_refusal, ActorStanding,
 };
@@ -187,7 +189,15 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
 /// as "the N closest of M", a count and a way to narrow — never as "not complete". That word
 /// is reserved for `incomplete`, because it changes whether "no match" can be trusted, and
 /// being cut to five does not. The prompt is a nudge; being cut is its normal state.
-pub fn prompt_summary(shown: usize, withheld: usize, incomplete: bool) -> String {
+///
+/// Takes [`PromptCounts`] (read off the prompt by `PromptList::counts`) rather than three bare
+/// values: two adjacent `usize` arguments compile just as well swapped (review of #678).
+pub fn prompt_summary(counts: &PromptCounts) -> String {
+    let PromptCounts {
+        shown,
+        withheld,
+        incomplete,
+    } = *counts;
     // Appended to a list with rows when the search itself was partial.
     let partial = if incomplete {
         ", but the list is not complete (the reason follows)"
@@ -211,7 +221,7 @@ pub fn prompt_summary(shown: usize, withheld: usize, incomplete: bool) -> String
             "{n} existing patient(s) might be this person — the {n} closest of {} matches, \
              listed below{partial}; type more to narrow. Pressing Register now means none of \
              these.",
-            n + withheld
+            counts.total()
         ),
         n => format!(
             "{n} existing patient(s) might be this person — listed below{partial}. Pressing \
@@ -364,6 +374,15 @@ pub fn header_opened_by_id(id: Uuid) -> ChartHeaderView {
 pub(crate) mod tests {
     use super::*;
     use cairn_gui_funnel::trigger_state;
+
+    /// Named fields, so each call below says which count is which.
+    fn counts(shown: usize, withheld: usize, incomplete: bool) -> PromptCounts {
+        PromptCounts {
+            shown,
+            withheld,
+            incomplete,
+        }
+    }
     use cairn_patient_search::{Age, TrustState};
 
     #[test]
@@ -457,10 +476,10 @@ pub(crate) mod tests {
     /// the Register button now means — the prompt is otherwise silent while they type.
     #[test]
     fn the_prompt_announces_how_many_matches_and_what_register_now_means() {
-        let some = prompt_summary(3, 0, false);
+        let some = prompt_summary(&counts(3, 0, false));
         assert!(some.contains('3'), "{some}");
         assert!(some.contains("none of these"), "{some}");
-        let none = prompt_summary(0, 0, false);
+        let none = prompt_summary(&counts(0, 0, false));
         assert!(none.contains("No existing chart matched"), "{none}");
         assert!(none.contains("record that search"), "{none}");
     }
@@ -469,7 +488,7 @@ pub(crate) mod tests {
     /// but did NOT finish must never be announced as "nobody matched" (PR #674 review).
     #[test]
     fn a_partial_search_that_shows_nobody_never_reads_as_no_match() {
-        let s = prompt_summary(0, 0, true);
+        let s = prompt_summary(&counts(0, 0, true));
         assert!(!s.contains("No existing chart matched"), "{s}");
         assert!(s.contains("NOT"), "{s}");
         let b = browse_summary(0, true);
@@ -481,7 +500,7 @@ pub(crate) mod tests {
     /// not as "incomplete", which is reserved for a search that did not finish.
     #[test]
     fn a_cut_prompt_says_how_many_closest_of_how_many() {
-        let s = prompt_summary(5, 98, false);
+        let s = prompt_summary(&counts(5, 98, false));
         assert!(s.contains("5 closest of 103"), "{s}");
         assert!(s.contains("type more to narrow"), "{s}");
         assert!(
@@ -493,7 +512,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_cut_prompt_over_a_partial_search_says_both() {
-        let s = prompt_summary(5, 3, true);
+        let s = prompt_summary(&counts(5, 3, true));
         assert!(s.contains("5 closest of 8"), "{s}");
         assert!(s.contains("not complete"), "{s}");
     }
@@ -503,22 +522,39 @@ pub(crate) mod tests {
     /// today's cap of five, and pinned so it stays safe if the cap ever changes.
     #[test]
     fn a_prompt_cut_to_nobody_never_reads_as_no_match() {
-        let s = prompt_summary(0, 4, false);
+        let s = prompt_summary(&counts(0, 4, false));
         assert!(!s.contains("No existing chart matched"), "{s}");
         assert!(s.contains('4'), "{s}");
+    }
+
+    /// Exactly the cap and nothing cut: no "closest of" — the list IS every match.
+    #[test]
+    fn a_prompt_of_exactly_the_cap_does_not_say_it_was_cut() {
+        let s = prompt_summary(&counts(5, 0, false));
+        assert!(!s.contains("closest of"), "{s}");
+        assert!(s.contains("none of these"), "{s}");
+    }
+
+    /// A partial search wins over a cut one when nobody was shown: the reader must hear that
+    /// the search did not finish, which is the stronger warning against "no match".
+    #[test]
+    fn a_partial_search_cut_to_nobody_says_it_did_not_finish() {
+        let s = prompt_summary(&counts(0, 4, true));
+        assert!(s.contains("did not finish"), "{s}");
+        assert!(!s.contains("No existing chart matched"), "{s}");
     }
 
     /// Review focus 5: the one sentence that licenses a new chart is unchanged.
     #[test]
     fn an_empty_prompt_still_licenses_a_new_chart() {
-        assert!(prompt_summary(0, 0, false).contains("No existing chart matched"));
+        assert!(prompt_summary(&counts(0, 0, false)).contains("No existing chart matched"));
     }
 
     /// A partial list with rows says it is partial IN the announcement, not only in the
     /// separate note — a screen-reader clerk hears the live region, and may hear only that.
     #[test]
     fn a_partial_list_with_rows_says_so_in_its_announcement() {
-        assert!(prompt_summary(2, 0, true).contains("not complete"));
+        assert!(prompt_summary(&counts(2, 0, true)).contains("not complete"));
         assert!(browse_summary(2, true).contains("not complete"));
         assert!(!browse_summary(2, false).contains("not complete"));
     }

@@ -105,6 +105,43 @@ impl PromptList {
     pub fn withheld(&self) -> usize {
         self.withheld
     }
+
+    /// The three facts the on-screen announcement is built from, as one named value.
+    ///
+    /// Why not three getters passed to `prompt_summary`: two adjacent `usize` arguments compile
+    /// just as well swapped, and the swap reads "98 might be this person — the 98 closest of
+    /// 103" (review of #678). Named fields make a swap visible at the call site.
+    pub fn counts(&self) -> PromptCounts {
+        PromptCounts {
+            shown: self.list.candidates.len(),
+            withheld: self.withheld,
+            incomplete: self.list.incomplete,
+        }
+    }
+}
+
+/// What the step-3 announcement says, read off a [`PromptList`] by [`PromptList::counts`].
+///
+/// Plain data with public fields, so a view test can state any combination — including shapes
+/// today's cap never produces (showed nobody because everything was cut) that the wording must
+/// still get right. Production code takes it from `counts()`, where it is consistent by
+/// construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptCounts {
+    /// Rows on screen — the ones a registration signs as displayed.
+    pub shown: usize,
+    /// Further candidates that matched but are not shown. Said, never signed (ADR-0075).
+    pub withheld: usize,
+    /// The SEARCH was partial (the node could not read a chart it matched) — ADR-0061's meaning.
+    pub incomplete: bool,
+}
+
+impl PromptCounts {
+    /// Everything the node returned: the "M" of "the N closest of M". Owned here, not
+    /// recomputed by each caller.
+    pub fn total(&self) -> usize {
+        self.shown + self.withheld
+    }
 }
 
 /// Bound a node-returned list to what the step-3 prompt can truthfully claim it displayed.
@@ -139,8 +176,14 @@ fn bound_to(list: &CandidateList, cap: usize) -> PromptList {
             // laundered into a complete one here.
             incomplete: list.incomplete,
             // `node_reason` rather than `list.incomplete_reason` directly: a node that set the
-            // flag with no prose still reaches the clerk as a sentence.
-            incomplete_reason: node_reason(list).map(str::to_string),
+            // flag with no prose still reaches the clerk as a sentence. And ONLY when the flag
+            // is set: prose beside a list that says it is complete would contradict it, and
+            // the flag is what gets signed, so the flag wins (review of #678).
+            incomplete_reason: if list.incomplete {
+                node_reason(list).map(str::to_string)
+            } else {
+                None
+            },
         },
         withheld: list.candidates.len().saturating_sub(cap),
     }
@@ -215,6 +258,33 @@ mod tests {
         // screen is a warning nobody reads.
         let list = list_of(3, None);
         assert_eq!(bound_for_prompt(&list).as_list(), &list);
+    }
+
+    /// Review of #678: the "N closest of M" line needs shown, withheld and the search's
+    /// partiality together. Handing them out as three bare values let a caller swap the two
+    /// counts and still compile, so they travel as one named value read off the prompt.
+    #[test]
+    fn the_counts_are_read_off_the_prompt_and_total_what_the_node_returned() {
+        let counts = bound_to(&list_with(8, true, Some("x")), 5).counts();
+        assert_eq!(
+            counts,
+            PromptCounts {
+                shown: 5,
+                withheld: 3,
+                incomplete: true
+            }
+        );
+        assert_eq!(counts.total(), 8);
+    }
+
+    /// Review of #678: a node list claiming a reason for a partiality it does NOT claim is a
+    /// contradiction the public fields allow. Passing the prose through would put a "why it is
+    /// not complete" sentence beside a list that says it is. The flag wins: no flag, no reason.
+    #[test]
+    fn a_reason_without_the_flag_is_not_passed_through() {
+        let bounded = bound_for_prompt(&list_with(3, false, Some("stray prose")));
+        assert!(!bounded.as_list().incomplete);
+        assert_eq!(bounded.as_list().incomplete_reason, None);
     }
 
     #[test]

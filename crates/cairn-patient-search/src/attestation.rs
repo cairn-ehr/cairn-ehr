@@ -15,7 +15,9 @@ pub struct SearchAttestation {
     pub query: SearchQuery,
     /// The candidate ids that were on the screen, in display order.
     pub displayed: Vec<Uuid>,
-    /// Carried straight through from the list — never re-decided here.
+    /// Carried straight through from the list — never re-decided here. It means the SEARCH was
+    /// partial (see `CandidateList::incomplete`), never that fewer rows were shown than matched
+    /// (ADR-0075 decision 3).
     pub incomplete: bool,
 }
 

@@ -138,9 +138,14 @@ pub struct Candidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateList {
     pub candidates: Vec<Candidate>,
-    /// True when the node found more than it could show, or could not read something it
-    /// found. ADR-0060 decision 2: partial completion is reported, never implied — a clerk
-    /// must never believe an exhaustive search happened when it did not.
+    /// True when the SEARCH was partial: the node could not read something it matched.
+    /// ADR-0060 decision 2: partial completion is reported, never implied — a clerk must never
+    /// believe an exhaustive search happened when it did not.
+    ///
+    /// NOT set because a prompt showed fewer rows than matched: that is display truncation,
+    /// counted as `cairn_gui_funnel::PromptList::withheld` and never signed. Folding it back
+    /// in set this flag on 92% of registrations, so it said nothing (ADR-0075 decision 3,
+    /// restoring ADR-0061's meaning).
     pub incomplete: bool,
     /// Human-readable reason, shown beside the list. `Some` whenever `incomplete`.
     pub incomplete_reason: Option<String>,

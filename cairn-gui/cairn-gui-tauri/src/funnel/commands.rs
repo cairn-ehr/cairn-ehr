@@ -195,10 +195,11 @@ pub async fn prompt_search_impl(
         .map_err(|e| search_error_view(&e))?;
     let prompt = bound_for_prompt(&list);
     // Rendered from the BOUNDED list, before `record` takes it: the rows on screen are exactly
-    // the rows a registration will swear were displayed. `withheld` is read now for the same
-    // reason — `record` moves the prompt — and is shown, never signed (ADR-0075).
+    // the rows a registration will swear were displayed. The counts are read now for the same
+    // reason — `record` moves the prompt — and their `withheld` is shown, never signed
+    // (ADR-0075).
     let bounded = prompt.as_list().clone();
-    let withheld = prompt.withheld();
+    let counts = prompt.counts();
     let recorded = state.funnel.lock().await.record(&form, prompt);
     match recorded {
         Ok(Recorded::Current(token)) => {
@@ -208,11 +209,7 @@ pub async fn prompt_search_impl(
                 waiting: None,
                 stale: false,
                 token: Some(token),
-                summary: Some(prompt_summary(
-                    bounded.candidates.len(),
-                    withheld,
-                    bounded.incomplete,
-                )),
+                summary: Some(prompt_summary(&counts)),
                 candidates: bounded.candidates.iter().map(candidate_view).collect(),
                 incomplete_reason: bounded.incomplete_reason,
             })
@@ -737,9 +734,16 @@ mod tests {
             p.incomplete_reason.is_none(),
             "a cut prompt is not a partial search: {p:?}"
         );
+        // The COUNT, not just the phrase: PROMPT_CAP + 1 charts matched, so exactly one was cut
+        // (a wrong `withheld`, or the raw list length passed for it, would still say "closest of").
+        let expected = format!(
+            "{} closest of {}",
+            cairn_gui_funnel::PROMPT_CAP,
+            cairn_gui_funnel::PROMPT_CAP + 1
+        );
         assert!(
-            p.summary.as_deref().unwrap_or("").contains("closest of"),
-            "a cut prompt must say it was cut: {p:?}"
+            p.summary.as_deref().unwrap_or("").contains(&expected),
+            "a cut prompt must say how many it cut: {p:?}"
         );
         let shown: Vec<uuid::Uuid> = p
             .candidates
