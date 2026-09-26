@@ -69,20 +69,22 @@ pub struct RankKey {
 /// "Alexander", so it must also count toward how strongly "Alexander" matched, or the
 /// duplicate a clerk found by typing a short first name ties every namesake (review of #678).
 ///
-/// **Only PLAIN tokens (every character alphanumeric) are counted.** [`name_tokens`] emits a
+/// **Each query WORD counts once, by its parts where they stand for it.** [`name_tokens`] emits a
 /// punctuated word three ways — "mary-jane" plus "mary" and "jane" — so counting every token
 /// let a hyphenated given name score three against a surname's one, and "Mary-Jane Brown"
-/// tied the real "Mary Jane Smith" duplicate (final review, #671). Both sides emit a
-/// punctuated word's parts, so a whole form's match is normally also a match of its parts:
-/// skipping the whole form counts each part once.
+/// tied the real "Mary Jane Smith" duplicate (final review, #671). So a punctuated whole form
+/// is skipped WHEN ONE OF ITS PARTS IS ALSO A QUERY TOKEN: the parts carry the match, and both
+/// sides emit them. See `is_represented_by_its_parts` for why the test is "a part is in the
+/// query" and not "every character is alphanumeric".
 ///
 /// # Mirrors db/046, callsigns included
 ///
 /// db/046 never splits a callsign ("unknown-ed-site1-…") into parts, and refuses it the prefix
 /// arm, so a clerk typing "Ed" does not match every John Doe on the node. A callsign is always
-/// dash-joined, so no PLAIN query token can equal it whole: under db/046's rules it contributes
-/// nothing to this count. The caller therefore leaves callsigns out of `stored_names` rather
-/// than this function carrying a `use` flag it would only ever use to skip them.
+/// dash-joined, so even typed in full its whole form is represented by its parts here, and the
+/// parts are exactly what db/046 refuses: it contributes nothing to this count. The caller
+/// therefore leaves callsigns out of `stored_names` rather than this function carrying a `use`
+/// flag it would only ever use to skip them.
 pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize {
     count_matched(query_tokens, stored_names, token_matches)
 }
@@ -106,14 +108,28 @@ fn count_matched(
     matches: impl Fn(&str, &str) -> bool,
 ) -> usize {
     let stored: HashSet<String> = stored_names.iter().flat_map(|n| name_tokens(n)).collect();
-    let distinct_plain_query: HashSet<&String> = query_tokens
+    let query: HashSet<&str> = query_tokens.iter().map(String::as_str).collect();
+    query
         .iter()
-        .filter(|t| t.chars().all(char::is_alphanumeric))
-        .collect();
-    distinct_plain_query
-        .into_iter()
+        .filter(|t| !is_represented_by_its_parts(t, &query))
         .filter(|t| stored.iter().any(|s| matches(t, s)))
         .count()
+}
+
+/// True when `token` is a punctuated whole form ("mary-jane") one of whose alphanumeric parts is
+/// ALSO in `query` — so the parts are counted and the whole must not be counted again.
+///
+/// Why not simply "count only all-alphanumeric tokens" (the #671 rule this replaces): a word can
+/// be non-alphanumeric without its parts standing for it, and that rule scored such a word
+/// ZERO. Rust lowercases Turkish "İ" to "i" + U+0307, a combining mark, and `name_tokens` split
+/// the word BEFORE lowercasing, so "i̇nce" has no part in the query at all; a Thai tone mark or
+/// a Devanagari virama, and initials like "J-P", split a word into single characters, which
+/// `name_tokens` drops. Asking "is a part in the query?" needs no table of Unicode categories and
+/// cannot drift from `name_tokens`, which made the parts in the first place (review of #678).
+fn is_represented_by_its_parts(token: &str, query: &HashSet<&str>) -> bool {
+    token
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|part| part != token && query.contains(part))
 }
 
 /// db/046's prefix gate, in BYTES (its `octet_length(q.qt) >= 3`, #638): UTF-8 spends 3 bytes
@@ -128,15 +144,23 @@ fn token_matches(query_token: &str, stored_token: &str) -> bool {
 
 /// True when `candidate` is `query` with one of the commonest date-of-birth slips.
 ///
-/// Both must be full, real ISO dates (`candidate::parse_ymd`); a partial-precision date is an honest
-/// "only the year is known" (principle 4), not a slip, and never counts. An EXACT match is
-/// not a near-miss — db/046's DOB pass already rewards it through `passes`.
+/// Both must be full, real ISO dates (`candidate::parse_ymd`, after trimming); a
+/// partial-precision date is an honest "only the year is known" (principle 4), not a slip, and
+/// never counts.
+///
+/// An IDENTICAL STRING is not a near-miss — db/046's DOB pass already rewards it through
+/// `passes`. But that pass is an exact STRING compare and nothing on the write path pins the
+/// format, so the SAME date written differently ("1980-3-7", a stray space) is missed by it.
+/// That is the strongest slip of all, so it counts here (review of #678).
 pub fn is_dob_near_miss(query: &str, candidate: &str) -> bool {
-    let (Some(q), Some(c)) = (parse_ymd(query), parse_ymd(candidate)) else {
+    if query == candidate {
+        return false;
+    }
+    let (Some(q), Some(c)) = (parse_ymd(query.trim()), parse_ymd(candidate.trim())) else {
         return false;
     };
     if q == c {
-        return false;
+        return true;
     }
     let (qy, qm, qd) = q;
     let (cy, cm, cd) = c;
@@ -306,6 +330,21 @@ mod tests {
         assert_eq!(tokens_matched(&s(&["wu", "li"]), &s(&["wu li"])), 2);
     }
 
+    /// Review of #678: "only plain tokens count" silently scored ZERO for a word whose parts all
+    /// fail to be plain tokens themselves. Rust lowercases Turkish "İ" to "i" + U+0307 (a
+    /// combining mark, not alphanumeric); a Thai tone mark or a Devanagari virama splits a word
+    /// into single characters, which `name_tokens` drops; so do initials like "J-P". Each word
+    /// must still count once.
+    #[test]
+    fn a_word_whose_parts_do_not_stand_for_it_counts_whole() {
+        let q = crate::query::name_tokens("İnce Yılmaz");
+        assert_eq!(tokens_matched(&q, &s(&["i\u{307}nce yılmaz"])), 2, "{q:?}");
+        let q = crate::query::name_tokens("ก่อ สมชาย");
+        assert_eq!(tokens_matched(&q, &s(&["ก่อ สมชาย"])), 2, "{q:?}");
+        let q = crate::query::name_tokens("J-P Smith");
+        assert_eq!(tokens_matched(&q, &s(&["j-p smith"])), 2, "{q:?}");
+    }
+
     #[test]
     fn day_and_month_swapped_is_a_near_miss() {
         assert!(is_dob_near_miss("1980-03-07", "1980-07-03"));
@@ -327,6 +366,36 @@ mod tests {
     fn an_exact_dob_is_not_a_near_miss() {
         // The exact match is already rewarded by db/046's DOB pass (`passes`).
         assert!(!is_dob_near_miss("1980-03-07", "1980-03-07"));
+    }
+
+    /// Review of #678: db/046's DOB pass is an EXACT STRING compare, and nothing on the write path
+    /// pins the format, so a chart stored as "1980-3-7" is missed by it when "1980-03-07" is typed.
+    /// Skipping every "parses equal" pair as "already rewarded" then gave that duplicate no DOB
+    /// credit at all. Only an identical STRING is already rewarded.
+    #[test]
+    fn the_same_date_written_differently_is_a_near_miss() {
+        assert!(is_dob_near_miss("1980-03-07", "1980-3-7"));
+        assert!(is_dob_near_miss("1980-03-07", "1980-03-07 "));
+    }
+
+    #[test]
+    fn near_miss_edges_across_centuries_and_double_slips() {
+        assert!(
+            is_dob_near_miss("1999-05-20", "2000-05-20"),
+            "year +1 across a century"
+        );
+        assert!(
+            is_dob_near_miss("2001-05-20", "2010-05-20"),
+            "transposed in the 2000s"
+        );
+        assert!(
+            !is_dob_near_miss("1980-03-07", "1981-07-03"),
+            "a swap AND a year slip is two slips, not one"
+        );
+        assert!(
+            !is_dob_near_miss("1980-03-03", "1980-03-03"),
+            "day == month: the swap is the same string"
+        );
     }
 
     #[test]

@@ -25,6 +25,19 @@ pub(super) struct MatchedPasses {
     pub(super) identifier_matched: bool,
 }
 
+/// db/046's per-candidate pass count, checked into the `1..=3` its three passes allow.
+///
+/// A plain `as u32` would wrap a negative count to ~4 billion — a chart ranked FIRST in every
+/// prompt, with nothing on screen to say why. A count outside the contract means db/046 changed
+/// under this code, and that must fail the search loudly (the funnel then says "the search
+/// FAILED — this is NOT a 'no match'"), never reorder it silently.
+pub(super) fn passes_from_db(count: i64) -> anyhow::Result<u32> {
+    match u32::try_from(count) {
+        Ok(n @ 1..=3) => Ok(n),
+        _ => anyhow::bail!("db/046 reported {count} passes for one candidate; expected 1..=3"),
+    }
+}
+
 /// Build one [`RankKey`] per candidate from the reads `search_patients` already made. Pure:
 /// the keys and their order are `cairn_patient_search::rank`'s; this only gathers inputs.
 ///
@@ -118,4 +131,81 @@ pub(super) async fn normalise_query_tokens<C: GenericClient + Sync>(
         )
         .await?;
     Ok(row.get::<_, Vec<String>>(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matched(n: u128, passes: u32, identifier_matched: bool) -> MatchedPasses {
+        MatchedPasses {
+            id: Uuid::from_u128(n),
+            passes,
+            identifier_matched,
+        }
+    }
+
+    /// db/046 has three passes, so a count outside 1..=3 is a broken contract. `as u32` wrapped a
+    /// negative count to ~4 billion — a chart that would rank FIRST in every prompt, silently.
+    #[test]
+    fn a_pass_count_outside_one_to_three_is_refused_not_wrapped() {
+        assert_eq!(passes_from_db(1).unwrap(), 1);
+        assert_eq!(passes_from_db(3).unwrap(), 3);
+        for bad in [-1, 0, 4] {
+            assert!(passes_from_db(bad).is_err(), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_query_without_a_dob_marks_no_near_miss() {
+        let query = SearchQuery::new("John Smith", None, &[]);
+        let dobs = HashMap::from([(
+            Uuid::from_u128(1),
+            ("1980-07-03".to_string(), "patient-stated".to_string()),
+        )]);
+        let keys = rank_keys(
+            &[matched(1, 1, false)],
+            &query.name_tokens,
+            &query,
+            &HashMap::new(),
+            &dobs,
+        );
+        assert!(!keys[0].dob_near_miss);
+    }
+
+    #[test]
+    fn a_candidate_with_no_dob_or_name_row_is_keyed_not_dropped() {
+        let query = SearchQuery::new("John Smith", Some("1980-03-07"), &[]);
+        let keys = rank_keys(
+            &[matched(1, 1, true)],
+            &query.name_tokens,
+            &query,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].tokens_matched, 0);
+        assert!(!keys[0].dob_near_miss);
+        assert!(keys[0].identifier_matched, "carried from db/046's passes");
+    }
+
+    #[test]
+    fn keys_read_the_retained_names_and_the_stored_dob() {
+        let query = SearchQuery::new("Alex Nguyen", Some("1980-03-07"), &[]);
+        let retained = HashMap::from([(Uuid::from_u128(1), vec!["alexander nguyen".to_string()])]);
+        let dobs = HashMap::from([(
+            Uuid::from_u128(1),
+            ("1980-07-03".to_string(), "patient-stated".to_string()),
+        )]);
+        let keys = rank_keys(
+            &[matched(1, 1, false)],
+            &query.name_tokens,
+            &query,
+            &retained,
+            &dobs,
+        );
+        assert_eq!(keys[0].tokens_matched, 2, "one exact, one by prefix");
+        assert_eq!(keys[0].tokens_exact, 1);
+        assert!(keys[0].dob_near_miss);
+    }
 }

@@ -10,8 +10,9 @@
 //! activity, address, photo evidence), several of which are retained SETS rather than single
 //! rows (an address has one row per USE; a chart may carry more than one photo-evidence
 //! event over its life; a rendition set may carry more than one rendition per attachment).
-//! Two more reads feed only the ORDER, never a displayed field: every retained name and the
-//! query's own tokens, both normalised by Postgres, for the ADR-0075 ranking (`rank_keys`).
+//! Two more reads feed only the ORDER, never a displayed field: every retained name
+//! (`read_retained_names`) and the query's own tokens (`normalise_query_tokens`), both
+//! normalised by Postgres; `rank_keys` assembles them into the ADR-0075 ranking's keys.
 //! Folding all of that into one query would need multiple levels of aggregation and would be
 //! far harder for a reviewer to check against each projection's own definition. Plain
 //! queries plus an explicit assembly step in Rust is the reviewer-legible shape §9 asks for
@@ -33,7 +34,9 @@
 //! driver feature, and every other jsonb parameter in this crate already uses the text-cast
 //! idiom, so following it here keeps the binding convention uniform rather than one-off.
 
-use super::search_rank::{normalise_query_tokens, rank_keys, read_retained_names, MatchedPasses};
+use super::search_rank::{
+    normalise_query_tokens, passes_from_db, rank_keys, read_retained_names, MatchedPasses,
+};
 use cairn_patient_search::{
     age_years, rank_candidates, Age, Candidate, CandidateList, SearchQuery, TrustState,
 };
@@ -231,14 +234,14 @@ async fn read_candidate_passes<C: GenericClient + Sync>(
         .map(|row| {
             Ok(MatchedPasses {
                 id: row.get::<_, String>("patient_id").parse::<Uuid>()?,
-                // 1..=3 by construction (three passes), so the narrowing cannot truncate.
-                passes: row.get::<_, i64>("passes") as u32,
+                passes: passes_from_db(row.get::<_, i64>("passes"))?,
                 identifier_matched: row.get::<_, bool>("identifier_matched"),
             })
         })
-        .collect::<Result<_, uuid::Error>>()?;
-    // Id order only, so the reads below see a deterministic list; the order SHOWN is
-    // decided by the ranking.
+        .collect::<anyhow::Result<_>>()?;
+    // Id order only, so `rank_keys` is fed a deterministic list (the reads themselves land in
+    // maps and do not care). The order SHOWN is decided by the ranking, which ends on an id
+    // tie-break anyway.
     rows.sort_by_key(|p| p.id);
     Ok(rows)
 }

@@ -168,10 +168,11 @@ def rank_v1(rows: list[Row]) -> list[str]:
 
 
 def tokens_matched(query: list[str], stored_names: list[str], prefix: bool = True) -> int:
-    """Twin of `cairn_patient_search::tokens_matched`: DISTINCT PLAIN (all-alphanumeric) query
-    tokens found among the tokens of any stored name, each stored name tokenised by the query's
-    own rule (`query_tokens`) after the NFC + lowercase normalisation Postgres applies in
-    `search_rank.rs`. Plain only, so a hyphenated word's whole form and parts count once each.
+    """Twin of `cairn_patient_search::tokens_matched`: DISTINCT query tokens found among the
+    tokens of any stored name, each stored name tokenised by the query's own rule (`query_tokens`)
+    after the NFC + lowercase normalisation Postgres applies in `search_rank.rs`. A punctuated
+    whole form is skipped when its parts are query tokens too (`represented_by_its_parts`), so a
+    hyphenated word counts once per part.
 
     A query token matches a stored token as db/046's name pass matches it: equal, or — at least
     `MIN_PREFIX_BYTES` UTF-8 bytes long — a prefix of it (#636, #638; review of #678). The rig
@@ -188,7 +189,23 @@ def tokens_matched(query: list[str], stored_names: list[str], prefix: bool = Tru
             and len(t.encode()) >= MIN_PREFIX_BYTES and any(s.startswith(t) for s in stored)
         )
 
-    return sum(1 for t in set(query) if t.isalnum() and matches(t))
+    distinct = set(query)
+    return sum(1 for t in distinct if not represented_by_its_parts(t, distinct) and matches(t))
+
+
+def represented_by_its_parts(token: str, query: set[str]) -> bool:
+    """Twin of `rank.rs`'s `is_represented_by_its_parts`: a punctuated whole form ("mary-jane")
+    one of whose alphanumeric parts is also a query token, so the parts carry the match and the
+    whole must not count again. A word none of whose parts are query tokens ("j-p", whose parts
+    are single characters) counts whole."""
+    parts, part = [], ""
+    for ch in token + " ":
+        if ch.isalnum():
+            part += ch
+        else:
+            parts.append(part)
+            part = ""
+    return any(p != token and p in query for p in parts)
 
 
 # Twin of `cairn_patient_search::rank::MIN_PREFIX_BYTES` (db/046's `octet_length(q.qt) >= 3`).
@@ -211,10 +228,15 @@ def parse_ymd(value: str) -> tuple[int, int, int] | None:
 
 def is_dob_near_miss(query: str, candidate: str) -> bool:
     """Twin of `cairn_patient_search::is_dob_near_miss`: day/month swapped, year +-1, or the
-    year's last two digits transposed. Partial or impossible dates, and exact matches, never."""
-    q, c = parse_ymd(query), parse_ymd(candidate)
-    if q is None or c is None or q == c:
+    year's last two digits transposed, or the same date WRITTEN differently ("1980-3-7"). Partial or
+    impossible dates, and identical strings, never."""
+    if query == candidate:
         return False
+    q, c = parse_ymd(query.strip()), parse_ymd(candidate.strip())
+    if q is None or c is None:
+        return False
+    if q == c:
+        return True  # the same date written differently: db/046's string compare missed it
     (qy, qm, qd), (cy, cm, cd) = q, c
     same_day_month = (cm, cd) == (qm, qd)
     swapped = cy == qy and cm == qd and cd == qm
@@ -236,7 +258,7 @@ def perturb_dob_any(dob: str, rng: random.Random) -> str:
             return other
 
 
-def perturb_name(name: str, rng: random.Random) -> str:
+def perturb_name(name: str, rng: random.Random) -> str | None:
     """The commonest real duplicate (maintainer, #671): a TYPO in a hard-to-spell name. One
     interior character of the last word becomes a different lowercase letter, length kept.
 
@@ -248,7 +270,10 @@ def perturb_name(name: str, rng: random.Random) -> str:
     words = name.split()
     last = words[-1]
     if len(last) < 3:
-        return name
+        # No interior character to change ("Li", "Wu", "Ng"). Returned as None so the caller
+        # COUNTS it (`unperturbed`) — sending the name unchanged would report a correctly typed
+        # search as a typo'd one and inflate the typo arms (review of #678).
+        return None
     i = rng.randrange(1, len(last) - 1)
     replacement = rng.choice([ch for ch in "abcdefghijklmnopqrstuvwxyz" if ch != last[i].lower()])
     words[-1] = last[:i] + replacement + last[i + 1 :]
@@ -421,6 +446,10 @@ def self_test() -> int:
     assert tokens_matched(["john"], []) == 0
     q = query_tokens("Mary-Jane Smith")
     assert tokens_matched(q, ["Mary Jane Smith"]) > tokens_matched(q, ["Mary-Jane Brown"])
+    # Review of #678: initials whose parts are all one character still count, once.
+    assert tokens_matched(query_tokens("J-P Smith"), ["j-p smith"]) == 2
+    # ...and the same date written differently is a near-miss (db/046's DOB pass missed it).
+    assert is_dob_near_miss("1980-03-07", "1980-3-7")
     assert is_dob_near_miss("1980-03-07", "1980-07-03")
     assert is_dob_near_miss("1980-03-07", "1979-03-07")
     assert is_dob_near_miss("1967-05-20", "1976-05-20")
@@ -459,6 +488,8 @@ def self_test() -> int:
     t = perturb_name("John Smith", random.Random(1))
     assert t.split()[0] == "John" and t != "John Smith" and len(t) == len("John Smith"), t
     assert perturb_name("John Smith", random.Random(1)) == t, "deterministic under a seed"
+    # Review of #678: a surname too short to typo is REPORTED, never sent unchanged as a "typo".
+    assert perturb_name("Wei Li", random.Random(1)) is None
     assert perturb_dob_any("1980-03-07", random.Random(1)) != "1980-03-07"
     s = summarise(
         [
@@ -574,16 +605,22 @@ def main() -> int:
             mrns = [mrn_of(pid) for pid, _, _ in samples]
         elif args.perturb == "dob":
             queried = [(pid, name, perturb_dob(dob)) for pid, name, dob in samples]
-        elif args.perturb == "name":
-            queried = [(pid, perturb_name(name, rng), dob) for pid, name, dob in samples]
-        elif args.perturb == "both":
-            queried = [(pid, perturb_name(name, rng), perturb_dob(dob)) for pid, name, dob in samples]
+        elif args.perturb in ("name", "both", "both-any"):
+            # The surname typo, then the arm's date. Evaluated in this order so the RNG draws — and
+            # so the samples — match every earlier run of these arms.
+            queried = []
+            for pid, name, dob in samples:
+                typo = perturb_name(name, rng)
+                unperturbed += typo is None
+                if args.perturb == "name":
+                    q_dob = dob
+                elif args.perturb == "both":
+                    q_dob = perturb_dob(dob)
+                else:
+                    q_dob = perturb_dob_any(dob, rng)
+                queried.append((pid, typo or name, q_dob))
         elif args.perturb == "dob-any":
             queried = [(pid, name, perturb_dob_any(dob, rng)) for pid, name, dob in samples]
-        elif args.perturb == "both-any":
-            queried = [
-                (pid, perturb_name(name, rng), perturb_dob_any(dob, rng)) for pid, name, dob in samples
-            ]
         else:
             queried = samples
         out = psql(conn, batch_query_sql(queried, mrns))

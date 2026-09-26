@@ -13,17 +13,23 @@ use cairn_event::demographics::{
     dob_assertion_body, identifier_assertion_body, render_dob_twin, render_identifier_twin,
     IdentifierAssertion,
 };
+use cairn_event::identity::{
+    render_repudiate_twin, repudiation_assertion_body, RepudiationAssertion,
+};
+use cairn_event::{ClockGrade, EventBody, Hlc};
 use cairn_node::{db, john_doe};
 use cairn_patient_search::SearchQuery;
-use common::{chart_named, cs, setup, submit_signed, EventSpec};
+use common::{chart_named, cs, enroll_human, setup, submit_attested, submit_signed, EventSpec};
 
 /// The projections the charts below write beyond `common::setup`'s default core, cleared so a
 /// previous run's charts cannot join the candidate set (#583's shape). `chart_identity_state`
-/// is the overlay `register_john_doe` writes (the callsign test).
-const EXTRA_TABLES: [&str; 3] = [
+/// is the overlay `register_john_doe` writes (the callsign test); `name_repudiation` backs the
+/// repudiated-name test.
+const EXTRA_TABLES: [&str; 4] = [
     "patient_name",
     "patient_registration",
     "chart_identity_state",
+    "name_repudiation",
 ];
 
 #[tokio::test]
@@ -287,4 +293,65 @@ async fn a_callsign_is_not_split_into_name_tokens_for_ranking() {
         vec![namesake, jd],
         "a callsign's parts are not name tokens: {list:?}"
     );
+}
+
+/// #349, pinned for the ORDER: a fabricated persona's chart is FOUND by its repudiated alias —
+/// db/046 searches `patient_name`, struck names included — so the alias must also count toward
+/// how strongly it matched. Reading `patient_name_current` in `read_retained_names` (the obvious
+/// "tidy-up") would score it zero tokens and cut it from the prompt behind every namesake.
+#[tokio::test]
+async fn a_chart_found_by_its_repudiated_name_still_ranks_by_it() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+
+    let older = six_older_namesakes(&c, &sk, &kid, "Persona").await;
+    let fabricated = chart_named(&c, &sk, &kid, 100, "Fabricated Persona").await;
+    // Strike the chart's ONLY name — suppressing-mode, so a human must attest it (§5.7).
+    let subject = fabricated.to_string();
+    let rep = RepudiationAssertion {
+        subject: &subject,
+        value: "Fabricated Persona",
+        reason: "confessed fabricated persona",
+    };
+    let body = EventBody {
+        event_id: uuid::Uuid::now_v7().to_string(),
+        patient_id: subject.clone(),
+        event_type: "identity.repudiate.asserted".into(),
+        schema_version: "identity.repudiate.asserted/1".into(),
+        hlc: Hlc {
+            wall: 103,
+            counter: 0,
+            node_origin: "n".into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.clone(),
+        contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+        payload: repudiation_assertion_body(&rep),
+        attachments: vec![],
+        plaintext_twin: Some(render_repudiate_twin(&rep)),
+        clock_grade: ClockGrade::SelfAsserted,
+        safety: None,
+    };
+    submit_attested(&c, &sk, body, &sk_h, &kid_h)
+        .await
+        .expect("repudiation accepted with human attestation");
+
+    let query = SearchQuery::new("Fabricated Persona", None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+
+    let ids: Vec<_> = list.candidates.iter().map(|c| c.patient_id).collect();
+    assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
+    assert_eq!(
+        ids[0], fabricated,
+        "both tokens of the struck alias count: {list:?}"
+    );
+    assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
 }
