@@ -820,9 +820,9 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   untested in both trees) · #658 · #663 (`resolve_matcher_actor` still enrols on a write path) ·
   #664 / #666 (what a superseded key classifies as; db/004 contradicts itself) · #665 (the
   orchestrator-level half) · #667 · #668 (the arming affordance + typed slots) · #669 (a dropped
-  `register` future latches the store) · #670 (three representable invalid states) · #671 · #672 ·
+  `register` future latches the store) · #670 (three representable invalid states) · #672 ·
   #673 · #676 (the clerk reads `operator_chain` text). Also cited: #442, #450, #583, #636, #638.
-  Decided and closed 2026-09-23: #648 (the `Refused` split, built in 2b; the non-`P0001` remainder
+  Decided 2026-09-26: #671 (ADR-0075, next entry). Decided and closed 2026-09-23: #648 (the `Refused` split, built in 2b; the non-`P0001` remainder
   is #655) and #677 (the prompt read guard is soft policy and stays in `funnel.js`).
 - **2c's whole-branch review** found one Critical — with charts now switching, a sign-off signed
   whichever chart was OPEN while the previous patient's list could still be on screen — fixed by
@@ -845,6 +845,31 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   `M ≤ N`. The mononymous path costs one click more: the first Register searches and shows. The
   machine half is measured (above, and #639's search figures); the stopwatch half (find ≤ 5 s,
   register ≤ 20 s) is a **human act**, runbook §8.
+
+### 2026-09-26 — the step-3 prompt is a nudge, not a completeness claim (#671, ADR-0075, PR #678)
+
+[ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md), spec
+**v0.77**; design `docs/superpowers/specs/2026-09-26-step3-prompt-is-a-nudge-671-design.md`. No wire,
+`db/`, or `SCHEMA_GENERATION` change. **Maintainer's clinical decision:** duplicates are common
+(typos in hard names), the person at the desk cannot be made to browse, so accept them and make
+repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
+- **`search.incomplete` = the SEARCH was partial** (ADR-0061's meaning, restored); being cut to
+  `PROMPT_CAP` is `PromptList::withheld`, shown as *"the 5 closest of N · type more to narrow"*,
+  never signed. Before: set on 92% of registrations. The live suite pins both polarities (a cut
+  prompt signs `false`; a nameless matched chart makes the search partial and signs `true`).
+- **Ranking** (`cairn_patient_search::rank`, a pure module; inputs read in
+  `cairn-node/src/patient/search_rank.rs`): passes → name tokens matched (over the RETAINED names,
+  repudiated included, #349) → DOB near-miss (day/month swap, year ±1, last two year digits
+  transposed) → chart age. Reorder only.
+- **Measured** (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`, 50,000
+  real names, 500 searches per arm): duplicate among the five — exact 500; DOB slip 100 → **500**;
+  DOB simply wrong 97 → **500**; surname typo 500; typo + DOB slip 156 → **500**; typo + DOB
+  simply wrong 155 → **204**; synthetic twin-heavy names + wrong DOB 2 → **72**. The last two are
+  the repair path's. The two new reads cost 2–5 ms over the largest candidate set (968 ids).
+- **Filed — the repair path, next to brainstorm:** #679 (commit-time local duplicate check by the
+  §5.2 matcher), #680 (duplicate worklist), #681 (link gesture).
+- **§1.2:** paper counterpart the glance at neighbouring index cards; paper 1 → forced 1 → target 1,
+  `M ≤ N`; no act added, and a warning that fired on 92% of registrations is gone.
 
 ---
 

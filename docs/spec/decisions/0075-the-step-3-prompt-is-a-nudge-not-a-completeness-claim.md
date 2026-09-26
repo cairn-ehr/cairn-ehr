@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-26
 - **Spec version at acceptance:** 0.77
-- **Issues:** [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671)
+- **Issues:** [#671](https://github.com/cairn-ehr/cairn-ehr/issues/671) · filed: #679 · #680 · #681 (the repair path)
 - **Relates to:** [ADR-0061](0061-registration-is-an-act-that-carries-its-search.md) ·
   [ADR-0060](0060-partial-validity-a-defect-on-one-line-never-invalidates-another.md) ·
   [ADR-0014](0014-locale-pluggable-matcher-comparators.md)
@@ -60,8 +60,10 @@ A duplicate is repaired by an auditable, reversible `link` with no data loss (pr
 the link cannot repair is anything that happened in the **window** before it — an allergy recorded on
 chart A while a drug is charted on duplicate B. So effort goes into shortening that window: a
 commit-time local duplicate check by the advisory §5.2 matcher, a duplicate worklist, and a link
-gesture that is fast and safe. Those are future slices, filed as issues with this ADR; nothing here
-builds them. Until they exist, the backstop is the hub sweep (ADR-0014), which an isolated node may not
+gesture that is fast and safe. Those are future slices, filed with this ADR as
+[#679](https://github.com/cairn-ehr/cairn-ehr/issues/679) (commit-time check),
+[#680](https://github.com/cairn-ehr/cairn-ehr/issues/680) (worklist) and
+[#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) (link gesture); nothing here builds them. Until they exist, the backstop is the hub sweep (ADR-0014), which an isolated node may not
 reach for a long time — an honest, stated gap.
 
 ### 3. `search.incomplete` means the SEARCH was partial — ADR-0061's meaning, restored
