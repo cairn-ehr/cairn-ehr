@@ -59,7 +59,7 @@ pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize
 
 /// True when `candidate` is `query` with one of the commonest date-of-birth slips.
 ///
-/// Both must be full, real ISO dates ([`parse_ymd`]); a partial-precision date is an honest
+/// Both must be full, real ISO dates (`candidate::parse_ymd`); a partial-precision date is an honest
 /// "only the year is known" (principle 4), not a slip, and never counts. An EXACT match is
 /// not a near-miss — db/046's DOB pass already rewards it through `passes`.
 pub fn is_dob_near_miss(query: &str, candidate: &str) -> bool {

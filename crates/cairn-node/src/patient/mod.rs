@@ -9,3 +9,4 @@
 //! search-AFTER-create §5.4 path this module does not cover.
 pub mod register;
 pub mod search;
+mod search_rank;
