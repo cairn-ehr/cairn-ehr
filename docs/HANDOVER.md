@@ -3,24 +3,46 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ FUNNEL UI SLICE 2c IS BUILT — THE FRONT DOOR IS RUNNABLE — AND IT FOUND A DESIGN PROBLEM
-> THAT IS NOW THE NEXT DECISION.** PR **[#674](https://github.com/cairn-ehr/cairn-ehr/pull/674)**
-> (2026-09-23): the reference window opens on the §5.3/§5.8 funnel (browse → pick → chart; browse →
-> register → bounded step-3 prompt → chart) under a persistent identity header, in `--mock` and
-> against a live node. `--patient` still opens straight onto one chart. No ADR, no migration,
-> `SCHEMA_GENERATION` unchanged, no new dependency. ROADMAP has the per-slice account of 2a → 2c.
+> **⇒ #671 IS DECIDED AND BUILT: THE STEP-3 PROMPT IS A NUDGE, NOT A COMPLETENESS CLAIM
+> ([ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md), spec
+> v0.77, PR [#678](https://github.com/cairn-ehr/cairn-ehr/pull/678), 2026-09-26).** Maintainer's
+> clinical call: duplicates are common (typos in hard names) and the person at the desk cannot be
+> made to browse, so **accept duplicates and make repair (`link`) easy** — the safety measure is how
+> fast a duplicate is FOUND. So: `search.incomplete` means only that the SEARCH was partial
+> (ADR-0061's meaning, restored; no wire change); being cut to five is `PromptList::withheld`, shown
+> on screen as *"… the 5 closest of N matches, listed below; type more to narrow"* and never signed; ranking gained an **identifier match**, a **callsign
+> typed whole**, **name tokens matched**, a **DOB near-miss** and an exact-token tie-break
+> (ADR-0075 decision 5). Measured over 50,000 real names: every single slip (wrong DOB, surname
+> typo) is now in the five 500/500; a surname typo AND a simply wrong DOB 203/500 — that residue is
+> the repair path's (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`).
+> ⚠️ Those names were the pool's namesake-heavy FIRST 50,000 rows; the representative re-run is **#685**.
 >
 > **⇒ NEXT, in order:**
-> 1. **[#671](https://github.com/cairn-ehr/cairn-ehr/issues/671): the step-3 prompt truncates on 92%
->    of registrations, so the signed `incomplete` flag carries no signal.** Measured over 50,000
->    real names (`cairn-gui/cairn-gui-tauri/results/2026-09-23-funnel-prompt-truncation.md`). 2c
->    fixed the SAFETY half (see the rule below: the duplicate now comes first, 500/500); the
->    ATTESTATION half is the design's own "cap is wrong" condition and touches a signed body, so it
->    is a **brainstorm → ADR**, not a TDD slice. The lead: no search had more than five candidates
->    matching ≥ 2 passes — **but withholding single-pass candidates would hide exactly the duplicate
->    typed with a WRONG date of birth**, which ranking does not help either (shown 20% of the time,
->    ranked or not; `--perturb dob`). The more promising lever is ranking WITHIN the name pass by
->    how many name tokens matched. **Do not change `PROMPT_CAP` to make the number look better.**
+> 0. **PR #678: every review finding is fixed or filed; re-review, then merge.** Fixed (each test-first,
+>    all eleven measurement arms re-run): the identifier key, the prefix rule, the exact-token
+>    tie-break, the callsign exclusion, the date written differently as a near-miss, words whose parts
+>    cannot stand for them (Turkish `İ`, Thai, Devanagari, `J-P`), the checked pass count,
+>    `PromptCounts` (named, so the counts cannot be swapped), the flag-gated reason, the stale
+>    `incomplete` docs, the rig's unperturbable names, and the test gaps. Filed: **#683**
+>    (`CandidateList` as one sum type, a wire decision), **#684** (a DOB compared and stored as typed:
+>    a SET gap the ranking fix cannot reach). Not taken, a product call: saying "closest" when the
+>    ranking is a heuristic ("strongest" was suggested).
+>    **Third review round (2026-09-26, five specialist reviewers):** fixed test-first — a §5.4
+>    callsign typed WHOLE ranked its John Doe below every "Ed …" (the callsign's part "ed" matched
+>    them; the callsign itself was read nowhere) → new `callsign_matched` key; the two unpinned key
+>    precedences (tokens over near-miss, tokens over exact-tokens); DOB edge tests; `rank_keys` takes
+>    only the birth date, not the whole query; `try_get` on the pass read; the rig's head-of-table
+>    name draw (→ spread draw, blank names excluded, `perturbed_only`). Filed: **#685** (re-run every
+>    real-name arm on the spread draw — clearing `cairn_test`'s fixtures needs the maintainer's
+>    permission; ADR-0075 and the results doc state the limit meanwhile), **#686** (a partial DOB
+>    consistent with the typed one gets no ranking credit — a weighting decision), and fixed **#687** (CI
+>    did not run the prompt rig's `--self-test`, which pins the ranking's Python twins); findings added to **#682** (NFD/Turkish DB tests), **#683**
+>    (the dropped stray reason) and **#684** (an unparseable typed DOB is silently ignored while the
+>    prompt says "closest of").
+> 1. **The repair path — brainstorm first, with the maintainer:** **#679** (commit-time local
+>    duplicate check by the §5.2 matcher), **#680** (duplicate worklist), **#681** (link gesture —
+>    show each chart's allergies/active meds at link time, the window's hazard). ADR-0075 decision 2
+>    is the brief. Probably one design covering all three, then slices.
 > 2. **The human acts 2c exposed** (an agent cannot do them): runbook §8's stopwatch figures (find
 >    ≤ 5 s, register ≤ 20 s, live AND `--mock`) and the front-door accessibility checks, recorded
 >    in a dated copy of `results/TEMPLATE.md`. See also *Four things still owed are HUMAN acts* below.
@@ -34,12 +56,22 @@
 >
 > **⇒ THE FUNNEL'S DURABLE RULES — do not undo any of these** (full text: the design page's
 > dated notes and ROADMAP's 2a → 2c entry):
-> - **`search_patients` RANKS BY PASSES MATCHED, THEN CHART AGE** (`rank_by_passes_matched`).
->   `db/046` is a disjunction, so in plain id order the five-row prompt showed the five OLDEST
->   charts: an exact duplicate was among them in 20% of registrations (ranked: 100%). "Simplifying"
->   the sort back to `ids.sort()` reinstates that silently; `patient_search_ranking.rs` fails on
->   it. **It does NOT help a duplicate typed with a wrong DOB** (still 20%): the name pass counts
->   once however many tokens matched — #671's to settle.
+> - **`search_patients` RANKS BY SEVEN KEYS** (`cairn_patient_search::rank_candidates`, inputs read
+>   in `patient/search_rank.rs`): passes matched → identifier matched → a §5.4 callsign typed
+>   WHOLE → name tokens matched (exact OR a ≥3-byte typed prefix, as `db/046` matches; callsigns
+>   never split) → DOB near-miss → tokens matched EXACTLY → chart age (the identifier, callsign,
+>   prefix and exact keys all from the #678 review). It only REORDERS. Dropping the callsign key
+>   sinks a John Doe re-found by its whole callsign below every "Ed …" (the callsign's part
+>   matches them; its whole form is counted nowhere else). Dropping the identifier key
+>   buries a chart found only by its MRN below every namesake; dropping the prefix arm ties an
+>   "Alex"-typed "Alexander" with every namesake. `db/046` is a disjunction, so in plain id order the prompt showed the
+>   OLDEST charts; "simplifying" back to `ids.sort()` or to passes-only fails
+>   `patient_search_ranking.rs`. Name tokens are counted over the RETAINED set (`patient_name`,
+>   repudiated names included — #349), never `patient_name_current`.
+> - **`incomplete` is the SEARCH's partiality only; truncation is `withheld`** (ADR-0075). Folding
+>   `withheld` back into `incomplete` re-creates #671 (a flag set on 92% of registrations).
+>   `attestation_through_the_port.rs` pins both halves: a cut prompt signs `false`, a search that
+>   could not read a chart signs `true`. **Do not raise `PROMPT_CAP` to make a number look better.**
 > - **The raw typed name travels WITH its token** (`FunnelSession`); `register` takes only the
 >   token. A search for an older form revision is DROPPED, never recorded over a newer one; the
 >   webview forgets its held token synchronously on every edit.
@@ -88,9 +120,13 @@
 >
 > **Open from the funnel run:** #355 · #645 · #647 · #649 · #650 · #652 · #655 · #656 · #657
 > (multi-event rollback untested in both trees) · #658 · #662 (seven `init` effects unpinned) ·
-> #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 · #671 ·
+> #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 ·
 > #672 (identifier entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads
-> `operator_chain` text, `[P0001]` included). #675's four gaps were fixed in PR #674's third review
+> `operator_chain` text, `[P0001]` included) · the repair path #679 · #680 · #681 · #682 (an NFD
+> trailing accent is lost: `SearchQuery` tokenises before NFC; changes signed tokens) · #683
+> (`CandidateList`'s flag + optional reason → one sum type; touches the attestation) · #684 (a DOB
+> is compared and stored as typed: `1980-3-7` misses `1980-03-07` in db/046's DOB pass — a SET
+> gap, not just order). #675's four gaps were fixed in PR #674's third review
 > round. **Decided 2026-09-23 (#677):** the 800 ms prompt read guard is SOFT POLICY and stays in
 > `funnel.js` only; do not move it into `FunnelSession` without reopening that decision.
 >
@@ -533,7 +569,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-23 (**funnel UI slice 2c built — the front door is runnable**; PR **[#674](https://github.com/cairn-ehr/cairn-ehr/pull/674)**; no ADR, no migration; `search_patients` now ranks by passes matched; filed **#671**, **#672**, **#673**) · 2026-09-23 (**2c's four prerequisites**, PR #661) · 2026-09-22 (**funnel slices 2a + 2b**, PRs #646, #653) · 2026-09-21 (**#636 slice 1 + #639**, PRs #635, #642, #644) · 2026-09-20 (**#621**, ADR-0074, spec v0.76, PR #627) · 2026-09-19 (**#619**, ADR-0073, PR #623) · 09-17 **#614 + #615** (ADR-0072, db/053, PR #618) · 09-16 **#594** (ADR-0071, PR #612) · 09-15/16 **#584** (ADR-0070, PR #601) · earlier: ROADMAP. · **Spec:** **v0.76** (newest [ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md); [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication chart.
+**Session date:** 2026-09-26 (**#671 decided and built — the step-3 prompt is a nudge**, [ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md), spec v0.77, PR **[#678](https://github.com/cairn-ehr/cairn-ehr/pull/678)**; filed **#679**, **#680**, **#681**, **#682**, **#683**, **#684**) · 2026-09-23 (**funnel UI slice 2c built — the front door is runnable**; PR **[#674](https://github.com/cairn-ehr/cairn-ehr/pull/674)**; no ADR, no migration; `search_patients` now ranks by passes matched; filed **#671**, **#672**, **#673**) · 2026-09-23 (**2c's four prerequisites**, PR #661) · 2026-09-22 (**funnel slices 2a + 2b**, PRs #646, #653) · 2026-09-21 (**#636 slice 1 + #639**, PRs #635, #642, #644) · 2026-09-20 (**#621**, ADR-0074, spec v0.76, PR #627) · 2026-09-19 (**#619**, ADR-0073, PR #623) · 09-17 **#614 + #615** (ADR-0072, db/053, PR #618) · 09-16 **#594** (ADR-0071, PR #612) · 09-15/16 **#584** (ADR-0070, PR #601) · earlier: ROADMAP. · **Spec:** **v0.77** (newest [ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md); [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication chart.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3
@@ -557,6 +593,34 @@ medication chart (plain JS, no npm), pane/routing/freshness state machine tested
 ROADMAP carries the per-slice narrative and **every open issue number** (including an index of the ones
 its prose does not name). This section keeps only what a *next* session needs — the traps, and the lessons
 that generalise past the slice that found them.
+
+### 2026-09-26 — #671: the step-3 prompt is a nudge (ADR-0075, PR #678)
+
+Brainstorm → ADR → plan → inline TDD (six tasks). Design
+`docs/superpowers/specs/2026-09-26-step3-prompt-is-a-nudge-671-design.md`; plan
+`docs/superpowers/plans/2026-09-26-step3-prompt-is-a-nudge-671.md`.
+- **⇒ THE MAINTAINER'S CLINICAL FRAME SETTLED WHAT THE DESIGN COULD NOT.** The first framing asked
+  what the signed record should prove about the clerk; the maintainer answered that the clerk cannot
+  be made to browse and duplicates are repaired by `link` — which moved the safety question from
+  "did they look?" to "how fast is it found?" (#679–#681). **Ask what the person at the desk will
+  actually do before designing what they must attest.**
+- **⇒ THE MEASUREMENT FALSIFIED THE ADR DRAFT, BEFORE MERGE.** "A name typo never enters the candidate
+  set" was repeated from #671 into ADR-0075; the new `name` arm found every one-token typo (other
+  tokens + DOB still match). And an arm built from the same slips the near-miss key rewards grades the
+  rule on its own test — the `-any` controls were added to find the real boundary (203/500).
+  **Measure the claim in the ADR, and give every arm a control the feature cannot help.**
+- **⇒ A RANKING KEY IS ONLY AS GOOD AS ITS MATCH RULE'S AGREEMENT WITH THE SEARCH'S.** The PR
+  review found the ranking counted exact tokens while `db/046` also matches a typed prefix, and
+  gave an identifier match no weight at all: a chart found only by its MRN was shown 48/500 —
+  WORSE than chart age. Adding the prefix rule then cost another arm 204 → 183 until an
+  exact-token tie-break went under it. **Every ranking change gets every arm re-run, not just the
+  arm it was for.**
+- **⇒ INVERTING A TEST CAN DELETE THE OTHER HALF OF A PAIR.** Two live tests asserted `incomplete`
+  `false` and `true`; flipping the `true` one to match ADR-0075 left the flag free to be a constant,
+  so a positive case (a nameless chart makes the search partial) was added.
+- **⇒ A LATENCY INSTRUMENT MUST SEE THE CODE PATH.** `measure_patient_search.py` times only the SQL
+  function; the new reads are Rust-side, so they were timed directly (2–5 ms over 968 ids, the
+  largest real-name set — the 20,547-candidate synthetic case was not timed).
 
 ### 2026-09-23 — funnel UI slice 2c: the window (PR #674)
 
@@ -621,150 +685,44 @@ victim is code that does not exist yet"; three of the four issues said so themse
   cannot detect not being invoked** (#656). **⇒ A slice held to one tree keeps its gate honest**
   (#652 was deferred rather than touching `crates/`).
 
-### 2026-09-20 — #621: a deterministic door failure is a refusal, not a fault
+### 2026-08-20 → 09-20 — the restore, node-plane and door slices (condensed to one-liners)
 
-Design `docs/superpowers/specs/2026-09-20-node-pull-deterministic-refusal-621-design.md`; plan
-`docs/superpowers/plans/2026-09-20-node-pull-deterministic-refusal-621.md` (M1–M13 ledger);
-[ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md). The durable
-rule is trap 14. What generalises past the slice:
+Per-slice narrative: ROADMAP; the durable rules are traps 9–14; plans in `docs/superpowers/plans/`
+carry each review ledger (#621 ADR-0074 · #619 ADR-0073 · #584/#594/#614+#615 ADR-0070–0072 · slice
+2d, #567, #576 CodeQL pack, #593). What generalises, one line each:
 
-- **⇒ AN ISSUE'S FAILURE SCENARIO IS A CLAIM — AGAIN, AND IT CHANGED THE ADR.** #621 said *"any
-  trusted peer serving a stranger-signed event"*; `serve` streams only rows already in the serving
-  peer's own log, which passed its identical casts and CHECKs, so an honest peer cannot. The real
-  triggers are a misbehaving peer (which can wedge only its own link, and could stall it by going
-  silent anyway) and **cross-version CHECK-vocabulary skew**. Reading the table also found a FOURTH
-  deterministic raise the issue never listed (`node_event_role_check`). **Read the code before the
-  issue's severity enters an immutable record — and read it for what the issue MISSED, not only for
-  what it claimed.**
-- **⇒ VALIDATE A SQL VALUE WITH THE PARSER THAT WILL PARSE IT.** `pg_input_is_valid(v,'uuid')` asks
-  the very grammar the `::uuid` on the next line uses, so no second parser exists to drift. A regex
-  "equivalent" is narrower and refuses events the log can already hold — PR #623's finding 1 with the
-  polarity reversed (mutation M9 pins it).
-- **⇒ A GUARD THAT HAS ONLY EVER BEEN GREEN HAS PROVED NOTHING.** The two-plane SQLSTATE drift guard
-  was checked by actually deleting a class from `cairn-sync`'s list and watching it fail, before any
-  work was built on it. Cheap, and the alternative is a guard discovered to be vacuous much later.
-- **⇒ A HARNESS THAT RUNS NOTHING STILL PRINTS SUCCESS.** A mis-assembled copy of the mutation script
-  executed ZERO mutations and reported *"tree is clean: every revert landed"* — true, and worthless.
-  It now compares the number that RAN against what was asked for. Sibling of #594's revert defect and
-  #619's unknown-id defect: **every harness needs a control for the run not happening.**
-- **⇒ `nohup cmd &` INSIDE A BACKGROUNDED TOOL CALL IS DOUBLE-DETACHED.** The launcher exits 0
-  immediately, the runner is reported "completed", and the log stops mid-compile. Same family as the
-  `cmd; echo exit=$?` trap: **read the log's own last line, never the wrapper's status.**
-- **⇒ A FIXTURE CAN MANUFACTURE A SQLSTATE PRODUCTION NEVER SEES.** `serve_raw` plants bytes under a
-  FRESH table id, so re-applying them collides on the `content_address` UNIQUE (`23505`) rather than
-  the primary key. Unreachable in production (bytes determine the id inside them, so identical bytes
-  always hit the PK first), but it silently changed what an anti-vacuity control was measuring.
-- **Fixture fact:** `restore_node_event` refuses a node that is already enrolled, so a db/009 fixture
-  provisions nothing and restores a genesis first.
-
-### 2026-09-19 — #619: the node plane refuses a substitution at both live doors, and pens it (condensed)
-
-Design/plan in `docs/superpowers/` (M1–M16 ledger);
-[ADR-0073](spec/decisions/0073-the-node-plane-refuses-a-substitution-and-pens-it.md). The durable rule
-is trap 13. What still generalises:
-
-- **⇒ A RESIDUAL RESTS ON A PREMISE — CHECK IT BEFORE IT ENTERS AN IMMUTABLE ADR.** M10 was declared
-  an unkillable survivor for want of a fault-injection seam that existed (`SET ROLE` to a role without
-  SELECT). **"Untestable" is a claim; try the seam first.**
-- **⇒ A MUTATION ANCHOR MUST BE UNIQUE IN BOTH DIRECTIONS** — M9's replacement text already occurred
-  twice, so the revert was ambiguous and the harness stopped with the mutation applied (#594's defect).
-- **⇒ CITE A CONTRACT WHERE IT IS WRITTEN, NOT WHERE YOU REMEMBER IT.** "db/001's header makes P0001 a
-  contract" was copied into four places; it is the comment above `cairn_decode_hex_or_raise` (#228),
-  and db/048 states the clinical half. #608's lesson in prose.
-- **⇒ CONTENT-ADDRESSING OVER UNSIGNED BYTES IS NOT CONTENT-ADDRESSING** — the COSE unprotected header
-  is hashed into the address but lies outside the signature (**#620**). Read it before reasoning "same
-  address ⇔ same signed event".
-- **⇒ TWO PARSERS FOR ONE VALUE ARE TWO PROTOCOLS** (PR #623 finding 1, **#624**): where Rust must
-  agree with the database, mirror the DB's grammar and pin the mirror against the live server — and do
-  not reach for `CASE WHEN pg_input_is_valid(…) THEN $1::uuid END` in a bound-parameter query: a plan
-  made for the actual value may fold the cast and raise.
-- **⇒ WHEN THE SYSTEM CAN RECREATE WHAT A MUTATION DESTROYS, ASSERT IDENTITY, NOT EXISTENCE** (M15 —
-  `first_seen` unchanged and `seen_count` bumped is what killed it).
-- **Process:** subagent-driven, seven tasks; four needed a fix round and **two of the defects were in
-  the plan, not the code**. Review the brief as hard as the code.
-
-### 2026-09-15 → 09-17 — the three restore slices: #584, #594, #614+#615 (condensed)
-
-Plans in `docs/superpowers/plans/`; [ADR-0070](spec/decisions/0070-a-late-key-reaches-the-chart.md)
-(traps 9 retired, 10), [ADR-0071](spec/decisions/0071-a-restore-that-left-records-behind-exits-incomplete.md)
-(trap 11), [ADR-0072](spec/decisions/0072-a-restore-loses-no-record-silently.md) (trap 12, Errata
-E1–E2). What still generalises:
-
-- **⇒ THE OBVIOUS FIX FOR A MISSING GUARD IS TO COPY THE GUARD, AND THAT IS HOW A KNOWN FAIL-OPEN
-  SPREADS.** Both existing copies carried #608's `<>` fail-open; extract, never paste a third.
-  (Read alongside 2b's #652: three copies of the P0001 rule, same shape, one tree over.)
-- **⇒ A NEGATIVE ASSERTION MUST NAME WHAT IT IS NEGATIVE ABOUT.** `.is_some()` on a DB error passed
-  against a tree with no helper at all (`42883` is some error), and `!status.success()` stops being
-  an assertion the moment a third status exists — write `Some(n)`.
-- **⇒ REVIEW THE REVIEW'S FIXES, AND THEN REVIEW THOSE.** Three of four rounds found a defect the
-  previous round's fix created; check new absolutes against the issues you just filed.
-- **⇒ WHEN YOU ADD A NEW STATUS, AUDIT THE OLD ONES FOR THE SAME STATE — THEN AUDIT WHAT THE NEW ONE
-  STILL CANNOT SAY** (that is what found #614/#615).
-- **⇒ BEFORE RECORDING A SURVIVOR AS UNOBSERVABLE, ASK WHETHER A PROBE OBSERVES IT** (M6) — and,
-  since #619, whether a `SET ROLE` seam does. **⇒ Deleting or reordering a statement can silently
-  move which layer a fault-injection test hits.** **⇒ Check an ADR sentence by sentence against the
-  code, not against its design doc.**
-- **Mechanics that still bite:** the paper-parity plan guard wants its literal labels ("Paper
-  counterpart", "Steps", "Time + cognitive load"); a new ADR needs its `mkdocs.yml` nav line in the
-  same commit (`--strict`); `--help` is assembled at runtime, so assert the SPAWNED help and its
-  status; a refactor's test is a source guard with an anti-vacuity control; write a harness's
-  positive control first; `grep` for which test covers a line rather than reasoning from file names;
-  a background wrapper `cmd; echo exit=$?` reports the echo's status — read the logged exit; a
-  duplicate with a documented reason is not drift.
-
-### 2026-09-10 → 09-15 — slice 2d, its budget, requeue custody, the CodeQL pack, `verify-backup`, #593 (condensed)
-
-Each plan in `docs/superpowers/plans/` carries its review ledger (PRs #573–#595). What still
-generalises:
-
-- **⇒ A PIN OVER SHIPPED BEHAVIOUR PASSES ON ITS FIRST RUN, SO THE MUTATION IS THE RED PHASE — AND IT
-  MUST FAIL AT THE ASSERTION THAT NAMES ITS CLAIM.** Read the panic line. **⇒ A list of owed tests
-  recalled from memory was wrong by one — grep, do not recall.**
-- **⇒ A FIXTURE MODELLING "A FRESH MACHINE" MUST BE CHECKED TABLE BY TABLE, AND A COUNT ASSERTION CAN
-  BE VACUOUS BY FIXTURE SIZE** (the shared wipe left `node_unwrap_key` registered — #598 tracks the
-  older suite with the same gap; 10 001 small records crossed the row cap and never the byte cap).
-- **⇒ A DOOR RETURNING `Ok` IS NOT THE RECORD COMING BACK** — db/020's lenient arms warn and return
-  normally, and nothing reads Postgres notices (#585); assert the projection. **⇒ THE HEADLINE TEST
-  DECRYPTS A BODY** — a row count would have shipped a double-wrapped key with every count agreeing.
-- **⇒ REUSED OPERATOR TEXT CAN BE FALSE IN ITS NEW HOME, AND A REMEDY IN A MESSAGE IS CODE.** Read
-  stdout and stderr APART. **⇒ Treat an issue's scope and a design's "why not X" as claims** (#567's
-  asked-for warning could never have fired). **⇒ A design sentence with two readings and no test
-  survives a merge** (ADR-0068 settled one); an erratum only under a passage false about the code.
-- **⇒ A GUARD NEEDS A POSITIVE CONTROL THAT IT SEES THE CODE IT GUARDS** (a source guard skipped ~96% of
-  `main.rs` after the first `#[cfg(test)] mod`, #586). **⇒ A new definer function copies its `SET`
-  clause — write `public, pg_temp`** (`search_path_pg_temp.rs`, #426).
-- **⇒ A RED GATE CAN BELONG TO A PREDECESSOR (#583)** — `cairn_test` is never recreated between sweeps;
-  truncate `local_node` before trusting a red after a killed gate. **Fault injection without residue:**
-  a `cairn_test_*` trigger (or role, since #619) scoped to one test, dropped at test start and end.
-- **⇒ CodeQL (#576): `rust/cleartext-logging`'s sources are NAME heuristics** — one `barrierModel` row
-  per function RETURN; read the SARIF `codeFlows` first; local reproduction via `gh codeql`.
-- **⇒ A SUBAGENT THAT ENDS ITS TURN WAITING ON A BACKGROUND JOB NEVER WAKES** — brief every dispatch
-  "foreground only", and put `cargo fmt --check` and the `-D warnings` doc build in every task's
-  commit step (#619's plan missed exactly that once). **⇒ A MEASUREMENT'S RESULT IS ITS SHAPE**
-  (linear, no bend, is what makes a ceiling predictable).
-- Still open from this stretch: **#569** (db/052's registry door silently discards a content conflict
-  and leaves `actor_event_id`/`seq` unvalidated). **Tooling:** rust-analyzer can hold `target/` for
-  minutes — use a scratch `CARGO_TARGET_DIR`; zsh does not word-split `$T` (write `${=T}`).
-
-### 2026-09-07 → 08-20 — the sessions before slice 2d (condensed to what generalises)
-
-The per-slice narrative is **ROADMAP's**, and every issue number these sessions opened lives there.
-What a next session still needs from them:
-
-- **⇒ AN UNPUSHED BRANCH IS INVISIBLE, AND IT COST A WHOLE SESSION (2026-09-07).** DR slice 2c had
-  been built and reviewed on 09-06 and left un-PR'd when the editor restarted; the next session
-  checked the tracking documents against `main`, found them consistent, and part-rebuilt a slice that
-  already existed. **Checking the working tree and `main` is not checking the repository** — `gh pr
-  list --state all`, then `git branch -a`, then `git log --all` (house rule 8).
-- **⇒ A ROUND-TRIP TEST PROVES A CODEC IS SELF-CONSISTENT, NEVER THAT IT IS CORRECT (slice 2a).** A
-  mutation audit found **19 of 19 single-line mutations surviving** because every test round-tripped
-  through the same encoder/decoder pair; golden bytes in `src/wire_pins.rs` killed 18/18 on re-run.
-- **⇒ A SCANNER READS NAMES, NOT VALUES (#527)** — house rule 6(b), enforced by
-  `crates/cairn-node/tests/crypto_sink_names_are_genuine.rs`.
-- **⇒ A DEFERRAL IS ONLY HONEST WHILE ITS PRECONDITION HOLDS, and nothing watches for one expiring
-  (slice 2b).** `localstate.rs`'s header declared its seam truthfully and ADR-0052 made it false while
-  ROADMAP kept recording ✓; seven more comments across four crates had the shape, and #511 found two
-  inside `seal.rs`. **Before trusting any ✓, check the sentence that justified it. Grep, do not recall.**
+- **An issue's failure scenario, scope and blast radius are CLAIMS** — read the code for what the
+  issue MISSED (#621 missed a fourth raise; #567's warning could never fire; #654 said one site, not 15).
+- **Validate a SQL value with the parser that will parse it** (`pg_input_is_valid`); **two parsers for
+  one value are two protocols** (#624); no `CASE WHEN pg_input_is_valid … THEN $1::uuid` over a bound
+  parameter.
+- **A guard that has only ever been green has proved nothing**; a guard needs a positive control that
+  it sees the code it guards (#586); **every harness needs a control for the run not happening**.
+- **"Untestable" is a claim — try a `SET ROLE` seam first** (M10, #619); before recording a survivor
+  as unobservable, ask whether a probe observes it.
+- **A mutation is the RED phase of a pin over shipped behaviour** and must fail at the assertion naming
+  its claim; a mutation anchor must be unique in both directions.
+- **Negative assertions must name what they negate** — `!status.success()` stopped being one when exit
+  3 appeared; write `Some(n)`.
+- **Copying a guard spreads its fail-open** (#608's `<>`): extract, never paste a third copy (cf. #652).
+- **Review the review's fixes** (three of four rounds found a defect the last fix created); when a new
+  status is added, audit the old ones for the same state (found #614/#615).
+- **A door returning `Ok` is not the record coming back** (#585, nothing reads notices) — assert the
+  projection, and make the headline test DECRYPT a body.
+- **Content-addressing over unsigned bytes is not content-addressing** (#620). **Cite a contract where
+  it is written** (#228's comment above `cairn_decode_hex_or_raise`).
+- **An unpushed branch is invisible** (2026-09-07 lost a session — house rule 8). **A round-trip test
+  proves self-consistency, not correctness** (slice 2a: 19/19 mutations survived until golden bytes).
+  **A scanner reads names, not values** (#527, rule 6b). **A deferral is honest only while its
+  precondition holds** (#511).
+- **Mechanics:** a fixture can manufacture a SQLSTATE production never sees (`serve_raw` → `23505`);
+  `restore_node_event` refuses an enrolled node; a red gate can be a predecessor's (#583 — truncate
+  `local_node`); fault injection via a test-scoped `cairn_test_*` trigger or role; a new definer
+  writes `SET search_path = public, pg_temp` (#426); `nohup … &` inside a backgrounded call and
+  `cmd; echo exit=$?` both lie — read the log's last line; subagent briefs say FOREGROUND ONLY and put
+  `cargo fmt --check` + the `-D warnings` doc build in every commit step; a new ADR needs its
+  `mkdocs.yml` nav line; zsh needs `${=T}` to word-split; rust-analyzer holds `target/` — use a
+  scratch `CARGO_TARGET_DIR`. Still open from this stretch: **#569**, **#598**.
 
 **⇒ THE OPEN ISSUES THOSE SESSIONS OPENED, INDEXED RATHER THAN NARRATED.** Condensing the prose
 above deleted these once already, and 25 of them were in no other tracking document. They are kept

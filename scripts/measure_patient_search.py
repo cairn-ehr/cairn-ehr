@@ -140,8 +140,22 @@ def synthetic_names(count: int) -> list[str]:
     return [f"{shapes[i % len(shapes)]}{i}" for i in range(count)]
 
 
-def pool_names(sqlite_path: str, count: int) -> list[str]:
+def pool_names(sqlite_path: str, count: int, spread: bool = False) -> list[str]:
     """Draw `count` names from a SQLite pool of real names.
+
+    `spread=False` (this rig's default, kept EXACTLY as it was so its published latency figures
+    reproduce) takes the FIRST `count` rows with a surname. That head is not representative of the pool: in the
+    maintainer's pool the first 50,000 rows hold ~4x the table's share of its commonest
+    surnames (Smith 0.72% vs 0.18%, review of PR #678). For a latency rig that is a pessimistic,
+    stable choice — more namesakes, bigger candidate sets. A rig whose figures are ABOUT the
+    name distribution (`measure_prompt_truncation.py`) passes `spread=True`: every k-th usable
+    row across the whole table, deterministic and representative. It numbers the usable rows
+    with `row_number()` rather than reading `rowid`, which a VIEW or a WITHOUT ROWID table (both
+    of which discovery can pick) does not have.
+
+    A spread draw also skips a row with a blank (empty or whitespace-only) given name or surname:
+    it would become a one-word "name" and quietly model a case the prompt rig does not claim to.
+    The default draw keeps such a row as a one-word name, as it always has.
 
     The pool's shape is discovered rather than assumed: the first table holding columns that
     look like a given name and a surname is used. A pool that does not match is a loud error
@@ -187,12 +201,31 @@ def pool_names(sqlite_path: str, count: int) -> list[str]:
                     plain_identifier(given),
                     plain_identifier(family),
                 )
-                rows = con.execute(
-                    f'SELECT "{given}", "{family}" FROM "{table}" '
-                    f'WHERE "{family}" IS NOT NULL AND "{family}" <> \'\' '
-                    f'  AND "{given}" IS NOT NULL LIMIT ?',
-                    (count,),
-                ).fetchall()
+                stride = 1
+                if spread:
+                    usable = (
+                        f'"{family}" IS NOT NULL AND trim("{family}") <> \'\' '
+                        f'AND "{given}" IS NOT NULL AND trim("{given}") <> \'\''
+                    )
+                    # Every `stride`-th USABLE row: `available // count` numbered rows at a
+                    # stride of `stride` yield at least `count`, so the draw cannot come up short.
+                    (available,) = con.execute(
+                        f'SELECT count(*) FROM "{table}" WHERE {usable}'
+                    ).fetchone()
+                    stride = max(1, available // count)
+                    rows = con.execute(
+                        f'SELECT g, f FROM (SELECT "{given}" AS g, "{family}" AS f, '
+                        f"row_number() OVER () AS rn FROM \"{table}\" WHERE {usable}) "
+                        f"WHERE (rn - 1) % ? = 0 LIMIT ?",
+                        (stride, count),
+                    ).fetchall()
+                else:
+                    rows = con.execute(
+                        f'SELECT "{given}", "{family}" FROM "{table}" '
+                        f'WHERE "{family}" IS NOT NULL AND "{family}" <> \'\' '
+                        f'  AND "{given}" IS NOT NULL LIMIT ?',
+                        (count,),
+                    ).fetchall()
                 # SAY WHICH TABLE WON. The schema is DISCOVERED, and more than one table can
                 # satisfy the heuristic: the maintainer's own pool has `names` (6.5M rows) and
                 # `person` (10 rows), both matching, resolved only by `sqlite_master` order.
@@ -200,7 +233,8 @@ def pool_names(sqlite_path: str, count: int) -> list[str]:
                 # undebuggable six months out.
                 print(
                     f"pool: {sqlite_path} table {table!r} "
-                    f"columns ({given}, {family}) -> {len(rows)} names",
+                    f"columns ({given}, {family}) -> {len(rows)} names, "
+                    + (f"one usable row in every {stride}" if spread else "the first usable rows"),
                     flush=True,
                 )
                 # THE SHORT-DRAW GUARD, which `file_names` below has always had and this path

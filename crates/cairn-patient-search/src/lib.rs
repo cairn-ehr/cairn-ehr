@@ -1,5 +1,5 @@
-//! The shared, pure patient-search read model: what a candidate IS, and the one definition
-//! of what a registration attests to.
+//! The shared, pure patient-search read model: what a candidate IS, the order candidates are
+//! shown in (`rank`), and the one definition of what a registration attests to.
 //!
 //! # Why this is its own crate
 //!
@@ -13,7 +13,12 @@
 pub mod attestation;
 pub mod candidate;
 pub mod query;
+pub mod rank;
 
 pub use attestation::SearchAttestation;
 pub use candidate::{age_years, Age, Candidate, CandidateList, TrustState};
-pub use query::SearchQuery;
+pub use query::{name_tokens, SearchQuery};
+pub use rank::{
+    callsign_typed_whole, is_dob_near_miss, rank_candidates, tokens_exactly_matched,
+    tokens_matched, RankKey,
+};

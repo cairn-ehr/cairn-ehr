@@ -283,6 +283,13 @@ jobs:
       - name: scripts/measure_patient_search.py pure tests
         run: python3 scripts/tests/measure_patient_search_test.py
 
+      # The step-3 prompt rig (ADR-0075, #687): its --self-test pins the Python twins of
+      # `cairn_patient_search::rank` to the Rust unit tests' own examples. Every ranking figure in
+      # the ADR and its results file is computed by those twins, so a Rust ranking change that
+      # leaves them behind must fail here rather than publish stale figures. Stdlib-only, <1 s.
+      - name: scripts/measure_prompt_truncation.py self-test (ranking twins)
+        run: python3 scripts/measure_prompt_truncation.py --self-test
+
       # ---- system prerequisites: PostgreSQL + its server headers + libclang --------
       # postgresql-server-dev-N supplies pg_config and the server headers pgrx's
       # bindgen step needs; clang/libclang-dev supply the libclang bindgen links against

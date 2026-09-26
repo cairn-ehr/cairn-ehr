@@ -820,9 +820,9 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   untested in both trees) · #658 · #663 (`resolve_matcher_actor` still enrols on a write path) ·
   #664 / #666 (what a superseded key classifies as; db/004 contradicts itself) · #665 (the
   orchestrator-level half) · #667 · #668 (the arming affordance + typed slots) · #669 (a dropped
-  `register` future latches the store) · #670 (three representable invalid states) · #671 · #672 ·
+  `register` future latches the store) · #670 (three representable invalid states) · #672 ·
   #673 · #676 (the clerk reads `operator_chain` text). Also cited: #442, #450, #583, #636, #638.
-  Decided and closed 2026-09-23: #648 (the `Refused` split, built in 2b; the non-`P0001` remainder
+  Decided 2026-09-26: #671 (ADR-0075, next entry). Decided and closed 2026-09-23: #648 (the `Refused` split, built in 2b; the non-`P0001` remainder
   is #655) and #677 (the prompt read guard is soft policy and stays in `funnel.js`).
 - **2c's whole-branch review** found one Critical — with charts now switching, a sign-off signed
   whichever chart was OPEN while the previous patient's list could still be on screen — fixed by
@@ -845,6 +845,49 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
   `M ≤ N`. The mononymous path costs one click more: the first Register searches and shows. The
   machine half is measured (above, and #639's search figures); the stopwatch half (find ≤ 5 s,
   register ≤ 20 s) is a **human act**, runbook §8.
+
+### 2026-09-26 — the step-3 prompt is a nudge, not a completeness claim (#671, ADR-0075, PR #678)
+
+[ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md), spec
+**v0.77**; design `docs/superpowers/specs/2026-09-26-step3-prompt-is-a-nudge-671-design.md`. No wire,
+`db/`, or `SCHEMA_GENERATION` change. **Maintainer's clinical decision:** duplicates are common
+(typos in hard names), the person at the desk cannot be made to browse, so accept them and make
+repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
+- **`search.incomplete` = the SEARCH was partial** (ADR-0061's meaning, restored); being cut to
+  `PROMPT_CAP` is `PromptList::withheld`, shown as *"… the 5 closest of N matches, listed below; type more to narrow"*,
+  never signed. Before: set on 92% of registrations. The live suite pins both polarities (a cut
+  prompt signs `false`; a nameless matched chart makes the search partial and signs `true`).
+- **Ranking** (`cairn_patient_search::rank`, a pure module; inputs read in
+  `cairn-node/src/patient/search_rank.rs`): passes → identifier matched → a §5.4 callsign typed
+  whole → name tokens matched (over the RETAINED names, repudiated included, #349; exact or a
+  ≥3-byte typed prefix, as `db/046` matches; callsigns never split) → DOB near-miss (day/month
+  swap, year ±1, last two year digits transposed, or the same date written differently) → tokens
+  matched exactly → chart age. Reorder only. The identifier key, the callsign key, the prefix arm
+  and the exact-token tie-break came from the PR #678 review: without the identifier key and the
+  prefix arm an MRN-only match and an "Alex"-for-"Alexander" duplicate ranked with or below every
+  namesake; without the callsign key a John Doe re-found by its whole callsign sank below every
+  "Ed …" (the callsign's part); the tie-break stops a prefix-only "Annabel" tying a typed "Ann".
+- **Measured** (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`, 50,000
+  real names, 500 searches per arm): duplicate among the five — exact 500; DOB slip 100 → **500**;
+  DOB simply wrong 97 → **500**; surname typo 500; typo + DOB slip 156 → **500**; typo + DOB
+  simply wrong 155 → **203**; synthetic twin-heavy names + wrong DOB 2 → **72**. The last two are
+  the repair path's. From the review's arms: MRN-only match (another name, wrong DOB) 48 as first
+  reviewed → **500**; first name cut to a prefix + wrong DOB 286 → **499**. The two new reads cost
+  2–5 ms over the largest REAL-name candidate set (968 ids); the synthetic worst case (20,547) was
+  not timed. ⚠️ The real names were the pool's FIRST 50,000 rows (~4× its share of common
+  surnames), so these figures are likely conservative but not yet representative; the rig now
+  draws a spread sample and the re-run is #685.
+- **Filed — the repair path, next to brainstorm:** #679 (commit-time local duplicate check by the
+  §5.2 matcher), #680 (duplicate worklist), #681 (link gesture). From the final review: #682
+  (pre-existing — an NFD-typed word-final accent is lost before NFC, so it never matches). From
+  the PR #678 review: #683 (`CandidateList`'s partiality as one sum type — a wire decision, since
+  the flag is signed); #684 (a DOB is compared and stored as typed, so `1980-3-7` misses
+  `1980-03-07` in db/046's DOB pass — the ranking now counts it as a near-miss, the set does not).
+  From its third review round: #685 (re-run on a representative name draw), #686 (a partial DOB
+  consistent with the typed one gets no ranking credit), #687 (CI did not run the prompt rig's
+  `--self-test`; fixed in the PR, one workflow step).
+- **§1.2:** paper counterpart the glance at neighbouring index cards; paper 1 → forced 1 → target 1,
+  `M ≤ N`; no act added, and a warning that fired on 92% of registrations is gone.
 
 ---
 
