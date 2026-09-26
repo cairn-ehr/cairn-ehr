@@ -10,20 +10,21 @@
 > made to browse, so **accept duplicates and make repair (`link`) easy** — the safety measure is how
 > fast a duplicate is FOUND. So: `search.incomplete` means only that the SEARCH was partial
 > (ADR-0061's meaning, restored; no wire change); being cut to five is `PromptList::withheld`, shown
-> as *"the 5 closest of N"* and never signed; ranking gained **name tokens matched** and a **DOB
+> on screen as *"… the 5 closest of N matches, listed below; type more to narrow"* and never signed; ranking gained **name tokens matched** and a **DOB
 > near-miss**. Measured over 50,000 real names: every single slip (wrong DOB, surname typo) is now
 > in the five 500/500; a surname typo AND a simply wrong DOB 203/500 — that residue is the repair
 > path's (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`).
 >
 > **⇒ NEXT, in order:**
-> 0. **Finish PR #678's review before merge.** Item 1 (identifier key, prefix rule, exact-token
->    tie-break, callsign exclusion) is DONE and measured. Still open, fix or file (rule 5): a DOB
->    stored unpadded (`1980-3-7`) parses equal to the typed one, so it gets neither the DOB pass nor
->    the near-miss (`rank.rs` `q == c`); a name whose lowercasing adds a combining mark (Turkish
->    `İ`), or whose parts are all single characters (Thai, Devanagari, `J-P`), counts zero tokens;
->    `CandidateList::incomplete`'s doc still says "found more than it could show" (ADR-0075 removed
->    that); `prompt_summary(usize, usize, bool)` compiles with the counts swapped; `passes as u32`
->    can wrap; `perturb_name` sends surnames under 3 characters unchanged; the docs-only items.
+> 0. **PR #678: every review finding is fixed or filed; re-review, then merge.** Fixed (each test-first,
+>    all eleven measurement arms re-run): the identifier key, the prefix rule, the exact-token
+>    tie-break, the callsign exclusion, the date written differently as a near-miss, words whose parts
+>    cannot stand for them (Turkish `İ`, Thai, Devanagari, `J-P`), the checked pass count,
+>    `PromptCounts` (named, so the counts cannot be swapped), the flag-gated reason, the stale
+>    `incomplete` docs, the rig's unperturbable names, and the test gaps. Filed: **#683**
+>    (`CandidateList` as one sum type, a wire decision), **#684** (a DOB compared and stored as typed:
+>    a SET gap the ranking fix cannot reach). Not taken, a product call: saying "closest" when the
+>    ranking is a heuristic ("strongest" was suggested).
 > 1. **The repair path — brainstorm first, with the maintainer:** **#679** (commit-time local
 >    duplicate check by the §5.2 matcher), **#680** (duplicate worklist), **#681** (link gesture —
 >    show each chart's allergies/active meds at link time, the window's hazard). ADR-0075 decision 2
@@ -106,7 +107,10 @@
 > #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 ·
 > #672 (identifier entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads
 > `operator_chain` text, `[P0001]` included) · the repair path #679 · #680 · #681 · #682 (an NFD
-> trailing accent is lost: `SearchQuery` tokenises before NFC; changes signed tokens). #675's four gaps were fixed in PR #674's third review
+> trailing accent is lost: `SearchQuery` tokenises before NFC; changes signed tokens) · #683
+> (`CandidateList`'s flag + optional reason → one sum type; touches the attestation) · #684 (a DOB
+> is compared and stored as typed: `1980-3-7` misses `1980-03-07` in db/046's DOB pass — a SET
+> gap, not just order). #675's four gaps were fixed in PR #674's third review
 > round. **Decided 2026-09-23 (#677):** the 800 ms prompt read guard is SOFT POLICY and stays in
 > `funnel.js` only; do not move it into `FunnelSession` without reopening that decision.
 >
@@ -549,7 +553,7 @@ surface has never been through one — include it next.
 
 ---
 
-**Session date:** 2026-09-26 (**#671 decided and built — the step-3 prompt is a nudge**, [ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md), spec v0.77, PR **[#678](https://github.com/cairn-ehr/cairn-ehr/pull/678)**; filed **#679**, **#680**, **#681**) · 2026-09-23 (**funnel UI slice 2c built — the front door is runnable**; PR **[#674](https://github.com/cairn-ehr/cairn-ehr/pull/674)**; no ADR, no migration; `search_patients` now ranks by passes matched; filed **#671**, **#672**, **#673**) · 2026-09-23 (**2c's four prerequisites**, PR #661) · 2026-09-22 (**funnel slices 2a + 2b**, PRs #646, #653) · 2026-09-21 (**#636 slice 1 + #639**, PRs #635, #642, #644) · 2026-09-20 (**#621**, ADR-0074, spec v0.76, PR #627) · 2026-09-19 (**#619**, ADR-0073, PR #623) · 09-17 **#614 + #615** (ADR-0072, db/053, PR #618) · 09-16 **#594** (ADR-0071, PR #612) · 09-15/16 **#584** (ADR-0070, PR #601) · earlier: ROADMAP. · **Spec:** **v0.77** (newest [ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md); [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication chart.
+**Session date:** 2026-09-26 (**#671 decided and built — the step-3 prompt is a nudge**, [ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md), spec v0.77, PR **[#678](https://github.com/cairn-ehr/cairn-ehr/pull/678)**; filed **#679**, **#680**, **#681**, **#682**, **#683**, **#684**) · 2026-09-23 (**funnel UI slice 2c built — the front door is runnable**; PR **[#674](https://github.com/cairn-ehr/cairn-ehr/pull/674)**; no ADR, no migration; `search_patients` now ranks by passes matched; filed **#671**, **#672**, **#673**) · 2026-09-23 (**2c's four prerequisites**, PR #661) · 2026-09-22 (**funnel slices 2a + 2b**, PRs #646, #653) · 2026-09-21 (**#636 slice 1 + #639**, PRs #635, #642, #644) · 2026-09-20 (**#621**, ADR-0074, spec v0.76, PR #627) · 2026-09-19 (**#619**, ADR-0073, PR #623) · 09-17 **#614 + #615** (ADR-0072, db/053, PR #618) · 09-16 **#594** (ADR-0071, PR #612) · 09-15/16 **#584** (ADR-0070, PR #601) · earlier: ROADMAP. · **Spec:** **v0.77** (newest [ADR-0075](spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md); [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes **ADR-0026 decision 2's implementation wording** only) · **`SCHEMA_GENERATION`:** **53** (`db/053`) · **Phase:** architecture complete (every original §11 question closed); **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication chart.
 
 **Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices
 1–5** (§4.4 identifiers · §4.2 DOB/sex-at-birth · names · administrative-sex/gender-identity · §4.3

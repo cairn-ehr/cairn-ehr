@@ -49,6 +49,9 @@ review's three changes.
 
 ¹ 38 of the 500 sampled first names were under four characters and could not be cut; the rig sent
 those names as-is and reports the count (`unperturbed`) rather than passing them off as shortened.
+The surname-typo arms (`name`, `both`, `both-any`) likewise report **5 of 500** surnames under three
+characters ("Li", "Wu") that had no interior letter to change. Before the review they were counted
+as typo'd searches without saying so; the bias is small (1%) but it is now stated.
 
 Candidates per search: median ~104 (typo arms ~60, `short-any` ~163 — a 3-letter prefix is broad),
 and the prompt is cut on ~80–96% of searches — the state ADR-0075 accepts as normal.
@@ -94,7 +97,15 @@ twins are everywhere (median 7,576 candidates per search, max 20,547).
    grades the rule on its own test. The `dob-any` and `both-any` arms are the controls, and the
    conclusions above lean on them.
 
-**Re-run after the final review's fix** (`tokens_matched` now counts only plain tokens, so a
+**Re-run after the review's remaining fixes** (the same date written differently counts as a DOB
+near-miss; a punctuated word is skipped only when its own parts are query tokens, so Turkish `İ`,
+Thai, Devanagari and initials like `J-P` count; the rig reports unperturbable names): all eleven
+arms reproduced the "final" figures above exactly. The real-name pool is Latin-script and zero-padded,
+so the rig does not exercise those two fixes; the unit tests
+`a_word_whose_parts_do_not_stand_for_it_counts_whole` and
+`the_same_date_written_differently_is_a_near_miss` do.
+
+**Earlier re-run, after the final review's fix** (`tokens_matched` now counts only plain tokens, so a
 hyphenated word counts once per part): all eight arms reproduced the figures of the first run
 exactly. The
 real-name pool is almost entirely unpunctuated, so this rig does not exercise that fix — the unit

@@ -854,7 +854,7 @@ No ADR, no migration, `SCHEMA_GENERATION` unchanged throughout.
 (typos in hard names), the person at the desk cannot be made to browse, so accept them and make
 repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
 - **`search.incomplete` = the SEARCH was partial** (ADR-0061's meaning, restored); being cut to
-  `PROMPT_CAP` is `PromptList::withheld`, shown as *"the 5 closest of N · type more to narrow"*,
+  `PROMPT_CAP` is `PromptList::withheld`, shown as *"… the 5 closest of N matches, listed below; type more to narrow"*,
   never signed. Before: set on 92% of registrations. The live suite pins both polarities (a cut
   prompt signs `false`; a nameless matched chart makes the search partial and signs `true`).
 - **Ranking** (`cairn_patient_search::rank`, a pure module; inputs read in
@@ -875,7 +875,10 @@ repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
   not timed.
 - **Filed — the repair path, next to brainstorm:** #679 (commit-time local duplicate check by the
   §5.2 matcher), #680 (duplicate worklist), #681 (link gesture). From the final review: #682
-  (pre-existing — an NFD-typed word-final accent is lost before NFC, so it never matches).
+  (pre-existing — an NFD-typed word-final accent is lost before NFC, so it never matches). From
+  the PR #678 review: #683 (`CandidateList`'s partiality as one sum type — a wire decision, since
+  the flag is signed); #684 (a DOB is compared and stored as typed, so `1980-3-7` misses
+  `1980-03-07` in db/046's DOB pass — the ranking now counts it as a near-miss, the set does not).
 - **§1.2:** paper counterpart the glance at neighbouring index cards; paper 1 → forced 1 → target 1,
   `M ≤ N`; no act added, and a warning that fired on 92% of registrations is gone.
 

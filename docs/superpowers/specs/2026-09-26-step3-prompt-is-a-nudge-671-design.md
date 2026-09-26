@@ -20,7 +20,8 @@ Slice 2c measured the step-3 prompt over 50,000 real names
   says nothing.
 - Ranking by passes matched puts an **exactly-typed** duplicate first 500/500, but a duplicate typed
   with a **wrong DOB** is shown only 100/500: it matches the name pass alone, which counts once
-  however many name tokens matched, so it ties with ~100 namesakes and falls to chart-age order.
+  however many name tokens matched, so it ties with the ~100 other candidates (everyone sharing a
+  name token or the birth date) and falls to chart-age order.
 - A duplicate with a **typo in a name token** ("Smyth" for "Smith") loses that token's match and can
   be found only through its other keys; with every token misspelt it is not found at all, and no
   prompt logic can show it. *(Corrected 2026-09-26 by measurement: a one-token surname typo is still
