@@ -178,26 +178,38 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
 /// changes what the Register button MEANS: from "search first" to "none of these". A clerk who
 /// is never told either has not been shown the list the registration will swear they saw.
 ///
-/// `incomplete` is the bounded list's own flag (the node's partiality or the cap's). It decides
-/// the wording, not only a separate note: "No existing chart matched" licenses a new chart, so
-/// a search that did not finish must never say it (principle 4) — even when it showed nobody,
-/// which is exactly when the list, and anything nested in it, is hidden.
-pub fn prompt_summary(shown: usize, incomplete: bool) -> String {
-    match (shown, incomplete) {
-        (0, false) => {
-            "No existing chart matched what is typed. Registering will record that search."
-                .to_string()
-        }
-        (0, true) => "The search did not finish, and showed nobody — this is NOT a \"no match\" \
-                      (the reason follows). Registering now records that incomplete search."
+/// `incomplete` is the SEARCH's partiality (the node could not read some chart it matched).
+/// It decides the wording, not only a separate note: "No existing chart matched" licenses a
+/// new chart, so a search that did not finish must never say it (principle 4) — even when it
+/// showed nobody, which is exactly when the list, and anything nested in it, is hidden.
+///
+/// `withheld` is how many further candidates matched but are not shown (ADR-0075, #671): said
+/// as "the N closest of M", a count and a way to narrow — never as "not complete". That word
+/// is reserved for `incomplete`, because it changes whether "no match" can be trusted, and
+/// being cut to five does not. The prompt is a nudge; being cut is its normal state.
+pub fn prompt_summary(shown: usize, withheld: usize, incomplete: bool) -> String {
+    // Appended to a list with rows when the search itself was partial.
+    let partial = if incomplete {
+        ", but the list is not complete (the reason follows)"
+    } else {
+        ""
+    };
+    match shown {
+        0 if incomplete => "The search did not finish, and showed nobody — this is NOT a \
+                            \"no match\" (the reason follows). Registering now records that \
+                            incomplete search."
             .to_string(),
-        (n, false) => format!(
-            "{n} existing patient(s) might be this person — listed below. Pressing Register \
-             now means none of these."
+        0 => "No existing chart matched what is typed. Registering will record that search."
+            .to_string(),
+        n if withheld > 0 => format!(
+            "{n} existing patient(s) might be this person — the {n} closest of {} matches, \
+             listed below{partial}; type more to narrow. Pressing Register now means none of \
+             these.",
+            n + withheld
         ),
-        (n, true) => format!(
-            "{n} existing patient(s) might be this person — listed below, but the list is not \
-             complete (the reason follows). Pressing Register now means none of these."
+        n => format!(
+            "{n} existing patient(s) might be this person — listed below{partial}. Pressing \
+             Register now means none of these."
         ),
     }
 }
@@ -439,10 +451,10 @@ pub(crate) mod tests {
     /// the Register button now means — the prompt is otherwise silent while they type.
     #[test]
     fn the_prompt_announces_how_many_matches_and_what_register_now_means() {
-        let some = prompt_summary(3, false);
+        let some = prompt_summary(3, 0, false);
         assert!(some.contains('3'), "{some}");
         assert!(some.contains("none of these"), "{some}");
-        let none = prompt_summary(0, false);
+        let none = prompt_summary(0, 0, false);
         assert!(none.contains("No existing chart matched"), "{none}");
         assert!(none.contains("record that search"), "{none}");
     }
@@ -451,7 +463,7 @@ pub(crate) mod tests {
     /// but did NOT finish must never be announced as "nobody matched" (PR #674 review).
     #[test]
     fn a_partial_search_that_shows_nobody_never_reads_as_no_match() {
-        let s = prompt_summary(0, true);
+        let s = prompt_summary(0, 0, true);
         assert!(!s.contains("No existing chart matched"), "{s}");
         assert!(s.contains("NOT"), "{s}");
         let b = browse_summary(0, true);
@@ -459,11 +471,38 @@ pub(crate) mod tests {
         assert!(b.contains("NOT"), "{b}");
     }
 
+    /// ADR-0075 decision 4: truncation is said quietly, as a count and a way to narrow —
+    /// not as "incomplete", which is reserved for a search that did not finish.
+    #[test]
+    fn a_cut_prompt_says_how_many_closest_of_how_many() {
+        let s = prompt_summary(5, 98, false);
+        assert!(s.contains("5 closest of 103"), "{s}");
+        assert!(s.contains("type more to narrow"), "{s}");
+        assert!(
+            !s.contains("not complete"),
+            "a cut list is not a partial search: {s}"
+        );
+        assert!(s.contains("none of these"), "{s}");
+    }
+
+    #[test]
+    fn a_cut_prompt_over_a_partial_search_says_both() {
+        let s = prompt_summary(5, 3, true);
+        assert!(s.contains("5 closest of 8"), "{s}");
+        assert!(s.contains("not complete"), "{s}");
+    }
+
+    /// Review focus 5: the one sentence that licenses a new chart is unchanged.
+    #[test]
+    fn an_empty_prompt_still_licenses_a_new_chart() {
+        assert!(prompt_summary(0, 0, false).contains("No existing chart matched"));
+    }
+
     /// A partial list with rows says it is partial IN the announcement, not only in the
     /// separate note — a screen-reader clerk hears the live region, and may hear only that.
     #[test]
     fn a_partial_list_with_rows_says_so_in_its_announcement() {
-        assert!(prompt_summary(2, true).contains("not complete"));
+        assert!(prompt_summary(2, 0, true).contains("not complete"));
         assert!(browse_summary(2, true).contains("not complete"));
         assert!(!browse_summary(2, false).contains("not complete"));
     }

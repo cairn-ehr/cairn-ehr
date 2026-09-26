@@ -195,8 +195,10 @@ pub async fn prompt_search_impl(
         .map_err(|e| search_error_view(&e))?;
     let prompt = bound_for_prompt(&list);
     // Rendered from the BOUNDED list, before `record` takes it: the rows on screen are exactly
-    // the rows a registration will swear were displayed.
+    // the rows a registration will swear were displayed. `withheld` is read now for the same
+    // reason — `record` moves the prompt — and is shown, never signed (ADR-0075).
     let bounded = prompt.as_list().clone();
+    let withheld = prompt.withheld();
     let recorded = state.funnel.lock().await.record(&form, prompt);
     match recorded {
         Ok(Recorded::Current(token)) => {
@@ -206,7 +208,11 @@ pub async fn prompt_search_impl(
                 waiting: None,
                 stale: false,
                 token: Some(token),
-                summary: Some(prompt_summary(bounded.candidates.len(), bounded.incomplete)),
+                summary: Some(prompt_summary(
+                    bounded.candidates.len(),
+                    withheld,
+                    bounded.incomplete,
+                )),
                 candidates: bounded.candidates.iter().map(candidate_view).collect(),
                 incomplete_reason: bounded.incomplete_reason,
             })
@@ -710,7 +716,7 @@ mod tests {
     }
 
     /// WHAT IS SHOWN IS WHAT IS SIGNED, end to end (PR #674 review). More candidates than the
-    /// prompt may show: the prompt carries exactly `PROMPT_CAP` rows and says it is partial,
+    /// prompt may show: the prompt carries exactly `PROMPT_CAP` rows and says how many it cut,
     /// and the registration attests exactly those rows, in that order — not the unbounded list.
     #[tokio::test]
     async fn the_prompt_is_bounded_and_the_registration_attests_exactly_its_rows() {
@@ -725,9 +731,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(p.candidates.len(), cairn_gui_funnel::PROMPT_CAP, "{p:?}");
+        // ADR-0075: a cut prompt says how many it did not show, and does NOT call the search
+        // partial — that word is kept for a search that could not read a chart.
         assert!(
-            p.incomplete_reason.is_some(),
-            "a truncated prompt must say so"
+            p.incomplete_reason.is_none(),
+            "a cut prompt is not a partial search: {p:?}"
+        );
+        assert!(
+            p.summary.as_deref().unwrap_or("").contains("closest of"),
+            "a cut prompt must say it was cut: {p:?}"
         );
         let shown: Vec<uuid::Uuid> = p
             .candidates
