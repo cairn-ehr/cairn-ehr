@@ -867,7 +867,8 @@ repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
   simply wrong 155 → **204**; synthetic twin-heavy names + wrong DOB 2 → **72**. The last two are
   the repair path's. The two new reads cost 2–5 ms over the largest candidate set (968 ids).
 - **Filed — the repair path, next to brainstorm:** #679 (commit-time local duplicate check by the
-  §5.2 matcher), #680 (duplicate worklist), #681 (link gesture).
+  §5.2 matcher), #680 (duplicate worklist), #681 (link gesture). From the final review: #682
+  (pre-existing — an NFD-typed word-final accent is lost before NFC, so it never matches).
 - **§1.2:** paper counterpart the glance at neighbouring index cards; paper 1 → forced 1 → target 1,
   `M ≤ N`; no act added, and a warning that fired on 92% of registrations is gone.
 

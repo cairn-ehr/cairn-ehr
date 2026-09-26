@@ -93,7 +93,8 @@
 > (multi-event rollback untested in both trees) · #658 · #662 (seven `init` effects unpinned) ·
 > #663 · #664 · #665 (the orchestrator-level half) · #666 · #667 · #668 · #669 · #670 ·
 > #672 (identifier entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads
-> `operator_chain` text, `[P0001]` included) · the repair path #679 · #680 · #681. #675's four gaps were fixed in PR #674's third review
+> `operator_chain` text, `[P0001]` included) · the repair path #679 · #680 · #681 · #682 (an NFD
+> trailing accent is lost: `SearchQuery` tokenises before NFC; changes signed tokens). #675's four gaps were fixed in PR #674's third review
 > round. **Decided 2026-09-23 (#677):** the 800 ms prompt read guard is SOFT POLICY and stays in
 > `funnel.js` only; do not move it into `FunnelSession` without reopening that decision.
 >
