@@ -70,6 +70,15 @@ A pure function in `cairn-patient-search` (`rank_candidates`), ordering by:
    count. An EXACT DOB is already rewarded by key 1 and is not a near-miss.
 4. **Chart age** (UUIDv7 id), ascending — today's tie-break.
 
+> [!NOTE]
+> **Amended by the PR #678 review.** Two gaps in the order above were found and fixed before merge:
+> an **identifier match** is now its own key, between 1 and 2 — a chart found ONLY by the typed
+> identifier shares no name token and otherwise sank below every one-token namesake — and key 2
+> counts a query token that is a **prefix of at least 3 bytes** of a stored token, as `db/046`'s
+> name pass matches it (#636), while never counting a §5.4 callsign's parts. Measuring the prefix
+> rule showed it lifting prefix-only candidates into the duplicate's tier, so **exactly-matched
+> tokens** break the tie under the DOB near-miss. ADR-0075 decision 5 states the final order.
+
 `search_patients` ranks after its per-candidate reads (it already reads DOBs), with one new read of
 the candidates' retained names. **Stated limit:** keys 2 and 3 are computed in Rust and may drift
 from `db/046`'s SQL normalisation. Drift can only worsen the order, never lose a candidate, so it is

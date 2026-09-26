@@ -858,14 +858,21 @@ repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
   never signed. Before: set on 92% of registrations. The live suite pins both polarities (a cut
   prompt signs `false`; a nameless matched chart makes the search partial and signs `true`).
 - **Ranking** (`cairn_patient_search::rank`, a pure module; inputs read in
-  `cairn-node/src/patient/search_rank.rs`): passes → name tokens matched (over the RETAINED names,
-  repudiated included, #349) → DOB near-miss (day/month swap, year ±1, last two year digits
-  transposed) → chart age. Reorder only.
+  `cairn-node/src/patient/search_rank.rs`): passes → identifier matched → name tokens matched
+  (over the RETAINED names, repudiated included, #349; exact or a ≥3-byte typed prefix, as
+  `db/046` matches; callsigns never split) → DOB near-miss (day/month swap, year ±1, last two year
+  digits transposed) → tokens matched exactly → chart age. Reorder only. The identifier key, the
+  prefix arm and the exact-token tie-break came from the PR #678 review: without the first two an
+  MRN-only match and an "Alex"-for-"Alexander" duplicate ranked with or below every namesake; the
+  third stops a prefix-only "Annabel" tying a typed "Ann".
 - **Measured** (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`, 50,000
   real names, 500 searches per arm): duplicate among the five — exact 500; DOB slip 100 → **500**;
   DOB simply wrong 97 → **500**; surname typo 500; typo + DOB slip 156 → **500**; typo + DOB
-  simply wrong 155 → **204**; synthetic twin-heavy names + wrong DOB 2 → **72**. The last two are
-  the repair path's. The two new reads cost 2–5 ms over the largest candidate set (968 ids).
+  simply wrong 155 → **203**; synthetic twin-heavy names + wrong DOB 2 → **72**. The last two are
+  the repair path's. From the review's arms: MRN-only match (another name, wrong DOB) 48 as first
+  reviewed → **500**; first name cut to a prefix + wrong DOB 286 → **499**. The two new reads cost
+  2–5 ms over the largest REAL-name candidate set (968 ids); the synthetic worst case (20,547) was
+  not timed.
 - **Filed — the repair path, next to brainstorm:** #679 (commit-time local duplicate check by the
   §5.2 matcher), #680 (duplicate worklist), #681 (link gesture). From the final review: #682
   (pre-existing — an NFD-typed word-final accent is lost before NFC, so it never matches).

@@ -12,10 +12,18 @@
 > (ADR-0061's meaning, restored; no wire change); being cut to five is `PromptList::withheld`, shown
 > as *"the 5 closest of N"* and never signed; ranking gained **name tokens matched** and a **DOB
 > near-miss**. Measured over 50,000 real names: every single slip (wrong DOB, surname typo) is now
-> in the five 500/500; a surname typo AND a simply wrong DOB 204/500 — that residue is the repair
+> in the five 500/500; a surname typo AND a simply wrong DOB 203/500 — that residue is the repair
 > path's (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`).
 >
 > **⇒ NEXT, in order:**
+> 0. **Finish PR #678's review before merge.** Item 1 (identifier key, prefix rule, exact-token
+>    tie-break, callsign exclusion) is DONE and measured. Still open, fix or file (rule 5): a DOB
+>    stored unpadded (`1980-3-7`) parses equal to the typed one, so it gets neither the DOB pass nor
+>    the near-miss (`rank.rs` `q == c`); a name whose lowercasing adds a combining mark (Turkish
+>    `İ`), or whose parts are all single characters (Thai, Devanagari, `J-P`), counts zero tokens;
+>    `CandidateList::incomplete`'s doc still says "found more than it could show" (ADR-0075 removed
+>    that); `prompt_summary(usize, usize, bool)` compiles with the counts swapped; `passes as u32`
+>    can wrap; `perturb_name` sends surnames under 3 characters unchanged; the docs-only items.
 > 1. **The repair path — brainstorm first, with the maintainer:** **#679** (commit-time local
 >    duplicate check by the §5.2 matcher), **#680** (duplicate worklist), **#681** (link gesture —
 >    show each chart's allergies/active meds at link time, the window's hazard). ADR-0075 decision 2
@@ -33,9 +41,13 @@
 >
 > **⇒ THE FUNNEL'S DURABLE RULES — do not undo any of these** (full text: the design page's
 > dated notes and ROADMAP's 2a → 2c entry):
-> - **`search_patients` RANKS BY FOUR KEYS** (`cairn_patient_search::rank_candidates`, inputs read
->   in `patient/search_rank.rs`): passes matched → name tokens matched → DOB near-miss → chart
->   age. It only REORDERS. `db/046` is a disjunction, so in plain id order the prompt showed the
+> - **`search_patients` RANKS BY SIX KEYS** (`cairn_patient_search::rank_candidates`, inputs read
+>   in `patient/search_rank.rs`): passes matched → identifier matched → name tokens matched
+>   (exact OR a ≥3-byte typed prefix, as `db/046` matches; callsigns never split) → DOB near-miss
+>   → tokens matched EXACTLY → chart age (the identifier, prefix and exact keys all from the #678
+>   review). It only REORDERS. Dropping the identifier key
+>   buries a chart found only by its MRN below every namesake; dropping the prefix arm ties an
+>   "Alex"-typed "Alexander" with every namesake. `db/046` is a disjunction, so in plain id order the prompt showed the
 >   OLDEST charts; "simplifying" back to `ids.sort()` or to passes-only fails
 >   `patient_search_ranking.rs`. Name tokens are counted over the RETAINED set (`patient_name`,
 >   repudiated names included — #349), never `patient_name_current`.
@@ -575,13 +587,20 @@ Brainstorm → ADR → plan → inline TDD (six tasks). Design
 - **⇒ THE MEASUREMENT FALSIFIED THE ADR DRAFT, BEFORE MERGE.** "A name typo never enters the candidate
   set" was repeated from #671 into ADR-0075; the new `name` arm found every one-token typo (other
   tokens + DOB still match). And an arm built from the same slips the near-miss key rewards grades the
-  rule on its own test — the `-any` controls were added to find the real boundary (204/500).
+  rule on its own test — the `-any` controls were added to find the real boundary (203/500).
   **Measure the claim in the ADR, and give every arm a control the feature cannot help.**
+- **⇒ A RANKING KEY IS ONLY AS GOOD AS ITS MATCH RULE'S AGREEMENT WITH THE SEARCH'S.** The PR
+  review found the ranking counted exact tokens while `db/046` also matches a typed prefix, and
+  gave an identifier match no weight at all: a chart found only by its MRN was shown 48/500 —
+  WORSE than chart age. Adding the prefix rule then cost another arm 204 → 183 until an
+  exact-token tie-break went under it. **Every ranking change gets every arm re-run, not just the
+  arm it was for.**
 - **⇒ INVERTING A TEST CAN DELETE THE OTHER HALF OF A PAIR.** Two live tests asserted `incomplete`
   `false` and `true`; flipping the `true` one to match ADR-0075 left the flag free to be a constant,
   so a positive case (a nameless chart makes the search partial) was added.
 - **⇒ A LATENCY INSTRUMENT MUST SEE THE CODE PATH.** `measure_patient_search.py` times only the SQL
-  function; the new reads are Rust-side, so they were timed directly (2–5 ms over 968 ids).
+  function; the new reads are Rust-side, so they were timed directly (2–5 ms over 968 ids, the
+  largest real-name set — the 20,547-candidate synthetic case was not timed).
 
 ### 2026-09-23 — funnel UI slice 2c: the window (PR #674)
 

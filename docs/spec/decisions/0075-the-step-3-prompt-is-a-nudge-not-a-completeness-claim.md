@@ -94,16 +94,24 @@ named ids.
 ### 5. Ranking is improved where it costs nobody a step
 
 The order of the prompt is the one lever that helps without asking anything of the user. It only
-reorders — never adds or removes a candidate — by passes matched, then **name tokens matched**, then a
-**DOB near-miss** (day/month swapped, year ±1, the year's last two digits transposed), then chart age.
-It is advisory: a ranking computed in Rust that drifts from `db/046`'s SQL normalisation can only
-worsen the order, never lose a candidate. The measure is the rig's `--perturb` arms (`dob`, and `name`, `both`,
+reorders — never adds or removes a candidate — by passes matched, then an **identifier match**, then
+**name tokens matched** (exactly or as a typed prefix of at least 3 bytes, as `db/046`'s name pass
+matches them, and never a §5.4 callsign's parts), then a **DOB near-miss** (day/month swapped, year
+±1, the year's last two digits transposed), then **exactly-matched tokens** (so a prefix-only
+"Annabel" never ties a typed "Ann"), then chart age. The identifier key, the prefix rule and the
+exact-token tie-break came from this ADR's own PR review: without the first two, a chart found only
+by its identifier (a nickname and a married surname) and a chart found by a shortened first name
+("Alex" for "Alexander") both ranked with, or below, every namesake; the third was needed once the
+prefix rule was measured. It is advisory: a ranking computed in Rust that drifts from
+`db/046`'s SQL normalisation can only worsen the order, never lose a candidate. The measure is the rig's `--perturb` arms (`dob`, and `name`, `both`,
 `dob-any`, `both-any`, added while measuring); the `-any` arms are the near-miss key's
 controls and measure where the prompt stops helping. Measured 2026-09-26 over 50,000 real names
 (`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`): a DOB slip or a
 simply wrong DOB with the name right, and a surname typo with the DOB right or slipped, are all
-now shown 500/500; a surname typo together with a simply wrong DOB is shown 204/500, and a common
-full name with a wrong DOB in a twin-heavy population 72/500. Those residues are Decision 2's.
+now shown 500/500, as are a chart found only by its typed MRN (48/500 before the review's
+identifier key) and a shortened first name with a wrong DOB (499/500); a surname typo together
+with a simply wrong DOB is shown 203/500, and a common full name with a wrong DOB in a twin-heavy
+population 72/500. Those residues are Decision 2's.
 
 ## Consequences
 
