@@ -1,5 +1,9 @@
 # The funnel's step-3 prompt: how often it truncates, and whether the duplicate survives — 2026-09-23
 
+> **Superseded in part by [2026-09-26-funnel-prompt-ranking.md](2026-09-26-funnel-prompt-ranking.md)**
+> (ADR-0075, #671): truncation is now the prompt's normal state, and the ranking gained name
+> tokens matched and a DOB near-miss. The figures below remain the 2c baseline.
+
 **Why this was measured.** The registration window shows at most `PROMPT_CAP` (5) candidates in
 its step-3 prompt, and the new chart's birth act attests exactly those rows as displayed
 (ADR-0061). The funnel design assumed a full-name-plus-DOB search "returns few candidates by

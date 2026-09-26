@@ -29,7 +29,9 @@ The measurement also showed the limits of any prompt:
 - ranked by passes matched, an **exactly-typed** duplicate is first in 500/500 searches;
 - a duplicate typed with a **wrong date of birth** is shown in 100/500, ranked or not — it matches the
   name pass alone, which ties with every namesake;
-- a duplicate with a **typo in the name** never enters the candidate set at all.
+- a duplicate with a **typo in a name token** loses that token's match, so it can be found only through
+  its other keys (the remaining name tokens, an exact DOB) — and a name with every token misspelt is
+  not found at all.
 
 The obvious fix — show every "strong" candidate and sign that the weak remainder was withheld by rule —
 would have withheld exactly the wrong-DOB duplicate, and would still have left the prompt claiming a
@@ -93,8 +95,13 @@ The order of the prompt is the one lever that helps without asking anything of t
 reorders — never adds or removes a candidate — by passes matched, then **name tokens matched**, then a
 **DOB near-miss** (day/month swapped, year ±1, the year's last two digits transposed), then chart age.
 It is advisory: a ranking computed in Rust that drifts from `db/046`'s SQL normalisation can only
-worsen the order, never lose a candidate. The measure is the rig's `--perturb dob` arm, and a new
-`--perturb name` arm records the case no prompt can catch.
+worsen the order, never lose a candidate. The measure is the rig's `--perturb` arms (`dob`, and `name`, `both`,
+`dob-any`, `both-any`, added while measuring); the `-any` arms are the near-miss key's
+controls and measure where the prompt stops helping. Measured 2026-09-26 over 50,000 real names
+(`cairn-gui/cairn-gui-tauri/results/2026-09-26-funnel-prompt-ranking.md`): a DOB slip or a
+simply wrong DOB with the name right, and a surname typo with the DOB right or slipped, are all
+now shown 500/500; a surname typo together with a simply wrong DOB is shown 204/500, and a common
+full name with a wrong DOB in a twin-heavy population 72/500. Those residues are Decision 2's.
 
 ## Consequences
 

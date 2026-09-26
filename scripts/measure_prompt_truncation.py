@@ -32,10 +32,16 @@ are assigned in insertion order, so "id order" really is chart-creation order �
 `search_patients` used before slice 2c. The population is shuffled first, so a sampled patient's
 chart age is random.
 
+With `--perturb name` the query carries a TYPO in the last name (`perturb_name`) — the commonest
+real duplicate — and `--perturb both` a typo AND a mis-typed date of birth, so the chart is left
+with only its given name to be found by. Recorded, not optimised: ADR-0075 hands what no prompt
+can show to the §5.2 matcher and the link-repair path.
+
 **Ranking is recomputed here, not read from `search_patients`.** `rank()` is the Python twin of
-`rank_by_passes_matched` (crates/cairn-node/src/patient/search.rs), pinned against it by the
-self-test on the same example the Rust unit test uses. The pass counts themselves come from the
-real `cairn_search_candidates`.
+`cairn_patient_search::rank_candidates` (ADR-0075: passes, then name tokens matched, then DOB
+near-miss, then id), and `rank_by_passes()` of slice 2c's order, so one run reports before and
+after. Both are pinned by the self-test on the Rust unit tests' own examples. The pass counts
+themselves come from the real `cairn_search_candidates`.
 
 # Usage
 
@@ -53,6 +59,7 @@ Requires `psql` and a cluster with the schema loaded; reuses `measure_patient_se
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import os
 import random
@@ -122,9 +129,89 @@ def query_tokens(raw_name: str) -> list[str]:
     return sorted(tokens)
 
 
-def rank(rows: list[tuple[str, int]]) -> list[str]:
-    """The Python twin of `rank_by_passes_matched`: passes matched DESC, then id ASC."""
-    return [pid for pid, _ in sorted(rows, key=lambda r: (-r[1], r[0]))]
+# A candidate row: (id, passes matched, name tokens matched, DOB near-miss).
+Row = tuple[str, int, int, bool]
+
+
+def rank_by_passes(rows: list[Row]) -> list[str]:
+    """Slice 2c's order, kept so one run reports before AND after: passes DESC, then id ASC."""
+    return [r[0] for r in sorted(rows, key=lambda r: (-r[1], r[0]))]
+
+
+def rank(rows: list[Row]) -> list[str]:
+    """The Python twin of `cairn_patient_search::rank_candidates` (ADR-0075): passes DESC, then
+    name tokens matched DESC, then DOB near-miss first, then id ASC."""
+    return [r[0] for r in sorted(rows, key=lambda r: (-r[1], -r[2], not r[3], r[0]))]
+
+
+def tokens_matched(query: list[str], stored_names: list[str]) -> int:
+    """Twin of `cairn_patient_search::tokens_matched`: DISTINCT query tokens found among the tokens
+    of any stored name, each stored name tokenised by the query's own rule (`query_tokens`)
+    after the NFC + lowercase normalisation Postgres applies in `search_rank.rs`."""
+    stored: set[str] = set()
+    for name in stored_names:
+        stored.update(query_tokens(unicodedata.normalize("NFC", name).lower()))
+    return sum(1 for t in set(query) if t in stored)
+
+
+def parse_ymd(value: str) -> tuple[int, int, int] | None:
+    """Twin of `cairn_patient_search::candidate::parse_ymd`: a full, REAL ISO date or None."""
+    parts = value.split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        y, m, d = (int(x) for x in parts)
+    except ValueError:
+        return None
+    if not 1 <= m <= 12 or not 1 <= d <= calendar.monthrange(y, m)[1]:
+        return None
+    return y, m, d
+
+
+def is_dob_near_miss(query: str, candidate: str) -> bool:
+    """Twin of `cairn_patient_search::is_dob_near_miss`: day/month swapped, year +-1, or the
+    year's last two digits transposed. Partial or impossible dates, and exact matches, never."""
+    q, c = parse_ymd(query), parse_ymd(candidate)
+    if q is None or c is None or q == c:
+        return False
+    (qy, qm, qd), (cy, cm, cd) = q, c
+    same_day_month = (cm, cd) == (qm, qd)
+    swapped = cy == qy and cm == qd and cd == qm
+    transposed = (
+        qy != cy and qy // 100 == cy // 100
+        and (qy % 100) // 10 == cy % 10 and qy % 10 == (cy % 100) // 10
+    )
+    return swapped or (same_day_month and abs(cy - qy) == 1) or (same_day_month and transposed)
+
+
+def perturb_dob_any(dob: str, rng: random.Random) -> str:
+    """A date of birth that is simply WRONG — any other valid date, 1930-2025 — rather than one
+    of the slips `is_dob_near_miss` knows. The control for the near-miss key: the `dob` arm uses
+    exactly the slips that key rewards, so it cannot say what happens outside them.
+    """
+    while True:
+        other = f"{rng.randint(1930, 2025):04d}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
+        if other != dob:
+            return other
+
+
+def perturb_name(name: str, rng: random.Random) -> str:
+    """The commonest real duplicate (maintainer, #671): a TYPO in a hard-to-spell name. One
+    interior character of the last word becomes a different lowercase letter, length kept.
+
+    `db/046` matches whole tokens, so the misspelt token no longer matches; the chart is still
+    found through its OTHER keys (the given name, an exact DOB). The arms record how often it
+    is shown; what no prompt can show — every token misspelt AND the date wrong — is the §5.2
+    matcher's and the link-repair path's (ADR-0075 decision 2).
+    """
+    words = name.split()
+    last = words[-1]
+    if len(last) < 3:
+        return name
+    i = rng.randrange(1, len(last) - 1)
+    replacement = rng.choice([ch for ch in "abcdefghijklmnopqrstuvwxyz" if ch != last[i].lower()])
+    words[-1] = last[:i] + replacement + last[i + 1 :]
+    return " ".join(words)
 
 
 def perturb_dob(dob: str) -> str:
@@ -143,33 +230,42 @@ def perturb_dob(dob: str) -> str:
 
 
 def position(order: list[str], pid: str) -> int:
-    """1-based position of `pid` in `order`."""
-    return order.index(pid) + 1
+    """1-based position of `pid` in `order`, or a sentinel past any cap when it is absent (the
+    name-typo arm, where the search usually does not find the chart at all)."""
+    return order.index(pid) + 1 if pid in order else 10**9
 
 
 def summarise(results: list[dict], cap: int) -> dict[str, object]:
     """Reduce per-search results to the figures the result file reports.
 
-    Each result is `{"self": id, "rows": [(id, passes), ...]}` — the candidates one step-3
-    search returned, with how many passes each matched.
+    Each result is `{"self": id, "rows": [Row, ...]}` — the candidates one step-3 search
+    returned, each with its passes, name tokens matched and DOB near-miss.
     """
     counts = [len(r["rows"]) for r in results]
-    by_id = [position(sorted(pid for pid, _ in r["rows"]), r["self"]) for r in results]
+    found = [r for r in results if r["self"] in {row[0] for row in r["rows"]}]
+    by_id = [position(sorted(row[0] for row in r["rows"]), r["self"]) for r in results]
+    by_passes = [position(rank_by_passes(r["rows"]), r["self"]) for r in results]
     ranked = [position(rank(r["rows"]), r["self"]) for r in results]
-    strong = [sum(1 for _, p in r["rows"] if p >= 2) for r in results]
+    strong = [sum(1 for row in r["rows"] if row[1] >= 2) for r in results]
+
+    def median_found(positions: list[int]) -> object:
+        inside = [p for p in positions if p < 10**9]
+        return statistics.median(inside) if inside else None
+
     return {
         "searches": len(results),
         "candidates_median": statistics.median(counts),
         "candidates_p90": sorted(counts)[int(0.9 * (len(counts) - 1))],
         "candidates_max": max(counts),
         "truncated": sum(1 for c in counts if c > cap),
+        "self_in_candidate_set": len(found),
         "self_in_cap_by_id": sum(1 for p in by_id if p <= cap),
+        "self_in_cap_passes_only": sum(1 for p in by_passes if p <= cap),
         "self_in_cap_ranked": sum(1 for p in ranked if p <= cap),
-        "self_rank_by_id_median": statistics.median(by_id),
-        "self_rank_ranked_median": statistics.median(ranked),
-        # Searches where MORE than `cap` candidates matched two or more passes: the prompt
-        # truncates among strong matches too, and the self-match can then be cut on id order.
-        "strong_over_cap": sum(1 for s in strong if s > cap),
+        "self_rank_passes_only_median": median_found(by_passes),
+        "self_rank_ranked_median": median_found(ranked),
+        # Searches where MORE than `cap` candidates matched two or more passes.
+        "strong_over_cap": sum(1 for x in strong if x > cap),
     }
 
 
@@ -220,20 +316,45 @@ def self_test() -> int:
         query_tokens("O'Brien-Smith, John")
     )
     assert query_tokens("  Wu   Ling ") == ["ling", "wu"]
-    # Twin of rank_by_passes_matched, on the Rust unit test's own example.
-    assert rank([("1", 1), ("3", 1), ("2", 2)]) == ["2", "1", "3"]
-    assert rank([("b", 1), ("a", 1), ("c", 2)]) == ["c", "a", "b"]
+    # Twin of the 2c order (passes, then id) — kept to report before/after in one run.
+    assert rank_by_passes([("1", 1, 0, False), ("3", 1, 0, False), ("2", 2, 0, False)]) == ["2", "1", "3"]
+    # Twin of cairn_patient_search::rank (the Rust unit tests' own examples).
+    assert tokens_matched(["john", "smith"], ["john smith"]) == 2
+    assert tokens_matched(["john", "smith"], ["john brown"]) == 1
+    assert tokens_matched(["john", "john"], ["john smith"]) == 1
+    assert tokens_matched(["john"], []) == 0
+    assert is_dob_near_miss("1980-03-07", "1980-07-03")
+    assert is_dob_near_miss("1980-03-07", "1979-03-07")
+    assert is_dob_near_miss("1967-05-20", "1976-05-20")
+    assert not is_dob_near_miss("1967-05-20", "1977-05-20")
+    assert not is_dob_near_miss("1980-03-07", "1980-03-07")
+    assert not is_dob_near_miss("1980", "1981")
+    assert not is_dob_near_miss("1980-02-30", "1980-30-02")
+    assert not is_dob_near_miss("1980-03-07", "1982-03-07")
+    assert rank([("1", 1, 2, True), ("2", 2, 0, False)]) == ["2", "1"]
+    assert rank([("1", 1, 1, False), ("2", 1, 2, False)]) == ["2", "1"]
+    assert rank([("1", 1, 2, False), ("2", 1, 2, True)]) == ["2", "1"]
+    assert rank([("20", 1, 1, False), ("10", 1, 1, False)]) == ["10", "20"]
+    # The name-typo arm: exactly one character of the LAST word changes, deterministically.
+    t = perturb_name("John Smith", random.Random(1))
+    assert t.split()[0] == "John" and t != "John Smith" and len(t) == len("John Smith"), t
+    assert perturb_name("John Smith", random.Random(1)) == t, "deterministic under a seed"
+    assert perturb_dob_any("1980-03-07", random.Random(1)) != "1980-03-07"
     s = summarise(
         [
-            {"self": "x", "rows": [("a", 1), ("b", 1), ("x", 2)]},
-            {"self": "y", "rows": [("y", 2)]},
+            {"self": "x", "rows": [("a", 1, 2, False), ("b", 1, 0, False), ("x", 2, 1, False)]},
+            {"self": "y", "rows": [("y", 2, 2, False)]},
         ],
         cap=2,
     )
     assert s["searches"] == 2
     assert s["truncated"] == 1, s
     assert s["self_in_cap_by_id"] == 1, s  # x is 3rd by id; y is 1st
+    assert s["self_in_cap_passes_only"] == 2, s
     assert s["self_in_cap_ranked"] == 2, s
+    assert s["self_in_candidate_set"] == 2, s
+    lost = summarise([{"self": "z", "rows": [("a", 1, 1, False)]}], cap=2)
+    assert lost["self_in_candidate_set"] == 0 and lost["self_in_cap_ranked"] == 0, lost
     assert s["strong_over_cap"] == 0, s
     sql = seed_sql([("00000000-0000-0000-0000-000000000001", "O'Brien Ann", "1980")])
     assert "'O''Brien Ann'" in sql[0] and "'1980'" in sql[1]
@@ -258,9 +379,11 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=20260923)
     ap.add_argument(
         "--perturb",
-        choices=["none", "dob"],
+        choices=["none", "dob", "dob-any", "name", "both", "both-any"],
         default="none",
-        help="'dob': query each sampled patient with a mis-typed date of birth (see perturb_dob)",
+        help="'dob': a mis-typed date of birth (perturb_dob); 'name': a typo in the last name "
+        "(perturb_name); 'both': the two slips at once; '*-any': the date simply wrong "
+        "(perturb_dob_any), the near-miss key's control",
     )
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
@@ -297,22 +420,45 @@ def main() -> int:
         count_sql = f"SELECT count(*) FROM patient_name WHERE asserted_origin = '{ORIGIN}'"
         before = scalar(conn, count_sql)
         samples = rng.sample(people, args.samples)
-        queried = (
-            [(pid, name, perturb_dob(dob)) for pid, name, dob in samples]
-            if args.perturb == "dob"
-            else samples
-        )
+        if args.perturb == "dob":
+            queried = [(pid, name, perturb_dob(dob)) for pid, name, dob in samples]
+        elif args.perturb == "name":
+            queried = [(pid, perturb_name(name, rng), dob) for pid, name, dob in samples]
+        elif args.perturb == "both":
+            queried = [(pid, perturb_name(name, rng), perturb_dob(dob)) for pid, name, dob in samples]
+        elif args.perturb == "dob-any":
+            queried = [(pid, name, perturb_dob_any(dob, rng)) for pid, name, dob in samples]
+        elif args.perturb == "both-any":
+            queried = [
+                (pid, perturb_name(name, rng), perturb_dob_any(dob, rng)) for pid, name, dob in samples
+            ]
+        else:
+            queried = samples
         out = psql(conn, batch_query_sql(queried))
         after = scalar(conn, count_sql)
         if before != after or int(before) != len(people):
             raise SystemExit(f"population changed mid-run ({before} -> {after}); refusing to report")
-        rows: dict[int, list[tuple[str, int]]] = {i: [] for i in range(len(samples))}
+        # The ranking keys are computed from the population this rig seeded, exactly as
+        # `search_rank.rs` computes them from `patient_name` / `patient_demographic`.
+        name_of = {pid: name for pid, name, _ in people}
+        dob_of = {pid: dob for pid, _, dob in people}
+        rows: dict[int, list[Row]] = {i: [] for i in range(len(samples))}
         for line in out.splitlines():
             i, pid, passes = line.split("|")
-            rows[int(i)].append((pid, int(passes)))
+            _, q_name, q_dob = queried[int(i)]
+            rows[int(i)].append(
+                (
+                    pid,
+                    int(passes),
+                    tokens_matched(query_tokens(q_name), [name_of[pid]]),
+                    is_dob_near_miss(q_dob, dob_of[pid]),
+                )
+            )
         results = [{"self": samples[i][0], "rows": rows[i]} for i in range(len(samples))]
-        missing = [r for r in results if r["self"] not in {pid for pid, _ in r["rows"]}]
-        if missing:
+        missing = [r for r in results if r["self"] not in {row[0] for row in r["rows"]}]
+        # A typo'd name usually leaves the candidate set entirely: that is a RESULT of the name
+        # arm (reported as self_in_candidate_set), and a rig defect for every other arm.
+        if missing and args.perturb not in ("name", "both", "both-any"):
             raise SystemExit(f"{len(missing)} searches did not find their own chart; the rig is wrong")
         summary = summarise(results, PROMPT_CAP)
         summary.update(

@@ -21,8 +21,10 @@ Slice 2c measured the step-3 prompt over 50,000 real names
 - Ranking by passes matched puts an **exactly-typed** duplicate first 500/500, but a duplicate typed
   with a **wrong DOB** is shown only 100/500: it matches the name pass alone, which counts once
   however many name tokens matched, so it ties with ~100 namesakes and falls to chart-age order.
-- A duplicate with a **typo in the name** ("Smyth" for "Smith") never enters the candidate set at all;
-  no prompt logic can show it.
+- A duplicate with a **typo in a name token** ("Smyth" for "Smith") loses that token's match and can
+  be found only through its other keys; with every token misspelt it is not found at all, and no
+  prompt logic can show it. *(Corrected 2026-09-26 by measurement: a one-token surname typo is still
+  FOUND through the given name and the DOB — see the result file.)*
 
 ## The maintainer's framing (decided in the brainstorm)
 
@@ -81,7 +83,7 @@ pinned against the Rust unit examples (self-test). Runs over the same 50,000 rea
 |---|---|---|
 | exact name + DOB | 500/500 | stays 500/500 |
 | name + wrong DOB (`--perturb dob`) | 100/500 | close to 500/500 |
-| surname typo (`--perturb name`, new) | not measured | **recorded, not optimised** — the case only the matcher/repair path can catch |
+| surname typo (`--perturb name`, new) | not measured | **recorded, not optimised** — plus `both`, `dob-any` and `both-any` arms added while measuring, to find where the prompt stops helping |
 
 ## Testing (TDD)
 
