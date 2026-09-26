@@ -33,7 +33,7 @@
 //! driver feature, and every other jsonb parameter in this crate already uses the text-cast
 //! idiom, so following it here keeps the binding convention uniform rather than one-off.
 
-use super::search_rank::{normalise_query_tokens, rank_keys, read_retained_names};
+use super::search_rank::{normalise_query_tokens, rank_keys, read_retained_names, MatchedPasses};
 use cairn_patient_search::{
     age_years, rank_candidates, Age, Candidate, CandidateList, SearchQuery, TrustState,
 };
@@ -64,7 +64,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
     }
 
     let passes = read_candidate_passes(client, query).await?;
-    let ids: Vec<Uuid> = passes.iter().map(|(id, _)| *id).collect();
+    let ids: Vec<Uuid> = passes.iter().map(|p| p.id).collect();
     if ids.is_empty() {
         return Ok(empty_list());
     }
@@ -189,7 +189,7 @@ fn trust_state_from_db(trust_state: &str) -> TrustState {
 }
 
 /// Call `cairn_search_candidates` once and return each DISTINCT patient id it names with how
-/// many passes it matched, in id order. The DISPLAY order is decided later, in
+/// many passes it matched and whether the identifier pass is one of them, in id order. The DISPLAY order is decided later, in
 /// [`search_patients`], by `cairn_patient_search::rank_candidates` over `search_rank::rank_keys` — in
 /// Rust rather than depended on from the database, the same reasoning `medication/read.rs`
 /// gives for sorting query results itself.
@@ -202,7 +202,7 @@ fn trust_state_from_db(trust_state: &str) -> TrustState {
 async fn read_candidate_passes<C: GenericClient + Sync>(
     client: &C,
     query: &SearchQuery,
-) -> anyhow::Result<Vec<(Uuid, u32)>> {
+) -> anyhow::Result<Vec<MatchedPasses>> {
     let identifiers: Vec<serde_json::Value> = query
         .identifiers
         .iter()
@@ -216,25 +216,30 @@ async fn read_candidate_passes<C: GenericClient + Sync>(
             // db/046's outer UNION dedups on (patient_id, matched_pass), so one patient comes
             // back once per pass it matched. Counting per patient therefore counts the DISTINCT
             // passes it matched (1..=3); the `DISTINCT` inside the count states that rather
-            // than relying on it.
-            "SELECT patient_id::text AS patient_id, count(DISTINCT matched_pass) AS passes \
+            // than relying on it. `bool_or` asks the ranking's second question of the same rows:
+            // did the IDENTIFIER pass find this chart (ADR-0075, review of #678)?
+            "SELECT patient_id::text AS patient_id, count(DISTINCT matched_pass) AS passes, \
+                    bool_or(matched_pass = 'identifier') AS identifier_matched \
              FROM cairn_search_candidates($1, $2, $3::text::jsonb) \
              GROUP BY patient_id",
             &[&query.name_tokens, &birth_date, &identifiers_json],
         )
         .await?;
 
-    let mut rows: Vec<(Uuid, u32)> = rows
+    let mut rows: Vec<MatchedPasses> = rows
         .iter()
         .map(|row| {
-            let id = row.get::<_, String>("patient_id").parse::<Uuid>()?;
-            // 1..=3 by construction (three passes), so the narrowing cannot truncate.
-            Ok((id, row.get::<_, i64>("passes") as u32))
+            Ok(MatchedPasses {
+                id: row.get::<_, String>("patient_id").parse::<Uuid>()?,
+                // 1..=3 by construction (three passes), so the narrowing cannot truncate.
+                passes: row.get::<_, i64>("passes") as u32,
+                identifier_matched: row.get::<_, bool>("identifier_matched"),
+            })
         })
         .collect::<Result<_, uuid::Error>>()?;
     // Id order only, so the reads below see a deterministic list; the order SHOWN is
     // decided by the ranking.
-    rows.sort();
+    rows.sort_by_key(|p| p.id);
     Ok(rows)
 }
 

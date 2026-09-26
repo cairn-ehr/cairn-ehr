@@ -12,18 +12,25 @@
 //! # The keys, strongest first
 //!
 //! 1. `passes` — how many of db/046's passes matched (identifier / DOB / name).
-//! 2. `tokens_matched` — how many DISTINCT query name tokens the chart's retained names
-//!    contain. db/046's name pass counts ONCE however many tokens matched, so without this
-//!    key "John Brown" ties "John Smith" for a "John Smith" query.
-//! 3. `dob_near_miss` — the chart's DOB is the query's with a typical slip (day/month
-//!    swapped, year ±1, last two year digits transposed). This is what lifts a duplicate
-//!    typed with a WRONG date of birth, which matches the name pass alone.
-//! 4. `id` ascending — UUIDv7, so chart age: a stable, deterministic final tie-break.
+//! 2. `identifier_matched` — the identifier pass is among them. An identifier is the one
+//!    near-unique key a clerk types; a chart found ONLY by it (a nickname plus a married
+//!    surname) shares no name token, so without this key it sank below every one-token
+//!    namesake and was cut from the prompt (review of #678).
+//! 3. `tokens_matched` — how many DISTINCT query name tokens match the chart's retained names,
+//!    exactly or as a typed prefix, as db/046 matches them. db/046's name pass counts ONCE
+//!    however many tokens matched, so without this key "John Brown" ties "John Smith" for a
+//!    "John Smith" query.
+//! 4. `dob_near_miss` — the chart's DOB is the query's with a typical slip (day/month
+//!    swapped, year ±1, last two year digits transposed). Measured, the name-token key does
+//!    most of the lifting for a duplicate typed with a wrong DOB; this key decides it once a
+//!    name token is lost too (a surname typo AND a DOB slip).
+//! 5. `id` ascending — UUIDv7, so chart age: a stable, deterministic final tie-break.
 //!
 //! # Stated limit
 //!
-//! Keys 2 and 3 are computed here, in Rust, over names Postgres has normalised. They may
-//! drift from db/046's own SQL expression. That can only worsen the ORDER, never lose a
+//! Keys 3 and 4 are computed here, in Rust, over names Postgres has normalised. Key 3 mirrors
+//! db/046's name pass — exact OR a prefix of at least 3 bytes, callsigns never split — but
+//! tokenises in Rust, so it may drift from db/046's own SQL expression. That can only worsen the ORDER, never lose a
 //! candidate — which is why it is stated rather than pinned by a cross-language twin.
 use crate::candidate::parse_ymd;
 use crate::query::name_tokens;
@@ -37,23 +44,40 @@ pub struct RankKey {
     pub id: Uuid,
     /// Distinct db/046 passes this chart matched (1..=3).
     pub passes: u32,
+    /// True when db/046's IDENTIFIER pass is among the passes this chart matched.
+    pub identifier_matched: bool,
     /// See [`tokens_matched`].
     pub tokens_matched: usize,
     /// See [`is_dob_near_miss`].
     pub dob_near_miss: bool,
 }
 
-/// How many DISTINCT plain `query_tokens` appear among the tokens of ANY of `stored_names`.
+/// How many DISTINCT plain `query_tokens` match a token of ANY of `stored_names`.
 ///
 /// `stored_names` are the chart's retained names, already lowercased and NFC-normalised by
-/// Postgres; each is tokenised by [`name_tokens`] — the SAME rule the query was.
+/// Postgres, with §5.4 callsigns already left out by the caller (see "Mirrors db/046" below);
+/// each is tokenised by [`name_tokens`] — the SAME rule the query was.
+///
+/// **A query token matches a stored token the two ways db/046's name pass does:** it EQUALS
+/// it, or — when the query token is at least [`MIN_PREFIX_BYTES`] bytes long — the stored
+/// token STARTS WITH it. The prefix arm is #636's "a clerk types a fragment": "Alex" finds
+/// "Alexander", so it must also count toward how strongly "Alexander" matched, or the
+/// duplicate a clerk found by typing a short first name ties every namesake (review of #678).
 ///
 /// **Only PLAIN tokens (every character alphanumeric) are counted.** [`name_tokens`] emits a
 /// punctuated word three ways — "mary-jane" plus "mary" and "jane" — so counting every token
 /// let a hyphenated given name score three against a surname's one, and "Mary-Jane Brown"
 /// tied the real "Mary Jane Smith" duplicate (final review, #671). Both sides emit a
-/// punctuated word's parts, so a whole form's match is always also a match of its parts:
-/// skipping the whole form loses nothing and counts each part once.
+/// punctuated word's parts, so a whole form's match is normally also a match of its parts:
+/// skipping the whole form counts each part once.
+///
+/// # Mirrors db/046, callsigns included
+///
+/// db/046 never splits a callsign ("unknown-ed-site1-…") into parts, and refuses it the prefix
+/// arm, so a clerk typing "Ed" does not match every John Doe on the node. A callsign is always
+/// dash-joined, so no PLAIN query token can equal it whole: under db/046's rules it contributes
+/// nothing to this count. The caller therefore leaves callsigns out of `stored_names` rather
+/// than this function carrying a `use` flag it would only ever use to skip them.
 pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize {
     let stored: HashSet<String> = stored_names.iter().flat_map(|n| name_tokens(n)).collect();
     let distinct_plain_query: HashSet<&String> = query_tokens
@@ -62,8 +86,18 @@ pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize
         .collect();
     distinct_plain_query
         .into_iter()
-        .filter(|t| stored.contains(*t))
+        .filter(|t| stored.iter().any(|s| token_matches(t, s)))
         .count()
+}
+
+/// db/046's prefix gate, in BYTES (its `octet_length(q.qt) >= 3`, #638): UTF-8 spends 3 bytes
+/// on an ideograph and 1 on a Latin letter, so "李小" (6) is admitted and "al" (2) is not.
+pub const MIN_PREFIX_BYTES: usize = 3;
+
+/// One query token against one stored token: equal, or a long-enough prefix (db/046 pass 3).
+fn token_matches(query_token: &str, stored_token: &str) -> bool {
+    query_token == stored_token
+        || (query_token.len() >= MIN_PREFIX_BYTES && stored_token.starts_with(query_token))
 }
 
 /// True when `candidate` is `query` with one of the commonest date-of-birth slips.
@@ -98,6 +132,8 @@ pub fn rank_candidates(mut keys: Vec<RankKey>) -> Vec<Uuid> {
     keys.sort_by(|a, b| {
         b.passes
             .cmp(&a.passes)
+            // `bool` orders false < true, so comparing b to a puts an identifier match first.
+            .then(b.identifier_matched.cmp(&a.identifier_matched))
             .then(b.tokens_matched.cmp(&a.tokens_matched))
             // `bool` orders false < true, so comparing b to a puts a near-miss first.
             .then(b.dob_near_miss.cmp(&a.dob_near_miss))
@@ -117,8 +153,15 @@ mod tests {
         RankKey {
             id: Uuid::from_u128(n),
             passes,
+            identifier_matched: false,
             tokens_matched,
             dob_near_miss,
+        }
+    }
+    fn identifier_key(n: u128, passes: u32, tokens_matched: usize) -> RankKey {
+        RankKey {
+            identifier_matched: true,
+            ..key(n, passes, tokens_matched, false)
         }
     }
 
@@ -175,6 +218,34 @@ mod tests {
         assert!(duplicate > other, "duplicate {duplicate} must beat {other}");
     }
 
+    /// Review of #678: db/046's name pass also matches a typed PREFIX of a stored token (#636 —
+    /// "a clerk types a fragment"). Counting only exact tokens scored the "Alex" of an
+    /// "Alexander Nguyen" duplicate zero, tying it with every other Nguyen.
+    #[test]
+    fn a_typed_prefix_of_a_stored_token_counts() {
+        assert_eq!(
+            tokens_matched(&s(&["alex", "nguyen"]), &s(&["alexander nguyen"])),
+            2
+        );
+    }
+
+    /// The prefix counts under db/046's own gate — at least 3 BYTES, not characters (#638) — so
+    /// a Latin two-letter fragment does not count, and a two-character Han prefix does.
+    #[test]
+    fn a_prefix_counts_only_from_three_bytes() {
+        assert_eq!(
+            tokens_matched(&s(&["al", "nguyen"]), &s(&["alexander nguyen"])),
+            1
+        );
+        assert_eq!(tokens_matched(&s(&["李小"]), &s(&["李小明"])), 1);
+    }
+
+    #[test]
+    fn a_short_token_still_counts_by_exact_match() {
+        // The 3-byte gate is on the PREFIX arm only, exactly as in db/046: "Wu" stays countable.
+        assert_eq!(tokens_matched(&s(&["wu", "li"]), &s(&["wu li"])), 2);
+    }
+
     #[test]
     fn day_and_month_swapped_is_a_near_miss() {
         assert!(is_dob_near_miss("1980-03-07", "1980-07-03"));
@@ -222,6 +293,22 @@ mod tests {
     #[test]
     fn more_passes_rank_first() {
         let r = rank_candidates(vec![key(1, 1, 2, true), key(2, 2, 0, false)]);
+        assert_eq!(r, vec![Uuid::from_u128(2), Uuid::from_u128(1)]);
+    }
+
+    /// Review of #678: an identifier is the one near-unique key a clerk types. A chart found
+    /// ONLY by it ("Peggy Jones" for a "Margaret Smith" query: nickname and married surname)
+    /// shares no name token, so ranking by tokens alone put it below every one-token namesake
+    /// and cut it from the prompt. Within equal passes, the identifier match comes first.
+    #[test]
+    fn within_equal_passes_an_identifier_match_ranks_first() {
+        let r = rank_candidates(vec![key(1, 1, 2, true), identifier_key(2, 1, 0)]);
+        assert_eq!(r, vec![Uuid::from_u128(2), Uuid::from_u128(1)]);
+    }
+
+    #[test]
+    fn more_passes_still_outrank_an_identifier_match() {
+        let r = rank_candidates(vec![identifier_key(1, 1, 0), key(2, 2, 2, false)]);
         assert_eq!(r, vec![Uuid::from_u128(2), Uuid::from_u128(1)]);
     }
 

@@ -11,6 +11,18 @@ use std::collections::HashMap;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
+/// What db/046 said about ONE candidate: how many of its passes found the chart, and whether
+/// the identifier pass is among them. Read by `search::read_candidate_passes`; the first two
+/// ranking keys come straight from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MatchedPasses {
+    pub(super) id: Uuid,
+    /// Distinct passes matched (1..=3).
+    pub(super) passes: u32,
+    /// True when the identifier pass found this chart.
+    pub(super) identifier_matched: bool,
+}
+
 /// Build one [`RankKey`] per candidate from the reads `search_patients` already made. Pure:
 /// the keys and their order are `cairn_patient_search::rank`'s; this only gathers inputs.
 ///
@@ -32,7 +44,7 @@ use uuid::Uuid;
 /// projects, so a chart whose DOB was later corrected is scored against the corrected value
 /// only. Ordering only; widening it would mean reading the DOB assertion history.
 pub(super) fn rank_keys(
-    passes: &[(Uuid, u32)],
+    passes: &[MatchedPasses],
     query_tokens: &[String],
     query: &SearchQuery,
     retained: &HashMap<Uuid, Vec<String>>,
@@ -40,16 +52,17 @@ pub(super) fn rank_keys(
 ) -> Vec<RankKey> {
     passes
         .iter()
-        .map(|(id, n)| RankKey {
-            id: *id,
-            passes: *n,
+        .map(|p| RankKey {
+            id: p.id,
+            passes: p.passes,
+            identifier_matched: p.identifier_matched,
             // A candidate with no retained name (a DOB- or identifier-only match) matches no
             // tokens — it is ranked lower, never dropped.
             tokens_matched: tokens_matched(
                 query_tokens,
-                retained.get(id).map(Vec::as_slice).unwrap_or_default(),
+                retained.get(&p.id).map(Vec::as_slice).unwrap_or_default(),
             ),
-            dob_near_miss: match (query.birth_date.as_deref(), dobs.get(id)) {
+            dob_near_miss: match (query.birth_date.as_deref(), dobs.get(&p.id)) {
                 (Some(typed), Some((stored, _provenance))) => is_dob_near_miss(typed, stored),
                 _ => false,
             },
@@ -63,6 +76,12 @@ pub(super) fn rank_keys(
 /// Reads `patient_name`, NOT `patient_name_current`, for db/046's own reason (#349): a
 /// repudiated alias is exactly how a fabricated persona's chart is FOUND, so it must also
 /// count toward how strongly it matched. A candidate with no row simply gets no entry.
+///
+/// §5.4 CALLSIGNS ARE LEFT OUT, mirroring db/046: its name pass never splits a callsign into
+/// parts and refuses it the prefix arm, so "Ed" matches no John Doe's "unknown-n-ed-site1-…".
+/// A callsign is dash-joined, so the only way it matches under db/046 is typed whole — a
+/// punctuated token `tokens_matched` does not count anyway. Reading it here would only let
+/// `name_tokens` split it into "unknown", "ed", "site1" and count what db/046 refuses.
 pub(super) async fn read_retained_names<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
@@ -70,7 +89,8 @@ pub(super) async fn read_retained_names<C: GenericClient + Sync>(
     let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
     let sql = "SELECT patient_id::text AS patient_id, lower(normalize(value, NFC)) AS value \
                FROM patient_name \
-               WHERE patient_id = ANY($1::text[]::uuid[])";
+               WHERE patient_id = ANY($1::text[]::uuid[]) \
+                 AND use_key <> 'callsign'";
     let mut out: HashMap<Uuid, Vec<String>> = HashMap::new();
     for row in client.query(sql, &[&id_strs]).await? {
         let id: Uuid = row.get::<_, String>("patient_id").parse()?;
