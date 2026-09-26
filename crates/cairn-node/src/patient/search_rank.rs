@@ -6,7 +6,9 @@
 //! `cairn_patient_search::rank`; this module only reads what that rule needs — every retained
 //! name and the query's tokens, both normalised by Postgres — and assembles one `RankKey` per
 //! candidate. Nothing read here is ever displayed.
-use cairn_patient_search::{is_dob_near_miss, tokens_matched, RankKey, SearchQuery};
+use cairn_patient_search::{
+    is_dob_near_miss, tokens_exactly_matched, tokens_matched, RankKey, SearchQuery,
+};
 use std::collections::HashMap;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -52,20 +54,21 @@ pub(super) fn rank_keys(
 ) -> Vec<RankKey> {
     passes
         .iter()
-        .map(|p| RankKey {
-            id: p.id,
-            passes: p.passes,
-            identifier_matched: p.identifier_matched,
+        .map(|p| {
             // A candidate with no retained name (a DOB- or identifier-only match) matches no
             // tokens — it is ranked lower, never dropped.
-            tokens_matched: tokens_matched(
-                query_tokens,
-                retained.get(&p.id).map(Vec::as_slice).unwrap_or_default(),
-            ),
-            dob_near_miss: match (query.birth_date.as_deref(), dobs.get(&p.id)) {
-                (Some(typed), Some((stored, _provenance))) => is_dob_near_miss(typed, stored),
-                _ => false,
-            },
+            let names = retained.get(&p.id).map(Vec::as_slice).unwrap_or_default();
+            RankKey {
+                id: p.id,
+                passes: p.passes,
+                identifier_matched: p.identifier_matched,
+                tokens_matched: tokens_matched(query_tokens, names),
+                dob_near_miss: match (query.birth_date.as_deref(), dobs.get(&p.id)) {
+                    (Some(typed), Some((stored, _provenance))) => is_dob_near_miss(typed, stored),
+                    _ => false,
+                },
+                tokens_exact: tokens_exactly_matched(query_tokens, names),
+            }
         })
         .collect()
 }

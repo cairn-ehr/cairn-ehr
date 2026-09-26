@@ -43,7 +43,7 @@ matcher and the link-repair path.
 
 **Ranking is recomputed here, not read from `search_patients`.** `rank()` is the Python twin of
 `cairn_patient_search::rank_candidates` (ADR-0075: passes, then an identifier match, then name
-tokens matched, then DOB near-miss, then id), `rank_v1()` of that order before the PR #678 review
+tokens matched, then DOB near-miss, then exactly-matched tokens, then id), `rank_v1()` of that order before the PR #678 review
 added the identifier key, and `rank_by_passes()` of slice 2c's order, so one run reports before and
 after. All three are pinned by the self-test on the Rust unit tests' own examples. The pass counts
 themselves come from the real `cairn_search_candidates`.
@@ -141,8 +141,9 @@ def query_tokens(raw_name: str) -> list[str]:
     return sorted(tokens)
 
 
-# A candidate row: (id, passes matched, identifier pass matched, name tokens matched, DOB near-miss).
-Row = tuple[str, int, bool, int, bool]
+# A candidate row: (id, passes matched, identifier pass matched, name tokens matched, DOB
+# near-miss, name tokens matched EXACTLY — the tie-break under the rest).
+Row = tuple[str, int, bool, int, bool, int]
 
 
 def rank_by_passes(rows: list[Row]) -> list[str]:
@@ -152,9 +153,11 @@ def rank_by_passes(rows: list[Row]) -> list[str]:
 
 def rank(rows: list[Row]) -> list[str]:
     """The Python twin of `cairn_patient_search::rank_candidates` (ADR-0075): passes DESC, then
-    an identifier match first, then name tokens matched DESC, then DOB near-miss first, then id
-    ASC."""
-    return [r[0] for r in sorted(rows, key=lambda r: (-r[1], not r[2], -r[3], not r[4], r[0]))]
+    an identifier match first, then name tokens matched DESC, then DOB near-miss first, then
+    exactly-matched tokens DESC, then id ASC."""
+    return [
+        r[0] for r in sorted(rows, key=lambda r: (-r[1], not r[2], -r[3], not r[4], -r[5], r[0]))
+    ]
 
 
 def rank_v1(rows: list[Row]) -> list[str]:
@@ -173,7 +176,8 @@ def tokens_matched(query: list[str], stored_names: list[str], prefix: bool = Tru
     A query token matches a stored token as db/046's name pass matches it: equal, or — at least
     `MIN_PREFIX_BYTES` UTF-8 bytes long — a prefix of it (#636, #638; review of #678). The rig
     seeds no callsigns, so `search_rank.rs`'s callsign exclusion has nothing to twin here.
-    `prefix=False` is the exact-only count ADR-0075 first shipped, kept for `rank_v1`."""
+    `prefix=False` is the exact-only count: ADR-0075's first version (kept for `rank_v1`), and
+    `rank`'s final tie-break (twin of `tokens_exactly_matched`)."""
     stored: set[str] = set()
     for name in stored_names:
         stored.update(query_tokens(unicodedata.normalize("NFC", name).lower()))
@@ -408,7 +412,7 @@ def self_test() -> int:
     assert query_tokens("  Wu   Ling ") == ["ling", "wu"]
     # Twin of the 2c order (passes, then id) — kept to report before/after in one run.
     assert rank_by_passes(
-        [("1", 1, False, 0, False), ("3", 1, False, 0, False), ("2", 2, False, 0, False)]
+        [("1", 1, False, 0, False, 0), ("3", 1, False, 0, False, 0), ("2", 2, False, 0, False, 0)]
     ) == ["2", "1", "3"]
     # Twin of cairn_patient_search::rank (the Rust unit tests' own examples).
     assert tokens_matched(["john", "smith"], ["john smith"]) == 2
@@ -433,15 +437,18 @@ def self_test() -> int:
     # The order as first reviewed counted exact tokens only — kept for the before/after figures.
     assert tokens_matched(["alex", "nguyen"], ["alexander nguyen"], prefix=False) == 1
     # Rows are (id, passes, identifier matched, tokens matched, DOB near-miss).
-    assert rank([("1", 1, False, 2, True), ("2", 2, False, 0, False)]) == ["2", "1"]
-    assert rank([("1", 1, False, 1, False), ("2", 1, False, 2, False)]) == ["2", "1"]
-    assert rank([("1", 1, False, 2, False), ("2", 1, False, 2, True)]) == ["2", "1"]
-    assert rank([("20", 1, False, 1, False), ("10", 1, False, 1, False)]) == ["10", "20"]
+    assert rank([("1", 1, False, 2, True, 2), ("2", 2, False, 0, False, 0)]) == ["2", "1"]
+    assert rank([("1", 1, False, 1, False, 1), ("2", 1, False, 2, False, 2)]) == ["2", "1"]
+    assert rank([("1", 1, False, 2, False, 2), ("2", 1, False, 2, True, 2)]) == ["2", "1"]
+    assert rank([("20", 1, False, 1, False, 1), ("10", 1, False, 1, False, 1)]) == ["10", "20"]
     # Review of #678: within equal passes an identifier match comes first; more passes still win.
-    assert rank([("1", 1, False, 2, True), ("2", 1, True, 0, False)]) == ["2", "1"]
-    assert rank([("1", 1, True, 0, False), ("2", 2, False, 2, False)]) == ["2", "1"]
+    assert rank([("1", 1, False, 2, True, 2), ("2", 1, True, 0, False, 0)]) == ["2", "1"]
+    assert rank([("1", 1, True, 0, False, 0), ("2", 2, False, 2, False, 2)]) == ["2", "1"]
+    # Within equal tokens and near-miss, EXACT tokens break the tie over prefix-only ones.
+    assert rank([("1", 1, False, 1, False, 0), ("2", 1, False, 1, False, 1)]) == ["2", "1"]
+    assert rank([("1", 1, False, 2, True, 1), ("2", 1, False, 2, False, 2)]) == ["1", "2"]
     # ...and the order as first reviewed, kept to report before/after, ignores the identifier.
-    assert rank_v1([("1", 1, False, 2, True), ("2", 1, True, 0, False)]) == ["1", "2"]
+    assert rank_v1([("1", 1, False, 2, True, 2), ("2", 1, True, 0, False, 0)]) == ["1", "2"]
     # The shortened-given-name arm: a strict prefix of the first word, at least 3 characters.
     short = perturb_given_prefix("Alexander Nguyen", random.Random(1))
     first = short.split()[0]
@@ -455,8 +462,8 @@ def self_test() -> int:
     assert perturb_dob_any("1980-03-07", random.Random(1)) != "1980-03-07"
     s = summarise(
         [
-            {"self": "x", "rows": [("a", 1, False, 2, False), ("b", 1, False, 0, False), ("x", 2, False, 1, False)]},
-            {"self": "y", "rows": [("y", 2, False, 2, False)]},
+            {"self": "x", "rows": [("a", 1, False, 2, False, 2), ("b", 1, False, 0, False, 0), ("x", 2, False, 1, False, 1)]},
+            {"self": "y", "rows": [("y", 2, False, 2, False, 2)]},
         ],
         cap=2,
     )
@@ -468,12 +475,12 @@ def self_test() -> int:
     assert s["self_in_candidate_set"] == 2, s
     # `rows_v1`, when present, is what the as-reviewed order ranks (exact-only token counts).
     v1 = summarise(
-        [{"self": "x", "rows": [("x", 1, False, 2, False), ("a", 1, False, 1, False)],
-          "rows_v1": [("x", 1, False, 1, False), ("a", 1, False, 1, False)]}],
+        [{"self": "x", "rows": [("x", 1, False, 2, False, 2), ("a", 1, False, 1, False, 1)],
+          "rows_v1": [("x", 1, False, 1, False, 1), ("a", 1, False, 1, False, 1)]}],
         cap=1,
     )
     assert v1["self_in_cap_ranked"] == 1 and v1["self_in_cap_ranked_v1"] == 0, v1
-    lost = summarise([{"self": "z", "rows": [("a", 1, False, 1, False)]}], cap=2)
+    lost = summarise([{"self": "z", "rows": [("a", 1, False, 1, False, 1)]}], cap=2)
     assert lost["self_in_candidate_set"] == 0 and lost["self_in_cap_ranked"] == 0, lost
     assert s["strong_over_cap"] == 0, s
     sql = seed_sql([("00000000-0000-0000-0000-000000000001", "O'Brien Ann", "1980")])
@@ -601,18 +608,12 @@ def main() -> int:
             q_tokens = query_tokens(q_name)
             near_miss = is_dob_near_miss(q_dob, dob_of[pid])
             ident = identifier == "t"
+            exact = tokens_matched(q_tokens, [name_of[pid]], prefix=False)
             rows[int(i)].append(
-                (pid, int(passes), ident, tokens_matched(q_tokens, [name_of[pid]]), near_miss)
+                (pid, int(passes), ident, tokens_matched(q_tokens, [name_of[pid]]), near_miss, exact)
             )
-            rows_v1[int(i)].append(
-                (
-                    pid,
-                    int(passes),
-                    ident,
-                    tokens_matched(q_tokens, [name_of[pid]], prefix=False),
-                    near_miss,
-                )
-            )
+            # As first reviewed: exact-only token counts (so no exact tie-break to speak of).
+            rows_v1[int(i)].append((pid, int(passes), ident, exact, near_miss, exact))
         results = [
             {"self": samples[i][0], "rows": rows[i], "rows_v1": rows_v1[i]}
             for i in range(len(samples))

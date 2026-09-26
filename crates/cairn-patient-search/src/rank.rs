@@ -24,7 +24,10 @@
 //!    swapped, year ±1, last two year digits transposed). Measured, the name-token key does
 //!    most of the lifting for a duplicate typed with a wrong DOB; this key decides it once a
 //!    name token is lost too (a surname typo AND a DOB slip).
-//! 5. `id` ascending — UUIDv7, so chart age: a stable, deterministic final tie-break.
+//! 5. `tokens_exact` — how many of key 3's tokens matched EXACTLY rather than as a prefix. A
+//!    tie-break only: without it every prefix-only candidate ("Annabel" for a typed "Ann") tied
+//!    a duplicate found by its exact given name, and chart age decided (measured, PR #678).
+//! 6. `id` ascending — UUIDv7, so chart age: a stable, deterministic final tie-break.
 //!
 //! # Stated limit
 //!
@@ -50,6 +53,8 @@ pub struct RankKey {
     pub tokens_matched: usize,
     /// See [`is_dob_near_miss`].
     pub dob_near_miss: bool,
+    /// See [`tokens_exactly_matched`]: how many of `tokens_matched` were EXACT, not a prefix.
+    pub tokens_exact: usize,
 }
 
 /// How many DISTINCT plain `query_tokens` match a token of ANY of `stored_names`.
@@ -79,6 +84,27 @@ pub struct RankKey {
 /// nothing to this count. The caller therefore leaves callsigns out of `stored_names` rather
 /// than this function carrying a `use` flag it would only ever use to skip them.
 pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize {
+    count_matched(query_tokens, stored_names, token_matches)
+}
+
+/// Like [`tokens_matched`], but counting EXACT matches only — the tie-break under it.
+///
+/// Why a tie-break, not a replacement: a prefix match is still evidence (it is how db/046 found
+/// the chart), but "Ann" typed is a closer match to a stored "Ann" than to "Annabel". Counting
+/// prefixes alone lifted every prefix-only candidate into the tier of a duplicate found by its
+/// exact given name, and chart age then decided the tie (measured, PR #678).
+pub fn tokens_exactly_matched(query_tokens: &[String], stored_names: &[String]) -> usize {
+    count_matched(query_tokens, stored_names, |q, s| q == s)
+}
+
+/// The DISTINCT plain query tokens for which `matches` holds against some stored token. The one
+/// body behind [`tokens_matched`] and [`tokens_exactly_matched`], so they cannot disagree about
+/// what a plain token is or how a stored name is tokenised.
+fn count_matched(
+    query_tokens: &[String],
+    stored_names: &[String],
+    matches: impl Fn(&str, &str) -> bool,
+) -> usize {
     let stored: HashSet<String> = stored_names.iter().flat_map(|n| name_tokens(n)).collect();
     let distinct_plain_query: HashSet<&String> = query_tokens
         .iter()
@@ -86,7 +112,7 @@ pub fn tokens_matched(query_tokens: &[String], stored_names: &[String]) -> usize
         .collect();
     distinct_plain_query
         .into_iter()
-        .filter(|t| stored.iter().any(|s| token_matches(t, s)))
+        .filter(|t| stored.iter().any(|s| matches(t, s)))
         .count()
 }
 
@@ -137,6 +163,7 @@ pub fn rank_candidates(mut keys: Vec<RankKey>) -> Vec<Uuid> {
             .then(b.tokens_matched.cmp(&a.tokens_matched))
             // `bool` orders false < true, so comparing b to a puts a near-miss first.
             .then(b.dob_near_miss.cmp(&a.dob_near_miss))
+            .then(b.tokens_exact.cmp(&a.tokens_exact))
             .then(a.id.cmp(&b.id))
     });
     keys.into_iter().map(|k| k.id).collect()
@@ -156,6 +183,7 @@ mod tests {
             identifier_matched: false,
             tokens_matched,
             dob_near_miss,
+            tokens_exact: tokens_matched,
         }
     }
     fn identifier_key(n: u128, passes: u32, tokens_matched: usize) -> RankKey {
@@ -238,6 +266,38 @@ mod tests {
             1
         );
         assert_eq!(tokens_matched(&s(&["李小"]), &s(&["李小明"])), 1);
+    }
+
+    #[test]
+    fn exact_tokens_do_not_count_a_prefix() {
+        assert_eq!(
+            tokens_exactly_matched(&s(&["alex", "nguyen"]), &s(&["alexander nguyen"])),
+            1
+        );
+    }
+
+    /// Measured on the PR #678 fix: counting prefixes lifted every PREFIX-only candidate (typed
+    /// "Ann", stored "Annabel") into the tier of a duplicate found by its exact given name, and
+    /// chart age then broke the tie — a surname-typo-plus-wrong-DOB duplicate fell 204 -> 183 of
+    /// 500. Within equal tokens and near-miss, exactly-matched tokens break the tie.
+    #[test]
+    fn within_equal_tokens_an_exact_match_outranks_a_prefix_match() {
+        let prefix_only = RankKey {
+            tokens_exact: 0,
+            ..key(1, 1, 1, false)
+        };
+        let r = rank_candidates(vec![prefix_only, key(2, 1, 1, false)]);
+        assert_eq!(r, vec![Uuid::from_u128(2), Uuid::from_u128(1)]);
+    }
+
+    #[test]
+    fn a_dob_near_miss_outweighs_exact_over_prefix() {
+        let prefix_with_near_miss = RankKey {
+            tokens_exact: 1,
+            ..key(1, 1, 2, true)
+        };
+        let r = rank_candidates(vec![key(2, 1, 2, false), prefix_with_near_miss]);
+        assert_eq!(r, vec![Uuid::from_u128(1), Uuid::from_u128(2)]);
     }
 
     #[test]
