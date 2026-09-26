@@ -13,7 +13,9 @@
 pub mod attestation;
 pub mod candidate;
 pub mod query;
+pub mod rank;
 
 pub use attestation::SearchAttestation;
 pub use candidate::{age_years, Age, Candidate, CandidateList, TrustState};
-pub use query::SearchQuery;
+pub use query::{name_tokens, SearchQuery};
+pub use rank::{is_dob_near_miss, rank_candidates, tokens_matched, RankKey};

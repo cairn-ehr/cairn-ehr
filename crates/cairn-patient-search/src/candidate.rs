@@ -51,7 +51,7 @@ fn is_leap_year(year: i32) -> bool {
 }
 
 /// How many days `month` (1-12) actually has in `year`. `month` is assumed already
-/// range-checked by the caller (`ymd` below) — this only resolves the leap-year-dependent
+/// range-checked by the caller (`parse_ymd` below) — this only resolves the leap-year-dependent
 /// case for February.
 fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
@@ -64,11 +64,32 @@ fn days_in_month(year: i32, month: u32) -> u32 {
                 28
             }
         }
-        // Unreachable given `ymd`'s own `1..=12` guard runs before this is ever called;
+        // Unreachable given `parse_ymd`'s own `1..=12` guard runs before this is ever called;
         // 0 rather than panicking keeps this fn total, so a future caller that skips the
         // guard fails a date-validity comparison rather than crashing the read path.
         _ => 0,
     }
+}
+
+/// Parse an ISO `YYYY-MM-DD` date into `(year, month, day)`, or `None` for a partial date,
+/// anything unparseable, or a calendrically impossible day (`2026-02-30`).
+///
+/// Shared by [`age_years`] and the ranking's DOB near-miss (`crate::rank`), so the two can
+/// never disagree about what counts as a real date.
+pub(crate) fn parse_ymd(s: &str) -> Option<(i32, u32, u32)> {
+    let mut it = s.split('-');
+    let y = it.next()?.parse::<i32>().ok()?;
+    let m = it.next()?.parse::<u32>().ok()?;
+    let d = it.next()?.parse::<u32>().ok()?;
+    if it.next().is_some() || !(1..=12).contains(&m) {
+        return None;
+    }
+    // Real per-month validation (leap years included), not the old blanket 1..=31:
+    // that accepted "2026-02-30" and "2026-04-31" as if every month had 31 days.
+    if !(1..=days_in_month(y, m)).contains(&d) {
+        return None;
+    }
+    Some((y, m, d))
 }
 
 /// Whole years between two ISO `YYYY-MM-DD` dates, or `None` when that cannot be said
@@ -83,23 +104,8 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 /// same kind of precise untruth. `today` is a parameter so this stays pure and the edge owns
 /// the clock.
 pub fn age_years(birth_date: &str, today: &str) -> Option<u32> {
-    let ymd = |s: &str| -> Option<(i32, u32, u32)> {
-        let mut it = s.split('-');
-        let y = it.next()?.parse::<i32>().ok()?;
-        let m = it.next()?.parse::<u32>().ok()?;
-        let d = it.next()?.parse::<u32>().ok()?;
-        if it.next().is_some() || !(1..=12).contains(&m) {
-            return None;
-        }
-        // Real per-month validation (leap years included), not the old blanket 1..=31:
-        // that accepted "2026-02-30" and "2026-04-31" as if every month had 31 days.
-        if !(1..=days_in_month(y, m)).contains(&d) {
-            return None;
-        }
-        Some((y, m, d))
-    };
-    let (by, bm, bd) = ymd(birth_date)?;
-    let (ty, tm, td) = ymd(today)?;
+    let (by, bm, bd) = parse_ymd(birth_date)?;
+    let (ty, tm, td) = parse_ymd(today)?;
     let mut years = ty - by;
     // Not yet had this year's birthday → one fewer whole year.
     if (tm, td) < (bm, bd) {

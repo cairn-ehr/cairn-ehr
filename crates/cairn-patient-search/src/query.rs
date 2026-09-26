@@ -29,64 +29,74 @@ pub struct SearchQuery {
     pub identifiers: Vec<(String, String)>,
 }
 
+/// Split a typed (or stored) name into the tokens db/046 pass 3 blocks on.
+///
+/// Public because the ranking (`crate::rank`) must tokenise a STORED name by exactly the rule
+/// the query was tokenised by: two tokenisers would be two answers to "did this token match?".
+///
+/// TWO KINDS OF TOKEN PER WHITESPACE-DELIMITED WORD, not a single split — this is the
+/// fix for a review-round Critical (#344): db/046 pass 3's WHOLE-TOKEN source tokenises
+/// the STORED name only on whitespace (`regexp_split_to_table(..., '\s+')`, copied
+/// verbatim from the matcher), so a hyphenated or apostrophe'd compound like
+/// "O'Brien-Smith" stays ONE stored token there — deliberately, because the same rule is
+/// what keeps a dash-joined §5.4 callsign ("unknown-ed-site1-...") from fragmenting into
+/// pieces that would match every John Doe ever registered.
+///
+/// (Since #636 that source is no longer the only one: pass 3 ALSO projects the stored
+/// value's alphanumeric parts — for punctuated values only, since #639 — with its own
+/// callsign guard. That makes the stored side mirror this one rather than contradict it,
+/// and it does not change why this side emits two kinds of token: the intact stored token
+/// still exists and still has to be matchable. See db/046's pass 3 for the stored half.)
+///
+/// If this side split on every non-alphanumeric
+/// character (the old behaviour), a clerk typing a punctuated name — including typing
+/// it back EXACTLY as printed — would never produce a token equal to that intact stored
+/// one, and would silently fail to find the chart. So each word contributes:
+///   1. the WHOLE word, only its leading/trailing punctuation trimmed (so it can match
+///      an intact stored token like "o'brien-smith" or a callsign), and
+///   2. its alphanumeric PARTS (so "O'Brien-Smith, John" still finds a chart stored as
+///      separate words, and a clerk typing just "Brien" still gets a hit on a name
+///      stored as plain, unpunctuated words).
+///
+/// Pass 3 is a disjunction (UNION), so the extra part-tokens can only ADD advisory
+/// candidates, never remove one — a missed candidate is the dangerous direction here,
+/// an extra one is merely something a clerk dismisses. Sorted + deduplicated because
+/// this list is carried, verbatim, into a permanent signed registration attestation
+/// (db/045) — no duplicate tokens belong in that record.
+pub fn name_tokens(raw_name: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = raw_name
+        .split_whitespace()
+        .flat_map(|word| {
+            // The whole whitespace-delimited word, edge punctuation trimmed only —
+            // this IS the token pass 3 stores for a punctuated compound or a callsign.
+            let whole = word
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+            // Its alphanumeric parts, so a clerk typing a bare surname fragment still
+            // finds a chart stored as separate plain words. Single characters ("o" out
+            // of "O'Brien") are dropped as noise: they cannot narrow a search and would
+            // only inflate the advisory candidate set.
+            let parts: Vec<String> = word
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|p| p.chars().count() > 1)
+                .map(str::to_lowercase)
+                .collect();
+            std::iter::once(whole).chain(parts)
+        })
+        .filter(|t| !t.is_empty())
+        .collect();
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
 impl SearchQuery {
     /// Normalise raw operator input into the tokens db/046 pass 3 blocks on.
     ///
-    /// TWO KINDS OF TOKEN PER WHITESPACE-DELIMITED WORD, not a single split — this is the
-    /// fix for a review-round Critical (#344): db/046 pass 3's WHOLE-TOKEN source tokenises
-    /// the STORED name only on whitespace (`regexp_split_to_table(..., '\s+')`, copied
-    /// verbatim from the matcher), so a hyphenated or apostrophe'd compound like
-    /// "O'Brien-Smith" stays ONE stored token there — deliberately, because the same rule is
-    /// what keeps a dash-joined §5.4 callsign ("unknown-ed-site1-...") from fragmenting into
-    /// pieces that would match every John Doe ever registered.
-    ///
-    /// (Since #636 that source is no longer the only one: pass 3 ALSO projects the stored
-    /// value's alphanumeric parts — for punctuated values only, since #639 — with its own
-    /// callsign guard. That makes the stored side mirror this one rather than contradict it,
-    /// and it does not change why this side emits two kinds of token: the intact stored token
-    /// still exists and still has to be matchable. See db/046's pass 3 for the stored half.)
-    ///
-    /// If this side split on every non-alphanumeric
-    /// character (the old behaviour), a clerk typing a punctuated name — including typing
-    /// it back EXACTLY as printed — would never produce a token equal to that intact stored
-    /// one, and would silently fail to find the chart. So each word contributes:
-    ///   1. the WHOLE word, only its leading/trailing punctuation trimmed (so it can match
-    ///      an intact stored token like "o'brien-smith" or a callsign), and
-    ///   2. its alphanumeric PARTS (so "O'Brien-Smith, John" still finds a chart stored as
-    ///      separate words, and a clerk typing just "Brien" still gets a hit on a name
-    ///      stored as plain, unpunctuated words).
-    ///
-    /// Pass 3 is a disjunction (UNION), so the extra part-tokens can only ADD advisory
-    /// candidates, never remove one — a missed candidate is the dangerous direction here,
-    /// an extra one is merely something a clerk dismisses. Sorted + deduplicated because
-    /// this list is carried, verbatim, into a permanent signed registration attestation
-    /// (db/045) — no duplicate tokens belong in that record.
+    /// The name is tokenised by [`name_tokens`] (see its doc for the two kinds of token and why).
     pub fn new(raw_name: &str, birth_date: Option<&str>, identifiers: &[(String, String)]) -> Self {
-        let mut name_tokens: Vec<String> = raw_name
-            .split_whitespace()
-            .flat_map(|word| {
-                // The whole whitespace-delimited word, edge punctuation trimmed only —
-                // this IS the token pass 3 stores for a punctuated compound or a callsign.
-                let whole = word
-                    .trim_matches(|c: char| !c.is_alphanumeric())
-                    .to_lowercase();
-                // Its alphanumeric parts, so a clerk typing a bare surname fragment still
-                // finds a chart stored as separate plain words. Single characters ("o" out
-                // of "O'Brien") are dropped as noise: they cannot narrow a search and would
-                // only inflate the advisory candidate set.
-                let parts: Vec<String> = word
-                    .split(|c: char| !c.is_alphanumeric())
-                    .filter(|p| p.chars().count() > 1)
-                    .map(str::to_lowercase)
-                    .collect();
-                std::iter::once(whole).chain(parts)
-            })
-            .filter(|t| !t.is_empty())
-            .collect();
-        name_tokens.sort();
-        name_tokens.dedup();
         Self {
-            name_tokens,
+            name_tokens: name_tokens(raw_name),
             // Trimmed once and the TRIMMED string is what's stored (not merely used to
             // decide non-emptiness): db/046 pass 2 is an exact string compare against the
             // projected value, so a clerk's stray leading/trailing space (e.g. pasted from
