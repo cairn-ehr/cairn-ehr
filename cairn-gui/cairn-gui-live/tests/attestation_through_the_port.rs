@@ -242,20 +242,75 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
         "the bound must actually have bitten, or this test passed for the wrong reason"
     );
 
-    // THE HONESTY FLAG BESIDE THE ROSTER, and the assertion this test was missing.
-    //
-    // The two above check WHICH ids were sworn to. Neither checks whether the body admits that
-    // others were hidden — and the ids alone cannot: `bound_for_prompt` returns a PREFIX of the
-    // raw list, so a port forwarding the node's raw `CandidateList` instead of the bounded
-    // `PromptList` stores the same first `PROMPT_CAP` ids and passes both. What it would also
-    // store is `incomplete: false`: a signed claim that this clerk saw every Kowalczyk in the
-    // system, when three were withheld from them. That is exactly the claim a later duplicate-
-    // chart inquiry would use to argue they should have spotted the duplicate.
+    // THE FLAG BESIDE THE ROSTER. ADR-0075 (#671): the prompt was CUT, but the SEARCH was
+    // whole — so the signed body must say `incomplete: false`. Truncation is shown on screen,
+    // never signed (before ADR-0075 it was, on 92% of registrations, and the flag said
+    // nothing). The raw-list bypass the old `true` assertion guarded against is still caught
+    // above: a port forwarding the node's raw list would store all `PROMPT_CAP + 3` ids, and
+    // `stored.len() == PROMPT_CAP` fails on it.
+    assert!(
+        !common::stored_incomplete(&reader, created).await,
+        "{} candidates were cut from the prompt, but the search read every chart it matched: \
+         truncation is not an incompleteness of the search (ADR-0075 decision 3)",
+        raw.candidates.len() - PROMPT_CAP
+    );
+}
+
+/// The positive half of ADR-0075's rule, and what stops `incomplete` becoming a constant
+/// `false` now that a CUT prompt signs `false`: a search that could NOT read every chart it
+/// matched must still sign `true`.
+///
+/// The node's one read gap today is a matched chart with no name ever asserted — it displays
+/// as "(name unavailable)" and the list reports itself partial. A chart registered with only a
+/// date of birth is exactly that, and a later search on the same date finds it.
+#[tokio::test]
+async fn a_search_that_could_not_read_a_chart_still_signs_incomplete() {
+    let Some(cs) = common::cs() else { return };
+    let (reader, _guard) = common::connect(&cs).await;
+    let (sk, _kid) = common::setup(&reader).await;
+    let live = LiveData::new(
+        common::connect_for_live(&cs).await,
+        sk,
+        &common::identity(ORIGIN),
+    );
+
+    // A nameless chart: registered off a date-of-birth-only search, with no name asserted.
+    let born = "1931-07-19";
+    let dob_only = SearchQuery::new("", Some(born), &[]);
+    let mut store = TokenStore::new();
+    let t = store
+        .record(dob_only.clone(), bound_for_prompt(&common::nothing_found()))
+        .expect("a date of birth alone is a search");
+    let a = store.take(t).expect("redeemable");
+    live.register(a, None)
+        .await
+        .map_err(|(e, _)| e)
+        .expect("a nameless chart registers");
+    store.commit();
+
+    let raw = live
+        .search(&dob_only, TODAY)
+        .await
+        .expect("the step-3 search");
+    assert!(
+        raw.incomplete,
+        "the fixture must make the node's search PARTIAL or this test proves nothing: {raw:?}"
+    );
+
+    let prompt = bound_for_prompt(&raw);
+    let mut store = TokenStore::new();
+    let token = store.record(dob_only, prompt).expect("a token");
+    let attested = store.take(token).expect("redeemable");
+    let created = live
+        .register(attested, Some("Nameless Neighbour"))
+        .await
+        .map_err(|(e, _)| e)
+        .expect("registration accepted");
+    store.commit();
+
     assert!(
         common::stored_incomplete(&reader, created).await,
-        "{} candidates were withheld from the prompt, so the signed attestation MUST say the \
-         list was incomplete — storing `false` here is the forensic record lying on the \
-         clerk's behalf",
-        raw.candidates.len() - PROMPT_CAP
+        "the search could not read a chart it matched, so the signed body MUST say it was \
+         partial — that is what makes a 'no match' untrustworthy (ADR-0061, ADR-0075)"
     );
 }

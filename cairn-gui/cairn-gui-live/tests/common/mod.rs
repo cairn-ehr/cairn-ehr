@@ -195,22 +195,17 @@ pub async fn stored_displayed(c: &Client, patient: uuid::Uuid) -> Vec<uuid::Uuid
         .collect()
 }
 
-/// Read the stored attestation's `incomplete` flag back — whether the signed body admits that
-/// the clerk was shown less than everything.
+/// Read the stored attestation's `incomplete` flag back — whether the signed body says the
+/// SEARCH was partial.
 ///
 /// # Why this is not a detail
 ///
-/// `displayed` says WHICH candidates were on screen; `incomplete` says whether that roster was
-/// the whole truth. `bound_for_prompt` sets it to `list.incomplete || withheld > 0` and
-/// `SearchAttestation::from_displayed` carries it straight into the signed body, so a
-/// registration made off an overflowing prompt must store `true`.
-///
-/// Without this read-back, a port forwarding the node's RAW `CandidateList` instead of the
-/// bounded `PromptList` passes every other assertion in this crate — the ids are a prefix of
-/// the raw list either way — while storing `incomplete: false`. That is a signed claim that
-/// the clerk saw a complete screenful when three namesakes were hidden from them, which is
-/// precisely the claim someone would later use to argue they should have spotted the
-/// duplicate. The roster and the honesty flag beside it have to be checked together.
+/// `displayed` says WHICH candidates were on screen; `incomplete` says whether the search
+/// behind them read every chart it matched (ADR-0061's meaning). Since ADR-0075 (#671) a
+/// prompt being CUT to `PROMPT_CAP` is not that — it is counted on screen and never signed —
+/// so a registration made off an overflowing prompt over a whole search must store `false`.
+/// Reading the flag back is what proves the port signed the bounded list's own flag and did
+/// not re-derive one from the list's length.
 pub async fn stored_incomplete(c: &Client, patient: uuid::Uuid) -> bool {
     let row = c
         .query_one(
