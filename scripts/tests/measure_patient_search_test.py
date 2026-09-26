@@ -197,6 +197,46 @@ def test_a_pool_whose_other_tables_are_oddly_named_still_yields_names(m) -> None
         assert len(m.pool_names(path, 2)) == 2
 
 
+def test_the_default_draw_is_the_head_unchanged(m) -> None:
+    """The latency rig's published figures depend on WHICH rows it draws, so the default draw is
+    pinned as it always was: the first usable rows, a blank given name kept as a one-word name.
+    Review of PR #678 changed this by accident; this file's CI step caught it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _pool(tmp, [("", "Wu"), ("Ann", "Ng"), ("Bo", "Li"), ("Cy", "Ho")])
+        assert m.pool_names(path, 2) == ["Wu", "Ann Ng"]
+
+
+def test_a_spread_draw_skips_blank_names(m) -> None:
+    """The prompt rig models full names; a blank given name or surname (empty or whitespace)
+    would quietly model a one-word name it does not claim to (review of PR #678)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _pool(tmp, [("", "Wu"), ("  ", "Li"), ("Ann", " "), ("Ann", "Ng"), ("Bo", "Ho")])
+        assert sorted(m.pool_names(path, 2, spread=True)) == ["Ann Ng", "Bo Ho"]
+
+
+def test_a_spread_draw_reaches_across_the_whole_table(m) -> None:
+    """The head of the maintainer's pool holds ~4x its share of common surnames, so a
+    representative draw must come from the whole table, not its first rows (review of PR #678)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _pool(tmp, [(f"G{i}", f"S{i}") for i in range(100)])
+        names = m.pool_names(path, 10, spread=True)
+        assert len(names) == 10, names
+        assert "G90 S90" in names, names
+
+
+def test_a_spread_draw_works_on_a_view(m) -> None:
+    """Discovery also picks VIEWs, which have no `rowid`; the spread draw must not read it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _pool(tmp, [(f"G{i}", f"S{i}") for i in range(20)], table="raw")
+        con = sqlite3.connect(path)
+        con.execute("DROP TABLE IF EXISTS names")
+        con.execute('ALTER TABLE raw RENAME COLUMN firstname TO a')
+        con.execute("CREATE VIEW people AS SELECT a AS firstname, surname FROM raw")
+        con.commit()
+        con.close()
+        assert len(m.pool_names(path, 5, spread=True)) == 5
+
+
 def main() -> int:
     m = load_rig()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

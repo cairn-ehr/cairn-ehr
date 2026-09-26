@@ -35,8 +35,8 @@
 >    name draw (→ spread draw, blank names excluded, `perturbed_only`). Filed: **#685** (re-run every
 >    real-name arm on the spread draw — clearing `cairn_test`'s fixtures needs the maintainer's
 >    permission; ADR-0075 and the results doc state the limit meanwhile), **#686** (a partial DOB
->    consistent with the typed one gets no ranking credit — a weighting decision), **#687** (CI does
->    not run the rigs' `--self-test`); findings added to **#682** (NFD/Turkish DB tests), **#683**
+>    consistent with the typed one gets no ranking credit — a weighting decision), and fixed **#687** (CI
+>    did not run the prompt rig's `--self-test`, which pins the ranking's Python twins); findings added to **#682** (NFD/Turkish DB tests), **#683**
 >    (the dropped stray reason) and **#684** (an unparseable typed DOB is silently ignored while the
 >    prompt says "closest of").
 > 1. **The repair path — brainstorm first, with the maintainer:** **#679** (commit-time local

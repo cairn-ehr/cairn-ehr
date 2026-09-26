@@ -44,6 +44,10 @@
 //! at least 3 bytes — but tokenise in Rust, so they may drift from db/046's own SQL expression.
 //! That can only worsen the ORDER, never lose a candidate — which is why it is stated rather than
 //! pinned by a cross-language twin.
+//!
+//! The measurement rig `scripts/measure_prompt_truncation.py` DOES carry a Python twin of these
+//! keys (`rank`, `tokens_matched`, `is_dob_near_miss`), pinned by its `--self-test` in CI: change
+//! the order here and change it there, or ADR-0075's published figures go stale.
 use crate::candidate::parse_ymd;
 use crate::query::name_tokens;
 use std::collections::HashSet;

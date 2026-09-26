@@ -884,8 +884,8 @@ repair by `link` easy — the safety measure is how fast a duplicate is FOUND.
   the flag is signed); #684 (a DOB is compared and stored as typed, so `1980-3-7` misses
   `1980-03-07` in db/046's DOB pass — the ranking now counts it as a near-miss, the set does not).
   From its third review round: #685 (re-run on a representative name draw), #686 (a partial DOB
-  consistent with the typed one gets no ranking credit), #687 (CI does not run the rigs'
-  `--self-test`).
+  consistent with the typed one gets no ranking credit), #687 (CI did not run the prompt rig's
+  `--self-test`; fixed in the PR, one workflow step).
 - **§1.2:** paper counterpart the glance at neighbouring index cards; paper 1 → forced 1 → target 1,
   `M ≤ N`; no act added, and a warning that fired on 92% of registrations is gone.
 

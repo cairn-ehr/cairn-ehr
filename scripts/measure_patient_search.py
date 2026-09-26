@@ -143,8 +143,8 @@ def synthetic_names(count: int) -> list[str]:
 def pool_names(sqlite_path: str, count: int, spread: bool = False) -> list[str]:
     """Draw `count` names from a SQLite pool of real names.
 
-    `spread=False` (this rig's default, kept so its published latency figures stay comparable —
-    close, not exact, since blank names are now skipped) takes the FIRST `count` usable rows. That head is not representative of the pool: in the
+    `spread=False` (this rig's default, kept EXACTLY as it was so its published latency figures
+    reproduce) takes the FIRST `count` rows with a surname. That head is not representative of the pool: in the
     maintainer's pool the first 50,000 rows hold ~4x the table's share of its commonest
     surnames (Smith 0.72% vs 0.18%, review of PR #678). For a latency rig that is a pessimistic,
     stable choice — more namesakes, bigger candidate sets. A rig whose figures are ABOUT the
@@ -153,8 +153,9 @@ def pool_names(sqlite_path: str, count: int, spread: bool = False) -> list[str]:
     with `row_number()` rather than reading `rowid`, which a VIEW or a WITHOUT ROWID table (both
     of which discovery can pick) does not have.
 
-    A row with a blank (empty or whitespace-only) given name or surname is never drawn: it
-    would become a one-word "name" and quietly model a case the rig does not claim to.
+    A spread draw also skips a row with a blank (empty or whitespace-only) given name or surname:
+    it would become a one-word "name" and quietly model a case the prompt rig does not claim to.
+    The default draw keeps such a row as a one-word name, as it always has.
 
     The pool's shape is discovered rather than assumed: the first table holding columns that
     look like a given name and a surname is used. A pool that does not match is a loud error
@@ -200,12 +201,12 @@ def pool_names(sqlite_path: str, count: int, spread: bool = False) -> list[str]:
                     plain_identifier(given),
                     plain_identifier(family),
                 )
-                usable = (
-                    f'"{family}" IS NOT NULL AND trim("{family}") <> \'\' '
-                    f'AND "{given}" IS NOT NULL AND trim("{given}") <> \'\''
-                )
                 stride = 1
                 if spread:
+                    usable = (
+                        f'"{family}" IS NOT NULL AND trim("{family}") <> \'\' '
+                        f'AND "{given}" IS NOT NULL AND trim("{given}") <> \'\''
+                    )
                     # Every `stride`-th USABLE row: `available // count` numbered rows at a
                     # stride of `stride` yield at least `count`, so the draw cannot come up short.
                     (available,) = con.execute(
@@ -220,7 +221,9 @@ def pool_names(sqlite_path: str, count: int, spread: bool = False) -> list[str]:
                     ).fetchall()
                 else:
                     rows = con.execute(
-                        f'SELECT "{given}", "{family}" FROM "{table}" WHERE {usable} LIMIT ?',
+                        f'SELECT "{given}", "{family}" FROM "{table}" '
+                        f'WHERE "{family}" IS NOT NULL AND "{family}" <> \'\' '
+                        f'  AND "{given}" IS NOT NULL LIMIT ?',
                         (count,),
                     ).fetchall()
                 # SAY WHICH TABLE WON. The schema is DISCOVERED, and more than one table can
