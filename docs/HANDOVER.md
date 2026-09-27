@@ -4,7 +4,8 @@
 
 > [!NOTE]
 > **⇒ R1 — THE COMBINED READ — IS BUILT ON PR [#688](https://github.com/cairn-ehr/cairn-ehr/pull/688)
-> (2026-09-27), AWAITING ITS FINAL WHOLE-BRANCH REVIEW AND THE MAINTAINER'S MERGE.** It is the first of
+> (2026-09-27), WHOLE-BRANCH REVIEWED (ready after fixes → fixed, re-reviewed), AWAITING THE MAINTAINER'S
+> MERGE.** It is the first of
 > five slices of the duplicate repair path (#679 · #680 · #681), one design —
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` — and
 > [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
@@ -13,10 +14,12 @@
 > no winner chosen); writes stay per chart; every chart command names the displayed chart SET and refuses
 > when it changed. `db/054_person_charts.sql` (`cairn_person_charts`, `cairn_medication_duplicate_groups`),
 > `SCHEMA_GENERATION` **54**. **#334 is fixed by it** (the PR body closes it — never a commit message).
-> Full root sweep 2336 passed / 0 failed; the webview walked with a stubbed bridge over a linked payload.
+> Final tree (1ec920c3): full sweep + both trees' fmt/clippy/doc/deny/tests green, 2606 passed / 0 failed; the
+> webview walked with a stubbed bridge over a linked payload. The CLI's text `medication-list` names a combined
+> list's charts too (`medication/list_text.rs`).
 >
 > **⇒ NEXT, in order:**
-> 0. **PR #688** — final whole-branch review → maintainer review → merge. Then check `gh pr list` before
+> 0. **PR #688** — maintainer review → merge (the whole-branch review is done). Then check `gh pr list` before
 >    trusting this list (house rule 8).
 > 1. **R2 — link and unlink from an open chart (#681) + the precedence floor.** Plan it from the design
 >    page's *R2* section: header **"Same person as…"** → the front door's search → a side-by-side panel
