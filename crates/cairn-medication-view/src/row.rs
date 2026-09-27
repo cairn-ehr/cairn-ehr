@@ -75,6 +75,15 @@ pub struct MemberVouch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MedicationRow {
     pub group_id: Uuid,
+    /// The chart the GROUP displays under: the list view's single display winner
+    /// (`medication_group_display`'s DISTINCT ON pick), carried through as-is.
+    ///
+    /// Since the combined read (ADR-0076) this is NOT "the chart this line is on". For a
+    /// group spanning two linked charts it is whichever one won, and for a cross-patient
+    /// group it can be a chart OUTSIDE the set the list was read over — someone else's.
+    /// Nor is it where a signature goes: sign-off attests each thread under its own chart.
+    /// For where the drug was recorded, read `source_charts`; for the chart a thread lives
+    /// on (the attestation target), read `MemberVouch::patient_id`.
     pub patient_id: Uuid,
     /// The free-text term as asserted — may legitimately be vague ("little white pill").
     pub term: String,

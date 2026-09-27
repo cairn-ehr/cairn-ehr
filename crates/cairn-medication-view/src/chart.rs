@@ -75,17 +75,19 @@ pub struct PatientMedicationList {
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything
     /// else this struct carries is scoped to the charts in `charts` — each row's `members`
     /// lists only threads whose own chart (`medication_thread_group.patient_id`) is in the
-    /// set — so the *other* patient's thread appears nowhere. Without this field the node names a remedy whose arguments it never shows,
-    /// and the only way out is raw SQL. The cross-patient member is deliberately the one
-    /// piece of another chart's data this read path surfaces: it is a bare thread id with
-    /// no clinical content attached, and it is the minimum needed to repair a wrong-chart
-    /// link the node itself is complaining about.
+    /// set — so the *other* patient's thread appears nowhere. Without this field the node
+    /// names a remedy whose arguments it never shows, and the only way out is raw SQL. The
+    /// cross-patient member is deliberately the one piece of another chart's data this read
+    /// path surfaces: it is a bare thread id with no clinical content attached, and it is
+    /// the minimum needed to repair a wrong-chart link the node itself is complaining about.
     pub separation_targets: BTreeMap<Uuid, Vec<Uuid>>,
-    /// The set of charts this list was read over (ADR-0076 decision 1) — one chart today,
-    /// and eventually every chart in a link component. Carried on the list itself (rather
-    /// than only inferred from its rows) because an EMPTY list still has to say which chart
-    /// it covers — the whole point of decision 3's "read covers a set the clinician saw and
-    /// can name" is that a chart with nothing on it is still a chart that was read.
+    /// The set of charts this list was read over (ADR-0076 decision 1): the opened chart and
+    /// every chart in its link component, or just the opened chart when it is linked to
+    /// nothing. Carried on the list itself (rather than only inferred from its rows) because
+    /// an EMPTY list still has to say which chart it covers — the whole point of decision
+    /// 3's "read covers a set the clinician saw and can name" is that a chart with nothing on
+    /// it is still a chart that was read. It is also what a sign-off is held to: a surface
+    /// that showed this list passes this set back, and a changed set refuses the gesture.
     pub charts: ChartSet,
 }
 

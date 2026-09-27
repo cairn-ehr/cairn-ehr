@@ -628,11 +628,11 @@ async fn a_cross_patient_group_shows_on_both_charts_flagged() {
 ///
 /// Here patient B has an ordinary, unsigned drug of their own PLUS a cross-patient group.
 /// The sound drug must be signed; the hazardous line must be withheld and reported, not
-/// used as grounds to refuse. (Renamed from `an_incomplete_chart_still_signs_every_line_it_
-/// can_show`: before the #334 fix the cross-patient group was INVISIBLE on B's chart; it now
-/// shows, flagged, so the defect on the other line is "untrustworthy" rather than "missing".
-/// The "invisible group" half of the property is pinned by the pure `missing_groups` test
-/// in `read.rs`; the property itself — the sound line is signed regardless — is unchanged.)
+/// used as grounds to refuse. (Was `an_incomplete_chart_still_signs_every_line_it_can_show`;
+/// since #334 the cross-patient group SHOWS, flagged.) NOT COVERED: the "invisible group"
+/// half. `read.rs`'s pure `missing_groups` test pins DETECTION only; sign-off's handling of
+/// a non-empty `groups_missing_from_chart` (report, never refuse, union both reads) has no
+/// DB coverage, the state being unreachable by construction now (same class as #333).
 #[tokio::test]
 async fn a_hazardous_line_never_blocks_a_sound_one() {
     let Some(base) = cs() else {
