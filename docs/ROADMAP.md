@@ -636,7 +636,7 @@ spec **v0.78**; design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-
 maintainer's decisions table; five slices **R1 → R5**, each with its own plan, PR and §1.2 section); plan
 `docs/superpowers/plans/2026-09-27-repair-path-r1-combined-read.md`. `db/054_person_charts.sql`,
 `SCHEMA_GENERATION` 53 → **54** (node loader list only; `cairn-sync` lags, #284). PR
-[#688](https://github.com/cairn-ehr/cairn-ehr/pull/688), awaiting the maintainer's merge.
+[#688](https://github.com/cairn-ehr/cairn-ehr/pull/688), merged 2026-09-27.
 
 The brainstorm surveyed the code before designing and found ADR-0075's *"repair by `link` is easy"* rested on
 things that were not there: a `link` repaired nothing a clinician could see, "different people" had no home,
@@ -686,9 +686,11 @@ all four; R1 builds the first.
   model) · [#695](https://github.com/cairn-ehr/cairn-ehr/issues/695) (remaining test gaps) ·
   [#696](https://github.com/cairn-ehr/cairn-ehr/issues/696) (`Option<&ChartSet>` → an enum) ·
   [#697](https://github.com/cairn-ehr/cairn-ehr/issues/697) (the withheld-line wording for a doubted link,
-  and whether a doubted set's one-chart lines should be signable — a maintainer decision).
-- **Next: R2** — link/unlink from an open chart (#681) + `patient_link.attested` outranking an un-attested link
-  in db/018; then **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
+  and whether a doubted set's one-chart lines should be signable — DECIDED (b), 2026-09-27: withhold every
+  line not on the opened chart while the set holds a doubted link).
+- **Next: R2**, split 2026-09-27 into **R2a** (`patient_link.attested` outranking an un-attested link in
+  db/018, the migration re-folding existing winners; `link_charts`/`unlink_charts` + CLI) and **R2b** (the
+  window's link/unlink gesture, #681); then #697 (b); then **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
   proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
   forced 1 → target 1; signing off a combined list 1 → 1 → 1 (one gesture covers every line across both

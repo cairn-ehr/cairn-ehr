@@ -3,9 +3,10 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R1 — THE COMBINED READ — IS BUILT ON PR [#688](https://github.com/cairn-ehr/cairn-ehr/pull/688)
-> (2026-09-27), WHOLE-BRANCH REVIEWED, THEN A FIVE-AGENT PR REVIEW + A SECOND PASS ON ITS FIXES (all fixed or
-> filed — see the durable rules below), AWAITING THE MAINTAINER'S MERGE.** It is the first of
+> **⇒ R1 — THE COMBINED READ — IS MERGED (PR [#688](https://github.com/cairn-ehr/cairn-ehr/pull/688),
+> 2026-09-27). R2 IS SPLIT (maintainer, 2026-09-27): R2a = the D5 precedence floor + the node's
+> `link_charts`/`unlink_charts` (branch `feat/r2a-link-precedence-floor`); R2b = the window's gesture and
+> side-by-side panel. #697 is DECIDED: option (b) (see item 2).** R1 is the first of
 > five slices of the duplicate repair path (#679 · #680 · #681), one design —
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` — and
 > [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
@@ -19,10 +20,11 @@
 > list's charts too (`medication/list_text.rs`).
 >
 > **⇒ NEXT, in order:**
-> 0. **PR #688** — maintainer review → merge (the whole-branch review is done). Then check `gh pr list` before
->    trusting this list (house rule 8).
-> 1. **R2 — link and unlink from an open chart (#681) + the precedence floor.** Plan it from the design
->    page's *R2* section: header **"Same person as…"** → the front door's search → a side-by-side panel
+> 0. Check `gh pr list` before trusting this list (house rule 8).
+> 1. **R2 — link and unlink from an open chart (#681) + the precedence floor**, as **R2a** (floor + node
+>    orchestration + CLI; the migration must RE-FOLD every pair's winner, not merely backfill `attested` — a
+>    backfill leaves a machine link that already displaced a human unlink standing) then **R2b** (the window).
+>    Plan from the design page's *R2* section: header **"Same person as…"** → the front door's search → a side-by-side panel
 >    (names incl. aliases, DOB with provenance, identifiers, active medications, `cairn_match_veto`
 >    findings as plain facts — the panel's safety is what it SHOWS, never an "are you sure?") → an attested
 >    `identity.link.asserted`; each member line gets **"Not the same person"** → attested `unlink`;
@@ -39,8 +41,9 @@
 >    cross-patient group, never auto-separated) · **#691** (every row of a linked list names its chart by
 >    full 36-char uuid, on screen and to the screen reader — want a short per-member tag keyed to the
 >    header lines). **#333** gained the between-reads chart-set refusal (no DB test; same concurrency seam).
->    **From the PR review:** **#697** first — it holds a maintainer decision (should a set holding a doubted
->    link keep the other member's one-chart lines signable? and its withheld-line wording) · #692 (a failed
+>    **From the PR review:** **#697 — DECIDED (b), 2026-09-27:** while a set holds a doubted link, every line
+>    not recorded on the opened chart is withheld from sign-off (shown, labelled, reported); build it with the
+>    issue's wording half, after R2a · #692 (a failed
 >    refresh overwrites the outcome) · #693 (member line: dob precision, repudiated name) · #694 (member lines
 >    missing from the semantic model) · #695 (remaining R1 test gaps) · #696 (`Option<&ChartSet>` → an enum).
 >    **#220** gained a comment: R1 widened its blast radius and db/054 contains it for this read.
