@@ -5,14 +5,16 @@
 > [!NOTE]
 > **⇒ R2a — A HUMAN'S LINK JUDGEMENT OUTRANKS A MACHINE'S, AND THE NODE CAN AUTHOR ONE — IS BUILT ON PR
 > [#698](https://github.com/cairn-ehr/cairn-ehr/pull/698) (2026-09-27), per-task reviewed, whole-branch reviewed
-> (opus), its fix wave re-reviewed clean; AWAITING THE MAINTAINER'S MERGE.** It is the second of the duplicate
+> (opus), its fix wave re-reviewed clean, then a five-agent PR review (2026-09-28) whose fixes are on the same
+> PR; AWAITING THE MAINTAINER'S MERGE.** It is the second of the duplicate
 > repair path's slices (#679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
 > spec **v0.78**). R1 (the combined read, PR #688) is merged. R2 was split by the maintainer: **R2a** = ADR-0076
 > decision 5 in db/018 (`patient_link.attested`, comparator `cairn_link_overlay_wins`: attested first, then
-> HLC), `db/055` (**`SCHEMA_GENERATION` 55** — its loader heal re-folds existing winners), `chart_link.rs`
-> (`link_charts`/`unlink_charts`, CLI `link-charts`/`unlink-charts`), `apply_accepted_proposal` a thin wrapper,
-> auto-apply yields to a human judgement. Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`.
+> HLC), `db/055` (**`SCHEMA_GENERATION` 55** — the loader heal AND db/055's own re-fold re-decide existing
+> winners), `chart_link.rs` (`link_charts`/`unlink_charts`, CLI `link-charts`/`unlink-charts`, each reporting a
+> `LinkEffect`), `apply_accepted_proposal` a thin wrapper, auto-apply yields to a human judgement and rolls back
+> a matcher link that does not stand. Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **PR #698** — maintainer review → merge.
@@ -20,9 +22,11 @@
 >    some list showed — `AppState::shown`) → a side-by-side panel (names incl. aliases, DOB with provenance,
 >    identifiers, active medications, `cairn_match_veto` findings as plain facts — its safety is what it SHOWS,
 >    never an "are you sure?") → `link_charts`; each member line gets **"Not the same person"** →
->    `unlink_charts`. **A member joined through a THIRD chart:** an unlink of the pair is recorded but reports
->    `LinkOutcome::still_joined` — the member line must name the edge(s) that actually join it (#699 is the
->    neither-held half — decide before R2b). R2b owes the §1.2 budget measurement (review-and-link ≤ 20 s).
+>    `unlink_charts`. **Show `LinkOutcome::effect`, never assume it:** `StillJoined` (a member joined through a
+>    THIRD chart — the member line must name the edge(s) that actually join it) and `Outranked` (a later
+>    judgement about the same pair stands — a human disagreement to show, not retry) must not read as done
+>    (#699 is the neither-held half — decide before R2b). A refusal and an infrastructure fault are both `Err`
+>    today; R2b may want them apart (see #702). R2b owes the §1.2 budget measurement (review-and-link ≤ 20 s).
 >    Then **#697 (b)** (decided: while a set holds a doubted link, every line not on the opened chart is withheld
 >    from sign-off, with its own wording; do #701 alongside), **R3** (the front door collapses by person),
 >    **R4** (per-node matcher worker, #679 — proposes, never links), **R5** (banner + worklist, #680 — the
@@ -30,7 +34,13 @@
 > 2. **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
 >    show on a held chart's record — a decision) · **#700** (auto-apply's human-judged skip has a race; a skipped
 >    proposal stays `pending`) · **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (a
->    floor refusal through `chart_link` surfaces as a bare `db error`). **From R1:** #689 (db/034 admits an
+>    floor refusal through `chart_link` surfaces as a bare `db error` — addressed on PR #698, now pinned).
+>    **Filed 2026-09-28 (PR #698 review):** **#703** (the generation heal can be used up by `cairn-sync init` on
+>    a shared database, silently skipping a node-only migration's heal — the class behind db/055's own re-fold) ·
+>    **#704** (make db/019's `applied_event_id ⇔ applied` a CHECK) · **#705** (`link-charts` against a database
+>    at an older generation judges under the old order, silently) · **#706** (R2a test follow-ups: precedence
+>    over the sync wire, deferred-promoted vouch, upgrade re-fold of vetoed pairs). #700's race half is handled
+>    on PR #698 (auto-apply confirms its link stands); its pending-forever half remains. **From R1:** #689 (db/034 admits an
 >    attestation naming another chart — floor gap) · #690 (reconciling across LINKED charts is refused — a
 >    decision) · #691 (full-uuid source labels) · #692 · #693 · #694 · #695 · #696; #333 and #220 gained comments.
 > 3. **Human acts still owed** (an agent cannot do them): the runbook stopwatch figures — now also a **linked
@@ -48,8 +58,13 @@
 >   because a vouch never changes after first projection (db/043 gate 1 runs before gate 4). Never add a second
 >   spelling; a new reader reads `pl.attested`.
 > - **`db/055`'s EXISTENCE is load-bearing** — it moved the generation to 55, and the loader's generation-change
->   heal is what re-decides winners the old order chose. A column backfill cannot. **Never fold db/055 into
->   db/018.** A peer still on an older binary ranks the old way until it upgrades (stated in identity.md §5.2).
+>   heal re-decides winners the old order chose. A column backfill cannot. **Never fold db/055 into db/018.**
+>   **And never delete its re-fold block**: cairn-sync shares the generation and heals with the OLD applier, so
+>   a cairn-sync-first load would otherwise use up the heal (#703). A peer still on an older binary ranks the
+>   old way until it upgrades (stated in identity.md §5.2).
+> - **Recorded is not took effect.** db/018 admits an assertion that loses the overlay. Every judgement path
+>   reads back, in its own transaction, whether its event stands (`chart_link::standing_link`): a human
+>   judgement reports `LinkEffect`, auto-apply rolls a losing matcher link back rather than mark it applied.
 > - **One lock order everywhere: the `match_proposal` row, then db/018's CARNLK advisory lock**
 >   (`chart_link::assert_link_in_tx` pre-locks the row; `auto_apply` and `apply_accepted_proposal` read it `FOR
 >   UPDATE` first). Reversing it deadlocks a same-pair race (40P01). Pinned by a `pg_stat_activity` Lock-wait
@@ -57,7 +72,8 @@
 > - **A judgement is a human's**: `link_charts`/`unlink_charts` take a `Reviewer` (the human key signs AND
 >   attests); there is no node-key fallback. `link` needs BOTH charts held here; `unlink` also admits a displayed
 >   member not held here (same record), and is then filed under the HELD chart (db/005 step 8b). Only OPEN
->   proposals (`pending`/`accepted`/`review`) move; closed rows are never touched (db/019's invariant).
+>   proposals (`pending`/`accepted`/`review`) move; closed rows are never touched (`applied`/`auto_applied` by
+>   db/019's invariant; `rejected`/`retracted` by design — `patient_link` holds what stands).
 >
 > **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
@@ -377,6 +393,19 @@ patient's (or one linked person's) medication chart (plain JS, no npm); pane/rou
 ROADMAP carries the per-slice narrative and **every open issue number**. This section keeps only what a *next* session
 needs — the lessons that generalise past the slice that found them.
 
+### 2026-09-28 — PR #698 five-agent review, and its fixes on the same PR
+
+- **⇒ A TRIGGER ANOTHER PROCESS CAN CONSUME IS NOT A TRIGGER YOU OWN.** db/055 relied on the generation-change heal,
+  but `cairn-sync init` shares the generation number, heals with the OLD applier (it loads no identity migration)
+  and stamps it — so cairn-node would skip its own heal. db/055 now re-folds the affected pairs itself; the class is
+  #703. **Ask of any "this runs on upgrade" mechanism: who else can run it first, and with what code?**
+- **⇒ RECORDED IS NOT TOOK EFFECT.** An overlay admits the losing assertion (set-union), so "the submit succeeded"
+  says nothing about what stands. Three reviewers independently found a report ("linked", "still joined") and a
+  proposal status (`auto_applied`) built on that assumption. Read the winner back **inside the same transaction**.
+- **⇒ `event_log.body` IS the payload** — no `payload` wrapper (`patient_link_apply` reads `e.body ->> 'subject_a'`).
+  A probe written against `body -> 'payload'` matched nothing and failed silently green-looking; the red test
+  caught it. SQL that reads event bodies outside an applier: copy the applier's own path.
+
 ### 2026-09-27 (later) — R2a: the link precedence floor and the node's judgement (PR #698)
 
 Maintainer split R2 (R2a/R2b) and decided #697 (b) → plan → subagent-driven (six tasks, per-task reviews; opus on the
@@ -393,7 +422,8 @@ safety-critical tasks and the whole-branch review).
   first version could pass against the bug on a slow runner.
 - **⇒ THE WHOLE-BRANCH REVIEW FOUND WHAT NO TASK REVIEW COULD:** a rule written for one verb (link's "both held here")
   applied to the other (unlink — a displayed member could not be separated), and a transitive unlink reported
-  "unlinked" while the charts stayed combined (`still_joined`). **Check each rule against every verb that reaches it.**
+  "unlinked" while the charts stayed combined (now `LinkEffect::StillJoined`). **Check each rule against every verb
+  that reaches it.**
 - **Mechanics:** R1's condensed lessons — survey the tree before designing (a brief is a claim); when a read widens from
   a key to a set, re-read every per-key aggregate; run a plan's verbatim code against its own guards; capture a golden
   BEFORE the rewrite; availability over consistency binds a header read too.

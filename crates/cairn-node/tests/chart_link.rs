@@ -854,3 +854,50 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
         "the judgement's own move still lands once it is unblocked"
     );
 }
+
+#[tokio::test]
+async fn a_floor_refusal_reaches_the_caller_with_its_reason_and_its_step() {
+    // #702: a refusal from the in-DB floor must reach the operator naming BOTH the step that
+    // met it and the server's reason — not a bare `db error`. Drive a real one past every
+    // Rust pre-check: `stranger` has a `patient_chart` row (so this node reads it as held)
+    // but no event history, and sorts LOW (minted first; v7 is time-ordered), so the event
+    // is filed under it and db/005 step 8b refuses a first event that is not a registration.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let stranger = Uuid::now_v7();
+    let a = Uuid::now_v7();
+    assert!(
+        stranger < a,
+        "precondition: the historyless chart is the one filed under"
+    );
+    common::submit_registration(&c, &sk_a, &kid_a, a, 1).await;
+    c.execute(
+        "INSERT INTO patient_chart (patient_id) VALUES ($1::text::uuid)",
+        &[&stranger.to_string()],
+    )
+    .await
+    .unwrap();
+
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let refused = link_charts(&mut c, a, stranger, &who, ORIGIN)
+        .await
+        .expect_err("db/005 step 8b refuses the event");
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("submitting the judgement through the floor"),
+        "names the step: {chain}"
+    );
+    assert!(
+        chain.contains("the first event on a chart must be its registration"),
+        "and the floor's reason: {chain}"
+    );
+    assert_eq!(standing(&c, a, stranger).await, None, "nothing was written");
+}

@@ -699,14 +699,19 @@ Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md
   - **db/018:** `patient_link.attested` (CREATE + paired ALTER, #207) holding the ONE definition of attested,
     evaluated once per applied event. `cairn_link_overlay_wins` ranks attested first, then `cairn_hlc_overlay_wins`.
     The applier, the #190 door refusal and the flag read-back all use it.
-  - **db/055:** a backfill, plus the generation bump whose loader heal re-folds winners the old order chose.
+  - **db/055:** a backfill, the generation bump whose loader heal re-folds winners the old order chose, and its
+    own re-fold of every pair whose standing winner is un-attested beside a vouched assertion — because a
+    cairn-sync-first load can use up the heal (#703).
   - **`chart_link.rs`:** `link_charts`/`unlink_charts` with a `Reviewer` (the human key signs and attests; no
     node-key fallback). Admission: `link` requires both charts to be held here; `unlink` also admits a displayed
-    member that is not held here, filed under the held chart (db/005 step 8b). `LinkOutcome::still_joined` flags an
-    unlink through a third chart. An open proposal moves in the same transaction; closed ones are never touched.
-    One lock order: proposal row, then CARNLK.
+    member that is not held here, filed under the held chart (db/005 step 8b). Each judgement reads back, in its own
+    transaction, whether its event stands: `LinkOutcome::effect` is `TookEffect`, `Outranked` (a later judgement
+    about the same pair stands) or `StillJoined` (an unlink through a third chart). An open proposal moves in the
+    same transaction; closed ones are never touched. One lock order: proposal row, then CARNLK. Every postgres
+    call names its step (`chart_link.rs` is in the #467 legibility guard).
   - `apply_accepted_proposal` is now a thin wrapper, still with no production caller.
-  - `auto_apply` skips a pair a human has already judged.
+  - `auto_apply` answers "a human already judged" (`AutoOutcome::AlreadyJudged`, its own summary count) before the
+    veto re-check, and rolls back a matcher link that does not stand once submitted.
   - CLI `link-charts` / `unlink-charts`.
   - identity.md §5.2 states the mixed-fleet consequence.
 - **Tests.**
@@ -714,12 +719,20 @@ Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md
     both directions, column truthfulness, the upgrade re-fold.
   - `chart_link.rs`: incl. a lock-order test that waits on `pg_stat_activity` Lock.
   - An `auto_apply.rs` judged-pair skip, and `migration_replay_widening` + the #477 legibility pin updated.
+  - From the PR review (2026-09-28): the cairn-sync-first upgrade, the backfill never marking an unvouched token
+    attested, an outranked judgement, a losing matcher link rolled back, a floor refusal's step and reason, the
+    CLI's command → verb mapping, realistic closed proposals under both verbs plus db/019's invariant.
 - **Filed:** [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699) (neither-held unlink refused though both
   show on a held chart's record — decide before R2b) · [#700](https://github.com/cairn-ehr/cairn-ehr/issues/700)
   (auto-apply's judged-pair skip races; a skipped proposal stays `pending` — R5's worklist must filter it) ·
   [#701](https://github.com/cairn-ehr/cairn-ehr/issues/701) (db/054 should read `pl.attested`) ·
   [#702](https://github.com/cairn-ehr/cairn-ehr/issues/702) (a floor refusal via `chart_link` reads as a bare `db
-  error`).
+  error` — addressed on PR #698). **From the PR review (2026-09-28):**
+  [#703](https://github.com/cairn-ehr/cairn-ehr/issues/703) (cairn-sync can use up the generation heal; a node-only
+  migration relying on it is silently skipped) · [#704](https://github.com/cairn-ehr/cairn-ehr/issues/704)
+  (db/019's `applied_event_id ⇔ applied` as a CHECK) · [#705](https://github.com/cairn-ehr/cairn-ehr/issues/705)
+  (`link-charts` against a database at an older generation) · [#706](https://github.com/cairn-ehr/cairn-ehr/issues/706)
+  (R2a test follow-ups). #700's race half is handled on PR #698; its pending-forever half remains.
 - **§1.2:**
   - **Paper counterpart:** clipping two folders together, or writing "NOT the same patient — checked" on both
     covers.
