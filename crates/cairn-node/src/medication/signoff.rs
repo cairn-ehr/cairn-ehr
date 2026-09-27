@@ -110,11 +110,16 @@ pub struct SignOffOutcome {
 ///   chart; putting chart B's drug on chart A is a wrong-chart write, and the two charts
 ///   can be unlinked again tomorrow (identity is a claim, never a fact). A target whose
 ///   chart cannot be read is reported as a `FailedLine`, never guessed.
-/// - **A changed chart set refuses the whole gesture**, before anything is minted or
-///   written. The clinician vouched for the list they SAW; a link that landed while it was
-///   on screen adds another chart's drugs they never reviewed, and an unlink removes lines
-///   they did. `displayed` is the set that was on screen, compared against the first read;
-///   the first read is also compared against the second (a link landing between them).
+/// - **A changed chart set refuses the whole gesture**, and nothing is ever WRITTEN once it
+///   does. The clinician vouched for the list they SAW; a link that landed while it was on
+///   screen adds another chart's drugs they never reviewed, and an unlink removes lines
+///   they did. `displayed` is the set that was on screen, compared against the first read —
+///   that half runs before any HLC is minted. The first read is ALSO compared against the
+///   second, catching a link landing between them; that half runs AFTER minting (HLCs are
+///   minted once, up front, to size the mint before the transaction opens — see below), so
+///   a refusal there burns the minted HLCs rather than pre-empting them. Either way nothing
+///   is written: the per-line transactions that would write an attestation do not open
+///   until after both compares have passed.
 ///
 /// `displayed: None` skips ONLY the on-screen compare, and exists for the CLI verb, which
 /// shows no list before signing and so has no displayed set to hold the gesture to — it

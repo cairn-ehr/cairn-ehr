@@ -89,10 +89,23 @@ pub(crate) fn build_row(
     }
 }
 
+/// A linked row whose `source_charts` came back empty — reachable only through the race
+/// documented on `MedicationRow::source_charts` (a group-chart read landing between two of
+/// `list_patient_medications`'s several statements), never in normal operation. Rendered
+/// explicitly rather than as an empty string: `Some("")` is what `linked.then(||
+/// source_label(...))` used to produce here, and `main.js` treats an empty string as
+/// falsy — so the row's provenance label would silently vanish from the screen with
+/// nothing to say anything had gone wrong. Principle 4: acknowledged uncertainty ("we do
+/// not know") must always outrank a silent gap that reads as "nothing to say".
+const SOURCE_UNREAD: &str = "(chart not read)";
+
 /// The source-chart label: every chart owning a member thread of the group, in the row's own
 /// (sorted) order. ALL of them, not just one: a group spanning two charts was recorded on
 /// both, and naming only the first would hide the second folder.
 fn source_label(charts: &[Uuid]) -> String {
+    if charts.is_empty() {
+        return SOURCE_UNREAD.to_string();
+    }
     charts
         .iter()
         .map(Uuid::to_string)
@@ -370,5 +383,30 @@ mod tests {
             Some(format!("{}, {}", opened, Uuid::from_u128(2)))
         );
         assert_eq!(view.charts, vec![opened.to_string(), linked.to_string()]);
+    }
+
+    /// The race case named on `MedicationRow::source_charts` itself: a group-chart read
+    /// landing between the read model's several statements can leave a row on a LINKED
+    /// list with an empty `source_charts`. Before this fix, `linked.then(|| source_label(…))`
+    /// turned that into `Some("")` — an empty string `main.js` treats as falsy, so the row
+    /// silently lost its provenance label on screen with no visible sign anything was
+    /// wrong. Render an explicit marker instead, so the clinician sees "we don't know",
+    /// never a blank that reads as "nothing to say" (principle 4: acknowledged uncertainty
+    /// beats a silent gap).
+    #[test]
+    fn a_linked_row_with_no_source_charts_says_so_rather_than_going_silent() {
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        r.source_charts = vec![];
+        let view = super::build_row(&r, &std::collections::HashSet::new(), true);
+        assert_eq!(
+            view.source,
+            Some("(chart not read)".to_string()),
+            "an empty source_charts on a linked list must say so explicitly, not render as \
+             an empty (falsy) string"
+        );
     }
 }

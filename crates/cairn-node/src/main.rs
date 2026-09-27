@@ -5006,6 +5006,16 @@ async fn main() -> anyhow::Result<()> {
                 // Deliberately explicit: an empty chart is a real clinical state, and
                 // silence would read as "the query failed" (issue #331 covers recording
                 // "nil medications, reviewed" as an act — not attempted here).
+                //
+                // The combined-read header (ADR-0076 decision 1) applies here too, before
+                // any row-naming logic: an empty list read across linked charts is still a
+                // combined read, and "no medications recorded" alone would read as a
+                // single, unlinked chart when it may be several.
+                if let Some(header) =
+                    cairn_node::medication::list_text::combined_list_header(&list.charts)
+                {
+                    println!("{header}");
+                }
                 println!("no medications recorded for {patient}");
                 if !list.groups_missing_from_chart.is_empty() {
                     // The #334 case this whole fix exists for: "no medications recorded"
@@ -5026,6 +5036,16 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             } else {
+                // ADR-0076 decision 1: a combined list must SAY it is combined, not just
+                // carry the chart set silently in `--json`'s `charts` field. Printed once,
+                // before the rows, and ONLY when the read actually crossed more than one
+                // chart — `combined_list_header` returns `None` on a never-linked chart, so
+                // that chart's text output gains not one new character (#679).
+                if let Some(header) =
+                    cairn_node::medication::list_text::combined_list_header(&list.charts)
+                {
+                    println!("{header}");
+                }
                 for row in &list.rows {
                     let name = row.display_name();
                     let dose = match (&row.dose_amount, &row.dose_unit) {
@@ -5053,7 +5073,21 @@ async fn main() -> anyhow::Result<()> {
                             }
                         })
                         .collect();
-                    println!("{name}{dose} [{status}] — {}", vouches.join("; "));
+                    // #679: name the chart(s) this line was recorded on WHENEVER the read
+                    // is combined — the fix this arm exists for is exactly the case where
+                    // an operator sees a drug on a linked chart with no clue it lives
+                    // elsewhere, then gets a baffling refusal from a later command that
+                    // targets the wrong chart. `row_source_suffix` returns `None` (an empty
+                    // suffix) on a never-linked list, so nothing changes there.
+                    let source_suffix = cairn_node::medication::list_text::row_source_suffix(
+                        &row.source_charts,
+                        list.charts.is_linked(),
+                    )
+                    .unwrap_or_default();
+                    println!(
+                        "{name}{dose} [{status}] — {}{source_suffix}",
+                        vouches.join("; ")
+                    );
                     if row.reconciliation_flagged {
                         println!("    ! possible un-reconciled duplicate");
                     }
@@ -5061,13 +5095,15 @@ async fn main() -> anyhow::Result<()> {
                         println!("    ! two different drug anchors in this group");
                     }
                     if row.cross_patient {
-                        // This row displayed at all only because this patient happened to
-                        // win the DISTINCT ON tiebreak in medication_group_display — the
-                        // group's OTHER patient sees no row for it (issue #334). The dose
-                        // shown may be that other patient's, so the line cannot be signed.
-                        // The member-thread list is printed with it because the remedy named
-                        // here takes thread ids, and `row.members` holds only THIS patient's
-                        // half of the group.
+                        // Since #334's fix, this group is shown on BOTH charts it reaches —
+                        // this patient's and the other patient's each see their own row for
+                        // it, flagged and withheld on both sides; it is not displayed here
+                        // merely because this patient happened to win a DISTINCT ON
+                        // tiebreak. The dose shown may still be the other patient's (the
+                        // group's display winner isn't scoped per-patient), so the line
+                        // cannot be signed. The member-thread list is printed with it
+                        // because the remedy named here takes thread ids, and `row.members`
+                        // holds only THIS patient's half of the group.
                         println!(
                             "    ! this group's member threads span more than one patient — \
                              the dose shown may belong to the other patient, so this line \
@@ -5183,23 +5219,28 @@ async fn main() -> anyhow::Result<()> {
                     "signed off {} medication thread(s) for {patient}",
                     out.attested.len()
                 );
-                if out.charts.is_linked() {
-                    // A combined list (ADR-0076): the gesture read every chart linked to
-                    // {patient}, and each line above was signed on the chart it was recorded
-                    // on — not all on {patient}. Say so, or the operator reads "for {patient}"
-                    // as "recorded on {patient}", which is false for the other charts' lines.
-                    let charts: Vec<String> =
-                        out.charts.members().iter().map(Uuid::to_string).collect();
-                    println!(
-                        "  across {} linked charts ({}); each line was signed on the chart it \
-                         was recorded on",
-                        charts.len(),
-                        charts.join(", ")
-                    );
-                }
                 for (thread, event) in out.attested.iter().zip(&out.event_ids) {
                     println!("  {thread} -> attestation {event}");
                 }
+            }
+            if out.charts.is_linked() {
+                // A combined list (ADR-0076): the gesture READ every chart linked to
+                // {patient} regardless of whether anything above ended up attested — a
+                // chart that turned out to need no signature (or whose only outstanding
+                // lines were withheld) was still read as this wider set, and the operator
+                // must be told so even when `out.attested` is empty. Any line signed above
+                // was signed on the chart it was recorded on, not necessarily {patient}, so
+                // the operator does not read "for {patient}" as "recorded on {patient}".
+                // Printed unconditionally on `is_linked()` (moved out of the success-only
+                // branch, #679) rather than only when something was attested.
+                let charts: Vec<String> =
+                    out.charts.members().iter().map(Uuid::to_string).collect();
+                println!(
+                    "  this gesture read across {} linked charts ({}); any line signed above \
+                     was signed on the chart it was recorded on",
+                    charts.len(),
+                    charts.join(", ")
+                );
             }
             if !out.withheld.is_empty() {
                 // Printed in EVERY outcome, never folded into the success line. "Signed off
