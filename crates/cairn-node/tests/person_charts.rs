@@ -187,3 +187,75 @@ async fn each_member_reports_its_own_name_and_date() {
     assert_eq!(of(bare).birth_date, None);
     assert_eq!(of(smith).trust, "confirmed");
 }
+
+/// A member's trust state is READ, not defaulted. The test above only ever sees "confirmed",
+/// which the no-row default would produce even if the trust read matched nothing at all. A
+/// link this node's hard veto flagged (db/018 `link_veto_flag`) makes both charts read
+/// `under-review` in `chart_trust` — exactly the state the combined header must not paper
+/// over. The flag is set directly: its lifecycle is db/018's, pinned by `link_veto_floor.rs`.
+#[tokio::test]
+async fn a_member_under_review_reads_under_review() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let a = fresh(&c, &sk, &kid).await;
+    let x = fresh(&c, &sk, &kid).await;
+    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
+    c.execute(
+        "INSERT INTO link_veto_flag (low, high, content_address) \
+         SELECT low, high, content_address FROM patient_link \
+         WHERE low = $1::text::uuid AND high = $2::text::uuid",
+        &[&a.min(x).to_string(), &a.max(x).to_string()],
+    )
+    .await
+    .unwrap();
+
+    let set = person_charts(&c, a).await.unwrap();
+    let lines = chart_identities(&c, &set).await.unwrap();
+    assert!(lines.iter().all(|l| l.held));
+    assert!(lines.iter().all(|l| l.trust == "under-review"), "{lines:?}");
+}
+
+/// A link can name a chart this node holds nothing about: a link event is not refused for
+/// naming an unknown subject, it can sync ahead of that chart's registration, and a
+/// scope-limited node (ADR-0004) may never receive the other chart at all. The set still
+/// includes it (the link stands), but its line must not claim "identity confirmed" — the
+/// no-`chart_trust`-row default is true only of a chart that exists here. Principle 4: an
+/// unknown identity is `unknown`, and `held` says why the name and date are absent.
+#[tokio::test]
+async fn a_member_this_node_does_not_hold_is_not_confirmed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let a = fresh(&c, &sk, &kid).await;
+    let elsewhere = Uuid::now_v7(); // never registered, nothing about it held here
+    submit_link_event(&c, &sk, &kid, a, elsewhere, 10, true).await;
+
+    let set = person_charts(&c, a).await.unwrap();
+    assert_eq!(set, ChartSet::new([a, elsewhere]).unwrap());
+    let lines = chart_identities(&c, &set).await.unwrap();
+    let of = |p: Uuid| lines.iter().find(|l| l.patient_id == p).unwrap();
+    assert!(of(a).held);
+    assert_eq!(of(a).trust, "confirmed");
+    assert!(!of(elsewhere).held, "nothing about it is held on this node");
+    assert_eq!(
+        of(elsewhere).trust,
+        "unknown",
+        "never the no-row default of `confirmed`"
+    );
+    assert_eq!(of(elsewhere).name, None);
+}

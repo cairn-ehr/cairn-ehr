@@ -161,6 +161,65 @@ async fn a_combined_sign_off_attests_each_thread_under_its_own_chart() {
     );
 }
 
+/// ONE reconciled group whose two threads sit on two linked charts. The test above cannot
+/// tell "the thread's own chart" from "the chart the row displays under", because each of
+/// its groups has one thread on one chart. Here the row has a single display chart
+/// (`MedicationRow::display_chart`, `medication_group_display`'s one winner) but its threads
+/// live on two — so an orchestrator that took the chart from the row would attest one of
+/// the two threads on the wrong chart, whichever chart won the display pick. The database
+/// floor would not catch it (#689), which makes this test the guard.
+#[tokio::test]
+async fn a_group_spanning_two_linked_charts_signs_each_thread_on_its_own_chart() {
+    let Some((_guard, mut c, (sk, kid, hsk, hkid))) = open().await else {
+        return;
+    };
+    let a = chart(&c, &sk, &kid).await;
+    let b = chart(&c, &sk, &kid).await;
+    let ta = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    let tb = assert_one(&mut c, &sk, &kid, b, "metformin").await;
+    // The peer-arrival shape of a cross-chart group (the local door refuses to reconcile
+    // across charts — #690 — and the sync path never does), as `combined_read.rs` builds it.
+    c.execute(
+        "INSERT INTO medication_group_member (medication_id, group_id) VALUES \
+         ($1::text::uuid, $1::text::uuid), ($2::text::uuid, $1::text::uuid)",
+        &[&ta.to_string(), &tb.to_string()],
+    )
+    .await
+    .unwrap();
+    submit_link_event(&c, &sk, &kid, a, b, 10, true).await;
+    let list = list_patient_medications(&c, b).await.unwrap();
+    assert_eq!(list.rows.len(), 1, "one group, one line");
+
+    let out = sign_off_medication_list(
+        &mut c,
+        &sk,
+        "origin-a",
+        &params(&hsk, &hkid),
+        b,
+        Some(&list.charts),
+    )
+    .await
+    .unwrap();
+
+    assert!(out.failed.is_empty(), "{:?}", out.failed);
+    let mut attested = out.attested.clone();
+    attested.sort();
+    let mut both = vec![ta, tb];
+    both.sort();
+    assert_eq!(attested, both, "both threads of the one line are signed");
+    let event_of = |t: Uuid| out.event_ids[out.attested.iter().position(|x| *x == t).unwrap()];
+    assert_eq!(
+        chart_of_event(&c, event_of(ta)).await,
+        a,
+        "the thread recorded on A is attested on A"
+    );
+    assert_eq!(
+        chart_of_event(&c, event_of(tb)).await,
+        b,
+        "the thread recorded on B is attested on B"
+    );
+}
+
 /// A link landing while the list is on screen changes what the gesture would sign (B's
 /// drugs join the list the clinician never saw), so it is refused and nothing is written.
 #[tokio::test]

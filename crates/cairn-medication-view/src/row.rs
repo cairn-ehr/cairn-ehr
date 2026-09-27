@@ -84,7 +84,12 @@ pub struct MedicationRow {
     /// Nor is it where a signature goes: sign-off attests each thread under its own chart.
     /// For where the drug was recorded, read `source_charts`; for the chart a thread lives
     /// on (the attestation target), read `MemberVouch::patient_id`.
-    pub patient_id: Uuid,
+    ///
+    /// Named `display_chart` in Rust so no later writer mistakes it for a write target (it
+    /// was `patient_id`, which invites exactly that); serialized as `patient_id` so the
+    /// `--json` output and the never-linked golden are unchanged.
+    #[serde(rename = "patient_id")]
+    pub display_chart: Uuid,
     /// The free-text term as asserted — may legitimately be vague ("little white pill").
     pub term: String,
     /// The ADR-0059 coded display name, when the drug has been coded.
@@ -103,16 +108,24 @@ pub struct MedicationRow {
     /// Two different drug anchors inside one reconciled group
     /// (`medication_group_coding_conflict`) — a possible mis-reconciliation.
     pub coding_conflict: bool,
-    /// This group's member threads reach a chart OUTSIDE the chart set the list was read
-    /// over (`medication_group_cross_patient`, tested against `PatientMedicationList::charts`)
-    /// — a standing wrong-chart hazard (issue #334). A group spanning two linked charts of the
-    /// same person is not one (ADR-0076): only another person's chart can put their dose on
-    /// this line.
+    /// This line may carry another person's dose, so it is withheld from sign-off — a
+    /// standing wrong-chart hazard (issue #334). True when the group's threads reach a chart
+    /// OUTSIDE the chart set the list was read over, by either of two sources (the
+    /// statement-derived `source_charts`, or `medication_group_cross_patient`, which also sees
+    /// a thread known only through an orphan cessation); and, while the set holds a pair
+    /// whose link this node's hard veto flagged, when the group spans more than one chart at
+    /// all. A group spanning two linked charts of the same person is otherwise not a hazard
+    /// (ADR-0076). The rule is `cairn-node`'s `medication::read::is_wrong_chart_hazard`.
     pub cross_patient: bool,
     /// The charts owning at least one member thread of this group, sorted. The row names
     /// where the drug was recorded so a clinician reading a combined list — one read over
     /// several linked charts (ADR-0076) — can tell which chart a line came from, rather than
     /// having to infer it from which patient happened to be open.
+    ///
+    /// Empty only in a race: a concurrent reconciliation or separation re-keyed the group
+    /// between two of the read's statements (READ COMMITTED, one snapshot per statement —
+    /// see `cairn-node`'s `medication/read.rs`). Renderers name that state ("not read")
+    /// rather than printing an empty label.
     pub source_charts: Vec<Uuid>,
 }
 
@@ -136,7 +149,7 @@ mod tests {
     fn row(term: &str, coding_display: Option<&str>) -> MedicationRow {
         MedicationRow {
             group_id: Uuid::from_u128(1),
-            patient_id: Uuid::from_u128(2),
+            display_chart: Uuid::from_u128(2),
             term: term.into(),
             coding_display: coding_display.map(Into::into),
             formulation: None,

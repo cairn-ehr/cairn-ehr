@@ -19,7 +19,7 @@ use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
     format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus, PatientMedicationList,
-    SEPARATION_INSTRUCTION,
+    MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -127,12 +127,11 @@ pub fn missing_report(
         return None;
     }
     Some(format!(
-        "This chart is INCOMPLETE. {} medication group(s) known to this patient cannot be \
-         displayed here, because their threads are shared with another patient's record: \
-         {}. {}",
+        "This chart is INCOMPLETE. {} medication group(s) this record holds a thread in have \
+         no line on this list: {}. {}",
         missing.len(),
         format_hazard_groups(missing, separation_targets),
-        SEPARATION_INSTRUCTION
+        MISSING_GROUP_INSTRUCTION
     ))
 }
 
@@ -294,8 +293,10 @@ mod tests {
         );
     }
 
-    /// The half with no row at all: a group the node knows this patient has a thread in,
-    /// but which displays on someone else's chart. The report is the ONLY surface it has.
+    /// The half with no row at all: a group the node knows this record has a thread in, but
+    /// which has no line (a group re-keyed mid-read, or a projection defect — a cross-patient
+    /// group is SHOWN since ADR-0076). The report is the ONLY surface it has, and it must not
+    /// name the cross-patient cause or its separation remedy.
     #[test]
     fn a_group_that_cannot_be_displayed_is_reported_as_missing() {
         let list = PatientMedicationList {
@@ -313,6 +314,11 @@ mod tests {
             .missing_message
             .expect("an incomplete chart must say so");
         assert!(message.contains(&uid(71).to_string()), "{message}");
+        assert!(
+            !message.contains("another patient"),
+            "a missing group is no longer the cross-patient case: {message}"
+        );
+        assert!(message.contains("Reload"), "{message}");
         assert!(
             view.sign_off_enabled,
             "an incomplete chart still signs the lines it CAN show (ADR-0060)"

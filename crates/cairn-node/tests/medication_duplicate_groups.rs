@@ -1,8 +1,7 @@
-//! Fix round 1 (Task 2 review, Important finding): `cairn_medication_duplicate_groups`
-//! (db/054) had no behavioural test of its own — only a source-level drift guard pinning
-//! it against db/033's dup_key expression, plus a manual `psql` smoke test on empty
-//! input. This file pins the function's actual SET semantics case by case, calling the
-//! SQL function directly (no Rust reader exists for it yet — Task 4 owns that).
+//! `cairn_medication_duplicate_groups` (db/054)'s own SET semantics, case by case, calling
+//! the SQL function directly. The source-level drift guard (`medication_dup_key_drift.rs`)
+//! pins only its duplicate-key TEXT against db/033's; this file pins what it DOES. Its Rust
+//! reader is `medication::read::read_reconciliation_flagged_groups`.
 //!
 //! DB-gated on $CAIRN_TEST_PG, serialized cluster-wide via `db::test_serial_guard`, same
 //! conventions as `medication_read.rs` (`medication_setup` + `submit_registration` + the
@@ -10,7 +9,8 @@
 //! `INSERT INTO medication_group_member` way `medication_read.rs`'s cross-patient tests
 //! do). Linking (`person_member`/`patient_link`) is deliberately NOT exercised here — the
 //! function takes an explicit chart array, not a linked person's set; that composition
-//! (person_charts feeding this function) is Task 4's job.
+//! (person_charts feeding this function) is pinned by `combined_read.rs`'s
+//! `the_same_drug_on_two_linked_charts_is_flagged`.
 mod common;
 
 use cairn_event::SigningKey;

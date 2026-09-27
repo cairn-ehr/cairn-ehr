@@ -3,12 +3,18 @@
 //!
 //! A chart command must name the set the clinician SAW and refuse when it changed
 //! (decision 3). That comparison crosses an IPC hop and two database reads, so the set's
-//! ORDER must never make two equal sets compare unequal: the constructor sorts and
-//! deduplicates, and it is the only place a `ChartSet` is built. It is never empty — a
-//! read always covers at least the chart that was opened.
+//! ORDER must never make two equal sets compare unequal: `new` sorts and deduplicates, and
+//! it and `single` (one chart, trivially in order) are the only ways a `ChartSet` is built.
+//! It is never empty — a read always covers at least the chart that was opened.
 use serde::Serialize;
 use uuid::Uuid;
 
+/// Serialize only. Do NOT derive `Deserialize`: a plain derive would build a `ChartSet`
+/// straight from the wire, skipping `new`'s sort and dedup, and `contains` (a binary search)
+/// would then silently answer wrong. If one is ever needed, use
+/// `#[serde(try_from = "Vec<Uuid>")]` through `new`. Today the window sends the displayed set
+/// back as `Vec<String>` and parses it through `new` (`cairn-gui-tauri`'s
+/// `check_displayed_set`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ChartSet(Vec<Uuid>);

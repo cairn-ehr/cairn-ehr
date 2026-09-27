@@ -5,19 +5,21 @@
 //! `MedicationList` CLI arm's plain-text branch printed a row's name, dose, status and
 //! vouches, and NOTHING about which chart the row came from. The failure that surfaces:
 //! an operator opens chart A (linked to chart B), sees amlodipine on the printed list — it
-//! is actually recorded on B — and later runs `medication-cease --patient A …` against it,
-//! which refuses with a "#192 patient cannot change" error that names no chart and gives
-//! no hint the drug was never A's to begin with. The list itself had the information
+//! is actually recorded on B — and later runs `medication-cease A <thread>` against it,
+//! which refuses with db/031's "#192 patient cannot change" error: it names the two charts
+//! only as bare uuids in a thread-level message, with no hint that the list it came from
+//! was combined or that the drug was never A's. The list itself had the information
 //! (`MedicationRow::source_charts`) and never said it.
 //!
 //! WHY A SEPARATE PURE MODULE RATHER THAN INLINE STRINGS IN `main.rs`. Two properties need
-//! checking independently of any database: that a NEVER-linked chart's output is untouched
-//! (byte-identical to what this CLI printed before R1 — nobody reading a single, unlinked
-//! chart should see so much as one new character), and that a LINKED chart's header and
-//! per-row suffix actually name every chart involved. Both are properties of pure string
+//! checking independently of any database: that a NEVER-linked chart gains no header, member
+//! line or row suffix from the combined read (nobody reading a single, unlinked chart should
+//! see so much as one new character of it), and that a LINKED chart's header and per-row
+//! suffix actually name every chart involved. Both are properties of pure string
 //! formatting over `ChartSet`/`Vec<Uuid>`, so they belong in functions a unit test can
 //! drive directly — not buried in a 150-line `println!` arm that only a full CLI run
 //! exercises.
+use crate::patient::person::ChartIdentity;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 
@@ -27,7 +29,7 @@ use uuid::Uuid;
 /// information that exists only because there is more than one chart to name; printing it
 /// unconditionally would mean EVERY chart's output gained a line it did not have before
 /// R1, not just a linked one's. `main.rs` prints nothing at all when this returns `None`,
-/// which is what keeps a never-linked chart's output byte-identical to its pre-R1 form.
+/// which is what keeps the combined read from adding anything to a never-linked chart's output.
 pub fn combined_list_header(charts: &ChartSet) -> Option<String> {
     if !charts.is_linked() {
         return None;
@@ -41,7 +43,7 @@ pub fn combined_list_header(charts: &ChartSet) -> Option<String> {
 
 /// The per-row suffix naming where one displayed line was actually recorded.
 ///
-/// `None` on a never-linked list, for the same byte-identical reason as
+/// `None` on a never-linked list, for the same nothing-added reason as
 /// [`combined_list_header`] — `linked` is `PatientMedicationList::charts.is_linked()`,
 /// decided once per list by the caller (the same value the header was built from), rather
 /// than re-derived here from `source_charts` alone: an empty `source_charts` must not be
@@ -66,6 +68,30 @@ pub fn row_source_suffix(source_charts: &[Uuid], linked: bool) -> Option<String>
     ))
 }
 
+/// One line per member chart of a combined list, naming its identity STATE — printed under
+/// [`combined_list_header`].
+///
+/// WHY THE CLI NEEDS IT. A link this node's hard veto doubts still combines the read, and both
+/// charts then read `under-review`; the window shows that on each member line, and this is the
+/// CLI's equivalent. Without it an operator reading `medication-list` sees "combined list
+/// across 2 linked charts" and nothing saying the combination is itself in question. Names
+/// and dates are deliberately NOT printed: the header's job is the state of the link, and the
+/// CLI has never printed demographics on this verb. A chart this node does not hold says so
+/// (its `unknown` state would otherwise read as an unexplained gap).
+pub fn member_lines(members: &[ChartIdentity]) -> Vec<String> {
+    members
+        .iter()
+        .map(|m| {
+            let not_held = if m.held {
+                ""
+            } else {
+                " (chart not yet received on this node)"
+            };
+            format!("  chart {}: identity {}{not_held}", m.patient_id, m.trust)
+        })
+        .collect()
+}
+
 /// Render a slice of chart/thread ids as the comma-separated form both functions above
 /// share, so the header and the per-row suffix can never drift into two different
 /// separators or orderings for what is conceptually the same kind of list.
@@ -84,7 +110,7 @@ mod tests {
         Uuid::from_u128(n)
     }
 
-    /// The byte-identical guarantee: a never-linked chart gets no header and no suffix at
+    /// The nothing-added guarantee: a never-linked chart gets no header and no suffix at
     /// all, on any row — including one that (implausibly, but not something this function
     /// should trust) carries source charts of its own.
     #[test]
@@ -118,6 +144,30 @@ mod tests {
             suffix,
             format!(" — recorded on chart(s) {}, {}", u(1), u(2))
         );
+    }
+
+    /// Each member names its own state, and a chart not held here says why it is `unknown`.
+    #[test]
+    fn member_lines_name_each_charts_identity_state() {
+        let member = |n: u128, held: bool, trust: &str| ChartIdentity {
+            patient_id: u(n),
+            held,
+            name: Some("never printed".into()),
+            birth_date: None,
+            trust: trust.into(),
+        };
+        let lines = member_lines(&[member(1, true, "under-review"), member(2, false, "unknown")]);
+        assert_eq!(
+            lines,
+            vec![
+                format!("  chart {}: identity under-review", u(1)),
+                format!(
+                    "  chart {}: identity unknown (chart not yet received on this node)",
+                    u(2)
+                ),
+            ]
+        );
+        assert!(lines.iter().all(|l| !l.contains("never printed")));
     }
 
     /// The race case: `source_charts` empty on a linked list says so explicitly rather than

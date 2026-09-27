@@ -19,7 +19,9 @@
 //!    clinician needs to act on.
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
-use crate::chart_set::{chart_pane, check_displayed_set, linked_members, ChartPane};
+use crate::chart_set::{
+    chart_pane, check_displayed_set, linked_members, signed_across_message, ChartPane,
+};
 use crate::state::{AppState, Now, SessionKey};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -47,8 +49,8 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
     // The node resolves the chart SET itself; `list.charts` is what the view hands the webview
     // to send back with every write.
     let list = read_chart_of(state, patient).await?;
-    // NOT `?`: a failed read of the member NAMES must never hide the medication list itself
-    // (availability over consistency, Ruling R8). `chart_pane` turns it into a warning instead.
+    // NOT `?`: a failed read of the member identities must never hide the medication list
+    // itself (availability over consistency). `chart_pane` turns it into a warning instead.
     let members = linked_members(state, &list.charts).await;
     Ok(chart_pane(&list, members))
 }
@@ -154,6 +156,9 @@ pub struct SignOffReport {
     /// line still was. Naming which and why is what makes that safe rather than merely
     /// convenient.
     pub failed: Vec<String>,
+    /// On a combined list only: the charts the gesture read across, and that each line was
+    /// signed on the chart it was recorded on (`chart_set::signed_across_message`).
+    pub charts_message: Option<String>,
 }
 
 /// Sign off every unsigned or stale drug on the chart — the ONE gesture (#288).
@@ -182,7 +187,7 @@ pub async fn sign_off_impl(
     // as exactly that everywhere. This is the window's early snapshot; the orchestrator below
     // compares again against its own first read, and that one is authoritative.
     let read_set = read_chart_of(state, patient).await?.charts;
-    check_displayed_set(&read_set, &charts)?;
+    let shown = check_displayed_set(&read_set, &charts)?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -216,8 +221,9 @@ pub async fn sign_off_impl(
             &state.node_origin,
             &params,
             patient,
-            // Checked equal to what the webview sent, just above.
-            Some(&read_set),
+            // What the webview displayed — the orchestrator re-compares it against its own
+            // first read, so the authoritative check is against the screen itself.
+            Some(&shown),
         )
         .await
         .map_err(|e| format!("{e:#}"))?
@@ -242,6 +248,7 @@ pub async fn sign_off_impl(
             .iter()
             .map(|f| format!("thread {}: {}", f.medication_id, f.error))
             .collect(),
+        charts_message: signed_across_message(&outcome.charts),
     })
 }
 
@@ -293,6 +300,10 @@ pub async fn cease_impl(
     // membership is a clinical fact the node owns. Read BEFORE the other refusals so the set
     // check (ADR-0076 decision 3) comes second, as it does for sign-off.
     let chart = read_chart_of(state, patient).await?;
+    // The ONLY set check a cease gets: unlike sign-off, `cease_medication` takes one thread
+    // and knows nothing of chart sets, so there is no orchestrator-side second compare. What
+    // keeps a cease on the right chart regardless is decision 2 below — each thread is
+    // written on the chart its own statement is on, read from this same `chart`.
     check_displayed_set(&chart.charts, &charts)?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
@@ -491,6 +502,7 @@ pub(crate) mod tests {
             withheld_message: None,
             missing_message: None,
             failed: vec![],
+            charts_message: None,
         })
         .unwrap();
         let cease = serde_json::to_value(CeaseReport {

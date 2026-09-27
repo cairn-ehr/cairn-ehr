@@ -82,10 +82,11 @@
                alike, for a chart linked to nothing, which reads exactly as it always did. -->
           <p id="linked-charts-label" hidden>This record combines linked charts, each with its own identity:</p>
           <ul id="linked-charts" aria-labelledby="linked-charts-label" hidden></ul>
-          <!-- Where the member lines would be, when their names could not be read: the list below
-               is still shown (a clinician must always be able to read), and this says it is
-               combined and why the names are missing. -->
-          <p id="linked-charts-error" role="status" aria-live="polite" hidden></p>
+          <!-- Where the member lines would be, when their identities could not be read: the list
+               below is still shown (a clinician must always be able to read), and this says it is
+               combined, that no member's identity state is known, and why. An alert, not a polite
+               status: it is the one place an under-review member would otherwise have said so. -->
+          <p id="linked-charts-error" role="alert" hidden></p>
           <button id="close-chart" type="button">Find another patient</button>
         </header>
 

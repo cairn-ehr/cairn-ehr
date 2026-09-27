@@ -16,7 +16,9 @@ pub mod fixtures;
 pub mod row;
 pub mod targeting;
 
-pub use chart::{format_hazard_groups, PatientMedicationList, SEPARATION_INSTRUCTION};
+pub use chart::{
+    format_hazard_groups, PatientMedicationList, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+};
 pub use chart_set::ChartSet;
 pub use display::{short_kid, DISPLAYED_KID_CHARS};
 pub use row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};

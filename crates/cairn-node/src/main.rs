@@ -282,6 +282,36 @@ mod attest_context_tests {
     }
 }
 
+/// Print `medication-list`'s combined-read header (ADR-0076 decision 1): the charts the list
+/// covers, then one identity-state line per member — or nothing at all on a never-linked
+/// chart, whose text output gains not one character (`combined_list_header` returns `None`).
+///
+/// The member states are read here, not by the list read, and a failure to read them is a
+/// printed warning, never an error: the medication list must still reach the operator
+/// (availability over consistency — the window's `chart_pane` makes the same choice). The
+/// warning says the identity states are unknown, because a member `under-review` is exactly
+/// what that line would have shown.
+async fn print_combined_header(
+    db: &tokio_postgres::Client,
+    charts: &cairn_medication_view::ChartSet,
+) {
+    let Some(header) = cairn_node::medication::list_text::combined_list_header(charts) else {
+        return;
+    };
+    println!("{header}");
+    match cairn_node::patient::person::chart_identities(db, charts).await {
+        Ok(members) => {
+            for line in cairn_node::medication::list_text::member_lines(&members) {
+                println!("{line}");
+            }
+        }
+        Err(e) => println!(
+            "! the linked charts' identity states could not be read — whether any of them is \
+             under review is unknown: {e:#}"
+        ),
+    }
+}
+
 /// Print a freshly-minted recovery code exactly once, with the honest loss warning.
 fn print_recovery_code(code: &str) {
     eprintln!();
@@ -4997,9 +5027,10 @@ async fn main() -> anyhow::Result<()> {
                 if !list.groups_missing_from_chart.is_empty() {
                     eprintln!(
                         "warning: {} medication group(s) with locally-known content for this \
-                         patient are missing from this chart (issue #334); see \
-                         .separation_targets for the threads to pass to `medication-separate`",
-                        list.groups_missing_from_chart.len()
+                         patient are missing from this chart; .separation_targets lists their \
+                         threads. {}",
+                        list.groups_missing_from_chart.len(),
+                        cairn_node::medication::read::MISSING_GROUP_INSTRUCTION
                     );
                 }
             } else if list.rows.is_empty() {
@@ -5011,24 +5042,21 @@ async fn main() -> anyhow::Result<()> {
                 // any row-naming logic: an empty list read across linked charts is still a
                 // combined read, and "no medications recorded" alone would read as a
                 // single, unlinked chart when it may be several.
-                if let Some(header) =
-                    cairn_node::medication::list_text::combined_list_header(&list.charts)
-                {
-                    println!("{header}");
-                }
+                print_combined_header(&db, &list.charts).await;
                 println!("no medications recorded for {patient}");
                 if !list.groups_missing_from_chart.is_empty() {
-                    // The #334 case this whole fix exists for: "no medications recorded"
-                    // would otherwise be a straightforward LIE when the node actually holds
-                    // content for this patient it just cannot display (a cross-patient
-                    // reconciliation). Never let the plain empty-chart message stand alone
-                    // when this is true.
+                    // "no medications recorded" would otherwise be a straightforward LIE when
+                    // the node holds content for this patient it did not display. Since
+                    // ADR-0076 a cross-patient group is SHOWN (flagged), so this now means a
+                    // group re-keyed mid-read or a projection defect — see
+                    // `MISSING_GROUP_INSTRUCTION`. Never let the plain empty-chart message
+                    // stand alone when it is true.
                     println!(
                         "! but {} medication group(s) with locally-known content for this \
-                         patient are missing from this chart entirely (issue #334) — this is \
-                         NOT the same as \"no medications\". {}\n    {}",
+                         patient are missing from this chart entirely — this is NOT the same \
+                         as \"no medications\". {}\n    {}",
                         list.groups_missing_from_chart.len(),
-                        cairn_node::medication::read::SEPARATION_INSTRUCTION,
+                        cairn_node::medication::read::MISSING_GROUP_INSTRUCTION,
                         cairn_node::medication::read::format_hazard_groups(
                             &list.groups_missing_from_chart,
                             &list.separation_targets
@@ -5039,13 +5067,8 @@ async fn main() -> anyhow::Result<()> {
                 // ADR-0076 decision 1: a combined list must SAY it is combined, not just
                 // carry the chart set silently in `--json`'s `charts` field. Printed once,
                 // before the rows, and ONLY when the read actually crossed more than one
-                // chart — `combined_list_header` returns `None` on a never-linked chart, so
-                // that chart's text output gains not one new character (#679).
-                if let Some(header) =
-                    cairn_node::medication::list_text::combined_list_header(&list.charts)
-                {
-                    println!("{header}");
-                }
+                // chart — see `print_combined_header`.
+                print_combined_header(&db, &list.charts).await;
                 for row in &list.rows {
                     let name = row.display_name();
                     let dose = match (&row.dose_amount, &row.dose_unit) {
@@ -5073,8 +5096,8 @@ async fn main() -> anyhow::Result<()> {
                             }
                         })
                         .collect();
-                    // #679: name the chart(s) this line was recorded on WHENEVER the read
-                    // is combined — the fix this arm exists for is exactly the case where
+                    // ADR-0076 decision 1: name the chart(s) this line was recorded on
+                    // WHENEVER the read is combined — the fix this arm exists for is exactly the case where
                     // an operator sees a drug on a linked chart with no clue it lives
                     // elsewhere, then gets a baffling refusal from a later command that
                     // targets the wrong chart. `row_source_suffix` returns `None` (an empty
@@ -5103,7 +5126,8 @@ async fn main() -> anyhow::Result<()> {
                         // group's display winner isn't scoped per-patient), so the line
                         // cannot be signed. The member-thread list is printed with it
                         // because the remedy named here takes thread ids, and `row.members`
-                        // holds only THIS patient's half of the group.
+                        // holds only the threads on this chart SET, never the other
+                        // patient's half of the group.
                         println!(
                             "    ! this group's member threads span more than one patient — \
                              the dose shown may belong to the other patient, so this line \
@@ -5122,10 +5146,9 @@ async fn main() -> anyhow::Result<()> {
                 if !list.groups_missing_from_chart.is_empty() {
                     println!(
                         "! {} medication group(s) with locally-known content for this patient \
-                         are missing from this chart entirely (issue #334) — this list is \
-                         INCOMPLETE. {}\n    {}",
+                         are missing from this chart entirely — this list is INCOMPLETE. {}\n    {}",
                         list.groups_missing_from_chart.len(),
-                        cairn_node::medication::read::SEPARATION_INSTRUCTION,
+                        cairn_node::medication::read::MISSING_GROUP_INSTRUCTION,
                         cairn_node::medication::read::format_hazard_groups(
                             &list.groups_missing_from_chart,
                             &list.separation_targets
@@ -5231,8 +5254,8 @@ async fn main() -> anyhow::Result<()> {
                 // must be told so even when `out.attested` is empty. Any line signed above
                 // was signed on the chart it was recorded on, not necessarily {patient}, so
                 // the operator does not read "for {patient}" as "recorded on {patient}".
-                // Printed unconditionally on `is_linked()` (moved out of the success-only
-                // branch, #679) rather than only when something was attested.
+                // Printed unconditionally on `is_linked()` rather than only when something
+                // was attested.
                 let charts: Vec<String> =
                     out.charts.members().iter().map(Uuid::to_string).collect();
                 println!(
@@ -5272,10 +5295,10 @@ async fn main() -> anyhow::Result<()> {
                 // clinician and a chart that looks finished while the node knows it is not.
                 println!(
                     "! {} medication group(s) with locally-known content for this patient \
-                     could NOT be displayed on this chart and were therefore NOT signed \
-                     (issue #334) — whatever was signed above, this list is INCOMPLETE. {}",
+                     could NOT be displayed on this chart and were therefore NOT signed — \
+                     whatever was signed above, this list is INCOMPLETE. {}",
                     out.groups_missing_from_chart.len(),
-                    cairn_node::medication::read::SEPARATION_INSTRUCTION
+                    cairn_node::medication::read::MISSING_GROUP_INSTRUCTION
                 );
                 println!(
                     "    {}",

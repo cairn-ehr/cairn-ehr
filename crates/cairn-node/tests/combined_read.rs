@@ -127,7 +127,7 @@ fn strip_new_fields(list: &mut Value) {
 
 /// THE GOLDEN (ADR-0076 R1, plan constraint "a single never-linked chart reads exactly as
 /// before"). Captured against the read as it stood BEFORE the combined read replaced it
-/// (the post-Task-3 tree, controller ruling R2), and required to pass unchanged after.
+/// (the post-Task-3 tree of the R1 plan), and required to pass unchanged after.
 ///
 /// One never-linked chart holding one of each thing the read distinguishes: an attested
 /// active drug (a Fresh vouch), a ceased drug (the past view), a reconciled same-chart pair
@@ -461,6 +461,150 @@ async fn a_group_reaching_outside_the_set_is_still_a_hazard() {
     assert_eq!(theirs.rows.len(), 1);
     assert!(theirs.rows[0].cross_patient);
     assert!(theirs.groups_missing_from_chart.is_empty());
+}
+
+/// A link this node's own hard veto flagged (db/018 `link_veto_flag`: an un-attested link that
+/// trips `cairn_has_hard_veto`, admitted on the sync path) still combines the read — ADR-0076
+/// decision 1 follows every standing link, and the member lines show `under-review`. But it
+/// must NOT make a group spanning the pair signable. Before the combined read such a group was
+/// cross-patient and withheld; treating it as "inside the set" would let a clinician vouch A's
+/// thread under a line whose displayed dose may be X's — the node itself believes X may be
+/// someone else. So while the set holds a vetoed pair, a group spanning more than one chart
+/// stays a hazard; a line on ONE chart is untouched (its dose is its own chart's).
+///
+/// The flag is set directly rather than by engineering a veto-tripping pair: its lifecycle is
+/// db/018's and is pinned by `link_veto_floor.rs`; this test is about the read's response.
+#[tokio::test]
+async fn a_group_across_a_vetoed_link_is_still_withheld() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let ta = assert_one(&mut c, &sk, &kid, a, "warfarin").await;
+    let tx = assert_one(&mut c, &sk, &kid, x, "warfarin").await;
+    let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
+    group(&c, ta, tx).await;
+    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
+
+    // Positive control: with the link standing and NOT flagged, the pair is one person and
+    // the shared group is an ordinary reconciled drug.
+    let before = list_patient_medications(&c, a).await.unwrap();
+    assert!(before.rows.iter().all(|r| !r.cross_patient));
+
+    let (lo, hi) = lo_hi(a, x);
+    c.execute(
+        "INSERT INTO link_veto_flag (low, high, content_address) \
+         SELECT low, high, content_address FROM patient_link \
+         WHERE low = $1::text::uuid AND high = $2::text::uuid",
+        &[&lo.to_string(), &hi.to_string()],
+    )
+    .await
+    .unwrap();
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert!(
+        list.charts.is_linked(),
+        "the vetoed link still combines the read"
+    );
+    let shared = list.rows.iter().find(|r| r.group_id == ta).unwrap();
+    assert!(
+        shared.cross_patient,
+        "a group spanning a vetoed pair is a wrong-chart hazard"
+    );
+    assert_eq!(
+        withheld_rows(&list.rows),
+        vec![ta],
+        "the line (reported by its group id) is withheld from sign-off"
+    );
+    assert!(
+        list.separation_targets.contains_key(&ta),
+        "with the arguments to separate it"
+    );
+    let single = list.rows.iter().find(|r| r.group_id == only_x).unwrap();
+    assert!(
+        !single.cross_patient,
+        "a line on ONE chart shows that chart's own dose: not a wrong-chart hazard"
+    );
+    assert_eq!(
+        sign_off_targets(&list.rows),
+        vec![only_x],
+        "neither thread of the shared group is signed; the one-chart line still is"
+    );
+}
+
+/// The orphan-cessation half of the hazard rule, through the combined read. A thread known
+/// only through a stop event that arrived before its statement (db/033 PR #219 finding 3)
+/// is invisible to `medication_thread_group`, so only `medication_group_cross_patient` can
+/// say the group reaches another chart. Deleting that half of the rule would look like
+/// redundancy cleanup and leave every other test green — this one pins it, and then pins
+/// that the SET rule applies on this path too: once the two charts are linked, it is not a
+/// hazard.
+#[tokio::test]
+async fn a_group_reaching_outside_only_through_an_orphan_cessation_is_a_hazard() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let other = chart(&c, &sk, &kid).await;
+    let ta = assert_one(&mut c, &sk, &kid, a, "digoxin").await;
+    // A thread id no statement ever named, stopped on `other`: accepted offline-first, and
+    // known locally ONLY through this cessation (the `medication_patient_consistency.rs`
+    // finding-3 shape).
+    let orphan = Uuid::now_v7();
+    cease_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "origin-a",
+        other,
+        orphan,
+        &CeaseMedicationInput {
+            stopped: Some("2025"),
+            stopped_precision: Some("year"),
+            reason: Some("stopped elsewhere"),
+        },
+        None,
+        None,
+    )
+    .await
+    .expect("an orphan cessation is accepted offline-first");
+    group(&c, ta, orphan).await;
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    let row = list.rows.iter().find(|r| r.group_id == ta).unwrap();
+    assert_eq!(
+        row.source_charts,
+        vec![a],
+        "the orphan's chart is invisible to the statement-derived source list"
+    );
+    assert!(
+        row.cross_patient,
+        "yet the group reaches another chart, through the cessation alone"
+    );
+    assert_eq!(withheld_rows(&list.rows), vec![ta]);
+
+    submit_link_event(&c, &sk, &kid, a, other, 10, true).await;
+    let linked = list_patient_medications(&c, a).await.unwrap();
+    let row = linked.rows.iter().find(|r| r.group_id == ta).unwrap();
+    assert!(
+        !row.cross_patient,
+        "once linked, the other chart is this person: no hazard on this path either"
+    );
 }
 
 /// Review focus 4: the same drug recorded on two charts that turn out to be one person must

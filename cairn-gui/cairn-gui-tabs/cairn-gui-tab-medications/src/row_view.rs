@@ -1,6 +1,6 @@
 //! One drug line of the med-list view: what a single row of the table says.
 //!
-//! Split out of `view.rs` (which had grown to 645 lines) so that the two questions this crate
+//! Kept apart from `view.rs` so that the two questions this crate
 //! answers stay in two places a reviewer can hold at once: HERE, what one line says about one
 //! drug — its name, its dose, whose signature it carries, what is wrong with it; in `view.rs`,
 //! what the chart as a whole says — how many threads the gesture signs, and what the chart
@@ -41,8 +41,8 @@ pub struct MedListRowView {
     /// Which chart(s) this drug was recorded on — the ids joined by ", " — and `Some` ONLY
     /// when the list is a combined read over linked charts (ADR-0076 decision 1: "every row
     /// names its source chart(s)"; two paper folders clipped together, and the clinician
-    /// reads both). On a never-linked chart it is `None`, so that chart reads exactly as it
-    /// did before R1 — the label is information only where there is a choice of folder.
+    /// reads both). On a never-linked chart it is `None`, so that chart gains no label — the
+    /// label is information only where there is a choice of folder.
     pub source: Option<String>,
 }
 

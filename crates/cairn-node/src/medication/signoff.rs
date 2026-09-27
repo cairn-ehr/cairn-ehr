@@ -152,23 +152,25 @@ pub struct SignOffOutcome {
 /// potassium line is unsigned — or invalid, or invisible — withholds fluid from a patient
 /// over a defect in a different line. Partial orders carry weight.
 ///
-/// The one thing still refused is the target-set MISMATCH below, and it is a different
+/// The whole gesture is refused only when it is not the list the human reviewed: the
+/// chart SET changed (the two ADR-0076 decision 3 compares, `ensure_same_charts`), or the
+/// target set changed between the two reads (the MISMATCH below). That is a different
 /// question: not "is this chart perfect?" but "is this the same chart the human reviewed?".
 ///
 /// # Why the target set is read twice
 ///
 /// HLCs must be minted BEFORE the transaction opens: `node_hlc_tick()` advances node state,
 /// and minting inside a transaction that later aborts would roll the tick back. So the list
-/// is read once outside the transaction (to size the HLC mint) and once inside it (to
-/// decide what to sign), and the two computed target SETS must agree before anything is
-/// written.
+/// is read once before the mint (to size it) and once after (to decide what to sign) — both
+/// on the client, outside any transaction, since each line then commits in its own — and the
+/// two computed target SETS must agree before anything is written.
 ///
-/// WHAT THIS DOES NOT GUARANTEE (issue #335). `client.transaction()` issues a plain BEGIN,
-/// which runs at Postgres's default READ COMMITTED — a fresh snapshot PER STATEMENT, not
-/// one snapshot for the whole transaction. `list_patient_medications` issues up to NINE
-/// statements (the chart-set read, the per-thread vouch read, the two group-chart reads, two
-/// advisory-flag reads, the current/past list reads, and the hazardous-group membership
-/// read — see `read.rs`), so even the in-transaction read alone spans nine snapshots, and
+/// WHAT THIS DOES NOT GUARANTEE (issue #335). The connection runs at Postgres's default
+/// READ COMMITTED — a fresh snapshot PER STATEMENT. `list_patient_medications` issues up to
+/// TEN statements (the chart-set read, the per-thread vouch read, the two group-chart reads,
+/// two advisory-flag reads, the vetoed-link read, the current/past list reads, and the
+/// hazardous-group membership read — see `read.rs`), so even one read alone spans up to ten
+/// snapshots, and
 /// neither read is atomic with the other or with itself. The
 /// `actual != expected` compare below is therefore a best-effort check, not an isolation
 /// guarantee: it catches a race that happens to move the computed TARGET SET between the
@@ -285,7 +287,8 @@ pub async fn sign_off_medication_list(
 
     let actual = sign_off_targets(&second_read.rows);
     if actual != expected {
-        // The ONE admissible whole-gesture refusal (ADR-0060 decision 5). It does not ask
+        // The target-set half of the whole-gesture refusal (ADR-0060 decision 5; the chart-
+        // set half is `ensure_same_charts`, ADR-0076 decision 3). It does not ask
         // "is this chart perfect?" — that question is now always answered by reporting — but
         // "is this the same list the human reviewed?". Raised BEFORE any line commits, so
         // refusing here writes nothing and needs no rollback.
@@ -403,7 +406,7 @@ fn union_sorted(a: &[Uuid], b: &[Uuid]) -> Vec<Uuid> {
 /// Every thread on the list → the chart that thread lives on (ADR-0076 decision 2).
 ///
 /// Read from each row's members (`MemberVouch::patient_id`, the thread's own statement's
-/// chart), NOT from `MedicationRow::patient_id`: that field is only the chart the GROUP
+/// chart), NOT from `MedicationRow::display_chart`: that field is only the chart the GROUP
 /// displays under — the view's display winner — which for a group spanning two linked
 /// charts is one of them, and would put the other chart's thread on the wrong chart.
 ///
@@ -464,7 +467,7 @@ mod tests {
     fn row(group: u128, display_chart: u128, members: &[(u128, u128)]) -> MedicationRow {
         MedicationRow {
             group_id: uid(group),
-            patient_id: uid(display_chart),
+            display_chart: uid(display_chart),
             term: "metformin".into(),
             coding_display: None,
             formulation: None,

@@ -1,4 +1,4 @@
-//! R1 Task 2 / ADR-0076 — `cairn_medication_duplicate_groups` (db/054) computes the SAME
+//! ADR-0076 — `cairn_medication_duplicate_groups` (db/054) computes the SAME
 //! duplicate-drug key as `patient_medication_reconciliation_flag` (db/033, itself kept in
 //! lockstep with db/031 by that view's own comment), just over a caller-chosen SET of
 //! charts instead of one patient's own. Nothing in SQL keeps the two `coalesce('code:' …)`
@@ -10,7 +10,8 @@
 //! `db::SCHEMA`), so this is a SOURCE-LEVEL guard, the `name_winner_order_drift.rs` idiom
 //! (#159) — it runs in every `cargo test` / CI pass and needs no Postgres.
 
-/// The two migrations whose dup_key expression must stay byte-for-byte in lockstep.
+/// The two migrations whose dup_key expression must stay in lockstep — identical once
+/// whitespace is normalised (the two copies are indented differently).
 /// Paths resolve the same way `src/db.rs` does — a test file sits at the same depth
 /// under the crate as `src/`, so `../../../db/…` reaches the repo-root `db/` directory.
 const DB033: &str = include_str!("../../../db/033_medication_reconciliation.sql");
@@ -93,12 +94,11 @@ GROUP BY coalesce('code:' || (coding_system COLLATE \"C\") || '|' || (coding_cod
 
 /// The guard proper: db/033's dup_key expression (its `SELECT` list copy and its `GROUP
 /// BY` copy — 2 occurrences, pinned so a guard that silently finds none cannot pass) must
-/// be byte-identical (after whitespace normalization) to db/054's ONE copy (fix round 1,
-/// review minor b: db/054 now writes the expression once, in its `keyed` CTE, and both
-/// the outer SELECT and the HAVING-grouped subquery read it from there — so there is only
-/// one place in db/054 left to drift).
+/// be identical after whitespace normalisation to db/054's ONE copy (db/054 writes the
+/// expression once, in its `keyed` CTE, and both the outer SELECT and the HAVING-grouped
+/// subquery read it from there — so there is only one place in db/054 to drift).
 #[test]
-fn db033_and_db054_dup_key_are_byte_identical() {
+fn db033_and_db054_dup_key_are_identical() {
     let db033 = extract_all(DB033);
     let db054 = extract_all(DB054);
 
@@ -113,8 +113,8 @@ fn db033_and_db054_dup_key_are_byte_identical() {
     assert_eq!(
         db054.len(),
         1,
-        "expected exactly 1 copy of the dup_key expression in db/054 (the `keyed` CTE — \
-         fix round 1 collapsed the earlier two-copy `t`/`u` shape into one) — got {}: {:?}",
+        "expected exactly 1 copy of the dup_key expression in db/054 (the `keyed` CTE, which \
+         both of its readers share) — got {}: {:?}",
         db054.len(),
         db054
     );

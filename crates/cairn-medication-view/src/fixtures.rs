@@ -28,7 +28,7 @@ fn uid(n: u128) -> Uuid {
 fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
     MedicationRow {
         group_id: uid(group),
-        patient_id: uid(1),
+        display_chart: uid(1),
         term: term.to_string(),
         coding_display: None,
         formulation: Some("tablet".into()),

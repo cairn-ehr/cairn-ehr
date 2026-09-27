@@ -21,7 +21,7 @@ pub(crate) fn row(
 ) -> MedicationRow {
     MedicationRow {
         group_id: uid(group),
-        patient_id: uid(999),
+        display_chart: uid(999),
         term: "metformin".into(),
         coding_display: None,
         formulation: None,

@@ -2,8 +2,9 @@
 //!
 //! WHY THIS LIVES IN THE SHARED CRATE AND NOT IN THE NODE. It was born in
 //! `cairn-node`'s read path, where it had exactly one consumer (the CLI). The med-list
-//! window is the second, and it needs the *same* three things the CLI needs: the rows, the
-//! groups the chart cannot display, and the thread ids that make the repair runnable.
+//! window is the second, and it needs the *same* four things the CLI needs: the rows, the
+//! groups the chart cannot display, the thread ids that make the repair runnable, and the
+//! chart set the list was read over (ADR-0076).
 //!
 //! That is not a convenience. ADR-0060 decision 2 says partial completion must be
 //! **reported, never implied** — so a renderer that receives only `rows` is structurally
@@ -38,6 +39,23 @@ pub const SEPARATION_INSTRUCTION: &str =
      threads listed below — run it WITHOUT `--attest-as`, because the threads belong to \
      different patients and a vouch would record the wrong chart for one of them. Separation \
      is deliberately never blocked (db/033).";
+
+/// What to do about a group the node knows this chart set holds a thread in, but which has
+/// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
+/// for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
+///
+/// WHY NOT THE SEPARATION REMEDY. Before the combined read (ADR-0076), a missing group WAS
+/// the cross-patient case (#334): the group displayed on the other patient's chart only, and
+/// separating its threads was the repair. Rows are now selected by membership, so a
+/// cross-patient group is SHOWN, flagged and withheld (with the separation remedy on its own
+/// line), and a missing group means something else: a concurrent reconciliation or
+/// separation re-keyed the group between the read's statements, or a list view dropped a
+/// group it should emit (a projection defect). Telling the operator to separate threads
+/// "because they belong to different patients" would name the wrong cause and the wrong fix.
+pub const MISSING_GROUP_INSTRUCTION: &str =
+    "Reload the list: a group can move while the list is being read. If it is still missing, \
+     the node's medication projection needs repair — report the group and threads listed \
+     below; do not rely on this list as complete until then.";
 
 /// A patient's chart, plus what the node knows is MISSING from it.
 ///
@@ -84,9 +102,9 @@ pub struct PatientMedicationList {
     /// The set of charts this list was read over (ADR-0076 decision 1): the opened chart and
     /// every chart in its link component, or just the opened chart when it is linked to
     /// nothing. Carried on the list itself (rather than only inferred from its rows) because
-    /// an EMPTY list still has to say which chart it covers — the whole point of decision
-    /// 3's "read covers a set the clinician saw and can name" is that a chart with nothing on
-    /// it is still a chart that was read. It is also what a sign-off is held to: a surface
+    /// an EMPTY list still has to say which chart it covers: decision 3 holds a chart command
+    /// to the set the clinician saw, and a chart with nothing on it is still a chart that was
+    /// read. It is also what a sign-off is held to: a surface
     /// that showed this list passes this set back, and a changed set refuses the gesture.
     pub charts: ChartSet,
 }
@@ -140,6 +158,14 @@ pub fn format_hazard_groups(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The missing-group remedy must not reuse the cross-patient cause (see its doc).
+    #[test]
+    fn the_missing_group_instruction_names_a_reload_not_a_separation() {
+        assert!(MISSING_GROUP_INSTRUCTION.contains("Reload"));
+        assert!(!MISSING_GROUP_INSTRUCTION.contains("medication-separate"));
+        assert!(!MISSING_GROUP_INSTRUCTION.contains("different patients"));
+    }
 
     fn uid(n: u128) -> Uuid {
         Uuid::from_u128(n)

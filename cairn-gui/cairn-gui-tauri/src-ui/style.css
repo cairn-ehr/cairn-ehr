@@ -117,7 +117,11 @@ button:disabled {
   outline-offset: 2px;
 }
 
-#chart-warnings {
+/* The member-identity warning wears the same frame as the chart warnings: a combined list
+   whose members' identity states could not be read is a degraded, safety-relevant state, not
+   ordinary header text (it is where an `under-review` member would have said so). */
+#chart-warnings,
+#linked-charts-error {
   border: 2px solid var(--warn-line);
   border-radius: 6px;
   background: var(--warn-bg);

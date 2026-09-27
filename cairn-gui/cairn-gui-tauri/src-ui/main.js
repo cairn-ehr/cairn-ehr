@@ -229,6 +229,7 @@ function reportSignOff(report) {
   }
   if (report.withheld_message) parts.push(report.withheld_message);
   if (report.missing_message) parts.push(report.missing_message);
+  if (report.charts_message) parts.push(report.charts_message);
   say(parts.join(" "));
 }
 

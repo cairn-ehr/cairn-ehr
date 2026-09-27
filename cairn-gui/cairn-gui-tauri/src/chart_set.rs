@@ -18,7 +18,9 @@
 //! sign-off orchestrator checks it again against ITS first read. They are two snapshots taken at
 //! two moments: the window's is the early one, testable against `AppState::mock` with no
 //! database; the orchestrator's is the authoritative one, taken inside the act itself. Neither
-//! replaces the other.
+//! replaces the other. A CEASE gets only the first: `cease_medication` writes one thread and
+//! has no notion of a chart set, so the window's check is the whole of decision 3 for it (see
+//! `commands::cease_impl`).
 use crate::state::AppState;
 use cairn_gui_tab_medications::view::{build_view, MedListView};
 use cairn_medication_view::{ChartSet, PatientMedicationList};
@@ -35,14 +37,20 @@ const UNREADABLE: &str = "this window could not tell which charts are on screen 
 const CHANGED: &str =
     "the linked charts changed while this list was on screen — nothing was done; reload the chart";
 
-/// Refuse unless the charts the webview DISPLAYED are exactly the set just read.
+/// Refuse unless the charts the webview DISPLAYED are exactly the set just read; on a match,
+/// return the displayed set.
 ///
 /// `read` is the set a fresh read of the open chart resolved; `displayed` is what the webview
 /// sent back — the `charts` field of the `MedListView` it rendered. Order does not matter (both
 /// sides go through `ChartSet`, which sorts and de-duplicates); membership does. An empty or
 /// unparseable list is refused as "could not tell", never treated as a match: a command that
 /// cannot say what it saw must not act.
-pub fn check_displayed_set(read: &ChartSet, displayed: &[String]) -> Result<(), String> {
+///
+/// Returns the DISPLAYED set rather than `()` so a caller hands the node's orchestrator what
+/// the clinician actually saw, visibly at the call site — equal to `read` here, but the
+/// orchestrator's own compare is then literally against the screen, not against a set a
+/// reviewer has to prove equal to it.
+pub fn check_displayed_set(read: &ChartSet, displayed: &[String]) -> Result<ChartSet, String> {
     let parsed: Vec<Uuid> = displayed
         .iter()
         .map(|id| id.parse::<Uuid>())
@@ -50,10 +58,28 @@ pub fn check_displayed_set(read: &ChartSet, displayed: &[String]) -> Result<(), 
         .map_err(|_| UNREADABLE.to_string())?;
     let shown = ChartSet::new(parsed).ok_or_else(|| UNREADABLE.to_string())?;
     if &shown == read {
-        Ok(())
+        Ok(shown)
     } else {
         Err(CHANGED.to_string())
     }
+}
+
+/// The sign-off report's sentence naming the charts a combined gesture read across, or `None`
+/// for a single chart.
+///
+/// The CLI prints the same fact after a combined sign-off (`main.rs`, `medication-sign-off`),
+/// and for the same reason: "Signed 3 medication thread(s)" on a combined list could be read
+/// as "recorded on the chart I opened". Each line was signed on the chart it was recorded on
+/// (ADR-0076 decision 2), and the report says so. `None` for a never-linked chart, whose report
+/// is unchanged.
+pub fn signed_across_message(charts: &ChartSet) -> Option<String> {
+    charts.is_linked().then(|| {
+        format!(
+            "This gesture read across {} linked charts; each line was signed on the chart it \
+             was recorded on.",
+            charts.members().len()
+        )
+    })
 }
 
 /// One member chart's line under the identity header of a combined record.
@@ -72,16 +98,26 @@ pub struct MemberLine {
 /// recordable state the clinician needs to see — the wording matches the single-chart header's
 /// (`funnel::view`). The chart id is always last and always whole: it is what ties this line to
 /// the source label on each medication row.
+///
+/// A chart this node does not HOLD (`ChartIdentity::held`, a link naming a chart that has not
+/// arrived here) gets its own wording: its name and date are absent because nothing arrived,
+/// not because nothing was recorded, and "(no name recorded)" would say the latter.
 pub fn member_line(identity: &ChartIdentity) -> MemberLine {
-    let name = identity.name.as_deref().unwrap_or("(no name recorded)");
-    let born = identity
-        .birth_date
-        .as_deref()
-        .unwrap_or("date of birth not recorded");
+    let facts = if identity.held {
+        let name = identity.name.as_deref().unwrap_or("(no name recorded)");
+        let born = identity
+            .birth_date
+            .as_deref()
+            .map(|d| format!("born {d}"))
+            .unwrap_or_else(|| "date of birth not recorded".to_string());
+        format!("{name} · {born}")
+    } else {
+        "(chart not yet received on this node — name and date of birth unknown)".to_string()
+    };
     MemberLine {
         patient_id: identity.patient_id.to_string(),
         text: format!(
-            "{name} · born {born} · identity {} · chart {}",
+            "{facts} · identity {} · chart {}",
             identity.trust, identity.patient_id
         ),
     }
@@ -94,19 +130,22 @@ pub struct ChartPane {
     pub list: MedListView,
     /// Empty unless the list is a combined read over linked charts whose names were read.
     pub members: Vec<MemberLine>,
-    /// Set when the chart is linked but its member names could NOT be read. The list is still
-    /// shown — a clinician must always be able to read (availability over consistency) — and
-    /// this says, where the member lines would have been, that the list is combined and why the
-    /// names are missing. Without it a combined list would read as a single chart.
+    /// Set when the chart is linked but its member identities could NOT be read. The list is
+    /// still shown — a clinician must always be able to read (availability over consistency) —
+    /// and this says, where the member lines would have been, that the list is combined and
+    /// what is missing: the names, dates of birth AND identity states, all three (they are read
+    /// together). The last matters most — a member `under-review` is exactly what should stop a
+    /// clinician trusting the combination, and its line is gone. Without this warning a combined
+    /// list would read as a single chart.
     pub members_error: Option<String>,
 }
 
 /// Assemble the pane from one chart read and the outcome of reading its member names.
 ///
-/// Pure, so the availability rule is tested with no database: whatever happened to the names,
-/// the list itself always goes to the screen. A name-read failure becomes `members_error`,
-/// worded to say the list is combined and over how many charts — the fact the missing header
-/// lines would have conveyed.
+/// Pure, so the availability rule is tested with no database: whatever happened to the member
+/// read, the list itself always goes to the screen. A failure becomes `members_error`, worded to
+/// say the list is combined, over how many charts, and that each member's identity state is
+/// unknown — the facts the missing header lines would have conveyed.
 pub fn chart_pane(
     list: &PatientMedicationList,
     members: Result<Vec<MemberLine>, String>,
@@ -116,7 +155,9 @@ pub fn chart_pane(
         Err(e) => (
             vec![],
             Some(format!(
-                "The linked charts' names could not be read — this list covers {} charts: {e}",
+                "The linked charts' names, dates of birth and identity states could not be read \
+                 — this list covers {} charts, and whether any of them is under review is \
+                 unknown: {e}",
                 list.charts.members().len()
             )),
         ),
@@ -131,8 +172,9 @@ pub fn chart_pane(
 /// The member lines for a chart set, or none when it is not linked.
 ///
 /// None for a single chart: its identity is already the header, and a one-line "linked charts"
-/// list would claim a link that does not exist. None in fixture mode too (Ruling R3) — fixture
-/// charts are never linked, and there is no database to read identities from. A failed read is
+/// list would claim a link that does not exist. A LINKED set with no database to read from
+/// (fixture mode — unreachable today, since `AppState::mock` serves single-chart fixtures only)
+/// is an error, not an empty list, for the reason that follows. A failed read is
 /// an ERROR, not an empty list: a combined record whose header silently lost its member lines
 /// would read as a single chart while its rows came from several. The caller
 /// ([`chart_pane`]) turns that error into a warning beside the list, never a failed open.
@@ -140,12 +182,12 @@ pub async fn linked_members(
     state: &AppState,
     charts: &ChartSet,
 ) -> Result<Vec<MemberLine>, String> {
-    let Some(db) = state.db.as_ref() else {
-        return Ok(vec![]);
-    };
     if !charts.is_linked() {
         return Ok(vec![]);
     }
+    let Some(db) = state.db.as_ref() else {
+        return Err("there is no database to read the linked charts' identities from".into());
+    };
     let db = db.lock().await;
     let identities = cairn_node::patient::person::chart_identities(&*db, charts)
         .await
@@ -167,8 +209,22 @@ mod tests {
     }
 
     #[test]
-    fn the_same_set_in_any_order_is_accepted() {
-        assert!(check_displayed_set(&set(&[1, 2]), &ids(&[2, 1])).is_ok());
+    fn the_same_set_in_any_order_is_accepted_and_returned() {
+        assert_eq!(
+            check_displayed_set(&set(&[1, 2]), &ids(&[2, 1])),
+            Ok(set(&[1, 2]))
+        );
+    }
+
+    #[test]
+    fn a_combined_sign_off_report_names_the_charts_it_read() {
+        let message = signed_across_message(&set(&[1, 2])).unwrap();
+        assert!(message.contains("2 linked charts"), "{message}");
+        assert!(
+            message.contains("signed on the chart it was recorded on"),
+            "{message}"
+        );
+        assert_eq!(signed_across_message(&set(&[1])), None);
     }
 
     #[test]
@@ -196,6 +252,7 @@ mod tests {
         let id = Uuid::from_u128(7);
         let line = member_line(&ChartIdentity {
             patient_id: id,
+            held: true,
             name: Some("SMYTHE, Jo".into()),
             birth_date: Some("1970-03-04".into()),
             trust: "confirmed".into(),
@@ -213,6 +270,7 @@ mod tests {
         let id = Uuid::from_u128(8);
         let line = member_line(&ChartIdentity {
             patient_id: id,
+            held: true,
             name: None,
             birth_date: None,
             trust: "unconfirmed".into(),
@@ -220,16 +278,39 @@ mod tests {
         assert_eq!(
             line.text,
             format!(
-                "(no name recorded) · born date of birth not recorded · identity unconfirmed \
+                "(no name recorded) · date of birth not recorded · identity unconfirmed \
                  · chart {id}"
             )
         );
     }
 
-    /// Availability over consistency (Ruling R8): a clinician must always be able to READ. If
-    /// the member names cannot be read, the medication list is still shown — with a warning that
-    /// says the list is combined, over how many charts, and why the names are missing — rather
-    /// than the whole chart failing to open.
+    /// A linked chart that has not reached this node: nothing was RECORDED-as-absent, nothing
+    /// ARRIVED. The line says so, and carries the `unknown` trust `trust_of` gives it rather
+    /// than a borrowed "confirmed".
+    #[test]
+    fn a_member_line_says_when_the_chart_is_not_held_here() {
+        let id = Uuid::from_u128(9);
+        let line = member_line(&ChartIdentity {
+            patient_id: id,
+            held: false,
+            name: None,
+            birth_date: None,
+            trust: "unknown".into(),
+        });
+        assert_eq!(
+            line.text,
+            format!(
+                "(chart not yet received on this node — name and date of birth unknown) \
+                 · identity unknown · chart {id}"
+            )
+        );
+        assert!(!line.text.contains("recorded"), "{}", line.text);
+    }
+
+    /// Availability over consistency: a clinician must always be able to READ. If the member
+    /// identities cannot be read, the medication list is still shown — with a warning that says
+    /// the list is combined, over how many charts, that no member's identity state is known, and
+    /// why — rather than the whole chart failing to open.
     #[test]
     fn a_failed_identity_read_keeps_the_list_and_says_so() {
         let mut list = cairn_medication_view::fixtures::sample_chart();
@@ -242,6 +323,10 @@ mod tests {
             .expect("the failure is reported, never implied");
         assert!(warning.contains("could not be read"), "{warning}");
         assert!(warning.contains("2 charts"), "{warning}");
+        assert!(
+            warning.contains("identity states"),
+            "the lost trust states are named, not only the names: {warning}"
+        );
         assert!(warning.contains("connection reset"), "{warning}");
     }
 
@@ -252,11 +337,20 @@ mod tests {
         assert_eq!(pane.list.charts.len(), 1);
     }
 
-    /// Ruling R3: fixture charts are never linked, and there is nothing to read identities from.
+    /// A single chart has no member lines, database or not.
     #[tokio::test]
-    async fn fixture_mode_has_no_member_lines() {
+    async fn a_single_chart_has_no_member_lines() {
         let state = AppState::mock(Some(Uuid::from_u128(1)));
-        assert_eq!(linked_members(&state, &set(&[1, 2])).await.unwrap(), vec![]);
+        assert_eq!(linked_members(&state, &set(&[1])).await.unwrap(), vec![]);
+    }
+
+    /// A LINKED set with nothing to read identities from must not come back as an empty list:
+    /// that would render a combined list as a single chart. It is an error, which `chart_pane`
+    /// turns into the member warning.
+    #[tokio::test]
+    async fn a_linked_set_without_a_database_is_an_error_not_an_empty_list() {
+        let state = AppState::mock(Some(Uuid::from_u128(1)));
+        assert!(linked_members(&state, &set(&[1, 2])).await.is_err());
     }
 }
 
@@ -312,7 +406,7 @@ mod command_tests {
     }
 
     /// The read hands the webview the set it must send back, and — the fixture chart being
-    /// linked to nothing (Ruling R3) — no member lines.
+    /// linked to nothing (fixture charts never are) — no member lines.
     #[tokio::test]
     async fn the_medication_list_names_its_chart_set() {
         let (state, on_screen) = open_on_the_fixture_chart();
