@@ -96,6 +96,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            source_charts: vec![uid(999)],
         }
     }
 
@@ -103,6 +104,7 @@ mod tests {
         MemberVouch {
             medication_id: uid(id),
             vouch,
+            patient_id: uid(999),
         }
     }
 

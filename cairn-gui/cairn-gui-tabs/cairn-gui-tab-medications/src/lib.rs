@@ -126,6 +126,7 @@ mod semantic_tests {
     use super::*;
     use cairn_gui_tab::context::{Capabilities, Context, PatientRef, UserRef};
     use cairn_gui_tab::{Role, Semantic};
+    use uuid::Uuid;
 
     fn ctx() -> Context {
         Context {
@@ -202,7 +203,9 @@ mod semantic_tests {
     #[test]
     fn a_healthy_chart_announces_no_warnings() {
         let node = MedicationsTab::new(crate::view::build_view(
-            &cairn_medication_view::PatientMedicationList::empty(),
+            &cairn_medication_view::PatientMedicationList::empty(
+                cairn_medication_view::ChartSet::single(Uuid::from_u128(1)),
+            ),
         ))
         .semantics(&ctx());
         assert!(node
@@ -217,7 +220,9 @@ mod semantic_tests {
     #[test]
     fn the_sign_off_control_is_labelled_even_when_there_is_nothing_to_sign() {
         let node = MedicationsTab::new(crate::view::build_view(
-            &cairn_medication_view::PatientMedicationList::empty(),
+            &cairn_medication_view::PatientMedicationList::empty(
+                cairn_medication_view::ChartSet::single(Uuid::from_u128(1)),
+            ),
         ))
         .semantics(&ctx());
         let button = node

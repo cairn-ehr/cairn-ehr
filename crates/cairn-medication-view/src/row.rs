@@ -57,6 +57,12 @@ impl VouchState {
 pub struct MemberVouch {
     pub medication_id: Uuid,
     pub vouch: VouchState,
+    /// The chart this thread lives on (ADR-0076 decision 2). A combined list's sign-off
+    /// gesture attests each thread under the chart it actually belongs to, not under
+    /// whichever chart the read happened to be opened from — so once a read can cover more
+    /// than one linked chart, the attestation target must be carried on the member itself
+    /// rather than assumed from the enclosing list.
+    pub patient_id: Uuid,
 }
 
 /// One displayed row = one medication GROUP.
@@ -91,6 +97,11 @@ pub struct MedicationRow {
     /// This group's member threads span more than one patient
     /// (`medication_group_cross_patient`) — a standing wrong-chart hazard (issue #334).
     pub cross_patient: bool,
+    /// The charts owning at least one member thread of this group, sorted. The row names
+    /// where the drug was recorded so a clinician reading a combined list — one read over
+    /// several linked charts (ADR-0076) — can tell which chart a line came from, rather than
+    /// having to infer it from which patient happened to be open.
+    pub source_charts: Vec<Uuid>,
 }
 
 impl MedicationRow {
@@ -127,6 +138,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            source_charts: vec![],
         }
     }
 

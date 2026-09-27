@@ -277,6 +277,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            source_charts: vec![uid(999)],
         }
     }
 
@@ -284,6 +285,7 @@ mod tests {
         MemberVouch {
             medication_id: uid(id),
             vouch,
+            patient_id: uid(999),
         }
     }
 
@@ -294,6 +296,7 @@ mod tests {
             rows,
             groups_missing_from_chart: vec![],
             separation_targets: BTreeMap::new(),
+            charts: cairn_medication_view::ChartSet::single(uid(999)),
         }
     }
 
@@ -563,6 +566,7 @@ mod tests {
             rows: vec![hazard],
             groups_missing_from_chart: vec![],
             separation_targets: BTreeMap::from([(uid(1), vec![uid(1), uid(2)])]),
+            charts: cairn_medication_view::ChartSet::single(uid(999)),
         };
         let message = build_view(&list)
             .withheld_message
@@ -586,6 +590,7 @@ mod tests {
             )],
             groups_missing_from_chart: vec![uid(70)],
             separation_targets: BTreeMap::from([(uid(70), vec![uid(70), uid(71)])]),
+            charts: cairn_medication_view::ChartSet::single(uid(999)),
         };
         let view = build_view(&list);
         let message = view

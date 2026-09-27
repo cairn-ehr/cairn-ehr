@@ -28,7 +28,7 @@
 //! `medication/attestation.rs`, `auto_apply.rs`). So every UUID parameter is bound as text
 //! and cast in SQL (`$1::text::uuid`), and every UUID column is cast back to text in the
 //! SELECT list and parsed on the Rust side.
-use cairn_medication_view::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
+use cairn_medication_view::{ChartSet, MedicationRow, MedicationStatus, MemberVouch, VouchState};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
@@ -66,9 +66,10 @@ pub async fn list_patient_medications(
     ] {
         for db_row in client.query(&list_sql(view), &[&patient_s]).await? {
             let group_id: Uuid = db_row.get::<_, String>("medication_id").parse()?;
+            let row_patient_id: Uuid = db_row.get::<_, String>("patient_id").parse()?;
             rows.push(MedicationRow {
                 group_id,
-                patient_id: db_row.get::<_, String>("patient_id").parse()?,
+                patient_id: row_patient_id,
                 term: db_row.get("term"),
                 coding_display: db_row.get("coding_display"),
                 formulation: db_row.get("formulation"),
@@ -82,6 +83,12 @@ pub async fn list_patient_medications(
                 reconciliation_flagged: reconciliation_flagged.contains(&group_id),
                 coding_conflict: coding_conflict.contains(&group_id),
                 cross_patient: cross_patient.contains(&group_id),
+                // Task 3 (R1 combined read, ADR-0076): pure shape change, no behaviour
+                // change yet. This read is still single-chart, so the row's one known
+                // source chart is the chart it was just read from. Task 4 rewrites this
+                // function to read over a `ChartSet` and fill this from the real per-thread
+                // membership.
+                source_charts: vec![row_patient_id],
             });
         }
     }
@@ -138,6 +145,9 @@ pub async fn list_patient_medications(
         rows,
         groups_missing_from_chart,
         separation_targets,
+        // Task 3 (R1 combined read, ADR-0076): this read covers exactly the one chart it
+        // was asked for. Task 4 widens the caller to pass a real `ChartSet`.
+        charts: ChartSet::single(patient),
     })
 }
 
@@ -246,6 +256,11 @@ async fn read_member_vouches(
         out.entry(group_id).or_default().push(MemberVouch {
             medication_id,
             vouch,
+            // Task 3 (R1 combined read, ADR-0076): this read is patient-scoped
+            // (`WHERE g.patient_id = $1`), so every member it can see already lives on
+            // `patient`. Task 4 widens the query to a `ChartSet` and fills this from the
+            // per-thread chart the join actually returns.
+            patient_id: patient,
         });
     }
     Ok(out)

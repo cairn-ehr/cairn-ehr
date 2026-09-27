@@ -13,6 +13,7 @@
 //!
 //! Pure: no database driver, no GUI toolkit. `cairn-node` re-exports every item from
 //! `medication::read`, so its old paths still resolve.
+use crate::chart_set::ChartSet;
 use crate::row::MedicationRow;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -79,17 +80,26 @@ pub struct PatientMedicationList {
     /// no clinical content attached, and it is the minimum needed to repair a wrong-chart
     /// link the node itself is complaining about.
     pub separation_targets: BTreeMap<Uuid, Vec<Uuid>>,
+    /// The set of charts this list was read over (ADR-0076 decision 1) — one chart today,
+    /// and eventually every chart in a link component. Carried on the list itself (rather
+    /// than only inferred from its rows) because an EMPTY list still has to say which chart
+    /// it covers — the whole point of decision 3's "read covers a set the clinician saw and
+    /// can name" is that a chart with nothing on it is still a chart that was read.
+    pub charts: ChartSet,
 }
 
 impl PatientMedicationList {
-    /// An empty chart. Not an error state: a patient with nothing recorded is a real
-    /// clinical situation, and it is also what a fixture-mode window shows for any patient
-    /// other than the fixture one.
-    pub fn empty() -> Self {
+    /// An empty chart over `charts`. Not an error state: a patient with nothing recorded is
+    /// a real clinical situation, and it is also what a fixture-mode window shows for any
+    /// patient other than the fixture one. Takes the covered set explicitly rather than
+    /// defaulting it, because an empty list is exactly the case where nothing else on the
+    /// struct could tell you which chart(s) were actually read.
+    pub fn empty(charts: ChartSet) -> Self {
         Self {
             rows: vec![],
             groups_missing_from_chart: vec![],
             separation_targets: BTreeMap::new(),
+            charts,
         }
     }
 }
@@ -202,6 +212,7 @@ mod tests {
             rows: vec![],
             groups_missing_from_chart: vec![uid(1)],
             separation_targets: BTreeMap::from([(uid(1), vec![uid(1), uid(2)])]),
+            charts: ChartSet::single(uid(1)),
         };
         let json = serde_json::to_string(&list).expect("the read model must serialize");
         assert!(json.contains(&uid(2).to_string()), "{json}");
@@ -210,9 +221,20 @@ mod tests {
 
     #[test]
     fn an_empty_chart_carries_no_rows_and_no_hazards() {
-        let list = PatientMedicationList::empty();
+        let list = PatientMedicationList::empty(ChartSet::single(uid(1)));
         assert!(list.rows.is_empty());
         assert!(list.groups_missing_from_chart.is_empty());
         assert!(list.separation_targets.is_empty());
+    }
+
+    /// Task brief step 1: even a chart with nothing on it must be able to say which
+    /// chart(s) it was read over — the field the caller needs cannot depend on `rows`
+    /// being non-empty, or an empty list would be structurally unable to answer.
+    #[test]
+    fn an_empty_list_still_says_which_charts_it_covers() {
+        let one = Uuid::from_u128(9);
+        let list = PatientMedicationList::empty(ChartSet::single(one));
+        assert_eq!(list.charts.members(), &[one]);
+        assert!(list.rows.is_empty());
     }
 }
