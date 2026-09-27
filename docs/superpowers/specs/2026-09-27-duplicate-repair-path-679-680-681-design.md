@@ -5,7 +5,7 @@
   [#680](https://github.com/cairn-ehr/cairn-ehr/issues/680) (worklist) ·
   [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) (link gesture) · folds in
   [#334](https://github.com/cairn-ehr/cairn-ehr/issues/334) (cross-patient reconciled group)
-- **ADR:** ADR-0076 (to be written from this page; records decisions D1–D6 below)
+- **ADR:** [ADR-0076](../../spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md) (spec v0.78) — D1–D6 below are its decisions 1–6; its decision 7 restates R4
 - **Spec sections:** §5.2, §5.7, §5.8, §5.12, §5.13 ([identity.md](../../spec/identity.md))
 - **Brief:** [ADR-0075](../../spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md)
   decision 2 — *the safety measure is how fast a duplicate is FOUND*.
