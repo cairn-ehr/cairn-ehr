@@ -283,7 +283,7 @@ async fn between_two_human_judgements_the_later_wins() {
 
 #[tokio::test]
 async fn an_attested_assertion_wins_even_an_hlc_triple_collision() {
-    // Review Focus 1: identical (wall, counter, origin) — the old order fell through to the
+    // Identical (wall, counter, origin) — the old order fell through to the
     // content address; the attested assertion must win whichever address sorts higher.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
@@ -371,7 +371,7 @@ async fn the_local_door_ranks_the_same_way() {
 
 #[tokio::test]
 async fn an_older_human_unlink_clears_a_standing_vetoed_machine_link() {
-    // Review Focus 2. A vetoed machine link lands first (remote door admits it, flags it,
+    // A vetoed machine link lands first (remote door admits it, flags it,
     // both charts read under-review). A human unlink with an EARLIER HLC then arrives —
     // under the old order it lost; now it wins, the flag clears and the charts split.
     let Some(base) = cs() else {
@@ -470,7 +470,7 @@ async fn every_standing_row_records_its_winners_attestation_truthfully() {
 
 #[tokio::test]
 async fn an_upgraded_node_refolds_a_winner_the_old_order_chose() {
-    // Review Focus 3. Recreate what a generation-54 node holds after the old order ran: a
+    // Recreate what a generation-54 node holds after the old order ran: a
     // human unlink (HLC 10) displaced by a machine link (HLC 20) — the machine link is the
     // stored winner and the charts are merged. The upgrade connect must leave the human's
     // unlink standing and the charts apart. Filling the new column alone would not: it
@@ -492,7 +492,7 @@ async fn an_upgraded_node_refolds_a_winner_the_old_order_chose() {
     land_remote(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
     land_remote(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
 
-    // Forge the OLD order's outcome: the machine link as the stored winner, the pre-D5
+    // Forge the OLD order's outcome: the machine link as the stored winner, the pre-R2a
     // table shape (no column), the component merged, the generation one behind.
     c.batch_execute(&format!(
         "UPDATE patient_link pl SET state = 'link', hlc_wall = el.hlc_wall,

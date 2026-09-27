@@ -41,7 +41,7 @@
 --   * db/005         — reads event_deferred for cairn_replay_eligible (the replay gate);
 --                       reads cairn_attestation_vouched (over event_attestation_unvouched)
 --                       for the ADR-0043 owner-gate's target-attester check AND for
---                       cairn_claim_authority's R1 attested-attestation check.
+--                       cairn_claim_authority's rung-R1 ('attested') check.
 --   * db/018, db/034,
 --     db/054, db/055 — read cairn_attestation_vouched (over event_attestation_unvouched),
 --                       NOT event_deferred, before trusting event_log.attester_key as a vouch

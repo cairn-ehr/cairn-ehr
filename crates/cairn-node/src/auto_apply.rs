@@ -12,7 +12,7 @@
 use crate::db_diagnosis::{operator_chain, LocalDbFault};
 use crate::matcher_actor::resolve_matcher_actor;
 use cairn_event::identity::{link_assertion_body, render_link_twin, LinkAssertion};
-use cairn_event::{sign, EventBody, Hlc, SigningKey};
+use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
 use std::collections::HashMap;
 use std::path::Path;
 use tokio_postgres::Client;
@@ -78,18 +78,24 @@ pub enum AutoOutcome {
     Applied(Uuid),
     /// A veto appeared since propose; the proposal was kicked to human `review`.
     VetoedToReview,
-    /// Not eligible: not auto_candidate, not pending, absent, or a human already judged
-    /// the pair (a standing attested `patient_link` row outranks any matcher link,
-    /// ADR-0076 decision 5); nothing changed.
+    /// A human has already judged the pair — a standing ATTESTED `patient_link` row, which
+    /// any matcher link loses to (ADR-0076 decision 5) — so nothing was written. `state` is
+    /// that judgement (`link` or `unlink`). Its own variant, not a [`AutoOutcome::Skipped`],
+    /// because the proposal stays `pending` and is met again on every run (#700): the
+    /// operator's summary must be able to show it apart from a benign skip.
+    AlreadyJudged { state: String },
+    /// Not eligible (not auto_candidate, not pending, absent), or the matcher link was
+    /// outranked once submitted and rolled back; nothing changed. Carries the reason.
     Skipped(String),
 }
 
 /// Apply ONE proposal: read it `FOR UPDATE`, require band='auto_candidate' AND
-/// status='pending', RE-CHECK the db/016 veto (any severity) — a veto that appeared since
-/// propose kicks the pair to human `review` instead of auto-linking — skip a pair a human
-/// has already judged (an attested `patient_link` row, which any matcher link loses to) —
-/// else build + sign an un-attested link with the matcher's key, submit through the 1-arg
-/// `submit_event` door, and mark the proposal 'auto_applied'. All in ONE transaction: any
+/// status='pending', skip a pair a human has already judged (an attested `patient_link`
+/// row, which any matcher link loses to), RE-CHECK the db/016 veto (any severity) — a veto
+/// that appeared since propose kicks the pair to human `review` instead of auto-linking —
+/// else build + sign an un-attested link with the matcher's key, submit it through the
+/// 1-arg `submit_event` door, CONFIRM it is now the pair's standing winner (rolling back if
+/// it was outranked), and mark the proposal 'auto_applied'. All in ONE transaction: any
 /// rejection rolls back, so no event is written and the proposal stays 'pending' to retry
 /// (atomicity = idempotency).
 ///
@@ -142,7 +148,33 @@ pub async fn apply_auto_candidate(
         )));
     }
 
-    // 2. Re-check the veto floor (no human backstop on this path). ANY veto (hard_veto or
+    // 2. A HUMAN has already judged this pair (ADR-0076 decision 5, R2a). An attested
+    //    link or unlink outranks any un-attested one in db/018's `patient_link`, so the
+    //    matcher link built below would be admitted and then LOSE — changing nothing.
+    //    Marking the proposal `auto_applied`, with `applied_event_id` naming that losing
+    //    event, and counting it "applied" would be a precise untruth (principle 4) in the
+    //    table the duplicate worklist reads. So write nothing: no event, no status change.
+    //    (The proposal stays `pending` and is met again on every run — #700; the human's
+    //    judgement, whether it arrived from a peer or was made here before the matcher
+    //    proposed the pair, is what stands.)
+    //
+    //    BEFORE the veto re-check below, deliberately: a human who linked two charts that
+    //    now trip a veto has already made the decision a veto forces, so kicking the pair
+    //    to `review` would ask a clinician again.
+    let judged: Option<String> = tx
+        .query_opt(
+            "SELECT state FROM patient_link \
+             WHERE low=$1::text::uuid AND high=$2::text::uuid AND attested",
+            &[&low_s, &high_s],
+        )
+        .await
+        .map_err(|e| LocalDbFault::new("reading whether a human already judged the pair", e))?
+        .map(|r| r.get(0));
+    if let Some(state) = judged {
+        return Ok(AutoOutcome::AlreadyJudged { state });
+    }
+
+    // 3. Re-check the veto floor (no human backstop on this path). ANY veto (hard_veto or
     //    degrade_hold) forbids an auto-link — mirrors banding.py. A since-vetoed pair is
     //    kicked to a human, never auto-linked over.
     let vetoed: bool = tx
@@ -167,30 +199,7 @@ pub async fn apply_auto_candidate(
         return Ok(AutoOutcome::VetoedToReview);
     }
 
-    // 2b. A HUMAN has already judged this pair (ADR-0076 decision 5, R2a). An attested
-    //     link or unlink outranks any un-attested one in db/018's `patient_link`, so the
-    //     matcher link built below would be admitted and then LOSE — changing nothing.
-    //     Marking the proposal `auto_applied`, with `applied_event_id` naming that losing
-    //     event, and counting it "applied" would be a precise untruth (principle 4) in the
-    //     table the duplicate worklist reads. So skip it and write nothing: no event, no
-    //     status change. (The proposal stays `pending`; the human's judgement, which
-    //     arrived from a peer, is what stands.)
-    let judged: Option<String> = tx
-        .query_opt(
-            "SELECT state FROM patient_link \
-             WHERE low=$1::text::uuid AND high=$2::text::uuid AND attested",
-            &[&low_s, &high_s],
-        )
-        .await
-        .map_err(|e| LocalDbFault::new("reading whether a human already judged the pair", e))?
-        .map(|r| r.get(0));
-    if let Some(state) = judged {
-        return Ok(AutoOutcome::Skipped(format!(
-            "a human already judged ({low}, {high}) ({state}) — a matcher link would lose to it"
-        )));
-    }
-
-    // 3. Build + sign the un-attested matcher link.
+    // 4. Build + sign the un-attested matcher link.
     let provenance = compose_auto_provenance(&matcher_version);
     let confidence = format!("{score:.3}");
     let event_id = Uuid::now_v7();
@@ -205,13 +214,38 @@ pub async fn apply_auto_candidate(
     );
     let signed = sign(&body, matcher_sk)?;
 
-    // 4. Submit through the 1-arg (un-attested) door. The db/018 identity floor +
+    // 5. Submit through the 1-arg (un-attested) door. The db/018 identity floor +
     //    patient_link_apply trigger run here.
     tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
         .await
         .map_err(|e| LocalDbFault::new("submitting the matcher link through the floor", e))?;
 
-    // 5. Mark the proposal auto_applied (distinct from C2's human 'applied').
+    // 6. Did it take effect? db/018 ADMITS a link that loses the overlay, so the submit
+    //    succeeding says nothing about whether it stands. Step 2 cannot see everything
+    //    that outranks it: a peer's judgement committed after that read (the race #700
+    //    names), or a standing assertion with a later HLC than the one this run was
+    //    handed. Marking the proposal `auto_applied` over a losing event is the precise
+    //    untruth step 2 exists to prevent — so read the winner back and, if it is not
+    //    ours, return WITHOUT committing: the transaction rolls back when it drops, and
+    //    the losing link (which would change nothing) is never written.
+    let ours = event_address(&signed.signed_bytes);
+    match crate::chart_link::standing_link(&tx, low, high).await? {
+        Some(w) if w.is(&ours) => {}
+        Some(w) if w.attested => return Ok(AutoOutcome::AlreadyJudged { state: w.state }),
+        Some(w) => {
+            return Ok(AutoOutcome::Skipped(format!(
+                "the matcher link for ({low}, {high}) was outranked by a standing {} \
+                 assertion once submitted — rolled back, nothing written",
+                w.state
+            )))
+        }
+        None => anyhow::bail!(
+            "no patient_link row for ({low}, {high}) after submitting a link for it — \
+             db/018's applier did not run"
+        ),
+    }
+
+    // 7. Mark the proposal auto_applied (distinct from C2's human 'applied').
     let event_id_s = event_id.to_string();
     tx.execute(
         "UPDATE match_proposal SET status='auto_applied', applied_event_id=$3::text::uuid, updated_at=clock_timestamp() \
@@ -231,6 +265,10 @@ pub async fn apply_auto_candidate(
 pub struct AutoSummary {
     pub applied: usize,
     pub vetoed_to_review: usize,
+    /// Pairs a human has already judged ([`AutoOutcome::AlreadyJudged`]). Counted apart
+    /// from `skipped` because each stays `pending` and returns on every run (#700) — the
+    /// operator sees how many, rather than having them hidden among benign skips.
+    pub human_judged: usize,
     pub skipped: usize,
     /// Pairs that hit a HARD error (matcher-actor resolve failed, or the apply txn errored).
     /// Kept separate from the benign `skipped` bucket so a systematic failure (a floor
@@ -358,6 +396,7 @@ async fn ceremony_locked(
     let mut summary = AutoSummary {
         applied: 0,
         vetoed_to_review: 0,
+        human_judged: 0,
         skipped: 0,
         errored: 0,
     };
@@ -403,6 +442,7 @@ async fn ceremony_locked(
         match apply_auto_candidate(client, low, high, &sk, &kid, hlc).await {
             Ok(AutoOutcome::Applied(_)) => summary.applied += 1,
             Ok(AutoOutcome::VetoedToReview) => summary.vetoed_to_review += 1,
+            Ok(AutoOutcome::AlreadyJudged { .. }) => summary.human_judged += 1,
             Ok(AutoOutcome::Skipped(_)) => summary.skipped += 1,
             Err(e) => {
                 eprintln!("{}", apply_failure_line(low, high, &e));

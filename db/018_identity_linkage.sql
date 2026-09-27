@@ -5,8 +5,8 @@
 -- `identity.link.asserted` / `identity.unlink.asserted` event types, a
 -- culture-neutral structural floor, an attested-first, then HLC-overlay `patient_link` edge
 -- table (ADR-0076 decision 5), and a `person_member` connected-component ("golden identity")
--- projection with clean
--- unmerge (principle 2 — never merge, always link; unmerge is always clean).
+-- projection with clean unmerge (principle 2 — never merge, always link; unmerge is always
+-- clean).
 --
 -- The safety-critical write door submit_event (db/005) is REUSED verbatim: new
 -- types register in event_type_class and add a branch to the cairn_event_twin hook.
@@ -278,9 +278,10 @@ END;
 $$;
 
 -- Incremental maintenance: fold exactly the one new link/unlink event into the edge
--- overlay. The whole row overlays atomically only when the incoming HLC is strictly
--- greater than the stored one (ON CONFLICT ... WHERE) — so out-of-order arrival
--- converges to the highest-HLC assertion. After the edge overlay, recompute the
+-- overlay. The whole row overlays atomically only when the incoming assertion OUTRANKS the
+-- stored one under cairn_link_overlay_wins (ON CONFLICT ... WHERE): attested first, then
+-- HLC, then content address (ADR-0076 decision 5) — a total order, so out-of-order arrival
+-- converges to the same winner on every node. After the edge overlay, recompute the
 -- connected-component projection around both endpoints (see cairn_recompute_component
 -- above).
 -- #190 (finding A2): the standing worklist of UN-ATTESTED links that tripped the
@@ -464,8 +465,8 @@ BEGIN
         patient_link.origin, patient_link.content_address);
 
     -- #190 flag lifecycle, DERIVED FROM THE STANDING OVERLAY WINNER (PR #219 review,
-    -- finding 1) — never from the arriving event's verb. The upsert above is HLC-guarded,
-    -- so an arriving event can LOSE the overlay; keying the flag on arrival desynced it
+    -- finding 1) — never from the arriving event's verb. The upsert above is guarded by
+    -- cairn_link_overlay_wins, so an arriving event can LOSE the overlay; keying the flag on arrival desynced it
     -- from the standing edge in two exploitable ways: a BACKDATED un-attested unlink that
     -- loses the overlay would clear the flag while the vetoed merge still stands (a silent
     -- merge the ADR-0030 writer triggers with one cheap event — unlinks are never veto-

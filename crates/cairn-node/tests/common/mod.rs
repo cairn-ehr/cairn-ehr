@@ -687,12 +687,12 @@ pub async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, hi
 
 /// Two registered charts whose verified DOBs clash — a hard veto by construction.
 ///
-/// Promoted here in the R2a plan's Task 3 (`chart_link.rs`): `link_precedence.rs`'s
-/// veto-precedence tests and `chart_link.rs`'s "a human may still link a vetoed pair"
-/// tests both needed the identical fixture (registered pair + two document-verified DOB
-/// assertions that clash), and had drifted into two near-identical copies. `link_veto_floor.rs`
-/// keeps its own local copy: that suite asserts on the veto's *message text*, a detail this
-/// shared copy deliberately does not carry.
+/// Shared because `link_precedence.rs`'s veto-precedence tests and `chart_link.rs`'s "a
+/// human may still link a vetoed pair" tests both need the same fixture (registered pair +
+/// two document-verified DOB assertions that clash). `link_veto_floor.rs` still carries its
+/// own OLDER copy, built on that suite's `submit_dob` with its own walls; it is equivalent in
+/// effect, and was left in place rather than re-basing that suite's eight tests on a new
+/// fixture.
 pub async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid) {
     use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());

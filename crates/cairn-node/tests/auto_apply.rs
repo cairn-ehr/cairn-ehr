@@ -469,7 +469,7 @@ async fn human_rejected_auto_candidate_is_skipped() {
     assert_eq!(status, "rejected", "a human's disposition is untouched");
 }
 
-/// Final-review finding 3 (R2a, ADR-0076 decision 5). Since R2a an UN-attested link loses
+/// ADR-0076 decision 5. Since R2a an UN-attested link loses
 /// to a standing ATTESTED judgement on the same pair — so a matcher link submitted over a
 /// human's "different people" (or "same person") changes nothing in `patient_link`. Before
 /// the fix, auto-apply submitted it anyway and marked the proposal `auto_applied` with an
@@ -527,12 +527,15 @@ async fn a_pair_a_human_already_judged_is_skipped_and_nothing_is_written() {
         )
         .await
         .unwrap();
+        // Its own outcome, not a generic skip: the proposal stays `pending` (#700), so the
+        // batch driver must be able to count these apart from "absent"/"not pending".
         match out {
-            AutoOutcome::Skipped(why) => assert!(
-                why.contains("human already judged"),
-                "human_says_same={human_says_same}: names why: {why}"
+            AutoOutcome::AlreadyJudged { state } => assert_eq!(
+                state,
+                if human_says_same { "link" } else { "unlink" },
+                "human_says_same={human_says_same}: names the standing judgement"
             ),
-            _ => panic!("human_says_same={human_says_same}: must be Skipped"),
+            _ => panic!("human_says_same={human_says_same}: must be AlreadyJudged"),
         }
         let events_after: i64 = c
             .query_one("SELECT count(*) FROM event_log", &[])
@@ -557,7 +560,154 @@ async fn a_pair_a_human_already_judged_is_skipped_and_nothing_is_written() {
             ("pending", None),
             "human_says_same={human_says_same}: the proposal is not marked auto_applied"
         );
+        // The batch driver counts it in its own bucket, so the operator's summary shows a
+        // pair that will stay pending rather than hiding it among benign skips.
+        let s: AutoSummary = apply_auto_candidates(&mut c, dir.path(), None, "testnode")
+            .await
+            .unwrap();
+        assert_eq!(
+            (s.applied, s.skipped, s.human_judged, s.errored),
+            (0, 0, 1, 0),
+            "human_says_same={human_says_same}"
+        );
     }
+}
+
+/// A pair a human has already judged is not sent back to a human because a veto appeared.
+/// The human-judgement check runs BEFORE the veto re-check: a peer's clinician linked two
+/// charts that now trip a hard veto here, and kicking the local proposal to `review` would
+/// ask a clinician to decide what a clinician already decided.
+#[tokio::test]
+async fn a_vetoed_pair_a_human_already_judged_is_not_sent_back_to_review() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
+    assert_identifier_clash(&c, &seed_sk, &seed_kid, low, high).await;
+    seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
+
+    let (sk_h, kid_h) = common::enroll_human(&c).await;
+    let judged =
+        common::link_assertion_event(&kid_h, low, high, LinkVerb::Link, 50, 0, "peer", true);
+    common::apply_remote_attested(&c, &sk_h, judged, &sk_h, &kid_h)
+        .await
+        .expect("the peer's attested link lands (a human may link over a veto)");
+
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
+    let out = apply_auto_candidate(
+        &mut c,
+        low,
+        high,
+        &sk,
+        &kid,
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(out, AutoOutcome::AlreadyJudged { ref state } if state == "link"),
+        "the standing human judgement answers first"
+    );
+    let status: String = c
+        .query_one(
+            "SELECT status FROM match_proposal \
+             WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+            &[&low.to_string(), &high.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(status, "pending", "not kicked to review");
+}
+
+/// A matcher link that LOSES the overlay once submitted is rolled back, not recorded as
+/// applied. The step-2b read cannot see everything that outranks the link: an assertion
+/// committed after it (a peer's judgement racing it — #700), or a standing assertion with a
+/// later HLC than the one this run was handed. Deterministic stand-in for the race: a
+/// peer's UN-attested unlink at a later HLC (so step 2b, which looks only for attested
+/// rows, lets the pair through). Submitting would change nothing in `patient_link`; marking
+/// the proposal `auto_applied` with the LOSING event's id would be a precise untruth.
+#[tokio::test]
+async fn a_matcher_link_that_loses_the_overlay_is_rolled_back_not_marked_applied() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
+    seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
+
+    let later_unlink = common::link_assertion_event(
+        &seed_kid,
+        low,
+        high,
+        LinkVerb::Unlink,
+        500,
+        0,
+        "peer",
+        false,
+    );
+    common::apply_remote_raw(&c, &seed_sk, later_unlink)
+        .await
+        .expect("the peer's un-attested unlink lands");
+    let events_before: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
+    let out = apply_auto_candidate(
+        &mut c,
+        low,
+        high,
+        &sk,
+        &kid,
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
+    )
+    .await
+    .unwrap();
+    match out {
+        AutoOutcome::Skipped(why) => assert!(why.contains("outranked"), "names why: {why}"),
+        _ => panic!("a link that did not take effect must not be reported Applied"),
+    }
+    let events_after: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        events_after, events_before,
+        "the losing link was rolled back"
+    );
+    let r = c
+        .query_one(
+            "SELECT status, applied_event_id::text FROM match_proposal \
+             WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+            &[&low.to_string(), &high.to_string()],
+        )
+        .await
+        .unwrap();
+    let (status, applied): (String, Option<String>) = (r.get(0), r.get(1));
+    assert_eq!((status.as_str(), applied), ("pending", None));
 }
 
 // ---------------------------------------------------------------------------

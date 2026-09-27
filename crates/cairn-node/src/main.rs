@@ -128,22 +128,38 @@ async fn run_chart_judgement(
 /// What `link-charts` / `unlink-charts` print. **Pure**, so what the operator is told is
 /// unit-tested apart from the database.
 ///
-/// The one case that must not read as a plain success: an unlink that could not split the
-/// record because the two charts are still joined THROUGH another link (A–C–B). Saying
-/// "unlinked" and then listing all three charts as one record would contradict itself; the
-/// truthful report is that the judgement was recorded, the record is still one, and which
-/// other link to undo is the operator's call (the machine never picks — principle 2).
+/// Only [`LinkEffect::TookEffect`] reads as a plain success. The other two must not:
+/// - an unlink that could not split the record because the charts are still joined THROUGH
+///   another link (A–C–B) — saying "unlinked" and then listing all three charts as one
+///   record would contradict itself. Which other link to undo is the operator's call (the
+///   machine never picks — principle 2);
+/// - a judgement another, later judgement about the SAME pair outranks. It is recorded, but
+///   the record reads the other way; "linked" or "unlinked" would be false, and so would
+///   "unlink that other link too" (there is none).
+///
+/// [`LinkEffect::TookEffect`]: cairn_node::chart_link::LinkEffect::TookEffect
 fn chart_judgement_report(
     verb: cairn_node::chart_link::LinkVerb,
     a: Uuid,
     b: Uuid,
     out: &cairn_node::chart_link::LinkOutcome,
 ) -> Vec<String> {
-    use cairn_node::chart_link::LinkVerb;
-    let first = match (verb, out.still_joined) {
-        (LinkVerb::Link, _) => format!("{a} and {b} linked (same person)"),
-        (LinkVerb::Unlink, false) => format!("{a} and {b} unlinked (not the same person)"),
-        (LinkVerb::Unlink, true) => format!(
+    use cairn_node::chart_link::{LinkEffect, LinkVerb};
+    let said = match verb {
+        LinkVerb::Link => "the same person",
+        LinkVerb::Unlink => "different people",
+    };
+    let first = match (verb, out.effect) {
+        (LinkVerb::Link, LinkEffect::TookEffect) => format!("{a} and {b} linked (same person)"),
+        (LinkVerb::Unlink, LinkEffect::TookEffect) => {
+            format!("{a} and {b} unlinked (not the same person)")
+        }
+        (_, LinkEffect::Outranked) => format!(
+            "recorded that {a} and {b} are {said} — but a later judgement about this same \
+             pair outranks it, so the record still reads the other way; a human must settle \
+             the disagreement"
+        ),
+        (_, LinkEffect::StillJoined) => format!(
             "recorded that {a} and {b} are different people — but {b} still reads as part \
              of {a}'s record through another link; unlink that link too"
         ),
@@ -153,8 +169,41 @@ fn chart_judgement_report(
         lines.push("the open duplicate proposal for this pair is resolved".into());
     }
     let members: Vec<String> = out.charts.members().iter().map(Uuid::to_string).collect();
-    lines.push(format!("chart {a} now reads as: {}", members.join(", ")));
+    lines.push(format!(
+        "chart {} now reads as: {}",
+        out.filed_under,
+        members.join(", ")
+    ));
     lines
+}
+
+/// The two charts and the human key of a `link-charts` / `unlink-charts` judgement.
+#[derive(clap::Args, Clone, Debug)]
+struct ChartPairArgs {
+    /// One chart of the pair (the order does not matter; the output names the chart the
+    /// judgement is filed under, which is always one held on this node).
+    a: Uuid,
+    /// The other chart of the pair.
+    b: Uuid,
+    /// The human signing key that makes the judgement (required — never the node key).
+    #[arg(long)]
+    attester_key: PathBuf,
+    /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+    #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+    attester_passphrase: Option<String>,
+}
+
+/// Which judgement a command makes, and about which charts. **Pure**, and the ONLY place
+/// the command → verb mapping is written: the dispatch calls it, and a test pins it — a
+/// swapped arm would otherwise record "different people" for `link-charts` with every
+/// other test green.
+fn chart_judgement(cmd: &Cmd) -> Option<(cairn_node::chart_link::LinkVerb, &ChartPairArgs)> {
+    use cairn_node::chart_link::LinkVerb;
+    match cmd {
+        Cmd::LinkCharts(args) => Some((LinkVerb::Link, args)),
+        Cmd::UnlinkCharts(args) => Some((LinkVerb::Unlink, args)),
+        _ => None,
+    }
 }
 
 /// The `--attest-as` flag set, shared by every medication verb (author-time
@@ -1953,33 +2002,16 @@ enum Cmd {
     },
 
     /// "Same person": link two charts as a human's attested judgement (ADR-0076 decision
-    /// 5 — no machine link or unlink can then undo it). Both charts must be held here.
-    /// Resolves an open match_proposal for the pair.
-    LinkCharts {
-        a: Uuid,
-        b: Uuid,
-        /// The human signing key that makes the judgement (required — never the node key).
-        #[arg(long)]
-        attester_key: PathBuf,
-        /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
-        attester_passphrase: Option<String>,
-    },
+    /// 5 — on an upgraded node no machine assertion about this pair can then undo it). Both
+    /// charts must be held here. Resolves an open match_proposal for the pair.
+    LinkCharts(ChartPairArgs),
     /// "Not the same person": record a human's attested judgement that two charts are two
-    /// people — splits a directly linked pair, and on a pair never linked stops any matcher
-    /// from joining them (ADR-0076 decision 4). If the two are joined only through another
-    /// chart, the judgement is recorded and the output says the record is still one. One
-    /// chart may be a member not held here, if it reads as part of the other's record.
-    UnlinkCharts {
-        a: Uuid,
-        b: Uuid,
-        /// The human signing key that makes the judgement (required — never the node key).
-        #[arg(long)]
-        attester_key: PathBuf,
-        /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
-        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
-        attester_passphrase: Option<String>,
-    },
+    /// people — splits a directly linked pair, and on a pair never linked no machine link
+    /// between these two charts can then join them (ADR-0076 decisions 4–5; a join through
+    /// a THIRD chart is still possible, and is reported). If the two are joined only through
+    /// another chart, the judgement is recorded and the output says the record is still
+    /// one. One chart may be a member not held here, if it reads as part of the other's.
+    UnlinkCharts(ChartPairArgs),
 
     /// Record a medication the patient takes/took (clinical.medication.asserted).
     /// Mints a medication thread id. Only --term is required; it may be vague
@@ -4041,8 +4073,9 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!(
-                "auto-apply: applied {}  vetoed->review {}  skipped {}  errored {}",
-                s.applied, s.vetoed_to_review, s.skipped, s.errored
+                "auto-apply: applied {}  vetoed->review {}  human-judged (left pending) {}  \
+                 skipped {}  errored {}",
+                s.applied, s.vetoed_to_review, s.human_judged, s.skipped, s.errored
             );
             // Non-zero exit when anything errored, so a systematic failure can't pass as a
             // healthy quiet run in a cron/pipeline (the summary line is still printed above).
@@ -4714,35 +4747,16 @@ async fn main() -> anyhow::Result<()> {
                 println!("linked to {prior}; link event {link_eid}");
             }
         }
-        Cmd::LinkCharts {
-            a,
-            b,
-            attester_key,
-            attester_passphrase,
-        } => {
+        Cmd::LinkCharts(_) | Cmd::UnlinkCharts(_) => {
+            let (verb, args) =
+                chart_judgement(&cli.cmd).expect("this arm matched a chart-judgement command");
             run_chart_judgement(
                 &cli.conn,
-                cairn_node::chart_link::LinkVerb::Link,
-                a,
-                b,
-                &attester_key,
-                attester_passphrase,
-            )
-            .await?;
-        }
-        Cmd::UnlinkCharts {
-            a,
-            b,
-            attester_key,
-            attester_passphrase,
-        } => {
-            run_chart_judgement(
-                &cli.conn,
-                cairn_node::chart_link::LinkVerb::Unlink,
-                a,
-                b,
-                &attester_key,
-                attester_passphrase,
+                verb,
+                args.a,
+                args.b,
+                &args.attester_key,
+                args.attester_passphrase.clone(),
             )
             .await?;
         }
@@ -6878,39 +6892,121 @@ mod tests {
         assert!(format!("{err:#}").contains("not a tty"));
     }
 
-    /// Final-review finding 2: an unlink that leaves the charts joined through a third
-    /// chart must not print "unlinked"; a direct one still does.
+    /// Only a judgement that took effect reads as a plain success. An unlink that leaves the
+    /// charts joined through a third chart must not print "unlinked"; a judgement a later
+    /// one outranks must print neither verb nor the (false) "unlink that link too".
     #[test]
-    fn link_and_unlink_report_says_when_an_unlink_did_not_split() {
-        use cairn_node::chart_link::{LinkOutcome, LinkVerb};
+    fn link_and_unlink_report_says_what_the_judgement_did() {
+        use cairn_node::chart_link::{LinkEffect, LinkOutcome, LinkVerb};
         let id = |n: u128| Uuid::from_u128(n);
         let (a, b, c) = (id(1), id(2), id(3));
-        let outcome = |members: Vec<Uuid>, still_joined| LinkOutcome {
+        let outcome = |members: Vec<Uuid>, effect, resolved| LinkOutcome {
             event_id: id(9),
-            proposal_resolved: false,
+            proposal_resolved: resolved,
+            filed_under: b,
             charts: cairn_medication_view::ChartSet::new(members).unwrap(),
-            still_joined,
+            effect,
         };
-        let joined =
-            super::chart_judgement_report(LinkVerb::Unlink, a, b, &outcome(vec![a, b, c], true));
+        let joined = super::chart_judgement_report(
+            LinkVerb::Unlink,
+            a,
+            b,
+            &outcome(vec![a, b, c], LinkEffect::StillJoined, false),
+        );
         assert!(!joined[0].contains("unlinked"), "{joined:?}");
         assert!(joined[0].contains("still reads as part of"), "{joined:?}");
         assert!(
             joined.last().unwrap().contains(&c.to_string()),
             "lists the set"
         );
+        assert!(
+            joined.last().unwrap().starts_with(&format!("chart {b} ")),
+            "names the filed-under chart, not the first argument: {joined:?}"
+        );
 
-        let split = super::chart_judgement_report(LinkVerb::Unlink, a, b, &outcome(vec![a], false));
+        let split = super::chart_judgement_report(
+            LinkVerb::Unlink,
+            a,
+            b,
+            &outcome(vec![b], LinkEffect::TookEffect, false),
+        );
         assert!(
             split[0].contains("unlinked (not the same person)"),
             "{split:?}"
         );
+
+        let linked = super::chart_judgement_report(
+            LinkVerb::Link,
+            a,
+            b,
+            &outcome(vec![a, b], LinkEffect::TookEffect, true),
+        );
+        assert!(linked[0].contains("linked (same person)"), "{linked:?}");
+        assert!(
+            linked
+                .iter()
+                .any(|l| l.contains("proposal for this pair is resolved")),
+            "{linked:?}"
+        );
+
+        for verb in [LinkVerb::Link, LinkVerb::Unlink] {
+            let lost = super::chart_judgement_report(
+                verb,
+                a,
+                b,
+                &outcome(vec![a, b], LinkEffect::Outranked, false),
+            );
+            assert!(lost[0].contains("outranks it"), "{verb:?}: {lost:?}");
+            assert!(
+                !lost[0].contains(" linked (") && !lost[0].contains("unlinked ("),
+                "{verb:?}: claims no effect: {lost:?}"
+            );
+            assert!(
+                !lost[0].contains("unlink that link too"),
+                "{verb:?}: {lost:?}"
+            );
+        }
+    }
+
+    /// Each command makes ITS judgement about the charts named, in the order named — the
+    /// mapping the dispatch uses, pinned (a swapped arm would record the opposite verdict).
+    #[test]
+    fn each_chart_command_makes_its_own_judgement() {
+        use cairn_node::chart_link::LinkVerb;
+        use clap::Parser;
+        let (a, b) = (
+            "0190a000-0000-7000-8000-000000000001",
+            "0190a000-0000-7000-8000-000000000002",
+        );
+        for (verb_arg, expected) in [
+            ("link-charts", LinkVerb::Link),
+            ("unlink-charts", LinkVerb::Unlink),
+        ] {
+            let cli = super::Cli::try_parse_from([
+                "cairn-node",
+                "--conn",
+                "host=localhost",
+                verb_arg,
+                a,
+                b,
+                "--attester-key",
+                "/k",
+            ])
+            .unwrap();
+            let (verb, args) = super::chart_judgement(&cli.cmd).expect(verb_arg);
+            assert_eq!(verb, expected, "{verb_arg}");
+            assert_eq!(
+                (args.a.to_string(), args.b.to_string()),
+                (a.to_string(), b.to_string()),
+                "{verb_arg}: the charts, in the order named"
+            );
+        }
     }
 
     /// The two judgement verbs parse, and a missing attester key is a parse error rather
     /// than a run-time fallback to the node key: an identity judgement is a human's.
     ///
-    /// `--conn` is a required top-level flag (no default, and `CAIRN_CONN` is not set in
+    /// `--conn` is a required top-level flag (no default, and `CAIRN_CONN` may not be set in
     /// the test process), so both branches supply it explicitly — without it every
     /// `try_parse_from` here would fail on the missing connection string rather than on
     /// what this test is actually about: the presence or absence of `--attester-key`.

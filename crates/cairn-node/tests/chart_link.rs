@@ -4,7 +4,7 @@
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::{generate_key, SigningKey};
-use cairn_node::chart_link::{link_charts, unlink_charts, LinkVerb, Reviewer};
+use cairn_node::chart_link::{link_charts, unlink_charts, LinkEffect, LinkVerb, Reviewer};
 use cairn_node::db;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -67,16 +67,43 @@ async fn standing(c: &Client, a: Uuid, b: Uuid) -> Option<(String, bool)> {
     .map(|r| (r.get(0), r.get(1)))
 }
 
+/// Seed a proposal row as its writers leave it: an `applied`/`auto_applied` row carries
+/// the event that applied it (db/019: `applied_event_id IS NOT NULL` ⇔ applied), every
+/// other status carries none. A fixture that broke that invariant could not catch a
+/// regression that breaks it.
 async fn seed_proposal(c: &Client, a: Uuid, b: Uuid, status: &str) {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let applied: Option<String> =
+        matches!(status, "applied" | "auto_applied").then(|| Uuid::now_v7().to_string());
     c.execute(
         "INSERT INTO match_proposal \
-           (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version, status) \
-         VALUES ($1::text::uuid, $2::text::uuid, 0.91, 'review', '[]'::jsonb, '[]'::jsonb, 'cfg@test', $3)",
-        &[&lo.to_string(), &hi.to_string(), &status.to_string()],
+           (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version, \
+            status, applied_event_id) \
+         VALUES ($1::text::uuid, $2::text::uuid, 0.91, 'review', '[]'::jsonb, '[]'::jsonb, 'cfg@test', \
+                 $3, $4::text::uuid)",
+        &[&lo.to_string(), &hi.to_string(), &status.to_string(), &applied],
     )
     .await
     .unwrap();
+}
+
+/// db/019's invariant over EVERY proposal row: `applied_event_id` is set exactly when the
+/// status is `applied`/`auto_applied`. Nothing in the schema enforces it, so the tests that
+/// move or leave proposals check it after they run.
+async fn assert_proposal_invariant(c: &Client) {
+    let broken: i64 = c
+        .query_one(
+            "SELECT count(*) FROM match_proposal \
+              WHERE (applied_event_id IS NOT NULL) <> (status IN ('applied', 'auto_applied'))",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        broken, 0,
+        "applied_event_id IS NOT NULL <=> applied/auto_applied"
+    );
 }
 
 async fn proposal(c: &Client, a: Uuid, b: Uuid) -> (String, Option<String>) {
@@ -154,7 +181,7 @@ async fn different_people_is_an_unlink_on_a_pair_never_linked() {
         .expect("unlink");
     assert_eq!(standing(&c, a, b).await, Some(("unlink".into(), true)));
     assert_eq!(out.charts.members(), &[a], "a stays a chart of its own");
-    assert!(!out.still_joined);
+    assert_eq!(out.effect, LinkEffect::TookEffect);
 }
 
 #[tokio::test]
@@ -176,15 +203,16 @@ async fn an_unlink_after_a_link_splits_the_set_again() {
     link_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
     let out = unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
     assert_eq!(out.charts.members().len(), 1);
-    assert!(
-        !out.still_joined,
+    assert_eq!(
+        out.effect,
+        LinkEffect::TookEffect,
         "a DIRECT link, unlinked, really splits the pair — nothing else holds them together"
     );
 }
 
 #[tokio::test]
 async fn an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split() {
-    // Final-review finding 2. A–C and C–B are linked, so A and B read as one record THROUGH
+    // A–C and C–B are linked, so A and B read as one record THROUGH
     // C although no A–B edge was ever asserted. The human says "A and B are different
     // people": the attested unlink on the (never-linked) A–B edge IS recorded — it is the
     // human's judgement and it replicates (ADR-0076 decision 4) — but it cannot split the
@@ -211,8 +239,9 @@ async fn an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split()
     let out = unlink_charts(&mut c, a, b, &who, ORIGIN)
         .await
         .expect("the judgement is recorded even though it cannot split the record");
-    assert!(
-        out.still_joined,
+    assert_eq!(
+        out.effect,
+        LinkEffect::StillJoined,
         "b still reads as part of a's record through the third chart"
     );
     assert_eq!(out.charts.members().len(), 3, "the record is still one");
@@ -225,7 +254,7 @@ async fn an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split()
 
 #[tokio::test]
 async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
-    // Final-review finding 1. R1's combined read shows a member line for every chart in the
+    // R1's combined read shows a member line for every chart in the
     // person component — including one whose REGISTRATION has not reached this node (a
     // peer's link named it; it synced ahead). R2 puts "Not the same person" on that line.
     // Refusing it because the chart is "not held" would leave the clinician looking at a
@@ -236,7 +265,8 @@ async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
     // the one that matters for the write door — the event's envelope must be filed under
     // the chart this node HOLDS, because db/005 step 8b refuses a local event about a chart
     // with no history here (and the peer's link below is filed under the held chart, so the
-    // unheld one has none).
+    // unheld one has none). The second run also names the UNHELD chart first: the outcome
+    // must still describe the held chart, never one this node cannot open.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -267,7 +297,12 @@ async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
             human_sk: &sk_h,
             human_kid: &kid_h,
         };
-        let out = unlink_charts(&mut c, held, unheld, &who, ORIGIN)
+        let (first, second) = if unheld_sorts_low {
+            (unheld, held)
+        } else {
+            (held, unheld)
+        };
+        let out = unlink_charts(&mut c, first, second, &who, ORIGIN)
             .await
             .unwrap_or_else(|e| {
                 panic!("unheld_sorts_low={unheld_sorts_low}: a displayed member unlinks: {e}")
@@ -277,12 +312,13 @@ async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
             Some(("unlink".into(), true)),
             "unheld_sorts_low={unheld_sorts_low}"
         );
+        assert_eq!(out.filed_under, held, "unheld_sorts_low={unheld_sorts_low}");
         assert_eq!(
             out.charts.members(),
             &[held],
-            "the held chart reads alone again"
+            "unheld_sorts_low={unheld_sorts_low}: the held chart reads alone again"
         );
-        assert!(!out.still_joined);
+        assert_eq!(out.effect, LinkEffect::TookEffect);
     }
 }
 
@@ -321,7 +357,7 @@ async fn an_unlink_needs_at_least_one_of_the_charts_held_here() {
 
 #[tokio::test]
 async fn a_later_machine_link_from_a_peer_does_not_undo_the_reviewers_unlink() {
-    // D5 end to end: the reviewer says "different people"; a peer's matcher then links the
+    // ADR-0076 decision 5 end to end: the reviewer says "different people"; a peer's matcher then links the
     // pair with a later clock. The charts stay two.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
@@ -468,11 +504,13 @@ async fn an_open_proposal_moves_with_the_judgement_in_the_same_transaction() {
             "a rejection names no applied event (db/019's invariant)"
         );
     }
+    assert_proposal_invariant(&c).await;
 }
 
 #[tokio::test]
 async fn a_closed_proposal_is_left_exactly_as_it_was() {
-    // Review Focus 5.
+    // A closed proposal (applied / auto_applied / rejected / retracted) is left exactly as
+    // it was, whichever judgement is made — what stands is patient_link's business.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -485,14 +523,85 @@ async fn a_closed_proposal_is_left_exactly_as_it_was() {
         human_kid: &kid_h,
     };
     for closed in ["applied", "auto_applied", "rejected", "retracted"] {
-        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
-        register_pair(&c, &sk_a, &kid_a, a, b).await;
-        seed_proposal(&c, a, b, closed).await;
-        let before = proposal(&c, a, b).await;
-        let out = unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
-        assert!(!out.proposal_resolved, "{closed} is not an open proposal");
-        assert_eq!(proposal(&c, a, b).await, before);
+        for verb in [LinkVerb::Link, LinkVerb::Unlink] {
+            let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+            register_pair(&c, &sk_a, &kid_a, a, b).await;
+            seed_proposal(&c, a, b, closed).await;
+            let before = proposal(&c, a, b).await;
+            let out = match verb {
+                LinkVerb::Link => link_charts(&mut c, a, b, &who, ORIGIN).await,
+                LinkVerb::Unlink => unlink_charts(&mut c, a, b, &who, ORIGIN).await,
+            }
+            .unwrap();
+            assert!(
+                !out.proposal_resolved,
+                "{closed}/{verb:?} is not an open proposal"
+            );
+            assert_eq!(proposal(&c, a, b).await, before, "{closed}/{verb:?}");
+        }
     }
+    assert_proposal_invariant(&c).await;
+}
+
+#[tokio::test]
+async fn a_judgement_a_later_one_outranks_is_recorded_but_says_it_did_not_take_effect() {
+    // A peer's clinician judged the same pair "same person" with a clock ahead of this
+    // node's (db/020 admits a future wall; it only caps how far it moves the local clock).
+    // Between two human judgements the later wins, so this node's unlink is recorded — it is
+    // real and replicates — but the record still reads as one. It must say so: "unlinked"
+    // would be false, and so would "still joined through another link" (there is none).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let thirty_days_ms = 30 * 24 * 3_600_000;
+    let peer = link_assertion_event(
+        &kid_h,
+        a,
+        b,
+        LinkVerb::Link,
+        now_ms + thirty_days_ms,
+        0,
+        "peer-ahead",
+        true,
+    );
+    common::apply_remote_attested(&c, &sk_h, peer, &sk_h, &kid_h)
+        .await
+        .expect("the peer's attested link lands");
+
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = unlink_charts(&mut c, a, b, &who, ORIGIN)
+        .await
+        .expect("recorded, though outranked");
+    assert_eq!(out.effect, LinkEffect::Outranked);
+    assert_eq!(
+        standing(&c, a, b).await,
+        Some(("link".into(), true)),
+        "the later human link still stands"
+    );
+    assert!(out.charts.contains(&b), "the record still reads as one");
+    let recorded: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_id = $1::text::uuid",
+            &[&out.event_id.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(recorded, 1, "the judgement is recorded all the same");
 }
 
 #[tokio::test]
@@ -527,7 +636,7 @@ async fn a_non_human_key_is_refused_and_nothing_moves() {
 
 #[tokio::test]
 async fn a_chart_this_node_has_never_seen_is_refused_before_signing() {
-    // Review Focus 4. A NEVER-LINKED stranger is refused for BOTH verbs: an unlink may name
+    // A NEVER-LINKED stranger is refused for BOTH verbs: an unlink may name
     // a chart not held here only when it already reads as part of the other's record (see
     // `a_displayed_member_not_held_here_can_still_be_unlinked`).
     let Some(base) = cs() else {
@@ -592,10 +701,10 @@ async fn a_chart_cannot_be_linked_to_itself() {
 
 #[tokio::test]
 async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
-    // Lock-order regression (controller ruling on R2a Task 4). Inside `submit_event`,
+    // Lock-order regression. Inside `submit_event`,
     // db/018's `patient_link_apply` takes the GLOBAL advisory lock
     // `pg_advisory_xact_lock(x'4341524E4C4B')` ('CARNLK') and holds it until commit.
-    // `auto_apply.rs`'s `apply_auto_candidate` (~:122) and `apply_proposal.rs`'s
+    // `auto_apply.rs`'s `apply_auto_candidate` and `apply_proposal.rs`'s
     // `apply_accepted_proposal` both lock the pair's `match_proposal` row `FOR UPDATE`
     // FIRST, and only THEN submit (which takes CARNLK). `assert_link_in_tx` used to do the
     // reverse — submit first, update the proposal row second — so two transactions on the
@@ -610,13 +719,9 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
     // pair's proposal row `FOR UPDATE` and holds it open in its own transaction. A
     // judgement (`unlink_charts`) on the same pair is fired concurrently and — correctly —
     // blocks waiting for that row. While it is blocked, T1 tries
-    // `pg_try_advisory_xact_lock(CARNLK)`:
-    //   - under the OLD (pre-fix) order, the judgement's transaction has ALREADY called
-    //     submit_event and so already holds CARNLK while it waits on the row update — T1's
-    //     attempt returns FALSE. That is the RED this test caught before the fix.
-    //   - under the FIXED order, the judgement is still waiting on the ROW and has never
-    //     reached submit_event/CARNLK — T1's attempt returns TRUE.
-    // T1 then releases the row lock, and the judgement completes normally.
+    // `pg_try_advisory_xact_lock(CARNLK)`; why that attempt tells the two orders apart is
+    // explained at the check itself, below. T1 then releases the row lock, and the
+    // judgement completes normally.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -711,7 +816,7 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
     //     submit_event — and so already taken CARNLK — BEFORE it ever reached the row
     //     update it is now blocked on. So at the exact moment we observe it blocked, it is
     //     STILL HOLDING CARNLK, and T1's attempt returns FALSE. That is the RED this test
-    //     caught before the fix (confirmed below).
+    //     caught before the fix.
     //   - under the FIXED order, the new pre-lock means the judgement blocks on the row
     //     BEFORE it has ever touched submit_event/CARNLK, so at the moment we observe it
     //     blocked it has NOT taken CARNLK — T1's attempt returns TRUE.

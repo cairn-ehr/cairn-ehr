@@ -15,7 +15,9 @@
 -- WRITERS — five sites, two languages. The Python matcher INSERTs the proposal and retracts
 -- it (pipeline/db.py upsert_proposal / retract_pending_proposal), as a role granted
 -- cairn_agent by the GRANT at the foot of this file. The Rust apply seams then move
--- `status` — apply_proposal.rs (C2, human-driven) and auto_apply.rs (C2b, ×2); auto_apply
+-- `status` — chart_link.rs's assert_link_in_tx (the one human-judgement writer: C2's
+-- apply_accepted_proposal and R2a's link_charts/unlink_charts both go through it) and
+-- auto_apply.rs (C2b, ×2); auto_apply
 -- runs on an OWNER connection, not cairn_agent, because its caller must also enroll the
 -- per-epoch matcher actor and the db/004 trust-anchor floor deliberately bars cairn_agent
 -- from enroll_actor (see matcher_actor.rs). Ownership bypasses the GRANT, so that path does
@@ -59,8 +61,8 @@ CREATE TABLE IF NOT EXISTS match_proposal (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     -- NO UPDATE TRIGGER, DELIBERATELY (#79). EVERY writer listed in the header sets
     -- updated_at = clock_timestamp() explicitly today: db.py's upsert_proposal (in its
-    -- ON CONFLICT DO UPDATE arm) and retract_pending_proposal, plus apply_proposal.rs and
-    -- auto_apply.rs (×2). A BEFORE UPDATE trigger would be more robust against a future
+    -- ON CONFLICT DO UPDATE arm) and retract_pending_proposal, plus chart_link.rs's
+    -- assert_link_in_tx and auto_apply.rs (×2). A BEFORE UPDATE trigger would be more robust against a future
     -- writer that forgets — but this is the advisory tier, where a stale updated_at costs a
     -- worklist a wrong sort order, never record integrity, and the project keeps in-DB
     -- machinery for the safety-critical floor (ADR-0001's "fat Postgres" is about the
