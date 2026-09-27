@@ -18,27 +18,10 @@
 > ⚠️ Those names were the pool's namesake-heavy FIRST 50,000 rows; the representative re-run is **#685**.
 >
 > **⇒ NEXT, in order:**
-> 0. **PR #678: every review finding is fixed or filed; re-review, then merge.** Fixed (each test-first,
->    all eleven measurement arms re-run): the identifier key, the prefix rule, the exact-token
->    tie-break, the callsign exclusion, the date written differently as a near-miss, words whose parts
->    cannot stand for them (Turkish `İ`, Thai, Devanagari, `J-P`), the checked pass count,
->    `PromptCounts` (named, so the counts cannot be swapped), the flag-gated reason, the stale
->    `incomplete` docs, the rig's unperturbable names, and the test gaps. Filed: **#683**
->    (`CandidateList` as one sum type, a wire decision), **#684** (a DOB compared and stored as typed:
->    a SET gap the ranking fix cannot reach). Not taken, a product call: saying "closest" when the
->    ranking is a heuristic ("strongest" was suggested).
->    **Third review round (2026-09-26, five specialist reviewers):** fixed test-first — a §5.4
->    callsign typed WHOLE ranked its John Doe below every "Ed …" (the callsign's part "ed" matched
->    them; the callsign itself was read nowhere) → new `callsign_matched` key; the two unpinned key
->    precedences (tokens over near-miss, tokens over exact-tokens); DOB edge tests; `rank_keys` takes
->    only the birth date, not the whole query; `try_get` on the pass read; the rig's head-of-table
->    name draw (→ spread draw, blank names excluded, `perturbed_only`). Filed: **#685** (re-run every
->    real-name arm on the spread draw — clearing `cairn_test`'s fixtures needs the maintainer's
->    permission; ADR-0075 and the results doc state the limit meanwhile), **#686** (a partial DOB
->    consistent with the typed one gets no ranking credit — a weighting decision), and fixed **#687** (CI
->    did not run the prompt rig's `--self-test`, which pins the ranking's Python twins); findings added to **#682** (NFD/Turkish DB tests), **#683**
->    (the dropped stray reason) and **#684** (an unparseable typed DOB is silently ignored while the
->    prompt says "closest of").
+> 0. ~~PR #678~~ **MERGED 2026-09-26** (three review rounds; #687 fixed in it). Its filings stay
+>    open: **#682** · **#683** · **#684** · **#685** (re-run on the spread draw — clearing
+>    `cairn_test`'s fixtures needs the maintainer's permission) · **#686**. Not taken, a product
+>    call: "closest" vs "strongest" for a heuristic ranking.
 > 1. **The repair path — brainstorm first, with the maintainer:** **#679** (commit-time local
 >    duplicate check by the §5.2 matcher), **#680** (duplicate worklist), **#681** (link gesture —
 >    show each chart's allergies/active meds at link time, the window's hazard). ADR-0075 decision 2
