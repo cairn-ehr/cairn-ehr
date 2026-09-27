@@ -493,12 +493,25 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
         .unwrap();
     assert!(held.is_some(), "the seeded proposal row exists to lock");
 
+    // Capture the FIRST connection's backend pid BEFORE it is moved into the spawned task,
+    // so the observer (T1) can watch its REAL state in `pg_stat_activity` rather than
+    // guessing with a fixed sleep. A fixed sleep can pass FALSELY for the very bug this
+    // test guards against: on a loaded/slow runner the observer's check could fire before
+    // the judgement has even reached `submit_event`, so CARNLK would read as free no matter
+    // which lock order the code actually uses — a guard that can pass while broken is not a
+    // guard (review finding, round 1).
+    let judgement_pid: i32 = c
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+
     // Fire the judgement concurrently on the FIRST connection. `sk_h`/`kid_h` are cloned
     // into the spawned task (owned) so the future is 'static; the `Reviewer` then borrows
     // them from inside that same future.
     let sk_h_owned = sk_h.clone();
     let kid_h_owned = kid_h.clone();
-    let mut handle = tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let who = Reviewer {
             human_sk: &sk_h_owned,
             human_kid: &kid_h_owned,
@@ -506,20 +519,49 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
         unlink_charts(&mut c, a, b, &who, ORIGIN).await
     });
 
-    // Give the spawned task a moment to actually reach and block on the row lock before we
-    // inspect state, so we are not just racing ahead of it.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Poll `pg_stat_activity`, via T1's own connection, until the judgement's backend
+    // (`judgement_pid`) shows `wait_event_type = 'Lock'` — genuinely parked waiting for
+    // T1's `FOR UPDATE` row lock. This is a real synchronisation signal, not a guessed
+    // delay: it only proceeds once the judgement has provably reached the point this test
+    // is about. Bounded to an overall 5s budget so a regression that never blocks (or one
+    // that panics/returns early) fails this test with a clear message instead of hanging
+    // the suite.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let wait_event_type: Option<String> = t1_tx
+            .query_one(
+                "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+                &[&judgement_pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if wait_event_type.as_deref() == Some("Lock") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the judgement (backend pid {judgement_pid}) never reached \
+             wait_event_type='Lock' within 5s — it may have completed without blocking, or \
+             errored early (last observed wait_event_type = {wait_event_type:?})"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
-    // Bounded wait: the judgement must NOT have completed yet — T1 still holds the row.
-    let still_running = timeout(Duration::from_millis(400), &mut handle).await;
-    assert!(
-        still_running.is_err(),
-        "the judgement completed before T1 released the row — it did not wait on the lock"
-    );
-
-    // The crux of the test: while the judgement is blocked, T1 can still take CARNLK —
-    // proof the judgement has not touched CARNLK yet and is genuinely waiting on the ROW,
-    // not the advisory lock.
+    // The crux of the test: NOW that the judgement is provably blocked on the row (not
+    // merely "probably" after a sleep), T1 checks whether it can still take CARNLK. Both
+    // the old and the fixed order eventually show `wait_event_type='Lock'` here — the old
+    // order blocks on this SAME row via its final `UPDATE match_proposal`, the fixed order
+    // via the new pre-lock — so the poll loop above cannot by itself tell them apart. This
+    // check is what does:
+    //   - under the OLD (pre-fix) order, the judgement's transaction had ALREADY called
+    //     submit_event — and so already taken CARNLK — BEFORE it ever reached the row
+    //     update it is now blocked on. So at the exact moment we observe it blocked, it is
+    //     STILL HOLDING CARNLK, and T1's attempt returns FALSE. That is the RED this test
+    //     caught before the fix (confirmed below).
+    //   - under the FIXED order, the new pre-lock means the judgement blocks on the row
+    //     BEFORE it has ever touched submit_event/CARNLK, so at the moment we observe it
+    //     blocked it has NOT taken CARNLK — T1's attempt returns TRUE.
     let carnlk_free: bool = t1_tx
         .query_one(
             "SELECT pg_try_advisory_xact_lock(x'4341524E4C4B'::bigint)",
@@ -539,9 +581,12 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
     // can proceed.
     t1_tx.rollback().await.unwrap();
 
-    // The judgement now completes.
-    let out = handle
+    // The judgement now completes. Bounded so a regression that hangs (rather than
+    // deadlocking outright, which Postgres would abort with 40P01 anyway) fails this test
+    // fast instead of eating the CI job.
+    let out = timeout(Duration::from_secs(5), handle)
         .await
+        .expect("the judgement did not complete within 5s of the row lock being released")
         .expect("spawned task did not panic")
         .expect("unlink_charts succeeds once the row is free");
     assert_eq!(out.charts.members(), &[a]);
