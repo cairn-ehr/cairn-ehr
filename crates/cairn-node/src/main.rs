@@ -94,6 +94,43 @@ fn load_attester_key(
     }
 }
 
+/// `link-charts` / `unlink-charts`: unseal the human's key, make the judgement, and say
+/// what the chart now is. No node key is loaded — the event is the human's, signed and
+/// attested by them (ADR-0053); the node contributes only its HLC origin.
+async fn run_chart_judgement(
+    conn: &str,
+    verb: cairn_node::chart_link::LinkVerb,
+    a: Uuid,
+    b: Uuid,
+    attester_key: &std::path::Path,
+    attester_passphrase: Option<String>,
+) -> anyhow::Result<()> {
+    use cairn_node::chart_link::{link_charts, unlink_charts, LinkVerb, Reviewer};
+    let sk = load_attester_key(attester_key, attester_passphrase)?;
+    let kid = hex::encode(sk.verifying_key().to_bytes());
+    let mut db = cairn_node::db::connect(conn).await?;
+    let origin = cairn_node::identity::load_local(&db).await?.node_id_hex;
+    let reviewer = Reviewer {
+        human_sk: &sk,
+        human_kid: &kid,
+    };
+    let out = match verb {
+        LinkVerb::Link => link_charts(&mut db, a, b, &reviewer, &origin).await?,
+        LinkVerb::Unlink => unlink_charts(&mut db, a, b, &reviewer, &origin).await?,
+    };
+    let what = match verb {
+        LinkVerb::Link => "linked (same person)",
+        LinkVerb::Unlink => "unlinked (not the same person)",
+    };
+    println!("{a} and {b} {what}; event {}", out.event_id);
+    if out.proposal_resolved {
+        println!("the open duplicate proposal for this pair is resolved");
+    }
+    let members: Vec<String> = out.charts.members().iter().map(Uuid::to_string).collect();
+    println!("chart {a} now reads as: {}", members.join(", "));
+    Ok(())
+}
+
 /// The `--attest-as` flag set, shared by every medication verb (author-time
 /// convenience) and the standalone `medication-attest` command (post-hoc sign-off).
 /// `--attest-as` present ⇒ a human vouches for the affected thread(s); absent ⇒ the
@@ -1885,6 +1922,31 @@ enum Cmd {
         #[arg(long)]
         attester_key: Option<PathBuf>,
         /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        attester_passphrase: Option<String>,
+    },
+
+    /// "Same person": link two charts as a human's attested judgement (ADR-0076 decision
+    /// 5 — no machine link or unlink can then undo it). Both charts must be held here.
+    /// Resolves an open match_proposal for the pair.
+    LinkCharts {
+        a: Uuid,
+        b: Uuid,
+        /// The human signing key that makes the judgement (required — never the node key).
+        #[arg(long)]
+        attester_key: PathBuf,
+        /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
+        #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
+        attester_passphrase: Option<String>,
+    },
+    /// "Not the same person": record a human's attested judgement that two charts are two
+    /// people — splits a linked pair, and on a pair never linked stops any matcher from
+    /// joining them (ADR-0076 decision 4). Both charts must be held here.
+    UnlinkCharts {
+        a: Uuid,
+        b: Uuid,
+        #[arg(long)]
+        attester_key: PathBuf,
         #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
         attester_passphrase: Option<String>,
     },
@@ -4622,6 +4684,38 @@ async fn main() -> anyhow::Result<()> {
                 println!("linked to {prior}; link event {link_eid}");
             }
         }
+        Cmd::LinkCharts {
+            a,
+            b,
+            attester_key,
+            attester_passphrase,
+        } => {
+            run_chart_judgement(
+                &cli.conn,
+                cairn_node::chart_link::LinkVerb::Link,
+                a,
+                b,
+                &attester_key,
+                attester_passphrase,
+            )
+            .await?;
+        }
+        Cmd::UnlinkCharts {
+            a,
+            b,
+            attester_key,
+            attester_passphrase,
+        } => {
+            run_chart_judgement(
+                &cli.conn,
+                cairn_node::chart_link::LinkVerb::Unlink,
+                a,
+                b,
+                &attester_key,
+                attester_passphrase,
+            )
+            .await?;
+        }
         Cmd::MedicationAssert {
             patient,
             term,
@@ -6752,5 +6846,42 @@ mod tests {
         .expect_err("an unreadable prompt is an error, not a wrong guess");
         assert_eq!(asked, 1, "no point re-asking a prompt that cannot be read");
         assert!(format!("{err:#}").contains("not a tty"));
+    }
+
+    /// The two judgement verbs parse, and a missing attester key is a parse error rather
+    /// than a run-time fallback to the node key: an identity judgement is a human's.
+    ///
+    /// `--conn` is a required top-level flag (no default, and `CAIRN_CONN` is not set in
+    /// the test process), so both branches supply it explicitly — without it every
+    /// `try_parse_from` here would fail on the missing connection string rather than on
+    /// what this test is actually about: the presence or absence of `--attester-key`.
+    #[test]
+    fn link_and_unlink_charts_parse_and_demand_an_attester_key() {
+        use clap::Parser;
+        let (a, b) = (
+            "0190a000-0000-7000-8000-000000000001",
+            "0190a000-0000-7000-8000-000000000002",
+        );
+        for verb in ["link-charts", "unlink-charts"] {
+            assert!(
+                super::Cli::try_parse_from([
+                    "cairn-node",
+                    "--conn",
+                    "host=localhost",
+                    verb,
+                    a,
+                    b,
+                    "--attester-key",
+                    "/k"
+                ])
+                .is_ok(),
+                "{verb} parses"
+            );
+            assert!(
+                super::Cli::try_parse_from(["cairn-node", "--conn", "host=localhost", verb, a, b])
+                    .is_err(),
+                "{verb} without --attester-key must not parse"
+            );
+        }
     }
 }
