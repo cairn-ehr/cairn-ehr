@@ -84,7 +84,7 @@ async fn one_gesture_attests_every_unvouched_thread() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .unwrap();
 
@@ -149,7 +149,7 @@ async fn a_thread_with_a_fresh_vouch_is_left_untouched() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &me, patient)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &me, patient, None)
         .await
         .unwrap();
 
@@ -214,7 +214,7 @@ async fn a_ceased_thread_is_not_signed() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .unwrap();
 
@@ -257,7 +257,7 @@ async fn an_empty_list_signs_nothing_without_erroring() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, Uuid::now_v7())
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, Uuid::now_v7(), None)
         .await
         .unwrap();
 
@@ -299,10 +299,10 @@ async fn a_fully_vouched_chart_reports_its_current_rows() {
     };
 
     // First gesture signs it; the second finds nothing left to do.
-    sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .unwrap();
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .unwrap();
 
@@ -351,7 +351,7 @@ async fn an_unenrolled_attester_fails_every_line_and_commits_nothing() {
         note: None,
     };
 
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .expect("per-line failures are reported, not raised as a whole-gesture error");
     assert!(out.attested.is_empty(), "nothing may be signed");
@@ -427,7 +427,7 @@ async fn a_line_that_cannot_be_attested_never_rolls_back_the_others() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .expect("one unattestable line must not fail the gesture");
 
@@ -494,7 +494,7 @@ async fn a_dose_change_after_signoff_is_re_signed_by_the_next_whole_list_signoff
     };
 
     // First whole-list sign-off: the thread is unvouched, so it is signed.
-    let first = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let first = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .unwrap();
     assert_eq!(
@@ -529,7 +529,7 @@ async fn a_dose_change_after_signoff_is_re_signed_by_the_next_whole_list_signoff
 
     // Second whole-list sign-off: the vouch from the first is now stale (the thread grew
     // after it), so the whole-list gesture must pick the thread back up and re-attest it.
-    let second = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+    let second = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
         .await
         .unwrap();
     assert_eq!(

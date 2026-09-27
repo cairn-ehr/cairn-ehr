@@ -5129,6 +5129,10 @@ async fn main() -> anyhow::Result<()> {
                 &id.node_id_hex,
                 &params,
                 patient,
+                // The CLI shows no list before this verb runs, so there is no displayed
+                // chart set to hold the gesture to (ADR-0076 decision 3): it signs the set it
+                // finds, and says below which set that was.
+                None,
             )
             .await?;
 
@@ -5179,6 +5183,20 @@ async fn main() -> anyhow::Result<()> {
                     "signed off {} medication thread(s) for {patient}",
                     out.attested.len()
                 );
+                if out.charts.is_linked() {
+                    // A combined list (ADR-0076): the gesture read every chart linked to
+                    // {patient}, and each line above was signed on the chart it was recorded
+                    // on — not all on {patient}. Say so, or the operator reads "for {patient}"
+                    // as "recorded on {patient}", which is false for the other charts' lines.
+                    let charts: Vec<String> =
+                        out.charts.members().iter().map(Uuid::to_string).collect();
+                    println!(
+                        "  across {} linked charts ({}); each line was signed on the chart it \
+                         was recorded on",
+                        charts.len(),
+                        charts.join(", ")
+                    );
+                }
                 for (thread, event) in out.attested.iter().zip(&out.event_ids) {
                     println!("  {thread} -> attestation {event}");
                 }

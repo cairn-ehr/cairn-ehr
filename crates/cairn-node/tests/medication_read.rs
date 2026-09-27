@@ -590,7 +590,7 @@ async fn a_cross_patient_group_shows_on_both_charts_flagged() {
         note: None,
     };
     for patient in [patient_a, patient_b] {
-        let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+        let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient, None)
             .await
             .expect("a chart with a hazardous line is reported, never refused (#339)");
         assert!(
@@ -684,7 +684,7 @@ async fn a_hazardous_line_never_blocks_a_sound_one() {
         basis: None,
         note: None,
     };
-    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
+    let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b, None)
         .await
         .expect("a chart with a hazardous line must never be refused (#339)");
 

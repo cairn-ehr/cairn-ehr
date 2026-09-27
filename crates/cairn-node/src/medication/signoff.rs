@@ -12,8 +12,8 @@
 //! independent clinical acts, and a failure on one must not un-write the others. An earlier
 //! version bundled all N into one transaction and had exactly that defect.
 use crate::medication::{read::list_patient_medications, AttestParams};
-use cairn_medication_view::{sign_off_targets, MedicationStatus};
-use std::collections::BTreeMap;
+use cairn_medication_view::{sign_off_targets, ChartSet, MedicationRow, MedicationStatus};
+use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 /// One line the gesture attempted but could not complete.
@@ -84,10 +84,44 @@ pub struct SignOffOutcome {
     /// `groups_missing_from_chart` — which are reported, actionable, normal-operation states
     /// — a failed line is an attempted write that errored. Empty in normal operation.
     pub failed: Vec<FailedLine>,
+    /// The chart set this gesture read and signed across (ADR-0076): the opened chart plus
+    /// every chart linked to it, or just the opened chart when it is linked to nothing.
+    ///
+    /// Each line in `attested` was recorded under the chart IN this set that its thread
+    /// lives on — not necessarily the chart the gesture was opened from — so a caller
+    /// reporting a combined sign-off must name the set, not only the opened chart. It is the
+    /// first read's set, and a gesture that got as far as a second read was refused unless
+    /// that read agreed.
+    pub charts: ChartSet,
 }
 
-/// Attest every thread on this patient's chart whose vouch is absent or stale, in one
-/// transaction.
+/// Attest every thread on this patient's medication list whose vouch is absent or stale —
+/// one human gesture, one transaction PER LINE (see below).
+///
+/// # A combined list is signed chart by chart (ADR-0076 decisions 2 and 3)
+///
+/// The list is read over the opened chart's whole chart SET — every chart linked to it —
+/// so one gesture can cover lines recorded on several charts. Two rules keep that gesture
+/// a truthful signature:
+///
+/// - **Each thread is attested under the chart it lives on** (`MemberVouch::patient_id`,
+///   gathered by `thread_charts`), NEVER under `patient`, the chart the list was opened
+///   from. An attestation is a responsibility-bearing clinical signature recorded on a
+///   chart; putting chart B's drug on chart A is a wrong-chart write, and the two charts
+///   can be unlinked again tomorrow (identity is a claim, never a fact). A target whose
+///   chart cannot be read is reported as a `FailedLine`, never guessed.
+/// - **A changed chart set refuses the whole gesture**, before anything is minted or
+///   written. The clinician vouched for the list they SAW; a link that landed while it was
+///   on screen adds another chart's drugs they never reviewed, and an unlink removes lines
+///   they did. `displayed` is the set that was on screen, compared against the first read;
+///   the first read is also compared against the second (a link landing between them).
+///
+/// `displayed: None` skips ONLY the on-screen compare, and exists for the CLI verb, which
+/// shows no list before signing and so has no displayed set to hold the gesture to — it
+/// signs the set it finds, reported in `SignOffOutcome::charts`. `None` is NOT the default
+/// for a surface that shows a list: there, passing `None` would silently sign a set the
+/// clinician may never have seen, which is exactly the substitution decision 3 forbids.
+/// Such a surface passes the `PatientMedicationList::charts` it rendered.
 ///
 /// # A defect on one line never invalidates another (ADR-0060, #339)
 ///
@@ -157,6 +191,7 @@ pub async fn sign_off_medication_list(
     node_origin: &str,
     params: &AttestParams<'_>,
     patient: Uuid,
+    displayed: Option<&ChartSet>,
 ) -> anyhow::Result<SignOffOutcome> {
     // The node holds custody of every sealed body it writes, attestations included
     // (ADR-0052). Verified ahead of the transaction so an unprovisioned node is refused
@@ -164,6 +199,14 @@ pub async fn sign_off_medication_list(
     crate::medication::sealed_submit::ensure_unwrap_key(client).await?;
 
     let first_read = list_patient_medications(&*client, patient).await?;
+
+    // ADR-0076 decision 3, the on-screen half: is this the chart set the clinician saw?
+    // Checked FIRST — before the empty-list early return and before any HLC is minted — so
+    // a refused gesture has advanced no node state and reported nothing about a set nobody
+    // was shown.
+    if let Some(shown) = displayed {
+        ensure_same_charts(shown, &first_read.charts, "while this list was on screen")?;
+    }
 
     // Lines that need a signature but are not safe to sign (cross-patient dose bleed,
     // issue #334). Withheld per LINE, never per chart — see the #339 note on this
@@ -191,6 +234,7 @@ pub async fn sign_off_medication_list(
             separation_targets: first_read.separation_targets,
             groups_missing_from_chart: first_read.groups_missing_from_chart,
             failed: vec![],
+            charts: first_read.charts,
         });
     }
 
@@ -212,6 +256,18 @@ pub async fn sign_off_medication_list(
     // this patient in the narrow window between the two reads.
     let second_read = list_patient_medications(&*client, patient).await?;
 
+    // ADR-0076 decision 3, the between-reads half: a link or unlink landing in the gap
+    // changes whose drugs are on the list. Checked before the target compare because it is
+    // the more specific diagnosis — such a change usually moves the targets too, and "the
+    // linked charts changed" tells the clinician WHY the list is different. Same best-effort
+    // caveat as the target compare below (READ COMMITTED, issue #335), and the same #333
+    // coverage gap: forcing it needs a second connection writing a link in that window.
+    ensure_same_charts(
+        &first_read.charts,
+        &second_read.charts,
+        "while it was being signed",
+    )?;
+
     // Report the UNION of what either read found missing. A reconciliation landing in the
     // gap can pull a group off this chart WITHOUT changing the target set — if every thread
     // on the vanished group was already vouched, `actual == expected` still holds and the
@@ -231,8 +287,8 @@ pub async fn sign_off_medication_list(
         //
         // Report WHAT changed, not just how many — two counts that happen to match (a
         // thread swapped for another) would otherwise read as a true but useless "3 vs 3".
-        let added = format_thread_ids(actual.iter().filter(|t| !expected.contains(t)));
-        let removed = format_thread_ids(expected.iter().filter(|t| !actual.contains(t)));
+        let added = format_ids(actual.iter().filter(|t| !expected.contains(t)));
+        let removed = format_ids(expected.iter().filter(|t| !actual.contains(t)));
         anyhow::bail!(
             "the medication list changed while it was being signed (thread(s) added: {added}; \
              removed: {removed}); nothing was signed — refresh the list and sign again so the \
@@ -253,12 +309,28 @@ pub async fn sign_off_medication_list(
     // What is NOT split: a single clinical act that spans two threads (a reconciliation and
     // its two attestations, `reconciliation.rs`) stays atomic — you cannot half-link two
     // drugs. The unit is the clinical line, not the statement count.
+    //
+    // THE CHART EACH LINE IS SIGNED ON (ADR-0076 decision 2) comes from the SECOND read —
+    // the same rows `actual` was computed from — so a target and its chart always describe
+    // one moment. `patient` (the opened chart) is deliberately not consulted here at all.
+    let charts_of = thread_charts(&second_read.rows);
     let mut attested = Vec::with_capacity(actual.len());
     let mut event_ids = Vec::with_capacity(actual.len());
     let mut failed = Vec::new();
     for (thread, hlc) in actual.iter().zip(hlcs) {
+        let chart = match chart_of_thread(&charts_of, *thread) {
+            Ok(chart) => chart,
+            Err(line) => {
+                // Unreachable by construction (every target comes from a member of these
+                // same rows), and handled anyway: the only alternative to reporting it is
+                // guessing a chart, and the obvious guess — the opened one — is the
+                // wrong-chart write this function exists to prevent. Its HLC is burned.
+                failed.push(line);
+                continue;
+            }
+        };
         let tx = client.transaction().await?;
-        match crate::medication::attest_thread_in_tx(&tx, params, patient, *thread, hlc).await {
+        match crate::medication::attest_thread_in_tx(&tx, params, chart, *thread, hlc).await {
             Ok(event_id) => {
                 tx.commit().await?;
                 attested.push(*thread);
@@ -293,14 +365,15 @@ pub async fn sign_off_medication_list(
         separation_targets,
         groups_missing_from_chart,
         failed,
+        charts: first_read.charts,
     })
 }
 
-/// Render a set of uuids for a clinician-facing message: `"none"` when empty, otherwise a
-/// comma-separated list. Pure and reusable rather than inlined at each call site, so the
-/// mismatch diagnostic's two symmetric branches (added / removed) stay visibly identical
-/// instead of risking silent drift between two hand-written formats.
-fn format_thread_ids<'a>(ids: impl Iterator<Item = &'a Uuid>) -> String {
+/// Render a set of uuids (threads or charts) for a clinician-facing message: `"none"` when
+/// empty, otherwise a comma-separated list. Pure and reusable rather than inlined at each
+/// call site, so the mismatch diagnostics' symmetric halves (added / removed, shown / now)
+/// stay visibly identical instead of risking silent drift between hand-written formats.
+fn format_ids<'a>(ids: impl Iterator<Item = &'a Uuid>) -> String {
     let rendered: Vec<String> = ids.map(|id| id.to_string()).collect();
     if rendered.is_empty() {
         "none".to_string()
@@ -320,4 +393,146 @@ fn union_sorted(a: &[Uuid], b: &[Uuid]) -> Vec<Uuid> {
     out.sort();
     out.dedup();
     out
+}
+
+/// Every thread on the list → the chart that thread lives on (ADR-0076 decision 2).
+///
+/// Read from each row's members (`MemberVouch::patient_id`, the thread's own statement's
+/// chart), NOT from `MedicationRow::patient_id`: that field is only the chart the GROUP
+/// displays under — the view's display winner — which for a group spanning two linked
+/// charts is one of them, and would put the other chart's thread on the wrong chart.
+///
+/// Pure, so the rule "a thread signs on its own chart" is tested without a database.
+fn thread_charts(rows: &[MedicationRow]) -> HashMap<Uuid, Uuid> {
+    rows.iter()
+        .flat_map(|row| row.members.iter())
+        .map(|member| (member.medication_id, member.patient_id))
+        .collect()
+}
+
+/// The chart `thread` must be attested under, or the `FailedLine` explaining why it
+/// cannot be. There is deliberately no fallback: a missing entry is reported, never
+/// answered with the opened chart (see `sign_off_medication_list`).
+fn chart_of_thread(charts_of: &HashMap<Uuid, Uuid>, thread: Uuid) -> Result<Uuid, FailedLine> {
+    charts_of.get(&thread).copied().ok_or_else(|| FailedLine {
+        medication_id: thread,
+        error: "its chart could not be read (the thread is not a member of any line on this \
+                list), so it was not signed rather than signed on a guessed chart"
+            .to_string(),
+    })
+}
+
+/// Refuse the gesture when the chart set moved (ADR-0076 decision 3): `Ok` exactly when
+/// `before == now`, otherwise the clinician-facing refusal naming both sets.
+///
+/// Shared by both compares — the displayed set against the first read, and the first read
+/// against the second — so the two refusals say the same thing in the same words; `window`
+/// is the only part that differs ("while this list was on screen" / "while it was being
+/// signed"). Sets compare by value: `ChartSet` is sorted and deduplicated on construction,
+/// so two reads of one link component are equal whatever order the database returned.
+fn ensure_same_charts(before: &ChartSet, now: &ChartSet, window: &str) -> anyhow::Result<()> {
+    if before == now {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "the linked charts changed {window} (shown: {}; now: {}); nothing was signed — \
+         reload the chart and sign again",
+        format_ids(before.members().iter()),
+        format_ids(now.members().iter()),
+    )
+}
+
+/// Pure tests for the set rules this module adds. The DB-backed behaviour of the gesture
+/// lives in `crates/cairn-node/tests/medication_signoff.rs` (one chart) and
+/// `crates/cairn-node/tests/combined_signoff.rs` (a chart set, ADR-0076).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cairn_medication_view::{MemberVouch, VouchState};
+
+    fn uid(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    /// One active, uncoded row displaying under `display_chart` with the given members,
+    /// each `(thread, chart it lives on)`. Only the fields `thread_charts` reads matter.
+    fn row(group: u128, display_chart: u128, members: &[(u128, u128)]) -> MedicationRow {
+        MedicationRow {
+            group_id: uid(group),
+            patient_id: uid(display_chart),
+            term: "metformin".into(),
+            coding_display: None,
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            started_value: None,
+            started_precision: None,
+            status: MedicationStatus::Active,
+            members: members
+                .iter()
+                .map(|&(thread, chart)| MemberVouch {
+                    medication_id: uid(thread),
+                    vouch: VouchState::Absent,
+                    patient_id: uid(chart),
+                })
+                .collect(),
+            reconciliation_flagged: false,
+            coding_conflict: false,
+            cross_patient: false,
+            source_charts: vec![],
+        }
+    }
+
+    /// The decision-2 rule at its sharpest: a reconciled group spanning two linked charts
+    /// displays under ONE of them (chart 1 here), yet its thread on chart 2 must sign on
+    /// chart 2. Reading the row's display chart would get exactly that thread wrong.
+    #[test]
+    fn each_thread_maps_to_its_own_chart_not_the_display_chart() {
+        let rows = [row(10, 1, &[(10, 1), (11, 2)]), row(20, 2, &[(20, 2)])];
+        let map = thread_charts(&rows);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map[&uid(10)], uid(1));
+        assert_eq!(map[&uid(11)], uid(2), "the member's chart, not the row's");
+        assert_eq!(map[&uid(20)], uid(2));
+    }
+
+    #[test]
+    fn a_thread_with_no_chart_is_a_failed_line_never_a_guess() {
+        let map = thread_charts(&[row(10, 1, &[(10, 1)])]);
+        assert_eq!(chart_of_thread(&map, uid(10)), Ok(uid(1)));
+        let line = chart_of_thread(&map, uid(99)).unwrap_err();
+        assert_eq!(line.medication_id, uid(99));
+        assert!(
+            line.error.contains("its chart could not be read"),
+            "{}",
+            line.error
+        );
+    }
+
+    #[test]
+    fn an_unchanged_set_passes_whatever_order_it_was_built_in() {
+        let shown = ChartSet::new([uid(2), uid(1)]).unwrap();
+        let now = ChartSet::new([uid(1), uid(2), uid(1)]).unwrap();
+        assert!(ensure_same_charts(&shown, &now, "while this list was on screen").is_ok());
+    }
+
+    #[test]
+    fn a_changed_set_is_refused_naming_both_sets() {
+        let shown = ChartSet::single(uid(1));
+        let now = ChartSet::new([uid(1), uid(2)]).unwrap();
+        let msg = format!(
+            "{:#}",
+            ensure_same_charts(&shown, &now, "while this list was on screen").unwrap_err()
+        );
+        assert_eq!(
+            msg,
+            format!(
+                "the linked charts changed while this list was on screen (shown: {one}; now: \
+                 {one}, {two}); nothing was signed — reload the chart and sign again",
+                one = uid(1),
+                two = uid(2)
+            )
+        );
+    }
 }

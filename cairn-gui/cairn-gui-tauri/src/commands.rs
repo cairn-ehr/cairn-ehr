@@ -194,6 +194,8 @@ pub async fn sign_off_impl(state: &AppState, patient_id: &str) -> Result<SignOff
             &state.node_origin,
             &params,
             patient,
+            // Task 7 (R1): pass the displayed ChartSet
+            None,
         )
         .await
         .map_err(|e| format!("{e:#}"))?
