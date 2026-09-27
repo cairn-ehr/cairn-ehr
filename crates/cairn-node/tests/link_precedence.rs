@@ -455,6 +455,76 @@ async fn every_standing_row_records_its_winners_attestation_truthfully() {
     );
 }
 
+#[tokio::test]
+async fn an_upgraded_node_refolds_a_winner_the_old_order_chose() {
+    // Review Focus 3. Recreate what a generation-54 node holds after the old order ran: a
+    // human unlink (HLC 10) displaced by a machine link (HLC 20) — the machine link is the
+    // stored winner and the charts are merged. The upgrade connect must leave the human's
+    // unlink standing and the charts apart. Filling the new column alone would not: it
+    // would mark the machine link "not attested" and keep it as the winner.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let (lo_s, hi_s) = (lo.to_string(), hi.to_string());
+
+    let human_unlink = Landing {
+        body: link_assertion_event(&kid_h, a, b, false, 10, 0, "nodeH", true),
+        attested: true,
+    };
+    let machine_link = Landing {
+        body: link_assertion_event(&kid_a, a, b, true, 20, 0, "nodeM", false),
+        attested: false,
+    };
+    land_remote(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
+    land_remote(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
+
+    // Forge the OLD order's outcome: the machine link as the stored winner, the pre-D5
+    // table shape (no column), the component merged, the generation one behind.
+    c.batch_execute(&format!(
+        "UPDATE patient_link pl SET state = 'link', hlc_wall = el.hlc_wall,
+                hlc_counter = el.hlc_counter, origin = el.node_origin,
+                content_address = el.content_address
+           FROM event_log el
+          WHERE el.event_type = 'identity.link.asserted'
+            AND pl.low = '{lo_s}'::uuid AND pl.high = '{hi_s}'::uuid;
+         ALTER TABLE patient_link DROP COLUMN attested CASCADE;
+         SELECT cairn_recompute_component('{lo_s}'::uuid, NULL);
+         UPDATE node_schema SET version = 54;"
+    ))
+    .await
+    .unwrap();
+    assert!(
+        same_person(&c, a, b).await,
+        "precondition: the forged old state is merged"
+    );
+    drop(c);
+
+    // The upgrade: reconnect = replay every migration, then (generation 54 → 55) the heal.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert_eq!(
+        standing(&c, a, b).await,
+        ("unlink".to_string(), true),
+        "the human's unlink is re-decided as the winner"
+    );
+    assert!(
+        !same_person(&c, a, b).await,
+        "and the charts are two people again"
+    );
+    let recorded: i32 = c
+        .query_one("SELECT version FROM node_schema", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(recorded, cairn_event::schema_generation::SCHEMA_GENERATION);
+}
+
 async fn flag_count(c: &Client) -> i64 {
     c.query_one("SELECT count(*) FROM link_veto_flag", &[])
         .await
