@@ -43,6 +43,14 @@
 -- once converged is a probe of each un-attested row (an index lookup on content_address),
 -- with no writes.
 --
+-- The re-fold block at the end costs more per connect, and says so: once converged it still
+-- reads every link/unlink event that carries an attester (through the event-type index),
+-- testing each for a vouch, replay eligibility and a pair whose winner is un-attested — it
+-- writes nothing, but its read grows with the number of HUMAN identity judgements, not with
+-- the work left. Negligible today; on a hub where every CLI invocation reconnects it could
+-- show. If it ever does, gate the block on a node-local "re-fold done at generation 55"
+-- marker — the probe is only needed until it has once matched nothing.
+--
 -- Node loader only: cairn-sync loads no identity migration (#284).
 
 BEGIN;

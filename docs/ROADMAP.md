@@ -705,8 +705,8 @@ Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md
   - **`chart_link.rs`:** `link_charts`/`unlink_charts` with a `Reviewer` (the human key signs and attests; no
     node-key fallback). Admission: `link` requires both charts to be held here; `unlink` also admits a displayed
     member that is not held here, filed under the held chart (db/005 step 8b). Each judgement reads back, in its own
-    transaction, whether its event stands: `LinkOutcome::effect` is `TookEffect`, `Outranked` (a later judgement
-    about the same pair stands) or `StillJoined` (an unlink through a third chart). An open proposal moves in the
+    transaction, what now stands: `LinkOutcome::effect` is `TookEffect`, `Outranked` (a later judgement about the
+    same pair that says the opposite stands) or `StillJoined` (an unlink through a third chart). An open proposal moves in the
     same transaction; closed ones are never touched. One lock order: proposal row, then CARNLK. Every postgres
     call names its step (`chart_link.rs` is in the #467 legibility guard).
   - `apply_accepted_proposal` is now a thin wrapper, still with no production caller.

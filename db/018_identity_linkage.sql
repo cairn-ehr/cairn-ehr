@@ -87,8 +87,9 @@ INSERT INTO cairn_event_twin_check (event_type, check_fn, twin_required_msg) VAL
 ON CONFLICT (event_type) DO NOTHING;
 
 -- 4. patient_link: the standing-edge overlay (same shape as patient_identifier). One
---    row per canonical (low, high) pair; the latest-HLC link/unlink assertion wins the
---    `state`. Never merge, always overlay — link then a later unlink ⇒ edge gone.
+--    row per canonical (low, high) pair; the winning link/unlink assertion — attested
+--    first, then latest HLC (cairn_link_overlay_wins, below; ADR-0076 decision 5) — sets
+--    the `state`. Never merge, always overlay — link then a later unlink ⇒ edge gone.
 CREATE TABLE IF NOT EXISTS patient_link (
     low         UUID    NOT NULL,
     high        UUID    NOT NULL,

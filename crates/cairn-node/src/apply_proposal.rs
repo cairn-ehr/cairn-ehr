@@ -159,7 +159,7 @@ pub async fn apply_accepted_proposal(
         asserted.proposal_resolved,
         "match_proposal ({low}, {high}) did not move to 'applied'"
     );
-    // `asserted.stands` is deliberately not required: a human's acceptance is recorded as
+    // `asserted.agrees` is deliberately not required: a human's acceptance is recorded as
     // how this proposal was answered even if a later human judgement about the pair now
     // outranks it — `patient_link` holds what stands, the proposal row how it was answered.
     tx.commit().await?;

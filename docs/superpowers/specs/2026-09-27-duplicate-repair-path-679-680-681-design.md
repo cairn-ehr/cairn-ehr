@@ -181,9 +181,10 @@ before it can be repaired (R2); R4/R5 consume both.
 >   unheld chart, even though `unlink_charts(unheld, held)` reads `unheld`'s chart set back (see
 >   `LinkOutcome::filed_under`; the returned chart set is always that held chart's).
 > - **Recorded is not took effect.** db/018 admits an assertion that loses the overlay, so each
->   judgement reads back, inside its own transaction, whether its event is the pair's standing
->   winner. `LinkEffect` is `TookEffect`, `Outranked` (a later judgement about the same pair — e.g.
->   a peer's from a clock ahead of this node's — stands instead) or `StillJoined`; the CLI prints
+>   judgement reads back, inside its own transaction, what the pair's standing assertion says.
+>   `LinkEffect` is `TookEffect` (it says what this judgement says — this event, or a later one that
+>   agrees), `Outranked` (a later judgement about the same pair that says the OPPOSITE — e.g. a
+>   peer's from a clock ahead of this node's — stands instead) or `StillJoined`; the CLI prints
 >   each differently and never "linked"/"unlinked" for the latter two. Because the read-back is in
 >   the transaction, nothing can fail after the commit except the commit itself, whose error says
 >   the outcome is unknown and names the event.

@@ -631,10 +631,10 @@ async fn a_vetoed_pair_a_human_already_judged_is_not_sent_back_to_review() {
 }
 
 /// A matcher link that LOSES the overlay once submitted is rolled back, not recorded as
-/// applied. The step-2b read cannot see everything that outranks the link: an assertion
+/// applied. The step-2 read cannot see everything that outranks the link: an assertion
 /// committed after it (a peer's judgement racing it — #700), or a standing assertion with a
 /// later HLC than the one this run was handed. Deterministic stand-in for the race: a
-/// peer's UN-attested unlink at a later HLC (so step 2b, which looks only for attested
+/// peer's UN-attested unlink at a later HLC (so step 2, which looks only for attested
 /// rows, lets the pair through). Submitting would change nothing in `patient_link`; marking
 /// the proposal `auto_applied` with the LOSING event's id would be a precise untruth.
 #[tokio::test]

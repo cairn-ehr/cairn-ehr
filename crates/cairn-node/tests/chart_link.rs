@@ -560,17 +560,12 @@ async fn a_judgement_a_later_one_outranks_is_recorded_but_says_it_did_not_take_e
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk_a, &kid_a, a, b).await;
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let thirty_days_ms = 30 * 24 * 3_600_000;
     let peer = link_assertion_event(
         &kid_h,
         a,
         b,
         LinkVerb::Link,
-        now_ms + thirty_days_ms,
+        now_ms() + THIRTY_DAYS_MS,
         0,
         "peer-ahead",
         true,
@@ -602,6 +597,70 @@ async fn a_judgement_a_later_one_outranks_is_recorded_but_says_it_did_not_take_e
         .unwrap()
         .get(0);
     assert_eq!(recorded, 1, "the judgement is recorded all the same");
+    reset_clock(&c).await;
+}
+
+#[tokio::test]
+async fn a_judgement_a_later_agreeing_one_outranks_still_took_effect() {
+    // The mirror: a peer's clinician already said "different people", with a clock ahead of
+    // this node's. This node's unlink loses the overlay to it — but the record reads exactly
+    // as this clinician said, so there is no disagreement to settle. Reporting one would send
+    // a clinician looking for a conflict that does not exist.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    let peer = link_assertion_event(
+        &kid_h,
+        a,
+        b,
+        LinkVerb::Unlink,
+        now_ms() + THIRTY_DAYS_MS,
+        0,
+        "peer-ahead",
+        true,
+    );
+    common::apply_remote_attested(&c, &sk_h, peer, &sk_h, &kid_h)
+        .await
+        .expect("the peer's attested unlink lands");
+
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
+    assert_eq!(out.effect, LinkEffect::TookEffect);
+    assert_eq!(out.charts.members(), &[a]);
+    reset_clock(&c).await;
+}
+
+/// Wall-clock now in ms, the HLC's unit.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// Far enough ahead that db/020's drift clamp (24h) keeps this node's clock BEHIND the
+/// peer's event, so a local judgement made now is deterministically the earlier one.
+const THIRTY_DAYS_MS: i64 = 30 * 24 * 3_600_000;
+
+/// Put the shared clock back (PR #285's rule, as `status.rs` does): `hlc_state` survives
+/// TRUNCATE and the suites share one serialized database, and a far-future remote event
+/// leaves it ~24h ahead — a latent trap for whichever test runs next.
+async fn reset_clock(c: &Client) {
+    c.execute(
+        "UPDATE hlc_state SET hlc_wall = 0, hlc_counter = 0 WHERE id",
+        &[],
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

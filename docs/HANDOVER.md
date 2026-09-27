@@ -24,7 +24,7 @@
 >    never an "are you sure?") → `link_charts`; each member line gets **"Not the same person"** →
 >    `unlink_charts`. **Show `LinkOutcome::effect`, never assume it:** `StillJoined` (a member joined through a
 >    THIRD chart — the member line must name the edge(s) that actually join it) and `Outranked` (a later
->    judgement about the same pair stands — a human disagreement to show, not retry) must not read as done
+>    judgement about the same pair that says the OPPOSITE stands — a human disagreement to show, not retry) must not read as done
 >    (#699 is the neither-held half — decide before R2b). A refusal and an infrastructure fault are both `Err`
 >    today; R2b may want them apart (see #702). R2b owes the §1.2 budget measurement (review-and-link ≤ 20 s).
 >    Then **#697 (b)** (decided: while a set holds a doubted link, every line not on the opened chart is withheld
@@ -63,8 +63,9 @@
 >   a cairn-sync-first load would otherwise use up the heal (#703). A peer still on an older binary ranks the
 >   old way until it upgrades (stated in identity.md §5.2).
 > - **Recorded is not took effect.** db/018 admits an assertion that loses the overlay. Every judgement path
->   reads back, in its own transaction, whether its event stands (`chart_link::standing_link`): a human
->   judgement reports `LinkEffect`, auto-apply rolls a losing matcher link back rather than mark it applied.
+>   reads back, in its own transaction, what now stands (`chart_link::standing_link`): a human judgement
+>   reports `LinkEffect` (by whether the standing assertion AGREES — a later agreeing one is not a
+>   disagreement), auto-apply rolls back a matcher link that is not itself the winner rather than mark it applied.
 > - **One lock order everywhere: the `match_proposal` row, then db/018's CARNLK advisory lock**
 >   (`chart_link::assert_link_in_tx` pre-locks the row; `auto_apply` and `apply_accepted_proposal` read it `FOR
 >   UPDATE` first). Reversing it deadlocks a same-pair race (40P01). Pinned by a `pg_stat_activity` Lock-wait

@@ -55,6 +55,14 @@ impl LinkVerb {
         }
     }
 
+    /// The `patient_link.state` this judgement asserts (db/018).
+    pub fn state(self) -> &'static str {
+        match self {
+            LinkVerb::Link => "link",
+            LinkVerb::Unlink => "unlink",
+        }
+    }
+
     /// The `match_proposal.status` an OPEN proposal for the pair moves to when a human
     /// decides it this way.
     pub fn resolved_status(self) -> &'static str {
@@ -153,13 +161,15 @@ pub struct Reviewer<'a> {
 /// is not the same as it taking effect, and a caller must never report the one as the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkEffect {
-    /// It is the pair's standing assertion, and the record reads the way it says: a link
-    /// joined the charts; an unlink left them apart.
+    /// The record reads the way it says: a link joined the charts; an unlink left them
+    /// apart. Usually its own event is the pair's standing assertion; it may instead be a
+    /// later judgement that says the SAME thing (e.g. a peer's, from a clock ahead) —
+    /// either way there is nothing left to do.
     TookEffect,
-    /// Another assertion about the SAME pair outranks it — a later human judgement (higher
-    /// HLC; e.g. a peer's, from a clock ahead of this node's). The direct edge still stands
-    /// as that other judgement says. Unlinking again changes nothing; it is a disagreement
-    /// between humans for a human to settle.
+    /// Another assertion about the SAME pair that says the OPPOSITE outranks it — a later
+    /// human judgement (higher HLC; e.g. a peer's, from a clock ahead of this node's). The
+    /// direct edge still stands as that other judgement says. Judging again changes
+    /// nothing; it is a disagreement between humans for a human to settle.
     Outranked,
     /// An UNLINK that stands on its own edge, but the second chart still reads as part of
     /// the first's record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and
@@ -172,10 +182,11 @@ pub enum LinkEffect {
 /// What a judgement did, from two facts read inside its own transaction. **Pure**, so the
 /// three outcomes are unit-tested apart from the database.
 ///
-/// `stands`: the event is the pair's standing `patient_link` winner. `other_in_record`: the
-/// other chart reads as part of the filed-under chart's record.
-pub fn link_effect(verb: LinkVerb, stands: bool, other_in_record: bool) -> LinkEffect {
-    match (verb, stands, other_in_record) {
+/// `agrees`: the pair's standing `patient_link` assertion says what this judgement says
+/// (see [`Asserted::agrees`]). `other_in_record`: the other chart reads as part of the
+/// filed-under chart's record.
+pub fn link_effect(verb: LinkVerb, agrees: bool, other_in_record: bool) -> LinkEffect {
+    match (verb, agrees, other_in_record) {
         (_, false, _) => LinkEffect::Outranked,
         (LinkVerb::Unlink, true, true) => LinkEffect::StillJoined,
         _ => LinkEffect::TookEffect,
@@ -206,9 +217,12 @@ pub struct Asserted {
     pub event_id: Uuid,
     /// Whether an OPEN `match_proposal` for the pair moved.
     pub proposal_resolved: bool,
-    /// Whether the event is now the pair's standing `patient_link` winner. db/018 admits an
-    /// assertion that loses the overlay, so a successful submit does not imply this.
-    pub stands: bool,
+    /// Whether the pair's standing `patient_link` assertion says what this judgement says —
+    /// its own event, or a later one that agrees. db/018 admits an assertion that loses the
+    /// overlay, so a successful submit does not imply this. (Deliberately not "is it OUR
+    /// event": a judgement a later AGREEING one outranks has nothing left to do, and must
+    /// not be reported as a disagreement.)
+    pub agrees: bool,
 }
 
 /// The pair's STANDING `patient_link` row — the assertion that currently wins the overlay
@@ -377,14 +391,15 @@ pub async fn assert_link_in_tx(
         .await
         .map_err(|e| LocalDbFault::new("resolving the pair's open match proposal", e))?;
 
-    // Did it take effect? Read inside this transaction, so it sees our own event.
-    let stands = standing_link(tx, low, high)
+    // Does the record now say what the human said? Read inside this transaction, so it sees
+    // our own event.
+    let agrees = standing_link(tx, low, high)
         .await?
-        .is_some_and(|w| w.is(&ca));
+        .is_some_and(|w| w.state == verb.state());
     Ok(Asserted {
         event_id,
         proposal_resolved: moved > 0,
-        stands,
+        agrees,
     })
 }
 
@@ -553,7 +568,7 @@ async fn judge(
         .await
         .context("reading the chart set the judgement leaves")?;
     let other = if about == a { b } else { a };
-    let effect = link_effect(verb, asserted.stands, charts.contains(&other));
+    let effect = link_effect(verb, asserted.agrees, charts.contains(&other));
 
     // The one failure that may have written: a connection lost DURING the commit leaves
     // its outcome unknown. Name the event so the operator looks before retrying.
@@ -604,6 +619,8 @@ mod tests {
         assert_eq!(LinkVerb::Unlink.event_type(), "identity.unlink.asserted");
         assert_eq!(LinkVerb::Link.schema_version(), "identity.link/1");
         assert_eq!(LinkVerb::Unlink.schema_version(), "identity.unlink/1");
+        assert_eq!(LinkVerb::Link.state(), "link");
+        assert_eq!(LinkVerb::Unlink.state(), "unlink");
         assert_eq!(LinkVerb::Link.resolved_status(), "applied");
         assert_eq!(LinkVerb::Unlink.resolved_status(), "rejected");
     }
@@ -651,7 +668,8 @@ mod tests {
     #[test]
     fn a_judgement_says_what_it_did_not_just_that_it_was_recorded() {
         use LinkEffect::*;
-        // Outranked whenever it does not stand — whatever the record reads.
+        // Outranked whenever the standing assertion says the opposite — whatever the rest of
+        // the record reads.
         for verb in [LinkVerb::Link, LinkVerb::Unlink] {
             for joined in [false, true] {
                 assert_eq!(link_effect(verb, false, joined), Outranked, "{verb:?}");
