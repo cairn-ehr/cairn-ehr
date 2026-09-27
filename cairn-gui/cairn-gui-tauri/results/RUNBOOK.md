@@ -175,6 +175,19 @@ line, not one overall pass:
       "will be signed").
 - [ ] A ceased line is identifiable without colour (its status cell says "ceased").
 
+**A linked chart (ADR-0076 R1, added 2026-09-27).** The `--mock` fixture chart is never linked, so
+these need the live window opened on a chart that shares a link component with another. The
+identity header then lists each member chart's own name, date of birth and trust state (no winner
+is chosen), and every drug line names the chart it was recorded on. Confirm, again per line:
+
+- [ ] The header's member lines are announced with the identity header, before the table.
+- [ ] Each drug line's source chart is announced in the same utterance as the drug. Record how
+      long it takes to hear: today it is a full chart uuid on every line, a known cost filed as
+      [#691](https://github.com/cairn-ehr/cairn-ehr/issues/691).
+- [ ] The same drug recorded on both linked charts shows as two lines, **both flagged** as a
+      possible duplicate — never two silent lines.
+- [ ] If a member's identity cannot be read, the list still shows, with a warning announced.
+
 ## 7. Record it
 
 Copy [`TEMPLATE.md`](TEMPLATE.md) to `YYYY-MM-DD-<host>.md` and fill it in. **Record the
