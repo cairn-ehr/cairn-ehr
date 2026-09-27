@@ -19,22 +19,13 @@
 //!    clinician needs to act on.
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
-use crate::chart_set::{check_displayed_set, linked_members, MemberLine};
+use crate::chart_set::{chart_pane, check_displayed_set, linked_members, ChartPane};
 use crate::state::{AppState, Now, SessionKey};
-use cairn_gui_tab_medications::view::{build_view, missing_report, withheld_report, MedListView};
+use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
 use uuid::Uuid;
 use zeroize::Zeroizing;
-
-/// What `med_list` hands the webview: the list, and — when the chart is linked to others — one
-/// identity line per member chart, shown under the identity header (ADR-0076 decision 1).
-#[derive(Debug, serde::Serialize)]
-pub struct ChartPane {
-    pub list: MedListView,
-    /// Empty unless the list is a combined read over linked charts.
-    pub members: Vec<MemberLine>,
-}
 
 /// Read the chart and build the view model.
 ///
@@ -56,11 +47,10 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
     // The node resolves the chart SET itself; `list.charts` is what the view hands the webview
     // to send back with every write.
     let list = read_chart_of(state, patient).await?;
-    let members = linked_members(state, &list.charts).await?;
-    Ok(ChartPane {
-        list: build_view(&list),
-        members,
-    })
+    // NOT `?`: a failed read of the member NAMES must never hide the medication list itself
+    // (availability over consistency, Ruling R8). `chart_pane` turns it into a warning instead.
+    let members = linked_members(state, &list.charts).await;
+    Ok(chart_pane(&list, members))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -191,8 +181,8 @@ pub async fn sign_off_impl(
     // (ADR-0076 decision 3). Also ahead of fixture mode's refusal, so a changed set is reported
     // as exactly that everywhere. This is the window's early snapshot; the orchestrator below
     // compares again against its own first read, and that one is authoritative.
-    let displayed = read_chart_of(state, patient).await?.charts;
-    check_displayed_set(&displayed, &charts)?;
+    let read_set = read_chart_of(state, patient).await?.charts;
+    check_displayed_set(&read_set, &charts)?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -227,7 +217,7 @@ pub async fn sign_off_impl(
             &params,
             patient,
             // Checked equal to what the webview sent, just above.
-            Some(&displayed),
+            Some(&read_set),
         )
         .await
         .map_err(|e| format!("{e:#}"))?
@@ -417,6 +407,7 @@ async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::chart_set::MemberLine;
     use std::collections::BTreeSet;
 
     /// Every field name `main.js` reads off a payload, in source order of appearance.
@@ -490,6 +481,7 @@ pub(crate) mod tests {
         let pane_json = serde_json::to_value(ChartPane {
             list: view,
             members: vec![member.clone()],
+            members_error: None,
         })
         .unwrap();
         let member_json = serde_json::to_value(&member).unwrap();
@@ -607,6 +599,7 @@ pub(crate) mod tests {
     fn the_webview_reads_the_linked_set_and_each_rows_source() {
         assert!(fields_read_by_the_webview("view").contains("charts"));
         assert!(fields_read_by_the_webview("pane").contains("members"));
+        assert!(fields_read_by_the_webview("pane").contains("members_error"));
         assert!(fields_read_by_the_webview("member").contains("text"));
         assert!(fields_read_by_the_webview("row").contains("source"));
     }

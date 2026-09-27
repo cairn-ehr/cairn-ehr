@@ -82,6 +82,10 @@
                alike, for a chart linked to nothing, which reads exactly as it always did. -->
           <p id="linked-charts-label" hidden>This record combines linked charts, each with its own identity:</p>
           <ul id="linked-charts" aria-labelledby="linked-charts-label" hidden></ul>
+          <!-- Where the member lines would be, when their names could not be read: the list below
+               is still shown (a clinician must always be able to read), and this says it is
+               combined and why the names are missing. -->
+          <p id="linked-charts-error" role="status" aria-live="polite" hidden></p>
           <button id="close-chart" type="button">Find another patient</button>
         </header>
 

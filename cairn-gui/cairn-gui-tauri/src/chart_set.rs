@@ -20,7 +20,8 @@
 //! database; the orchestrator's is the authoritative one, taken inside the act itself. Neither
 //! replaces the other.
 use crate::state::AppState;
-use cairn_medication_view::ChartSet;
+use cairn_gui_tab_medications::view::{build_view, MedListView};
+use cairn_medication_view::{ChartSet, PatientMedicationList};
 use cairn_node::patient::person::ChartIdentity;
 use serde::Serialize;
 use uuid::Uuid;
@@ -86,13 +87,55 @@ pub fn member_line(identity: &ChartIdentity) -> MemberLine {
     }
 }
 
+/// What `med_list` hands the webview: the list, and — when the chart is linked to others — one
+/// identity line per member chart, shown under the identity header (ADR-0076 decision 1).
+#[derive(Debug, Serialize)]
+pub struct ChartPane {
+    pub list: MedListView,
+    /// Empty unless the list is a combined read over linked charts whose names were read.
+    pub members: Vec<MemberLine>,
+    /// Set when the chart is linked but its member names could NOT be read. The list is still
+    /// shown — a clinician must always be able to read (availability over consistency) — and
+    /// this says, where the member lines would have been, that the list is combined and why the
+    /// names are missing. Without it a combined list would read as a single chart.
+    pub members_error: Option<String>,
+}
+
+/// Assemble the pane from one chart read and the outcome of reading its member names.
+///
+/// Pure, so the availability rule is tested with no database: whatever happened to the names,
+/// the list itself always goes to the screen. A name-read failure becomes `members_error`,
+/// worded to say the list is combined and over how many charts — the fact the missing header
+/// lines would have conveyed.
+pub fn chart_pane(
+    list: &PatientMedicationList,
+    members: Result<Vec<MemberLine>, String>,
+) -> ChartPane {
+    let (members, members_error) = match members {
+        Ok(members) => (members, None),
+        Err(e) => (
+            vec![],
+            Some(format!(
+                "The linked charts' names could not be read — this list covers {} charts: {e}",
+                list.charts.members().len()
+            )),
+        ),
+    };
+    ChartPane {
+        list: build_view(list),
+        members,
+        members_error,
+    }
+}
+
 /// The member lines for a chart set, or none when it is not linked.
 ///
 /// None for a single chart: its identity is already the header, and a one-line "linked charts"
 /// list would claim a link that does not exist. None in fixture mode too (Ruling R3) — fixture
 /// charts are never linked, and there is no database to read identities from. A failed read is
 /// an ERROR, not an empty list: a combined record whose header silently lost its member lines
-/// would read as a single chart while its rows came from several.
+/// would read as a single chart while its rows came from several. The caller
+/// ([`chart_pane`]) turns that error into a warning beside the list, never a failed open.
 pub async fn linked_members(
     state: &AppState,
     charts: &ChartSet,
@@ -106,7 +149,7 @@ pub async fn linked_members(
     let db = db.lock().await;
     let identities = cairn_node::patient::person::chart_identities(&*db, charts)
         .await
-        .map_err(|e| format!("could not read the linked charts' identities: {e:#}"))?;
+        .map_err(|e| format!("{e:#}"))?;
     Ok(identities.iter().map(member_line).collect())
 }
 
@@ -181,6 +224,32 @@ mod tests {
                  · chart {id}"
             )
         );
+    }
+
+    /// Availability over consistency (Ruling R8): a clinician must always be able to READ. If
+    /// the member names cannot be read, the medication list is still shown — with a warning that
+    /// says the list is combined, over how many charts, and why the names are missing — rather
+    /// than the whole chart failing to open.
+    #[test]
+    fn a_failed_identity_read_keeps_the_list_and_says_so() {
+        let mut list = cairn_medication_view::fixtures::sample_chart();
+        list.charts = set(&[1, 0xB]);
+        let pane = chart_pane(&list, Err("connection reset".into()));
+        assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
+        assert!(pane.members.is_empty());
+        let warning = pane
+            .members_error
+            .expect("the failure is reported, never implied");
+        assert!(warning.contains("could not be read"), "{warning}");
+        assert!(warning.contains("2 charts"), "{warning}");
+        assert!(warning.contains("connection reset"), "{warning}");
+    }
+
+    #[test]
+    fn a_successful_identity_read_carries_no_warning() {
+        let pane = chart_pane(&cairn_medication_view::fixtures::sample_chart(), Ok(vec![]));
+        assert!(pane.members_error.is_none());
+        assert_eq!(pane.list.charts.len(), 1);
     }
 
     /// Ruling R3: fixture charts are never linked, and there is nothing to read identities from.

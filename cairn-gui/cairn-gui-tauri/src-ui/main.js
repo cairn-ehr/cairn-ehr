@@ -155,6 +155,7 @@ function render(pane, patient) {
   renderedPatient = patient;
   renderedCharts = view.charts;
   renderMembers(pane.members);
+  setMessage(el("linked-charts-error"), pane.members_error);
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -183,6 +184,7 @@ function clearChart() {
   renderedPatient = null;
   renderedCharts = null;
   renderMembers([]);
+  setMessage(el("linked-charts-error"), "");
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");

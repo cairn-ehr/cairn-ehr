@@ -8,6 +8,13 @@
  * out in a row beneath it. Remove all the colour and the chart still reads correctly.
  */
 
+/* `hidden` must always hide. Every view in this window shows and hides by the `hidden` attribute,
+   and any author `display` rule (e.g. `#unlock-form { display: flex }`) otherwise beats the
+   user agent's `[hidden] { display: none }` — which left the passphrase form on screen. */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
