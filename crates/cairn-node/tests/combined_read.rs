@@ -7,13 +7,14 @@
 //! for this read in particular). Key material is minted at runtime (house rule 6).
 mod common;
 use cairn_event::SigningKey;
+use cairn_medication_view::{sign_off_targets, withheld_rows, ChartSet};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, reconcile_medications,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
 };
-use common::{cs, medication_setup as setup, submit_registration};
+use common::{cs, medication_setup as setup, submit_link_event, submit_registration};
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio_postgres::Client;
@@ -66,6 +67,19 @@ async fn assert_drug(
 /// difference each, is below the bar for `common/`).
 async fn assert_one(c: &mut Client, sk: &SigningKey, kid: &str, patient: Uuid, term: &str) -> Uuid {
     assert_drug(c, sk, kid, patient, term, None).await
+}
+
+/// Fold two threads into one group with `first` as the group id — the peer-arrival shape
+/// `medication_read.rs`'s #334 tests use (the local door refuses a cross-chart reconcile, and
+/// never refuses on the sync-apply path, so this state legitimately arrives from a peer).
+async fn group(c: &Client, first: Uuid, second: Uuid) {
+    c.execute(
+        "INSERT INTO medication_group_member (medication_id, group_id) VALUES \
+         ($1::text::uuid, $1::text::uuid), ($2::text::uuid, $1::text::uuid)",
+        &[&first.to_string(), &second.to_string()],
+    )
+    .await
+    .unwrap();
 }
 
 /// Two ids in ascending order. The golden names a pair's threads by their ORDER rather than
@@ -282,4 +296,232 @@ async fn a_never_linked_chart_reads_exactly_as_before() {
         "a never-linked chart must read exactly as it did before the combined read:\n{}",
         serde_json::to_string_pretty(&got).unwrap()
     );
+}
+
+/// The headline of R1: two linked charts read as ONE list from either side, and each row
+/// says which chart it was recorded on — a clinician reading a combined list must never have
+/// to infer a drug's source from which chart happened to be opened.
+#[tokio::test]
+async fn a_linked_pair_reads_as_one_list_with_source_labels() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let b = chart(&c, &sk, &kid).await;
+    let met = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    let aml = assert_one(&mut c, &sk, &kid, b, "amlodipine").await;
+    submit_link_event(&c, &sk, &kid, a, b, 10, true).await;
+
+    for opened in [a, b] {
+        let list = list_patient_medications(&c, opened).await.unwrap();
+        assert_eq!(
+            list.charts,
+            ChartSet::new([a, b]).unwrap(),
+            "opened {opened}"
+        );
+        assert_eq!(list.rows.len(), 2, "both charts' drugs, from either side");
+        let row = |g: Uuid| list.rows.iter().find(|r| r.group_id == g).unwrap();
+        assert_eq!(row(met).source_charts, vec![a]);
+        assert_eq!(row(aml).source_charts, vec![b]);
+        assert_eq!(
+            row(met).members[0].patient_id,
+            a,
+            "each thread names its own chart"
+        );
+        assert_eq!(row(aml).members[0].patient_id, b);
+        assert!(
+            list.rows.iter().all(|r| !r.cross_patient),
+            "nothing reaches outside the set"
+        );
+    }
+}
+
+/// A reconciled group whose threads sit on two charts of the SAME person: one line (never the
+/// view's two `(group, patient)` rows), naming both source charts, each member naming its own
+/// chart — and signable, because both charts are this person, so it is no wrong-chart hazard.
+#[tokio::test]
+async fn a_group_inside_the_set_shows_once_and_is_signable() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let b = chart(&c, &sk, &kid).await;
+    let ta = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    let tb = assert_one(&mut c, &sk, &kid, b, "metformin").await;
+    group(&c, ta, tb).await;
+    submit_link_event(&c, &sk, &kid, a, b, 10, true).await;
+
+    let list = list_patient_medications(&c, b).await.unwrap();
+    assert_eq!(
+        list.rows.len(),
+        1,
+        "one drug, one line — never the view's two (group, patient) rows"
+    );
+    let row = &list.rows[0];
+    assert_eq!(row.source_charts, {
+        let mut v = vec![a, b];
+        v.sort();
+        v
+    });
+    assert!(
+        !row.cross_patient,
+        "both charts are this person: not a wrong-chart hazard"
+    );
+    assert!(
+        !row.reconciliation_flagged,
+        "one group is not a duplicate of itself"
+    );
+    let owner = |t: Uuid| {
+        row.members
+            .iter()
+            .find(|m| m.medication_id == t)
+            .unwrap()
+            .patient_id
+    };
+    assert_eq!(owner(ta), a);
+    assert_eq!(owner(tb), b);
+    let mut both = vec![ta, tb];
+    both.sort();
+    assert_eq!(
+        sign_off_targets(&list.rows),
+        both,
+        "a group inside the set is signable"
+    );
+    assert!(list.groups_missing_from_chart.is_empty());
+    assert!(
+        list.separation_targets.is_empty(),
+        "nothing hazardous, nothing to separate"
+    );
+}
+
+/// Review focus 3: A–B linked, and a reconciled group spanning B and an UNLINKED chart C.
+/// Membership in the set is not enough to make a group safe — it must lie WHOLLY inside it.
+/// And #334's other half: C's own chart shows the group too, where it used to vanish.
+#[tokio::test]
+async fn a_group_reaching_outside_the_set_is_still_a_hazard() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let b = chart(&c, &sk, &kid).await;
+    let outsider = chart(&c, &sk, &kid).await;
+    let tb = assert_one(&mut c, &sk, &kid, b, "warfarin").await;
+    let to = assert_one(&mut c, &sk, &kid, outsider, "warfarin").await;
+    group(&c, tb, to).await;
+    submit_link_event(&c, &sk, &kid, a, b, 10, true).await; // the outsider is NOT linked
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_eq!(list.rows.len(), 1);
+    assert!(
+        list.rows[0].cross_patient,
+        "the group reaches a chart that is not this person"
+    );
+    assert_eq!(
+        withheld_rows(&list.rows),
+        vec![tb],
+        "and is withheld from sign-off"
+    );
+    assert!(
+        list.separation_targets.contains_key(&tb),
+        "with the arguments to separate it"
+    );
+    assert_eq!(
+        list.rows[0]
+            .members
+            .iter()
+            .map(|m| m.medication_id)
+            .collect::<Vec<_>>(),
+        vec![tb],
+        "the outsider's thread is a separation argument, never a member of this person's line"
+    );
+
+    // #334's other half: the outsider's own chart SHOWS the group too (it used to vanish).
+    let theirs = list_patient_medications(&c, outsider).await.unwrap();
+    assert_eq!(theirs.rows.len(), 1);
+    assert!(theirs.rows[0].cross_patient);
+    assert!(theirs.groups_missing_from_chart.is_empty());
+}
+
+/// Review focus 4: the same drug recorded on two charts that turn out to be one person must
+/// never read as two quiet lines — that is a double-dose reading hazard. The positive control
+/// (nothing flagged before the link) proves the flag is about the SET, not about the drug.
+#[tokio::test]
+async fn the_same_drug_on_two_linked_charts_is_flagged() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let b = chart(&c, &sk, &kid).await;
+    assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    assert_one(&mut c, &sk, &kid, b, "Metformin ").await; // the dup_key lowers and trims
+
+    // Positive control: before the link each chart holds ONE metformin and nothing is flagged,
+    // so the flag below is about the SET, not about metformin.
+    let alone = list_patient_medications(&c, a).await.unwrap();
+    assert!(alone.rows.iter().all(|r| !r.reconciliation_flagged));
+
+    submit_link_event(&c, &sk, &kid, a, b, 10, true).await;
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_eq!(
+        list.rows.len(),
+        2,
+        "two recordings, two lines — until reconciled"
+    );
+    assert!(
+        list.rows.iter().all(|r| r.reconciliation_flagged),
+        "the same drug on two linked charts must never show twice unflagged"
+    );
+}
+
+/// Review focus 2: the set follows the STANDING links only — an unlink splits the read again,
+/// and the other chart's drug leaves this list with it.
+#[tokio::test]
+async fn an_unlink_splits_the_read_again() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let b = chart(&c, &sk, &kid).await;
+    assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    assert_one(&mut c, &sk, &kid, b, "amlodipine").await;
+    submit_link_event(&c, &sk, &kid, a, b, 10, true).await;
+    submit_link_event(&c, &sk, &kid, a, b, 11, false).await;
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_eq!(list.charts, ChartSet::single(a));
+    assert_eq!(list.rows.len(), 1);
 }

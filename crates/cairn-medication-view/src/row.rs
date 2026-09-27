@@ -94,8 +94,11 @@ pub struct MedicationRow {
     /// Two different drug anchors inside one reconciled group
     /// (`medication_group_coding_conflict`) — a possible mis-reconciliation.
     pub coding_conflict: bool,
-    /// This group's member threads span more than one patient
-    /// (`medication_group_cross_patient`) — a standing wrong-chart hazard (issue #334).
+    /// This group's member threads reach a chart OUTSIDE the chart set the list was read
+    /// over (`medication_group_cross_patient`, tested against `PatientMedicationList::charts`)
+    /// — a standing wrong-chart hazard (issue #334). A group spanning two linked charts of the
+    /// same person is not one (ADR-0076): only another person's chart can put their dose on
+    /// this line.
     pub cross_patient: bool,
     /// The charts owning at least one member thread of this group, sorted. The row names
     /// where the drug was recorded so a clinician reading a combined list — one read over

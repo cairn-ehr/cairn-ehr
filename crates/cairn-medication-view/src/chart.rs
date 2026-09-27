@@ -41,13 +41,15 @@ pub const SEPARATION_INSTRUCTION: &str =
 
 /// A patient's chart, plus what the node knows is MISSING from it.
 ///
-/// `rows` is what the clinician sees. `groups_missing_from_chart` is a safety signal that
-/// exists BECAUSE a reconciled group can span more than one patient (issue #334): the
-/// group then displays on only ONE patient's chart, so a patient whose thread was pulled
-/// into such a group can have locally-known medication content the node simply cannot show
-/// here. Non-empty means this chart is INCOMPLETE, not merely sparse. It does **not** stop
-/// the rest of the chart being read or signed (ADR-0060) — it is something every renderer
-/// must say out loud.
+/// `rows` is what the clinician sees. `groups_missing_from_chart` is a safety signal: a
+/// group with a locally-known member thread on a chart in `charts` that nonetheless has no
+/// row. It was introduced for issue #334, when the read selected rows by the list view's
+/// single display-winner patient and a group spanning two charts vanished from all but one.
+/// Since the combined read (ADR-0076) selects groups through their own member threads, it is
+/// empty by construction — kept as a defensive net against a projection that drops a group,
+/// or a group re-keyed between the read's statements. Non-empty means this chart is
+/// INCOMPLETE, not merely sparse. It does **not** stop the rest of the chart being read or
+/// signed (ADR-0060) — it is something every renderer must say out loud.
 ///
 /// WHAT IT DOES NOT CATCH. The signal is derived from `medication_thread_group`, which
 /// db/033 drives from `medication_statement` alone. A thread known locally ONLY through an
@@ -71,10 +73,9 @@ pub struct PatientMedicationList {
     ///
     /// WHY THIS EXISTS (#338 review finding 1). Every message about a cross-patient group
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything
-    /// else this struct carries is scoped to one patient — `rows` shows only groups that
-    /// display under this patient, and the node's vouch read filters members by
-    /// `medication_thread_group.patient_id` — so the *other* patient's thread appears
-    /// nowhere. Without this field the node names a remedy whose arguments it never shows,
+    /// else this struct carries is scoped to the charts in `charts` — each row's `members`
+    /// lists only threads whose own chart (`medication_thread_group.patient_id`) is in the
+    /// set — so the *other* patient's thread appears nowhere. Without this field the node names a remedy whose arguments it never shows,
     /// and the only way out is raw SQL. The cross-patient member is deliberately the one
     /// piece of another chart's data this read path surfaces: it is a bare thread id with
     /// no clinical content attached, and it is the minimum needed to repair a wrong-chart

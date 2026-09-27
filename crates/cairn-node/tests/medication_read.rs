@@ -486,13 +486,19 @@ async fn a_reconciled_group_with_conflicting_codings_is_flagged() {
     );
 }
 
-/// Fix 1 (#288 final review, issue #334): a reconciled group whose member threads span
-/// TWO patients is a standing wrong-chart hazard. `medication_group_display`'s
-/// `DISTINCT ON (group_id)` always picks exactly ONE patient as the group's displayed
-/// owner (see db/033's comment on that view), so `patient_medication_current` shows the
-/// group under the WINNING patient's id — TWICE, once per `medication_group_status` row —
-/// while the LOSING patient's chart shows no row for it at all, even though the node holds
-/// real, locally-known content (a whole medication thread) for that patient.
+/// Fix 1 (#288 final review), issue #334 — FIXED by the combined read (ADR-0076 R1). A
+/// reconciled group whose member threads span TWO unlinked patients is a standing wrong-chart
+/// hazard, and it must be visible AND flagged on BOTH charts.
+///
+/// WHAT CHANGED. This test used to be `a_cross_patient_group_is_missing_from_the_losing_
+/// patients_chart` and pinned the defect itself: the read selected rows by the list view's
+/// `patient_id`, which is `medication_group_display`'s single `DISTINCT ON` winner, so the
+/// group showed on the winner's chart only and the LOSING patient's chart showed nothing —
+/// `groups_missing_from_chart` was how that silent gap was surfaced. The read now selects a
+/// group through its own member threads, so B's chart shows the line too. Every assertion
+/// about withholding and `separation_targets` is kept, on both sides; the "invisible group"
+/// half moved to the pure `missing_groups` test in `read.rs`, where the defensive net still
+/// lives (by construction it is now empty unless a view drops a group).
 ///
 /// THE DOOR CANNOT PRODUCE THIS VIA THE EVENT PATH. db/033's reconcile door
 /// (`medication_reconciliation_apply`) refuses a reconciliation at LOCAL author time
@@ -503,7 +509,7 @@ async fn a_reconciled_group_with_conflicting_codings_is_flagged() {
 /// `medication_group_member`, the same projection table the sync-apply path would write,
 /// rather than by asserting an event the local door would refuse.
 #[tokio::test]
-async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
+async fn a_cross_patient_group_shows_on_both_charts_flagged() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -522,10 +528,9 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
     let thread_b = assert_one(&mut c, &sk, &kid, "origin-a", patient_b, "amlodipine").await;
 
     // Fold both threads into ONE group, with thread_a as the group id — the same shape
-    // `cairn_recompute_medication_group` writes for a real reconciled pair. Using thread_a
-    // as the group id (rather than relying on which of the two UUIDs happens to sort
-    // lower) makes patient A deterministically the "winner" below via
-    // `medication_group_display`'s `(s.medication_id = g.group_id) DESC` tiebreak.
+    // `cairn_recompute_medication_group` writes for a real reconciled pair. thread_a being
+    // the group id makes patient A the view's display "winner"; the point of the test is
+    // that winning no longer decides which chart SHOWS the group.
     c.execute(
         "INSERT INTO medication_group_member (medication_id, group_id) VALUES \
          ($1::text::uuid, $1::text::uuid), ($2::text::uuid, $1::text::uuid)",
@@ -534,108 +539,76 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
     .await
     .unwrap();
 
-    // Patient A wins the tiebreak (its member IS the group id), so patient A's chart shows
-    // the group — deduplicated to ONE row by the FIX 1(c) defence in `read.rs`, not the two
-    // `medication_group_status` would otherwise emit — and carries the cross-patient
-    // warning so the winning chart's reader can see the hazard too.
-    let a_list = list_patient_medications(&c, patient_a).await.unwrap();
-    assert_eq!(a_list.rows.len(), 1, "the group is deduplicated to one row");
-    assert!(
-        a_list.rows[0].cross_patient,
-        "the winning patient's row must carry the cross-patient warning"
-    );
-    assert!(
-        a_list.groups_missing_from_chart.is_empty(),
-        "patient A's own thread is fully accounted for on patient A's chart"
-    );
+    // Both charts show the group ONCE — deduplicated (the view emits one row per chart the
+    // group touches), carrying the cross-patient warning, naming both source charts, and
+    // with the group's full membership as the arguments to `medication-separate` (#338
+    // review finding 1: each chart's own row lists only its own thread).
+    for (patient, own_thread) in [(patient_a, thread_a), (patient_b, thread_b)] {
+        let list = list_patient_medications(&c, patient).await.unwrap();
+        assert_eq!(
+            list.rows.len(),
+            1,
+            "the group shows, once, on {patient}'s chart"
+        );
+        let row = &list.rows[0];
+        assert_eq!(row.group_id, thread_a);
+        assert!(
+            row.cross_patient,
+            "{patient}'s row must carry the cross-patient warning"
+        );
+        assert_eq!(row.source_charts, sorted(vec![patient_a, patient_b]));
+        assert_eq!(
+            row.members
+                .iter()
+                .map(|m| m.medication_id)
+                .collect::<Vec<_>>(),
+            vec![own_thread],
+            "a chart's line lists only its own thread — the other is someone else's"
+        );
+        assert!(
+            list.groups_missing_from_chart.is_empty(),
+            "#334 fixed: a locally-known group is never missing from a chart it touches"
+        );
+        assert_eq!(
+            list.separation_targets.get(&thread_a),
+            Some(&sorted(vec![thread_a, thread_b])),
+            "the hazardous group must carry BOTH member threads, including the one belonging \
+             to the other patient — they are the arguments to `medication-separate`"
+        );
+    }
 
-    // Patient B loses the tiebreak: every row `patient_medication_current` emits for this
-    // group carries the WINNER's (patient A's) patient_id, so filtering
-    // `WHERE patient_id = patient_b` returns nothing — patient B's chart renders empty even
-    // though the node holds a real, locally-known drug (thread_b) for patient B. The
-    // `groups_missing_from_chart` signal is what catches this silent gap.
-    let b_list = list_patient_medications(&c, patient_b).await.unwrap();
-    assert!(
-        b_list.rows.is_empty(),
-        "the group displays under patient A only — patient B's chart shows nothing"
-    );
-    assert_eq!(
-        b_list.groups_missing_from_chart,
-        vec![thread_a],
-        "the node must surface that a locally-known group is missing from this chart"
-    );
-    // FIX 1 (#338 review finding 1): naming the group is not enough to ACT on it.
-    // `medication-separate` takes TWO THREAD ids, and patient B's own thread_b appears
-    // nowhere else on this chart — the rows are empty and `read_member_vouches` is
-    // patient-scoped, so without this the operator is told to run a command whose
-    // arguments the node never shows them.
-    assert_eq!(
-        b_list.separation_targets.get(&thread_a),
-        Some(&sorted(vec![thread_a, thread_b])),
-        "the hazardous group must carry BOTH member threads, including the one belonging \
-         to the other patient — they are the arguments to `medication-separate`"
-    );
-
-    // Sign-off must NOT refuse over the invisible group (#339, resolved by the clinician).
-    // An incomplete chart is REPORTED, never refused: nothing here is signable, but that is
-    // because B's chart is empty, not because the node blocked it. The missing group comes
-    // back in the outcome so the caller can say so out loud.
+    // Sign-off on EITHER chart withholds the line rather than signing it: the dose on it
+    // comes from `medication_group_current_dose`, which picks one member across the whole
+    // group regardless of patient, so it may be the other patient's dose under this
+    // patient's drug name. Withholding is per LINE and REPORTED, never silent (an empty
+    // `attested` would read as "nothing needed doing"), and the report carries the remedy's
+    // arguments — the other patient's thread is on no other surface of this chart.
     let params = AttestParams {
         human_sk: &hsk,
         human_kid: &hkid,
         basis: None,
         note: None,
     };
-    let b_out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
-        .await
-        .expect("an incomplete chart is reported, never refused (#339)");
-    assert!(
-        b_out.attested.is_empty(),
-        "patient B's chart displays nothing, so there is nothing to sign"
-    );
-    assert_eq!(
-        b_out.groups_missing_from_chart,
-        vec![thread_a],
-        "the outcome must carry what the chart could not show — an empty `attested` over a \
-         silently incomplete chart is the false 'all accounted for' claim #334 is about"
-    );
-    // The remedy's ARGUMENTS travel with it: `medication-separate` takes two thread ids and
-    // patient B's own thread_b is on no other surface (their chart is empty and the vouch
-    // read is patient-scoped), so without this the report is unactionable.
-    assert_eq!(
-        b_out.separation_targets.get(&thread_a),
-        Some(&sorted(vec![thread_a, thread_b])),
-        "the missing group must carry BOTH member threads, including the one belonging to \
-         the other patient"
-    );
-
-    // The WINNING patient's side of the same hazard. Patient A's chart DOES show the line,
-    // but the dose on it comes from `medication_group_current_dose`, which picks one member
-    // across the whole group regardless of patient, so it may be patient B's dose under
-    // patient A's drug name. The line is therefore withheld from the gesture instead of
-    // signed — withholding is per LINE.
-    let a_out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_a)
-        .await
-        .expect("the winning patient's chart is complete, so sign-off must not refuse it");
-    assert!(
-        a_out.attested.is_empty(),
-        "a cross-patient line must not be signed: its displayed dose may be another patient's"
-    );
-    assert_eq!(
-        a_out.withheld,
-        vec![thread_a],
-        "the withheld line must be REPORTED, or the clinician reads an empty result as \
-         'nothing needed doing' over a drug that still needs their signature"
-    );
-    // FIX 1 (#338 review finding 1), the winning chart's side: the withheld line's warning
-    // names `medication-separate` too, and patient A's own row lists only patient A's
-    // member thread (the vouch read is patient-scoped) — so the outcome must carry the
-    // group's FULL membership or A's clinician is given the same unactionable advice.
-    assert_eq!(
-        a_out.separation_targets.get(&thread_a),
-        Some(&sorted(vec![thread_a, thread_b])),
-        "the withheld line must carry both member threads for `medication-separate`"
-    );
+    for patient in [patient_a, patient_b] {
+        let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient)
+            .await
+            .expect("a chart with a hazardous line is reported, never refused (#339)");
+        assert!(
+            out.attested.is_empty(),
+            "a cross-patient line must not be signed: its displayed dose may be another patient's"
+        );
+        assert_eq!(
+            out.withheld,
+            vec![thread_a],
+            "the withheld line must be REPORTED"
+        );
+        assert_eq!(
+            out.separation_targets.get(&thread_a),
+            Some(&sorted(vec![thread_a, thread_b])),
+            "the withheld line must carry both member threads for `medication-separate`"
+        );
+        assert!(out.groups_missing_from_chart.is_empty());
+    }
 }
 
 /// THE #339 CONTRACT, and the most important test in this file: **a defect on one line
@@ -653,11 +626,15 @@ async fn a_cross_patient_group_is_missing_from_the_losing_patients_chart() {
 /// giveable. A system that voids the whole chart because the potassium line is unsigned (or
 /// invalid, or invisible) withholds fluid from a patient over a defect in a different line.
 ///
-/// Here patient B has an ordinary, unsigned drug of their own PLUS an invisible
-/// cross-patient group. The visible drug must be signed; the invisible group must be
-/// reported, not used as grounds to refuse.
+/// Here patient B has an ordinary, unsigned drug of their own PLUS a cross-patient group.
+/// The sound drug must be signed; the hazardous line must be withheld and reported, not
+/// used as grounds to refuse. (Renamed from `an_incomplete_chart_still_signs_every_line_it_
+/// can_show`: before the #334 fix the cross-patient group was INVISIBLE on B's chart; it now
+/// shows, flagged, so the defect on the other line is "untrustworthy" rather than "missing".
+/// The "invisible group" half of the property is pinned by the pure `missing_groups` test
+/// in `read.rs`; the property itself — the sound line is signed regardless — is unchanged.)
 #[tokio::test]
-async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
+async fn a_hazardous_line_never_blocks_a_sound_one() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -678,8 +655,7 @@ async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
     // of its own, and unsigned. On paper B's clinician would simply sign this line.
     let unrelated = assert_one(&mut c, &sk, &kid, "origin-a", patient_b, "warfarin").await;
 
-    // Same peer-arrival shape as the test above: thread_a is the group id, so patient A
-    // wins `medication_group_display`'s tiebreak and patient B loses it.
+    // Same peer-arrival shape as the test above: one group spanning A and B, id thread_a.
     c.execute(
         "INSERT INTO medication_group_member (medication_id, group_id) VALUES \
          ($1::text::uuid, $1::text::uuid), ($2::text::uuid, $1::text::uuid)",
@@ -688,23 +664,19 @@ async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
     .await
     .unwrap();
 
-    // B's chart is NOT empty: warfarin displays normally and needs a signature.
+    // B's chart shows both lines: the sound warfarin, and the hazardous group, flagged.
     let b_list = list_patient_medications(&c, patient_b).await.unwrap();
+    let row = |g: Uuid| b_list.rows.iter().find(|r| r.group_id == g).unwrap();
     assert_eq!(
         b_list.rows.len(),
-        1,
-        "patient B's own un-reconciled drug still displays"
+        2,
+        "B's own drug and the cross-patient line"
     );
-    assert_eq!(b_list.rows[0].group_id, unrelated);
     assert!(
-        !b_list.rows[0].cross_patient,
+        !row(unrelated).cross_patient,
         "the unrelated drug carries no hazard of its own"
     );
-    assert_eq!(
-        b_list.groups_missing_from_chart,
-        vec![thread_a],
-        "the invisible group is still surfaced"
-    );
+    assert!(row(thread_a).cross_patient, "the shared group is flagged");
 
     let params = AttestParams {
         human_sk: &hsk,
@@ -714,9 +686,9 @@ async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
     };
     let out = sign_off_medication_list(&mut c, &sk, "origin-a", &params, patient_b)
         .await
-        .expect("an incomplete chart must never be refused (#339)");
+        .expect("a chart with a hazardous line must never be refused (#339)");
 
-    // THE PROPERTY: the sound line is signed, despite an invisible group on the same chart.
+    // THE PROPERTY: the sound line is signed, despite a hazardous line on the same chart.
     assert_eq!(
         out.attested,
         vec![unrelated],
@@ -729,17 +701,22 @@ async fn an_incomplete_chart_still_signs_every_line_it_can_show() {
         "and the attestation is really committed, not merely reported"
     );
 
-    // AND the incompleteness is still surfaced — signing what it can must never become
-    // silence about what it cannot. This is the half that keeps #334 honest.
+    // AND the hazardous line is still surfaced — signing what it can must never become
+    // silence about what it cannot.
     assert_eq!(
-        out.groups_missing_from_chart,
+        out.withheld,
         vec![thread_a],
-        "the invisible group must be reported alongside the successful sign-off"
+        "the hazardous line must be reported alongside the successful sign-off"
     );
     assert_eq!(
         out.separation_targets.get(&thread_a),
         Some(&sorted(vec![thread_a, thread_b])),
         "with the thread ids that make `medication-separate` runnable"
+    );
+    assert_eq!(
+        attestation_count(&c, thread_b).await,
+        0,
+        "B's own thread on the withheld line is not signed"
     );
 
     // The other patient's thread is untouched: signing B's chart says nothing about A's.

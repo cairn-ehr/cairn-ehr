@@ -126,10 +126,11 @@ pub struct SignOffOutcome {
 ///
 /// WHAT THIS DOES NOT GUARANTEE (issue #335). `client.transaction()` issues a plain BEGIN,
 /// which runs at Postgres's default READ COMMITTED — a fresh snapshot PER STATEMENT, not
-/// one snapshot for the whole transaction. `list_patient_medications` issues up to SEVEN
-/// statements (the per-thread vouch read, three advisory-flag reads, the current/past list
-/// reads, and the hazardous-group membership read), so even the in-transaction read alone
-/// spans seven snapshots, and neither read is atomic with the other or with itself. The
+/// one snapshot for the whole transaction. `list_patient_medications` issues up to NINE
+/// statements (the chart-set read, the per-thread vouch read, the two group-chart reads, two
+/// advisory-flag reads, the current/past list reads, and the hazardous-group membership
+/// read — see `read.rs`), so even the in-transaction read alone spans nine snapshots, and
+/// neither read is atomic with the other or with itself. The
 /// `actual != expected` compare below is therefore a best-effort check, not an isolation
 /// guarantee: it catches a race that happens to move the computed TARGET SET between the
 /// two reads, but a narrower race, or one that leaves the target set unchanged while still
