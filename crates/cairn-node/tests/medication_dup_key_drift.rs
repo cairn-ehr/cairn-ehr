@@ -93,8 +93,10 @@ GROUP BY coalesce('code:' || (coding_system COLLATE \"C\") || '|' || (coding_cod
 
 /// The guard proper: db/033's dup_key expression (its `SELECT` list copy and its `GROUP
 /// BY` copy — 2 occurrences, pinned so a guard that silently finds none cannot pass) must
-/// be byte-identical (after whitespace normalization) to db/054's two copies (its inner
-/// `t` projection and its inner `u`/`HAVING` projection over the SAME `base` CTE).
+/// be byte-identical (after whitespace normalization) to db/054's ONE copy (fix round 1,
+/// review minor b: db/054 now writes the expression once, in its `keyed` CTE, and both
+/// the outer SELECT and the HAVING-grouped subquery read it from there — so there is only
+/// one place in db/054 left to drift).
 #[test]
 fn db033_and_db054_dup_key_are_byte_identical() {
     let db033 = extract_all(DB033);
@@ -110,9 +112,9 @@ fn db033_and_db054_dup_key_are_byte_identical() {
     );
     assert_eq!(
         db054.len(),
-        2,
-        "expected exactly 2 copies of the dup_key expression in db/054 (the inner `t` \
-         projection, plus the inner `u`/HAVING projection) — got {}: {:?}",
+        1,
+        "expected exactly 1 copy of the dup_key expression in db/054 (the `keyed` CTE — \
+         fix round 1 collapsed the earlier two-copy `t`/`u` shape into one) — got {}: {:?}",
         db054.len(),
         db054
     );

@@ -34,19 +34,24 @@ GRANT EXECUTE ON FUNCTION cairn_person_charts(uuid) TO cairn_agent;
 --    group. Returns the flagged GROUP ids (every group those threads display under).
 --
 --    DRIFT: the `coalesce('code:' || …)` dup_key expression below must stay byte-identical
---    to db/033's (and db/031's) view — medication_dup_key_drift.rs pins it. Note it is
---    written over the UNQUALIFIED column names `coding_system` / `coding_code` / `term`,
---    matching db/033's own shape exactly (db/033 groups the same inner projection, so its
---    dup_key never needed to qualify them) — an inner CTE first produces that same bare
---    shape here so the expression can be copied verbatim rather than adapted.
+--    to db/033's LIVE view (`patient_medication_reconciliation_flag`) — medication_dup_key_
+--    drift.rs pins db/033 against THIS file. db/031 originally defined that view too, but
+--    db/033's `CREATE OR REPLACE VIEW` supersedes it on every schema replay (connect_and_
+--    load_schema always replays db/031 first), so db/031's copy is inert prose, not a
+--    second live definition the guard needs to track — see db/033's own header comment on
+--    why the column name stayed `thread_count` there. Note the expression is written over
+--    the UNQUALIFIED column names `coding_system` / `coding_code` / `term`, matching
+--    db/033's own shape exactly (its inner subquery groups the same bare projection, so its
+--    dup_key never needed to qualify them) — the `base`/`keyed` CTEs below produce that same
+--    bare shape here so the expression can be copied verbatim rather than adapted.
 CREATE OR REPLACE FUNCTION cairn_medication_duplicate_groups(p_charts uuid[])
 RETURNS SETOF uuid
 LANGUAGE sql STABLE
 SET search_path = public, pg_temp
 AS $$
     WITH base AS (
-        -- Bare column names on purpose (db/033's own inner-subquery shape): the dup_key
-        -- expression below reads them unqualified, byte-identical to db/033's copies.
+        -- Bare column names on purpose (db/033's own inner-subquery shape): `keyed` below
+        -- reads them unqualified, byte-identical to db/033's dup_key copy.
         SELECT s.patient_id, s.medication_id, mc.coding_system, mc.coding_code, s.term,
                COALESCE(gm.group_id, s.medication_id) AS group_id
         FROM medication_statement s
@@ -54,23 +59,21 @@ AS $$
         LEFT JOIN medication_coding mc ON mc.medication_id = s.medication_id
         WHERE s.patient_id = ANY(p_charts)
           AND NOT EXISTS (SELECT 1 FROM medication_cessation c WHERE c.medication_id = s.medication_id)
-    )
-    SELECT DISTINCT t.group_id
-    FROM (
+    ),
+    keyed AS (
+        -- The ONE copy of the dup_key expression in this file (fix round 1, review minor
+        -- b): both the outer SELECT and the HAVING-grouped subquery below read it from
+        -- here instead of each repeating it, so there is exactly one place in db/054 that
+        -- can drift from db/033.
         SELECT group_id,
                coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
                         'term:' || lower(btrim(term) COLLATE "C")) AS dup_key
         FROM base
-    ) t
-    WHERE t.dup_key IN (
-        SELECT dup_key FROM (
-            SELECT group_id,
-                   coalesce('code:' || (coding_system COLLATE "C") || '|' || (coding_code COLLATE "C"),
-                            'term:' || lower(btrim(term) COLLATE "C")) AS dup_key
-            FROM base
-        ) u
-        GROUP BY dup_key
-        HAVING count(DISTINCT group_id) > 1
+    )
+    SELECT DISTINCT group_id
+    FROM keyed
+    WHERE dup_key IN (
+        SELECT dup_key FROM keyed GROUP BY dup_key HAVING count(DISTINCT group_id) > 1
     )
 $$;
 GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_agent;
