@@ -74,9 +74,10 @@ fn load_signing_key(
     }
 }
 
-/// Load the human attester key for `identify-patient --link`. Mirrors `load_signing_key`
-/// but keyed on the SEPARATE attester passphrase (flag / CAIRN_ATTESTER_PASSPHRASE / prompt)
-/// so the attester key is distinct from the node's own operational key.
+/// Load a human attester key — for every human-attested verb (`identify-patient --link`,
+/// `link-charts`, `unlink-charts`, …). Mirrors `load_signing_key` but keyed on the SEPARATE
+/// attester passphrase (flag / CAIRN_ATTESTER_PASSPHRASE / prompt) so the attester key is
+/// distinct from the node's own operational key.
 fn load_attester_key(
     path: &std::path::Path,
     passphrase: Option<String>,
@@ -118,17 +119,42 @@ async fn run_chart_judgement(
         LinkVerb::Link => link_charts(&mut db, a, b, &reviewer, &origin).await?,
         LinkVerb::Unlink => unlink_charts(&mut db, a, b, &reviewer, &origin).await?,
     };
-    let what = match verb {
-        LinkVerb::Link => "linked (same person)",
-        LinkVerb::Unlink => "unlinked (not the same person)",
+    for line in chart_judgement_report(verb, a, b, &out) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// What `link-charts` / `unlink-charts` print. **Pure**, so what the operator is told is
+/// unit-tested apart from the database.
+///
+/// The one case that must not read as a plain success: an unlink that could not split the
+/// record because the two charts are still joined THROUGH another link (A–C–B). Saying
+/// "unlinked" and then listing all three charts as one record would contradict itself; the
+/// truthful report is that the judgement was recorded, the record is still one, and which
+/// other link to undo is the operator's call (the machine never picks — principle 2).
+fn chart_judgement_report(
+    verb: cairn_node::chart_link::LinkVerb,
+    a: Uuid,
+    b: Uuid,
+    out: &cairn_node::chart_link::LinkOutcome,
+) -> Vec<String> {
+    use cairn_node::chart_link::LinkVerb;
+    let first = match (verb, out.still_joined) {
+        (LinkVerb::Link, _) => format!("{a} and {b} linked (same person)"),
+        (LinkVerb::Unlink, false) => format!("{a} and {b} unlinked (not the same person)"),
+        (LinkVerb::Unlink, true) => format!(
+            "recorded that {a} and {b} are different people — but {b} still reads as part \
+             of {a}'s record through another link; unlink that link too"
+        ),
     };
-    println!("{a} and {b} {what}; event {}", out.event_id);
+    let mut lines = vec![format!("{first}; event {}", out.event_id)];
     if out.proposal_resolved {
-        println!("the open duplicate proposal for this pair is resolved");
+        lines.push("the open duplicate proposal for this pair is resolved".into());
     }
     let members: Vec<String> = out.charts.members().iter().map(Uuid::to_string).collect();
-    println!("chart {a} now reads as: {}", members.join(", "));
-    Ok(())
+    lines.push(format!("chart {a} now reads as: {}", members.join(", ")));
+    lines
 }
 
 /// The `--attest-as` flag set, shared by every medication verb (author-time
@@ -1940,13 +1966,17 @@ enum Cmd {
         attester_passphrase: Option<String>,
     },
     /// "Not the same person": record a human's attested judgement that two charts are two
-    /// people — splits a linked pair, and on a pair never linked stops any matcher from
-    /// joining them (ADR-0076 decision 4). Both charts must be held here.
+    /// people — splits a directly linked pair, and on a pair never linked stops any matcher
+    /// from joining them (ADR-0076 decision 4). If the two are joined only through another
+    /// chart, the judgement is recorded and the output says the record is still one. One
+    /// chart may be a member not held here, if it reads as part of the other's record.
     UnlinkCharts {
         a: Uuid,
         b: Uuid,
+        /// The human signing key that makes the judgement (required — never the node key).
         #[arg(long)]
         attester_key: PathBuf,
+        /// Passphrase to unseal --attester-key (else CAIRN_ATTESTER_PASSPHRASE, else prompt).
         #[arg(long, env = "CAIRN_ATTESTER_PASSPHRASE")]
         attester_passphrase: Option<String>,
     },
@@ -6855,6 +6885,35 @@ mod tests {
     /// the test process), so both branches supply it explicitly — without it every
     /// `try_parse_from` here would fail on the missing connection string rather than on
     /// what this test is actually about: the presence or absence of `--attester-key`.
+    /// Final-review finding 2: an unlink that leaves the charts joined through a third
+    /// chart must not print "unlinked"; a direct one still does.
+    #[test]
+    fn link_and_unlink_report_says_when_an_unlink_did_not_split() {
+        use cairn_node::chart_link::{LinkOutcome, LinkVerb};
+        let id = |n: u128| Uuid::from_u128(n);
+        let (a, b, c) = (id(1), id(2), id(3));
+        let outcome = |members: Vec<Uuid>, still_joined| LinkOutcome {
+            event_id: id(9),
+            proposal_resolved: false,
+            charts: cairn_medication_view::ChartSet::new(members).unwrap(),
+            still_joined,
+        };
+        let joined =
+            super::chart_judgement_report(LinkVerb::Unlink, a, b, &outcome(vec![a, b, c], true));
+        assert!(!joined[0].contains("unlinked"), "{joined:?}");
+        assert!(joined[0].contains("still reads as part of"), "{joined:?}");
+        assert!(
+            joined.last().unwrap().contains(&c.to_string()),
+            "lists the set"
+        );
+
+        let split = super::chart_judgement_report(LinkVerb::Unlink, a, b, &outcome(vec![a], false));
+        assert!(
+            split[0].contains("unlinked (not the same person)"),
+            "{split:?}"
+        );
+    }
+
     #[test]
     fn link_and_unlink_charts_parse_and_demand_an_attester_key() {
         use clap::Parser;

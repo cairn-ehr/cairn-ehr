@@ -154,6 +154,7 @@ async fn different_people_is_an_unlink_on_a_pair_never_linked() {
         .expect("unlink");
     assert_eq!(standing(&c, a, b).await, Some(("unlink".into(), true)));
     assert_eq!(out.charts.members(), &[a], "a stays a chart of its own");
+    assert!(!out.still_joined);
 }
 
 #[tokio::test]
@@ -175,6 +176,138 @@ async fn an_unlink_after_a_link_splits_the_set_again() {
     link_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
     let out = unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
     assert_eq!(out.charts.members().len(), 1);
+    assert!(
+        !out.still_joined,
+        "a DIRECT link, unlinked, really splits the pair — nothing else holds them together"
+    );
+}
+
+#[tokio::test]
+async fn an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split() {
+    // Final-review finding 2. A–C and C–B are linked, so A and B read as one record THROUGH
+    // C although no A–B edge was ever asserted. The human says "A and B are different
+    // people": the attested unlink on the (never-linked) A–B edge IS recorded — it is the
+    // human's judgement and it replicates (ADR-0076 decision 4) — but it cannot split the
+    // record, because the A–C–B path still stands. Which of A–C or C–B is wrong is a
+    // judgement only a human may make (principle 2), so nothing is auto-resolved: the
+    // outcome must SAY that the charts are still joined, never claim "unlinked".
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b, mid) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    common::submit_registration(&c, &sk_a, &kid_a, mid, 1).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    link_charts(&mut c, a, mid, &who, ORIGIN).await.unwrap();
+    link_charts(&mut c, mid, b, &who, ORIGIN).await.unwrap();
+
+    let out = unlink_charts(&mut c, a, b, &who, ORIGIN)
+        .await
+        .expect("the judgement is recorded even though it cannot split the record");
+    assert!(
+        out.still_joined,
+        "b still reads as part of a's record through the third chart"
+    );
+    assert_eq!(out.charts.members().len(), 3, "the record is still one");
+    assert_eq!(
+        standing(&c, a, b).await,
+        Some(("unlink".into(), true)),
+        "the human's A–B judgement stands on its own edge"
+    );
+}
+
+#[tokio::test]
+async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
+    // Final-review finding 1. R1's combined read shows a member line for every chart in the
+    // person component — including one whose REGISTRATION has not reached this node (a
+    // peer's link named it; it synced ahead). R2 puts "Not the same person" on that line.
+    // Refusing it because the chart is "not held" would leave the clinician looking at a
+    // wrong merge they cannot undo. An unlink attaches nothing, so the typo risk that makes
+    // LINK demand both charts held does not apply.
+    //
+    // Run twice: once with the unheld chart sorting HIGH, once LOW. The second order is
+    // the one that matters for the write door — the event's envelope must be filed under
+    // the chart this node HOLDS, because db/005 step 8b refuses a local event about a chart
+    // with no history here (and the peer's link below is filed under the held chart, so the
+    // unheld one has none).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    for unheld_sorts_low in [false, true] {
+        let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+        let (x, y) = (Uuid::now_v7(), Uuid::now_v7()); // x < y (v7 is time-ordered)
+        let (held, unheld) = if unheld_sorts_low { (y, x) } else { (x, y) };
+        common::submit_registration(&c, &sk_a, &kid_a, held, 1).await;
+        // A peer's machine link joins them; `unheld` is never registered here.
+        let peer = link_assertion_event(&kid_a, held, unheld, true, 50, 0, "peer-matcher", false);
+        apply_remote_raw(&c, &sk_a, peer)
+            .await
+            .expect("set-union admits a link naming a chart that has not synced yet");
+
+        let who = Reviewer {
+            human_sk: &sk_h,
+            human_kid: &kid_h,
+        };
+        let out = unlink_charts(&mut c, held, unheld, &who, ORIGIN)
+            .await
+            .unwrap_or_else(|e| {
+                panic!("unheld_sorts_low={unheld_sorts_low}: a displayed member unlinks: {e}")
+            });
+        assert_eq!(
+            standing(&c, held, unheld).await,
+            Some(("unlink".into(), true)),
+            "unheld_sorts_low={unheld_sorts_low}"
+        );
+        assert_eq!(
+            out.charts.members(),
+            &[held],
+            "the held chart reads alone again"
+        );
+        assert!(!out.still_joined);
+    }
+}
+
+#[tokio::test]
+async fn an_unlink_needs_at_least_one_of_the_charts_held_here() {
+    // The other edge of finding 1's rule: two charts NEITHER of which is held here are not
+    // something a clinician on this node has looked at, even if a peer's link joins them.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (x, y) = (Uuid::now_v7(), Uuid::now_v7());
+    let peer = link_assertion_event(&kid_a, x, y, true, 50, 0, "peer-matcher", false);
+    apply_remote_raw(&c, &sk_a, peer).await.unwrap();
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let err = unlink_charts(&mut c, x, y, &who, ORIGIN)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains(&x.to_string()) && err.contains(&y.to_string()),
+        "names both charts: {err}"
+    );
+    assert_eq!(
+        standing(&c, x, y).await,
+        Some(("link".into(), false)),
+        "nothing was written"
+    );
 }
 
 #[tokio::test]
@@ -376,7 +509,9 @@ async fn a_non_human_key_is_refused_and_nothing_moves() {
 
 #[tokio::test]
 async fn a_chart_this_node_has_never_seen_is_refused_before_signing() {
-    // Review Focus 4.
+    // Review Focus 4. A NEVER-LINKED stranger is refused for BOTH verbs: an unlink may name
+    // a chart not held here only when it already reads as part of the other's record (see
+    // `a_displayed_member_not_held_here_can_still_be_unlinked`).
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

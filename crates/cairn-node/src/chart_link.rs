@@ -84,17 +84,28 @@ pub fn compose_review_provenance(verb: LinkVerb, human_kid: &str) -> String {
 /// The attested link or unlink body. Pure: the caller supplies `event_id` and `hlc`.
 /// The human is the sole contributor and carries `responsibility` — which is what makes
 /// both write doors demand a verified human attestation token for this event.
+///
+/// `about` is the chart the event's ENVELOPE (`patient_id`) is filed under, and must be
+/// `low` or `high`. The C1 convention is `low`; an unlink naming a chart not held here
+/// (see [`admit_judgement`]) is filed under the HELD chart instead, because db/005 step 8b refuses a local event
+/// about a chart with no history on this node. The payload's subjects stay canonical
+/// either way — db/018 reads the pair from them, never from the envelope.
 #[allow(clippy::too_many_arguments)]
 pub fn build_attested_assertion_body(
     verb: LinkVerb,
     event_id: Uuid,
     low: Uuid,
     high: Uuid,
+    about: Uuid,
     provenance: &str,
     confidence: Option<&str>,
     human_kid: &str,
     hlc: Hlc,
 ) -> EventBody {
+    debug_assert!(
+        about == low || about == high,
+        "the envelope names one of the pair"
+    );
     let low_s = low.to_string();
     let high_s = high.to_string();
     let la = LinkAssertion {
@@ -109,7 +120,7 @@ pub fn build_attested_assertion_body(
     };
     EventBody {
         event_id: event_id.to_string(),
-        patient_id: low_s.clone(), // C1 convention: an identity event is "about" subject_a
+        patient_id: about.to_string(),
         event_type: verb.event_type().into(),
         schema_version: verb.schema_version().into(),
         hlc,
@@ -145,6 +156,13 @@ pub struct LinkOutcome {
     pub proposal_resolved: bool,
     /// The chart set of the first chart named, read after commit — what a window reopens.
     pub charts: ChartSet,
+    /// An UNLINK was recorded, but the second chart still reads as part of the first's
+    /// record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and C–B
+    /// standing). The judgement is real and replicates (ADR-0076 decision 4) — it just
+    /// cannot split the record on its own. The remedy is to unlink that other link too;
+    /// the machine never picks which edge is wrong (principle 2), so this is reported,
+    /// never auto-resolved. Always `false` for a link.
+    pub still_joined: bool,
 }
 
 /// The proposal statuses a human judgement resolves. Every other status is CLOSED and is
@@ -158,7 +176,8 @@ const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 /// OPEN proposal for the pair. Returns (event id, whether a proposal moved).
 ///
 /// Shared with `apply_proposal::apply_accepted_proposal`, so the matcher-proposal path
-/// and the chart-review path cannot drift. `low`/`high` must already be canonical.
+/// and the chart-review path cannot drift. `low`/`high` must already be canonical;
+/// `about` is the envelope's chart (see [`build_attested_assertion_body`]).
 ///
 /// Locks the pair's `match_proposal` row (if any) FIRST, before signing or submitting
 /// anything — see the inline comment at the top of the body for why: it keeps this
@@ -174,6 +193,7 @@ pub async fn assert_link_in_tx(
     verb: LinkVerb,
     low: Uuid,
     high: Uuid,
+    about: Uuid,
     provenance: &str,
     confidence: Option<&str>,
     reviewer: &Reviewer<'_>,
@@ -209,6 +229,7 @@ pub async fn assert_link_in_tx(
         event_id,
         low,
         high,
+        about,
         provenance,
         confidence,
         reviewer.human_kid,
@@ -254,7 +275,12 @@ pub async fn assert_link_in_tx(
     Ok((event_id, moved > 0))
 }
 
-/// "Same person": link two charts as the reviewer's attested judgement.
+/// "Same person": link two charts as the reviewer's attested judgement. Both charts must
+/// be held here.
+///
+/// An `Err` whose message says "recorded as event …" means the judgement IS committed —
+/// only the read-back of the chart set failed. Do not retry it: a retry mints a second
+/// event. Every other `Err` means nothing was written.
 pub async fn link_charts(
     client: &mut tokio_postgres::Client,
     a: Uuid,
@@ -266,8 +292,16 @@ pub async fn link_charts(
 }
 
 /// "Not the same person": record the reviewer's attested judgement that two charts are two
-/// people — on a linked pair it splits them; on a pair never linked it is the record that
-/// they were looked at and are different (decision 4), which no machine link then undoes.
+/// people. On a DIRECTLY linked pair it splits them. On a pair never linked it is the record
+/// that they were looked at and are different (decision 4), which no machine link then
+/// undoes. On a pair joined only THROUGH other charts (A–C–B) it is recorded on the A–B
+/// edge but cannot split the record — [`LinkOutcome::still_joined`] says so, and the other
+/// link must be unlinked too.
+///
+/// One chart may be a member this node does not hold (R1 shows it; a peer's link named
+/// it), provided it reads as part of the other chart's record here.
+///
+/// Errors: as [`link_charts`] — "recorded as event …" means the judgement is committed.
 pub async fn unlink_charts(
     client: &mut tokio_postgres::Client,
     a: Uuid,
@@ -276,6 +310,67 @@ pub async fn unlink_charts(
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
     judge(client, LinkVerb::Unlink, a, b, reviewer, node_origin).await
+}
+
+/// Whether a judgement may be made on this pair, given what this node holds — and if so,
+/// which chart its event is filed under. **Pure**, so the rule is unit-testable apart from
+/// the database.
+///
+/// - LINK needs BOTH charts held (a `patient_chart` row — see
+///   `patient::person::ChartIdentity::held`). The floor admits a link naming a chart that
+///   has not synced yet, correctly (offline-first); a human's deliberate act from this node
+///   has no such excuse, and a typo would otherwise attach a stranger's future chart to
+///   this person.
+/// - UNLINK attaches nothing, so that risk does not apply. It needs one chart held (the
+///   one the clinician has open) and the other either held too or already part of that
+///   chart's record here (`shared_record`) — the member line R1 displays for a chart whose
+///   registration has not reached this node. A never-linked stranger is still refused.
+///
+/// `Ok(about)`: the chart to file the event under — `low` by the C1 convention when both are
+/// held, else the one held chart (db/005 step 8b refuses a local event about a chart with
+/// no history here). `Err(text)`: the refusal, naming the chart(s) at fault.
+pub fn admit_judgement(
+    verb: LinkVerb,
+    (a, a_held): (Uuid, bool),
+    (b, b_held): (Uuid, bool),
+    shared_record: bool,
+) -> Result<Uuid, String> {
+    let (low, _) = canonical_pair(a, b);
+    let rule = "a link needs both charts held on this node; an unlink needs the chart you \
+                have open held here, and the other held too or already read as part of its \
+                record";
+    match (verb, a_held, b_held) {
+        (_, true, true) => Ok(low),
+        (_, false, false) => Err(format!(
+            "neither chart {a} nor chart {b} is held on this node — {rule}"
+        )),
+        (LinkVerb::Unlink, true, false) if shared_record => Ok(a),
+        (LinkVerb::Unlink, false, true) if shared_record => Ok(b),
+        // Exactly one chart unheld, and not admitted above. Say only what is true: for an
+        // unlink that means it is also outside the other's record; for a link, whether it
+        // is inside is beside the point.
+        (_, a_held, _) => {
+            let (unheld, other) = if a_held { (b, a) } else { (a, b) };
+            let outside = match verb {
+                LinkVerb::Unlink => format!(" and is not part of chart {other}'s record here"),
+                LinkVerb::Link => String::new(),
+            };
+            Err(format!(
+                "chart {unheld} is not held on this node{outside} — {rule}"
+            ))
+        }
+    }
+}
+
+/// Does this node hold `chart` itself (its `patient_chart` row, made by its registration)?
+async fn is_held(client: &tokio_postgres::Client, chart: Uuid) -> anyhow::Result<bool> {
+    Ok(client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM patient_chart WHERE patient_id = $1::text::uuid)",
+            &[&chart.to_string()],
+        )
+        .await?
+        .get(0))
 }
 
 /// The shared body of both entry points: pre-checks (legible refusals before anything is
@@ -291,26 +386,15 @@ async fn judge(
     if a == b {
         anyhow::bail!("{a} and {b} are the same chart — a chart cannot be linked to itself");
     }
-    // A judgement is about two charts the human has LOOKED at, so both must be held here
-    // (a `patient_chart` row — see `patient::person::ChartIdentity::held`). The floor admits
-    // a link naming a chart that has not synced yet, correctly (offline-first); a human's
-    // deliberate act from this node has no such excuse, and a typo would otherwise attach a
-    // stranger's future chart to this person.
-    for chart in [a, b] {
-        let held: bool = client
-            .query_one(
-                "SELECT EXISTS (SELECT 1 FROM patient_chart WHERE patient_id = $1::text::uuid)",
-                &[&chart.to_string()],
-            )
+    let (a_held, b_held) = (is_held(client, a).await?, is_held(client, b).await?);
+    // Only asked when it can change the answer: an unlink with exactly one chart unheld.
+    let shared_record = verb == LinkVerb::Unlink
+        && a_held != b_held
+        && crate::patient::person::person_charts(&*client, a)
             .await?
-            .get(0);
-        if !held {
-            anyhow::bail!(
-                "chart {chart} is not held on this node — only a chart you can open here can be \
-                 judged the same person as, or a different person from, another"
-            );
-        }
-    }
+            .contains(&b);
+    let about = admit_judgement(verb, (a, a_held), (b, b_held), shared_record)
+        .map_err(anyhow::Error::msg)?;
     // Legibility only; the db/005 gate is the enforcement (a raw-SQL client skipping this
     // still cannot attest with a non-human key).
     if !crate::identify::attester_is_enrolled_human(client, reviewer.human_kid).await? {
@@ -327,15 +411,38 @@ async fn judge(
     // clock gap, which the HLC allows (the identify_patient shape).
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let tx = client.transaction().await?;
-    let (event_id, proposal_resolved) =
-        assert_link_in_tx(&tx, verb, low, high, &provenance, None, reviewer, hlc).await?;
+    let (event_id, proposal_resolved) = assert_link_in_tx(
+        &tx,
+        verb,
+        low,
+        high,
+        about,
+        &provenance,
+        None,
+        reviewer,
+        hlc,
+    )
+    .await?;
     tx.commit().await?;
 
-    let charts = crate::patient::person::person_charts(client, a).await?;
+    // From here the judgement is DURABLE. A failed read-back must not look like a failed
+    // judgement — an operator who retries would mint a second event — so the error names
+    // the committed event.
+    let charts = crate::patient::person::person_charts(&*client, a)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "the judgement is recorded as event {event_id}; could not re-read the chart \
+                 set afterwards: {e}"
+            )
+        })?;
+    // An unlink that left b in a's record: joined through another link (see the field).
+    let still_joined = verb == LinkVerb::Unlink && charts.contains(&b);
     Ok(LinkOutcome {
         event_id,
         proposal_resolved,
         charts,
+        still_joined,
     })
 }
 
@@ -387,7 +494,8 @@ mod tests {
         let (lo, hi) = pair();
         for verb in [LinkVerb::Link, LinkVerb::Unlink] {
             let eid = Uuid::now_v7();
-            let b = build_attested_assertion_body(verb, eid, lo, hi, "prov", None, "kidH", hlc());
+            let b =
+                build_attested_assertion_body(verb, eid, lo, hi, lo, "prov", None, "kidH", hlc());
             assert_eq!(b.event_type, verb.event_type());
             assert_eq!(b.schema_version, verb.schema_version());
             assert_eq!(b.event_id, eid.to_string());
@@ -405,6 +513,45 @@ mod tests {
             );
             assert_eq!(b.contributors[0]["responsibility"]["held_by"], "kidH");
             assert!(!b.plaintext_twin.as_deref().unwrap().trim().is_empty());
+            // Filed under the HIGH chart: only the envelope moves; the pair stays canonical.
+            let h =
+                build_attested_assertion_body(verb, eid, lo, hi, hi, "prov", None, "kidH", hlc());
+            assert_eq!(h.patient_id, hi.to_string());
+            assert_eq!(h.payload["subject_a"], lo.to_string());
         }
+    }
+
+    #[test]
+    fn a_link_needs_both_charts_held() {
+        let (lo, hi) = pair();
+        assert_eq!(
+            admit_judgement(LinkVerb::Link, (hi, true), (lo, true), false),
+            Ok(lo)
+        );
+        // Even a chart already in the record: a link must not reach past this node.
+        let err = admit_judgement(LinkVerb::Link, (lo, true), (hi, false), true).unwrap_err();
+        assert!(err.contains(&hi.to_string()), "{err}");
+        assert!(
+            !err.contains("not part of"),
+            "true of this chart, so unsaid: {err}"
+        );
+    }
+
+    #[test]
+    fn an_unlink_may_name_a_displayed_member_not_held_here_but_not_a_stranger() {
+        let (lo, hi) = pair();
+        // Filed under whichever chart IS held, in either argument position.
+        assert_eq!(
+            admit_judgement(LinkVerb::Unlink, (hi, true), (lo, false), true),
+            Ok(hi)
+        );
+        assert_eq!(
+            admit_judgement(LinkVerb::Unlink, (lo, false), (hi, true), true),
+            Ok(hi)
+        );
+        let err = admit_judgement(LinkVerb::Unlink, (hi, true), (lo, false), false).unwrap_err();
+        assert!(err.contains(&lo.to_string()), "names the stranger: {err}");
+        let err = admit_judgement(LinkVerb::Unlink, (lo, false), (hi, false), true).unwrap_err();
+        assert!(err.contains(&lo.to_string()) && err.contains(&hi.to_string()));
     }
 }

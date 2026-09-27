@@ -47,6 +47,7 @@ pub fn build_attested_link_body(
         event_id,
         low,
         high,
+        low, // the C1 convention: filed under subject_a = low
         provenance,
         confidence,
         human_kid,
@@ -141,6 +142,7 @@ pub async fn apply_accepted_proposal(
         crate::chart_link::LinkVerb::Link,
         low,
         high,
+        low, // filed under subject_a = low: the C1 convention, unchanged by R2a
         &provenance,
         Some(&confidence),
         &reviewer,
