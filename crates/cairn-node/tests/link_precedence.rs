@@ -12,6 +12,7 @@
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
+use cairn_node::chart_link::LinkVerb;
 use cairn_node::db;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -108,6 +109,26 @@ struct Landing {
     attested: bool,
 }
 
+/// Build a [`Landing`] — `attested` is stated ONCE and drives both the body (a
+/// responsibility-bearing contributor) and the door it lands through (with a human token),
+/// so the two can never disagree and quietly exercise a different path than a test names.
+#[allow(clippy::too_many_arguments)]
+fn landing(
+    kid: &str,
+    a: Uuid,
+    b: Uuid,
+    verb: LinkVerb,
+    wall: i64,
+    counter: i32,
+    origin: &str,
+    attested: bool,
+) -> Landing {
+    Landing {
+        body: link_assertion_event(kid, a, b, verb, wall, counter, origin, attested),
+        attested,
+    }
+}
+
 /// Land `l` through the REMOTE door (apply_remote_event), attested or not.
 async fn land_remote(c: &Client, l: &Landing, sk_a: &SigningKey, sk_h: &SigningKey, kid_h: &str) {
     if l.attested {
@@ -175,14 +196,8 @@ async fn a_later_machine_link_does_not_displace_a_human_unlink() {
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk_a, &kid_a, a, b).await;
 
-    let human_unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 10, 0, "nodeH", true),
-        attested: true,
-    };
-    let machine_link = Landing {
-        body: link_assertion_event(&kid_a, a, b, true, 20, 0, "nodeM", false),
-        attested: false,
-    };
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 20, 0, "nodeM", false);
 
     let ((state, attested), merged) = both_orders_remote(
         &c,
@@ -219,14 +234,8 @@ async fn a_later_machine_unlink_does_not_split_a_human_link() {
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk_a, &kid_a, a, b).await;
 
-    let human_link = Landing {
-        body: link_assertion_event(&kid_h, a, b, true, 10, 0, "nodeH", true),
-        attested: true,
-    };
-    let machine_unlink = Landing {
-        body: link_assertion_event(&kid_a, a, b, false, 20, 0, "nodeM", false),
-        attested: false,
-    };
+    let human_link = landing(&kid_h, a, b, LinkVerb::Link, 10, 0, "nodeH", true);
+    let machine_unlink = landing(&kid_a, a, b, LinkVerb::Unlink, 20, 0, "nodeM", false);
 
     let ((state, _), merged) = both_orders_remote(
         &c,
@@ -259,14 +268,8 @@ async fn between_two_human_judgements_the_later_wins() {
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk_a, &kid_a, a, b).await;
 
-    let link = Landing {
-        body: link_assertion_event(&kid_h, a, b, true, 10, 0, "nodeH", true),
-        attested: true,
-    };
-    let unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 20, 0, "nodeH", true),
-        attested: true,
-    };
+    let link = landing(&kid_h, a, b, LinkVerb::Link, 10, 0, "nodeH", true);
+    let unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 20, 0, "nodeH", true);
 
     let ((state, attested), merged) =
         both_orders_remote(&c, &link, &unlink, a, b, &sk_a, &kid_a, &sk_h, &kid_h).await;
@@ -292,14 +295,8 @@ async fn an_attested_assertion_wins_even_an_hlc_triple_collision() {
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk_a, &kid_a, a, b).await;
 
-    let human_unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 30, 4, "same", true),
-        attested: true,
-    };
-    let machine_link = Landing {
-        body: link_assertion_event(&kid_a, a, b, true, 30, 4, "same", false),
-        attested: false,
-    };
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 30, 4, "same", true);
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 30, 4, "same", false);
 
     let ((state, _), _) = both_orders_remote(
         &c,
@@ -363,14 +360,8 @@ async fn the_local_door_ranks_the_same_way() {
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk_a, &kid_a, a, b).await;
 
-    let human_unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 10, 0, "nodeH", true),
-        attested: true,
-    };
-    let machine_link = Landing {
-        body: link_assertion_event(&kid_a, a, b, true, 20, 0, "nodeM", false),
-        attested: false,
-    };
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 20, 0, "nodeM", false);
     land_local(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
     land_local(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
 
@@ -392,10 +383,7 @@ async fn an_older_human_unlink_clears_a_standing_vetoed_machine_link() {
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
 
-    let machine_link = Landing {
-        body: link_assertion_event(&kid_a, a, b, true, 20, 0, "nodeM", false),
-        attested: false,
-    };
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 20, 0, "nodeM", false);
     land_remote(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
     assert_eq!(
         flag_count(&c).await,
@@ -403,10 +391,7 @@ async fn an_older_human_unlink_clears_a_standing_vetoed_machine_link() {
         "precondition: the vetoed machine link is flagged"
     );
 
-    let human_unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 10, 0, "nodeH", true),
-        attested: true,
-    };
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
     land_remote(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
 
     assert_eq!(standing(&c, a, b).await, ("unlink".to_string(), true));
@@ -431,14 +416,8 @@ async fn a_vetoed_machine_link_after_a_human_unlink_raises_no_flag() {
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
 
-    let human_unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 10, 0, "nodeH", true),
-        attested: true,
-    };
-    let machine_link = Landing {
-        body: link_assertion_event(&kid_a, a, b, true, 20, 0, "nodeM", false),
-        attested: false,
-    };
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 20, 0, "nodeM", false);
     land_remote(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
     land_remote(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
 
@@ -464,10 +443,7 @@ async fn every_standing_row_records_its_winners_attestation_truthfully() {
         let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
         register_pair(&c, &sk_a, &kid_a, a, b).await;
         let kid = if attested { &kid_h } else { &kid_a };
-        let l = Landing {
-            body: link_assertion_event(kid, a, b, true, 10 + i, 0, "n", attested),
-            attested,
-        };
+        let l = landing(kid, a, b, LinkVerb::Link, 10 + i, 0, "n", attested);
         land_remote(&c, &l, &sk_a, &sk_h, &kid_h).await;
     }
     let disagreeing: i64 = c
@@ -511,14 +487,8 @@ async fn an_upgraded_node_refolds_a_winner_the_old_order_chose() {
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     let (lo_s, hi_s) = (lo.to_string(), hi.to_string());
 
-    let human_unlink = Landing {
-        body: link_assertion_event(&kid_h, a, b, false, 10, 0, "nodeH", true),
-        attested: true,
-    };
-    let machine_link = Landing {
-        body: link_assertion_event(&kid_a, a, b, true, 20, 0, "nodeM", false),
-        attested: false,
-    };
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 20, 0, "nodeM", false);
     land_remote(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
     land_remote(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
 
@@ -560,6 +530,103 @@ async fn an_upgraded_node_refolds_a_winner_the_old_order_chose() {
         .unwrap()
         .get(0);
     assert_eq!(recorded, cairn_event::schema_generation::SCHEMA_GENERATION);
+}
+
+#[tokio::test]
+async fn the_refold_happens_even_when_cairn_sync_stamped_the_generation_first() {
+    // `cairn-sync init` shares this database and SCHEMA_GENERATION, runs the same
+    // generation heal, and stamps 55 — but it loads no identity migration, so its heal
+    // replays links through the OLD db/018 applier. cairn-node then connects, sees
+    // 55 == 55 and skips its own heal. Recreate that: the old order's winner stands, the
+    // column is absent (db/018 not yet loaded by the new binary), and the generation is
+    // ALREADY current. db/055 itself must still re-decide the pair.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let (lo_s, hi_s) = (lo.to_string(), hi.to_string());
+
+    let human_unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
+    let machine_link = landing(&kid_a, a, b, LinkVerb::Link, 20, 0, "nodeM", false);
+    land_remote(&c, &human_unlink, &sk_a, &sk_h, &kid_h).await;
+    land_remote(&c, &machine_link, &sk_a, &sk_h, &kid_h).await;
+
+    c.batch_execute(&format!(
+        "UPDATE patient_link pl SET state = 'link', hlc_wall = el.hlc_wall,
+                hlc_counter = el.hlc_counter, origin = el.node_origin,
+                content_address = el.content_address
+           FROM event_log el
+          WHERE el.event_type = 'identity.link.asserted'
+            AND pl.low = '{lo_s}'::uuid AND pl.high = '{hi_s}'::uuid;
+         ALTER TABLE patient_link DROP COLUMN attested CASCADE;
+         SELECT cairn_recompute_component('{lo_s}'::uuid, NULL);
+         UPDATE node_schema SET version = {gen};",
+        gen = cairn_event::schema_generation::SCHEMA_GENERATION
+    ))
+    .await
+    .unwrap();
+    assert!(
+        same_person(&c, a, b).await,
+        "precondition: the forged old state is merged"
+    );
+    drop(c);
+
+    // No generation change on this connect, so no heal — db/055 alone must do it.
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert_eq!(
+        standing(&c, a, b).await,
+        ("unlink".to_string(), true),
+        "the human's unlink is re-decided without the generation heal"
+    );
+    assert!(!same_person(&c, a, b).await, "and the charts are two again");
+}
+
+#[tokio::test]
+async fn the_backfill_never_marks_an_unvouched_token_attested() {
+    // db/055's backfill writes `attested = TRUE` only through the ONE definition. An
+    // unvouched token (a deferred event's carried, never-verified token — PR #302 F2) must
+    // stay FALSE: a spurious TRUE is STICKY — replaying the same event (FALSE) loses to it,
+    // and it would then outrank every real human judgement on the pair.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+
+    // A human-token link lands, then its vouch is withdrawn the way db/020 marks a deferred
+    // event's token (the marker row), and the stored column is forced back to FALSE — the
+    // state a winner projected before the vouch was known would have.
+    let link = landing(&kid_h, a, b, LinkVerb::Link, 20, 0, "nodeH", true);
+    land_remote(&c, &link, &sk_a, &sk_h, &kid_h).await;
+    c.batch_execute(
+        "INSERT INTO event_attestation_unvouched (event_id)
+           SELECT event_id FROM event_log WHERE event_type = 'identity.link.asserted';
+         UPDATE patient_link SET attested = FALSE;",
+    )
+    .await
+    .unwrap();
+    drop(c);
+
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    assert_eq!(
+        standing(&c, a, b).await,
+        ("link".to_string(), false),
+        "an unvouched token is not a vouch — the backfill leaves it un-attested"
+    );
+    // And an EARLIER real human unlink therefore still outranks it.
+    let unlink = landing(&kid_h, a, b, LinkVerb::Unlink, 10, 0, "nodeH", true);
+    land_remote(&c, &unlink, &sk_a, &sk_h, &kid_h).await;
+    assert_eq!(standing(&c, a, b).await, ("unlink".to_string(), true));
 }
 
 async fn flag_count(c: &Client) -> i64 {

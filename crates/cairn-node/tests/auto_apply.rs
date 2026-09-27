@@ -9,6 +9,7 @@ use cairn_event::{generate_key, sign, EventBody, Hlc, SigningKey};
 use cairn_node::auto_apply::{
     apply_auto_candidate, apply_auto_candidates, AutoOutcome, AutoSummary,
 };
+use cairn_node::chart_link::LinkVerb;
 use cairn_node::db;
 use cairn_node::matcher_actor::resolve_matcher_actor;
 use tokio_postgres::Client;
@@ -494,8 +495,12 @@ async fn a_pair_a_human_already_judged_is_skipped_and_nothing_is_written() {
         seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
 
         let (sk_h, kid_h) = common::enroll_human(&c).await;
-        let judged =
-            common::link_assertion_event(&kid_h, low, high, human_says_same, 50, 0, "peer", true);
+        let verb = if human_says_same {
+            LinkVerb::Link
+        } else {
+            LinkVerb::Unlink
+        };
+        let judged = common::link_assertion_event(&kid_h, low, high, verb, 50, 0, "peer", true);
         common::apply_remote_attested(&c, &sk_h, judged, &sk_h, &kid_h)
             .await
             .expect("the peer's attested judgement lands");

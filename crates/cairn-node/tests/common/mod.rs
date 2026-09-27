@@ -590,7 +590,7 @@ pub fn link_assertion_event(
     kid: &str,
     a: Uuid,
     b: Uuid,
-    link: bool,
+    verb: cairn_node::chart_link::LinkVerb,
     wall: i64,
     counter: i32,
     origin: &str,
@@ -604,21 +604,15 @@ pub fn link_assertion_event(
         provenance: "test:precedence",
         confidence: None,
     };
-    let (etype, sver, payload, twin) = if link {
-        (
-            "identity.link.asserted",
-            "identity.link/1",
-            link_assertion_body(&la),
-            render_link_twin(&la),
-        )
-    } else {
-        (
-            "identity.unlink.asserted",
-            "identity.unlink/1",
-            unlink_assertion_body(&la),
-            render_unlink_twin(&la),
-        )
+    // The verb's type and schema version come from the production enum, so a test body and
+    // a `chart_link` body can never disagree on either.
+    let (payload, twin) = match verb {
+        cairn_node::chart_link::LinkVerb::Link => (link_assertion_body(&la), render_link_twin(&la)),
+        cairn_node::chart_link::LinkVerb::Unlink => {
+            (unlink_assertion_body(&la), render_unlink_twin(&la))
+        }
     };
+    let (etype, sver) = (verb.event_type(), verb.schema_version());
     let contributors = if attested {
         serde_json::json!([{"actor_id": kid, "role": "attested", "responsibility": {"held_by": kid}}])
     } else {

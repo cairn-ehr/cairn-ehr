@@ -4,7 +4,7 @@
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::{generate_key, SigningKey};
-use cairn_node::chart_link::{link_charts, unlink_charts, Reviewer};
+use cairn_node::chart_link::{link_charts, unlink_charts, LinkVerb, Reviewer};
 use cairn_node::db;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -249,7 +249,16 @@ async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
         let (held, unheld) = if unheld_sorts_low { (y, x) } else { (x, y) };
         common::submit_registration(&c, &sk_a, &kid_a, held, 1).await;
         // A peer's machine link joins them; `unheld` is never registered here.
-        let peer = link_assertion_event(&kid_a, held, unheld, true, 50, 0, "peer-matcher", false);
+        let peer = link_assertion_event(
+            &kid_a,
+            held,
+            unheld,
+            LinkVerb::Link,
+            50,
+            0,
+            "peer-matcher",
+            false,
+        );
         apply_remote_raw(&c, &sk_a, peer)
             .await
             .expect("set-union admits a link naming a chart that has not synced yet");
@@ -289,7 +298,7 @@ async fn an_unlink_needs_at_least_one_of_the_charts_held_here() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let (x, y) = (Uuid::now_v7(), Uuid::now_v7());
-    let peer = link_assertion_event(&kid_a, x, y, true, 50, 0, "peer-matcher", false);
+    let peer = link_assertion_event(&kid_a, x, y, LinkVerb::Link, 50, 0, "peer-matcher", false);
     apply_remote_raw(&c, &sk_a, peer).await.unwrap();
     let who = Reviewer {
         human_sk: &sk_h,
@@ -334,7 +343,16 @@ async fn a_later_machine_link_from_a_peer_does_not_undo_the_reviewers_unlink() {
         .await
         .unwrap()
         .get(0);
-    let later = link_assertion_event(&kid_a, a, b, true, wall + 1_000, 0, "peer-matcher", false);
+    let later = link_assertion_event(
+        &kid_a,
+        a,
+        b,
+        LinkVerb::Link,
+        wall + 1_000,
+        0,
+        "peer-matcher",
+        false,
+    );
     apply_remote_raw(&c, &sk_a, later)
         .await
         .expect("the peer's link is admitted (set-union)");
@@ -382,7 +400,7 @@ async fn a_human_link_resolves_a_doubted_machine_link() {
     let mut c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let (a, b) = vetoed_pair(&c, &sk_a, &kid_a).await;
-    let machine = link_assertion_event(&kid_a, a, b, true, 50, 0, "peer-matcher", false);
+    let machine = link_assertion_event(&kid_a, a, b, LinkVerb::Link, 50, 0, "peer-matcher", false);
     apply_remote_raw(&c, &sk_a, machine).await.unwrap();
     // A plain async fn rather than a closure: a `|c: &Client| async move { .. }` closure's
     // returned future borrows `c` for the closure's OWN elided lifetime, which the compiler
