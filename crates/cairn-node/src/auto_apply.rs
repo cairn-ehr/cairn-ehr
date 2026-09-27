@@ -84,7 +84,9 @@ pub enum AutoOutcome {
 
 /// Apply ONE proposal: read it `FOR UPDATE`, require band='auto_candidate' AND
 /// status='pending', RE-CHECK the db/016 veto (any severity) — a veto that appeared since
-/// propose kicks the pair to human `review` instead of auto-linking — else build + sign an
+/// propose kicks the pair to human `review` instead of auto-linking — skip a pair a human
+/// has already judged (an attested `patient_link` row, which any matcher link loses to) —
+/// else build + sign an
 /// un-attested link with the matcher's key, submit through the 1-arg `submit_event` door,
 /// and mark the proposal 'auto_applied'. All in ONE transaction: any rejection rolls back,
 /// so no event is written and the proposal stays 'pending' to retry (atomicity =
@@ -162,6 +164,29 @@ pub async fn apply_auto_candidate(
             .await
             .map_err(|e| LocalDbFault::new("committing the veto-to-review update", e))?;
         return Ok(AutoOutcome::VetoedToReview);
+    }
+
+    // 2b. A HUMAN has already judged this pair (ADR-0076 decision 5, R2a). An attested
+    //     link or unlink outranks any un-attested one in db/018's `patient_link`, so the
+    //     matcher link built below would be admitted and then LOSE — changing nothing.
+    //     Marking the proposal `auto_applied`, with `applied_event_id` naming that losing
+    //     event, and counting it "applied" would be a precise untruth (principle 4) in the
+    //     table the duplicate worklist reads. So skip it and write nothing: no event, no
+    //     status change. (The proposal stays `pending`; the human's judgement, which
+    //     arrived from a peer, is what stands.)
+    let judged: Option<String> = tx
+        .query_opt(
+            "SELECT state FROM patient_link \
+             WHERE low=$1::text::uuid AND high=$2::text::uuid AND attested",
+            &[&low_s, &high_s],
+        )
+        .await
+        .map_err(|e| LocalDbFault::new("reading whether a human already judged the pair", e))?
+        .map(|r| r.get(0));
+    if let Some(state) = judged {
+        return Ok(AutoOutcome::Skipped(format!(
+            "a human already judged ({low}, {high}) ({state}) — a matcher link would lose to it"
+        )));
     }
 
     // 3. Build + sign the un-attested matcher link.
@@ -295,7 +320,7 @@ fn resolve_failure_line(version: &str, e: &anyhow::Error) -> String {
 /// same fix; the pair is named because the summary counts alone cannot say WHICH charts
 /// were left unlinked.
 ///
-/// The same exactness applies: `apply_auto_candidate`'s eight postgres calls are wrapped, so
+/// The same exactness applies: `apply_auto_candidate`'s nine postgres calls are wrapped, so
 /// the outermost `Display` is legible on its own. `operator_chain` earns its place on the
 /// paths that are NOT database errors at all — a signing failure, a future unwrapped call —
 /// and on any context layer a caller adds above.

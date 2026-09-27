@@ -468,6 +468,93 @@ async fn human_rejected_auto_candidate_is_skipped() {
     assert_eq!(status, "rejected", "a human's disposition is untouched");
 }
 
+/// Final-review finding 3 (R2a, ADR-0076 decision 5). Since R2a an UN-attested link loses
+/// to a standing ATTESTED judgement on the same pair — so a matcher link submitted over a
+/// human's "different people" (or "same person") changes nothing in `patient_link`. Before
+/// the fix, auto-apply submitted it anyway and marked the proposal `auto_applied` with an
+/// `applied_event_id` pointing at the LOSING event, and the summary counted it applied: a
+/// precise untruth (principle 4) in the very table R5's worklist reads. The pair must be
+/// skipped instead, writing nothing — no event, no status change.
+///
+/// The human's judgement lands through the REMOTE door (a peer's clinician made it), which
+/// — unlike `unlink_charts` on this node — leaves the local proposal `pending`: exactly the
+/// state in which auto-apply would otherwise act. Run for both verbs: an attested LINK
+/// already standing makes a matcher link just as redundant.
+#[tokio::test]
+async fn a_pair_a_human_already_judged_is_skipped_and_nothing_is_written() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    for human_says_same in [false, true] {
+        reset(&c).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+        let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+        common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
+        seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
+
+        let (sk_h, kid_h) = common::enroll_human(&c).await;
+        let judged =
+            common::link_assertion_event(&kid_h, low, high, human_says_same, 50, 0, "peer", true);
+        common::apply_remote_attested(&c, &sk_h, judged, &sk_h, &kid_h)
+            .await
+            .expect("the peer's attested judgement lands");
+        let events_before: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .await
+            .unwrap()
+            .get(0);
+
+        let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+            .await
+            .unwrap();
+        let out = apply_auto_candidate(
+            &mut c,
+            low,
+            high,
+            &sk,
+            &kid,
+            Hlc {
+                wall: 100,
+                counter: 0,
+                node_origin: "testnode".into(),
+            },
+        )
+        .await
+        .unwrap();
+        match out {
+            AutoOutcome::Skipped(why) => assert!(
+                why.contains("human already judged"),
+                "human_says_same={human_says_same}: names why: {why}"
+            ),
+            _ => panic!("human_says_same={human_says_same}: must be Skipped"),
+        }
+        let events_after: i64 = c
+            .query_one("SELECT count(*) FROM event_log", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            events_after, events_before,
+            "human_says_same={human_says_same}: no matcher event was written"
+        );
+        let r = c
+            .query_one(
+                "SELECT status, applied_event_id::text FROM match_proposal \
+                 WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+                &[&low.to_string(), &high.to_string()],
+            )
+            .await
+            .unwrap();
+        let (status, applied): (String, Option<String>) = (r.get(0), r.get(1));
+        assert_eq!(
+            (status.as_str(), applied),
+            ("pending", None),
+            "human_says_same={human_says_same}: the proposal is not marked auto_applied"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Task 5 — batch driver + idempotency + recall precision
 // ---------------------------------------------------------------------------
