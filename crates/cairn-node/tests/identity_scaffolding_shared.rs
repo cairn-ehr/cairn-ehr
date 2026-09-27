@@ -220,6 +220,11 @@ fn derivation_finds_the_expected_helpers() {
             // slice-1b tests and a later suite in the same plan both need "one chart with
             // one name, nothing else" as setup, so it is promoted here rather than
             // duplicated per-file (Ruling 1 of that plan's Task 2).
+            // `submit_link_event` joined in the R1 combined-read plan's Task 2
+            // (`person_charts.rs`): it is `identity_linkage.rs`'s own `submit_link_prov`
+            // body, promoted (panicking on refusal) for suites that need two charts already
+            // linked and are testing something else entirely — `identity_linkage.rs` keeps
+            // its own `Result`-returning copy, which its refusal tests still need.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -233,6 +238,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn person_chart_trust(",
             "async fn register_pair(",
             "async fn submit_attested(",
+            "async fn submit_link_event(",
             "async fn submit_medication_with_raw_safety(",
             "async fn submit_registration(",
             "async fn submit_signed(",
