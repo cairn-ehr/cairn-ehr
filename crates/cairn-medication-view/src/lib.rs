@@ -9,6 +9,7 @@
 //! The GUI crates that need it turn it on. `--mock` is still a shipped mode, just not one
 //! the node has to carry.
 pub mod chart;
+pub mod chart_set;
 pub mod display;
 #[cfg(feature = "fixtures")]
 pub mod fixtures;
@@ -16,6 +17,7 @@ pub mod row;
 pub mod targeting;
 
 pub use chart::{format_hazard_groups, PatientMedicationList, SEPARATION_INSTRUCTION};
+pub use chart_set::ChartSet;
 pub use display::{short_kid, DISPLAYED_KID_CHARS};
 pub use row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
 pub use targeting::{sign_off_targets, withheld_rows};
