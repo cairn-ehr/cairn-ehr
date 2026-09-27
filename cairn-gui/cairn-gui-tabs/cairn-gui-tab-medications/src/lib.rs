@@ -72,10 +72,16 @@ impl Semantic for MedicationsTab {
             // The list item's label reads the way a screen reader user needs it: drug,
             // dose, status and WHOSE signature, in one utterance. Splitting these across
             // silent cells would make the signature state announceable only by hunting.
-            let mut label = format!(
-                "{}, {}, {}, {}",
-                row.primary, row.dose, row.status_label, row.vouch_label
-            );
+            let mut label = row.primary.clone();
+            // On a combined list (ADR-0076), WHERE the drug was recorded belongs to the drug's
+            // name, exactly as the webview writes it into the Medication cell.
+            if let Some(source) = &row.source {
+                label.push_str(&format!(" — recorded on chart(s) {source}"));
+            }
+            label.push_str(&format!(
+                ", {}, {}, {}",
+                row.dose, row.status_label, row.vouch_label
+            ));
             if row.will_be_signed {
                 label.push_str(", will be signed");
             }
@@ -215,6 +221,30 @@ mod semantic_tests {
             .fields
             .iter()
             .all(|f| !f.label.contains("INCOMPLETE") && !f.label.contains("will NOT be signed")));
+    }
+
+    /// ADR-0076 decision 1 at the accessibility layer: on a combined list, WHERE a drug was
+    /// recorded is part of what the line says, so it rides the row's one utterance — a
+    /// screen-reader user must not have to hunt for which chart a line came from.
+    #[test]
+    fn a_linked_row_announces_its_source_chart() {
+        let mut list = cairn_medication_view::fixtures::sample_chart();
+        let other = Uuid::from_u128(0xB);
+        list.charts = cairn_medication_view::ChartSet::new([Uuid::from_u128(1), other]).unwrap();
+        list.rows[0].source_charts = vec![other];
+        let node = MedicationsTab::new(crate::view::build_view(&list)).semantics(&ctx());
+        let first_row = node
+            .fields
+            .iter()
+            .find(|f| f.role == Role::ListItem)
+            .expect("a row");
+        assert!(
+            first_row
+                .label
+                .contains(&format!("recorded on chart(s) {other}")),
+            "{}",
+            first_row.label
+        );
     }
 
     /// The sign-off control is always present and always labelled, even when it is

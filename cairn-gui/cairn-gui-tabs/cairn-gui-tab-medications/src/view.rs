@@ -28,6 +28,14 @@ use uuid::Uuid;
 /// The whole window's state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MedListView {
+    /// The chart SET this list was read over (`PatientMedicationList::charts`), as uuid
+    /// strings in the set's sorted order — one entry for a never-linked chart.
+    ///
+    /// The window keeps this and sends it back with every chart command (ADR-0076 decision 3):
+    /// a sign-off must sign the list the clinician SAW, and if a link or unlink changed the set
+    /// while the list was on screen, the backend refuses rather than signing a list nobody
+    /// reviewed.
+    pub charts: Vec<String>,
     pub rows: Vec<MedListRowView>,
     /// How many THREADS the gesture will sign. Not the row count — a reconciled group can
     /// contribute more than one, and the clinician is entitled to know the real number.
@@ -56,11 +64,13 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
     // construction, what the orchestrator will sign.
     let targets: HashSet<_> = sign_off_targets(&list.rows).into_iter().collect();
 
-    // One row per chart row; what a single line says is `row_view`'s job.
+    // One row per chart row; what a single line says is `row_view`'s job. Whether rows name
+    // their source chart is a property of the whole list, so it is decided here, once.
+    let linked = list.charts.is_linked();
     let view_rows: Vec<MedListRowView> = list
         .rows
         .iter()
-        .map(|row| build_row(row, &targets))
+        .map(|row| build_row(row, &targets, linked))
         .collect();
 
     let sign_off_count = targets.len();
@@ -74,6 +84,7 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
         empty_message: empty_message(list.rows.len(), active_rows, sign_off_count),
         withheld_message: withheld_report(&withheld_rows(&list.rows), &list.separation_targets),
         missing_message: missing_report(&list.groups_missing_from_chart, &list.separation_targets),
+        charts: list.charts.members().iter().map(Uuid::to_string).collect(),
         rows: view_rows,
         sign_off_count,
         sign_off_enabled: sign_off_count > 0,

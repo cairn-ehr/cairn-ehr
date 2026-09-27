@@ -8,6 +8,9 @@
 //! `*_impl(&AppState, …)` functions — the same split `funnel::commands` uses — so that the one
 //! rule a wrong-chart defect would break (act only on the chart on SCREEN,
 //! `AppState::displayed_patient`) is tested against `AppState::mock` with no Tauri runtime.
+//! Since R1 that rule covers a SET: a chart linked to others reads as one combined list, and
+//! the two writing commands also name the chart set that list was read over and refuse when it
+//! changed (ADR-0076 decision 3, `crate::chart_set`).
 //!
 //! # Two rules every command in this file follows
 //!
@@ -16,12 +19,22 @@
 //!    clinician needs to act on.
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
+use crate::chart_set::{check_displayed_set, linked_members, MemberLine};
 use crate::state::{AppState, Now, SessionKey};
 use cairn_gui_tab_medications::view::{build_view, missing_report, withheld_report, MedListView};
 use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
 use uuid::Uuid;
 use zeroize::Zeroizing;
+
+/// What `med_list` hands the webview: the list, and — when the chart is linked to others — one
+/// identity line per member chart, shown under the identity header (ADR-0076 decision 1).
+#[derive(Debug, serde::Serialize)]
+pub struct ChartPane {
+    pub list: MedListView,
+    /// Empty unless the list is a combined read over linked charts.
+    pub members: Vec<MemberLine>,
+}
 
 /// Read the chart and build the view model.
 ///
@@ -32,15 +45,22 @@ use zeroize::Zeroizing;
 pub async fn med_list(
     state: tauri::State<'_, AppState>,
     patient_id: String,
-) -> Result<MedListView, String> {
+) -> Result<ChartPane, String> {
     med_list_impl(&state, &patient_id).await
 }
 
-pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<MedListView, String> {
+pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPane, String> {
     // Bound to the chart the webview is showing (`AppState::displayed_patient`): a read for a
     // chart the clerk has since left must not be rendered under the next one's header.
     let patient = state.displayed_patient(patient_id).await?;
-    Ok(build_view(&read_chart_of(state, patient).await?))
+    // The node resolves the chart SET itself; `list.charts` is what the view hands the webview
+    // to send back with every write.
+    let list = read_chart_of(state, patient).await?;
+    let members = linked_members(state, &list.charts).await?;
+    Ok(ChartPane {
+        list: build_view(&list),
+        members,
+    })
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -151,16 +171,28 @@ pub struct SignOffReport {
 pub async fn sign_off(
     state: tauri::State<'_, AppState>,
     patient_id: String,
+    charts: Vec<String>,
 ) -> Result<SignOffReport, String> {
-    sign_off_impl(&state, &patient_id).await
+    sign_off_impl(&state, &patient_id, charts).await
 }
 
-pub async fn sign_off_impl(state: &AppState, patient_id: &str) -> Result<SignOffReport, String> {
+/// `charts` is the chart SET the webview displayed (`MedListView::charts`, sent back as-is).
+pub async fn sign_off_impl(
+    state: &AppState,
+    patient_id: &str,
+    charts: Vec<String>,
+) -> Result<SignOffReport, String> {
     // FIRST: the chart the clinician was LOOKING AT when they pressed the button, and only if
     // it is still the open one — never "whatever is open now" (see
     // `AppState::displayed_patient`). First so that no other refusal can mask this one, and so
     // it is testable in fixture mode.
     let patient = state.displayed_patient(patient_id).await?;
+    // SECOND: the set that chart reads over must still be the set whose list was on screen
+    // (ADR-0076 decision 3). Also ahead of fixture mode's refusal, so a changed set is reported
+    // as exactly that everywhere. This is the window's early snapshot; the orchestrator below
+    // compares again against its own first read, and that one is authoritative.
+    let displayed = read_chart_of(state, patient).await?.charts;
+    check_displayed_set(&displayed, &charts)?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -194,8 +226,8 @@ pub async fn sign_off_impl(state: &AppState, patient_id: &str) -> Result<SignOff
             &state.node_origin,
             &params,
             patient,
-            // Task 7 (R1): pass the displayed ChartSet
-            None,
+            // Checked equal to what the webview sent, just above.
+            Some(&displayed),
         )
         .await
         .map_err(|e| format!("{e:#}"))?
@@ -250,20 +282,28 @@ pub async fn cease(
     group_id: String,
     reason: String,
     patient_id: String,
+    charts: Vec<String>,
 ) -> Result<CeaseReport, String> {
-    cease_impl(&state, &patient_id, &group_id, &reason).await
+    cease_impl(&state, &patient_id, charts, &group_id, &reason).await
 }
 
+/// `charts` is the chart SET the webview displayed, exactly as for [`sign_off_impl`].
 pub async fn cease_impl(
     state: &AppState,
     patient_id: &str,
+    charts: Vec<String>,
     group_id: &str,
     reason: &str,
 ) -> Result<CeaseReport, String> {
-    // Asked ONCE, and FIRST, for the whole gesture: every member thread is stopped on the same
-    // chart, even if the clerk closes it while the loop below is running — and only if it is
-    // the chart the clinician was looking at (`AppState::displayed_patient`).
+    // Asked ONCE, and FIRST, for the whole gesture — and only if it is the chart the clinician
+    // was looking at (`AppState::displayed_patient`).
     let patient = state.displayed_patient(patient_id).await?;
+    // Which threads make up this displayed line. Read rather than trusted from the caller:
+    // the webview knows only the group id it was rendered with, and a reconciled group's
+    // membership is a clinical fact the node owns. Read BEFORE the other refusals so the set
+    // check (ADR-0076 decision 3) comes second, as it does for sign-off.
+    let chart = read_chart_of(state, patient).await?;
+    check_displayed_set(&chart.charts, &charts)?;
     if state.is_mock() {
         return Err("fixture mode: this window is showing mock data and cannot write".into());
     }
@@ -283,24 +323,23 @@ pub async fn cease_impl(
     let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
-    // Which threads make up this displayed line. Read rather than trusted from the caller:
-    // the webview knows only the group id it was rendered with, and a reconciled group's
-    // membership is a clinical fact the node owns.
-    let chart = read_chart_of(state, patient).await?;
-    let members: Vec<Uuid> = chart
+    // Each member thread paired with the chart it LIVES on. On a combined list a reconciled
+    // group can span two linked charts, and a cessation is written to its thread's own chart,
+    // never to the chart that happened to be opened (ADR-0076 decision 2).
+    let members: Vec<(Uuid, Uuid)> = chart
         .rows
         .iter()
         .find(|row| row.group_id == group)
         .ok_or("that drug is no longer on this chart — refresh and try again")?
         .members
         .iter()
-        .map(|m| m.medication_id)
+        .map(|m| (m.medication_id, m.patient_id))
         .collect();
 
     let started = Instant::now();
     let mut ceased = 0usize;
     let mut failed = Vec::new();
-    for medication_id in members {
+    for (medication_id, thread_chart) in members {
         // One member per call, and `cease_medication` opens its own transaction — so a
         // failure on one thread of a reconciled pair leaves the other one stopped rather
         // than rolling both back (ADR-0060 decision 7).
@@ -324,7 +363,7 @@ pub async fn cease_impl(
             node_sk,
             &node_kid,
             &state.node_origin,
-            patient,
+            thread_chart,
             medication_id,
             &input,
             Some(&author),
@@ -442,6 +481,18 @@ pub(crate) mod tests {
             cairn_gui_tab_medications::build_view(&cairn_medication_view::fixtures::sample_chart());
         let view_json = serde_json::to_value(&view).unwrap();
         let row_json = view_json["rows"][0].clone();
+        // `med_list` sends the view INSIDE a pane, beside the linked charts' member lines. The
+        // JS names the outer payload `pane`, the view `view` and each line `member`.
+        let member = MemberLine {
+            patient_id: String::new(),
+            text: String::new(),
+        };
+        let pane_json = serde_json::to_value(ChartPane {
+            list: view,
+            members: vec![member.clone()],
+        })
+        .unwrap();
+        let member_json = serde_json::to_value(&member).unwrap();
 
         let sign_off = serde_json::to_value(SignOffReport {
             signed: 0,
@@ -468,6 +519,8 @@ pub(crate) mod tests {
         report_keys.extend(serialized_keys(&cease));
 
         for (binding, available) in [
+            ("pane", serialized_keys(&pane_json)),
+            ("member", serialized_keys(&member_json)),
             ("view", serialized_keys(&view_json)),
             ("row", serialized_keys(&row_json)),
             ("report", report_keys),
@@ -514,16 +567,24 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn sign_off_refuses_a_chart_that_is_not_on_screen() {
         let (state, _) = open_on_the_fixture_chart();
-        let err = sign_off_impl(&state, &another_chart()).await.unwrap_err();
+        let err = sign_off_impl(&state, &another_chart(), vec![another_chart()])
+            .await
+            .unwrap_err();
         assert!(err.contains("not the chart"), "{err}");
     }
 
     #[tokio::test]
     async fn cease_refuses_a_chart_that_is_not_on_screen() {
         let (state, _) = open_on_the_fixture_chart();
-        let err = cease_impl(&state, &another_chart(), &another_chart(), "allergy")
-            .await
-            .unwrap_err();
+        let err = cease_impl(
+            &state,
+            &another_chart(),
+            vec![another_chart()],
+            &another_chart(),
+            "allergy",
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("not the chart"), "{err}");
     }
 
@@ -531,8 +592,23 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_write_on_the_chart_on_screen_meets_the_fixture_refusal() {
         let (state, on_screen) = open_on_the_fixture_chart();
-        let err = sign_off_impl(&state, &on_screen).await.unwrap_err();
+        let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()])
+            .await
+            .unwrap_err();
         assert!(err.contains("fixture mode"), "{err}");
+    }
+
+    /// The other direction for the combined read (ADR-0076). Each of these, dropped by the JS,
+    /// fails SILENTLY in a dangerous way: without `charts` every sign-off names no set and is
+    /// refused (safe, but the gesture is dead); without `members` a combined record's header
+    /// reads as a single chart while its rows come from several; without `source` a line
+    /// recorded on another chart looks like one recorded on this one.
+    #[test]
+    fn the_webview_reads_the_linked_set_and_each_rows_source() {
+        assert!(fields_read_by_the_webview("view").contains("charts"));
+        assert!(fields_read_by_the_webview("pane").contains("members"));
+        assert!(fields_read_by_the_webview("member").contains("text"));
+        assert!(fields_read_by_the_webview("row").contains("source"));
     }
 
     /// The other direction, for the two fields where silence is the dangerous failure.

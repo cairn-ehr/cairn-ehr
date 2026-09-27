@@ -21,6 +21,7 @@
 //! runbook use on a laptop.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chart_set;
 mod commands;
 mod funnel;
 mod state;

@@ -75,6 +75,13 @@
           <p id="identity-born"></p>
           <p id="identity-trust"></p>
           <p id="identity-id"></p>
+          <!-- A chart linked to others (ADR-0076) opens as ONE combined record: two paper folders
+               clipped together. Each member chart's OWN identity line is listed — no winner is
+               chosen, because the disagreement is often the typo that made the duplicate — and
+               every medication row below names the chart it came from. Hidden, label and list
+               alike, for a chart linked to nothing, which reads exactly as it always did. -->
+          <p id="linked-charts-label" hidden>This record combines linked charts, each with its own identity:</p>
+          <ul id="linked-charts" aria-labelledby="linked-charts-label" hidden></ul>
           <button id="close-chart" type="button">Find another patient</button>
         </header>
 

@@ -38,6 +38,12 @@ pub struct MedListRowView {
     pub can_cease: bool,
     /// Advisory worklist labels (duplicate suspicion, anchor conflict, wrong-chart hazard).
     pub flags: Vec<String>,
+    /// Which chart(s) this drug was recorded on — the ids joined by ", " — and `Some` ONLY
+    /// when the list is a combined read over linked charts (ADR-0076 decision 1: "every row
+    /// names its source chart(s)"; two paper folders clipped together, and the clinician
+    /// reads both). On a never-linked chart it is `None`, so that chart reads exactly as it
+    /// did before R1 — the label is information only where there is a choice of folder.
+    pub source: Option<String>,
 }
 
 /// Shown instead of a blank cell. Principle 4: an unrecorded dose is a recordable state,
@@ -49,7 +55,14 @@ const DOSE_UNKNOWN: &str = "dose not recorded";
 /// `targets` is the set of THREAD ids the sign-off gesture will sign, computed once for the
 /// whole chart by the caller. A row is "will be signed" when any of its member threads is in
 /// it — a reconciled group is one row but several threads.
-pub(crate) fn build_row(row: &MedicationRow, targets: &HashSet<Uuid>) -> MedListRowView {
+///
+/// `linked` is `PatientMedicationList::charts.is_linked()`, decided once per chart by the
+/// caller: whether this row must name its source chart(s) (see [`MedListRowView::source`]).
+pub(crate) fn build_row(
+    row: &MedicationRow,
+    targets: &HashSet<Uuid>,
+    linked: bool,
+) -> MedListRowView {
     MedListRowView {
         group_id: row.group_id.to_string(),
         primary: row.display_name().to_string(),
@@ -72,7 +85,19 @@ pub(crate) fn build_row(row: &MedicationRow, targets: &HashSet<Uuid>) -> MedList
             .any(|m| targets.contains(&m.medication_id)),
         can_cease: row.status == MedicationStatus::Active,
         flags: flags(row),
+        source: linked.then(|| source_label(&row.source_charts)),
     }
+}
+
+/// The source-chart label: every chart owning a member thread of the group, in the row's own
+/// (sorted) order. ALL of them, not just one: a group spanning two charts was recorded on
+/// both, and naming only the first would hide the second folder.
+fn source_label(charts: &[Uuid]) -> String {
+    charts
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Whose signature this line carries.
@@ -300,5 +325,50 @@ mod tests {
         let view = build_view(&chart(vec![reconciled]));
         assert_eq!(view.rows[0].vouch_label, "not signed");
         assert!(view.rows[0].will_be_signed);
+    }
+
+    // ---- ADR-0076 decision 1: every row of a combined list names its source chart(s).
+
+    /// A linked list is two paper folders clipped together, and the clinician reads BOTH — so
+    /// every line says which folder it came from. A never-linked chart says nothing extra:
+    /// it reads exactly as it did before R1 (the plan's cognitive-load budget).
+    #[test]
+    fn a_linked_list_labels_each_row_with_its_source() {
+        use cairn_medication_view::{fixtures::sample_chart, ChartSet};
+        use uuid::Uuid;
+
+        let opened = Uuid::from_u128(1); // the fixture chart
+        let linked = Uuid::from_u128(0xB);
+
+        // Unlinked: no row carries a label, whatever its sources.
+        let single = build_view(&sample_chart());
+        assert!(
+            single.rows.iter().all(|r| r.source.is_none()),
+            "a never-linked chart reads exactly as before: {:?}",
+            single.rows
+        );
+        assert_eq!(single.charts, vec![opened.to_string()]);
+
+        // Linked: the relabelled row names the OTHER chart; every row names its own.
+        let mut list = sample_chart();
+        list.charts = ChartSet::new([opened, linked]).unwrap();
+        list.rows[0].source_charts = vec![linked];
+        let view = build_view(&list);
+        assert_eq!(view.rows[0].source, Some(linked.to_string()));
+        for r in &view.rows[1..] {
+            let source = r
+                .source
+                .as_deref()
+                .expect("every row of a linked list is labelled");
+            assert!(!source.contains(&linked.to_string()), "{source}");
+            assert!(source.contains(&opened.to_string()), "{source}");
+        }
+        // A group spanning two charts names both, in the row's own (sorted) order.
+        let cross = view.rows.last().unwrap();
+        assert_eq!(
+            cross.source,
+            Some(format!("{}, {}", opened, Uuid::from_u128(2)))
+        );
+        assert_eq!(view.charts, vec![opened.to_string(), linked.to_string()]);
     }
 }

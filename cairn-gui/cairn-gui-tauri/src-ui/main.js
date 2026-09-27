@@ -31,6 +31,15 @@ let displayedPatient = null;
  */
 let renderedPatient = null;
 
+/**
+ * The chart SET the drawn list was read over (the view's `charts`, an array of chart ids) — set
+ * by `render`, cleared by `clearChart`. A chart linked to others reads as one combined list
+ * (ADR-0076), and sign-off and cease send this set back beside `renderedPatient`: if a link or
+ * unlink changed the set while the list was on screen, the backend refuses rather than signing a
+ * list nobody reviewed.
+ */
+let renderedCharts = null;
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -61,6 +70,21 @@ function renderWarnings(view) {
   el("chart-warnings").hidden = !(incomplete || withheld);
 }
 
+/**
+ * The linked charts' own identity lines, under the identity header. Label and list are hidden
+ * together when there are none: a chart linked to nothing must not announce a link.
+ */
+function renderMembers(members) {
+  const list = el("linked-charts");
+  list.replaceChildren();
+  for (const member of members) {
+    list.append(cell("li", member.text));
+  }
+  const linked = members.length > 0;
+  list.hidden = !linked;
+  el("linked-charts-label").hidden = !linked;
+}
+
 function renderRow(row) {
   const tr = document.createElement("tr");
   // Marked in the DOM, not only by colour: colour alone is invisible to a screen reader
@@ -69,7 +93,13 @@ function renderRow(row) {
   if (row.status_label === "ceased") tr.setAttribute("data-ceased", "true");
 
   tr.append(
-    cell("th", row.primary, { scope: "row" }),
+    // On a combined list the source chart is part of the drug's name, so a screen reader hears
+    // WHERE it was recorded in the same utterance as WHAT it is. `source` is present only then.
+    cell(
+      "th",
+      row.source ? row.primary + " — recorded on chart(s) " + row.source : row.primary,
+      { scope: "row" },
+    ),
     cell("td", row.dose),
     cell("td", row.status_label),
     cell(
@@ -119,8 +149,12 @@ function renderRow(row) {
   return rows;
 }
 
-function render(view, patient) {
+/** Draw a `med_list` answer: the pane carries the list itself and the linked charts' lines. */
+function render(pane, patient) {
+  const view = pane.list;
   renderedPatient = patient;
+  renderedCharts = view.charts;
+  renderMembers(pane.members);
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -147,6 +181,8 @@ function render(view, patient) {
  */
 function clearChart() {
   renderedPatient = null;
+  renderedCharts = null;
+  renderMembers([]);
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
@@ -161,10 +197,10 @@ async function refresh() {
   const patient = displayedPatient;
   if (patient === null) return;
   try {
-    const view = await invoke("med_list", { patientId: patient });
+    const answer = await invoke("med_list", { patientId: patient });
     // A read for a chart the clinician has since left is dropped, never rendered.
     if (patient !== displayedPatient) return;
-    render(view, patient);
+    render(answer, patient);
   } catch (e) {
     if (patient !== displayedPatient) return;
     say("Could not read the chart: " + e);
@@ -200,7 +236,9 @@ async function signOff() {
     return;
   }
   try {
-    reportSignOff(await invoke("sign_off", { patientId: renderedPatient }));
+    reportSignOff(
+      await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts }),
+    );
   } catch (e) {
     say("Sign-off failed: " + e);
   }
@@ -213,6 +251,7 @@ async function cease(groupId, reason) {
       groupId: groupId,
       reason: reason,
       patientId: renderedPatient,
+      charts: renderedCharts,
     });
     let text = "Stopped " + report.ceased + " thread(s) of this drug.";
     if (report.failed.length > 0) {
