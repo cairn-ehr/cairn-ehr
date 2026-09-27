@@ -160,6 +160,11 @@ const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 /// Shared with `apply_proposal::apply_accepted_proposal`, so the matcher-proposal path
 /// and the chart-review path cannot drift. `low`/`high` must already be canonical.
 ///
+/// Locks the pair's `match_proposal` row (if any) FIRST, before signing or submitting
+/// anything — see the inline comment at the top of the body for why: it keeps this
+/// function's lock order (row, then db/018's CARNLK advisory lock) the same as every
+/// other path that touches both, so two judgements on the same pair cannot deadlock.
+///
 /// Errors roll the caller's transaction back when it drops: nothing is written and the
 /// proposal does not move (the db/005 gate refuses a non-human attester, db/018 a
 /// self-link or empty provenance).
@@ -174,6 +179,30 @@ pub async fn assert_link_in_tx(
     reviewer: &Reviewer<'_>,
     hlc: Hlc,
 ) -> anyhow::Result<(Uuid, bool)> {
+    // LOCK ORDER (controller ruling, R2a Task 4): db/018's `patient_link_apply` trigger —
+    // run inside `submit_event` below — takes the GLOBAL advisory lock
+    // `pg_advisory_xact_lock(x'4341524E4C4B')` ('CARNLK') and holds it until this
+    // transaction commits or rolls back. Both `auto_apply.rs::apply_auto_candidate`
+    // (~:122) and `apply_proposal.rs::apply_accepted_proposal` lock the pair's
+    // `match_proposal` row `FOR UPDATE` FIRST and only submit (taking CARNLK) SECOND. If
+    // this function instead submitted first and updated `match_proposal` second, two
+    // transactions judging the same pair could deadlock: one holding CARNLK and wanting
+    // the row, the other holding the row and wanting CARNLK — Postgres detects the cycle
+    // and aborts one with 40P01, which a clinician would see as a random failure.
+    //
+    // Locking the row here FIRST — even though the actual UPDATE happens later, below —
+    // establishes ONE order for every path: row, then CARNLK. `query_opt`: a pair with no
+    // open proposal has no row to lock, which is fine — there is nothing to serialize
+    // against, and this is then a genuine no-op. When the caller (e.g.
+    // `apply_accepted_proposal`) already holds the row FOR UPDATE from its own earlier
+    // read, re-locking it here in the SAME transaction is a harmless no-op re-acquire.
+    tx.query_opt(
+        "SELECT 1 FROM match_proposal \
+         WHERE patient_low = $1::text::uuid AND patient_high = $2::text::uuid FOR UPDATE",
+        &[&low.to_string(), &high.to_string()],
+    )
+    .await?;
+
     let event_id = Uuid::now_v7();
     let body = build_attested_assertion_body(
         verb,

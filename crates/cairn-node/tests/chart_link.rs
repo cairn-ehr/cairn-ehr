@@ -6,6 +6,8 @@
 use cairn_event::{generate_key, SigningKey};
 use cairn_node::chart_link::{link_charts, unlink_charts, Reviewer};
 use cairn_node::db;
+use std::time::Duration;
+use tokio::time::timeout;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -433,4 +435,119 @@ async fn a_chart_cannot_be_linked_to_itself() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("same chart"), "{err}");
+}
+
+#[tokio::test]
+async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
+    // Lock-order regression (controller ruling on R2a Task 4). Inside `submit_event`,
+    // db/018's `patient_link_apply` takes the GLOBAL advisory lock
+    // `pg_advisory_xact_lock(x'4341524E4C4B')` ('CARNLK') and holds it until commit.
+    // `auto_apply.rs`'s `apply_auto_candidate` (~:122) and `apply_proposal.rs`'s
+    // `apply_accepted_proposal` both lock the pair's `match_proposal` row `FOR UPDATE`
+    // FIRST, and only THEN submit (which takes CARNLK). `assert_link_in_tx` used to do the
+    // reverse — submit first, update the proposal row second — so two transactions on the
+    // SAME pair could each end up holding the lock the other needs next (one holds CARNLK
+    // and wants the row; the other holds the row and wants CARNLK) and Postgres aborts one
+    // with 40P01 ("deadlock detected") — the clinician would see a random-looking failure.
+    // The fix locks the pair's proposal row (if one exists) FIRST, before anything is
+    // signed or submitted, so every path now shares ONE order: row, then CARNLK.
+    //
+    // A real deadlock is timing-dependent and not a good test. Instead this proves the
+    // ORDER directly: T1 (a second, independent connection to the same database) takes the
+    // pair's proposal row `FOR UPDATE` and holds it open in its own transaction. A
+    // judgement (`unlink_charts`) on the same pair is fired concurrently and — correctly —
+    // blocks waiting for that row. While it is blocked, T1 tries
+    // `pg_try_advisory_xact_lock(CARNLK)`:
+    //   - under the OLD (pre-fix) order, the judgement's transaction has ALREADY called
+    //     submit_event and so already holds CARNLK while it waits on the row update — T1's
+    //     attempt returns FALSE. That is the RED this test caught before the fix.
+    //   - under the FIXED order, the judgement is still waiting on the ROW and has never
+    //     reached submit_event/CARNLK — T1's attempt returns TRUE.
+    // T1 then releases the row lock, and the judgement completes normally.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk_a, &kid_a, a, b).await;
+    seed_proposal(&c, a, b, "pending").await;
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+
+    // T1: a second connection to the same database, standing in for a concurrent
+    // judgement / auto-apply / accepted-proposal-apply on the same pair. It locks the
+    // proposal row FOR UPDATE and holds its transaction open.
+    let mut t1 = db::connect(&base)
+        .await
+        .expect("second connection to CAIRN_TEST_PG");
+    let t1_tx = t1.transaction().await.unwrap();
+    let held = t1_tx
+        .query_opt(
+            "SELECT 1 FROM match_proposal \
+             WHERE patient_low = $1::text::uuid AND patient_high = $2::text::uuid FOR UPDATE",
+            &[&lo.to_string(), &hi.to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(held.is_some(), "the seeded proposal row exists to lock");
+
+    // Fire the judgement concurrently on the FIRST connection. `sk_h`/`kid_h` are cloned
+    // into the spawned task (owned) so the future is 'static; the `Reviewer` then borrows
+    // them from inside that same future.
+    let sk_h_owned = sk_h.clone();
+    let kid_h_owned = kid_h.clone();
+    let mut handle = tokio::spawn(async move {
+        let who = Reviewer {
+            human_sk: &sk_h_owned,
+            human_kid: &kid_h_owned,
+        };
+        unlink_charts(&mut c, a, b, &who, ORIGIN).await
+    });
+
+    // Give the spawned task a moment to actually reach and block on the row lock before we
+    // inspect state, so we are not just racing ahead of it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Bounded wait: the judgement must NOT have completed yet — T1 still holds the row.
+    let still_running = timeout(Duration::from_millis(400), &mut handle).await;
+    assert!(
+        still_running.is_err(),
+        "the judgement completed before T1 released the row — it did not wait on the lock"
+    );
+
+    // The crux of the test: while the judgement is blocked, T1 can still take CARNLK —
+    // proof the judgement has not touched CARNLK yet and is genuinely waiting on the ROW,
+    // not the advisory lock.
+    let carnlk_free: bool = t1_tx
+        .query_one(
+            "SELECT pg_try_advisory_xact_lock(x'4341524E4C4B'::bigint)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        carnlk_free,
+        "T1 could not take CARNLK — the judgement must already hold it, meaning it \
+         submitted before locking the proposal row (the lock-order inversion this test \
+         guards against)"
+    );
+
+    // Release T1's row lock (and the CARNLK it just took, on rollback) so the judgement
+    // can proceed.
+    t1_tx.rollback().await.unwrap();
+
+    // The judgement now completes.
+    let out = handle
+        .await
+        .expect("spawned task did not panic")
+        .expect("unlink_charts succeeds once the row is free");
+    assert_eq!(out.charts.members(), &[a]);
+    assert_eq!(
+        proposal(&t1, a, b).await,
+        ("rejected".into(), None),
+        "the judgement's own move still lands once it is unblocked"
+    );
 }
