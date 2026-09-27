@@ -225,6 +225,8 @@ fn derivation_finds_the_expected_helpers() {
             // body, promoted (panicking on refusal) for suites that need two charts already
             // linked and are testing something else entirely — `identity_linkage.rs` keeps
             // its own `Result`-returning copy, which its refusal tests still need.
+            // `link_assertion_event` joined in the R2a plan's Task 1 (`link_precedence.rs`,
+            // `chart_link.rs`): attested and un-attested link bodies at a chosen HLC triple.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -246,6 +248,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn trust_of(",
             "fn bearing_withdrawal_body(",
             "fn body_from_spec(",
+            "fn link_assertion_event(",
             "fn withdrawal_body_with_id(",
         ],
         "the guarded set should be common/mod.rs's public helpers minus REPO_WIDE"

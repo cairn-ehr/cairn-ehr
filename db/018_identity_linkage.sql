@@ -3,8 +3,9 @@
 --
 -- WHAT: the authoritative destination for identity linkage. Adds the additive
 -- `identity.link.asserted` / `identity.unlink.asserted` event types, a
--- culture-neutral structural floor, an HLC-overlay `patient_link` edge table, and
--- a `person_member` connected-component ("golden identity") projection with clean
+-- culture-neutral structural floor, an attested-first, then HLC-overlay `patient_link` edge
+-- table (ADR-0076 decision 5), and a `person_member` connected-component ("golden identity")
+-- projection with clean
 -- unmerge (principle 2 — never merge, always link; unmerge is always clean).
 --
 -- The safety-critical write door submit_event (db/005) is REUSED verbatim: new
@@ -98,6 +99,10 @@ CREATE TABLE IF NOT EXISTS patient_link (
     provenance  TEXT    NOT NULL,
     confidence  TEXT,
     content_address BYTEA NOT NULL,   -- winning event's content address; the #115 tiebreak
+    -- ADR-0076 decision 5: was the WINNING assertion attested? The one definition
+    -- (attester_key present AND cairn_attestation_vouched), evaluated when the winner was
+    -- applied. Ranked BEFORE the HLC by cairn_link_overlay_wins below.
+    attested    BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (low, high),
     CHECK (low < high)
@@ -108,6 +113,13 @@ CREATE TABLE IF NOT EXISTS patient_link (
 -- degrade honestly to the pre-#115 first-applied tiebreak; every new upsert writes it.
 -- Fresh DBs get NOT NULL from the CREATE. Guarded by migration_replay_widening.rs.
 ALTER TABLE patient_link ADD COLUMN IF NOT EXISTS content_address BYTEA;
+-- ADR-0076 decision 5 widening (#207 discipline: the CREATE above no-ops on an existing
+-- table, so the column ALSO ships as an idempotent ALTER). NOT NULL DEFAULT FALSE: every
+-- pre-existing row starts "not attested", which is corrected — together with the WINNER,
+-- which a column fill alone could never re-decide — by db/055's backfill and the loader's
+-- generation-change heal replaying every link event through the applier below. Guarded by
+-- migration_replay_widening.rs and link_precedence.rs::an_upgraded_node_refolds_*.
+ALTER TABLE patient_link ADD COLUMN IF NOT EXISTS attested BOOLEAN NOT NULL DEFAULT FALSE;
 GRANT SELECT ON patient_link TO cairn_agent;
 -- The component BFS joins on (pl.low = node OR pl.high = node). The PK indexes the `low`
 -- side; without an index on `high` the walk sequentially scans the edge table, which
@@ -297,6 +309,32 @@ DROP TRIGGER IF EXISTS patient_link_apply_trg ON event_log;
 -- (same idiom as db/005's `DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);`).
 DROP FUNCTION IF EXISTS patient_link_apply();
 
+-- ADR-0076 decision 5 — the patient_link winner order: ATTESTED FIRST, then the ordinary
+-- HLC overlay order (cairn_hlc_overlay_wins, db/002: wall, counter, origin, content_address).
+--
+-- Why: latest-HLC-wins let a machine's link (a peer's matcher, carrying a later clock)
+-- silently displace a human reviewer's unlink, and an un-attested unlink (the ADR-0030
+-- agent writer can author one — unlinks are never veto-gated) split a human's link. This
+-- ranks a human judgement above a machine one in both directions; between two human
+-- judgements, or two machine ones, the later still wins.
+--
+-- Convergence: this is a lexicographic order over (attested, wall, counter, origin,
+-- address) — still TOTAL, so every node applying the same set of assertions in any order
+-- keeps the same winner (principle 1). NULL is read as "not attested" (the column is NOT
+-- NULL; the COALESCE only makes the rule legible without that knowledge).
+-- Pure and IMMUTABLE, like the comparator it wraps.
+CREATE OR REPLACE FUNCTION cairn_link_overlay_wins(
+    new_attested boolean, new_wall bigint, new_counter int, new_origin text, new_addr bytea,
+    cur_attested boolean, cur_wall bigint, cur_counter int, cur_origin text, cur_addr bytea
+) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE
+        WHEN COALESCE(new_attested, FALSE) <> COALESCE(cur_attested, FALSE)
+            THEN COALESCE(new_attested, FALSE)
+        ELSE cairn_hlc_overlay_wins(new_wall, new_counter, new_origin, new_addr,
+                                    cur_wall, cur_counter, cur_origin, cur_addr)
+    END;
+$$;
+
 CREATE OR REPLACE FUNCTION patient_link_apply(e event_log)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -320,6 +358,9 @@ DECLARE
     v_win_state    text;
     v_win_ca       bytea;
     v_win_attested boolean;
+    -- NOT initialised in DECLARE — same reason as a/b/lo/hi above: it must not run
+    -- before the seal guard.
+    v_attested boolean;
 BEGIN
     -- ADR-0052 §2 seal-robustness (#10): a wrongly-sealed NON-clinical row holds CIPHERTEXT
     -- in e.body (refused at submit; admitted lenient at apply for lossless sync). Reading it
@@ -334,6 +375,15 @@ BEGIN
     b  := (p ->> 'subject_b')::uuid;
     lo := LEAST(a, b);
     hi := GREATEST(a, b);
+    -- The ONE definition of "attested" (ADR-0076 decision 5; the #190 veto check below and
+    -- the stored column share it). An unvouched token — carried by db/020 for a deferred
+    -- event, never verified — is NOT a vouch (PR #302 finding F2).
+    --
+    -- Evaluated ONCE, here, and stored with the winner. That is safe because an event's
+    -- vouch never changes after its first projection: a deferred event projects for the
+    -- first time in db/043's gate 4, AFTER gate 1 has cleared (or kept) its unvouched
+    -- marker; a non-deferred event's attester_key is only ever stored once verified.
+    v_attested := e.attester_key IS NOT NULL AND cairn_attestation_vouched(e.event_id);
     -- Serialize linkage applies (RACE FIX). cairn_recompute_component is a read-modify-
     -- write of person_member over the STANDING edges; under READ COMMITTED two concurrent
     -- applies (e.g. link(A,B) and link(B,C)) each BFS without seeing the other's uncommitted
@@ -381,7 +431,7 @@ BEGIN
     -- every replicated event, and a deferred event only ever arrives replicated), but a
     -- reader must not have to prove that to trust the line.
     IF v_state = 'link'
-       AND (e.attester_key IS NULL OR NOT cairn_attestation_vouched(e.event_id))
+       AND NOT v_attested
        AND cairn_has_hard_veto(lo, hi)
        AND current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
         RAISE EXCEPTION
@@ -391,10 +441,10 @@ BEGIN
 
     INSERT INTO patient_link
         (low, high, state, hlc_wall, hlc_counter, origin, provenance, confidence,
-         content_address)
+         content_address, attested)
     VALUES
         (lo, hi, v_state, e.hlc_wall, e.hlc_counter, e.node_origin,
-         p ->> 'provenance', p ->> 'confidence', e.content_address)
+         p ->> 'provenance', p ->> 'confidence', e.content_address, v_attested)
     ON CONFLICT (low, high) DO UPDATE SET
         state       = EXCLUDED.state,
         hlc_wall    = EXCLUDED.hlc_wall,
@@ -403,13 +453,15 @@ BEGIN
         provenance  = EXCLUDED.provenance,
         confidence  = EXCLUDED.confidence,
         content_address = EXCLUDED.content_address,
+        attested    = EXCLUDED.attested,
         updated_at  = clock_timestamp()
-    -- Overlay only when the incoming event outranks the stored winner, with content_address
-    -- as the deterministic final tiebreaker (#115) so an HLC-triple collision converges.
-    WHERE cairn_hlc_overlay_wins(
-        EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin, EXCLUDED.content_address,
-        patient_link.hlc_wall, patient_link.hlc_counter, patient_link.origin,
-        patient_link.content_address);
+    -- ADR-0076 decision 5: attested first, then the HLC overlay order (see
+    -- cairn_link_overlay_wins above). Content address remains the final tiebreak (#115).
+    WHERE cairn_link_overlay_wins(
+        EXCLUDED.attested, EXCLUDED.hlc_wall, EXCLUDED.hlc_counter, EXCLUDED.origin,
+        EXCLUDED.content_address,
+        patient_link.attested, patient_link.hlc_wall, patient_link.hlc_counter,
+        patient_link.origin, patient_link.content_address);
 
     -- #190 flag lifecycle, DERIVED FROM THE STANDING OVERLAY WINNER (PR #219 review,
     -- finding 1) — never from the arriving event's verb. The upsert above is HLC-guarded,
@@ -429,11 +481,12 @@ BEGIN
     -- SUPPRESS the flag on a hard-vetoed merge: two charts merged, no worklist entry, both
     -- charts reading `confirmed`. Strictly worse than the un-attested case, which is at
     -- least flagged. An unvouched vouch is not a vouch.
-    SELECT pl.state, pl.content_address,
-           el.attester_key IS NOT NULL AND cairn_attestation_vouched(el.event_id)
+    -- Since ADR-0076 decision 5 the winner's attestation is the stored column, written from
+    -- v_attested by the ONE definition when that winner was applied (see v_attested above
+    -- for why it cannot go stale).
+    SELECT pl.state, pl.content_address, pl.attested
       INTO v_win_state, v_win_ca, v_win_attested
       FROM patient_link pl
-      JOIN event_log el ON el.content_address = pl.content_address
       WHERE pl.low = lo AND pl.high = hi;
 
     IF v_win_state = 'link' AND NOT v_win_attested AND cairn_has_hard_veto(lo, hi) THEN

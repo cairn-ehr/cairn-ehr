@@ -575,6 +575,76 @@ pub async fn submit_link_event(
     .expect("link event accepted");
 }
 
+/// A link/unlink body at a CHOSEN HLC triple, attested or not — the shape every ADR-0076
+/// decision-5 test needs, where the whole question is how an attested and an un-attested
+/// assertion of the same pair rank against each other.
+///
+/// `attested = true` gives the body the responsibility-bearing contributor a human vouch
+/// carries (db/005/db/020 then DEMAND a verified human token — submit it with
+/// [`submit_attested`] / [`apply_remote_attested`]); `false` gives a plain `recorded`
+/// contributor (a matcher or agent writer — submit with `submit_event($1)` /
+/// [`apply_remote_raw`]). The caller picks `origin` so two events can collide on the
+/// full `(wall, counter, origin)` triple when a test needs that.
+#[allow(clippy::too_many_arguments)]
+pub fn link_assertion_event(
+    kid: &str,
+    a: Uuid,
+    b: Uuid,
+    link: bool,
+    wall: i64,
+    counter: i32,
+    origin: &str,
+    attested: bool,
+) -> EventBody {
+    let a_s = a.to_string();
+    let b_s = b.to_string();
+    let la = LinkAssertion {
+        subject_a: &a_s,
+        subject_b: &b_s,
+        provenance: "test:precedence",
+        confidence: None,
+    };
+    let (etype, sver, payload, twin) = if link {
+        (
+            "identity.link.asserted",
+            "identity.link/1",
+            link_assertion_body(&la),
+            render_link_twin(&la),
+        )
+    } else {
+        (
+            "identity.unlink.asserted",
+            "identity.unlink/1",
+            unlink_assertion_body(&la),
+            render_unlink_twin(&la),
+        )
+    };
+    let contributors = if attested {
+        serde_json::json!([{"actor_id": kid, "role": "attested", "responsibility": {"held_by": kid}}])
+    } else {
+        serde_json::json!([{"actor_id": kid, "role": "recorded"}])
+    };
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: a_s.clone(),
+        event_type: etype.into(),
+        schema_version: sver.into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: origin.into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors,
+        payload,
+        attachments: vec![],
+        plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
 /// Seed one chart carrying `name` as a legal, patient-stated name assertion. Returns its
 /// patient id.
 ///
