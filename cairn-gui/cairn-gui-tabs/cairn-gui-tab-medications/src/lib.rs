@@ -5,6 +5,9 @@
 //! reader announced — what is declared here is what the markup is written to produce.
 //! Verifying that the browser really announces it is still an operator act with a live
 //! screen reader; automating the DOM assertions is issue #332.
+mod row_view;
+#[cfg(test)]
+mod test_rows;
 pub mod view;
 
 pub use view::{build_view, MedListRowView, MedListView};
