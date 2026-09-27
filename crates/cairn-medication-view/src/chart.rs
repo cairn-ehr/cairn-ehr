@@ -54,8 +54,8 @@ pub const SEPARATION_INSTRUCTION: &str =
 /// "because they belong to different patients" would name the wrong cause and the wrong fix.
 pub const MISSING_GROUP_INSTRUCTION: &str =
     "Reload the list: a group can move while the list is being read. If it is still missing, \
-     the node's medication projection needs repair — report the group and threads listed \
-     below; do not rely on this list as complete until then.";
+     the node's medication projection needs repair — report the group and its threads (named \
+     with this warning); do not rely on this list as complete until then.";
 
 /// A patient's chart, plus what the node knows is MISSING from it.
 ///

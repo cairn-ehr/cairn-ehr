@@ -656,7 +656,7 @@ all four; R1 builds the first.
   member read keeps the list with a warning; a pre-existing CSS bug fixed (`[hidden]` now beats
   `#unlock-form {display:flex}`).
 - **Tests.** `person_charts.rs`, `medication_duplicate_groups.rs`, `medication_dup_key_drift.rs` (db/054's
-  dup_key byte-identical to db/033's), `combined_read.rs` (incl. the golden
+  dup_key identical to db/033's once whitespace is normalised), `combined_read.rs` (incl. the golden
   `a_never_linked_chart_reads_exactly_as_before`, captured before the rewrite), `combined_signoff.rs`; two
   `medication_read.rs` #334 tests re-expressed. Full root sweep 2336 passed / 0 failed; webview walked with a
   stubbed bridge over a linked payload.
@@ -666,14 +666,39 @@ all four; R1 builds the first.
   mirror, a decision) · [#691](https://github.com/cairn-ehr/cairn-ehr/issues/691) (each linked row names its
   chart by full uuid, on screen and to the screen reader — want a short per-member tag). Commented on
   [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333) (the between-reads chart-set refusal has no DB test).
+- **PR review round (2026-09-27, five agents, then a second pass on the fixes).** What was fixed:
+  - **A doubted link can no longer make a line signable or ceasable.** A doubted link is an un-attested link
+    that db/018 flagged, or that trips the hard veto now: db/054 `cairn_chart_set_has_doubted_link`
+    re-evaluates the veto at read time, which contains [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220)
+    for this read. While a set holds one, a multi-chart group is a wrong-chart hazard; a cease on such a line
+    stops only the opened chart's threads and names the rest.
+  - **A linked chart whose registration is not held here reads `unknown`**, never the no-row `confirmed`.
+  - `MedicationRow::patient_id` is renamed **`display_chart`**; the JSON name is unchanged.
+  - **CodeQL** `rust/cleartext-logging` (12 alerts on `parse_uuid_list`, flagged for "uid") is cleared by a
+    documented barrier row.
+  - **A missing-group report names a reload, not the retired cross-patient cause.**
+  - **Index:** `person_member(person_id)`.
+  - **The CLI header prints each member's identity state.**
+
+  Filed: [#692](https://github.com/cairn-ehr/cairn-ehr/issues/692) (a failed refresh overwrites the outcome) ·
+  [#693](https://github.com/cairn-ehr/cairn-ehr/issues/693) (member line: dob precision, repudiated name) ·
+  [#694](https://github.com/cairn-ehr/cairn-ehr/issues/694) (the member lines are absent from the semantic
+  model) · [#695](https://github.com/cairn-ehr/cairn-ehr/issues/695) (remaining test gaps) ·
+  [#696](https://github.com/cairn-ehr/cairn-ehr/issues/696) (`Option<&ChartSet>` → an enum) ·
+  [#697](https://github.com/cairn-ehr/cairn-ehr/issues/697) (the withheld-line wording for a doubted link,
+  and whether a doubted set's one-chart lines should be signable — a maintainer decision).
 - **Next: R2** — link/unlink from an open chart (#681) + `patient_link.attested` outranking an un-attested link
   in db/018; then **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
   proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
   forced 1 → target 1; signing off a combined list 1 → 1 → 1 (one gesture covers every line across both
-  charts). `M ≤ N`; R1 adds no act. Budget: opening a linked chart ≤ the single-chart open (the added cost is
-  one `cairn_person_charts` call and one duplicate-flag query, ≤ 20 ms), measurement owed by the runbook pass
-  (a human act).
+  charts). `M ≤ N`; R1 adds no act. Budget: opening a linked chart ≤ the single-chart open, measurement owed
+  by the runbook pass (a human act). The added reads, corrected after review:
+  - **Every open:** `cairn_person_charts` and the per-group chart read. The set-wide duplicate query replaces
+    the old per-patient flag query rather than adding one.
+  - **A linked open only:** the doubted-link check and three identity reads, plus the `patient_chart` read.
+  - **A window sign-off or cease:** a full list read before the orchestrator's own reads.
+  - The planned "≤ 20 ms" figure was never a measurement.
 
 ---
 

@@ -91,12 +91,13 @@ extensions:
       # return. (its own unit tests' assertion messages)
       - ["cairn_node::backup::untrusted_clinical_notice", "ReturnValue", "log-injection", "manual"]
 
-      # Returns anyhow::Result<Vec<Uuid>>: chart, group and thread IDS parsed out of a `text[]`
-      # column — the random v7 record identifiers the medication CLI prints ON PURPOSE so an
-      # operator can name the chart a line lives on and pass thread ids to `medication-separate`.
-      # No name, date of birth or other demographic ever enters it. Flagged because "uuid" contains
-      # the heuristic word "uid". (the `medication-list` / `medication-sign-off` lines naming a
-      # combined list's charts and each row's source charts, and two test assertion messages)
+      # Returns anyhow::Result<Vec<Uuid>>: CHART IDS parsed out of a `text[]` column (its one call
+      # site, `read_group_chart_lists`, reads each medication group's charts) — random v7 record
+      # identifiers the medication CLI prints ON PURPOSE so an operator can tell which chart a line
+      # was recorded on. No name, date of birth or other demographic ever enters it. Flagged because
+      # "uuid" contains the heuristic word "uid". (the `medication-list` / `medication-sign-off`
+      # per-row "recorded on chart(s)" suffix and the lines derived from the read, and two test
+      # assertion messages)
       - ["cairn_node::medication::read::parse_uuid_list", "ReturnValue", "log-injection", "manual"]
 
       # Returns Vec<String>: one "chart <id>: identity <trust state>" line per member of a combined

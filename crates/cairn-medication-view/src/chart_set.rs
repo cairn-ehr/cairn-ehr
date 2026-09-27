@@ -42,8 +42,10 @@ impl ChartSet {
         self.0.binary_search(chart).is_ok()
     }
 
-    /// Whether every one of `charts` is in this set. The cross-patient test: a medication
-    /// group is a hazard exactly when its charts are NOT all inside the set being read.
+    /// Whether every one of `charts` is in this set. The core of the cross-patient test: a
+    /// medication group reaching a chart NOT inside the set being read is a hazard (the node's
+    /// read adds one more case — a set holding a doubted link; see `cairn-node`'s
+    /// `medication::read::is_wrong_chart_hazard`).
     pub fn contains_all(&self, charts: &[Uuid]) -> bool {
         charts.iter().all(|c| self.contains(c))
     }

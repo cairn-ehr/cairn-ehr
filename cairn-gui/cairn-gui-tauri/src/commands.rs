@@ -20,7 +20,7 @@
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
 use crate::chart_set::{
-    chart_pane, check_displayed_set, linked_members, signed_across_message, ChartPane,
+    cease_plan, chart_pane, check_displayed_set, linked_members, signed_across_message, ChartPane,
 };
 use crate::state::{AppState, Now, SessionKey};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
@@ -256,12 +256,15 @@ pub async fn sign_off_impl(
 #[derive(Debug, serde::Serialize)]
 pub struct CeaseReport {
     pub ceased: usize,
-    /// Member threads whose cessation failed, named individually. ADR-0060 again: one
-    /// member failing must not un-stop the others, and it must never pass in silence.
+    /// Member threads this gesture did NOT stop, named individually: those whose cessation
+    /// failed, and those deliberately held back on a wrong-chart hazard line
+    /// (`chart_set::cease_plan`). ADR-0060 again: one member failing must not un-stop the
+    /// others, and it must never pass in silence.
     pub failed: Vec<String>,
 }
 
-/// Stop a drug — every member thread of the displayed line.
+/// Stop a drug — every member thread of the displayed line (on a wrong-chart hazard line,
+/// every thread on the opened chart; see `chart_set::cease_plan`).
 ///
 /// # Why this surface demands a reason and an author when the CLI verb does not
 ///
@@ -324,23 +327,22 @@ pub async fn cease_impl(
     let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
-    // Each member thread paired with the chart it LIVES on. On a combined list a reconciled
-    // group can span two linked charts, and a cessation is written to its thread's own chart,
-    // never to the chart that happened to be opened (ADR-0076 decision 2).
-    let members: Vec<(Uuid, Uuid)> = chart
+    // Each member thread paired with the chart it LIVES on — a cessation is written to its
+    // thread's own chart, never to the chart that happened to be opened (ADR-0076 decision
+    // 2) — and, on a line withheld as a wrong-chart hazard, only the opened chart's threads
+    // (see `cease_plan`). Held-back threads are reported with the failures: both are threads
+    // this gesture did NOT stop, and the report must name every one.
+    let row = chart
         .rows
         .iter()
         .find(|row| row.group_id == group)
-        .ok_or("that drug is no longer on this chart — refresh and try again")?
-        .members
-        .iter()
-        .map(|m| (m.medication_id, m.patient_id))
-        .collect();
+        .ok_or("that drug is no longer on this chart — refresh and try again")?;
+    let plan = cease_plan(row, patient);
 
     let started = Instant::now();
     let mut ceased = 0usize;
-    let mut failed = Vec::new();
-    for (medication_id, thread_chart) in members {
+    let mut failed = plan.held_back;
+    for (medication_id, thread_chart) in plan.write {
         // One member per call, and `cease_medication` opens its own transaction — so a
         // failure on one thread of a reconciled pair leaves the other one stopped rather
         // than rolling both back (ADR-0060 decision 7).

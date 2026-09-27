@@ -4,8 +4,8 @@
 
 > [!NOTE]
 > **⇒ R1 — THE COMBINED READ — IS BUILT ON PR [#688](https://github.com/cairn-ehr/cairn-ehr/pull/688)
-> (2026-09-27), WHOLE-BRANCH REVIEWED (ready after fixes → fixed, re-reviewed), AWAITING THE MAINTAINER'S
-> MERGE.** It is the first of
+> (2026-09-27), WHOLE-BRANCH REVIEWED, THEN A FIVE-AGENT PR REVIEW + A SECOND PASS ON ITS FIXES (all fixed or
+> filed — see the durable rules below), AWAITING THE MAINTAINER'S MERGE.** It is the first of
 > five slices of the duplicate repair path (#679 · #680 · #681), one design —
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` — and
 > [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
@@ -13,9 +13,9 @@
 > list, each row naming its source chart; demographics are NOT combined (each member's own identity line,
 > no winner chosen); writes stay per chart; every chart command names the displayed chart SET and refuses
 > when it changed. `db/054_person_charts.sql` (`cairn_person_charts`, `cairn_medication_duplicate_groups`),
-> `SCHEMA_GENERATION` **54**. **#334 is fixed by it** (the PR body closes it — never a commit message).
-> Final tree (1ec920c3): full sweep + both trees' fmt/clippy/doc/deny/tests green, 2606 passed / 0 failed; the
-> webview walked with a stubbed bridge over a linked payload. The CLI's text `medication-list` names a combined
+> `SCHEMA_GENERATION` **54**. **#334 is fixed by it** (the PR body closes it; commit 7c2d3ba2's body names it
+> too — harmless, the close is intended). Pre-review tree (1ec920c3): full sweep 2606 passed / 0 failed; the
+> webview walked with a stubbed bridge over a linked payload. Review-fix tree: see *Gate evidence* in the PR. The CLI's text `medication-list` names a combined
 > list's charts too (`medication/list_text.rs`).
 >
 > **⇒ NEXT, in order:**
@@ -39,6 +39,11 @@
 >    cross-patient group, never auto-separated) · **#691** (every row of a linked list names its chart by
 >    full 36-char uuid, on screen and to the screen reader — want a short per-member tag keyed to the
 >    header lines). **#333** gained the between-reads chart-set refusal (no DB test; same concurrency seam).
+>    **From the PR review:** **#697** first — it holds a maintainer decision (should a set holding a doubted
+>    link keep the other member's one-chart lines signable? and its withheld-line wording) · #692 (a failed
+>    refresh overwrites the outcome) · #693 (member line: dob precision, repudiated name) · #694 (member lines
+>    missing from the semantic model) · #695 (remaining R1 test gaps) · #696 (`Option<&ChartSet>` → an enum).
+>    **#220** gained a comment: R1 widened its blast radius and db/054 contains it for this read.
 > 3. **Human acts still owed** (an agent cannot do them): the runbook stopwatch figures — now also a
 >    **linked chart's open** — and the **live Tauri-IPC pass on a linked pair** (the mock walk cannot see an
 >    IPC-only defect). See *Four things still owed are HUMAN acts* below.
@@ -52,13 +57,23 @@
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
 >   the per-patient `patient_medication_reconciliation_flag`.** The view groups by `patient_id`, so the same
 >   drug on two LINKED charts is two groups on two patients and never flagged — "simplifying" back to it
->   re-hides two unflagged lines for one drug, a double-dose reading hazard. Its dup_key must stay
->   byte-identical to db/033's; `medication_dup_key_drift.rs` pins it.
+>   re-hides two unflagged lines for one drug, a double-dose reading hazard. Its dup_key must stay identical
+>   (whitespace-normalised) to db/033's; `medication_dup_key_drift.rs` pins it.
 > - **The medication read selects groups by MEMBERSHIP over the chart set.** Filtering the views by their
->   `patient_id` (the display winner) is the #334 defect returning. `cross_patient` = the group reaches a
->   chart OUTSIDE the set (flagged, withheld from sign-off).
-> - **`MedicationRow.patient_id` is the chart the group DISPLAYS under** — not "the chart this line is on",
->   never an attestation target. Use `source_charts` / `MemberVouch::patient_id`.
+>   `patient_id` (the display winner) is the #334 defect returning. `cross_patient` (`read.rs`
+>   `is_wrong_chart_hazard`) = the group reaches a chart OUTSIDE the set, OR the set holds a **doubted link**
+>   (db/054 `cairn_chart_set_has_doubted_link`: an un-attested link db/018 flagged, or that trips the hard
+>   veto NOW — #220's late-clash path) and the group spans more than one chart. Dropping the second half makes
+>   a line across a vetoed machine link signable with the other person's dose. `list_chart_set_medications`
+>   is PRIVATE: re-reading a stale displayed set would silently drop the withholding.
+> - **A cease on a `cross_patient` line stops only the opened chart's threads** and names the rest
+>   (`chart_set::cease_plan`) — never writes a cessation onto a chart that may be someone else's.
+> - **`MedicationRow::display_chart`** (serialized `patient_id`) is the chart the group DISPLAYS under — not
+>   "the chart this line is on", never a write target. Use `source_charts` / `MemberVouch::patient_id`.
+> - **A linked chart whose registration is not held here** (`ChartIdentity::held`, a `patient_chart` row)
+>   reads trust `unknown` (`person::trust_of`), never the no-row default `confirmed`.
+> - **A missing group is no longer the cross-patient case**: its reports use `MISSING_GROUP_INSTRUCTION`
+>   (reload / projection repair), never the separation remedy.
 > - **EVERY CHART COMMAND NAMES THE DISPLAYED CHART SET, not just the chart** (ADR-0076 decision 3; widens
 >   PR #674's Critical below). `displayed_patient` is still checked FIRST, then the set
 >   (`cairn-gui-tauri/src/chart_set.rs`). `sign_off_medication_list(…, displayed: Option<&ChartSet>)`
@@ -68,7 +83,7 @@
 >   chart — the floor does not yet enforce it (**#689**).
 > - **A failed member-identity read keeps the list and shows a warning** (availability over consistency):
 >   `ChartPane { list, members, members_error }`. Never let the header's completeness hide the drugs.
-> - **A never-linked chart reads exactly as before** — pinned by the golden
+> - **A never-linked chart gains no header, label or line** — pinned by the golden
 >   `combined_read.rs::a_never_linked_chart_reads_exactly_as_before`, captured BEFORE the read was
 >   rewritten. `groups_missing_from_chart` is now empty by construction; sign-off's handling of a non-empty
 >   one has no DB coverage (same class as #333).

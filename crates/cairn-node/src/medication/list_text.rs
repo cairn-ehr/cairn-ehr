@@ -76,8 +76,8 @@ pub fn row_source_suffix(source_charts: &[Uuid], linked: bool) -> Option<String>
 /// CLI's equivalent. Without it an operator reading `medication-list` sees "combined list
 /// across 2 linked charts" and nothing saying the combination is itself in question. Names
 /// and dates are deliberately NOT printed: the header's job is the state of the link, and the
-/// CLI has never printed demographics on this verb. A chart this node does not hold says so
-/// (its `unknown` state would otherwise read as an unexplained gap).
+/// CLI has never printed demographics on this verb. A chart whose registration this node does
+/// not hold says so (its `unknown` state would otherwise read as an unexplained gap).
 pub fn member_lines(members: &[ChartIdentity]) -> Vec<String> {
     members
         .iter()
@@ -85,7 +85,7 @@ pub fn member_lines(members: &[ChartIdentity]) -> Vec<String> {
             let not_held = if m.held {
                 ""
             } else {
-                " (chart not yet received on this node)"
+                " (registration not yet received on this node)"
             };
             format!("  chart {}: identity {}{not_held}", m.patient_id, m.trust)
         })
@@ -162,7 +162,7 @@ mod tests {
             vec![
                 format!("  chart {}: identity under-review", u(1)),
                 format!(
-                    "  chart {}: identity unknown (chart not yet received on this node)",
+                    "  chart {}: identity unknown (registration not yet received on this node)",
                     u(2)
                 ),
             ]

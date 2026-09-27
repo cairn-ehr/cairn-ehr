@@ -49,16 +49,18 @@ pub async fn person_charts(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartIdentity {
     pub patient_id: Uuid,
-    /// Whether this node holds anything about the chart at all (a `patient_chart` row). A
-    /// link can name a chart that has not reached this node — it synced ahead of that
-    /// chart's registration, or the chart lies outside this node's sync scope — and then
-    /// `name` and `birth_date` are absent because nothing ARRIVED, not because nothing was
-    /// recorded. Renderers must say which.
+    /// Whether this node holds the chart ITSELF — a `patient_chart` row, which its
+    /// registration creates (so do the older `patient.amended`/`note.added` types; no
+    /// medication or demographic-stream event does). A link can name a chart whose
+    /// registration has not reached this node — it synced ahead, or the chart lies outside
+    /// this node's sync scope (ADR-0004) — and other events about it may still have arrived.
+    /// So `false` means "registration not received here", NOT "nothing known": a name or
+    /// date that did arrive is still carried below, and renderers must show it.
     pub held: bool,
     pub name: Option<String>,
     pub birth_date: Option<String>,
-    /// A `chart_trust` state, or `"unknown"` for a chart this node does not hold — see
-    /// [`trust_of`].
+    /// A `chart_trust` state, or `"unknown"` for a chart whose registration this node does not
+    /// hold — see [`trust_of`].
     pub trust: String,
 }
 
@@ -73,7 +75,7 @@ pub struct ChartIdentity {
 /// `chart_trust` onto `patient_chart` and coalesces the gap) — the same convention
 /// `patient/search.rs::read_trust_states` applies. But that default is true only of a chart
 /// that EXISTS here, which is exactly why `person_chart_trust` starts from `patient_chart`.
-/// For a chart this node does not hold, "no row" means nothing arrived, and claiming
+/// For a chart whose registration has not arrived, "no row" is not evidence, and claiming
 /// `confirmed` would be a precise untruth (principle 4): it reads `unknown`. Pure, so the
 /// rule is tested without a database.
 pub fn trust_of(held: bool, row: Option<&str>) -> String {
@@ -122,8 +124,9 @@ pub async fn chart_identities<C: GenericClient + Sync>(
         .collect())
 }
 
-/// The ids this node holds anything about: a `patient_chart` row, which the projection
-/// dispatch creates for the first event about a chart of any type. The same relation
+/// The ids this node holds as charts: a `patient_chart` row, created by a chart's
+/// registration (and by the older `patient.amended`/`note.added` types — see db/005's and
+/// db/047's `cairn_projection_apply` registrations of `patient_chart_apply`). The same relation
 /// `person_chart_trust` is built from, which is what makes its `confirmed` default honest.
 async fn read_held<C: GenericClient + Sync>(
     client: &C,
@@ -195,7 +198,8 @@ async fn read_trusts<C: GenericClient + Sync>(
 }
 
 /// Pure tests for the member trust rule. The DB-backed behaviour (the four reads, and a link
-/// to a chart this node does not hold) lives in `crates/cairn-node/tests/person_charts.rs`.
+/// to a chart whose registration this node does not hold) lives in
+/// `crates/cairn-node/tests/person_charts.rs`.
 #[cfg(test)]
 mod tests {
     use super::trust_of;
@@ -211,7 +215,8 @@ mod tests {
         assert_eq!(trust_of(false, Some("under-review")), "under-review");
     }
 
-    /// Principle 4: "no row" about a chart that never arrived is not evidence of anything.
+    /// Principle 4: "no row" about a chart whose registration never arrived is not evidence
+    /// of anything.
     #[test]
     fn a_chart_not_held_with_no_trust_row_is_unknown_never_confirmed() {
         assert_eq!(trust_of(false, None), "unknown");

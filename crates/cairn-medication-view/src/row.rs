@@ -112,10 +112,11 @@ pub struct MedicationRow {
     /// standing wrong-chart hazard (issue #334). True when the group's threads reach a chart
     /// OUTSIDE the chart set the list was read over, by either of two sources (the
     /// statement-derived `source_charts`, or `medication_group_cross_patient`, which also sees
-    /// a thread known only through an orphan cessation); and, while the set holds a pair
-    /// whose link this node's hard veto flagged, when the group spans more than one chart at
-    /// all. A group spanning two linked charts of the same person is otherwise not a hazard
-    /// (ADR-0076). The rule is `cairn-node`'s `medication::read::is_wrong_chart_hazard`.
+    /// a thread known only through an orphan cessation); and, while the set holds a link
+    /// this node doubts (an un-attested link its hard veto flagged or trips now), when the
+    /// group spans more than one chart at all. A group spanning two linked charts of the same
+    /// person is otherwise not a hazard (ADR-0076). The rule is `cairn-node`'s
+    /// `medication::read::is_wrong_chart_hazard`.
     pub cross_patient: bool,
     /// The charts owning at least one member thread of this group, sorted. The row names
     /// where the drug was recorded so a clinician reading a combined list — one read over

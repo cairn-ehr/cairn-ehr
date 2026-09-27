@@ -6,6 +6,7 @@
 //! BEFORE connecting (see `medication_read.rs`'s header for why that order is load-bearing
 //! for this read in particular). Key material is minted at runtime (house rule 6).
 mod common;
+use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
 use cairn_event::SigningKey;
 use cairn_medication_view::{sign_off_targets, withheld_rows, ChartSet};
 use cairn_node::db;
@@ -14,7 +15,9 @@ use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, reconcile_medications,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
 };
-use common::{cs, medication_setup as setup, submit_link_event, submit_registration};
+use common::{
+    cs, medication_setup as setup, submit_link_event, submit_registration, submit_signed, EventSpec,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio_postgres::Client;
@@ -538,6 +541,84 @@ async fn a_group_across_a_vetoed_link_is_still_withheld() {
         vec![only_x],
         "neither thread of the shared group is signed; the one-chart line still is"
     );
+}
+
+/// Issue #220's path: db/018 evaluates the hard veto only when a link ARRIVES, so a link
+/// that synced ahead of the clashing demographics is never flagged. Here the un-attested link
+/// is admitted while neither chart has a date of birth (nothing to veto), then two clashing
+/// document-verified dates arrive. `link_veto_flag` stays empty — and the read must still
+/// withhold a group spanning the pair, because db/054's doubted-link test re-evaluates the
+/// veto at read time.
+#[tokio::test]
+async fn a_group_across_a_link_the_veto_now_refuses_is_withheld() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let ta = assert_one(&mut c, &sk, &kid, a, "warfarin").await;
+    let tx = assert_one(&mut c, &sk, &kid, x, "warfarin").await;
+    group(&c, ta, tx).await;
+    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
+    let before = list_patient_medications(&c, a).await.unwrap();
+    assert!(
+        before.rows.iter().all(|r| !r.cross_patient),
+        "positive control: no clash yet, so the link is not doubted"
+    );
+
+    verified_dob(&c, &sk, &kid, a, "1980-07-15", 20).await;
+    verified_dob(&c, &sk, &kid, x, "1975-01-02", 21).await;
+    let flags: i64 = c
+        .query_one("SELECT count(*) FROM link_veto_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 0,
+        "precondition: #220 — the late clash raised no flag"
+    );
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert!(list.charts.is_linked());
+    assert!(
+        list.rows[0].cross_patient,
+        "the veto trips NOW, so the link is doubted and the shared line is a hazard"
+    );
+    assert!(sign_off_targets(&list.rows).is_empty());
+}
+
+/// A document-verified date of birth — the trustworthy kind db/016's hard veto compares
+/// (`link_veto_floor.rs`'s `submit_dob` shape). `wall` orders it after the link.
+async fn verified_dob(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    patient: Uuid,
+    value: &str,
+    wall: i64,
+) {
+    submit_signed(
+        c,
+        sk,
+        kid,
+        EventSpec {
+            patient,
+            event_type: "demographic.field.asserted",
+            schema_version: "demographic.field/1",
+            payload: dob_assertion_body(value, "day", Some("document"), "document-verified"),
+            plaintext_twin: Some(render_dob_twin(value, "day", "document-verified")),
+            wall,
+        },
+    )
+    .await
+    .expect("dob accepted");
 }
 
 /// The orphan-cessation half of the hazard rule, through the combined read. A thread known

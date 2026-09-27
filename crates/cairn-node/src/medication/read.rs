@@ -23,7 +23,7 @@
 //!
 //! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. Up to ten statements — the chart set, the
 //! per-thread vouches, each group's charts, the charts a group reaches, two advisory flags,
-//! whether the set holds a vetoed link (skipped for a never-linked chart), the two list
+//! whether the set holds a doubted link (skipped for a never-linked chart), the two list
 //! views (one builder), and the membership of the groups the hazard flags name — answer
 //! different questions over different grains (chart set, group, thread, worklist,
 //! mis-reconciliation, cross-patient hazard). One join would need two levels of
@@ -90,10 +90,11 @@ pub async fn list_patient_medications(
 /// 2. `groups` — the keys of `members`. THIS is the #334 fix: a group is found through its
 ///    own members, never through the list views' single display-winner `patient_id`.
 /// 3. the rows of the two list views for exactly those groups.
-/// 4. per group: the charts its threads sit on (`source_charts`) and whether it reaches a
-///    chart OUTSIDE the set (`cross_patient`) — reaching another chart of the same person
-///    is not a hazard, reaching someone else's is.
-/// 5. the advisory flags, each scoped to the set, and whether the set holds a vetoed link
+/// 4. per group: the charts its threads sit on (`source_charts`) and whether it is a
+///    wrong-chart hazard (`cross_patient`, `is_wrong_chart_hazard`) — reaching another chart
+///    of the same person is not a hazard, reaching someone else's is, and so is spanning a
+///    link the node doubts.
+/// 5. the advisory flags, each scoped to the set, and whether the set holds a doubted link
 ///    (an input to the hazard rule in step 4, read just before it is applied).
 async fn list_chart_set_medications(
     client: &(impl tokio_postgres::GenericClient + Sync),
@@ -106,7 +107,7 @@ async fn list_chart_set_medications(
     let reached = read_cross_patient_charts(client, &groups).await?;
     let reconciliation_flagged = read_reconciliation_flagged_groups(client, charts).await?;
     let coding_conflict = read_coding_conflict_groups(client, charts).await?;
-    let vetoed = set_has_vetoed_link(client, charts).await?;
+    let doubted = set_has_doubted_link(client, charts).await?;
 
     // A group is a wrong-chart hazard per `is_wrong_chart_hazard`, over EVERY chart it
     // touches. Two sources name those charts: `source_charts` (statement-derived,
@@ -126,7 +127,7 @@ async fn list_chart_set_medications(
                 .chain(reached.get(g).unwrap_or(&empty))
                 .copied()
                 .collect();
-            is_wrong_chart_hazard(charts, vetoed, &touched)
+            is_wrong_chart_hazard(charts, doubted, &touched)
         })
         .collect();
 
@@ -200,8 +201,9 @@ async fn list_chart_set_medications(
     // The membership of every group this chart calls hazardous — the arguments to the
     // `medication-separate` remedy all three warnings name. Scoped to the hazardous groups
     // rather than fetched for the whole chart: in normal operation both sets are empty and
-    // this costs no query at all (`read_group_member_threads` returns early), whereas whole-chart membership would be a
-    // second O(all members) read per chart open for data nothing displays (issue #336).
+    // this costs no query at all (`read_group_member_threads` returns early), whereas
+    // whole-chart membership would be a second O(all members) read per chart open for data
+    // nothing displays (issue #336).
     let hazardous: Vec<Uuid> = sorted_unique(
         cross_patient
             .iter()
@@ -218,11 +220,11 @@ async fn list_chart_set_medications(
     })
 }
 
-/// Whether a group touching `group_charts` is a wrong-chart hazard for a read over `set`:
-/// true exactly when at least one of those charts is NOT in the set.
+/// Whether a group touching `group_charts` reaches a chart OUTSIDE `set` — the first of the
+/// two hazard tests in `is_wrong_chart_hazard`.
 ///
-/// This is the ADR-0076 meaning of "cross-patient". Before the combined read, any group
-/// spanning two charts was a hazard, because two charts were two people. Once linked charts
+/// This is the core of the ADR-0076 meaning of "cross-patient". Before the combined read, any
+/// group spanning two charts was a hazard, because two charts were two people. Once linked charts
 /// read as one person, a group spanning two charts OF THE SAME PERSON is an ordinary
 /// reconciled drug, and only a chart outside the set can put another person's dose on this
 /// line. Pure, so the rule is tested without a database (see the tests below).
@@ -235,20 +237,29 @@ fn reaches_outside(set: &ChartSet, group_charts: &[Uuid]) -> bool {
 ///
 /// Two ways a line can carry another person's dose:
 /// 1. the group reaches a chart OUTSIDE the set (`reaches_outside`), or
-/// 2. the set itself holds a pair this node's hard veto flagged (`set_has_vetoed_link`, from
-///    db/018's `link_veto_flag`) and the group spans more than one chart.
+/// 2. the set itself holds a link this node DOUBTS (`set_has_doubted_link`: an un-attested
+///    link its hard veto flagged, or trips now — db/054) and the group spans more than one
+///    chart.
 ///
 /// WHY (2). ADR-0076 decision 1 combines every standing link, including an un-attested
-/// synced link the local veto doubts (both charts then read `under-review`). Treating a
-/// group across such a pair as "inside the set" would turn a line that was withheld before
-/// the combined read into a signable one, whose displayed dose may be the other person's.
-/// The rule does not read the link graph to find WHICH pair was vetoed: any multi-chart
-/// group in such a set is withheld. That over-warns in a rare, already-under-review case,
-/// and a human resolving the link (R2) clears it. A one-chart line is never affected — its
-/// dose is its own chart's. Pure, so the rule is tested without a database.
-fn is_wrong_chart_hazard(set: &ChartSet, set_has_vetoed_link: bool, group_charts: &[Uuid]) -> bool {
+/// synced link the local veto doubts. Treating a group across such a pair as "inside the
+/// set" would turn a line that was withheld before the combined read into a signable one,
+/// whose displayed dose may be the other person's. The rule does not read the link graph to
+/// find WHICH pair is doubted: any multi-chart group in such a set is withheld. That
+/// over-warns in a rare case, and a human resolving the link (an attested link or unlink)
+/// clears it. A one-chart line is never affected — its dose is its own chart's.
+///
+/// NOT COVERED: a member whose own identity is in question for another reason (an open
+/// dispute, a pending John Doe) does not trigger (2). Those are claims about ONE chart, not
+/// about whether two charts are one person, and each member's header line shows them. Pure,
+/// so the rule is tested without a database.
+fn is_wrong_chart_hazard(
+    set: &ChartSet,
+    set_has_doubted_link: bool,
+    group_charts: &[Uuid],
+) -> bool {
     let spans_charts = sorted_unique(group_charts.iter().copied()).len() > 1;
-    reaches_outside(set, group_charts) || (set_has_vetoed_link && spans_charts)
+    reaches_outside(set, group_charts) || (set_has_doubted_link && spans_charts)
 }
 
 /// Groups with a member thread on a chart in the set but no row on the list — sorted.
@@ -435,7 +446,7 @@ async fn read_group_charts(
 /// through `cairn_medication_thread_patient` — the statement, else an ORPHAN CESSATION (a
 /// stop event that arrived before the statement it stops, db/033 PR #219 finding 3) — so a
 /// group reaching another person only through such a thread is still caught. Whether a
-/// listed group is a HAZARD is not this query's call: that is `reaches_outside` against
+/// listed group is a HAZARD is not this query's call: that is `is_wrong_chart_hazard` against
 /// the set, because two charts of the same person are no longer two people (ADR-0076).
 async fn read_cross_patient_charts(
     client: &(impl tokio_postgres::GenericClient + Sync),
@@ -498,27 +509,24 @@ async fn read_coding_conflict_groups(
     read_group_set(client, sql, charts).await
 }
 
-/// Whether the set holds a pair of charts whose standing link this node's hard veto flagged
-/// (db/018 `link_veto_flag`) — the second input to `is_wrong_chart_hazard`.
+/// Whether the set holds a link this node doubts (db/054 `cairn_chart_set_has_doubted_link`:
+/// an un-attested standing link that db/018 flagged on arrival, or that trips the hard veto
+/// now — see that function for why both) — the second input to `is_wrong_chart_hazard`.
 ///
-/// A set of one cannot hold a pair, so it is answered without a query: a never-linked chart
-/// costs exactly the statements it cost before. Both endpoints must be in the set; a flag
-/// row exists only while its link stands (an unlink clears it), and a standing link's two
-/// ends are always in one component, so in practice this asks "is any link in this
-/// component vetoed".
-async fn set_has_vetoed_link(
+/// A set of one cannot hold a link, so it is answered without a query: a never-linked chart
+/// costs exactly the statements it cost before.
+async fn set_has_doubted_link(
     client: &(impl tokio_postgres::GenericClient + Sync),
     charts: &ChartSet,
 ) -> anyhow::Result<bool> {
     if !charts.is_linked() {
         return Ok(false);
     }
-    let sql = "SELECT EXISTS (SELECT 1 FROM link_veto_flag \
-               WHERE low = ANY($1::text[]::uuid[]) AND high = ANY($1::text[]::uuid[])) AS vetoed";
+    let sql = "SELECT cairn_chart_set_has_doubted_link($1::text[]::uuid[]) AS doubted";
     let row = client
         .query_one(sql, &[&uuid_strings(charts.members())])
         .await?;
-    Ok(row.get("vetoed"))
+    Ok(row.get("doubted"))
 }
 
 /// Run a one-column `group_id` query bound to the set's charts and collect the ids.
@@ -580,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_vetoed_link_the_hazard_is_reaching_outside() {
+    fn without_a_doubted_link_the_hazard_is_reaching_outside() {
         let set = ChartSet::new([Uuid::from_u128(1), Uuid::from_u128(2)]).unwrap();
         let inside = [Uuid::from_u128(1), Uuid::from_u128(2)];
         let outside = [Uuid::from_u128(2), Uuid::from_u128(3)];
@@ -588,12 +596,12 @@ mod tests {
         assert!(is_wrong_chart_hazard(&set, false, &outside));
     }
 
-    /// A set holding a pair this node's hard veto flagged: any group spanning more than one
-    /// chart is withheld, even wholly inside the set — the node itself doubts the pair is one
-    /// person. Over-warns when the vetoed pair is not the pair the group spans (the rule does
-    /// not read the link graph); that is the direction this module always errs in.
+    /// A set holding a link this node doubts: any group spanning more than one chart is
+    /// withheld, even wholly inside the set — the node itself doubts the pair is one person.
+    /// Over-warns when the doubted pair is not the pair the group spans (the rule does not
+    /// read the link graph); that is the direction this module always errs in.
     #[test]
-    fn with_a_vetoed_link_a_group_spanning_two_charts_is_a_hazard() {
+    fn with_a_doubted_link_a_group_spanning_two_charts_is_a_hazard() {
         let set = ChartSet::new([Uuid::from_u128(1), Uuid::from_u128(2)]).unwrap();
         assert!(is_wrong_chart_hazard(
             &set,
@@ -602,11 +610,11 @@ mod tests {
         ));
     }
 
-    /// A line on ONE chart shows that chart's own dose, vetoed link or not: nothing on it can
+    /// A line on ONE chart shows that chart's own dose, doubted link or not: nothing on it can
     /// belong to the other member. Duplicates in the input (the two sources overlap) must not
     /// read as two charts.
     #[test]
-    fn with_a_vetoed_link_a_one_chart_group_is_not_a_hazard() {
+    fn with_a_doubted_link_a_one_chart_group_is_not_a_hazard() {
         let set = ChartSet::new([Uuid::from_u128(1), Uuid::from_u128(2)]).unwrap();
         assert!(!is_wrong_chart_hazard(&set, true, &[Uuid::from_u128(2)]));
         assert!(!is_wrong_chart_hazard(

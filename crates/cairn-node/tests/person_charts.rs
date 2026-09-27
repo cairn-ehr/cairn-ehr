@@ -223,9 +223,9 @@ async fn a_member_under_review_reads_under_review() {
     assert!(lines.iter().all(|l| l.trust == "under-review"), "{lines:?}");
 }
 
-/// A link can name a chart this node holds nothing about: a link event is not refused for
-/// naming an unknown subject, it can sync ahead of that chart's registration, and a
-/// scope-limited node (ADR-0004) may never receive the other chart at all. The set still
+/// A link can name a chart whose registration this node does not hold: a link event is not
+/// refused for naming an unknown subject, it can sync ahead of that chart's registration, and
+/// a scope-limited node (ADR-0004) may never receive the other chart at all. The set still
 /// includes it (the link stands), but its line must not claim "identity confirmed" — the
 /// no-`chart_trust`-row default is true only of a chart that exists here. Principle 4: an
 /// unknown identity is `unknown`, and `held` says why the name and date are absent.
@@ -251,7 +251,10 @@ async fn a_member_this_node_does_not_hold_is_not_confirmed() {
     let of = |p: Uuid| lines.iter().find(|l| l.patient_id == p).unwrap();
     assert!(of(a).held);
     assert_eq!(of(a).trust, "confirmed");
-    assert!(!of(elsewhere).held, "nothing about it is held on this node");
+    assert!(
+        !of(elsewhere).held,
+        "its registration is not held on this node"
+    );
     assert_eq!(
         of(elsewhere).trust,
         "unknown",

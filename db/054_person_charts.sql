@@ -1,4 +1,5 @@
--- db/054 — the person's chart set, and a duplicate flag over it (ADR-0076 decision 1).
+-- db/054 — the person's chart set, a duplicate flag over it, and whether it holds a doubted
+-- link (ADR-0076 decision 1).
 --
 -- WHY IN THE DATABASE. Every combined read — the medication list now, allergies when they
 -- exist, the duplicate banner (R5) — must agree on which charts are "this person". One
@@ -84,5 +85,47 @@ AS $$
     )
 $$;
 GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_agent;
+
+-- 3. Whether a chart set holds a link this node DOUBTS — an input to the medication read's
+--    wrong-chart hazard rule (cairn-node medication/read.rs, is_wrong_chart_hazard).
+--
+--    ADR-0076 decision 1 combines every standing link, including an un-attested one the
+--    node's hard veto (db/016) would refuse at its own door. Such a pair may be two people,
+--    so a medication group spanning it must stay withheld from sign-off, as it was before
+--    the combined read. Two ways a link is doubted:
+--      (a) db/018 flagged it on arrival (link_veto_flag), or
+--      (b) it is an un-attested standing link that trips cairn_has_hard_veto NOW. db/018
+--          evaluates the veto only when the link arrives, so demographics arriving later
+--          (a peer's link syncing ahead of the clashing DOB) never raise the flag — issue
+--          #220. Evaluating it here at read time closes that gap for this read, whatever
+--          #220's fix to the flag itself turns out to be.
+--    "Attested" is db/018's one definition: an attester key is present AND
+--    cairn_attestation_vouched holds. A human-attested link is the human decision the veto
+--    exists to force, so it is never doubted here.
+--
+--    SECURITY DEFINER because cairn_attestation_vouched is locked away from runtime roles
+--    (db/001) and event_log's attester columns sit under the #405 column floor; the answer
+--    is one boolean about a set the caller already holds, and search_path is pinned.
+CREATE OR REPLACE FUNCTION cairn_chart_set_has_doubted_link(p_charts uuid[])
+RETURNS boolean
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM link_veto_flag f
+        WHERE f.low = ANY(p_charts) AND f.high = ANY(p_charts)
+    ) OR EXISTS (
+        SELECT 1
+        FROM patient_link pl
+        JOIN event_log el ON el.content_address = pl.content_address
+        WHERE pl.state = 'link'
+          AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
+          AND NOT (el.attester_key IS NOT NULL AND cairn_attestation_vouched(el.event_id))
+          AND cairn_has_hard_veto(pl.low, pl.high)
+    )
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) TO cairn_agent;
 
 COMMIT;

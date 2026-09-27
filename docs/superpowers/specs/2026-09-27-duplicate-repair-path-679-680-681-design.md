@@ -114,6 +114,20 @@ before it can be repaired (R2); R4/R5 consume both.
   The webview's `renderedPatient` becomes the rendered set.
 - **Sign-off** loops `attest_thread_in_tx(patient_of_thread, thread)`.
 
+> [!NOTE]
+> **As built (2026-09-27, PR #688), where the build departed from the bullets above** (design sentences
+> are predictions; the code and ADR-0076 win):
+> - **#334 was fixed in Rust, not in the view.** `medication/read.rs` selects groups by *membership*
+>   over the set and deduplicates per group; the views are unchanged.
+> - **`AppState::displayed_patient` is kept.** The displayed set travels as a separate `charts`
+>   argument. `med_list` never refuses; `sign_off` and `cease` do.
+> - **Added after the PR review:**
+>   - **A set holding a *doubted* link withholds every multi-chart line from sign-off.** A doubted
+>     link is an un-attested one that db/018 flagged, or that trips the hard veto now: db/054
+>     `cairn_chart_set_has_doubted_link`, which covers #220's late-clash path.
+>   - **A cease on such a line stops only the opened chart's threads.**
+>   - Whether a doubted set should also withhold the other member's one-chart lines is open (#697).
+
 ### R2 — link and unlink from an open chart (#681) + the precedence floor
 
 - **Gesture**: header control **"Same person as…"** → the front door's search (only a chart some

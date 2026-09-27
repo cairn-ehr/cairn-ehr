@@ -23,7 +23,7 @@
 //! `commands::cease_impl`).
 use crate::state::AppState;
 use cairn_gui_tab_medications::view::{build_view, MedListView};
-use cairn_medication_view::{ChartSet, PatientMedicationList};
+use cairn_medication_view::{ChartSet, MedicationRow, PatientMedicationList};
 use cairn_node::patient::person::ChartIdentity;
 use serde::Serialize;
 use uuid::Uuid;
@@ -82,6 +82,51 @@ pub fn signed_across_message(charts: &ChartSet) -> Option<String> {
     })
 }
 
+/// Which member threads a cease gesture on one displayed line writes, and which it holds back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CeasePlan {
+    /// `(thread, the chart its own statement is on)` — each cessation is written to its
+    /// thread's own chart (ADR-0076 decision 2).
+    pub write: Vec<(Uuid, Uuid)>,
+    /// Threads deliberately NOT stopped, each with the sentence the report shows for it.
+    pub held_back: Vec<String>,
+}
+
+/// Plan a cease of `row` from the chart the clinician opened.
+///
+/// An ordinary line stops every member thread, each on its own chart. A line withheld as a
+/// WRONG-CHART HAZARD (`MedicationRow::cross_patient`) stops only the threads on the opened
+/// chart: the node itself says this line may carry another person's drug — the group reaches
+/// a chart outside the set, or spans a link the node doubts — so "stop this drug" can only
+/// be trusted to mean it for the patient in front of the clinician. The other threads are
+/// held back and NAMED, never skipped in silence (ADR-0060 decision 2); they can be stopped
+/// from their own chart. Without this, Stop on a line spanning a doubted link would write a
+/// cessation onto a chart the node believes may be someone else's.
+///
+/// This holds back more than strictly needed when the other thread is on a linked chart of
+/// the same person (a hazard line reaching OUTSIDE the set also spans the set): stopping less
+/// and saying so is the safe error. A never-linked chart is unaffected — all its members are
+/// on the opened chart. Pure, so the rule is tested without a database.
+pub fn cease_plan(row: &MedicationRow, opened: Uuid) -> CeasePlan {
+    let mut plan = CeasePlan {
+        write: vec![],
+        held_back: vec![],
+    };
+    for m in &row.members {
+        if !row.cross_patient || m.patient_id == opened {
+            plan.write.push((m.medication_id, m.patient_id));
+        } else {
+            plan.held_back.push(format!(
+                "thread {} on chart {}: NOT stopped from here — this line may carry another \
+                 person's drug, so only this chart's own threads are stopped; stop it from its \
+                 own chart",
+                m.medication_id, m.patient_id
+            ));
+        }
+    }
+    plan
+}
+
 /// One member chart's line under the identity header of a combined record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MemberLine {
@@ -99,25 +144,32 @@ pub struct MemberLine {
 /// (`funnel::view`). The chart id is always last and always whole: it is what ties this line to
 /// the source label on each medication row.
 ///
-/// A chart this node does not HOLD (`ChartIdentity::held`, a link naming a chart that has not
-/// arrived here) gets its own wording: its name and date are absent because nothing arrived,
-/// not because nothing was recorded, and "(no name recorded)" would say the latter.
+/// A chart whose registration this node does not HOLD (`ChartIdentity::held` — a link naming
+/// a chart that has not fully arrived here) is worded differently: an absent name or date is
+/// then UNKNOWN, not "not recorded" — nothing says it was never recorded, only that it has not
+/// arrived — and the line says the registration is missing. A name or date that did arrive
+/// is still shown.
 pub fn member_line(identity: &ChartIdentity) -> MemberLine {
-    let facts = if identity.held {
-        let name = identity.name.as_deref().unwrap_or("(no name recorded)");
-        let born = identity
-            .birth_date
-            .as_deref()
-            .map(|d| format!("born {d}"))
-            .unwrap_or_else(|| "date of birth not recorded".to_string());
-        format!("{name} · {born}")
+    let (no_name, no_dob) = if identity.held {
+        ("(no name recorded)", "date of birth not recorded")
     } else {
-        "(chart not yet received on this node — name and date of birth unknown)".to_string()
+        ("(name unknown)", "date of birth unknown")
+    };
+    let name = identity.name.as_deref().unwrap_or(no_name);
+    let born = identity
+        .birth_date
+        .as_deref()
+        .map(|d| format!("born {d}"))
+        .unwrap_or_else(|| no_dob.to_string());
+    let not_held = if identity.held {
+        ""
+    } else {
+        " · registration not yet received on this node"
     };
     MemberLine {
         patient_id: identity.patient_id.to_string(),
         text: format!(
-            "{facts} · identity {} · chart {}",
+            "{name} · {born} · identity {}{not_held} · chart {}",
             identity.trust, identity.patient_id
         ),
     }
@@ -284,9 +336,9 @@ mod tests {
         );
     }
 
-    /// A linked chart that has not reached this node: nothing was RECORDED-as-absent, nothing
-    /// ARRIVED. The line says so, and carries the `unknown` trust `trust_of` gives it rather
-    /// than a borrowed "confirmed".
+    /// A linked chart whose registration has not reached this node: an absent fact is
+    /// UNKNOWN, not "not recorded", and the line carries the `unknown` trust `trust_of` gives
+    /// it rather than a borrowed "confirmed".
     #[test]
     fn a_member_line_says_when_the_chart_is_not_held_here() {
         let id = Uuid::from_u128(9);
@@ -300,11 +352,31 @@ mod tests {
         assert_eq!(
             line.text,
             format!(
-                "(chart not yet received on this node — name and date of birth unknown) \
-                 · identity unknown · chart {id}"
+                "(name unknown) · date of birth unknown · identity unknown \
+                 · registration not yet received on this node · chart {id}"
             )
         );
         assert!(!line.text.contains("recorded"), "{}", line.text);
+    }
+
+    /// Other events about an unregistered chart can arrive first (a demographic stream does
+    /// not create its `patient_chart` row). A name that DID arrive is shown, not discarded.
+    #[test]
+    fn a_member_line_keeps_a_name_that_arrived_before_the_registration() {
+        let id = Uuid::from_u128(10);
+        let line = member_line(&ChartIdentity {
+            patient_id: id,
+            held: false,
+            name: Some("Jo BLOGGS".into()),
+            birth_date: None,
+            trust: "unknown".into(),
+        });
+        assert!(line.text.starts_with("Jo BLOGGS · "), "{}", line.text);
+        assert!(
+            line.text.contains("registration not yet received"),
+            "{}",
+            line.text
+        );
     }
 
     /// Availability over consistency: a clinician must always be able to READ. If the member
@@ -335,6 +407,62 @@ mod tests {
         let pane = chart_pane(&cairn_medication_view::fixtures::sample_chart(), Ok(vec![]));
         assert!(pane.members_error.is_none());
         assert_eq!(pane.list.charts.len(), 1);
+    }
+
+    fn plan_row(cross_patient: bool, members: &[(u128, u128)]) -> MedicationRow {
+        let mut row = cairn_medication_view::fixtures::sample_chart().rows[0].clone();
+        row.cross_patient = cross_patient;
+        row.members = members
+            .iter()
+            .map(|(thread, chart)| cairn_medication_view::MemberVouch {
+                medication_id: Uuid::from_u128(*thread),
+                vouch: cairn_medication_view::VouchState::Absent,
+                patient_id: Uuid::from_u128(*chart),
+            })
+            .collect();
+        row
+    }
+
+    /// An ordinary line on a combined list: every thread stopped, each on its OWN chart.
+    #[test]
+    fn an_ordinary_line_ceases_every_thread_on_its_own_chart() {
+        let plan = cease_plan(&plan_row(false, &[(10, 1), (11, 2)]), Uuid::from_u128(1));
+        assert_eq!(
+            plan.write,
+            vec![
+                (Uuid::from_u128(10), Uuid::from_u128(1)),
+                (Uuid::from_u128(11), Uuid::from_u128(2))
+            ]
+        );
+        assert!(plan.held_back.is_empty());
+    }
+
+    /// A hazard line: only the opened chart's thread is stopped; the other is held back and
+    /// named, never written onto a chart that may be someone else's.
+    #[test]
+    fn a_hazard_line_ceases_only_the_opened_charts_threads_and_names_the_rest() {
+        let plan = cease_plan(&plan_row(true, &[(10, 1), (11, 2)]), Uuid::from_u128(1));
+        assert_eq!(plan.write, vec![(Uuid::from_u128(10), Uuid::from_u128(1))]);
+        assert_eq!(plan.held_back.len(), 1);
+        assert!(
+            plan.held_back[0].contains(&Uuid::from_u128(11).to_string()),
+            "{}",
+            plan.held_back[0]
+        );
+        assert!(
+            plan.held_back[0].contains("NOT stopped"),
+            "{}",
+            plan.held_back[0]
+        );
+    }
+
+    /// A single chart linked to nothing: a hazard line's members are all on the opened chart,
+    /// so nothing changes from the pre-ADR-0076 behaviour.
+    #[test]
+    fn a_never_linked_hazard_line_still_ceases_its_own_thread() {
+        let plan = cease_plan(&plan_row(true, &[(10, 1)]), Uuid::from_u128(1));
+        assert_eq!(plan.write, vec![(Uuid::from_u128(10), Uuid::from_u128(1))]);
+        assert!(plan.held_back.is_empty());
     }
 
     /// A single chart has no member lines, database or not.
