@@ -26,7 +26,10 @@
 -- The backfill below makes `attested` truthful for every standing row the moment this file
 -- loads, before the heal: a reader between the two (none today; R5's worklist and db/054's
 -- doubted-link check are candidates) never sees an attested winner reported as un-attested.
--- It is idempotent: once converged, no row matches and the UPDATE writes nothing.
+-- It is idempotent: once converged, no row matches and the UPDATE writes nothing. Like every
+-- migration it runs on EVERY connect (connect_and_load_schema replays all files); the cost
+-- once converged is a probe of each un-attested row (an index lookup on content_address),
+-- with no writes.
 --
 -- Node loader only: cairn-sync loads no identity migration (#284).
 

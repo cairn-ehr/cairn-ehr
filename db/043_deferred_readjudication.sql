@@ -41,9 +41,11 @@
 --   * db/005         — reads event_deferred for cairn_replay_eligible (the replay gate);
 --                       reads cairn_attestation_vouched (over event_attestation_unvouched)
 --                       for the ADR-0043 owner-gate's target-attester check.
---   * db/018, db/034 — read cairn_attestation_vouched (over event_attestation_unvouched),
+--   * db/018, db/034,
+--     db/054, db/055 — read cairn_attestation_vouched (over event_attestation_unvouched),
 --                       NOT event_deferred, before trusting event_log.attester_key as a vouch
---                       (db/018 twice, db/034 once).
+--                       (once each; db/018 stores its answer in patient_link.attested — the
+--                       full list is at cairn_attestation_vouched in db/001).
 --   * this file      — consumes event_deferred (promotion, gate 4); clears event_
 --                       attestation_unvouched once gate 1 verifies the carried token; or
 --                       annotates event_deferred with a recorded refusal.

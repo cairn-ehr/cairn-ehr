@@ -473,8 +473,7 @@ BEGIN
     -- flag (arrival-order-dependent trust state across honest nodes — the class of bug
     -- #194 closes for the demographic projections). Read back who actually won and flag
     -- iff the standing winner is an UN-ATTESTED link that still trips the veto; otherwise
-    -- clear. The winner's attestation is looked up via its content_address (UNIQUE in
-    -- event_log); patient_link always has a row here (the upsert inserted or kept one).
+    -- clear. patient_link always has a row here (the upsert inserted or kept one).
     -- Node-local advisory state, so INSERT/DELETE is honest — the events all remain logged.
     -- THE REACHABLE ONE (PR #302 finding F2). Unlike the door refusal above, nothing skips
     -- this on the sync path — so an unvouched token satisfying `v_win_attested` would

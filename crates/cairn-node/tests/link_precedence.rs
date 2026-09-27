@@ -314,6 +314,39 @@ async fn an_attested_assertion_wins_even_an_hlc_triple_collision() {
     )
     .await;
     assert_eq!(state, "unlink");
+
+    // The end-to-end part above cannot by itself prove the rank beats the address: the two
+    // content addresses are uncontrolled, so against the OLD comparator it would pass
+    // whenever the human's address happened to sort higher — a coin flip. Pin it directly
+    // on the comparator with the addresses chosen AGAINST the attested side ('\x01' < '\xff'):
+    // the attested new edge wins over an un-attested one with the higher address…
+    let attested_new_wins: bool = c
+        .query_one(
+            "SELECT cairn_link_overlay_wins(TRUE, 30, 4, 'o', '\\x01'::bytea, \
+                                            FALSE, 30, 4, 'o', '\\xff'::bytea)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        attested_new_wins,
+        "attested beats un-attested even with the lower content address"
+    );
+    // …and the reverse comparison loses (antisymmetry: the two cannot both win).
+    let unattested_new_wins: bool = c
+        .query_one(
+            "SELECT cairn_link_overlay_wins(FALSE, 30, 4, 'o', '\\xff'::bytea, \
+                                            TRUE, 30, 4, 'o', '\\x01'::bytea)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        !unattested_new_wins,
+        "un-attested never displaces attested, whatever its address"
+    );
 }
 
 #[tokio::test]
@@ -417,7 +450,9 @@ async fn a_vetoed_machine_link_after_a_human_unlink_raises_no_flag() {
 #[tokio::test]
 async fn every_standing_row_records_its_winners_attestation_truthfully() {
     // The column must never disagree with the one definition, evaluated on the winning
-    // event. Land a mixed history over three pairs, then check every row.
+    // event. Three pairs, ONE event each (attested, un-attested, attested), so this checks
+    // the INSERT path of db/018's upsert; the UPDATE path's value (a later winner
+    // displacing an earlier one) is pinned by the `standing()` reads in the tests above.
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
