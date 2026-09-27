@@ -666,32 +666,18 @@ all four; R1 builds the first.
   mirror, a decision) · [#691](https://github.com/cairn-ehr/cairn-ehr/issues/691) (each linked row names its
   chart by full uuid, on screen and to the screen reader — want a short per-member tag). Commented on
   [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333) (the between-reads chart-set refusal has no DB test).
-- **PR review round (2026-09-27, five agents, then a second pass on the fixes).** What was fixed:
-  - **A doubted link can no longer make a line signable or ceasable.** A doubted link is an un-attested link
-    that db/018 flagged, or that trips the hard veto now: db/054 `cairn_chart_set_has_doubted_link`
-    re-evaluates the veto at read time, which contains [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220)
-    for this read. While a set holds one, a multi-chart group is a wrong-chart hazard; a cease on such a line
-    stops only the opened chart's threads and names the rest.
-  - **A linked chart whose registration is not held here reads `unknown`**, never the no-row `confirmed`.
-  - `MedicationRow::patient_id` is renamed **`display_chart`**; the JSON name is unchanged.
-  - **CodeQL** `rust/cleartext-logging` (12 alerts on `parse_uuid_list`, flagged for "uid") is cleared by a
-    documented barrier row.
-  - **A missing-group report names a reload, not the retired cross-patient cause.**
-  - **Index:** `person_member(person_id)`.
-  - **The CLI header prints each member's identity state.**
-
-  Filed: [#692](https://github.com/cairn-ehr/cairn-ehr/issues/692) (a failed refresh overwrites the outcome) ·
-  [#693](https://github.com/cairn-ehr/cairn-ehr/issues/693) (member line: dob precision, repudiated name) ·
-  [#694](https://github.com/cairn-ehr/cairn-ehr/issues/694) (the member lines are absent from the semantic
-  model) · [#695](https://github.com/cairn-ehr/cairn-ehr/issues/695) (remaining test gaps) ·
-  [#696](https://github.com/cairn-ehr/cairn-ehr/issues/696) (`Option<&ChartSet>` → an enum) ·
-  [#697](https://github.com/cairn-ehr/cairn-ehr/issues/697) (the withheld-line wording for a doubted link,
-  and whether a doubted set's one-chart lines should be signable — DECIDED (b), 2026-09-27: withhold every
-  line not on the opened chart while the set holds a doubted link).
-- **Next: R2**, split 2026-09-27 into **R2a** (`patient_link.attested` outranking an un-attested link in
-  db/018, the migration re-folding existing winners; `link_charts`/`unlink_charts` + CLI) and **R2b** (the
-  window's link/unlink gesture, #681); then #697 (b); then **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
-  proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
+- **PR review round (five agents + a second pass).** Fixed: a doubted link (un-attested + flagged, or tripping the
+  veto now — db/054 `cairn_chart_set_has_doubted_link`, containing [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220)
+  for this read) makes every multi-chart line unsignable, and a cease on one stops only the opened chart's threads; an
+  unheld linked chart reads `unknown`, never `confirmed`; `MedicationRow::patient_id` → `display_chart`; a CodeQL
+  barrier row; missing-group reports name a reload; `person_member(person_id)` indexed; the CLI header prints trust.
+  Filed: [#692](https://github.com/cairn-ehr/cairn-ehr/issues/692) · [#693](https://github.com/cairn-ehr/cairn-ehr/issues/693)
+  · [#694](https://github.com/cairn-ehr/cairn-ehr/issues/694) · [#695](https://github.com/cairn-ehr/cairn-ehr/issues/695)
+  · [#696](https://github.com/cairn-ehr/cairn-ehr/issues/696) · [#697](https://github.com/cairn-ehr/cairn-ehr/issues/697)
+  (DECIDED (b), 2026-09-27: withhold every line not on the opened chart while the set holds a doubted link).
+- **Next:** R2, split 2026-09-27 into R2a (built — next entry) and **R2b** (the window's gesture, #681); then
+  #697 (b), **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 — proposes, never
+  links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
   forced 1 → target 1; signing off a combined list 1 → 1 → 1 (one gesture covers every line across both
   charts). `M ≤ N`; R1 adds no act. Budget: opening a linked chart ≤ the single-chart open, measurement owed
@@ -703,6 +689,43 @@ all four; R1 builds the first.
   - The planned "≤ 20 ms" figure was never a measurement.
 
 ---
+
+### 2026-09-27 — repair path R2a: a human's link judgement outranks a machine's; the node can author one (PR #698)
+
+Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`; ADR-0076 decisions 4–5; `db/055`,
+`SCHEMA_GENERATION` 54 → **55** (node loader list only; cairn-sync loads no identity migration, #284). PR
+[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698), awaiting the maintainer's merge. #681 stays open for R2b.
+- **What R2a built.**
+  - **db/018:** `patient_link.attested` (CREATE + paired ALTER, #207) holding the ONE definition of attested,
+    evaluated once per applied event. `cairn_link_overlay_wins` ranks attested first, then `cairn_hlc_overlay_wins`.
+    The applier, the #190 door refusal and the flag read-back all use it.
+  - **db/055:** a backfill, plus the generation bump whose loader heal re-folds winners the old order chose.
+  - **`chart_link.rs`:** `link_charts`/`unlink_charts` with a `Reviewer` (the human key signs and attests; no
+    node-key fallback). Admission: `link` requires both charts to be held here; `unlink` also admits a displayed
+    member that is not held here, filed under the held chart (db/005 step 8b). `LinkOutcome::still_joined` flags an
+    unlink through a third chart. An open proposal moves in the same transaction; closed ones are never touched.
+    One lock order: proposal row, then CARNLK.
+  - `apply_accepted_proposal` is now a thin wrapper, still with no production caller.
+  - `auto_apply` skips a pair a human has already judged.
+  - CLI `link-charts` / `unlink-charts`.
+  - identity.md §5.2 states the mixed-fleet consequence.
+- **Tests.**
+  - `link_precedence.rs`: both arrival orders for every case, the triple collision, the local door, the veto flag in
+    both directions, column truthfulness, the upgrade re-fold.
+  - `chart_link.rs`: incl. a lock-order test that waits on `pg_stat_activity` Lock.
+  - An `auto_apply.rs` judged-pair skip, and `migration_replay_widening` + the #477 legibility pin updated.
+- **Filed:** [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699) (neither-held unlink refused though both
+  show on a held chart's record — decide before R2b) · [#700](https://github.com/cairn-ehr/cairn-ehr/issues/700)
+  (auto-apply's judged-pair skip races; a skipped proposal stays `pending` — R5's worklist must filter it) ·
+  [#701](https://github.com/cairn-ehr/cairn-ehr/issues/701) (db/054 should read `pl.attested`) ·
+  [#702](https://github.com/cairn-ehr/cairn-ehr/issues/702) (a floor refusal via `chart_link` reads as a bare `db
+  error`).
+- **§1.2:**
+  - **Paper counterpart:** clipping two folders together, or writing "NOT the same patient — checked" on both
+    covers.
+  - **Acts:** paper 3 → forced 3 → target 3 (2 from R5's banner). R2a adds no act, and it removes the paper
+    failure where a later clerk re-clips folders someone marked as different.
+  - **Budget** (review-and-link ≤ 20 s) owed by R2b's runbook pass.
 
 ## Above the foundation line (NOT in this roadmap)
 

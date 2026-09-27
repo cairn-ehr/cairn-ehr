@@ -3,58 +3,61 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R1 — THE COMBINED READ — IS MERGED (PR [#688](https://github.com/cairn-ehr/cairn-ehr/pull/688),
-> 2026-09-27). R2 IS SPLIT (maintainer, 2026-09-27): R2a = the D5 precedence floor + the node's
-> `link_charts`/`unlink_charts` (branch `feat/r2a-link-precedence-floor`); R2b = the window's gesture and
-> side-by-side panel. #697 is DECIDED: option (b) (see item 2).** R1 is the first of
-> five slices of the duplicate repair path (#679 · #680 · #681), one design —
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` — and
-> [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
-> (spec **v0.78**). A linked chart now reads as **one combined record**: every member's medications in one
-> list, each row naming its source chart; demographics are NOT combined (each member's own identity line,
-> no winner chosen); writes stay per chart; every chart command names the displayed chart SET and refuses
-> when it changed. `db/054_person_charts.sql` (`cairn_person_charts`, `cairn_medication_duplicate_groups`),
-> `SCHEMA_GENERATION` **54**. **#334 is fixed by it** (the PR body closes it; commit 7c2d3ba2's body names it
-> too — harmless, the close is intended). Pre-review tree (1ec920c3): full sweep 2606 passed / 0 failed; the
-> webview walked with a stubbed bridge over a linked payload. Review-fix tree: see *Gate evidence* in the PR. The CLI's text `medication-list` names a combined
-> list's charts too (`medication/list_text.rs`).
+> **⇒ R2a — A HUMAN'S LINK JUDGEMENT OUTRANKS A MACHINE'S, AND THE NODE CAN AUTHOR ONE — IS BUILT ON PR
+> [#698](https://github.com/cairn-ehr/cairn-ehr/pull/698) (2026-09-27), per-task reviewed, whole-branch reviewed
+> (opus), its fix wave re-reviewed clean; AWAITING THE MAINTAINER'S MERGE.** It is the second of the duplicate
+> repair path's slices (#679 · #680 · #681; design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
+> spec **v0.78**). R1 (the combined read, PR #688) is merged. R2 was split by the maintainer: **R2a** = ADR-0076
+> decision 5 in db/018 (`patient_link.attested`, comparator `cairn_link_overlay_wins`: attested first, then
+> HLC), `db/055` (**`SCHEMA_GENERATION` 55** — its loader heal re-folds existing winners), `chart_link.rs`
+> (`link_charts`/`unlink_charts`, CLI `link-charts`/`unlink-charts`), `apply_accepted_proposal` a thin wrapper,
+> auto-apply yields to a human judgement. Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`.
 >
 > **⇒ NEXT, in order:**
-> 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R2 — link and unlink from an open chart (#681) + the precedence floor**, as **R2a** (floor + node
->    orchestration + CLI; the migration must RE-FOLD every pair's winner, not merely backfill `attested` — a
->    backfill leaves a machine link that already displaced a human unlink standing) then **R2b** (the window).
->    Plan from the design page's *R2* section: header **"Same person as…"** → the front door's search → a side-by-side panel
->    (names incl. aliases, DOB with provenance, identifiers, active medications, `cairn_match_veto`
->    findings as plain facts — the panel's safety is what it SHOWS, never an "are you sure?") → an attested
->    `identity.link.asserted`; each member line gets **"Not the same person"** → attested `unlink`;
->    `link_charts`/`unlink_charts` move a resolved proposal row in the SAME transaction; and the
->    safety-critical half, **`patient_link.attested`** ranked BEFORE `cairn_hlc_overlay_wins` in db/018's
->    applier (one definition of "attested" — the one the #190 veto check already computes; `ALTER … ADD
->    COLUMN IF NOT EXISTS` beside the `CREATE`, per #207). Then **R3** (the front door collapses by person;
->    the step-3 prompt signs every member id), **R4** (the per-node matcher worker, #679: queue + `NOTIFY`,
->    proposes, **never links**), **R5** (the §5.2 banner + the worklist, #680).
-> 2. **Filed today, open:** **#689** (the db/034 attestation door admits an attestation naming a chart other
->    than its thread's own — a floor gap; needs a local-vs-apply-door decision) · **#690** (db/033's local
->    cross-patient guard refuses reconciling the duplicate threads of two LINKED charts — the write-side
->    mirror of R1; a decision: admit within one link component? what an unlink then does — a flagged
->    cross-patient group, never auto-separated) · **#691** (every row of a linked list names its chart by
->    full 36-char uuid, on screen and to the screen reader — want a short per-member tag keyed to the
->    header lines). **#333** gained the between-reads chart-set refusal (no DB test; same concurrency seam).
->    **From the PR review:** **#697 — DECIDED (b), 2026-09-27:** while a set holds a doubted link, every line
->    not recorded on the opened chart is withheld from sign-off (shown, labelled, reported); build it with the
->    issue's wording half, after R2a · #692 (a failed
->    refresh overwrites the outcome) · #693 (member line: dob precision, repudiated name) · #694 (member lines
->    missing from the semantic model) · #695 (remaining R1 test gaps) · #696 (`Option<&ChartSet>` → an enum).
->    **#220** gained a comment: R1 widened its blast radius and db/054 contains it for this read.
-> 3. **Human acts still owed** (an agent cannot do them): the runbook stopwatch figures — now also a
->    **linked chart's open** — and the **live Tauri-IPC pass on a linked pair** (the mock walk cannot see an
->    IPC-only defect). See *Four things still owed are HUMAN acts* below.
-> 4. **#620**, the only open item that can still change the wire (the COSE unprotected header is hashed
->    into the content address but lies outside the signature); brainstorm first. Then **#626** (the
->    clinical twin of #621, kept out because db/020 is the 100k-event hot path), **#652 + #655** together,
->    and the small advisory-tier **#640**, **#641**. Unchanged from 09-26: **#682–#686** (#685 = re-run the
->    ranking on the spread draw; clearing `cairn_test`'s fixtures needs the maintainer's permission).
+> 0. Check `gh pr list` before trusting this list (house rule 8). **PR #698** — maintainer review → merge.
+> 1. **R2b — the window's gesture (#681).** Header **"Same person as…"** → the front door's search (only a chart
+>    some list showed — `AppState::shown`) → a side-by-side panel (names incl. aliases, DOB with provenance,
+>    identifiers, active medications, `cairn_match_veto` findings as plain facts — its safety is what it SHOWS,
+>    never an "are you sure?") → `link_charts`; each member line gets **"Not the same person"** →
+>    `unlink_charts`. **A member joined through a THIRD chart:** an unlink of the pair is recorded but reports
+>    `LinkOutcome::still_joined` — the member line must name the edge(s) that actually join it (#699 is the
+>    neither-held half — decide before R2b). R2b owes the §1.2 budget measurement (review-and-link ≤ 20 s).
+>    Then **#697 (b)** (decided: while a set holds a doubted link, every line not on the opened chart is withheld
+>    from sign-off, with its own wording; do #701 alongside), **R3** (the front door collapses by person),
+>    **R4** (per-node matcher worker, #679 — proposes, never links), **R5** (banner + worklist, #680 — the
+>    worklist must filter pairs with an attested `patient_link` row, #700).
+> 2. **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
+>    show on a held chart's record — a decision) · **#700** (auto-apply's human-judged skip has a race; a skipped
+>    proposal stays `pending`) · **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (a
+>    floor refusal through `chart_link` surfaces as a bare `db error`). **From R1:** #689 (db/034 admits an
+>    attestation naming another chart — floor gap) · #690 (reconciling across LINKED charts is refused — a
+>    decision) · #691 (full-uuid source labels) · #692 · #693 · #694 · #695 · #696; #333 and #220 gained comments.
+> 3. **Human acts still owed** (an agent cannot do them): the runbook stopwatch figures — now also a **linked
+>    chart's open** — and the **live Tauri-IPC pass on a linked pair**. See *Four things still owed are HUMAN
+>    acts* below.
+> 4. **#620**, the only open item that can still change the wire (the COSE unprotected header is hashed into the
+>    content address but lies outside the signature); brainstorm first. Then **#626**, **#652 + #655** together,
+>    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
+>    `cairn_test`'s fixtures).
+>
+> **⇒ THE LINK PRECEDENCE FLOOR'S DURABLE RULES (R2a, ADR-0076 decision 5) — do not undo any of these:**
+> - **`patient_link`'s winner order is ATTESTED FIRST, then HLC** (`cairn_link_overlay_wins`, db/018). A total
+>   order, so every node converges. "Attested" is ONE definition (`attester_key IS NOT NULL AND
+>   cairn_attestation_vouched(event_id)`), evaluated ONCE per applied event and STORED with the winner — safe
+>   because a vouch never changes after first projection (db/043 gate 1 runs before gate 4). Never add a second
+>   spelling; a new reader reads `pl.attested`.
+> - **`db/055`'s EXISTENCE is load-bearing** — it moved the generation to 55, and the loader's generation-change
+>   heal is what re-decides winners the old order chose. A column backfill cannot. **Never fold db/055 into
+>   db/018.** A peer still on an older binary ranks the old way until it upgrades (stated in identity.md §5.2).
+> - **One lock order everywhere: the `match_proposal` row, then db/018's CARNLK advisory lock**
+>   (`chart_link::assert_link_in_tx` pre-locks the row; `auto_apply` and `apply_accepted_proposal` read it `FOR
+>   UPDATE` first). Reversing it deadlocks a same-pair race (40P01). Pinned by a `pg_stat_activity` Lock-wait
+>   test in `tests/chart_link.rs`.
+> - **A judgement is a human's**: `link_charts`/`unlink_charts` take a `Reviewer` (the human key signs AND
+>   attests); there is no node-key fallback. `link` needs BOTH charts held here; `unlink` also admits a displayed
+>   member not held here (same record), and is then filed under the HELD chart (db/005 step 8b). Only OPEN
+>   proposals (`pending`/`accepted`/`review`) move; closed rows are never touched (db/019's invariant).
 >
 > **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
@@ -344,14 +347,13 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-09-27 (**R1 — the combined read — built**,
-[ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
-spec **v0.78**, `db/054`, PR **[#688](https://github.com/cairn-ehr/cairn-ehr/pull/688)**, in which #334 is repaired; filed **#689**,
-**#690**, **#691**) · 2026-09-26 (**#671**, ADR-0075, spec v0.77, PR #678; filed #679–#684) · 2026-09-23 (**funnel
-slice 2c**, PR #674; its prerequisites, PR #661) · 2026-09-22 (funnel 2a + 2b, PRs #646, #653) · 2026-09-21 (#636
-slice 1 + #639) · 09-20 #621 (ADR-0074) · 09-19 #619 (ADR-0073) · 09-17 #614 + #615 (ADR-0072, db/053) · earlier:
+**Session date:** 2026-09-27 (**R2a — the link precedence floor + `link_charts`/`unlink_charts`**, PR
+**[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)**, `db/055`, generation 55; #697 decided (b); filed #699–#702;
+earlier the same day **R1 — the combined read**, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
+spec **v0.78**, `db/054`, PR #688, #334 repaired) · 2026-09-26 (**#671**, ADR-0075, PR #678) · 2026-09-23 (**funnel
+slice 2c**, PR #674) · 2026-09-22 (funnel 2a + 2b) · 2026-09-21 (#636 slice 1 + #639) · 09-20 #621 (ADR-0074) · earlier:
 ROADMAP. · **Spec:** **v0.78** (newest ADR-0076; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md)
-supersedes ADR-0026 decision 2's implementation wording only) · **`SCHEMA_GENERATION`:** **54** (`db/054`) · **Phase:**
+supersedes ADR-0026 decision 2's implementation wording only) · **`SCHEMA_GENERATION`:** **55** (`db/055`) · **Phase:**
 architecture complete (every original §11 question closed); **first production clinical surface RUNNING** —
 `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication chart that reads linked charts as one.
 
@@ -361,7 +363,8 @@ architecture complete (every original §11 question closed); **first production 
 precedence rule #345 at db/005 step 8b; ranking ADR-0075) · **`clinical.medication` slices 1–6b** under **born-sealed
 bodies** (ADR-0052) and **per-write human authorship** (ADR-0053 — grading half-live until #245) · **the §5.9 stream
 through its read surface** · **the med-list node tier** (first clinical READ path + whole-list sign-off, now over a
-linked chart set — ADR-0076 R1), **generic reprojection** (ADR-0057; a late key projects at the door, ADR-0070), the
+linked chart set — ADR-0076 R1), **human link/unlink judgements** (`chart_link`, attested-first `patient_link`
+— ADR-0076 R2a), **generic reprojection** (ADR-0057; a late key projects at the door, ADR-0070), the
 **ADR-0056 admit-uninterpreted floor** · **the L3 reference UI** — `cairn-gui/`, a standalone workspace, one-way GUI →
 crates, **`cairn-gui-tauri`** (the iced shell FAILED the accessibility bar, spike 0004): the funnel front door onto one
 patient's (or one linked person's) medication chart (plain JS, no npm); pane/routing/freshness state machine tested but
@@ -374,64 +377,40 @@ patient's (or one linked person's) medication chart (plain JS, no npm); pane/rou
 ROADMAP carries the per-slice narrative and **every open issue number**. This section keeps only what a *next* session
 needs — the lessons that generalise past the slice that found them.
 
-### 2026-09-27 — the duplicate repair path designed; R1, the combined read, built (ADR-0076, PR #688)
+### 2026-09-27 (later) — R2a: the link precedence floor and the node's judgement (PR #698)
 
-Brainstorm with the maintainer → one design for #679/#680/#681, five slices R1–R5 → ADR-0076 → plan
-`docs/superpowers/plans/2026-09-27-repair-path-r1-combined-read.md` → subagent-driven, per-task reviews all clean.
-- **⇒ SURVEY WHAT EXISTS BEFORE DESIGNING — THE BRIEF'S PREMISE WAS HALF-BUILT.** ADR-0075 said "accept duplicates and
-  make repair by `link` easy". Reading the code first found a `link` repairs nothing a clinician can SEE (the med read
-  filtered one `patient_id`; nothing read across `person_member`), "different people" had no home in the algebra, the
-  matcher could not run on its own, and a machine link could silently override a human `unlink`. The design is built on
-  those findings, not on the brief. **A brief is a claim about the tree; read the tree.**
-- **⇒ THE DOUBLE-LINE HAZARD WAS MISSED BY THE DESIGN AND CAUGHT AT PLANNING.** The design saw #334's doubled group,
-  but not that `patient_medication_reconciliation_flag` groups by `patient_id` — so the same drug on two LINKED charts
-  would have been two UNFLAGGED lines on the combined list. Planning the SQL against the view's text found it; db/054's
-  set-wide function exists because of it. **When a read widens from one key to a set, re-read every per-key aggregate
-  it leans on** (the Slice 57 `array_agg` lesson, again).
-- **⇒ THE PLAN'S OWN DRIFT GUARD CONTRADICTED ITS OWN SQL.** The guard required db/054's dup_key byte-identical to
-  db/033's; the plan's SQL qualified the columns (`mc.coding_system`) where db/033's are bare, so the guard could never
-  pass. Caught by the controller's pre-flight scan of producer/consumer pairs, not by an implementer. **Run a plan's
-  verbatim code against its own guards before handing it out** (the #503 lesson, one level up).
-- **⇒ CAPTURE THE GOLDEN BEFORE THE REWRITE.** `a_never_linked_chart_reads_exactly_as_before` was written and run
-  against the UNMODIFIED read, its literal pasted, and only then the read rewritten. A golden captured after the change
-  pins the change, not the invariant.
-- **⇒ AVAILABILITY OVER CONSISTENCY APPLIES TO A HEADER READ.** The first build failed the whole `med_list` when a
-  member's identity line could not be read — hiding every drug because the header was incomplete. Now the list renders
-  with a visible warning. **A founding invariant binds small reads too; never let a decorative read gate the clinical
-  one.**
-- **Mechanics:** a pre-existing CSS defect (`#unlock-form {display:flex}` beating `[hidden]`, since 2026-08-03) kept the
-  passphrase form visible after unlock — fixed (`[hidden] { display: none !important; }`); the webview was walked with
-  Playwright over a stubbed `invoke` returning a linked payload (not a substitute for the live IPC pass).
+Maintainer split R2 (R2a/R2b) and decided #697 (b) → plan → subagent-driven (six tasks, per-task reviews; opus on the
+safety-critical tasks and the whole-branch review).
+- **⇒ A MIGRATION THAT CHANGES A PROJECTION'S ORDER MUST RE-DECIDE WHAT THE OLD ORDER ALREADY DECIDED.** The design said
+  "backfill `attested`"; a backfill marks the stored machine link "not attested" and leaves it the winner. The fix
+  reuses the loader's generation-change heal — so the new migration's EXISTENCE is load-bearing. **Ask of every
+  ordering change: what did the old order already choose, and what re-chooses it?**
+- **⇒ A STORED DERIVED VALUE IS SAFE ONLY IF ITS INPUT CANNOT CHANGE AFTER IT IS STORED** — checked, not assumed
+  (db/043 gate 1 clears the unvouched marker before gate 4 first projects the event).
+- **⇒ A SECOND CALLER OF A SHARED CORE CAN INVERT A LOCK ORDER.** The task reviewer found the judgement took the
+  advisory lock before the proposal row while `auto_apply` took them the other way: a same-pair deadlock. **A
+  concurrency test must wait on the real signal** (`pg_stat_activity.wait_event_type = 'Lock'`), never a sleep — the
+  first version could pass against the bug on a slow runner.
+- **⇒ THE WHOLE-BRANCH REVIEW FOUND WHAT NO TASK REVIEW COULD:** a rule written for one verb (link's "both held here")
+  applied to the other (unlink — a displayed member could not be separated), and a transitive unlink reported
+  "unlinked" while the charts stayed combined (`still_joined`). **Check each rule against every verb that reaches it.**
+- **Mechanics:** R1's condensed lessons — survey the tree before designing (a brief is a claim); when a read widens from
+  a key to a set, re-read every per-key aggregate; run a plan's verbatim code against its own guards; capture a golden
+  BEFORE the rewrite; availability over consistency binds a header read too.
 
-### 2026-09-26 — #671: the step-3 prompt is a nudge (ADR-0075, PR #678)
+### 2026-09-22 → 09-26 — funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678), condensed
 
-- **⇒ THE MAINTAINER'S CLINICAL FRAME SETTLED WHAT THE DESIGN COULD NOT.** "Did the clerk look?" became "how fast is the
-  duplicate FOUND?" — **ask what the person at the desk will actually do before designing what they must attest.**
-- **⇒ THE MEASUREMENT FALSIFIED THE ADR DRAFT, BEFORE MERGE** ("a name typo never enters the candidate set" was false).
-  **Measure the claim in the ADR, and give every arm a control the feature cannot help.**
-- **⇒ A RANKING KEY IS ONLY AS GOOD AS ITS MATCH RULE'S AGREEMENT WITH THE SEARCH'S** (exact tokens vs db/046's
-  prefix; an MRN match shown 48/500). **Every ranking change re-runs every arm.**
-- **⇒ INVERTING A TEST CAN DELETE THE OTHER HALF OF A PAIR** — add the positive case back.
-- **⇒ A LATENCY INSTRUMENT MUST SEE THE CODE PATH** (the SQL rig cannot time Rust-side reads).
-
-### 2026-09-22 → 09-23 — funnel UI slices 2a → 2c (PRs #646, #653, #661, #674), condensed
-
-- **⇒ A DESIGN'S QUANTITATIVE ASSUMPTION IS A CLAIM — MEASURE IT BEFORE BUILDING ON IT** ("few candidates by
-  construction" was false; db/046 is a disjunction). **Read the query the UI sits on before wiring the UI.**
-- **⇒ A MEASUREMENT RIG NEEDS A POPULATION WITH THE RIGHT SHAPE** (unique synthetic names cannot measure truncation).
-- **⇒ A MOCK-MODE WINDOW CAN BE WALKED HEADLESS** over `src-ui/` with a stand-in `invoke`; a Tauri-IPC-only defect
-  (argument casing) stays the human pass's.
-- **⇒ WHEN A SLICE MAKES A CONSTANT VARIABLE, AUDIT EVERY READER OF IT** (2c's Critical: "open chart" = "chart on
-  screen" stopped being true for three pre-existing commands). R1 widened the same invariant from a chart to a set.
-  **Measure the case the feature exists for, not the easy one.**
-- **⇒ A SWEEP WITHOUT ALL THREE DB STRINGS IS NOT A SWEEP** — use `scripts/run-db-gated-tests.sh`.
-- **⇒ A second review round asks whether what the code SAYS is TRUE** (found a duplicate-chart path, two hollow guards).
-  **Every claim a test makes about a mutation is verified by applying it. An agent's, and an issue's, claim about the
-  tree is a claim — grep before planning** (#654 said one call site; there were fifteen).
-- **⇒ A design page's sentence is a prediction until code meets it** (dated revision notes, never edited away). A test
-  can pass for a reason not in its name; an atomicity probe that never reaches the server is decoration (#657); a signed
-  flag nothing reads back is a claim nothing checks; a copied truncate list is a second-run failure, a derived one only
-  as good as its predicate (#658); a new DB-gated suite in a non-root tree runs nowhere until wired (#656).
+- **Ask what the person at the desk will actually do before designing what they must attest** (#671's frame: "how fast
+  is the duplicate FOUND?"). **Measure the ADR's claim, with a control the feature cannot help**; every ranking change
+  re-runs every arm; a latency instrument must see the code path; inverting a test can delete its pair's other half.
+- **A design's quantitative assumption is a claim — measure it** ("few candidates by construction" was false); a rig
+  needs a population of the right shape; read the query the UI sits on before wiring the UI.
+- **When a slice makes a constant variable, audit every reader** (2c's Critical: "open chart" ≠ "chart on screen"; R1
+  widened it to a set). A mock-mode window can be walked headless; an IPC-only defect stays the human pass's.
+- **A sweep without all three DB strings is not a sweep** — `scripts/run-db-gated-tests.sh`. **An agent's or an issue's
+  claim about the tree is a claim — grep** (#654: one call site claimed, fifteen found). A design sentence is a
+  prediction; an atomicity probe that never reaches the server is decoration (#657); a derived truncate list is only as
+  good as its predicate (#658); a new DB suite in a non-root tree runs nowhere until wired (#656).
 
 ### 2026-08-20 → 09-21 — the restore, node-plane, door and search slices (condensed to one-liners)
 
