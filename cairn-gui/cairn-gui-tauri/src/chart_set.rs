@@ -356,7 +356,13 @@ mod tests {
                  · registration not yet received on this node · chart {id}"
             )
         );
-        assert!(!line.text.contains("recorded"), "{}", line.text);
+        // Static messages, never the line itself: a member line carries a chart's name and
+        // date of birth BY DESIGN, and CodeQL's cleartext-logging rule rightly treats echoing
+        // it into panic output as a leak — synthetic fixture or not.
+        assert!(
+            !line.text.contains("recorded"),
+            "an absent fact on an unregistered chart reads as unknown, never 'not recorded'"
+        );
     }
 
     /// Other events about an unregistered chart can arrive first (a demographic stream does
@@ -371,11 +377,13 @@ mod tests {
             birth_date: None,
             trust: "unknown".into(),
         });
-        assert!(line.text.starts_with("Jo BLOGGS · "), "{}", line.text);
+        assert!(
+            line.text.starts_with("Jo BLOGGS · "),
+            "the name that arrived leads the line"
+        );
         assert!(
             line.text.contains("registration not yet received"),
-            "{}",
-            line.text
+            "the line says the registration is missing"
         );
     }
 
