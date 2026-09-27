@@ -154,7 +154,9 @@ pub struct LinkOutcome {
     pub event_id: Uuid,
     /// Whether an OPEN `match_proposal` for the pair moved (`applied` / `rejected`).
     pub proposal_resolved: bool,
-    /// The chart set of the first chart named, read after commit — what a window reopens.
+    /// The chart set of the FIRST chart named (`a`), read after commit — not necessarily a
+    /// chart this node can open: after `unlink_charts(unheld, held)` it is the set of the
+    /// unheld chart. A caller wanting the held chart's view reads that chart's set instead.
     pub charts: ChartSet,
     /// An UNLINK was recorded, but the second chart still reads as part of the first's
     /// record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and C–B

@@ -6878,13 +6878,6 @@ mod tests {
         assert!(format!("{err:#}").contains("not a tty"));
     }
 
-    /// The two judgement verbs parse, and a missing attester key is a parse error rather
-    /// than a run-time fallback to the node key: an identity judgement is a human's.
-    ///
-    /// `--conn` is a required top-level flag (no default, and `CAIRN_CONN` is not set in
-    /// the test process), so both branches supply it explicitly — without it every
-    /// `try_parse_from` here would fail on the missing connection string rather than on
-    /// what this test is actually about: the presence or absence of `--attester-key`.
     /// Final-review finding 2: an unlink that leaves the charts joined through a third
     /// chart must not print "unlinked"; a direct one still does.
     #[test]
@@ -6914,6 +6907,13 @@ mod tests {
         );
     }
 
+    /// The two judgement verbs parse, and a missing attester key is a parse error rather
+    /// than a run-time fallback to the node key: an identity judgement is a human's.
+    ///
+    /// `--conn` is a required top-level flag (no default, and `CAIRN_CONN` is not set in
+    /// the test process), so both branches supply it explicitly — without it every
+    /// `try_parse_from` here would fail on the missing connection string rather than on
+    /// what this test is actually about: the presence or absence of `--attester-key`.
     #[test]
     fn link_and_unlink_charts_parse_and_demand_an_attester_key() {
         use clap::Parser;

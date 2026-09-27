@@ -78,7 +78,9 @@ pub enum AutoOutcome {
     Applied(Uuid),
     /// A veto appeared since propose; the proposal was kicked to human `review`.
     VetoedToReview,
-    /// Not eligible (not auto_candidate, not pending, or absent); nothing changed.
+    /// Not eligible: not auto_candidate, not pending, absent, or a human already judged
+    /// the pair (a standing attested `patient_link` row outranks any matcher link,
+    /// ADR-0076 decision 5); nothing changed.
     Skipped(String),
 }
 
@@ -86,11 +88,10 @@ pub enum AutoOutcome {
 /// status='pending', RE-CHECK the db/016 veto (any severity) — a veto that appeared since
 /// propose kicks the pair to human `review` instead of auto-linking — skip a pair a human
 /// has already judged (an attested `patient_link` row, which any matcher link loses to) —
-/// else build + sign an
-/// un-attested link with the matcher's key, submit through the 1-arg `submit_event` door,
-/// and mark the proposal 'auto_applied'. All in ONE transaction: any rejection rolls back,
-/// so no event is written and the proposal stays 'pending' to retry (atomicity =
-/// idempotency).
+/// else build + sign an un-attested link with the matcher's key, submit through the 1-arg
+/// `submit_event` door, and mark the proposal 'auto_applied'. All in ONE transaction: any
+/// rejection rolls back, so no event is written and the proposal stays 'pending' to retry
+/// (atomicity = idempotency).
 ///
 /// The pair may be passed in either order; it is canonicalized to `(least, greatest)` to
 /// match match_proposal's `CHECK (patient_low < patient_high)`.
