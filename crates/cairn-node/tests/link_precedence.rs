@@ -17,7 +17,9 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 mod common;
-use common::{apply_remote_attested, apply_remote_raw, link_assertion_event, register_pair};
+use common::{
+    apply_remote_attested, apply_remote_raw, link_assertion_event, register_pair, vetoed_pair,
+};
 
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
@@ -530,47 +532,4 @@ async fn flag_count(c: &Client) -> i64 {
         .await
         .unwrap()
         .get(0)
-}
-
-/// Two registered charts whose verified DOBs clash — a hard veto by construction (the same
-/// fixture `link_veto_floor.rs` uses, reduced to what this suite needs).
-async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid) {
-    use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
-    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
-    register_pair(c, sk, kid, a, b).await;
-    for (p, wall, value) in [(a, 2, "1980-07-15"), (b, 3, "1975-01-02")] {
-        let body = EventBody {
-            event_id: Uuid::now_v7().to_string(),
-            patient_id: p.to_string(),
-            event_type: "demographic.field.asserted".into(),
-            schema_version: "demographic.field/1".into(),
-            hlc: cairn_event::Hlc {
-                wall,
-                counter: 0,
-                node_origin: "n".into(),
-            },
-            t_effective: None,
-            signer_key_id: kid.into(),
-            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
-            payload: dob_assertion_body(value, "day", Some("document"), "document-verified"),
-            attachments: vec![],
-            plaintext_twin: Some(render_dob_twin(value, "day", "document-verified")),
-            clock_grade: cairn_event::ClockGrade::SelfAsserted,
-            safety: None,
-        };
-        let signed = sign(&body, sk).unwrap();
-        c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-            .await
-            .unwrap();
-    }
-    let vetoed: bool = c
-        .query_one(
-            "SELECT cairn_has_hard_veto($1::text::uuid, $2::text::uuid)",
-            &[&a.to_string(), &b.to_string()],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert!(vetoed, "precondition: the pair must trip the hard veto");
-    (a, b)
 }

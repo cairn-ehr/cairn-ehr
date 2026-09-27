@@ -227,6 +227,9 @@ fn derivation_finds_the_expected_helpers() {
             // its own `Result`-returning copy, which its refusal tests still need.
             // `link_assertion_event` joined in the R2a plan's Task 1 (`link_precedence.rs`,
             // `chart_link.rs`): attested and un-attested link bodies at a chosen HLC triple.
+            // `vetoed_pair` joined in the R2a plan's Task 3 (`chart_link.rs`): a registered
+            // pair with clashing verified DOBs (a hard veto by construction), promoted from
+            // `link_precedence.rs`'s identical local copy.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -246,6 +249,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn submit_signed(",
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
+            "async fn vetoed_pair(",
             "fn bearing_withdrawal_body(",
             "fn body_from_spec(",
             "fn link_assertion_event(",
