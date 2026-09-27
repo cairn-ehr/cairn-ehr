@@ -35,6 +35,9 @@
 #![allow(dead_code)]
 
 use cairn_event::demographics::{name_assertion_body, render_name_twin};
+use cairn_event::identity::{
+    link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
+};
 use cairn_event::registration::{
     registration_assertion_body, render_registration_twin, RegistrationAssertion,
     RegistrationClass, SearchAttestationInput, SearchTerms, REGISTRATION_EVENT_TYPE,
@@ -505,6 +508,71 @@ pub async fn submit_registration(
     .await
     .expect("registration accepted");
     event_id
+}
+
+/// Sign + submit one link OR unlink event through the real submit door, and PANIC on
+/// refusal (`.expect("link event accepted")`).
+///
+/// This is setup scaffolding, not the identity-linkage suite's own door test: promoted
+/// here (R1 Task 2) for suites that need two charts already linked (or already unlinked)
+/// so they can assert something ELSE — the combined-read chart set (`person_charts.rs`),
+/// say — and have no interest in the link door's own refusal paths. `identity_linkage.rs`
+/// keeps its OWN `submit_link`/`submit_link_prov`, which return the raw `Result` instead of
+/// panicking, because that suite's whole job is asserting on specific rejections (an empty
+/// provenance, e.g.) — a panicking helper would make those tests impossible to write.
+///
+/// Fixed provenance `"test:link"` (this helper never varies it — a caller that needs to
+/// vary provenance is testing the door itself and belongs in `identity_linkage.rs`, not
+/// here). `wall` is the HLC wall clock (higher = newer); `a` is `patient_id` by convention
+/// (an identity event is "about" subject_a's linkage), matching `identity_linkage.rs`'s
+/// own helper.
+pub async fn submit_link_event(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    a: Uuid,
+    b: Uuid,
+    wall: i64,
+    is_link: bool,
+) {
+    let a_s = a.to_string();
+    let b_s = b.to_string();
+    let la = LinkAssertion {
+        subject_a: &a_s,
+        subject_b: &b_s,
+        provenance: "test:link",
+        confidence: None,
+    };
+    let (etype, sver, payload, twin) = if is_link {
+        (
+            "identity.link.asserted",
+            "identity.link/1",
+            link_assertion_body(&la),
+            render_link_twin(&la),
+        )
+    } else {
+        (
+            "identity.unlink.asserted",
+            "identity.unlink/1",
+            unlink_assertion_body(&la),
+            render_unlink_twin(&la),
+        )
+    };
+    submit_signed(
+        c,
+        sk,
+        kid,
+        EventSpec {
+            patient: a,
+            event_type: etype,
+            schema_version: sver,
+            payload,
+            plaintext_twin: Some(twin),
+            wall,
+        },
+    )
+    .await
+    .expect("link event accepted");
 }
 
 /// Seed one chart carrying `name` as a legal, patient-stated name assertion. Returns its

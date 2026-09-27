@@ -13,6 +13,7 @@
 //! must be *reported*, never implied — is only checkable against a chart that has
 //! something to report.
 use crate::chart::PatientMedicationList;
+use crate::chart_set::ChartSet;
 use crate::row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -27,7 +28,7 @@ fn uid(n: u128) -> Uuid {
 fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
     MedicationRow {
         group_id: uid(group),
-        patient_id: uid(1),
+        display_chart: uid(1),
         term: term.to_string(),
         coding_display: None,
         formulation: Some("tablet".into()),
@@ -41,6 +42,9 @@ fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
         reconciliation_flagged: false,
         coding_conflict: false,
         cross_patient: false,
+        // The ordinary fixture rows all live on the one fixture chart; the cross-patient
+        // row overrides this below to name BOTH charts its group spans.
+        source_charts: vec![uid(1)],
     }
 }
 
@@ -48,6 +52,7 @@ fn member(id: u128, vouch: VouchState) -> MemberVouch {
     MemberVouch {
         medication_id: uid(id),
         vouch,
+        patient_id: uid(1),
     }
 }
 
@@ -91,6 +96,10 @@ pub fn sample_rows() -> Vec<MedicationRow> {
     let mut cross_patient = base(60, "warfarin", "5", "mg");
     cross_patient.members = vec![member(60, VouchState::Absent)];
     cross_patient.cross_patient = true;
+    // The group's member threads span TWO charts (this one and the other patient's) — the
+    // whole reason the row is flagged. `source_charts` names both, not just the one this
+    // chart is being read from.
+    cross_patient.source_charts = vec![uid(1), uid(2)];
 
     vec![
         unsigned,
@@ -121,6 +130,9 @@ pub fn sample_chart() -> PatientMedicationList {
             (cross_patient_group, vec![uid(60), uid(61)]),
             (invisible_group, vec![uid(70), uid(71)]),
         ]),
+        // Pre-ADR-0076: the fixture chart is read over the one fixture patient alone, not a
+        // linked set.
+        charts: ChartSet::single(uid(1)),
     }
 }
 

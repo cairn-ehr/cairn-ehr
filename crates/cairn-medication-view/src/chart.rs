@@ -2,8 +2,9 @@
 //!
 //! WHY THIS LIVES IN THE SHARED CRATE AND NOT IN THE NODE. It was born in
 //! `cairn-node`'s read path, where it had exactly one consumer (the CLI). The med-list
-//! window is the second, and it needs the *same* three things the CLI needs: the rows, the
-//! groups the chart cannot display, and the thread ids that make the repair runnable.
+//! window is the second, and it needs the *same* four things the CLI needs: the rows, the
+//! groups the chart cannot display, the thread ids that make the repair runnable, and the
+//! chart set the list was read over (ADR-0076).
 //!
 //! That is not a convenience. ADR-0060 decision 2 says partial completion must be
 //! **reported, never implied** — so a renderer that receives only `rows` is structurally
@@ -13,6 +14,7 @@
 //!
 //! Pure: no database driver, no GUI toolkit. `cairn-node` re-exports every item from
 //! `medication::read`, so its old paths still resolve.
+use crate::chart_set::ChartSet;
 use crate::row::MedicationRow;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -38,15 +40,34 @@ pub const SEPARATION_INSTRUCTION: &str =
      different patients and a vouch would record the wrong chart for one of them. Separation \
      is deliberately never blocked (db/033).";
 
+/// What to do about a group the node knows this chart set holds a thread in, but which has
+/// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
+/// for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
+///
+/// WHY NOT THE SEPARATION REMEDY. Before the combined read (ADR-0076), a missing group WAS
+/// the cross-patient case (#334): the group displayed on the other patient's chart only, and
+/// separating its threads was the repair. Rows are now selected by membership, so a
+/// cross-patient group is SHOWN, flagged and withheld (with the separation remedy on its own
+/// line), and a missing group means something else: a concurrent reconciliation or
+/// separation re-keyed the group between the read's statements, or a list view dropped a
+/// group it should emit (a projection defect). Telling the operator to separate threads
+/// "because they belong to different patients" would name the wrong cause and the wrong fix.
+pub const MISSING_GROUP_INSTRUCTION: &str =
+    "Reload the list: a group can move while the list is being read. If it is still missing, \
+     the node's medication projection needs repair — report the group and its threads (named \
+     with this warning); do not rely on this list as complete until then.";
+
 /// A patient's chart, plus what the node knows is MISSING from it.
 ///
-/// `rows` is what the clinician sees. `groups_missing_from_chart` is a safety signal that
-/// exists BECAUSE a reconciled group can span more than one patient (issue #334): the
-/// group then displays on only ONE patient's chart, so a patient whose thread was pulled
-/// into such a group can have locally-known medication content the node simply cannot show
-/// here. Non-empty means this chart is INCOMPLETE, not merely sparse. It does **not** stop
-/// the rest of the chart being read or signed (ADR-0060) — it is something every renderer
-/// must say out loud.
+/// `rows` is what the clinician sees. `groups_missing_from_chart` is a safety signal: a
+/// group with a locally-known member thread on a chart in `charts` that nonetheless has no
+/// row. It was introduced for issue #334, when the read selected rows by the list view's
+/// single display-winner patient and a group spanning two charts vanished from all but one.
+/// Since the combined read (ADR-0076) selects groups through their own member threads, it is
+/// empty by construction — kept as a defensive net against a projection that drops a group,
+/// or a group re-keyed between the read's statements. Non-empty means this chart is
+/// INCOMPLETE, not merely sparse. It does **not** stop the rest of the chart being read or
+/// signed (ADR-0060) — it is something every renderer must say out loud.
 ///
 /// WHAT IT DOES NOT CATCH. The signal is derived from `medication_thread_group`, which
 /// db/033 drives from `medication_statement` alone. A thread known locally ONLY through an
@@ -70,26 +91,36 @@ pub struct PatientMedicationList {
     ///
     /// WHY THIS EXISTS (#338 review finding 1). Every message about a cross-patient group
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything
-    /// else this struct carries is scoped to one patient — `rows` shows only groups that
-    /// display under this patient, and the node's vouch read filters members by
-    /// `medication_thread_group.patient_id` — so the *other* patient's thread appears
-    /// nowhere. Without this field the node names a remedy whose arguments it never shows,
-    /// and the only way out is raw SQL. The cross-patient member is deliberately the one
-    /// piece of another chart's data this read path surfaces: it is a bare thread id with
-    /// no clinical content attached, and it is the minimum needed to repair a wrong-chart
-    /// link the node itself is complaining about.
+    /// else this struct carries is scoped to the charts in `charts` — each row's `members`
+    /// lists only threads whose own chart (`medication_thread_group.patient_id`) is in the
+    /// set — so the *other* patient's thread appears nowhere. Without this field the node
+    /// names a remedy whose arguments it never shows, and the only way out is raw SQL. The
+    /// cross-patient member is deliberately the one piece of another chart's data this read
+    /// path surfaces: it is a bare thread id with no clinical content attached, and it is
+    /// the minimum needed to repair a wrong-chart link the node itself is complaining about.
     pub separation_targets: BTreeMap<Uuid, Vec<Uuid>>,
+    /// The set of charts this list was read over (ADR-0076 decision 1): the opened chart and
+    /// every chart in its link component, or just the opened chart when it is linked to
+    /// nothing. Carried on the list itself (rather than only inferred from its rows) because
+    /// an EMPTY list still has to say which chart it covers: decision 3 holds a chart command
+    /// to the set the clinician saw, and a chart with nothing on it is still a chart that was
+    /// read. It is also what a sign-off is held to: a surface
+    /// that showed this list passes this set back, and a changed set refuses the gesture.
+    pub charts: ChartSet,
 }
 
 impl PatientMedicationList {
-    /// An empty chart. Not an error state: a patient with nothing recorded is a real
-    /// clinical situation, and it is also what a fixture-mode window shows for any patient
-    /// other than the fixture one.
-    pub fn empty() -> Self {
+    /// An empty chart over `charts`. Not an error state: a patient with nothing recorded is
+    /// a real clinical situation, and it is also what a fixture-mode window shows for any
+    /// patient other than the fixture one. Takes the covered set explicitly rather than
+    /// defaulting it, because an empty list is exactly the case where nothing else on the
+    /// struct could tell you which chart(s) were actually read.
+    pub fn empty(charts: ChartSet) -> Self {
         Self {
             rows: vec![],
             groups_missing_from_chart: vec![],
             separation_targets: BTreeMap::new(),
+            charts,
         }
     }
 }
@@ -127,6 +158,14 @@ pub fn format_hazard_groups(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The missing-group remedy must not reuse the cross-patient cause (see its doc).
+    #[test]
+    fn the_missing_group_instruction_names_a_reload_not_a_separation() {
+        assert!(MISSING_GROUP_INSTRUCTION.contains("Reload"));
+        assert!(!MISSING_GROUP_INSTRUCTION.contains("medication-separate"));
+        assert!(!MISSING_GROUP_INSTRUCTION.contains("different patients"));
+    }
 
     fn uid(n: u128) -> Uuid {
         Uuid::from_u128(n)
@@ -202,6 +241,7 @@ mod tests {
             rows: vec![],
             groups_missing_from_chart: vec![uid(1)],
             separation_targets: BTreeMap::from([(uid(1), vec![uid(1), uid(2)])]),
+            charts: ChartSet::single(uid(1)),
         };
         let json = serde_json::to_string(&list).expect("the read model must serialize");
         assert!(json.contains(&uid(2).to_string()), "{json}");
@@ -210,9 +250,20 @@ mod tests {
 
     #[test]
     fn an_empty_chart_carries_no_rows_and_no_hazards() {
-        let list = PatientMedicationList::empty();
+        let list = PatientMedicationList::empty(ChartSet::single(uid(1)));
         assert!(list.rows.is_empty());
         assert!(list.groups_missing_from_chart.is_empty());
         assert!(list.separation_targets.is_empty());
+    }
+
+    /// Task brief step 1: even a chart with nothing on it must be able to say which
+    /// chart(s) it was read over — the field the caller needs cannot depend on `rows`
+    /// being non-empty, or an empty list would be structurally unable to answer.
+    #[test]
+    fn an_empty_list_still_says_which_charts_it_covers() {
+        let one = Uuid::from_u128(9);
+        let list = PatientMedicationList::empty(ChartSet::single(one));
+        assert_eq!(list.charts.members(), &[one]);
+        assert!(list.rows.is_empty());
     }
 }

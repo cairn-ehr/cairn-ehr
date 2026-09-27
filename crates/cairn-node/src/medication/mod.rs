@@ -10,6 +10,9 @@ mod attestation;
 mod cessation;
 mod coding;
 mod dose;
+// Public for the CLI's benefit, same as `read` and `signoff`: `main.rs`'s `MedicationList`
+// and `MedicationSignOff` arms call straight into these pure formatters.
+pub mod list_text;
 pub mod read;
 mod reconciliation;
 // Public since ADR-0066 decision 6: `ensure_unwrap_key` stopped being a side effect and

@@ -82,7 +82,7 @@ mod tests {
     fn row(group: u128, status: MedicationStatus, members: Vec<MemberVouch>) -> MedicationRow {
         MedicationRow {
             group_id: uid(group),
-            patient_id: uid(999),
+            display_chart: uid(999),
             term: "metformin".into(),
             coding_display: None,
             formulation: None,
@@ -96,6 +96,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            source_charts: vec![uid(999)],
         }
     }
 
@@ -103,6 +104,7 @@ mod tests {
         MemberVouch {
             medication_id: uid(id),
             vouch,
+            patient_id: uid(999),
         }
     }
 

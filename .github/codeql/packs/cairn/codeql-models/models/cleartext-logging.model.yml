@@ -91,6 +91,23 @@ extensions:
       # return. (its own unit tests' assertion messages)
       - ["cairn_node::backup::untrusted_clinical_notice", "ReturnValue", "log-injection", "manual"]
 
+      # Returns anyhow::Result<Vec<Uuid>>: CHART IDS parsed out of a `text[]` column (its one call
+      # site, `read_group_chart_lists`, reads each medication group's charts) — random v7 record
+      # identifiers the medication CLI prints ON PURPOSE so an operator can tell which chart a line
+      # was recorded on. No name, date of birth or other demographic ever enters it. Flagged because
+      # "uuid" contains the heuristic word "uid". (the `medication-list` / `medication-sign-off`
+      # per-row "recorded on chart(s)" suffix and the lines derived from the read, and two test
+      # assertion messages)
+      - ["cairn_node::medication::read::parse_uuid_list", "ReturnValue", "log-injection", "manual"]
+
+      # Returns Vec<String>: one "chart <id>: identity <trust state>" line per member of a combined
+      # medication list — a chart id and a `chart_trust` LABEL ("confirmed", "under-review", …). The
+      # member's name and date of birth are in its input and deliberately never reach the return;
+      # its unit test `member_lines_name_each_charts_identity_state` pins that. Added pre-emptively:
+      # the input field is named `trust`, and "trusted" has tripped the name heuristic before (see
+      # `no_drugref_dependency::trusted_sources` below). (the `medication-list` combined header)
+      - ["cairn_node::medication::list_text::member_lines", "ReturnValue", "log-injection", "manual"]
+
       # ---- cairn-wire -------------------------------------------------------------------------
       # Returns String: a WARNING TEXT about a certificate that was ignored. Flagged for "cert".
       - ["cairn_wire::medium::ignored_cert_warning", "ReturnValue", "log-injection", "manual"]

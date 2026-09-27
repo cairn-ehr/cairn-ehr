@@ -186,14 +186,21 @@ impl ClinicalData for MockData {
         &self,
         patient_uuid: &str,
     ) -> Result<cairn_medication_view::PatientMedicationList, DataError> {
-        // Any other patient has an EMPTY chart rather than a NotFound: an empty chart is a
-        // real clinical state and the window must render it honestly. That deliberately
-        // differs from `demographics` above, where an unknown patient really is absent — a
-        // patient with no medications recorded still exists.
+        // Any other WELL-FORMED patient id has an EMPTY chart rather than a NotFound: an
+        // empty chart is a real clinical state and the window must render it honestly. That
+        // deliberately differs from `demographics` above, where an unknown patient really is
+        // absent — a patient with no medications recorded still exists. But `empty` now
+        // needs a `ChartSet` to say which chart it covers (ADR-0076), which needs a real
+        // `Uuid` — an id that fails to parse is not a chart this mock can name, so it takes
+        // the same `NotFound` path `find` uses elsewhere in this file rather than one this
+        // struct cannot honestly construct.
+        let parsed: Uuid = patient_uuid.parse().map_err(|_| DataError::NotFound)?;
         if patient_uuid == cairn_medication_view::fixtures::FIXTURE_PATIENT {
             Ok(cairn_medication_view::fixtures::sample_chart())
         } else {
-            Ok(cairn_medication_view::PatientMedicationList::empty())
+            Ok(cairn_medication_view::PatientMedicationList::empty(
+                cairn_medication_view::ChartSet::single(parsed),
+            ))
         }
     }
 }

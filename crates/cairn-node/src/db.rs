@@ -342,6 +342,14 @@ const SCHEMA: &[(&str, &str)] = &[
         "053_substitution_guard",
         include_str!("../../../db/053_substitution_guard.sql"),
     ),
+    // db/054 (ADR-0076 decision 1): cairn_person_charts + cairn_medication_duplicate_groups.
+    // NODE-ONLY — cairn-sync's list legitimately lags (#284): no door it loads calls either
+    // function, both being read-side helpers for the combined-read surface, not the
+    // submit/apply/restore doors cairn-sync's subset exists to keep runnable standalone.
+    (
+        "054_person_charts",
+        include_str!("../../../db/054_person_charts.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

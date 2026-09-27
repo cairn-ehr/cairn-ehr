@@ -57,6 +57,12 @@ impl VouchState {
 pub struct MemberVouch {
     pub medication_id: Uuid,
     pub vouch: VouchState,
+    /// The chart this thread lives on (ADR-0076 decision 2). A combined list's sign-off
+    /// gesture attests each thread under the chart it actually belongs to, not under
+    /// whichever chart the read happened to be opened from — so once a read can cover more
+    /// than one linked chart, the attestation target must be carried on the member itself
+    /// rather than assumed from the enclosing list.
+    pub patient_id: Uuid,
 }
 
 /// One displayed row = one medication GROUP.
@@ -69,7 +75,21 @@ pub struct MemberVouch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MedicationRow {
     pub group_id: Uuid,
-    pub patient_id: Uuid,
+    /// The chart the GROUP displays under: the list view's single display winner
+    /// (`medication_group_display`'s DISTINCT ON pick), carried through as-is.
+    ///
+    /// Since the combined read (ADR-0076) this is NOT "the chart this line is on". For a
+    /// group spanning two linked charts it is whichever one won, and for a cross-patient
+    /// group it can be a chart OUTSIDE the set the list was read over — someone else's.
+    /// Nor is it where a signature goes: sign-off attests each thread under its own chart.
+    /// For where the drug was recorded, read `source_charts`; for the chart a thread lives
+    /// on (the attestation target), read `MemberVouch::patient_id`.
+    ///
+    /// Named `display_chart` in Rust so no later writer mistakes it for a write target (it
+    /// was `patient_id`, which invites exactly that); serialized as `patient_id` so the
+    /// `--json` output and the never-linked golden are unchanged.
+    #[serde(rename = "patient_id")]
+    pub display_chart: Uuid,
     /// The free-text term as asserted — may legitimately be vague ("little white pill").
     pub term: String,
     /// The ADR-0059 coded display name, when the drug has been coded.
@@ -88,9 +108,26 @@ pub struct MedicationRow {
     /// Two different drug anchors inside one reconciled group
     /// (`medication_group_coding_conflict`) — a possible mis-reconciliation.
     pub coding_conflict: bool,
-    /// This group's member threads span more than one patient
-    /// (`medication_group_cross_patient`) — a standing wrong-chart hazard (issue #334).
+    /// This line may carry another person's dose, so it is withheld from sign-off — a
+    /// standing wrong-chart hazard (issue #334). True when the group's threads reach a chart
+    /// OUTSIDE the chart set the list was read over, by either of two sources (the
+    /// statement-derived `source_charts`, or `medication_group_cross_patient`, which also sees
+    /// a thread known only through an orphan cessation); and, while the set holds a link
+    /// this node doubts (an un-attested link its hard veto flagged or trips now), when the
+    /// group spans more than one chart at all. A group spanning two linked charts of the same
+    /// person is otherwise not a hazard (ADR-0076). The rule is `cairn-node`'s
+    /// `medication::read::is_wrong_chart_hazard`.
     pub cross_patient: bool,
+    /// The charts owning at least one member thread of this group, sorted. The row names
+    /// where the drug was recorded so a clinician reading a combined list — one read over
+    /// several linked charts (ADR-0076) — can tell which chart a line came from, rather than
+    /// having to infer it from which patient happened to be open.
+    ///
+    /// Empty only in a race: a concurrent reconciliation or separation re-keyed the group
+    /// between two of the read's statements (READ COMMITTED, one snapshot per statement —
+    /// see `cairn-node`'s `medication/read.rs`). Renderers name that state ("not read")
+    /// rather than printing an empty label.
+    pub source_charts: Vec<Uuid>,
 }
 
 impl MedicationRow {
@@ -113,7 +150,7 @@ mod tests {
     fn row(term: &str, coding_display: Option<&str>) -> MedicationRow {
         MedicationRow {
             group_id: Uuid::from_u128(1),
-            patient_id: Uuid::from_u128(2),
+            display_chart: Uuid::from_u128(2),
             term: term.into(),
             coding_display: coding_display.map(Into::into),
             formulation: None,
@@ -127,6 +164,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            source_charts: vec![],
         }
     }
 
