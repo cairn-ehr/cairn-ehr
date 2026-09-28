@@ -20,7 +20,7 @@
 //! attests directly and submits through the 3-argument `submit_event` door — never the
 //! medication seal path.
 
-use crate::db_diagnosis::LocalDbFault;
+use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault};
 use anyhow::Context;
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
@@ -515,7 +515,10 @@ async fn judge(
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
     if a == b {
-        anyhow::bail!("{a} and {b} are the same chart — a chart cannot be linked to itself");
+        // A verdict about the INPUT: no retry, by anyone, ever changes it.
+        return Err(deliberate_refusal(format!(
+            "{a} and {b} are the same chart — a chart cannot be linked to itself"
+        )));
     }
     let (a_held, b_held) = (is_held(client, a).await?, is_held(client, b).await?);
     // Only asked when it can change the answer: an unlink with exactly one chart unheld.
@@ -525,19 +528,22 @@ async fn judge(
             .await
             .context("reading whether the two charts share a record here")?
             .contains(&b);
+    // A verdict about this NODE's state: the identical call succeeds once the chart (or the
+    // record joining them) has arrived here. Marked, so a surface words it as a verdict and
+    // never as an outage to retry (#702).
     let about = admit_judgement(verb, (a, a_held), (b, b_held), shared_record)
-        .map_err(anyhow::Error::msg)?;
+        .map_err(node_state_refusal)?;
     // Legibility only; the db/005 gate is the enforcement (a raw-SQL client skipping this
     // still cannot attest with a non-human key).
     if !crate::identify::attester_is_enrolled_human(client, reviewer.human_kid)
         .await
         .context("checking the reviewer's key is an enrolled human")?
     {
-        anyhow::bail!(
+        return Err(node_state_refusal(format!(
             "key {} is not an enrolled human actor — linking or unlinking charts is a human \
              judgement (unlock a clinician's key)",
             reviewer.human_kid
-        );
+        )));
     }
 
     let (low, high) = canonical_pair(a, b);

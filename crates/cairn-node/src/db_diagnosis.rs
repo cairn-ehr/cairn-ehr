@@ -449,10 +449,10 @@ pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
 /// [`deliberate_refusal`].
 ///
 /// `pub(crate)` for the reason [`deliberate_refusal`] gives: only this crate knows which of its
-/// own checks are decided by node state rather than by luck. The three current call sites are
-/// the [`crate::actor_enrolment`] refusals, all minted after `device_actor_standing` has read
-/// the registry — a read whose *answer* is stable until an operator changes it, which is
-/// exactly what this scope means (PR #661 review).
+/// own checks are decided by node state rather than by luck. The current call sites are the
+/// three [`crate::actor_enrolment`] refusals and `chart_link`'s held-chart and enrolled-human
+/// pre-checks (R2b-1), all minted after a read whose *answer* is stable until an operator
+/// changes it, which is exactly what this scope means (PR #661 review).
 pub(crate) fn node_state_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),
