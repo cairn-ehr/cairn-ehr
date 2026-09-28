@@ -16,7 +16,7 @@ use cairn_event::identity::{
 use cairn_event::{ClockGrade, EventBody, Hlc};
 use cairn_medication_view::ChartSet;
 use cairn_node::db;
-use cairn_node::patient::compare::chart_facts;
+use cairn_node::patient::compare::{chart_facts, cross_vetoes};
 use common::{
     cs, enroll_human, medication_setup as setup, submit_attested, submit_link_event,
     submit_registration, submit_signed, EventSpec,
@@ -153,33 +153,60 @@ async fn every_fact_of_a_chart_is_read_with_its_provenance() {
     assert_eq!(f.patient_id, p);
     assert!(f.held, "a registered chart is held here");
     assert_eq!(f.trust, "confirmed");
-    // EVERY retained name, legal first — a maiden name is often precisely the clue.
-    let names: Vec<(&str, Option<&str>)> = f
+    // EVERY retained name, legal first — a maiden name is often precisely the clue. Provenance
+    // rides along too, so a column swap between value and provenance would not pass silently.
+    let names: Vec<(&str, Option<&str>, &str)> = f
         .names
         .iter()
-        .map(|n| (n.value.as_str(), n.use_.as_deref()))
+        .map(|n| (n.value.as_str(), n.use_.as_deref(), n.provenance.as_str()))
         .collect();
     assert_eq!(
         names,
         vec![
-            ("Mary SMITH", Some("legal")),
-            ("Mary JONES", Some("maiden"))
+            ("Mary SMITH", Some("legal"), "patient-stated"),
+            ("Mary JONES", Some("maiden"), "patient-stated"),
         ]
     );
     assert!(f.aliases.is_empty());
     let dob = f.dob.as_ref().expect("a dob was asserted");
     assert_eq!(
-        (dob.value.as_str(), dob.provenance.as_str()),
-        ("1950-07-01", "document-verified")
+        (
+            dob.value.as_str(),
+            dob.provenance.as_str(),
+            dob.precision.as_deref()
+        ),
+        ("1950-07-01", "document-verified", Some("day")),
+        "a day-precision dob reads its precision facet back (principle 4)"
     );
+    let sab = f.sex_at_birth.as_ref().expect("sex-at-birth was asserted");
     assert_eq!(
-        f.sex_at_birth.as_ref().map(|s| s.value.as_str()),
-        Some("female")
+        (sab.value.as_str(), sab.provenance.as_str()),
+        ("female", "patient-stated")
+    );
+    assert!(
+        sab.precision.is_none(),
+        "sex-at-birth's schema carries no precision facet"
     );
     assert_eq!(f.identifiers.len(), 1);
-    assert_eq!(f.identifiers[0].system, "au-medicare");
+    let ident = &f.identifiers[0];
+    assert_eq!(
+        (
+            ident.system.as_str(),
+            ident.value.as_str(),
+            ident.provenance.as_str()
+        ),
+        ("au-medicare", "1234 56789 0", "document-verified")
+    );
     assert_eq!(f.addresses.len(), 1);
-    assert_eq!(f.addresses[0].use_.as_deref(), Some("residential"));
+    let addr = &f.addresses[0];
+    assert_eq!(
+        (
+            addr.use_.as_deref(),
+            addr.display.as_str(),
+            addr.provenance.as_str()
+        ),
+        (Some("residential"), "1 Main St, Bamaga", "patient-stated")
+    );
 }
 
 #[tokio::test]
@@ -289,4 +316,93 @@ async fn a_linked_set_reads_every_member_and_an_unheld_one_says_so() {
         u.names.is_empty() && u.dob.is_none(),
         "absent, never invented"
     );
+}
+
+/// A registration with no follow-on demographic events at all: every fact reads absent, never
+/// invented — a column swap or a spurious default row would otherwise pass unnoticed.
+#[tokio::test]
+async fn a_held_chart_with_no_facts_reads_everything_absent() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let p = fresh(&c, &sk, &kid).await;
+
+    let facts = chart_facts(&c, &ChartSet::single(p)).await.unwrap();
+    assert_eq!(facts.len(), 1);
+    let f = &facts[0];
+    assert!(f.names.is_empty());
+    assert!(f.aliases.is_empty());
+    assert!(f.dob.is_none());
+    assert!(f.sex_at_birth.is_none());
+    assert!(f.identifiers.is_empty());
+    assert!(f.addresses.is_empty());
+    assert!(f.held, "a registered chart is held here");
+    assert_eq!(f.trust, "confirmed");
+}
+
+/// The set-against-set case (design "R2b"): A is already linked to C; B is picked. Linking A–B
+/// also joins B to C, so a B–C clash must be shown even though A and B agree.
+#[tokio::test]
+async fn a_clash_with_a_third_chart_already_in_the_record_is_found() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member")
+        .await
+        .unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let (a, b, third) = (
+        fresh(&c, &sk, &kid).await,
+        fresh(&c, &sk, &kid).await,
+        fresh(&c, &sk, &kid).await,
+    );
+    for (p, wall, value) in [(third, 2, "1975-01-02"), (b, 3, "1980-07-15")] {
+        field(
+            &c,
+            &sk,
+            &kid,
+            p,
+            wall,
+            dob_assertion_body(value, "day", Some("document"), "document-verified"),
+            render_dob_twin(value, "day", "document-verified"),
+        )
+        .await;
+    }
+    submit_link_event(&c, &sk, &kid, a, third, 10, true).await;
+    let left = ChartSet::new([a, third]).unwrap();
+    let right = ChartSet::single(b);
+
+    let findings = cross_vetoes(&c, &left, &right).await.unwrap();
+    assert_eq!(findings.len(), 1, "exactly the B–third DOB clash");
+    let f = &findings[0];
+    assert_eq!(
+        (f.left, f.right),
+        (third, b),
+        "tagged with the pair it concerns"
+    );
+    assert_eq!(f.severity, "hard_veto");
+    assert_eq!(f.kind, "dob");
+}
+
+#[tokio::test]
+async fn two_charts_with_nothing_to_compare_have_no_findings() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid, _, _) = setup(&c).await;
+    let (a, b) = (fresh(&c, &sk, &kid).await, fresh(&c, &sk, &kid).await);
+    assert!(cross_vetoes(&c, &ChartSet::single(a), &ChartSet::single(b))
+        .await
+        .unwrap()
+        .is_empty());
 }

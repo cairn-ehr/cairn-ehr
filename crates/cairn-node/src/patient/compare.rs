@@ -39,6 +39,12 @@ pub struct NameFact {
 pub struct FieldFact {
     pub value: String,
     pub provenance: String,
+    /// The `facets.precision` a dob assertion carries (principle 4): a year-precision
+    /// "1950-01-01" must not read as a precise day, or it would look like a clash against
+    /// another chart's genuine "1950-07-01". `None` when the field carries no precision
+    /// facet at all — sex-at-birth's schema has none, so `None` there is not evidence of
+    /// imprecision, only of the facet not applying.
+    pub precision: Option<String>,
 }
 
 /// One identifier: its namespace, the value as entered, and its provenance.
@@ -91,7 +97,8 @@ const NAMES_SQL: &str =
 const ALIASES_SQL: &str = "SELECT patient_id::text AS patient_id, value FROM patient_alias_pool \
      WHERE patient_id = ANY($1::text[]::uuid[]) \
      ORDER BY patient_id, hlc_wall, hlc_counter, value COLLATE \"C\"";
-const FIELDS_SQL: &str = "SELECT patient_id::text AS patient_id, field, value, provenance \
+const FIELDS_SQL: &str = "SELECT patient_id::text AS patient_id, field, value, provenance, \
+     facets ->> 'precision' AS precision \
      FROM patient_demographic \
      WHERE field IN ('dob', 'sex-at-birth') AND patient_id = ANY($1::text[]::uuid[])";
 const IDENTIFIERS_SQL: &str = "SELECT patient_id::text AS patient_id, system, value, provenance \
@@ -184,6 +191,7 @@ pub async fn chart_facts<C: GenericClient + Sync>(
             let fact = FieldFact {
                 value: row.get("value"),
                 provenance: row.get("provenance"),
+                precision: row.get("precision"),
             };
             match row.get::<_, String>("field").as_str() {
                 "dob" => f.dob = Some(fact),
@@ -222,4 +230,111 @@ pub async fn chart_facts<C: GenericClient + Sync>(
         .iter()
         .filter_map(|id| by_id.remove(id))
         .collect())
+}
+
+/// One `cairn_match_veto` finding between a chart of the LEFT record and a chart of the RIGHT
+/// one, tagged with that pair so the window can say which two charts disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VetoFinding {
+    pub left: Uuid,
+    pub right: Uuid,
+    /// `identifier`, `dob` or `sex-at-birth` (db/016's closed vocabulary).
+    pub kind: String,
+    /// `hard_veto` or `degrade_hold`.
+    pub severity: String,
+    pub subject: String,
+    /// db/016's own human-readable reason — shown verbatim, never reworded.
+    pub detail: String,
+}
+
+/// Hard vetoes first, then a stable order (left, right, kind), so the panel always reads the
+/// same way for the same records. Pure.
+pub fn order_findings(mut findings: Vec<VetoFinding>) -> Vec<VetoFinding> {
+    findings.sort_by(|x, y| {
+        (x.severity != "hard_veto", x.left, x.right, &x.kind).cmp(&(
+            y.severity != "hard_veto",
+            y.left,
+            y.right,
+            &y.kind,
+        ))
+    });
+    findings
+}
+
+// Every left × right pair, in one statement. `l <> r` is belt and braces: two records are two
+// link components, so they share no chart — but a caller that passed overlapping sets must not
+// be told a chart "clashes" with itself.
+const VETO_SQL: &str = "SELECT l::text AS l, r::text AS r, v.veto_kind, v.severity, \
+            coalesce(v.subject, '') AS subject, coalesce(v.detail, '') AS detail \
+     FROM unnest($1::text[]::uuid[]) AS l \
+     CROSS JOIN unnest($2::text[]::uuid[]) AS r \
+     CROSS JOIN LATERAL cairn_match_veto(l, r) AS v \
+     WHERE l <> r";
+
+/// Every veto finding between a chart of `left` and a chart of `right`.
+///
+/// SET AGAINST SET, never chart against chart (design "R2b"): with A open and already linked to
+/// C, linking B to A also joins B to C — so a B–C clash is exactly as relevant as an A–B one.
+/// A hard veto forces a human decision and never an automatic refusal (§5.13): this only
+/// REPORTS; the human may still link.
+pub async fn cross_vetoes<C: GenericClient + Sync>(
+    client: &C,
+    left: &ChartSet,
+    right: &ChartSet,
+) -> anyhow::Result<Vec<VetoFinding>> {
+    let l: Vec<String> = left.members().iter().map(Uuid::to_string).collect();
+    let r: Vec<String> = right.members().iter().map(Uuid::to_string).collect();
+    let found = client
+        .query(VETO_SQL, &[&l, &r])
+        .await
+        .map_err(|e| LocalDbFault::new("checking the two records for veto findings", e))?;
+    let findings = found
+        .iter()
+        .map(|row| {
+            Ok(VetoFinding {
+                left: row.get::<_, String>("l").parse()?,
+                right: row.get::<_, String>("r").parse()?,
+                kind: row.get("veto_kind"),
+                severity: row.get("severity"),
+                subject: row.get("subject"),
+                detail: row.get("detail"),
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(order_findings(findings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finding(severity: &str, l: u128, r: u128, kind: &str) -> VetoFinding {
+        VetoFinding {
+            left: Uuid::from_u128(l),
+            right: Uuid::from_u128(r),
+            kind: kind.into(),
+            severity: severity.into(),
+            subject: kind.into(),
+            detail: String::new(),
+        }
+    }
+
+    /// A hard veto is the fact a clerk most needs, so it is read FIRST — before any
+    /// degrade-hold — whatever order the database returned them in.
+    #[test]
+    fn hard_vetoes_come_first_then_a_stable_order() {
+        let ordered = order_findings(vec![
+            finding("degrade_hold", 1, 2, "identifier"),
+            finding("hard_veto", 3, 4, "dob"),
+            finding("hard_veto", 1, 2, "sex-at-birth"),
+        ]);
+        let got: Vec<(&str, u128)> = ordered
+            .iter()
+            .map(|f| (f.severity.as_str(), f.left.as_u128()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("hard_veto", 1), ("hard_veto", 3), ("degrade_hold", 1)]
+        );
+    }
 }

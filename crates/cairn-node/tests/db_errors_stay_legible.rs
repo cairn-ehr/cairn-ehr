@@ -46,9 +46,10 @@
 //! message the operator most needs; it was written after the #485 measurement below and
 //! joined the guard from its first review rather than adding to that backlog), and
 //! `patient/compare.rs` (R2b-1 — the comparison a human links on).
-//! The last two are one subsystem and were converted together: `auto_apply.rs` alone would
-//! have left `resolve_failure_line` — the line that fires when an epoch's actor cannot be
-//! resolved at all — rendering `resolve_matcher_actor`'s three unwrapped registry reads.
+//! `auto_apply.rs` and `matcher_actor.rs` are one subsystem and were converted together:
+//! `auto_apply.rs` alone would have left `resolve_failure_line` — the line that fires when an
+//! epoch's actor cannot be resolved at all — rendering `resolve_matcher_actor`'s three
+//! unwrapped registry reads.
 //!
 //! That is **not** every production file in this crate that talks to the database: **28**
 //! files under `crates/cairn-node/src/` execute SQL, so **23** sit outside `GUARDED`, and they
@@ -231,10 +232,10 @@ fn every_postgres_call_in_a_chart_judgement_names_what_it_was_doing() {
     );
 }
 
-/// How many `LocalDbFault`s `patient/compare.rs` builds: its `rows` helper (all five of
-/// `chart_facts`'s reads) and `cross_vetoes`'s one query. The two `person.rs` reads it reuses
-/// carry `.context(…)` instead — `person.rs` is outside `GUARDED` (#485).
-const COMPARE_LOCAL_DB_FAULT_SITES: usize = 1;
+/// How many `LocalDbFault`s `patient/compare.rs` builds: the `rows` helper covers
+/// `chart_facts`'s five reads; `cross_vetoes` has its own one. The two `person.rs` reads it
+/// reuses carry `.context(…)` instead — `person.rs` is outside `GUARDED` (#485).
+const COMPARE_LOCAL_DB_FAULT_SITES: usize = 2;
 
 /// Every postgres call the comparison makes names what it was doing (R2b-1).
 #[test]
@@ -248,7 +249,9 @@ fn every_postgres_call_in_the_comparison_names_what_it_was_doing() {
     assert_eq!(
         found, COMPARE_LOCAL_DB_FAULT_SITES,
         "compare.rs builds {found} `LocalDbFault`s, expected {COMPARE_LOCAL_DB_FAULT_SITES}. \
-         If you ADDED a postgres call, wrap it and bump the constant."
+         If you ADDED a postgres call, wrap it and bump the constant. If this DROPPED, a call \
+         was reverted to a bare `?` — an operator would learn the SQLSTATE of a failed \
+         comparison but not which read of it failed."
     );
 }
 
