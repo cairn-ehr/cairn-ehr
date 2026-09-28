@@ -14,8 +14,8 @@
 //! SHAPE: one flat `WHERE patient_id = ANY(...)` query per fact kind, joined in Rust — the
 //! `person.rs` style, for the reason `chart_identities` gives (each projection has its own
 //! absence convention, and an outer join per projection is harder to review). Every query goes
-//! through [`rows`], which names the step on failure (#467: `db_errors_stay_legible.rs` guards
-//! this file).
+//! through the private `rows` helper, which names the step on failure (#467:
+//! `db_errors_stay_legible.rs` guards this file).
 use crate::db_diagnosis::LocalDbFault;
 use crate::patient::person::{read_held, read_trusts, trust_of};
 use anyhow::Context;
