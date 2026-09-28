@@ -13,7 +13,7 @@
 //! right-hand side). Only then fixture mode, then the key.
 pub mod view;
 
-use crate::chart_set::check_displayed_set;
+use crate::chart_set::{check_displayed_set, CHANGED};
 use crate::commands::read_chart_of;
 use crate::funnel::view::ErrorView;
 use crate::state::{AppState, Now};
@@ -21,7 +21,7 @@ use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 use view::{
     comparison_view, fixture_facts, link_error_view, link_report, refused, ComparisonParts,
-    ComparisonView, LinkReportView, ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED,
+    ComparisonView, LinkReportView, ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED,
 };
 
 /// A read's error as the text a comparison part carries (the operator chain, legible).
@@ -49,17 +49,37 @@ async fn chart_set_of(state: &AppState, patient: Uuid) -> Result<ChartSet, Error
         })
 }
 
+/// Which command is asking [`resolve_pair`] — it decides only how a CHANGED left-hand set is
+/// worded (see [`resolve_pair`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Act {
+    Compare,
+    Link,
+}
+
 /// The four screen checks both commands share. Returns the opened chart, its displayed set,
 /// and the other chart (with the name the list showed, for fixture mode).
+///
+/// For Compare, `charts` is the medication list's displayed set, and a changed set keeps the
+/// list's own wording ("reload the chart"). For Link, `charts` is the set the COMPARISON was
+/// built over (`ComparisonView::left_charts`, sent back by the webview), so a changed set means
+/// the comparison is stale and is worded [`THIS_CHANGED`] ("compare again") — final review I1.
+/// An unreadable set is a window fault, not a change, and keeps its own wording either way.
 async fn resolve_pair(
     state: &AppState,
+    act: Act,
     patient_id: &str,
     charts: &[String],
     other_id: &str,
 ) -> Result<(Uuid, ChartSet, Uuid, String), ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
-    let left =
-        check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(refused)?;
+    let left = check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(|e| {
+        if act == Act::Link && e == CHANGED {
+            refused(THIS_CHANGED)
+        } else {
+            refused(e)
+        }
+    })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
     let shown_name = state
         .shown
@@ -74,7 +94,8 @@ async fn resolve_pair(
     Ok((patient, left, other, shown_name))
 }
 
-/// "Compare" — read both records and build the panel.
+/// "Compare" — read both records and build the panel. The view carries BOTH sets it was read
+/// over (`left_charts`, `other_charts`); the webview sends exactly those back with Link.
 pub async fn compare_impl(
     state: &AppState,
     patient_id: &str,
@@ -82,7 +103,7 @@ pub async fn compare_impl(
     other_id: &str,
 ) -> Result<ComparisonView, ErrorView> {
     let (patient, left, other, shown_name) =
-        resolve_pair(state, patient_id, &charts, other_id).await?;
+        resolve_pair(state, Act::Compare, patient_id, &charts, other_id).await?;
     let right = chart_set_of(state, other).await?;
     // The other record's list: the SAME custody-applied read opening it would give (§5.9).
     let meds = read_chart_of(state, other)
@@ -119,10 +140,16 @@ pub async fn compare_impl(
             }
         }
     };
-    Ok(comparison_view(parts, &right))
+    Ok(comparison_view(parts, &left, &right))
 }
 
 /// "Link — same person" — the attested judgement, then what it did.
+///
+/// `charts` and `other_charts` are the two sets the comparison showed (not the medication
+/// list's): each must still be the record's current set, or the judgement is refused with
+/// [`THIS_CHANGED`] / [`OTHER_CHANGED`] — a link is never signed over a set nobody compared.
+/// Their union is handed to [`link_report`] so the outcome names any chart the record now
+/// combines that the comparison never showed.
 pub async fn link_impl(
     state: &AppState,
     patient_id: &str,
@@ -130,9 +157,13 @@ pub async fn link_impl(
     other_id: &str,
     other_charts: Vec<String>,
 ) -> Result<LinkReportView, ErrorView> {
-    let (patient, _left, other, _) = resolve_pair(state, patient_id, &charts, other_id).await?;
-    check_displayed_set(&chart_set_of(state, other).await?, &other_charts)
+    let (patient, left, other, _) =
+        resolve_pair(state, Act::Link, patient_id, &charts, other_id).await?;
+    let right = check_displayed_set(&chart_set_of(state, other).await?, &other_charts)
         .map_err(|_| refused(OTHER_CHANGED))?;
+    // Both sets non-empty, so the union always builds; `single` is an unreachable fallback.
+    let compared = ChartSet::new(left.members().iter().chain(right.members()).copied())
+        .unwrap_or_else(|| ChartSet::single(patient));
     if state.is_mock() {
         return Err(refused(
             "fixture mode: this window is showing mock data and cannot write",
@@ -159,7 +190,7 @@ pub async fn link_impl(
         cairn_node::chart_link::link_charts(&mut db, patient, other, &reviewer, &state.node_origin)
             .await
             .map_err(|e| link_error_view(&e))?;
-    Ok(link_report(outcome.effect, &outcome.charts))
+    Ok(link_report(outcome.effect, &outcome.charts, &compared))
 }
 
 // ---- Tauri forwarders (camelCase JS keys → snake_case parameters). ----
@@ -283,6 +314,11 @@ mod tests {
         assert_eq!(v.columns.len(), 2);
         assert_eq!(v.left_count, 1);
         assert_eq!(v.other_charts, vec![other.to_string()]);
+        assert_eq!(
+            v.left_charts,
+            vec![p.clone()],
+            "the compared left set, sent back with the link"
+        );
         assert!(
             v.can_link,
             "fixture mode reads everything it has; it refuses only the WRITE"
@@ -324,6 +360,73 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.text.contains("fixture mode"), "{}", err.text);
+    }
+
+    /// Final review I1: the Link sends the LEFT set the clinician compared, not whatever the
+    /// window shows by the time of the click. If this record grew in between (a peer's link
+    /// arriving, re-read by a sign-off's refresh), the judgement would be signed over a set
+    /// nobody compared — so it is refused, worded like its right-hand twin.
+    #[tokio::test]
+    async fn link_refuses_when_this_record_changed() {
+        let other = Uuid::from_u128(2);
+        let state = window_showing(&[other]).await;
+        let (p, _) = on_screen();
+        let err = link_impl(
+            &state,
+            &p,
+            vec![p.clone(), Uuid::from_u128(7).to_string()],
+            &other.to_string(),
+            vec![other.to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.text, view::THIS_CHANGED);
+    }
+
+    /// Compare keeps the ordinary chart-set wording: nothing was judged yet, so the remedy is
+    /// the list's own ("reload the chart"), not "compare again".
+    #[tokio::test]
+    async fn an_unreadable_left_set_is_not_worded_as_a_change() {
+        let other = Uuid::from_u128(2);
+        let state = window_showing(&[other]).await;
+        let (p, _) = on_screen();
+        let err = link_impl(
+            &state,
+            &p,
+            vec!["not-a-uuid".into()],
+            &other.to_string(),
+            vec![other.to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert_ne!(err.text, view::THIS_CHANGED);
+        assert!(err.text.contains("could not tell"), "{}", err.text);
+    }
+
+    #[tokio::test]
+    async fn link_is_bound_to_the_chart_on_screen() {
+        let other = Uuid::from_u128(2);
+        let state = window_showing(&[other]).await;
+        let err = link_impl(
+            &state,
+            &Uuid::from_u128(9).to_string(),
+            vec![],
+            &other.to_string(),
+            vec![other.to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.text.contains("not the chart"), "{}", err.text);
+    }
+
+    #[tokio::test]
+    async fn link_refuses_a_chart_already_in_the_record() {
+        let state = window_showing(&[fixture()]).await;
+        let (p, charts) = on_screen();
+        let err = link_impl(&state, &p, charts.clone(), &p, charts)
+            .await
+            .unwrap_err();
+        assert_eq!(err.text, view::ALREADY_IN_RECORD);
     }
 
     #[tokio::test]

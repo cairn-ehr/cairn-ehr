@@ -44,7 +44,7 @@ fn parts() -> ComparisonParts {
 
 #[test]
 fn a_full_comparison_is_linkable_and_names_the_other_record() {
-    let v = comparison_view(parts(), &ChartSet::single(id(2)));
+    let v = comparison_view(parts(), &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     assert!(v.can_link && v.problems.is_empty());
     assert_eq!(v.left_count, 1);
     assert_eq!(v.columns.len(), 2);
@@ -52,6 +52,11 @@ fn a_full_comparison_is_linkable_and_names_the_other_record() {
         v.other_charts,
         vec![id(2).to_string()],
         "sent back with the link"
+    );
+    assert_eq!(
+        v.left_charts,
+        vec![id(1).to_string()],
+        "the compared left set, sent back with the link too"
     );
     assert!(
         v.rows.iter().all(|r| r.cells.len() == 2),
@@ -65,7 +70,7 @@ fn a_full_comparison_is_linkable_and_names_the_other_record() {
 fn a_partial_comparison_names_what_is_missing_and_cannot_link() {
     let mut p = parts();
     p.other_medications = Err("connection reset".into());
-    let v = comparison_view(p, &ChartSet::single(id(2)));
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     assert!(!v.can_link);
     assert_eq!(v.problems.len(), 1);
     assert!(
@@ -83,7 +88,7 @@ fn a_partial_comparison_names_what_is_missing_and_cannot_link() {
 fn unreadable_facts_leave_no_columns_and_cannot_link() {
     let mut p = parts();
     p.right = Err("boom".into());
-    let v = comparison_view(p, &ChartSet::single(id(2)));
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     assert!(!v.can_link);
     assert_eq!(v.left_count, 1);
     assert_eq!(
@@ -105,7 +110,7 @@ fn an_absent_fact_says_not_recorded_or_unknown() {
     unheld.names.clear();
     let mut p = parts();
     p.right = Ok(vec![unheld]);
-    let v = comparison_view(p, &ChartSet::single(id(2)));
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     let dob = v.rows.iter().find(|r| r.label == "Date of birth").unwrap();
     assert_eq!(dob.cells[0], "1950-07-01 (document-verified)");
     assert_eq!(dob.cells[1], "unknown — registration not yet received here");
@@ -115,7 +120,7 @@ fn an_absent_fact_says_not_recorded_or_unknown() {
     let aliases = v
         .rows
         .iter()
-        .find(|r| r.label == "Earlier recorded names")
+        .find(|r| r.label == "Names struck as false")
         .unwrap();
     assert_eq!(
         aliases.cells[1],
@@ -128,7 +133,7 @@ fn an_absent_fact_says_not_recorded_or_unknown() {
         trust: "confirmed".into(),
         ..ChartFacts::default()
     }]);
-    let v = comparison_view(p, &ChartSet::single(id(2)));
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     let dob = v.rows.iter().find(|r| r.label == "Date of birth").unwrap();
     assert_eq!(dob.cells[1], "not recorded");
 }
@@ -151,7 +156,7 @@ fn a_coarse_dob_names_its_precision() {
     };
     let mut p = parts();
     p.right = Ok(vec![coarse]);
-    let v = comparison_view(p, &ChartSet::single(id(2)));
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     let dob = v.rows.iter().find(|r| r.label == "Date of birth").unwrap();
     assert_eq!(dob.cells[1], "1950 (year precision, patient-stated)");
 }
@@ -223,7 +228,7 @@ fn a_finding_is_a_plain_fact_naming_both_charts() {
 /// Never "no conflicts": an empty finding list renders nothing at all.
 #[test]
 fn no_findings_means_no_lines_and_no_clearance_sentence() {
-    let v = comparison_view(parts(), &ChartSet::single(id(2)));
+    let v = comparison_view(parts(), &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     assert!(v.findings.is_empty());
 }
 
@@ -295,16 +300,77 @@ fn an_empty_list_says_so() {
 #[test]
 fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
     let set = ChartSet::new([id(1), id(2)]).unwrap();
-    let took = link_report(LinkEffect::TookEffect, &set);
+    let took = link_report(LinkEffect::TookEffect, &set, &set);
     assert!(
         took.reload && took.sentence.starts_with("Linked"),
         "{}",
         took.sentence
     );
     assert!(took.sentence.contains("2 charts"));
-    let lost = link_report(LinkEffect::Outranked, &ChartSet::single(id(1)));
+    let lost = link_report(LinkEffect::Outranked, &ChartSet::single(id(1)), &set);
     assert!(!lost.reload, "a disagreement is shown, never reloaded away");
     assert!(lost.sentence.contains("NOT in effect"), "{}", lost.sentence);
+    // Final review M6: pressing Link again is not a no-op — it records another judgement.
+    assert!(
+        lost.sentence
+            .ends_with("pressing Link again records another judgement but changes nothing."),
+        "{}",
+        lost.sentence
+    );
+}
+
+/// Final review O1: the outcome tells the truth about what the link joined. A chart the
+/// record now combines that was in NEITHER compared set (a third chart already linked to one
+/// side by the time the judgement landed) is named, so it is reviewed rather than assumed.
+#[test]
+fn a_chart_the_comparison_never_showed_is_named() {
+    let compared = ChartSet::new([id(1), id(2)]).unwrap();
+    let now = ChartSet::new([id(1), id(2), id(3)]).unwrap();
+    let took = link_report(LinkEffect::TookEffect, &now, &compared);
+    assert!(took.sentence.starts_with("Linked"), "{}", took.sentence);
+    assert!(
+        took.sentence.ends_with(&format!(
+            "The record now also includes chart(s) {} that were not in the comparison — \
+             review them.",
+            id(3)
+        )),
+        "{}",
+        took.sentence
+    );
+    let exact = link_report(LinkEffect::TookEffect, &compared, &compared);
+    assert!(
+        !exact.sentence.contains("not in the comparison"),
+        "{}",
+        exact.sentence
+    );
+}
+
+/// Final review M4: every arm of the funnel's error classification, worded for a link. A
+/// verdict (refused / not provisioned) is never retried as-is; only an outage is retryable.
+#[test]
+fn every_data_error_arm_is_worded_for_a_link() {
+    let refused_view = link_error_from(DataError::Refused("floor says no".into()));
+    assert_eq!(refused_view.retry, Retry::Never);
+    assert_eq!(refused_view.text, "The link was refused: floor says no");
+
+    let unprovisioned = link_error_from(DataError::NotProvisioned("key not held".into()));
+    assert_eq!(unprovisioned.retry, Retry::AfterOperator);
+    assert_eq!(
+        unprovisioned.text,
+        "This node cannot record the link yet: key not held"
+    );
+    assert!(
+        !unprovisioned.text.contains("operator"),
+        "the not-held arm resolves by sync, not by an operator"
+    );
+
+    let outage = link_error_from(DataError::Unavailable("connection reset".into()));
+    assert_eq!(outage.retry, Retry::Now);
+    assert!(outage.text.contains("not confirmed"), "{}", outage.text);
+
+    let missing = link_error_from(DataError::NotFound);
+    assert_eq!(missing.retry, Retry::Never);
+    assert_eq!(missing.text, "The link was not recorded.");
 }
 
 /// Review Focus 5 (outage half): an outage is "not confirmed", never "nothing changed" — a

@@ -22,6 +22,13 @@ pub const NOT_ON_SCREEN: &str = "that chart was not in a list on screen — sear
 /// this record sight unseen).
 pub const OTHER_CHANGED: &str =
     "the other record changed while you were comparing — nothing was done; compare again";
+/// Refused because THIS record's charts changed between Compare and Link (final review I1).
+/// The Link sends back the left-hand set the comparison was built over, so a chart that joined
+/// this record after Compare (a peer's link, re-read by a sign-off's refresh) is caught here
+/// rather than signed over sight unseen. Worded like [`OTHER_CHANGED`], not like the medication
+/// list's "reload the chart": what was not seen is the comparison, so the remedy is to compare.
+pub const THIS_CHANGED: &str =
+    "this record changed while you were comparing — nothing was done; compare again";
 
 /// One chart's column heading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -47,6 +54,10 @@ pub struct ComparisonView {
     /// How many of `columns` belong to "This record".
     pub left_count: usize,
     pub rows: Vec<FactRowView>,
+    /// THIS record's chart set the comparison was built over — the webview sends it back with
+    /// the link, so the judgement names the set the clinician compared, not whatever the
+    /// window happens to show by the time Link is pressed (final review I1).
+    pub left_charts: Vec<String>,
     /// The OTHER record's chart set as displayed — the webview sends it back with the link.
     pub other_charts: Vec<String>,
     /// The other record's CURRENT medications, one line each.
@@ -132,10 +143,12 @@ fn address_text(a: &AddressFact) -> String {
     }
 }
 
-/// The "Earlier recorded names" cell. A chart NOT held here says so (principle 4: nothing
-/// tells this node such a chart has NO earlier names — only that its registration has not
-/// arrived — so "none" would be a false fact, the same distinction [`absent`] makes for every
-/// other row). On a chart held here, an empty alias pool IS a fact ("none"), not an unknown.
+/// The "Names struck as false" cell: `patient_alias_pool`, which holds the names REPUDIATED as
+/// known-false on this chart (db/025) — not earlier or former names, which is why the row is
+/// labelled for what it is (final review M5). A chart NOT held here says so (principle 4:
+/// nothing tells this node such a chart has NO struck names — only that its registration has
+/// not arrived — so "none" would be a false fact, the same distinction [`absent`] makes for
+/// every other row). On a chart held here, an empty pool IS a fact ("none"), not an unknown.
 fn alias_cell(f: &ChartFacts) -> String {
     if !f.held {
         absent(f)
@@ -190,7 +203,7 @@ fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
         ("Names", |f| {
             joined(f, f.names.iter().map(name_text).collect())
         }),
-        ("Earlier recorded names", alias_cell),
+        ("Names struck as false", alias_cell),
         ("Date of birth", dob_cell),
         ("Sex at birth", sex_cell),
         ("Identifiers", |f| {
@@ -245,7 +258,14 @@ pub fn medication_lines(list: &MedListView) -> (Vec<String>, Vec<String>) {
 
 /// Assemble the panel from whatever was read. Pure: the availability rule (show what was read,
 /// name what was not, offer no link unless everything was read) is tested with no database.
-pub fn comparison_view(parts: ComparisonParts, other_charts: &ChartSet) -> ComparisonView {
+///
+/// `left_charts` / `other_charts` are the two sets the comparison was read over; they are
+/// carried in the view so the Link can name exactly them.
+pub fn comparison_view(
+    parts: ComparisonParts,
+    left_charts: &ChartSet,
+    other_charts: &ChartSet,
+) -> ComparisonView {
     let mut problems = vec![];
     let mut take = |r: Result<Vec<ChartFacts>, String>, what: &str| match r {
         Ok(v) => v,
@@ -286,7 +306,8 @@ pub fn comparison_view(parts: ComparisonParts, other_charts: &ChartSet) -> Compa
             .collect(),
         left_count: left.len(),
         rows: fact_rows(&charts),
-        other_charts: other_charts.members().iter().map(Uuid::to_string).collect(),
+        left_charts: ids(left_charts),
+        other_charts: ids(other_charts),
         other_medications,
         other_medication_notes,
         can_link: problems.is_empty(),
@@ -294,9 +315,46 @@ pub fn comparison_view(parts: ComparisonParts, other_charts: &ChartSet) -> Compa
     }
 }
 
+/// A chart set as the id strings the webview sends back.
+fn ids(set: &ChartSet) -> Vec<String> {
+    set.members().iter().map(Uuid::to_string).collect()
+}
+
+/// The charts `now` combines that were in neither compared set — `compared` is the union of
+/// the two sets the panel showed. Empty in the ordinary case.
+fn uncompared(now: &ChartSet, compared: &ChartSet) -> Vec<String> {
+    now.members()
+        .iter()
+        .filter(|c| !compared.contains(c))
+        .map(Uuid::to_string)
+        .collect()
+}
+
 /// What the link did, as the outcome line says it. Never "linked" for a link that did not
 /// take effect (R2a: recorded is not took effect).
-pub fn link_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
+///
+/// `charts` is what the record reads as now (the node's read inside the judgement's own
+/// transaction); `compared` is both sets the panel showed. If the record now also includes a
+/// chart the comparison never showed — a third chart already linked to one side by the time the
+/// judgement landed — the sentence names it, so it is reviewed rather than assumed (final review
+/// O1): the outcome tells the truth about what the link joined.
+pub fn link_report(effect: LinkEffect, charts: &ChartSet, compared: &ChartSet) -> LinkReportView {
+    let mut view = effect_report(effect, charts);
+    let extra = uncompared(charts, compared);
+    if !extra.is_empty() {
+        view.sentence = format!(
+            "{} The record now also includes chart(s) {} that were not in the comparison — \
+             review them.",
+            view.sentence,
+            extra.join(", ")
+        );
+    }
+    view
+}
+
+/// The outcome sentence for each [`LinkEffect`], before [`link_report`] adds anything about
+/// charts the comparison did not show.
+fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
     match effect {
         LinkEffect::TookEffect => LinkReportView {
             sentence: format!(
@@ -308,7 +366,8 @@ pub fn link_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
                        are different people. The two judgements disagree — settle it with \
-                       the person who made the other one; pressing Link again changes nothing."
+                       the person who made the other one; pressing Link again records another \
+                       judgement but changes nothing."
                 .into(),
             reload: false,
         },
@@ -329,13 +388,23 @@ pub fn link_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
 /// node's own message (carried in `t`) says to check before retrying. A second identical link
 /// is harmless (the same standing state), so `Retry::Now` is safe.
 pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
-    match cairn_gui_live::error::data_error_from(e) {
+    link_error_from(cairn_gui_live::error::data_error_from(e))
+}
+
+/// The wording half of [`link_error_view`], split out so every arm is unit-tested with no
+/// database: the classification (`data_error_from`) is `cairn-gui-live`'s and tested there,
+/// and the verdicts `cairn-node` raises are `pub(crate)` to it, so this crate cannot build them.
+///
+/// `NotProvisioned` says "yet", not "until an operator acts": one of its causes (a chart this
+/// node does not hold yet) resolves by sync, with no operator involved (final review M4).
+pub fn link_error_from(error: DataError) -> ErrorView {
+    match error {
         DataError::Refused(t) => ErrorView {
             text: format!("The link was refused: {t}"),
             retry: Retry::Never,
         },
         DataError::NotProvisioned(t) => ErrorView {
-            text: format!("This node cannot record the link until an operator acts: {t}"),
+            text: format!("This node cannot record the link yet: {t}"),
             retry: Retry::AfterOperator,
         },
         DataError::Unavailable(t) => ErrorView {
