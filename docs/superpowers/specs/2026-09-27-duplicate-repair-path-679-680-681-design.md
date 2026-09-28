@@ -306,6 +306,48 @@ but the judgement needs the whole picture.
 (unclip, annotate) → forced 2 → target 2. `M ≤ N`. Review-and-link ≤ 20 s, measured by a new
 runbook section 9 (a human act).
 
+**As built (R2b-1, PR #707, 2026-09-29) — deviations from this design:**
+- **Fixture facts carry the name only.** `MockData`'s `chart_facts` gives a `--mock` `Candidate`
+  an age, not a DOB (the front door's own fixture shape, #673) — so the headless walk exercises
+  the panel's layout and wording but not a fixture DOB cell; the DOB row is only real over a live
+  node.
+- **The right-set refusal reuses `chart_set::check_displayed_set`.** `link_impl` names B's
+  displayed set the same way every other chart command names its own — both of that function's
+  failure arms (the set changed size, or a member no longer matches) fold to ONE panel sentence,
+  `OTHER_CHANGED` ("the other record changed while you were comparing — nothing was done; compare
+  again"), because the clerk does not need to know WHICH check tripped, only that the picture they
+  reviewed is stale.
+- **Link gesture timing is not recorded server-side.** `db/044_ui_gesture_timing.sql`'s
+  `gesture_kind` CHECK admits only `'signoff'`/`'cease'` and would refuse a `link` row (as it
+  already refuses registration); a widened CHECK is a migration this plan's Global Constraints
+  forbade (`SCHEMA_GENERATION` stays 55). The runbook's stopwatch (section 9) is the only figure
+  for this gesture, same as the front door's find/register gestures.
+- **The DOB cell names a non-day precision.** `FieldFact` gained a `precision: Option<String>`
+  facet (`facets->>'precision'`, principle 4): `"{value} ({provenance})"` when precision is absent
+  or `"day"`, else `"{value} ({precision} precision, {provenance})"` — a year-precision DOB stored
+  as `1950-01-01` must not read as a precise day it never claimed to be, which would look like a
+  clash against a same-day fact that IS precise.
+- **A chart not held here reads "unknown — registration not yet received here" in EVERY row**,
+  including earlier recorded names, not only the fields this section named — the absence word is
+  per-chart (`ChartFacts::held`), not per-field, so the wording is uniform across the whole
+  column.
+- **Address cells always carry provenance**, not only "the clerk's first disambiguator" framing
+  above — matching every other fact cell's shape (never a bare value with no source).
+- **The other record's medication warnings are prefixed "On the other record: "**, and the
+  "No current medications recorded on the other record." line appears only when no warning note
+  is already present — an empty list and a clean list read differently on the safety surface
+  (never "no conflicts" collapsed into "nothing here").
+- **`chart_link`'s pre-check refusals are now marked verdicts** (the node-side fix this section
+  called out as needed): same-chart is `RefusalScope::Input` (no retry by anyone ever changes the
+  answer); a chart not held here, and a key that is not an enrolled human actor, are both
+  `RefusalScope::NodeState` (the identical call succeeds once the chart or the enrolment arrives).
+  `link_report`'s error classification (`db_diagnosis::DeliberateRefusal`) now sees a verdict
+  instead of a bare `db error` (#702).
+- **The panel closes on ANY chart change** (`enterChart` as well as `closeChart`), not only on an
+  explicit close, and closing on a chart change does not move focus — a panel that outlived its
+  chart would let Compare/Link keep naming a chart no longer on screen. The Link button is
+  disabled while a link is in flight (no double-submit under set-union semantics).
+
 ### R3 — the front door collapses by person
 
 - Search results group by `cairn_person_charts`; a person row lists each member's name + DOB and

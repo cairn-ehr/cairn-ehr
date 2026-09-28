@@ -675,9 +675,10 @@ all four; R1 builds the first.
   · [#694](https://github.com/cairn-ehr/cairn-ehr/issues/694) · [#695](https://github.com/cairn-ehr/cairn-ehr/issues/695)
   · [#696](https://github.com/cairn-ehr/cairn-ehr/issues/696) · [#697](https://github.com/cairn-ehr/cairn-ehr/issues/697)
   (DECIDED (b), 2026-09-27: withhold every line not on the opened chart while the set holds a doubted link).
-- **Next:** R2, split 2026-09-27 into R2a (built — next entry) and **R2b** (the window's gesture, #681); then
-  #697 (b), **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 — proposes, never
-  links), **R5** (banner + worklist, #680). Plan each from the design page's section.
+- **Next:** R2, split 2026-09-27 into R2a (built — next entry) and R2b, split again into **R2b-1** ("Same person
+  as…"/link, built — see the 2026-09-29 entry below) and **R2b-2** ("Not the same person"/unlink + #699 (a),
+  next); then #697 (b), **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
+  proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
   forced 1 → target 1; signing off a combined list 1 → 1 → 1 (one gesture covers every line across both
   charts). `M ≤ N`; R1 adds no act. Budget: opening a linked chart ≤ the single-chart open, measurement owed
@@ -740,7 +741,49 @@ Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md
     failure where a later clerk re-clips folders someone marked as different.
   - **Budget** (review-and-link ≤ 20 s) owed by R2b's runbook pass.
 
-## Above the foundation line (NOT in this roadmap)
+### 2026-09-29 — repair path R2b-1: "Same person as…" (link) built (PR #707)
+
+Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; design page's R2b section (an
+as-built note there now lists the deviations below). No new ADR — R2b-1 decides nothing the design had not
+already taken. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
+[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707), draft (final whole-branch review and full gates pending
+as of 2026-09-29 — the controller runs both after this entry was written).
+- **What R2b-1 built.**
+  - `cairn_node::patient::compare` (new): `chart_facts` — every member chart's front-sheet facts (held, trust,
+    every retained non-repudiated name with use + provenance, repudiated names as aliases, DOB and sex-at-birth
+    with provenance and precision, identifiers, current addresses), one `ANY($1::uuid[])` query per section,
+    each failure a `LocalDbFault` naming its step (#467 legibility guard); `cross_vetoes` — `cairn_match_veto`
+    over every left×right pair across BOTH displayed sets, never chart against chart, hard vetoes before
+    degrade-hold.
+  - `chart_link`'s pre-check refusals (same chart, a chart not held here, a non-human attester key) marked as
+    verdicts (`RefusalScope::Input` / `NodeState`) through `db_diagnosis::deliberate_refusal` /
+    `node_state_refusal`, replacing bare `anyhow::bail!`s the window would have read as an outage to retry (#702).
+  - `cairn-gui-tauri/src/link/view.rs` — pure view builders: the comparison table's cells (names with use, DOB
+    with precision wording, sex at birth, identifiers, addresses, identity state), absence wording ("not
+    recorded" / "unknown — registration not yet received here", uniform per chart not per field), the other
+    record's medication notes ("On the other record: …"), `link_error_view` / `link_report`'s outcome sentences.
+  - `link/mod.rs` — `compare_records` / `link_records` commands: `compare_impl` reads over `displayed_patient` →
+    `check_displayed_set` → the other chart from `shown` → both sets' facts; `link_impl` names BOTH displayed
+    sets (decision 3 widened to the right-hand side), refusing on either with one sentence, `OTHER_CHANGED`; no
+    server-side gesture timing (db/044's `gesture_kind` CHECK admits only `signoff`/`cease`).
+  - `src-ui/link.js` — the panel: findings first (`role="alert"`, hidden when empty — never "no conflicts"), the
+    two-column table (**This record** / **Other record**), the other record's active medications read-only,
+    **Link — same person**; closes on ANY chart change without moving focus; the Link button is disabled while a
+    link is in flight; focus moves to the panel heading on open and back to "Same person as…" on close.
+- **Tests.** `patient/compare.rs`'s unit + DB tests (finding order, chart-set reads); `link/view.rs`'s
+  view-builder tests (moved to `link/view_tests.rs` for the 500-line guard); `link/mod.rs`'s `compare_impl` /
+  `link_impl` tests (`AppState::mock` + `shown`, not-on-screen, `OTHER_CHANGED`); the panel walked
+  manually/headless (no committed JS harness exists yet, #332).
+- **Filed:** none yet — the per-task reviews deferred a set of minors (recorded in the plan's own review ledger)
+  to the controller's final whole-branch review, which triages them alongside the full gate run.
+- **§1.2:**
+  - **Paper counterpart:** the records clerk fetches the other folder, lays the two front sheets side by side,
+    and clips the folders together.
+  - **Acts:** paper 3 (fetch, lay side by side, clip) → forced 3 (find → Compare → Link; the Link click IS the
+    signature under the unlocked key, ADR-0053, so authorship adds no act) → target 3 (2 from R5's banner: the
+    "find" is already done). `M ≤ N`.
+  - **Budget:** review-and-link ≤ 20 s, of which the side-by-side read is the load — measured by runbook §9
+    (Task 7), a human act owed alongside the front door's and med-list's stopwatch figures.
 
 - **Policy layer** — hard policy as a signed policy-assertion stream + effective-policy projection ([ADR-0024](spec/decisions/0024-hard-policy-expression-the-policy-assertion-stream.md)); soft policy in UI. **GUI / reference UI** — built only on the same public native API everyone else uses (principle 12); paper-parity is the governing law, **no confirmation dialogs as a safety mechanism**. **Active-write thin encounters** and clinical workflow surfaces ([ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)).
 

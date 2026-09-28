@@ -252,3 +252,65 @@ match".
 
 Record in the template's *Front door* section. A figure outside its budget is the finding: file
 it, do not adjust the budget.
+
+## 9. Compare and link: "Same person as…" (R2b-1, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681))
+
+The repair path's own §1.2 figure. Start with a chart already open (`--patient <uuid>`, as in
+section 3) — finding the chart is measured separately, in section 8.
+
+**Live** — the node from section 0/2, with a second chart registered that is NOT the one you
+opened (a plausible duplicate — same or a near-miss name):
+
+```bash
+OTHER=$($NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+    --confirm-new | sed -n 's/^registered patient //p')
+cd cairn-gui
+cargo run --release -p cairn-gui-tauri -- \
+    --patient "$PATIENT" --conn "$CONN" \
+    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+```
+
+**`--mock`** (no database; the fixture's second chart is reachable by typing a fragment of its
+name):
+
+```bash
+cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001
+```
+
+Start the stopwatch at the press of **"Same person as…"**, not before — opening the panel is
+part of the gesture, finding the chart (section 8) is not. Stop it when the outcome line reads
+"Linked — this record now combines N charts".
+
+1. Press **"Same person as…"**.
+2. Type part of the other chart's name into the panel's own search.
+3. Press **Compare**.
+4. Read the panel: veto findings (if any), then the two-column table (**This record** / **Other
+   record**), then the other record's active medications.
+5. Press **Link — same person**.
+
+Budget **review-and-link ≤ 20 s**, of which the side-by-side read is the load (§1.2 in the
+design page's R2b section). Record, per run:
+
+- the wall time from step 1 to the outcome line;
+- the number of veto findings shown (0 is a legitimate answer — the panel renders nothing for
+  an empty list, never "no conflicts");
+- whether the clinician's key was already unlocked, or the run also measures an unlock.
+
+Repeat at least five times (fresh chart pairs each time — `patient-register` again), because a
+single sample tells you nothing about the tail.
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Opening the panel announces the veto findings **before** the table.
+- [ ] The table's two column groups are announced as **"This record"** / **"Other record"**,
+      not by position.
+- [ ] An absent fact reads as a word ("not recorded", or "unknown — registration not yet
+      received here" for a chart not held on this node), never silence.
+- [ ] The Link button is reachable by Tab and announces when it is disabled (a link in flight,
+      or a comparison that could not be read in full).
+- [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
+      or switching to a different chart closes the panel without moving focus.
+
+Record in the template's *Compare and link* section. **A figure outside the ≤ 20 s budget is a
+finding to file, never a budget to adjust** (§1.2's own rule, echoed here because this is the
+slice that first measures it).

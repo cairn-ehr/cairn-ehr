@@ -3,33 +3,35 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R2a — A HUMAN'S LINK JUDGEMENT OUTRANKS A MACHINE'S, AND THE NODE CAN AUTHOR ONE — IS MERGED (PR
-> [#698](https://github.com/cairn-ehr/cairn-ehr/pull/698), 2026-09-28).** R2b (the window's gesture) is being
-> designed on branch `feat/r2b-window-link-gesture` (2026-09-28). R2a is the second of the duplicate
-> repair path's slices (#679 · #680 · #681; design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
-> spec **v0.78**). R1 (the combined read, PR #688) is merged. R2 was split by the maintainer: **R2a** = ADR-0076
-> decision 5 in db/018 (`patient_link.attested`, comparator `cairn_link_overlay_wins`: attested first, then
-> HLC), `db/055` (**`SCHEMA_GENERATION` 55** — the loader heal AND db/055's own re-fold re-decide existing
-> winners), `chart_link.rs` (`link_charts`/`unlink_charts`, CLI `link-charts`/`unlink-charts`, each reporting a
-> `LinkEffect`), `apply_accepted_proposal` a thin wrapper, auto-apply yields to a human judgement and rolls back
-> a matcher link that does not stand. Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`.
+> **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — IS BUILT ON PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707),
+> DRAFT (final whole-branch review and full gates pending as of 2026-09-29 — the controller updates this line once
+> they land).** The maintainer split R2b into two PRs (2026-09-28): **R2b-1** "Same person as…" (link, this PR)
+> then **R2b-2** "Not the same person" (unlink + #699 (a)). R2a (PR #698) and R1 (PR #688) are merged. R2b-1 is the
+> third of the duplicate repair path's slices (#679 · #680 · #681; design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
+> [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
+> spec **v0.78**). R2b-1 built: `cairn_node::patient::compare` (`chart_facts`, `cross_vetoes` — every member
+> chart's front-sheet facts and every cross-pair veto finding, hard first, over the SET not the pair);
+> `chart_link`'s pre-check refusals marked as verdicts (Input/NodeState, #702); the window's pure view builders
+> (`cairn-gui-tauri/src/link/view.rs`); the `compare_records`/`link_records` commands (`link/mod.rs`); the panel
+> (`src-ui/link.js`). Plan
+> `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R2b — the window's gesture (#681).** Header **"Same person as…"** → the front door's search (only a chart
->    some list showed — `AppState::shown`) → a side-by-side panel (names incl. aliases, DOB with provenance,
->    identifiers, active medications, `cairn_match_veto` findings as plain facts — its safety is what it SHOWS,
->    never an "are you sure?") → `link_charts`; each member line gets **"Not the same person"** →
->    `unlink_charts`. **Show `LinkOutcome::effect`, never assume it:** `StillJoined` (a member joined through a
->    THIRD chart — the member line must name the edge(s) that actually join it) and `Outranked` (a later
->    judgement about the same pair that says the OPPOSITE stands — a human disagreement to show, not retry) must not read as done
->    (#699 is the neither-held half — decide before R2b). A refusal and an infrastructure fault are both `Err`
->    today; R2b may want them apart (see #702). R2b owes the §1.2 budget measurement (review-and-link ≤ 20 s).
->    Then **#697 (b)** (decided: while a set holds a doubted link, every line not on the opened chart is withheld
->    from sign-off, with its own wording; do #701 alongside), **R3** (the front door collapses by person),
->    **R4** (per-node matcher worker, #679 — proposes, never links), **R5** (banner + worklist, #680 — the
->    worklist must filter pairs with an attested `patient_link` row, #700).
+> 1. **R2b-2 — "Not the same person" + #699 (a).** Per EDGE (the standing `patient_link` row), not per member —
+>    each member line lists the links that actually join it, each with its own "Not the same person". **Show
+>    `LinkOutcome::effect`, never assume it:** `StillJoined` (a member joined through a THIRD chart — the member
+>    line must name the edge(s) that actually join it) and `Outranked` (a later judgement about the same pair
+>    that says the OPPOSITE stands — a human disagreement to show, not retry) must not read as done. #699 (a)
+>    decides the neither-held unlink (filed under the opened chart when both subjects read as part of its record)
+>    — `unlink_charts` gains `opened`, `admit_judgement` a new arm, `assert_link_in_tx`'s `about` becomes a
+>    `FiledUnder::{Subject, RecordOf}` enum, plus a plan task auditing every identity-by-`patient_id` reader for a
+>    "filed-under ∈ subjects" assumption. See the design page's R2b-2 bullets. Then **#697 (b)** (decided: while a
+>    set holds a doubted link, every line not on the opened chart is withheld from sign-off, with its own
+>    wording; do #701 alongside), **R3** (the front door collapses by person), **R4** (per-node matcher worker,
+>    #679 — proposes, never links), **R5** (banner + worklist, #680 — the worklist must filter pairs with an
+>    attested `patient_link` row, #700).
 > 2. **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
 >    show on a held chart's record — a decision) · **#700** (auto-apply's human-judged skip has a race; a skipped
 >    proposal stays `pending`) · **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (a
@@ -74,6 +76,27 @@
 >   member not held here (same record), and is then filed under the HELD chart (db/005 step 8b). Only OPEN
 >   proposals (`pending`/`accepted`/`review`) move; closed rows are never touched (`applied`/`auto_applied` by
 >   db/019's invariant; `rejected`/`retracted` by design — `patient_link` holds what stands).
+>
+> **⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707) — do not undo any of these:**
+> - **The comparison is SET against SET, never chart against chart.** With A open and already linked to C,
+>   linking B to A also joins B to C — `cross_vetoes` runs `cairn_match_veto` over every left×right pair across
+>   BOTH sets, not one A–B pair, or a B–C clash (e.g. a date-of-birth conflict) would go unseen.
+> - **Every chart command names BOTH displayed sets**, widening decision 3 to the right-hand side: `link_impl`
+>   checks the opened chart's set (`check_displayed_set`) AND `other_charts`, the OTHER record's displayed set —
+>   a peer's link landing mid-review must not clip a chart into this record sight unseen. Both failure arms of
+>   the right-set check fold to one sentence, `OTHER_CHANGED` ("the other record changed while you were
+>   comparing — nothing was done; compare again").
+> - **A partially-read comparison offers no Link.** Reading stays available on a failed member read (availability
+>   over consistency), but the judgement needs the whole picture — a comparison view is either linkable or it
+>   is not, never linkable-with-caveats.
+> - **Absence and precision wording live in `link/view.rs`, not in the node read or the JS panel.** A chart not
+>   held here reads "unknown — registration not yet received here" in EVERY row (not just DOB); a coarser-than-day
+>   DOB names its precision (`FieldFact::precision`) so it never looks like a clash a same-day fact is not
+>   (principle 4). Add a new fact to the panel through a view function, never a raw string literal in `link.js`.
+> - **`chart_link`'s pre-check refusals are marked verdicts — never revert to bare `anyhow::bail!`.** Same chart
+>   is `RefusalScope::Input`; a chart not held here or a non-human attester key is `RefusalScope::NodeState`
+>   (#702) — both through `db_diagnosis::deliberate_refusal`/`node_state_refusal`, never a plain error the window
+>   would classify as an outage to retry.
 >
 > **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
@@ -363,7 +386,10 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-09-27 (**R2a — the link precedence floor + `link_charts`/`unlink_charts`**, PR
+**Session date:** 2026-09-29 (**R2b-1 — "Same person as…" (link)**, PR
+**[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)**, draft; `cairn_node::patient::compare`, `chart_link`
+pre-check refusals marked as verdicts, the window's compare/link commands and panel; final whole-branch review
+and gates pending) · 2026-09-27 (**R2a — the link precedence floor + `link_charts`/`unlink_charts`**, PR
 **[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)**, `db/055`, generation 55; #697 decided (b); filed #699–#702;
 earlier the same day **R1 — the combined read**, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
 spec **v0.78**, `db/054`, PR #688, #334 repaired) · 2026-09-26 (**#671**, ADR-0075, PR #678) · 2026-09-23 (**funnel
@@ -380,7 +406,8 @@ precedence rule #345 at db/005 step 8b; ranking ADR-0075) · **`clinical.medicat
 bodies** (ADR-0052) and **per-write human authorship** (ADR-0053 — grading half-live until #245) · **the §5.9 stream
 through its read surface** · **the med-list node tier** (first clinical READ path + whole-list sign-off, now over a
 linked chart set — ADR-0076 R1), **human link/unlink judgements** (`chart_link`, attested-first `patient_link`
-— ADR-0076 R2a), **generic reprojection** (ADR-0057; a late key projects at the door, ADR-0070), the
+— ADR-0076 R2a), **the window's compare-and-link panel** ("Same person as…", R2b-1, PR #707, draft),
+**generic reprojection** (ADR-0057; a late key projects at the door, ADR-0070), the
 **ADR-0056 admit-uninterpreted floor** · **the L3 reference UI** — `cairn-gui/`, a standalone workspace, one-way GUI →
 crates, **`cairn-gui-tauri`** (the iced shell FAILED the accessibility bar, spike 0004): the funnel front door onto one
 patient's (or one linked person's) medication chart (plain JS, no npm); pane/routing/freshness state machine tested but
@@ -393,67 +420,84 @@ patient's (or one linked person's) medication chart (plain JS, no npm); pane/rou
 ROADMAP carries the per-slice narrative and **every open issue number**. This section keeps only what a *next* session
 needs — the lessons that generalise past the slice that found them.
 
-### 2026-09-28 — PR #698 five-agent review, and its fixes on the same PR
+### 2026-09-28 → 09-29 — R2b-1: the "Same person as…" panel (PR #707)
 
-- **⇒ A TRIGGER ANOTHER PROCESS CAN CONSUME IS NOT A TRIGGER YOU OWN.** db/055 relied on the generation-change heal,
-  but `cairn-sync init` shares the generation number, heals with the OLD applier (it loads no identity migration)
-  and stamps it — so cairn-node would skip its own heal. db/055 now re-folds the affected pairs itself; the class is
-  #703. **Ask of any "this runs on upgrade" mechanism: who else can run it first, and with what code?**
-- **⇒ RECORDED IS NOT TOOK EFFECT.** An overlay admits the losing assertion (set-union), so "the submit succeeded"
-  says nothing about what stands. Three reviewers independently found a report ("linked", "still joined") and a
-  proposal status (`auto_applied`) built on that assumption. Read the winner back **inside the same transaction**.
-- **⇒ `event_log.body` IS the payload** — no `payload` wrapper (`patient_link_apply` reads `e.body ->> 'subject_a'`).
-  A probe written against `body -> 'payload'` matched nothing and failed silently green-looking; the red test
-  caught it. SQL that reads event bodies outside an applier: copy the applier's own path.
+Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; subagent-driven, seven tasks
+(compare/cross_vetoes, view builders, commands, panel, docs), per-task review, controller runs the final
+whole-branch review and gates before push.
+- **⇒ A LOCAL-ONLY COMMIT IS INVISIBLE — PUSH EARLY.** The session's network/permission-classifier connectivity
+  went out mid-session; work kept committing locally with nothing to show for it until connectivity returned.
+  House rule 8 (every session ends in at least a draft PR) exists for exactly this: push as soon as there is
+  anything worth seeing, not only at the end.
+- **⇒ A REVIEW CAN FIND A PRINCIPLE-4 DEFECT IN THE PLAN'S OWN CODE, NOT ONLY IN A DEVIATION FROM IT.** The plan
+  mandated an alias cell reading "none" for a chart not held here; review Important 1 caught that an unheld
+  chart's alias list is not KNOWN to be empty, it is simply not read yet — the correct word is the same absence
+  wording every other unheld cell uses ("unknown — registration not yet received here"), not "none". The plan
+  being explicit about the wrong word did not make it right; principle 4 (never let a required field be
+  satisfiable only by fabricating certainty) outranks a plan's literal text.
+- **⇒ A GUARD FILE'S COUNT PINS TRAVEL WITH THE CODE THAT MOVES.** `db_errors_stay_legible.rs` (the #467
+  legibility guard) counts `LocalDbFault::new(` sites per file; adding `patient/compare.rs` to the sweep meant
+  adding its own pinned count (`COMPARE_LOCAL_DB_FAULT_SITES`) alongside the file list — a file that builds
+  `LocalDbFault`s but is missing from BOTH the sweep's file list and a per-file count passes silently with zero
+  coverage, the same trap the twin-registry and helper-registry pins guard elsewhere.
+- **Mechanics:** the right-set refusal folds two different `check_displayed_set` failure arms into one sentence
+  (`OTHER_CHANGED`) rather than distinguishing them — the clerk needs to know the picture is stale, not which
+  check noticed; `chart_link`'s bare `anyhow::bail!`s needed marking as verdicts (`Input`/`NodeState`) before
+  the window could tell a refusal from an outage, closing #702 for this surface.
 
-### 2026-09-27 (later) — R2a: the link precedence floor and the node's judgement (PR #698)
+### 2026-09-27 → 09-28 — R2a: the link precedence floor, the node's judgement, and its PR review (PR #698)
 
-Maintainer split R2 (R2a/R2b) and decided #697 (b) → plan → subagent-driven (six tasks, per-task reviews; opus on the
-safety-critical tasks and the whole-branch review).
-- **⇒ A MIGRATION THAT CHANGES A PROJECTION'S ORDER MUST RE-DECIDE WHAT THE OLD ORDER ALREADY DECIDED.** The design said
-  "backfill `attested`"; a backfill marks the stored machine link "not attested" and leaves it the winner. The fix
-  reuses the loader's generation-change heal — so the new migration's EXISTENCE is load-bearing. **Ask of every
-  ordering change: what did the old order already choose, and what re-chooses it?**
+Maintainer split R2 (R2a/R2b) and decided #697 (b) → plan → subagent-driven (six tasks, per-task review, opus on
+the safety-critical tasks and the whole-branch review), then a five-agent PR review with its own fix round.
+- **⇒ A MIGRATION THAT CHANGES A PROJECTION'S ORDER MUST RE-DECIDE WHAT THE OLD ORDER ALREADY DECIDED.** The design
+  said "backfill `attested`"; a backfill marks the stored machine link "not attested" and leaves it the winner.
+  The fix reuses the loader's generation-change heal — so the new migration's EXISTENCE is load-bearing. **Ask of
+  every ordering change: what did the old order already choose, and what re-chooses it?**
 - **⇒ A STORED DERIVED VALUE IS SAFE ONLY IF ITS INPUT CANNOT CHANGE AFTER IT IS STORED** — checked, not assumed
   (db/043 gate 1 clears the unvouched marker before gate 4 first projects the event).
 - **⇒ A SECOND CALLER OF A SHARED CORE CAN INVERT A LOCK ORDER.** The task reviewer found the judgement took the
   advisory lock before the proposal row while `auto_apply` took them the other way: a same-pair deadlock. **A
-  concurrency test must wait on the real signal** (`pg_stat_activity.wait_event_type = 'Lock'`), never a sleep — the
-  first version could pass against the bug on a slow runner.
+  concurrency test must wait on the real signal** (`pg_stat_activity.wait_event_type = 'Lock'`), never a sleep.
 - **⇒ THE WHOLE-BRANCH REVIEW FOUND WHAT NO TASK REVIEW COULD:** a rule written for one verb (link's "both held here")
-  applied to the other (unlink — a displayed member could not be separated), and a transitive unlink reported
-  "unlinked" while the charts stayed combined (now `LinkEffect::StillJoined`). **Check each rule against every verb
-  that reaches it.**
-- **Mechanics:** R1's condensed lessons — survey the tree before designing (a brief is a claim); when a read widens from
-  a key to a set, re-read every per-key aggregate; run a plan's verbatim code against its own guards; capture a golden
-  BEFORE the rewrite; availability over consistency binds a header read too.
+  applied to the other (unlink), and a transitive unlink reported "unlinked" while the charts stayed combined (now
+  `LinkEffect::StillJoined`). **Check each rule against every verb that reaches it.**
+- **⇒ RECORDED IS NOT TOOK EFFECT, AND A TRIGGER ANOTHER PROCESS CAN CONSUME IS NOT A TRIGGER YOU OWN** — the PR
+  review's two findings. An overlay admits the losing assertion (set-union), so "the submit succeeded" says
+  nothing about what stands; three reviewers independently built a report or a proposal status on that
+  assumption, fixed by reading the winner back INSIDE the same transaction. And db/055's generation-change heal
+  can be consumed by `cairn-sync init` first (it shares the generation, heals with the old applier, and stamps
+  it) — db/055 now re-folds the affected pairs itself (#703). `event_log.body` IS the payload, no `payload`
+  wrapper; a probe written against the wrong shape matched nothing and failed silently green-looking, caught by
+  the red test.
+- **Mechanics:** survey the tree before designing (a brief is a claim); when a read widens from a key to a set,
+  re-read every per-key aggregate; run a plan's verbatim code against its own guards; capture a golden BEFORE the
+  rewrite; availability over consistency binds a header read too.
 
 ### 2026-09-22 → 09-26 — funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678), condensed
 
-- **Ask what the person at the desk will actually do before designing what they must attest** (#671's frame: "how fast
-  is the duplicate FOUND?"). **Measure the ADR's claim, with a control the feature cannot help**; every ranking change
-  re-runs every arm; a latency instrument must see the code path; inverting a test can delete its pair's other half.
-- **A design's quantitative assumption is a claim — measure it** ("few candidates by construction" was false); a rig
-  needs a population of the right shape; read the query the UI sits on before wiring the UI.
+- **Ask what the person at the desk will actually do before designing what they must attest** (#671: "how fast is the
+  duplicate FOUND?"); **measure the ADR's claim with a control the feature cannot help** — every ranking change re-runs
+  every arm, a latency instrument must see the code path, inverting a test can delete its pair's other half. A design's
+  quantitative assumption is itself a claim ("few candidates by construction" was false; a rig needs a
+  right-shaped population; read the query the UI sits on before wiring the UI).
 - **When a slice makes a constant variable, audit every reader** (2c's Critical: "open chart" ≠ "chart on screen"; R1
-  widened it to a set). A mock-mode window can be walked headless; an IPC-only defect stays the human pass's.
-- **A sweep without all three DB strings is not a sweep** — `scripts/run-db-gated-tests.sh`. **An agent's or an issue's
-  claim about the tree is a claim — grep** (#654: one call site claimed, fifteen found). A design sentence is a
-  prediction; an atomicity probe that never reaches the server is decoration (#657); a derived truncate list is only as
-  good as its predicate (#658); a new DB suite in a non-root tree runs nowhere until wired (#656).
+  widened it to a set); a mock-mode window walks headless, an IPC-only defect stays the human pass's.
+- **A sweep without all three DB strings is not a sweep** (`scripts/run-db-gated-tests.sh`); **an agent's or an issue's
+  claim about the tree is a claim — grep** (#654: one call site claimed, fifteen found); an atomicity probe that never
+  reaches the server is decoration (#657); a derived truncate list is only as good as its predicate (#658); a new DB
+  suite in a non-root tree runs nowhere until wired (#656).
 
 ### 2026-08-20 → 09-21 — the restore, node-plane, door and search slices (condensed to one-liners)
 
 Per-slice narrative: ROADMAP; the durable rules are traps 7–18; each plan carries its review ledger.
-- **An issue's failure scenario, scope and blast radius are CLAIMS** — read the code for what it MISSED.
-- **Validate a SQL value with the parser that will parse it** (`pg_input_is_valid`); two parsers for one value are
-  two protocols (#624).
-- **A guard that has only ever been green has proved nothing** — give it a positive control (#586), and every harness a
-  control for the run not happening. **"Untestable" is a claim — try a `SET ROLE` seam first.**
+- **An issue's failure scenario, scope and blast radius are CLAIMS** — read the code for what it MISSED. **Validate a
+  SQL value with the parser that will parse it** (`pg_input_is_valid`); two parsers for one value are two protocols
+  (#624). **A guard that has only ever been green has proved nothing** — give it a positive control (#586), and every
+  harness a control for the run not happening; **"untestable" is a claim — try a `SET ROLE` seam first.**
 - **A mutation is the RED phase of a pin over shipped behaviour**; negative assertions name what they negate (`Some(n)`).
-- **Copying a guard spreads its fail-open** (#608's `<>`): extract, never paste a third copy (cf. #652).
-- **Review the review's fixes** (three of four rounds found a defect the last fix created).
-- **A door returning `Ok` is not the record coming back** — assert the projection; the headline test DECRYPTS a body.
+  **Copying a guard spreads its fail-open** (#608's `<>`): extract, never paste a third copy (cf. #652). **Review the
+  review's fixes** (three of four rounds found a defect the last fix created). **A door returning `Ok` is not the
+  record coming back** — assert the projection; the headline test DECRYPTS a body.
 - **Content-addressing over unsigned bytes is not content-addressing** (#620). An unpushed branch is invisible (house
   rule 8). A round-trip test proves self-consistency, not correctness. A scanner reads names, not values (rule 6b). A
   deferral is honest only while its precondition holds.
