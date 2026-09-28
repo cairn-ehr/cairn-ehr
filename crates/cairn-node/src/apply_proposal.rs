@@ -6,16 +6,17 @@
 //! bound to this event. The event construction lives here (Rust, §9 safety-critical
 //! tier) and reuses cairn-event's serialization verbatim — never re-serialized elsewhere.
 //!
-//! Split: pure body-assembly (unit-testable, no DB) + one IO function that reads the
-//! proposal, signs, attests, submits, and marks the proposal applied in one transaction.
+//! Two pieces. `build_attested_link_body` is a pure body builder (a one-line delegate to
+//! `chart_link::build_attested_assertion_body`), kept as a named entry point for
+//! `identify::identify_patient`'s `--link`. `apply_accepted_proposal` reads the proposal
+//! (requiring it 'accepted') and delegates the write — sign, attest, submit, and mark the
+//! proposal applied, all in one transaction — to the shared `chart_link::assert_link_in_tx`
+//! core, so this C2 matcher-accepted path and the R2a chart-review path
+//! (`chart_link::link_charts`/`unlink_charts`) cannot drift apart. The accepted-proposal
+//! path does NOT call `build_attested_link_body`; the core builds its own body.
 
-use cairn_event::identity::{link_assertion_body, render_link_twin, LinkAssertion};
-use cairn_event::{event_address, sign, sign_attestation, SigningKey};
-use cairn_event::{EventBody, Hlc};
+use cairn_event::{EventBody, Hlc, SigningKey};
 use uuid::Uuid;
-
-/// The schema_version string for a link event (mirrors the C1 test convention).
-const LINK_SCHEMA_VERSION: &str = "identity.link/1";
 
 /// Compose the §4.1 provenance string for a matcher-proposed, human-accepted link.
 /// Non-empty by construction (the db/018 floor requires it) and legible: it records
@@ -24,12 +25,17 @@ pub fn compose_provenance(matcher_version: &str, human_kid: &str) -> String {
     format!("matcher:{matcher_version} accepted-by:{human_kid}")
 }
 
-/// Assemble the `identity.link.asserted` EventBody for an accepted proposal. Pure:
-/// `event_id` is supplied by the caller (so this stays deterministic and testable, and
-/// the caller can reuse the same id as match_proposal.applied_event_id). `low`/`high`
+/// Assemble an attested `identity.link.asserted` EventBody. Pure: `event_id` is supplied
+/// by the caller, so this stays deterministic and testable. Its production caller is
+/// `identify::identify_patient`'s `--link` (which has no proposal); the accepted-proposal
+/// path builds through `chart_link::assert_link_in_tx` instead. `low`/`high`
 /// are the canonical pair (low < high); subject_a := low, subject_b := high. The
 /// accepting human is the sole contributor and carries a `responsibility` marker — this
 /// is what makes submit_event demand a valid human attestation token.
+///
+/// Delegates to `chart_link::build_attested_assertion_body` — one body builder for every
+/// attested identity judgement, so this C2 accepted-proposal path and the R2a
+/// chart-review path share the exact same wire shape.
 pub fn build_attested_link_body(
     event_id: Uuid,
     low: Uuid,
@@ -39,50 +45,41 @@ pub fn build_attested_link_body(
     human_kid: &str,
     hlc: Hlc,
 ) -> EventBody {
-    let low_s = low.to_string();
-    let high_s = high.to_string();
-    let la = LinkAssertion {
-        subject_a: &low_s,
-        subject_b: &high_s,
+    crate::chart_link::build_attested_assertion_body(
+        crate::chart_link::LinkVerb::Link,
+        event_id,
+        low,
+        high,
+        low, // the C1 convention: filed under subject_a = low
         provenance,
         confidence,
-    };
-    EventBody {
-        event_id: event_id.to_string(),
-        patient_id: low_s.clone(), // C1 convention: an identity event is "about" subject_a
-        event_type: "identity.link.asserted".into(),
-        schema_version: LINK_SCHEMA_VERSION.into(),
+        human_kid,
         hlc,
-        t_effective: None,
-        signer_key_id: human_kid.into(),
-        // Responsibility-bearing contributor -> trips the db/005 attestation gate.
-        // ADR-0051 wire shape: responsibility = {held_by} object, held_by = the
-        // entry's own actor = the verified attester (the #195 binding chain).
-        contributors: serde_json::json!([
-            {"actor_id": human_kid, "role": "attested",
-             "responsibility": {"held_by": human_kid}}
-        ]),
-        payload: link_assertion_body(&la),
-        attachments: vec![],
-        plaintext_twin: Some(render_link_twin(&la)),
-        clock_grade: cairn_event::ClockGrade::SelfAsserted,
-        safety: None,
-    }
+    )
 }
 
-/// Apply one human-ACCEPTED match_proposal: read it, build + sign + attest the link
-/// event with the accepting human's key, submit it through the existing 3-arg
-/// submit_event door, and mark the proposal applied — all in ONE transaction.
+/// Apply one human-ACCEPTED match_proposal: read it here (requiring 'accepted'), then
+/// delegate the write — build, sign, attest, submit the link event through the existing
+/// 3-arg submit_event door, and mark the proposal applied — to the shared
+/// `chart_link::assert_link_in_tx` core, all in ONE transaction. This IO function's own
+/// job is: read + validate the proposal, compose its provenance/confidence, and hand off;
+/// `chart_link::assert_link_in_tx` is the one place either an accepted-proposal apply or a
+/// human chart-review judgement writes an attested link/unlink event (`identify-patient
+/// --link` still writes its own attested link, and touches no `match_proposal`).
 ///
 /// Atomicity is the idempotency guarantee: if submit_event rejects (e.g. a non-human
 /// attester) or any step fails, the whole transaction rolls back, so no link event is
 /// written and the proposal stays 'accepted' to be retried. On success the event and
 /// the 'applied' transition commit together, and a re-run finds no 'accepted' row.
 ///
-/// Concurrency: the proposal row is read `FOR UPDATE`, so two callers racing on the same
-/// pair serialize — the second blocks on the row lock, then re-reads the now-'applied'
-/// status and bails. Without the lock both would read 'accepted' under READ COMMITTED and
-/// each append its own link event.
+/// Concurrency: the proposal row is read `FOR UPDATE` here, so two callers racing on the
+/// same pair serialize — the second blocks on the row lock, then re-reads the now-
+/// 'applied' status and bails. Without the lock both would read 'accepted' under READ
+/// COMMITTED and each append its own link event. `assert_link_in_tx` also (re-)locks the
+/// row before it submits — a harmless no-op re-acquire here, since this function already
+/// holds it — which is what keeps this path's lock order (row, then db/018's CARNLK
+/// advisory lock) the same as `auto_apply.rs`'s, so the two can never deadlock on the
+/// same pair.
 ///
 /// The pair may be passed in either order: it is canonicalized to `(least, greatest)` to
 /// match match_proposal's `CHECK (patient_low < patient_high)` storage, so a caller passing
@@ -102,13 +99,9 @@ pub async fn apply_accepted_proposal(
 
     // Canonicalize to (least, greatest) so the pair matches match_proposal's
     // `CHECK (patient_low < patient_high)` storage regardless of the order the caller
-    // supplied. `build_attested_link_body` then also receives the canonical pair
+    // supplied. `chart_link::assert_link_in_tx` then also receives the canonical pair
     // (subject_a := low), matching the C1 edge overlay's canonical (low, high) key.
-    let (low, high) = if low <= high {
-        (low, high)
-    } else {
-        (high, low)
-    };
+    let (low, high) = crate::chart_link::canonical_pair(low, high);
 
     // Text-cast the UUIDs at the binding boundary: this crate's `uuid` dependency has no
     // `postgres`/`with-uuid-1` feature enabled, so `Uuid` does not implement `ToSql` here.
@@ -138,47 +131,39 @@ pub async fn apply_accepted_proposal(
         );
     }
 
-    // 2. Compose provenance + confidence and build the attested link body.
+    // 2. Compose provenance + confidence.
     let provenance = compose_provenance(&matcher_version, human_kid);
     let confidence = format!("{score:.3}");
-    let event_id = Uuid::now_v7();
-    let body = build_attested_link_body(
-        event_id,
+
+    // 3. Build, sign, attest and submit through the shared core, which also moves this
+    //    (open, 'accepted') proposal to 'applied' with its event id — in this transaction.
+    let reviewer = crate::chart_link::Reviewer {
+        human_sk,
+        human_kid,
+    };
+    let asserted = crate::chart_link::assert_link_in_tx(
+        &tx,
+        crate::chart_link::LinkVerb::Link,
         low,
         high,
+        low, // filed under subject_a = low: the C1 convention, unchanged by R2a
         &provenance,
         Some(&confidence),
-        human_kid,
+        &reviewer,
         hlc,
+    )
+    .await?;
+    // The row was read FOR UPDATE as 'accepted' above, so the core's open-status move must
+    // have hit it; anything else is a logic error, not a state to commit.
+    anyhow::ensure!(
+        asserted.proposal_resolved,
+        "match_proposal ({low}, {high}) did not move to 'applied'"
     );
-
-    // 3. Sign (human authors) + mint an attestation token (human vouches).
-    let signed = sign(&body, human_sk)?;
-    let ca = event_address(&signed.signed_bytes);
-    let token = sign_attestation(&ca, human_kid, "attested", human_sk)?;
-    let attester_vk = human_sk.verifying_key().to_bytes().to_vec();
-
-    // 4. Submit through the existing 3-arg door: db/005 attestation gate + db/018
-    //    identity floor + the patient_link_apply trigger all run here.
-    tx.execute(
-        "SELECT submit_event($1,$2,$3)",
-        &[&signed.signed_bytes, &token, &attester_vk],
-    )
-    .await?;
-
-    // 5. Mark the proposal applied, pointing at the emitted link event.
-    //    params: $1=low, $2=high, $3=event_id (positional — $3 in the SET clause,
-    //    $1/$2 in the WHERE, is just textual order, not a binding mismatch).
-    let event_id_s = event_id.to_string();
-    tx.execute(
-        "UPDATE match_proposal SET status='applied', applied_event_id=$3::text::uuid, updated_at=clock_timestamp() \
-         WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
-        &[&low_s, &high_s, &event_id_s],
-    )
-    .await?;
-
+    // `asserted.agrees` is deliberately not required: a human's acceptance is recorded as
+    // how this proposal was answered even if a later human judgement about the pair now
+    // outranks it — `patient_link` holds what stands, the proposal row how it was answered.
     tx.commit().await?;
-    Ok(event_id)
+    Ok(asserted.event_id)
 }
 
 #[cfg(test)]

@@ -575,6 +575,70 @@ pub async fn submit_link_event(
     .expect("link event accepted");
 }
 
+/// A link/unlink body at a CHOSEN HLC triple, attested or not — the shape every ADR-0076
+/// decision-5 test needs, where the whole question is how an attested and an un-attested
+/// assertion of the same pair rank against each other.
+///
+/// `attested = true` gives the body the responsibility-bearing contributor a human vouch
+/// carries (db/005/db/020 then DEMAND a verified human token — submit it with
+/// [`submit_attested`] / [`apply_remote_attested`]); `false` gives a plain `recorded`
+/// contributor (a matcher or agent writer — submit with `submit_event($1)` /
+/// [`apply_remote_raw`]). The caller picks `origin` so two events can collide on the
+/// full `(wall, counter, origin)` triple when a test needs that.
+#[allow(clippy::too_many_arguments)]
+pub fn link_assertion_event(
+    kid: &str,
+    a: Uuid,
+    b: Uuid,
+    verb: cairn_node::chart_link::LinkVerb,
+    wall: i64,
+    counter: i32,
+    origin: &str,
+    attested: bool,
+) -> EventBody {
+    let a_s = a.to_string();
+    let b_s = b.to_string();
+    let la = LinkAssertion {
+        subject_a: &a_s,
+        subject_b: &b_s,
+        provenance: "test:precedence",
+        confidence: None,
+    };
+    // The verb's type and schema version come from the production enum, so a test body and
+    // a `chart_link` body can never disagree on either.
+    let (payload, twin) = match verb {
+        cairn_node::chart_link::LinkVerb::Link => (link_assertion_body(&la), render_link_twin(&la)),
+        cairn_node::chart_link::LinkVerb::Unlink => {
+            (unlink_assertion_body(&la), render_unlink_twin(&la))
+        }
+    };
+    let (etype, sver) = (verb.event_type(), verb.schema_version());
+    let contributors = if attested {
+        serde_json::json!([{"actor_id": kid, "role": "attested", "responsibility": {"held_by": kid}}])
+    } else {
+        serde_json::json!([{"actor_id": kid, "role": "recorded"}])
+    };
+    EventBody {
+        event_id: Uuid::now_v7().to_string(),
+        patient_id: a_s.clone(),
+        event_type: etype.into(),
+        schema_version: sver.into(),
+        hlc: Hlc {
+            wall,
+            counter,
+            node_origin: origin.into(),
+        },
+        t_effective: None,
+        signer_key_id: kid.into(),
+        contributors,
+        payload,
+        attachments: vec![],
+        plaintext_twin: Some(twin),
+        clock_grade: cairn_event::ClockGrade::SelfAsserted,
+        safety: None,
+    }
+}
+
 /// Seed one chart carrying `name` as a legal, patient-stated name assertion. Returns its
 /// patient id.
 ///
@@ -619,6 +683,55 @@ pub async fn chart_named(c: &Client, sk: &SigningKey, kid: &str, wall: i64, name
 pub async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, high: Uuid) {
     submit_registration(c, sk, kid, low, 1).await;
     submit_registration(c, sk, kid, high, 1).await;
+}
+
+/// Two registered charts whose verified DOBs clash — a hard veto by construction.
+///
+/// Shared because `link_precedence.rs`'s veto-precedence tests and `chart_link.rs`'s "a
+/// human may still link a vetoed pair" tests both need the same fixture (registered pair +
+/// two document-verified DOB assertions that clash). `link_veto_floor.rs` still carries its
+/// own OLDER copy, built on that suite's `submit_dob` with its own walls; it is equivalent in
+/// effect, and was left in place rather than re-basing that suite's eight tests on a new
+/// fixture.
+pub async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid) {
+    use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(c, sk, kid, a, b).await;
+    for (p, wall, value) in [(a, 2, "1980-07-15"), (b, 3, "1975-01-02")] {
+        let body = EventBody {
+            event_id: Uuid::now_v7().to_string(),
+            patient_id: p.to_string(),
+            event_type: "demographic.field.asserted".into(),
+            schema_version: "demographic.field/1".into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: "n".into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: dob_assertion_body(value, "day", Some("document"), "document-verified"),
+            attachments: vec![],
+            plaintext_twin: Some(render_dob_twin(value, "day", "document-verified")),
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        let signed = sign(&body, sk).unwrap();
+        c.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
+            .await
+            .unwrap();
+    }
+    let vetoed: bool = c
+        .query_one(
+            "SELECT cairn_has_hard_veto($1::text::uuid, $2::text::uuid)",
+            &[&a.to_string(), &b.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(vetoed, "precondition: the pair must trip the hard veto");
+    (a, b)
 }
 
 /// The effective trust state `chart_trust` reports for a subject, or `None` (== confirmed).

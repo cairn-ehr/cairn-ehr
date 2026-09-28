@@ -350,6 +350,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "054_person_charts",
         include_str!("../../../db/054_person_charts.sql"),
     ),
+    // db/055 (ADR-0076 decision 5, R2a): backfills patient_link.attested — and, by being
+    // the newest file, moves the generation to 55 so every existing node's loader heal
+    // re-applies every link assertion under the attested-first order. Node list only.
+    (
+        "055_link_precedence_refold",
+        include_str!("../../../db/055_link_precedence_refold.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

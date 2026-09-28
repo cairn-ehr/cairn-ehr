@@ -151,6 +151,70 @@ before it can be repaired (R2); R4/R5 consume both.
   flag-lifecycle block that follows the upsert derives from the standing winner, and must be
   re-read against the new order.
 
+> [!NOTE]
+> **As built (R2a, 2026-09-27, PR #698)**, where the build departed from or refined the bullets above:
+> - **R2 split in two.** R2a is the floor + node + CLI: `patient_link.attested`, the D5 precedence
+>   rule, and `cairn-node link-charts` / `unlink-charts` (a human's judgement given from the command
+>   line, not yet the window). R2b — the "Same person as…"/"Not the same person" gesture and its
+>   side-by-side panel — is still to come.
+> - **The re-fold is db/055's generation-55 heal, not a column backfill.** A backfill can make
+>   `attested` truthful for the standing row; it cannot re-decide which assertion *is* the standing
+>   row. db/055 exists to bump `SCHEMA_GENERATION` so every node's next connect replays every link/
+>   unlink through the new applier (`cairn_reproject`), which is what actually re-folds a winner an
+>   un-attested machine link had already displaced. **And db/055 also re-folds the affected pairs
+>   itself** (every vouched assertion of a pair whose standing winner is un-attested): cairn-sync
+>   shares the generation number and runs the same heal but loads no identity migration, so a
+>   cairn-sync that reached a shared database first would otherwise stamp 55 after an old-order
+>   heal and cairn-node would skip its own (PR #698 review).
+> - **Who may act, precisely:** `link_charts` refuses unless BOTH charts are held here (attaching a
+>   stranger's future chart on a typo is the risk a link — but not an unlink — creates).
+>   `unlink_charts` needs the open chart held here and the other either held too or already read as
+>   part of that chart's record here (a displayed member this node hasn't synced the registration
+>   for, R1's case) — same record, not merely named. Neither chart held is refused outright (#699).
+> - **A third-chart join is recorded, not silently resolved.** Unlinking A from B when they are still
+>   joined through C (A–C–B) commits the attested `unlink` — it is real and replicates — but
+>   `LinkOutcome::effect` is `StillJoined` — the record didn't split. The machine never guesses which edge is
+>   wrong (principle 2), so it is reported. R2b's per-member "Not the same person" line must name the
+>   edge(s) actually joining that member, not just offer the verb.
+> - **Filing follows what's held.** When only one chart is held here, the event files under that one
+>   (db/005 step 8b refuses a local event about a chart with no history here) — never under the
+>   unheld chart, even though `unlink_charts(unheld, held)` reads `unheld`'s chart set back (see
+>   `LinkOutcome::filed_under`; the returned chart set is always that held chart's).
+> - **Recorded is not took effect.** db/018 admits an assertion that loses the overlay, so each
+>   judgement reads back, inside its own transaction, what the pair's standing assertion says.
+>   `LinkEffect` is `TookEffect` (it says what this judgement says — this event, or a later one that
+>   agrees), `Outranked` (a later judgement about the same pair that says the OPPOSITE — e.g. a
+>   peer's from a clock ahead of this node's — stands instead) or `StillJoined`; the CLI prints
+>   each differently and never "linked"/"unlinked" for the latter two. Because the read-back is in
+>   the transaction, nothing can fail after the commit except the commit itself, whose error says
+>   the outcome is unknown and names the event.
+> - **Closed proposals are left alone; open ones move with the judgement.** A `match_proposal` already
+>   `applied`/`auto_applied`/`rejected`/`retracted` is untouched — what stands is `patient_link`'s
+>   business, not the proposal row's. An open (`pending`/`accepted`/`review`) proposal for the same
+>   pair resolves
+>   (`applied`/`rejected`, `applied_event_id`) in the SAME transaction as the link/unlink event.
+> - **One lock order everywhere.** Every path that can touch a proposal row and take db/018's global
+>   `CARNLK` advisory lock (`pg_advisory_xact_lock(x'4341524E4C4B')`) — `apply_auto_candidate` (which
+>   set the order), `judge` (the CLI path; R2b's window will use it) and `apply_accepted_proposal`
+>   — locks the `match_proposal` row `FOR UPDATE` FIRST and only submits
+>   (which takes CARNLK) SECOND, so two concurrent judgements of the same pair cannot deadlock.
+> - **Auto-apply now yields to a standing human judgement.** `apply_auto_candidate` re-checks for an
+>   attested `patient_link` row before minting an un-attested matcher link, and skips the pair
+>   (`AutoOutcome::AlreadyJudged`, counted apart in the batch summary) when one exists — so a matcher
+>   link is never minted over a pair a human has directly judged (a join through a THIRD chart is
+>   still possible; see `StillJoined`). That check runs BEFORE the veto re-check, so a pair a human
+>   already linked is not sent back to review. And after submitting, auto-apply confirms its link
+>   is the standing winner; if a judgement committed after the check (a peer's, racing it — #700's
+>   race) or a later assertion outranks it, the transaction rolls back and nothing is written.
+>   (The proposal of a human-judged pair still stays `pending` — the rest of #700.)
+> - **`apply_accepted_proposal` now shares `judge`'s core** (`assert_link_in_tx`) instead of
+>   duplicating it — still with no production caller; R5's worklist will be its first.
+> - **Mixed fleet:** the winner order is a property of each node's own database (its schema
+>   generation, [ADR-0012](../../spec/decisions/0012-schema-evolution-event-format-and-legibility-across-time.md)),
+>   not of the event log, which is identical everywhere. A peer still on a pre-R2a binary ranks the
+>   old way — latest-HLC-wins, so a later machine link can still displace a human's unlink there —
+>   until it upgrades and its own heal re-folds; the fleet converges once every node has upgraded.
+
 ### R3 — the front door collapses by person
 
 - Search results group by `cairn_person_charts`; a person row lists each member's name + DOB and

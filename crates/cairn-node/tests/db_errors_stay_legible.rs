@@ -38,10 +38,13 @@
 //!
 //! # Scope, stated so coverage is not confused with aspiration
 //!
-//! Five files in `cairn-node`: `db.rs` (the file #467 was filed against, and the one that
+//! Six files in `cairn-node`: `db.rs` (the file #467 was filed against, and the one that
 //! fails first on a fresh node), `safety.rs` (#473 — the clinical write path), `sync.rs`
-//! (#474 — the daemon loop), and `auto_apply.rs` + `matcher_actor.rs` (#477 — the §5.7
-//! identity auto-apply ceremony, which links two patient charts with no human in the loop).
+//! (#474 — the daemon loop), `auto_apply.rs` + `matcher_actor.rs` (#477 — the §5.7
+//! identity auto-apply ceremony, which links two patient charts with no human in the loop),
+//! and `chart_link.rs` (R2a — a human's link/unlink judgement, whose floor refusal is the
+//! message the operator most needs; it was written after the #485 measurement below and
+//! joined the guard from its first review rather than adding to that backlog).
 //! The last two are one subsystem and were converted together: `auto_apply.rs` alone would
 //! have left `resolve_failure_line` — the line that fires when an epoch's actor cannot be
 //! resolved at all — rendering `resolve_matcher_actor`'s three unwrapped registry reads.
@@ -111,6 +114,7 @@ mod sources;
 /// are and why `cairn-sync`'s `main.rs` is not among them.
 const GUARDED: &[&str] = &[
     "crates/cairn-node/src/auto_apply.rs",
+    "crates/cairn-node/src/chart_link.rs",
     "crates/cairn-node/src/db.rs",
     "crates/cairn-node/src/matcher_actor.rs",
     "crates/cairn-node/src/safety.rs",
@@ -126,13 +130,15 @@ const GUARDED: &[&str] = &[
 /// deliberately swallows. An earlier draft said "every postgres call in that file propagates",
 /// which the unlock contradicts — and the unlock is precisely the swallowed one, so the claim
 /// omitted the case it most needed to name (PR #486 review). See #488 for the swallow itself.
+/// (ADR-0076 decision 5 / R2a added the step-2b read of `patient_link` for standing attested
+/// judgements.)
 ///
 /// The count is the same crude, effective instrument as [`SYNC_LOCAL_DB_FAULT_SITES`] next
 /// door, and it is needed for the same reason: reverting a wrapper to a bare `?` compiles,
 /// leaves the interpolation scan green (no `{e}` appears) and leaves the two
 /// operator-line tests green (they build their own error and never assert that a
 /// production site produces one).
-const AUTO_APPLY_LOCAL_DB_FAULT_SITES: usize = 10;
+const AUTO_APPLY_LOCAL_DB_FAULT_SITES: usize = 11;
 
 /// The shape counted for `auto_apply.rs` — narrower than `sync.rs`'s, deliberately.
 ///
@@ -140,7 +146,7 @@ const AUTO_APPLY_LOCAL_DB_FAULT_SITES: usize = 10;
 /// several lines and no single-line shape would match it. That works there because nothing
 /// in `sync.rs` builds one outside production code. `auto_apply.rs`'s test module DOES —
 /// `a_failed_apply_names_the_pair_and_the_diagnosis` constructs one to drive the operator
-/// line — so the bare form counts eleven and would report a *drop* to ten as healthy the
+/// line — so the bare form counts twelve and would report a *drop* to eleven as healthy the
 /// day someone deletes that test. Counting the `.map_err` shape keeps the two populations
 /// apart. Stated rather than left as an inconsistency between two adjacent guards.
 const AUTO_APPLY_WRAPPED_CALL: &str = ".map_err(|e| LocalDbFault::new(";
@@ -190,6 +196,36 @@ fn every_postgres_call_in_the_auto_apply_ceremony_names_what_it_was_doing() {
          {AUTO_APPLY_LOCAL_DB_FAULT_SITES}. If you ADDED a postgres call, wrap it and bump \
          the constant. If this DROPPED, a call was reverted to a bare `?` — which leaves \
          the SQLSTATE reachable but no longer says WHICH step of the ceremony failed (#477)."
+    );
+}
+
+/// How many `LocalDbFault`s `chart_link.rs` builds — every postgres call it makes itself.
+///
+/// Seven: the standing-link read, the proposal-row lock, the submit (whose db/005 / db/018
+/// refusal is the message an operator most needs), the proposal resolution, the held-chart
+/// read, opening the transaction, and the commit. The commit is built directly rather than
+/// through `.map_err(|e| LocalDbFault::new(` because it adds the "outcome unknown" context,
+/// so this counts the bare form — safe here because, unlike `auto_apply.rs`, nothing in
+/// `chart_link.rs`'s test module builds one.
+const CHART_LINK_LOCAL_DB_FAULT_SITES: usize = 7;
+
+/// Every postgres call a human's link/unlink judgement makes names what it was doing —
+/// pinned by count, for the reason [`AUTO_APPLY_LOCAL_DB_FAULT_SITES`] gives: reverting a
+/// wrapper to a bare `?` compiles and leaves the interpolation scan green.
+#[test]
+fn every_postgres_call_in_a_chart_judgement_names_what_it_was_doing() {
+    let root = sources::repo_root();
+    let text = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/chart_link.rs"))
+            .expect("chart_link.rs is in the tree"),
+    );
+    let found = text.matches("LocalDbFault::new(").count();
+    assert_eq!(
+        found, CHART_LINK_LOCAL_DB_FAULT_SITES,
+        "chart_link.rs builds {found} `LocalDbFault`s, expected \
+         {CHART_LINK_LOCAL_DB_FAULT_SITES}. If you ADDED a postgres call, wrap it and bump the \
+         constant. If this DROPPED, a call was reverted to a bare `?` — an operator would \
+         learn the SQLSTATE of a refused judgement but not which step refused it."
     );
 }
 

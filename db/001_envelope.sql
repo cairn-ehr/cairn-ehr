@@ -728,10 +728,12 @@ CREATE INDEX IF NOT EXISTS event_deferred_type_idx ON event_deferred (event_type
 --
 -- Deleted, never marked resolved, for the same reason event_deferred is: its
 -- presence IS the invariant, and a resolved-row history would be a second,
--- drift-prone source of truth for one fact. Its readers are documented at the
--- three call sites (db/005 cairn_suppression_author_ok, db/018
--- patient_link_apply, db/034 medication_attestation_apply); a new reader of
--- event_log.attestation / .attester_key owes the same exclusion.
+-- drift-prone source of truth for one fact. Its readers are listed at
+-- cairn_attestation_vouched below; a new reader of event_log.attestation /
+-- .attester_key owes the same exclusion — and so does a new reader of
+-- patient_link.attested (db/018), which is a DERIVED STORE of the vouch: it is
+-- written from this exclusion when a link winner is applied, so it must never be
+-- recomputed from attester_key alone.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
     event_id UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE
@@ -739,11 +741,17 @@ CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
 
 -- The ONE way to ask "is this row's stored attestation a real vouch?" (house rule 4).
 --
--- Four readers need it — db/005's cairn_suppression_author_ok, db/018's patient_link_apply
--- (twice) and db/034's medication_attestation_apply — and a fifth will arrive with the next
--- type that reads event_log.attester_key. Four hand-written copies of one predicate is four
--- places to change in step; a named function makes each call site read as the QUESTION being
--- asked rather than the mechanism, which is the point of the marker.
+-- Its readers (recount with `grep -n cairn_attestation_vouched db/*.sql`):
+--   * db/005 — cairn_suppression_author_ok and cairn_claim_authority;
+--   * db/018 — patient_link_apply, ONCE: the answer is stored into patient_link.attested,
+--              a derived store of the vouch that db/018's own read-back and ranking use
+--              instead of asking again;
+--   * db/034 — medication_attestation_apply;
+--   * db/054 — cairn_chart_set_has_doubted_link;
+--   * db/055 — the patient_link.attested backfill.
+-- More will arrive with the next type that reads event_log.attester_key. Hand-written copies
+-- of one predicate are places to change in step; a named function makes each call site read
+-- as the QUESTION being asked rather than the mechanism, which is the point of the marker.
 --
 -- Lives HERE, in db/001, because db/005's cairn_suppression_author_ok is LANGUAGE sql, whose
 -- body resolves table AND function names at CREATE time — the same reason the table is here.

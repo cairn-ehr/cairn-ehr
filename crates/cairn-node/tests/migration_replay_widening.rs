@@ -26,6 +26,8 @@ fn cs() -> Option<String> {
 const WIDENED: &[(&str, &str)] = &[
     ("patient_chart", "demo_content_address"),
     ("patient_link", "content_address"),
+    // ADR-0076 decision 5 (R2a): the winner's attestation, ranked before the HLC.
+    ("patient_link", "attested"),
     ("chart_dispute", "content_address"),
     ("chart_identity_state", "content_address"),
     ("name_repudiation", "content_address"),

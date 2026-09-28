@@ -225,6 +225,11 @@ fn derivation_finds_the_expected_helpers() {
             // body, promoted (panicking on refusal) for suites that need two charts already
             // linked and are testing something else entirely — `identity_linkage.rs` keeps
             // its own `Result`-returning copy, which its refusal tests still need.
+            // `link_assertion_event` (R2a; `link_precedence.rs`, `chart_link.rs`,
+            // `auto_apply.rs`): attested and un-attested link bodies at a chosen HLC triple.
+            // `vetoed_pair` (R2a; `link_precedence.rs`, `chart_link.rs`): a registered pair
+            // with clashing verified DOBs (a hard veto by construction), promoted from the
+            // local copy `link_precedence.rs` had.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -244,8 +249,10 @@ fn derivation_finds_the_expected_helpers() {
             "async fn submit_signed(",
             "async fn submit_signed_with_id(",
             "async fn trust_of(",
+            "async fn vetoed_pair(",
             "fn bearing_withdrawal_body(",
             "fn body_from_spec(",
+            "fn link_assertion_event(",
             "fn withdrawal_body_with_id(",
         ],
         "the guarded set should be common/mod.rs's public helpers minus REPO_WIDE"
