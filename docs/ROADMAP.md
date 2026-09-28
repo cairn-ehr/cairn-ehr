@@ -746,8 +746,8 @@ Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md
 Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; design page's R2b section (an
 as-built note there now lists the deviations below). No new ADR — R2b-1 decides nothing the design had not
 already taken. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
-[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707), draft (final whole-branch review and full gates pending
-as of 2026-09-29 — the controller runs both after this entry was written).
+[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707) — per-task reviewed, final whole-branch review (opus) and its
+fix wave re-reviewed clean; awaiting the maintainer's merge.
 - **What R2b-1 built.**
   - `cairn_node::patient::compare` (new): `chart_facts` — every member chart's front-sheet facts (held, trust,
     every retained non-repudiated name with use + provenance, repudiated names as aliases, DOB and sex-at-birth
@@ -783,8 +783,10 @@ as of 2026-09-29 — the controller runs both after this entry was written).
   `link_error_from` (pure, all four `DataError` arms tested) no longer says an operator is needed for a
   not-yet-held chart; the alias row is "Names struck as false" (`patient_alias_pool` = repudiated names);
   `link_report` names any chart the record now combines that the comparison never showed.
-- **Filed:** none yet — the per-task reviews deferred a set of minors (recorded in the plan's own review ledger)
-  to the controller's final whole-branch review, which triages them alongside the full gate run.
+- **Filed:** [#708](https://github.com/cairn-ehr/cairn-ehr/issues/708) (`link_charts` should re-check both compared
+  chart sets inside the judgement's transaction — a ms-scale race; plus a DB-gated window test of
+  `compare_impl`/`link_impl`) · [#709](https://github.com/cairn-ehr/cairn-ehr/issues/709) (a link outcome can go unseen
+  when it lands after the chart changed — wants a durable outcome surface).
 - **§1.2:**
   - **Paper counterpart:** the records clerk fetches the other folder, lays the two front sheets side by side,
     and clips the folders together.
@@ -793,6 +795,8 @@ as of 2026-09-29 — the controller runs both after this entry was written).
     "find" is already done). `M ≤ N`.
   - **Budget:** review-and-link ≤ 20 s, of which the side-by-side read is the load — measured by runbook §9
     (Task 7), a human act owed alongside the front door's and med-list's stopwatch figures.
+
+## Above the foundation line (NOT in this roadmap)
 
 - **Policy layer** — hard policy as a signed policy-assertion stream + effective-policy projection ([ADR-0024](spec/decisions/0024-hard-policy-expression-the-policy-assertion-stream.md)); soft policy in UI. **GUI / reference UI** — built only on the same public native API everyone else uses (principle 12); paper-parity is the governing law, **no confirmation dialogs as a safety mechanism**. **Active-write thin encounters** and clinical workflow surfaces ([ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)).
 

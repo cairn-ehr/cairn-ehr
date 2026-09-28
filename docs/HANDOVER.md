@@ -3,9 +3,9 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — IS BUILT ON PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707),
-> DRAFT (final whole-branch review and full gates pending as of 2026-09-29 — the controller updates this line once
-> they land).** The maintainer split R2b into two PRs (2026-09-28): **R2b-1** "Same person as…" (link, this PR)
+> **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — IS BUILT ON PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)
+> (2026-09-29): per-task reviewed, final whole-branch review (opus) and its fix wave re-reviewed clean, every gate
+> green (see the PR body); AWAITING THE MAINTAINER'S MERGE.** The maintainer split R2b into two PRs (2026-09-28): **R2b-1** "Same person as…" (link, this PR)
 > then **R2b-2** "Not the same person" (unlink + #699 (a)). R2a (PR #698) and R1 (PR #688) are merged. R2b-1 is the
 > third of the duplicate repair path's slices (#679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
@@ -32,7 +32,9 @@
 >    wording; do #701 alongside), **R3** (the front door collapses by person), **R4** (per-node matcher worker,
 >    #679 — proposes, never links), **R5** (banner + worklist, #680 — the worklist must filter pairs with an
 >    attested `patient_link` row, #700).
-> 2. **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
+> 2. **Filed 2026-09-29 (R2b-1):** **#708** (`link_charts` should re-check both compared sets inside its
+>    transaction; plus a DB-gated window test of `compare_impl`/`link_impl`) · **#709** (a link outcome can go
+>    unseen when it lands after the chart changed). **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
 >    show on a held chart's record — a decision) · **#700** (auto-apply's human-judged skip has a race; a skipped
 >    proposal stays `pending`) · **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (a
 >    floor refusal through `chart_link` surfaces as a bare `db error` — addressed on PR #698, now pinned).
@@ -395,8 +397,7 @@ through one — include it next.
 
 **Session date:** 2026-09-29 (**R2b-1 — "Same person as…" (link)**, PR
 **[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)**, draft; `cairn_node::patient::compare`, `chart_link`
-pre-check refusals marked as verdicts, the window's compare/link commands and panel; final whole-branch review
-and gates pending) · 2026-09-27 (**R2a — the link precedence floor + `link_charts`/`unlink_charts`**, PR
+pre-check refusals marked as verdicts, the window's compare/link commands and panel; filed #708, #709) · 2026-09-27 (**R2a — the link precedence floor + `link_charts`/`unlink_charts`**, PR
 **[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)**, `db/055`, generation 55; #697 decided (b); filed #699–#702;
 earlier the same day **R1 — the combined read**, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
 spec **v0.78**, `db/054`, PR #688, #334 repaired) · 2026-09-26 (**#671**, ADR-0075, PR #678) · 2026-09-23 (**funnel
@@ -442,6 +443,10 @@ whole-branch review and gates before push.
   wording every other unheld cell uses ("unknown — registration not yet received here"), not "none". The plan
   being explicit about the wrong word did not make it right; principle 4 (never let a required field be
   satisfiable only by fabricating certainty) outranks a plan's literal text.
+- **⇒ A HEADLESS WALK MUST ASSERT A MESSAGE IS VISIBLE, NOT THAT ITS TEXT IS SET.** The first panel wrote every
+  refusal and the Outranked sentence into a status line `setMessage` had hidden; the walk read `textContent`, passed,
+  and the final review found every outcome invisible and unannounced. Check `getComputedStyle(el).display` and
+  `hidden` on the element AND its ancestors.
 - **⇒ A GUARD FILE'S COUNT PINS TRAVEL WITH THE CODE THAT MOVES.** `db_errors_stay_legible.rs` (the #467
   legibility guard) counts `LocalDbFault::new(` sites per file; adding `patient/compare.rs` to the sweep meant
   adding its own pinned count (`COMPARE_LOCAL_DB_FAULT_SITES`) alongside the file list — a file that builds
