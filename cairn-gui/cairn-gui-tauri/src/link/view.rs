@@ -8,7 +8,7 @@ use cairn_gui_data::port::DataError;
 use cairn_gui_tab_medications::view::MedListView;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::LinkEffect;
-use cairn_node::patient::compare::{ChartFacts, NameFact, VetoFinding};
+use cairn_node::patient::compare::{AddressFact, ChartFacts, NameFact, VetoFinding};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -116,9 +116,34 @@ fn joined(f: &ChartFacts, values: Vec<String>) -> String {
     }
 }
 
+/// One name's cell text: the value, its `use` facet (or its named absence), and provenance.
 fn name_text(n: &NameFact) -> String {
     let use_ = n.use_.as_deref().unwrap_or("use not recorded");
     format!("{} ({use_}, {})", n.value, n.provenance)
+}
+
+/// One address's cell text: `"{display} ({use}, {provenance})"` when a `use` facet was
+/// recorded, else `"{display} ({provenance})"` — every other fact row carries provenance, so
+/// an address is never shown with only its `use` and none.
+fn address_text(a: &AddressFact) -> String {
+    match a.use_.as_deref() {
+        Some(use_) => format!("{} ({use_}, {})", a.display, a.provenance),
+        None => format!("{} ({})", a.display, a.provenance),
+    }
+}
+
+/// The "Earlier recorded names" cell. A chart NOT held here says so (principle 4: nothing
+/// tells this node such a chart has NO earlier names — only that its registration has not
+/// arrived — so "none" would be a false fact, the same distinction [`absent`] makes for every
+/// other row). On a chart held here, an empty alias pool IS a fact ("none"), not an unknown.
+fn alias_cell(f: &ChartFacts) -> String {
+    if !f.held {
+        absent(f)
+    } else if f.aliases.is_empty() {
+        "none".into()
+    } else {
+        f.aliases.join("; ")
+    }
 }
 
 /// The column heading: the first current name (or its absence) and the chart id, whole — it is
@@ -165,14 +190,7 @@ fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
         ("Names", |f| {
             joined(f, f.names.iter().map(name_text).collect())
         }),
-        // An empty alias pool is a fact ("none"), not an unknown.
-        ("Earlier recorded names", |f| {
-            if f.aliases.is_empty() {
-                "none".into()
-            } else {
-                f.aliases.join("; ")
-            }
-        }),
+        ("Earlier recorded names", alias_cell),
         ("Date of birth", dob_cell),
         ("Sex at birth", sex_cell),
         ("Identifiers", |f| {
@@ -185,19 +203,7 @@ fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
             )
         }),
         ("Addresses", |f| {
-            joined(
-                f,
-                f.addresses
-                    .iter()
-                    .map(|a| {
-                        format!(
-                            "{} ({})",
-                            a.display,
-                            a.use_.as_deref().unwrap_or(&a.provenance)
-                        )
-                    })
-                    .collect(),
-            )
+            joined(f, f.addresses.iter().map(address_text).collect())
         }),
         ("Identity", |f| f.trust.clone()),
     ];
@@ -211,7 +217,14 @@ fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
 }
 
 /// The other record's CURRENT medications as one line each, plus the notes to show before
-/// them (the list's own withheld/missing warnings, or the named absence of any drug).
+/// them (the list's own withheld/missing warnings, prefixed so they read as about the OTHER
+/// record — they are worded for the med-list tab, which speaks of "this chart" — or the named
+/// absence of any drug).
+///
+/// The absence sentence is added ONLY when there are no current lines AND no withheld/missing
+/// note either: a list the system itself calls incomplete (a withheld or missing note present)
+/// must never ALSO claim "no current medications" — that is an absence claim over a list this
+/// same function knows is not the whole picture (controller ruling, principle 4).
 pub fn medication_lines(list: &MedListView) -> (Vec<String>, Vec<String>) {
     let lines: Vec<String> = list
         .rows
@@ -222,9 +235,9 @@ pub fn medication_lines(list: &MedListView) -> (Vec<String>, Vec<String>) {
     let mut notes: Vec<String> = [&list.withheld_message, &list.missing_message]
         .into_iter()
         .flatten()
-        .cloned()
+        .map(|n| format!("On the other record: {n}"))
         .collect();
-    if lines.is_empty() {
+    if lines.is_empty() && notes.is_empty() {
         notes.push("No current medications recorded on the other record.".into());
     }
     (lines, notes)
@@ -349,233 +362,9 @@ pub fn fixture_facts(patient: Uuid, name: &str, trust: &str) -> ChartFacts {
     }
 }
 
+// Kept in a sibling file (fix round 1, task 4 review): the test module reproduces the
+// brief's tests verbatim plus this round's fixes, and together they no longer fit under the
+// house 500-line guideline alongside the implementation above.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use cairn_node::patient::compare::{FieldFact, NameFact};
-
-    fn id(n: u128) -> Uuid {
-        Uuid::from_u128(n)
-    }
-
-    fn held(n: u128) -> ChartFacts {
-        ChartFacts {
-            patient_id: id(n),
-            held: true,
-            trust: "confirmed".into(),
-            names: vec![NameFact {
-                value: "N".into(),
-                use_: Some("legal".into()),
-                provenance: "patient-stated".into(),
-            }],
-            // `precision: Some("day")` renders identically to the pre-controller-ruling
-            // fixture: day precision is the case that must NOT grow the "(N precision, …)"
-            // suffix (only a coarser facet does — see `a_coarse_dob_names_its_precision`).
-            dob: Some(FieldFact {
-                value: "1950-07-01".into(),
-                provenance: "document-verified".into(),
-                precision: Some("day".into()),
-            }),
-            ..ChartFacts::default()
-        }
-    }
-
-    fn meds() -> MedListView {
-        cairn_gui_tab_medications::view::build_view(&cairn_medication_view::fixtures::sample_chart())
-    }
-
-    fn parts() -> ComparisonParts {
-        ComparisonParts {
-            left: Ok(vec![held(1)]),
-            right: Ok(vec![held(2)]),
-            findings: Ok(vec![]),
-            other_medications: Ok(meds()),
-        }
-    }
-
-    #[test]
-    fn a_full_comparison_is_linkable_and_names_the_other_record() {
-        let v = comparison_view(parts(), &ChartSet::single(id(2)));
-        assert!(v.can_link && v.problems.is_empty());
-        assert_eq!(v.left_count, 1);
-        assert_eq!(v.columns.len(), 2);
-        assert_eq!(
-            v.other_charts,
-            vec![id(2).to_string()],
-            "sent back with the link"
-        );
-        assert!(
-            v.rows.iter().all(|r| r.cells.len() == 2),
-            "every row has a cell per chart"
-        );
-    }
-
-    /// Review Focus 4: a comparison read only in part shows what it has, names what it lacks,
-    /// and offers NO link — a judgement needs the whole picture.
-    #[test]
-    fn a_partial_comparison_names_what_is_missing_and_cannot_link() {
-        let mut p = parts();
-        p.other_medications = Err("connection reset".into());
-        let v = comparison_view(p, &ChartSet::single(id(2)));
-        assert!(!v.can_link);
-        assert_eq!(v.problems.len(), 1);
-        assert!(
-            v.problems[0].contains("medications"),
-            "names the part that is missing"
-        );
-        assert_eq!(
-            v.columns.len(),
-            2,
-            "the facts that WERE read are still shown"
-        );
-    }
-
-    #[test]
-    fn unreadable_facts_leave_no_columns_and_cannot_link() {
-        let mut p = parts();
-        p.right = Err("boom".into());
-        let v = comparison_view(p, &ChartSet::single(id(2)));
-        assert!(!v.can_link);
-        assert_eq!(v.left_count, 1);
-        assert_eq!(
-            v.columns.len(),
-            1,
-            "no invented column for a record that was not read"
-        );
-    }
-
-    /// Principle 4: absence is worded — and differently for a chart this node does not hold.
-    #[test]
-    fn an_absent_fact_says_not_recorded_or_unknown() {
-        let mut unheld = ChartFacts {
-            patient_id: id(2),
-            held: false,
-            trust: "unknown".into(),
-            ..ChartFacts::default()
-        };
-        unheld.names.clear();
-        let mut p = parts();
-        p.right = Ok(vec![unheld]);
-        let v = comparison_view(p, &ChartSet::single(id(2)));
-        let dob = v.rows.iter().find(|r| r.label == "Date of birth").unwrap();
-        assert_eq!(dob.cells[0], "1950-07-01 (document-verified)");
-        assert_eq!(dob.cells[1], "unknown — registration not yet received here");
-        let mut p = parts();
-        p.right = Ok(vec![ChartFacts {
-            patient_id: id(2),
-            held: true,
-            trust: "confirmed".into(),
-            ..ChartFacts::default()
-        }]);
-        let v = comparison_view(p, &ChartSet::single(id(2)));
-        let dob = v.rows.iter().find(|r| r.label == "Date of birth").unwrap();
-        assert_eq!(dob.cells[1], "not recorded");
-    }
-
-    /// Controller ruling (principle 4): a coarse date must never read as a precise day. Day
-    /// precision (and no precision facet at all, e.g. sex-at-birth) render as before; anything
-    /// coarser says so, so "1950" is never mistaken for a verified "1950-01-01".
-    #[test]
-    fn a_coarse_dob_names_its_precision() {
-        let coarse = ChartFacts {
-            patient_id: id(2),
-            held: true,
-            trust: "confirmed".into(),
-            dob: Some(FieldFact {
-                value: "1950".into(),
-                provenance: "patient-stated".into(),
-                precision: Some("year".into()),
-            }),
-            ..ChartFacts::default()
-        };
-        let mut p = parts();
-        p.right = Ok(vec![coarse]);
-        let v = comparison_view(p, &ChartSet::single(id(2)));
-        let dob = v.rows.iter().find(|r| r.label == "Date of birth").unwrap();
-        assert_eq!(dob.cells[1], "1950 (year precision, patient-stated)");
-    }
-
-    #[test]
-    fn a_finding_is_a_plain_fact_naming_both_charts() {
-        let f = VetoFinding {
-            left: id(1),
-            right: id(2),
-            kind: "dob".into(),
-            severity: "hard_veto".into(),
-            subject: "dob".into(),
-            detail: "verified dob clash (precision day): 'x' vs 'y'".into(),
-        };
-        let line = finding_line(&f);
-        assert!(line.starts_with("Verified facts differ"), "{line}");
-        assert!(line.contains(&id(1).to_string()) && line.contains(&id(2).to_string()));
-        assert!(
-            line.contains("verified dob clash"),
-            "db/016's own words, verbatim"
-        );
-        let hold = finding_line(&VetoFinding {
-            severity: "degrade_hold".into(),
-            ..f
-        });
-        assert!(hold.starts_with("Facts differ, not verified"), "{hold}");
-    }
-
-    /// Never "no conflicts": an empty finding list renders nothing at all.
-    #[test]
-    fn no_findings_means_no_lines_and_no_clearance_sentence() {
-        let v = comparison_view(parts(), &ChartSet::single(id(2)));
-        assert!(v.findings.is_empty());
-    }
-
-    #[test]
-    fn only_current_medications_are_listed_and_warnings_carry_over() {
-        let (lines, _notes) = medication_lines(&meds());
-        let current = meds()
-            .rows
-            .iter()
-            .filter(|r| r.status_label == "current")
-            .count();
-        assert_eq!(
-            lines.len(),
-            current,
-            "ceased drugs are not 'active medications'"
-        );
-    }
-
-    #[test]
-    fn an_empty_list_says_so() {
-        let empty = cairn_gui_tab_medications::view::build_view(
-            &cairn_medication_view::PatientMedicationList::empty(ChartSet::single(id(2))),
-        );
-        let (lines, notes) = medication_lines(&empty);
-        assert!(lines.is_empty());
-        assert!(
-            notes.iter().any(|n| n.contains("No current medications")),
-            "absence is named"
-        );
-    }
-
-    #[test]
-    fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
-        let set = ChartSet::new([id(1), id(2)]).unwrap();
-        let took = link_report(LinkEffect::TookEffect, &set);
-        assert!(
-            took.reload && took.sentence.starts_with("Linked"),
-            "{}",
-            took.sentence
-        );
-        assert!(took.sentence.contains("2 charts"));
-        let lost = link_report(LinkEffect::Outranked, &ChartSet::single(id(1)));
-        assert!(!lost.reload, "a disagreement is shown, never reloaded away");
-        assert!(lost.sentence.contains("NOT in effect"), "{}", lost.sentence);
-    }
-
-    /// Review Focus 5 (outage half): an outage is "not confirmed", never "nothing changed" — a
-    /// connection lost mid-commit leaves the outcome unknown.
-    #[test]
-    fn an_outage_is_worded_not_confirmed_and_retryable() {
-        let outage = anyhow::anyhow!("connection reset");
-        assert_eq!(link_error_view(&outage).retry, Retry::Now);
-        let text = link_error_view(&outage).text;
-        assert!(text.contains("not confirmed"), "{text}");
-    }
-}
+#[path = "view_tests.rs"]
+mod tests;
