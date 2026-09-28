@@ -81,6 +81,11 @@ async function runLinkSearch() {
   const list = el("link-candidates");
   if (!form.raw_name.trim() && !form.birth_date.trim()) {
     list.replaceChildren();
+    // Nothing is shown any more, so nothing may still be SAID about it — a status line
+    // reporting the last search's count next to an empty list would describe a list that is
+    // no longer on screen (principle 4). `linkRevision` was already bumped above, so any
+    // browse answer still in flight for the cleared search is dropped when it lands.
+    el("link-search-status").textContent = "";
     return;
   }
   try {
@@ -199,14 +204,17 @@ async function linkCompared() {
       otherId: compared.otherId,
       otherCharts: compared.otherCharts,
     });
-    say(report.sentence);
     if (report.reload) {
-      // Took effect: the record just changed under this chart, so the panel closes (same
-      // chart, same `#same-person` button) and the medication list is re-read.
+      // Took effect: the record just changed under this chart, so the outcome belongs on the
+      // chart itself (`#outcome`, via `say`) — the panel that reported it is about to close,
+      // same chart, same `#same-person` button — and the medication list is re-read.
+      say(report.sentence);
       closeLinkPanel(true);
       await refresh();
     } else {
-      el("link-status").textContent = report.sentence; // Outranked: keep the panel open
+      // Outranked: the panel stays open, so its own `#link-status` says this ONCE — not also
+      // through `say()`, which would read as two different outcomes rather than one.
+      el("link-status").textContent = report.sentence;
     }
   } catch (failure) {
     el("link-status").textContent = failureText(failure);
