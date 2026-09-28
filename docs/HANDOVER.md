@@ -4,18 +4,14 @@
 
 > [!NOTE]
 > **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — IS BUILT ON PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)
-> (2026-09-29): per-task reviewed, final whole-branch review (opus) and its fix wave re-reviewed clean, every gate
-> green (see the PR body); AWAITING THE MAINTAINER'S MERGE.** The maintainer split R2b into two PRs (2026-09-28): **R2b-1** "Same person as…" (link, this PR)
-> then **R2b-2** "Not the same person" (unlink + #699 (a)). R2a (PR #698) and R1 (PR #688) are merged. R2b-1 is the
-> third of the duplicate repair path's slices (#679 · #680 · #681; design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
+> (2026-09-29): per-task and final whole-branch reviews clean, every gate green (PR body); AWAITING THE MAINTAINER'S
+> MERGE.** R2b is two PRs (maintainer, 2026-09-28): **R2b-1** "Same person as…" (link, this PR), then **R2b-2** "Not
+> the same person" (unlink + #699 (a)). R1 (PR #688) and R2a (PR #698) are merged. Repair path #679 · #680 · #681;
+> design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
 > [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
-> spec **v0.78**). R2b-1 built: `cairn_node::patient::compare` (`chart_facts`, `cross_vetoes` — every member
-> chart's front-sheet facts and every cross-pair veto finding, hard first, over the SET not the pair);
-> `chart_link`'s pre-check refusals marked as verdicts (Input/NodeState, #702); the window's pure view builders
-> (`cairn-gui-tauri/src/link/view.rs`); the `compare_records`/`link_records` commands (`link/mod.rs`); the panel
-> (`src-ui/link.js`). Plan
-> `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`.
+> spec **v0.78**; plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`. Built:
+> `cairn_node::patient::compare` (`chart_facts`, `cross_vetoes` — over the SET, hard first); `chart_link` pre-check
+> refusals as verdicts (#702); `cairn-gui-tauri/src/link/{view,mod}.rs` (`compare_records`/`link_records`); `src-ui/link.js`.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
@@ -336,19 +332,18 @@
 >     kill. **Gate on the sweep**; use `CARGO_TARGET_DIR=/tmp/…` when an IDE is open; re-run every CI gate in
 >     CI's order AFTER the final edit.
 
-**The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)) is four subsystems: parts A and B
-(authority floor + operator surface) are BUILT, enforcing nothing beyond display/emission; C+D are DESIGNED and C1 is
-the next §5.9 BUILD.** Read **ADR-0062/0063/0064/0065** before touching any of it. The authority floor is ONE predicate
-`cairn_claim_authority` (db/005) at exactly ONE site (db/048's `NOT EXISTS`) — it gives **#245** its first SQL
-counterpart, not its mirror. Operator-surface §1.2 budget met (residual **#436**). **Parts C+D (ADR-0065)** are a
-custody ladder — admission → named nodes → named actors — under one invariant: **narrowing changes the cost and noise of
-reading, never whether content can be REACHED** (audited break-glass at every rung; rung-1 glass is a NETWORK act,
-**#498**). The node's own DEK is the keyring and the floor is the glass (LOCAL); C and D are not separable; custody
-composes by INTERSECTION, which can EMPTY (**#499**); it narrows on `event`/`patient`, never `thread`. **C1** is rung 1
-(`custody.nodes`, both doors, serve-door withholding) + audited break-glass + the in-chart location signal; rung 2 is
-**#496** (blocked on a reader identity, §5.11); chart-wide `patient` is out of C1 (#499). Related: **#494** (ADR-0052's
-`event_dek` sentence vs the built table), **#377**, **#235** (shred authorization hooks), **#236** (FTS/RAG must build on
-`event_clear`).
+**The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)): parts A+B (authority floor + operator
+surface) BUILT, enforcing nothing beyond display/emission; C+D DESIGNED, C1 the next §5.9 BUILD.** Read
+**ADR-0062/0063/0064/0065** first. The authority floor is ONE predicate `cairn_claim_authority` (db/005) at ONE site
+(db/048's `NOT EXISTS`) — **#245**'s first SQL counterpart, not its mirror; operator-surface §1.2 budget met (residual
+**#436**). **C+D (ADR-0065)** are a custody ladder (admission → named nodes → named actors) under one invariant:
+**narrowing changes the cost and noise of reading, never whether content can be REACHED** (audited break-glass at every
+rung; rung-1 glass is a NETWORK act, **#498**). The node's DEK is the keyring, the floor the glass (LOCAL); C and D are
+inseparable; custody composes by INTERSECTION, which can EMPTY (**#499**); it narrows on `event`/`patient`, never
+`thread`. **C1** = rung 1 (`custody.nodes`, both doors, serve-door withholding) + audited break-glass + in-chart
+location signal; rung 2 is **#496** (needs a reader identity, §5.11); chart-wide `patient` is out of C1 (#499).
+Related: **#494** (ADR-0052's `event_dek` sentence vs the built table), **#377**, **#235** (shred authorization hooks),
+**#236** (FTS/RAG must build on `event_clear`).
 
 **Two §5.9 facts that outlive their slices.** `REVOKE SELECT (column)` is inert while a table-level grant stands, so
 `cairn_agent` holds an explicit 23-column grant on `event_log` omitting `safety` — a new column must be granted in db/049
@@ -396,135 +391,93 @@ through one — include it next.
 ---
 
 **Session date:** 2026-09-29 (**R2b-1 — "Same person as…" (link)**, PR
-**[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)**, draft; `cairn_node::patient::compare`, `chart_link`
-pre-check refusals marked as verdicts, the window's compare/link commands and panel; filed #708, #709) · 2026-09-27 (**R2a — the link precedence floor + `link_charts`/`unlink_charts`**, PR
-**[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)**, `db/055`, generation 55; #697 decided (b); filed #699–#702;
-earlier the same day **R1 — the combined read**, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
-spec **v0.78**, `db/054`, PR #688, #334 repaired) · 2026-09-26 (**#671**, ADR-0075, PR #678) · 2026-09-23 (**funnel
-slice 2c**, PR #674) · 2026-09-22 (funnel 2a + 2b) · 2026-09-21 (#636 slice 1 + #639) · 09-20 #621 (ADR-0074) · earlier:
-ROADMAP. · **Spec:** **v0.78** (newest ADR-0076; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md)
-supersedes ADR-0026 decision 2's implementation wording only) · **`SCHEMA_GENERATION`:** **55** (`db/055`) · **Phase:**
-architecture complete (every original §11 question closed); **first production clinical surface RUNNING** —
-`cairn-node` plus a Tauri 2 window: the funnel front door onto a medication chart that reads linked charts as one.
+**[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)**, draft; filed #708, #709) · 2026-09-27 (**R2a — the link
+precedence floor + `link_charts`/`unlink_charts`**, PR **[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)**,
+`db/055`, generation 55; #697 decided (b); filed #699–#702; earlier that day **R1 — the combined read**, ADR-0076, spec
+**v0.78**, `db/054`, PR #688, #334 repaired) · 09-26 **#671** (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · 09-22
+funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier: ROADMAP. · **Spec:** **v0.78** (newest
+ADR-0076; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
+implementation wording only) · **`SCHEMA_GENERATION`:** **55** (`db/055`) · **Phase:** architecture complete; **first
+production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication
+chart that reads linked charts as one.
 
-**Built so far** — orientation only; ROADMAP + the ADR log + git carry the detail. **Demographics slices 1–5** · **the
-§5.2 advisory Python matcher** · **the §5.7 identity core C1–C5** (C5+ `reattribute` waits on a clinical-note surface)
-· **the §5.4 John-Doe subsystem** (§5.12 push-alert open) · **the §5.3/§5.8 search-before-create funnel** (ADR-0061;
-precedence rule #345 at db/005 step 8b; ranking ADR-0075) · **`clinical.medication` slices 1–6b** under **born-sealed
-bodies** (ADR-0052) and **per-write human authorship** (ADR-0053 — grading half-live until #245) · **the §5.9 stream
-through its read surface** · **the med-list node tier** (first clinical READ path + whole-list sign-off, now over a
-linked chart set — ADR-0076 R1), **human link/unlink judgements** (`chart_link`, attested-first `patient_link`
-— ADR-0076 R2a), **the window's compare-and-link panel** ("Same person as…", R2b-1, PR #707, draft),
-**generic reprojection** (ADR-0057; a late key projects at the door, ADR-0070), the
-**ADR-0056 admit-uninterpreted floor** · **the L3 reference UI** — `cairn-gui/`, a standalone workspace, one-way GUI →
-crates, **`cairn-gui-tauri`** (the iced shell FAILED the accessibility bar, spike 0004): the funnel front door onto one
-patient's (or one linked person's) medication chart (plain JS, no npm); pane/routing/freshness state machine tested but
-**not wired**.
+**Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
+matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waits on a clinical-note surface) · §5.4 John-Doe (§5.12
+push-alert open) · §5.3/§5.8 funnel (ADR-0061; precedence #345 at db/005 step 8b; ranking ADR-0075) ·
+`clinical.medication` 1–6b under born-sealed bodies (ADR-0052) + per-write human authorship (ADR-0053 — grading
+half-live until #245) · §5.9 stream through its read surface · med-list node tier (read + whole-list sign-off over a
+linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the compare-and-link
+panel (R2b-1, PR #707) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056 admit-uninterpreted floor · **the L3
+reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates; `cairn-gui-tauri`, the iced shell FAILED
+a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine tested but **not wired**.
 
 ---
 
 ## Recent sessions — what to carry forward
 
-ROADMAP carries the per-slice narrative and **every open issue number**. This section keeps only what a *next* session
-needs — the lessons that generalise past the slice that found them.
+ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise.
 
 ### 2026-09-28 → 09-29 — R2b-1: the "Same person as…" panel (PR #707)
 
-Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; subagent-driven, seven tasks
-(compare/cross_vetoes, view builders, commands, panel, docs), per-task review, controller runs the final
-whole-branch review and gates before push.
-- **⇒ A LOCAL-ONLY COMMIT IS INVISIBLE — PUSH EARLY.** The session's network/permission-classifier connectivity
-  went out mid-session; work kept committing locally with nothing to show for it until connectivity returned.
-  House rule 8 (every session ends in at least a draft PR) exists for exactly this: push as soon as there is
-  anything worth seeing, not only at the end.
-- **⇒ A REVIEW CAN FIND A PRINCIPLE-4 DEFECT IN THE PLAN'S OWN CODE, NOT ONLY IN A DEVIATION FROM IT.** The plan
-  mandated an alias cell reading "none" for a chart not held here; review Important 1 caught that an unheld
-  chart's alias list is not KNOWN to be empty, it is simply not read yet — the correct word is the same absence
-  wording every other unheld cell uses ("unknown — registration not yet received here"), not "none". The plan
-  being explicit about the wrong word did not make it right; principle 4 (never let a required field be
-  satisfiable only by fabricating certainty) outranks a plan's literal text.
-- **⇒ A HEADLESS WALK MUST ASSERT A MESSAGE IS VISIBLE, NOT THAT ITS TEXT IS SET.** The first panel wrote every
-  refusal and the Outranked sentence into a status line `setMessage` had hidden; the walk read `textContent`, passed,
-  and the final review found every outcome invisible and unannounced. Check `getComputedStyle(el).display` and
-  `hidden` on the element AND its ancestors.
-- **⇒ A GUARD FILE'S COUNT PINS TRAVEL WITH THE CODE THAT MOVES.** `db_errors_stay_legible.rs` (the #467
-  legibility guard) counts `LocalDbFault::new(` sites per file; adding `patient/compare.rs` to the sweep meant
-  adding its own pinned count (`COMPARE_LOCAL_DB_FAULT_SITES`) alongside the file list — a file that builds
-  `LocalDbFault`s but is missing from BOTH the sweep's file list and a per-file count passes silently with zero
-  coverage, the same trap the twin-registry and helper-registry pins guard elsewhere.
-- **⇒ A HEADLESS WALK THAT CHECKS `textContent` PROVES NOTHING ABOUT WHAT IS ON SCREEN.** The per-task walk
-  read every panel sentence out of the DOM and passed; the final review found every one of them inside a
-  `hidden` element (C1). Assert visibility (`getComputedStyle(el).display` and every ancestor's `hidden`) for
-  each message a walk checks — the words existing and the clinician seeing them are different facts.
-- **Mechanics:** the right-set refusal folds two different `check_displayed_set` failure arms into one sentence
-  (`OTHER_CHANGED`) rather than distinguishing them — the clerk needs to know the picture is stale, not which
-  check noticed; `chart_link`'s bare `anyhow::bail!`s needed marking as verdicts (`Input`/`NodeState`) before
-  the window could tell a refusal from an outage, closing #702 for this surface.
+Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; subagent-driven (seven tasks, per-task
+review), controller ran the final whole-branch review and gates.
+- **⇒ A LOCAL-ONLY COMMIT IS INVISIBLE — PUSH EARLY.** Connectivity dropped mid-session and work piled up locally;
+  house rule 8 means push as soon as anything is worth seeing, not only at the end.
+- **⇒ A REVIEW CAN FIND A PRINCIPLE-4 DEFECT IN THE PLAN'S OWN CODE.** The plan mandated "none" for an unheld chart's
+  aliases; that list is not KNOWN empty, only unread — the word is the shared absence wording ("unknown — registration
+  not yet received here"). Principle 4 outranks a plan's literal text.
+- **⇒ A HEADLESS WALK THAT CHECKS `textContent` PROVES NOTHING ABOUT WHAT IS ON SCREEN** (final review C1: every panel
+  message sat in a `hidden` element; the walk passed). The rule and its assertion are in R2b-1's durable rules above.
+- **⇒ A GUARD FILE'S COUNT PINS TRAVEL WITH THE CODE THAT MOVES.** `db_errors_stay_legible.rs` (#467) counts
+  `LocalDbFault::new(` per file; `patient/compare.rs` needed both a sweep entry and `COMPARE_LOCAL_DB_FAULT_SITES` — a
+  file missing from both passes with zero coverage (cf. the twin-registry and helper-registry pins).
+- **Mechanics:** `OTHER_CHANGED` folds two `check_displayed_set` failure arms into one sentence (the clerk needs "stale",
+  not which check); `chart_link`'s bare `anyhow::bail!`s became verdicts so the window tells a refusal from an outage
+  (#702, for this surface).
 
 ### 2026-09-27 → 09-28 — R2a: the link precedence floor, the node's judgement, and its PR review (PR #698)
 
-Maintainer split R2 (R2a/R2b) and decided #697 (b) → plan → subagent-driven (six tasks, per-task review, opus on
-the safety-critical tasks and the whole-branch review), then a five-agent PR review with its own fix round.
-- **⇒ A MIGRATION THAT CHANGES A PROJECTION'S ORDER MUST RE-DECIDE WHAT THE OLD ORDER ALREADY DECIDED.** The design
-  said "backfill `attested`"; a backfill marks the stored machine link "not attested" and leaves it the winner.
-  The fix reuses the loader's generation-change heal — so the new migration's EXISTENCE is load-bearing. **Ask of
-  every ordering change: what did the old order already choose, and what re-chooses it?**
-- **⇒ A STORED DERIVED VALUE IS SAFE ONLY IF ITS INPUT CANNOT CHANGE AFTER IT IS STORED** — checked, not assumed
-  (db/043 gate 1 clears the unvouched marker before gate 4 first projects the event).
-- **⇒ A SECOND CALLER OF A SHARED CORE CAN INVERT A LOCK ORDER.** The task reviewer found the judgement took the
-  advisory lock before the proposal row while `auto_apply` took them the other way: a same-pair deadlock. **A
-  concurrency test must wait on the real signal** (`pg_stat_activity.wait_event_type = 'Lock'`), never a sleep.
-- **⇒ THE WHOLE-BRANCH REVIEW FOUND WHAT NO TASK REVIEW COULD:** a rule written for one verb (link's "both held here")
-  applied to the other (unlink), and a transitive unlink reported "unlinked" while the charts stayed combined (now
-  `LinkEffect::StillJoined`). **Check each rule against every verb that reaches it.**
-- **⇒ RECORDED IS NOT TOOK EFFECT, AND A TRIGGER ANOTHER PROCESS CAN CONSUME IS NOT A TRIGGER YOU OWN** — the PR
-  review's two findings. An overlay admits the losing assertion (set-union), so "the submit succeeded" says
-  nothing about what stands; three reviewers independently built a report or a proposal status on that
-  assumption, fixed by reading the winner back INSIDE the same transaction. And db/055's generation-change heal
-  can be consumed by `cairn-sync init` first (it shares the generation, heals with the old applier, and stamps
-  it) — db/055 now re-folds the affected pairs itself (#703). `event_log.body` IS the payload, no `payload`
-  wrapper; a probe written against the wrong shape matched nothing and failed silently green-looking, caught by
-  the red test.
-- **Mechanics:** survey the tree before designing (a brief is a claim); when a read widens from a key to a set,
-  re-read every per-key aggregate; run a plan's verbatim code against its own guards; capture a golden BEFORE the
-  rewrite; availability over consistency binds a header read too.
+Subagent-driven (six tasks, opus on safety-critical tasks + whole-branch review), then a five-agent PR review + fix round.
+- **⇒ A MIGRATION THAT CHANGES A PROJECTION'S ORDER MUST RE-DECIDE WHAT THE OLD ORDER ALREADY DECIDED** — a backfill
+  leaves the old winner standing; db/055 reuses the generation-change heal. Ask: what did the old order choose, and what
+  re-chooses it?
+- **⇒ A STORED DERIVED VALUE IS SAFE ONLY IF ITS INPUT CANNOT CHANGE AFTER IT IS STORED** — checked, not assumed.
+- **⇒ A SECOND CALLER OF A SHARED CORE CAN INVERT A LOCK ORDER** (same-pair deadlock). A concurrency test waits on the
+  real signal (`pg_stat_activity.wait_event_type = 'Lock'`), never a sleep.
+- **⇒ CHECK EACH RULE AGAINST EVERY VERB THAT REACHES IT** — the whole-branch review found link's "both held here"
+  applied to unlink, and a transitive unlink reporting "unlinked" while still joined (`LinkEffect::StillJoined`).
+- **⇒ RECORDED IS NOT TOOK EFFECT, AND A TRIGGER ANOTHER PROCESS CAN CONSUME IS NOT ONE YOU OWN** — read the winner
+  back in the same transaction; db/055 re-folds its pairs itself because `cairn-sync init` can use up the heal (#703).
+  `event_log.body` IS the payload (no `payload` wrapper) — a wrong-shape probe matched nothing, caught by the red test.
+- **Mechanics:** survey the tree before designing (a brief is a claim); when a read widens from key to set, re-read every
+  per-key aggregate; run a plan's verbatim code against its own guards; capture a golden BEFORE the rewrite;
+  availability over consistency binds a header read too.
 
-### 2026-09-22 → 09-26 — funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678), condensed
+### 2026-09-22 → 09-26 — funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678)
 
-- **Ask what the person at the desk will actually do before designing what they must attest** (#671: "how fast is the
-  duplicate FOUND?"); **measure the ADR's claim with a control the feature cannot help** — every ranking change re-runs
-  every arm, a latency instrument must see the code path, inverting a test can delete its pair's other half. A design's
-  quantitative assumption is itself a claim ("few candidates by construction" was false; a rig needs a
-  right-shaped population; read the query the UI sits on before wiring the UI).
-- **When a slice makes a constant variable, audit every reader** (2c's Critical: "open chart" ≠ "chart on screen"; R1
-  widened it to a set); a mock-mode window walks headless, an IPC-only defect stays the human pass's.
-- **A sweep without all three DB strings is not a sweep** (`scripts/run-db-gated-tests.sh`); **an agent's or an issue's
-  claim about the tree is a claim — grep** (#654: one call site claimed, fifteen found); an atomicity probe that never
-  reaches the server is decoration (#657); a derived truncate list is only as good as its predicate (#658); a new DB
-  suite in a non-root tree runs nowhere until wired (#656).
+- **Ask what the desk will actually do before designing what it must attest** (#671); **measure the ADR's claim with a
+  control the feature cannot help**; a design's quantitative assumption is a claim (read the query the UI sits on first).
+- **When a slice makes a constant variable, audit every reader** (2c's Critical; R1 widened it to a set); a mock-mode
+  window walks headless, an IPC-only defect stays the human pass's.
+- **A sweep without all three DB strings is not a sweep**; **a claim about the tree is a claim — grep** (#654); an
+  atomicity probe that never reaches the server is decoration (#657); a derived truncate list is only as good as its
+  predicate (#658); a new DB suite in a non-root tree runs nowhere until wired (#656).
 
-### 2026-08-20 → 09-21 — the restore, node-plane, door and search slices (condensed to one-liners)
+### 2026-08-20 → 09-21 — the restore, node-plane, door and search slices
 
-Per-slice narrative: ROADMAP; the durable rules are traps 7–18; each plan carries its review ledger.
-- **An issue's failure scenario, scope and blast radius are CLAIMS** — read the code for what it MISSED. **Validate a
-  SQL value with the parser that will parse it** (`pg_input_is_valid`); two parsers for one value are two protocols
-  (#624). **A guard that has only ever been green has proved nothing** — give it a positive control (#586), and every
-  harness a control for the run not happening; **"untestable" is a claim — try a `SET ROLE` seam first.**
-- **A mutation is the RED phase of a pin over shipped behaviour**; negative assertions name what they negate (`Some(n)`).
-  **Copying a guard spreads its fail-open** (#608's `<>`): extract, never paste a third copy (cf. #652). **Review the
-  review's fixes** (three of four rounds found a defect the last fix created). **A door returning `Ok` is not the
-  record coming back** — assert the projection; the headline test DECRYPTS a body.
-- **Content-addressing over unsigned bytes is not content-addressing** (#620). An unpushed branch is invisible (house
-  rule 8). A round-trip test proves self-consistency, not correctness. A scanner reads names, not values (rule 6b). A
-  deferral is honest only while its precondition holds.
+Narrative: ROADMAP; durable rules: traps 7–18; each plan carries its review ledger.
+- **An issue's scenario, scope and blast radius are CLAIMS** — read the code for what it MISSED. **Validate a SQL value
+  with the parser that will parse it** (#624). **A guard only ever green proved nothing** — positive control (#586);
+  **"untestable" is a claim — try a `SET ROLE` seam first.**
+- **A mutation is the RED phase of a pin over shipped behaviour** (`Some(n)`). **Copying a guard spreads its fail-open**
+  (#608; cf. #652). **Review the review's fixes.** **A door returning `Ok` is not the record coming back** — assert the
+  projection. **Content-addressing over unsigned bytes is not content-addressing** (#620). A scanner reads names (6b).
 - **Mechanics:** a fixture can manufacture a SQLSTATE production never sees; `restore_node_event` refuses an enrolled
-  node; a red gate can be a predecessor's (#583 — truncate `local_node`); fault injection via a test-scoped trigger or
-  role; a new definer writes `SET search_path = public, pg_temp`; `nohup … &` and `cmd; echo exit=$?` both lie — read
-  the log's last line; subagent briefs say FOREGROUND ONLY; a new ADR needs its `mkdocs.yml` nav line; zsh needs `${=T}`
-  to word-split. Still open from this stretch: **#569**, **#598**.
+  node; a red gate can be a predecessor's (#583 — truncate `local_node`); a new definer writes `SET search_path =
+  public, pg_temp`; `nohup … &` and `cmd; echo exit=$?` lie — read the log's last line; a new ADR needs its `mkdocs.yml`
+  nav line; zsh needs `${=T}`. Still open: **#569**, **#598**.
 
-**⇒ THE OPEN ISSUES OLDER SESSIONS OPENED, INDEXED RATHER THAN NARRATED.** The rule is never to drop an **open** issue
-number while condensing; an index satisfies it where a paragraph does not.
+**⇒ OPEN ISSUES OLDER SESSIONS OPENED, INDEXED** (never drop an open number while condensing):
 
 [#288](https://github.com/cairn-ehr/cairn-ehr/issues/288) · [#327](https://github.com/cairn-ehr/cairn-ehr/issues/327) · [#394](https://github.com/cairn-ehr/cairn-ehr/issues/394) · [#402](https://github.com/cairn-ehr/cairn-ehr/issues/402) · [#406](https://github.com/cairn-ehr/cairn-ehr/issues/406) · [#407](https://github.com/cairn-ehr/cairn-ehr/issues/407) · [#408](https://github.com/cairn-ehr/cairn-ehr/issues/408) · [#409](https://github.com/cairn-ehr/cairn-ehr/issues/409) · [#413](https://github.com/cairn-ehr/cairn-ehr/issues/413) · [#420](https://github.com/cairn-ehr/cairn-ehr/issues/420) · [#422](https://github.com/cairn-ehr/cairn-ehr/issues/422) · [#428](https://github.com/cairn-ehr/cairn-ehr/issues/428) · [#430](https://github.com/cairn-ehr/cairn-ehr/issues/430) · [#431](https://github.com/cairn-ehr/cairn-ehr/issues/431) · [#447](https://github.com/cairn-ehr/cairn-ehr/issues/447) · [#458](https://github.com/cairn-ehr/cairn-ehr/issues/458) · [#463](https://github.com/cairn-ehr/cairn-ehr/issues/463) · [#464](https://github.com/cairn-ehr/cairn-ehr/issues/464) · [#470](https://github.com/cairn-ehr/cairn-ehr/issues/470) · [#483](https://github.com/cairn-ehr/cairn-ehr/issues/483) · [#484](https://github.com/cairn-ehr/cairn-ehr/issues/484) · [#485](https://github.com/cairn-ehr/cairn-ehr/issues/485) · [#487](https://github.com/cairn-ehr/cairn-ehr/issues/487) · [#488](https://github.com/cairn-ehr/cairn-ehr/issues/488) · [#490](https://github.com/cairn-ehr/cairn-ehr/issues/490) · [#491](https://github.com/cairn-ehr/cairn-ehr/issues/491) · [#492](https://github.com/cairn-ehr/cairn-ehr/issues/492) · [#494](https://github.com/cairn-ehr/cairn-ehr/issues/494) · [#504](https://github.com/cairn-ehr/cairn-ehr/issues/504) · [#505](https://github.com/cairn-ehr/cairn-ehr/issues/505) · [#506](https://github.com/cairn-ehr/cairn-ehr/issues/506) · [#507](https://github.com/cairn-ehr/cairn-ehr/issues/507) · [#508](https://github.com/cairn-ehr/cairn-ehr/issues/508) · [#509](https://github.com/cairn-ehr/cairn-ehr/issues/509) · [#513](https://github.com/cairn-ehr/cairn-ehr/issues/513) · [#518](https://github.com/cairn-ehr/cairn-ehr/issues/518) · [#521](https://github.com/cairn-ehr/cairn-ehr/issues/521) · [#522](https://github.com/cairn-ehr/cairn-ehr/issues/522) · [#529](https://github.com/cairn-ehr/cairn-ehr/issues/529) · [#530](https://github.com/cairn-ehr/cairn-ehr/issues/530) · [#543](https://github.com/cairn-ehr/cairn-ehr/issues/543) · [#545](https://github.com/cairn-ehr/cairn-ehr/issues/545) · [#557](https://github.com/cairn-ehr/cairn-ehr/issues/557) · [#558](https://github.com/cairn-ehr/cairn-ehr/issues/558) · [#559](https://github.com/cairn-ehr/cairn-ehr/issues/559) · [#560](https://github.com/cairn-ehr/cairn-ehr/issues/560) · [#561](https://github.com/cairn-ehr/cairn-ehr/issues/561)
 
@@ -552,8 +505,7 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 - **Test rig:** DB-gated tests need local PG18 + `cairn_pgx`, self-serializing via a Postgres advisory lock
   (`db::test_serial_guard`). **Advisory locks are scoped PER DATABASE** (#467; ~124 comments still say otherwise,
   **#476**), so every caller takes the guard against `CAIRN_TEST_PG`.
-- **Tech-debt loop** — `/techdebt-loop` triages into `loop:*` labels, `/techdebt-next` runs one fresh headless session
-  per issue; STOPPED by maintainer decision.
+- **Tech-debt loop** — `/techdebt-loop` triages, `/techdebt-next` works one issue per headless session; STOPPED (above).
 
 ---
 
@@ -561,14 +513,12 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 
 **Desk-doable now (no external dependency):**
 - **⇒ The repair path, R2 → R5** — see ⇒ NEXT.
-- **⇒ DR — closed and rehearsable end to end.** Two things a reader is led to expect and will not find: **2d does NOT
-  drive `cairn-sync`'s puller through `MediumTransport`**, and **the per-peer quarantine quota does not apply to a
-  restore-originated pen** (`restore_pen_is_uncapped.rs`). Open issues the chain filed: **#549**, **#551**, **#552**,
-  **#553**, **#525**, **#541** (no CI job compiles `cairn_pgx`'s `pg_test` module), **#531**/**#329** (decompose
-  `cairn-sync/src/main.rs` — a maintainer decision on which to keep), **#532**, **#534**, **#535**, **#536**, **#537**, **#538**, **#556**–**#563**,
-  **#569**, **#575**, **#589**–**#592**, **#596**–**#599**, **#602**–**#611**, **#613**, **#616**, **#617**, **#620**,
-  **#622**, **#624**–**#626**, **#628**, **#629**. (Ranges silently absorb issues that leave them: re-check each
-  against GitHub before trusting it.)
+- **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
+  `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
+  restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain: #549 · #551 · #552 · #553 · #525 · #541
+  (no CI job compiles `cairn_pgx`'s `pg_test`) · #531/#329 (decompose `cairn-sync/src/main.rs` — maintainer picks one) ·
+  #532 · #534 · #535 · #536 · #537 · #538 · #556–#563 · #569 · #575 · #589–#592 · #596–#599 · #602–#611 · #613 · #616 · #617 · #620 · #622 ·
+  #624–#626 · #628 · #629. (Ranges absorb issues that leave them: re-check against GitHub.)
 - **§5.9 parts C/D** (#232) — above.
 - **`clinical.medication` — slices 1–6b DONE, read over a linked set since R1.** Next: #690 (reconciling across linked
   charts), the **drugref term→anchor lookup**, fuzzy/automatic reconciliation + a Tier-A dictionary, structured
