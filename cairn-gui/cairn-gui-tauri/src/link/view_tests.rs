@@ -303,19 +303,20 @@ fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
     let took = link_report(LinkEffect::TookEffect, &set, &set);
     assert!(
         took.reload && took.sentence.starts_with("Linked"),
-        "{}",
-        took.sentence
+        "link report should indicate the link took effect and begin with 'Linked'"
     );
     assert!(took.sentence.contains("2 charts"));
     let lost = link_report(LinkEffect::Outranked, &ChartSet::single(id(1)), &set);
     assert!(!lost.reload, "a disagreement is shown, never reloaded away");
-    assert!(lost.sentence.contains("NOT in effect"), "{}", lost.sentence);
+    assert!(
+        lost.sentence.contains("NOT in effect"),
+        "outranked link should mention it is not in effect"
+    );
     // Final review M6: pressing Link again is not a no-op — it records another judgement.
     assert!(
         lost.sentence
             .ends_with("pressing Link again records another judgement but changes nothing."),
-        "{}",
-        lost.sentence
+        "outranked link should end with the pressing-again message"
     );
 }
 
@@ -327,21 +328,22 @@ fn a_chart_the_comparison_never_showed_is_named() {
     let compared = ChartSet::new([id(1), id(2)]).unwrap();
     let now = ChartSet::new([id(1), id(2), id(3)]).unwrap();
     let took = link_report(LinkEffect::TookEffect, &now, &compared);
-    assert!(took.sentence.starts_with("Linked"), "{}", took.sentence);
+    assert!(
+        took.sentence.starts_with("Linked"),
+        "link report should begin with 'Linked'"
+    );
     assert!(
         took.sentence.ends_with(&format!(
             "The record now also includes chart(s) {} that were not in the comparison — \
              review them.",
             id(3)
         )),
-        "{}",
-        took.sentence
+        "link report should mention the third chart not in the comparison"
     );
     let exact = link_report(LinkEffect::TookEffect, &compared, &compared);
     assert!(
         !exact.sentence.contains("not in the comparison"),
-        "{}",
-        exact.sentence
+        "link report should not mention unanticipated charts when none were added"
     );
 }
 

@@ -265,7 +265,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.text.contains("not the chart"), "{}", err.text);
+        assert!(
+            err.text.contains("not the chart"),
+            "compare should refuse a patient that is not the chart on screen"
+        );
     }
 
     #[tokio::test]
@@ -281,7 +284,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.text.contains("linked charts changed"), "{}", err.text);
+        assert!(
+            err.text.contains("linked charts changed"),
+            "compare should refuse a changed set"
+        );
     }
 
     #[tokio::test]
@@ -359,7 +365,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.text.contains("fixture mode"), "{}", err.text);
+        assert!(
+            err.text.contains("fixture mode"),
+            "link should refuse to write in fixture mode"
+        );
     }
 
     /// Final review I1: the Link sends the LEFT set the clinician compared, not whatever the
@@ -383,8 +392,8 @@ mod tests {
         assert_eq!(err.text, view::THIS_CHANGED);
     }
 
-    /// Compare keeps the ordinary chart-set wording: nothing was judged yet, so the remedy is
-    /// the list's own ("reload the chart"), not "compare again".
+    /// Link refuses an unreadable displayed left set with the "could not tell which charts are
+    /// on screen — reopen" wording, never the "this record changed" wording.
     #[tokio::test]
     async fn an_unreadable_left_set_is_not_worded_as_a_change() {
         let other = Uuid::from_u128(2);
@@ -400,7 +409,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_ne!(err.text, view::THIS_CHANGED);
-        assert!(err.text.contains("could not tell"), "{}", err.text);
+        assert!(
+            err.text.contains("could not tell"),
+            "unreadable set should produce the read-failure message"
+        );
     }
 
     #[tokio::test]
@@ -416,7 +428,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.text.contains("not the chart"), "{}", err.text);
+        assert!(
+            err.text.contains("not the chart"),
+            "link should refuse a patient that is not the chart on screen"
+        );
     }
 
     #[tokio::test]

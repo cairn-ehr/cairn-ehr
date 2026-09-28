@@ -1,7 +1,8 @@
 //! Repair path R2b-1 — the side-by-side comparison's node read (`patient::compare`).
 //!
 //! Two paper front sheets laid next to each other: every member chart of each record, with
-//! EVERY name it carries (not just the display winner), its earlier recorded names apart,
+//! EVERY name it carries (not just the display winner), names a human repudiated as known-false
+//! (§5.7, db/025), listed apart as `aliases` — never mixed with current names,
 //! DOB and sex-at-birth with provenance, identifiers and addresses. Real Postgres, gated on
 //! `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 mod common;

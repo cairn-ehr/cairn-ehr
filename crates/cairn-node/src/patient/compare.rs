@@ -8,8 +8,8 @@
 //!
 //! WHY EVERY NAME, NOT THE DISPLAY WINNER. `patient_name_current` picks one name per chart. A
 //! maiden or preferred name is often precisely what tells a clerk two charts are one woman, so
-//! the comparison reads every retained name with its `use`. Names a human REPUDIATED (§5.7) are
-//! listed apart as `aliases` — "was recorded as" — never mixed in with the current ones.
+//! the comparison reads every retained name with its `use`. Names a human repudiated as known-false
+//! (§5.7, db/025), listed apart as `aliases` — never mixed with current names.
 //!
 //! SHAPE: one flat `WHERE patient_id = ANY(...)` query per fact kind, joined in Rust — the
 //! `person.rs` style, for the reason `chart_identities` gives (each projection has its own
