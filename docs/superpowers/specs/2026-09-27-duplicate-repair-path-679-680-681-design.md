@@ -215,6 +215,97 @@ before it can be repaired (R2); R4/R5 consume both.
 >   old way — latest-HLC-wins, so a later machine link can still displace a human's unlink there —
 >   until it upgrades and its own heal re-folds; the fleet converges once every node has upgraded.
 
+#### R2b — the window's gesture (designed 2026-09-28)
+
+The maintainer's decisions (brainstorm, 2026-09-28): **#699 → (a)** — a neither-held unlink is
+filed under the opened chart when both subjects read as part of its record; **R2b ships as two PRs**
+— R2b-1 "Same person as…" (link) then R2b-2 "Not the same person" (unlink + #699); the panel adds
+**sex-at-birth and current addresses** to the bullets above (sex-at-birth is a veto field, so a
+finding must not cite a fact the panel hides; address is the clerk's first disambiguator).
+Contact details and next of kin are not projected streams yet.
+
+**The comparison is SET against SET, never chart against chart.** With A open and already linked to
+C, linking B to A also joins B to C — a pairwise A–B veto check would hide a B–C date-of-birth
+clash. So the left side is every member of the displayed record, the right side every member of
+B's record (B may itself be linked to D), and `cairn_match_veto` runs over every cross pair. For
+two never-linked charts this is exactly the picture above.
+
+**Node read** — `cairn-node/src/patient/compare.rs` (new; no SQL object, `SCHEMA_GENERATION` stays 55):
+- `chart_facts(client, &ChartSet) → Vec<ChartFacts>`: per member `held`, `trust` (`person::trust_of`),
+  **every** retained non-repudiated name with its `use` and provenance (not `patient_name_current`'s
+  one winner — a maiden or preferred name is often the clue), repudiated names apart as `aliases`,
+  DOB and sex-at-birth (`patient_demographic`, value + provenance), identifiers (system, value,
+  provenance), current addresses (`patient_address_current`). One `ANY($1::uuid[])` query per
+  section; each failure a `LocalDbFault` naming its step (#467 legibility guard).
+- `cross_vetoes(client, left, right) → Vec<VetoFinding>`: every left×right pair, each finding
+  tagged with its pair, `hard_veto` before `degrade_hold`.
+- The right side's medications are NOT a new read: `read_chart_of(B)`, the same custody-applied
+  combined read opening B would give (§5.9 sealing applies unchanged).
+
+**Window commands** — `cairn-gui-tauri/src/link.rs` (new), one-line forwarders onto `*_impl`:
+- **Search** reuses `browse` from a second form inside the chart: it already adds to `shown` and
+  never touches the open chart (whereas `open()` clears `shown`, so the front door cannot be reused).
+- `compare_impl(patient_id, charts, other)`: `displayed_patient` → `check_displayed_set` → `other`
+  in `shown` → `other` not already in the record → reads; returns the panel view **including B's
+  set as displayed**.
+- `link_impl(patient_id, charts, other, other_charts)`: **names both displayed sets** and refuses if
+  B's set changed ("the other record changed while you were comparing — nothing was done; compare
+  again") — decision 3 widened to the right-hand side: a peer's link landing mid-review must not clip
+  a chart into this record sight unseen. Fixture mode refuses; `live_key` (activity); calls
+  `link_charts(opened, B)`. No server-side timing row — db/044's `gesture_kind` CHECK would refuse
+  a `link` kind (as it does registration); the runbook's stopwatch measures the gesture.
+- `link_report(&LinkOutcome)` (pure): `TookEffect` → "Linked — this record now combines N charts" and
+  the pane reloads; `Outranked` → "Recorded, but NOT in effect: a later judgement on this pair says
+  these are different people", no reload, no retry. Errors are classified the way
+  `cairn-gui-live`'s `data_error_from` already does — a `P0001` from the floor OR a
+  `db_diagnosis::DeliberateRefusal` marker on the chain is a refusal, anything else an outage — and
+  worded with the funnel's `Retry` vocabulary, not a third one (#702). **This needs a node-side fix
+  first:** `chart_link`'s own pre-check refusals (same chart, a chart not held, a key that is not an
+  enrolled human) are bare `anyhow::bail!`s today, carrying neither marker nor SQLSTATE, so the
+  window would call them outages ("try again") when they are verdicts. They are minted through
+  `deliberate_refusal` in R2b-1. "Commit outcome unknown" passes through verbatim.
+
+**Panel** — `src-ui/link.js` (new), a `<section>` between the header and the medication table, never
+a dialog (Esc / "Close comparison" hides it). DOM order is clinical:
+1. Veto findings first, `role="alert"`, plain facts, hard vetoes first; hidden when there are none
+   — never "no conflicts", because an absent finding is not a clearance.
+2. One `<table>`: a column per chart under two `<colgroup>` headers, **This record** / **Other
+   record**; rows names (with use), earlier recorded names, DOB + provenance, sex at birth +
+   provenance, identifiers, addresses, identity state; every absence worded ("not recorded", or
+   "unknown — registration not yet received here" when unheld).
+3. The other record's active medications, read-only, captioned *"On the other record — not part of
+   this one until linked"*.
+4. **"Link — same person"**, which says what it needs when the key is locked.
+
+Focus moves to the panel heading on open and back to "Same person as…" on close. `MockData` gains
+fixture `chart_facts` (name, DOB) so the panel can be walked headless and timed under `--mock`.
+**A comparison that could not be read in full offers no Link button** — reading stays available,
+but the judgement needs the whole picture.
+
+**R2b-2 — "Not the same person" and #699 (a):**
+- `record_edges(client, &ChartSet) → Vec<Edge>` (the standing `link` rows inside the set: pair,
+  attested, provenance, when). Each member line lists the links that actually join it — *"linked to
+  chart … — by a clinician's judgement, <date>"* or *"— by the matcher (not reviewed)"* — each with
+  its own **"Not the same person"**. Per EDGE, not per member: in A–C–B the wrong clip may be A–C or
+  C–B; the human picks, the machine never guesses (principle 2), and a per-member act would yield
+  `StillJoined` by construction.
+- The same panel on that edge's two charts; `unlink_impl(patient_id, charts, low, high)` refuses an
+  edge no longer in `record_edges` of the displayed set.
+- **#699 (a):** `unlink_charts` gains `opened`; `admit_judgement` gains the arm *unlink, neither
+  held, `opened` held and its record contains both → file under `opened`*; `assert_link_in_tx`'s
+  `about ∈ {low, high}` becomes a `FiledUnder::{Subject, RecordOf}` enum so the relaxation cannot
+  reach `link`; CLI `unlink-charts --from <chart>`. A plan task audits every reader of identity
+  events by `patient_id` (db/018/019/023–025, reprojection, the twin, sync scope) for a
+  "filed-under ∈ subjects" assumption, with a test pinning the finding.
+- Outcomes: `TookEffect` "Unlinked — chart … is no longer part of this record"; `StillJoined`
+  "Recorded — but chart … still reads as part of this record through another link; that link is
+  listed on its line"; `Outranked` as for link. Each reloads except `Outranked`.
+
+**§1.2:** link — paper 3 (fetch the other folder, lay the front sheets side by side, clip) → forced 3
+(find → Compare → Link; the Link click IS the signature, ADR-0053) → target 3; unlink — paper 2
+(unclip, annotate) → forced 2 → target 2. `M ≤ N`. Review-and-link ≤ 20 s, measured by a new
+runbook section 9 (a human act).
+
 ### R3 — the front door collapses by person
 
 - Search results group by `cairn_person_charts`; a person row lists each member's name + DOB and
