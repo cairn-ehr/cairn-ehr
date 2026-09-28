@@ -24,6 +24,7 @@
 mod chart_set;
 mod commands;
 mod funnel;
+mod link;
 mod state;
 
 use clap::Parser;
