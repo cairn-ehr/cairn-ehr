@@ -3,10 +3,9 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R2a — A HUMAN'S LINK JUDGEMENT OUTRANKS A MACHINE'S, AND THE NODE CAN AUTHOR ONE — IS BUILT ON PR
-> [#698](https://github.com/cairn-ehr/cairn-ehr/pull/698) (2026-09-27), per-task reviewed, whole-branch reviewed
-> (opus), its fix wave re-reviewed clean, then a five-agent PR review (2026-09-28) whose fixes are on the same
-> PR; AWAITING THE MAINTAINER'S MERGE.** It is the second of the duplicate
+> **⇒ R2a — A HUMAN'S LINK JUDGEMENT OUTRANKS A MACHINE'S, AND THE NODE CAN AUTHOR ONE — IS MERGED (PR
+> [#698](https://github.com/cairn-ehr/cairn-ehr/pull/698), 2026-09-28).** R2b (the window's gesture) is being
+> designed on branch `feat/r2b-window-link-gesture` (2026-09-28). R2a is the second of the duplicate
 > repair path's slices (#679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`, [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
 > spec **v0.78**). R1 (the combined read, PR #688) is merged. R2 was split by the maintainer: **R2a** = ADR-0076
@@ -17,7 +16,7 @@
 > a matcher link that does not stand. Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`.
 >
 > **⇒ NEXT, in order:**
-> 0. Check `gh pr list` before trusting this list (house rule 8). **PR #698** — maintainer review → merge.
+> 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **R2b — the window's gesture (#681).** Header **"Same person as…"** → the front door's search (only a chart
 >    some list showed — `AppState::shown`) → a side-by-side panel (names incl. aliases, DOB with provenance,
 >    identifiers, active medications, `cairn_match_veto` findings as plain facts — its safety is what it SHOWS,

@@ -694,7 +694,7 @@ all four; R1 builds the first.
 
 Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`; ADR-0076 decisions 4–5; `db/055`,
 `SCHEMA_GENERATION` 54 → **55** (node loader list only; cairn-sync loads no identity migration, #284). PR
-[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698), awaiting the maintainer's merge. #681 stays open for R2b.
+[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698), merged 2026-09-28. #681 stays open for R2b.
 - **What R2a built.**
   - **db/018:** `patient_link.attested` (CREATE + paired ALTER, #207) holding the ONE definition of attested,
     evaluated once per applied event. `cairn_link_overlay_wins` ranks attested first, then `cairn_hlc_overlay_wins`.
