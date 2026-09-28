@@ -82,11 +82,17 @@
 >   linking B to A also joins B to C — `cross_vetoes` runs `cairn_match_veto` over every left×right pair across
 >   BOTH sets, not one A–B pair, or a B–C clash would go unseen. Pinned by
 >   `chart_compare.rs::a_clash_with_a_third_chart_already_in_the_record_is_found`.
-> - **Every chart command names BOTH displayed sets**, widening decision 3 to the right-hand side: `link_impl`
->   checks the opened chart's set AND `other_charts`, the OTHER record's displayed set — a peer's link landing
->   mid-review must not clip a chart into this record sight unseen; both failure arms fold to one sentence,
->   `OTHER_CHANGED`. Pinned by `link/mod.rs`'s `compare_is_bound_to_the_chart_on_screen`,
->   `compare_refuses_a_changed_set`, `link_refuses_when_the_other_record_changed`.
+> - **Link names BOTH COMPARED sets**, widening decision 3 to the right-hand side: `ComparisonView` carries
+>   `left_charts` and `other_charts`, the webview sends exactly those back (never its current `renderedCharts`,
+>   which a re-read can grow between Compare and Link), and `link_impl` refuses a changed left set as
+>   `THIS_CHANGED` and a changed right set as `OTHER_CHANGED` — a judgement is never signed over a set nobody
+>   compared. Pinned by `link/mod.rs`'s `compare_is_bound_to_the_chart_on_screen`,
+>   `compare_refuses_a_changed_set`, `link_refuses_when_this_record_changed`,
+>   `link_refuses_when_the_other_record_changed`, `link_is_bound_to_the_chart_on_screen`.
+> - **Every panel message goes through `setMessage`, never a bare `.textContent`.** An empty status line is
+>   `hidden`, and style.css's `[hidden]` wins — a bare write puts the words in the DOM but never on screen nor
+>   in the screen reader (the first build's refusals and Outranked sentence were all invisible). No JS harness
+>   pins it (#332): a headless walk must assert `getComputedStyle(el).display !== "none"`, not text.
 > - **A partially-read comparison offers no Link.** Reading stays available on a failed member read (availability
 >   over consistency), but the judgement needs the whole picture. Pinned by
 >   `view_tests.rs::a_partial_comparison_names_what_is_missing_and_cannot_link`.
@@ -441,6 +447,10 @@ whole-branch review and gates before push.
   adding its own pinned count (`COMPARE_LOCAL_DB_FAULT_SITES`) alongside the file list — a file that builds
   `LocalDbFault`s but is missing from BOTH the sweep's file list and a per-file count passes silently with zero
   coverage, the same trap the twin-registry and helper-registry pins guard elsewhere.
+- **⇒ A HEADLESS WALK THAT CHECKS `textContent` PROVES NOTHING ABOUT WHAT IS ON SCREEN.** The per-task walk
+  read every panel sentence out of the DOM and passed; the final review found every one of them inside a
+  `hidden` element (C1). Assert visibility (`getComputedStyle(el).display` and every ancestor's `hidden`) for
+  each message a walk checks — the words existing and the clinician seeing them are different facts.
 - **Mechanics:** the right-set refusal folds two different `check_displayed_set` failure arms into one sentence
   (`OTHER_CHANGED`) rather than distinguishing them — the clerk needs to know the picture is stale, not which
   check noticed; `chart_link`'s bare `anyhow::bail!`s needed marking as verdicts (`Input`/`NodeState`) before

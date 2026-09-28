@@ -763,8 +763,8 @@ as of 2026-09-29 — the controller runs both after this entry was written).
     recorded" / "unknown — registration not yet received here", uniform per chart not per field), the other
     record's medication notes ("On the other record: …"), `link_error_view` / `link_report`'s outcome sentences.
   - `link/mod.rs` — `compare_records` / `link_records` commands: `compare_impl` reads over `displayed_patient` →
-    `check_displayed_set` → the other chart from `shown` → both sets' facts; `link_impl` names BOTH displayed
-    sets (decision 3 widened to the right-hand side), refusing on either with one sentence, `OTHER_CHANGED`; no
+    `check_displayed_set` → the other chart from `shown` → both sets' facts; `link_impl` names BOTH sets it
+    COMPARED (decision 3 widened to the right-hand side), refusing `THIS_CHANGED` / `OTHER_CHANGED`; no
     server-side gesture timing (db/044's `gesture_kind` CHECK admits only `signoff`/`cease`).
   - `src-ui/link.js` — the panel: findings first (`role="alert"`, hidden when empty — never "no conflicts"), the
     two-column table (**This record** / **Other record**), the other record's active medications read-only,
@@ -775,6 +775,14 @@ as of 2026-09-29 — the controller runs both after this entry was written).
   `link/view.rs`'s view-builder tests (moved to `link/view_tests.rs` for the 500-line guard); `link/mod.rs`'s
   `compare_impl` / `link_impl` tests (`AppState::mock` + `shown`, not-on-screen, `OTHER_CHANGED`); the panel
   walked manually/headless (no committed JS harness exists yet, #332).
+- **Final whole-branch review fixes (same PR).** Every panel message now goes through `setMessage` (the first
+  build's refusals, failed Compare and Outranked sentence sat in a `hidden` status line — invisible and
+  unannounced); Link sends back BOTH compared sets (`ComparisonView::left_charts` beside `other_charts`) and a
+  changed left set is refused `THIS_CHANGED`; a link answer after a chart switch is reported "For chart <id>: …"
+  without re-reading the new chart; open/close drop in-flight answers; a never/after-operator refusal hides Link;
+  `link_error_from` (pure, all four `DataError` arms tested) no longer says an operator is needed for a
+  not-yet-held chart; the alias row is "Names struck as false" (`patient_alias_pool` = repudiated names);
+  `link_report` names any chart the record now combines that the comparison never showed.
 - **Filed:** none yet — the per-task reviews deferred a set of minors (recorded in the plan's own review ledger)
   to the controller's final whole-branch review, which triages them alongside the full gate run.
 - **§1.2:**

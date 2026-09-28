@@ -307,10 +307,12 @@ but the judgement needs the whole picture.
 runbook section 9 (a human act).
 
 **As built (R2b-1, PR #707, 2026-09-29) — deviations from this design:**
-- **Fixture facts carry the name only.** `MockData`'s `chart_facts` gives a `--mock` `Candidate`
-  an age, not a DOB (the front door's own fixture shape, #673) — so the headless walk exercises
-  the panel's layout and wording but not a fixture DOB cell; the DOB row is only real over a live
-  node.
+- **Fixture facts carry the name only.** `MockData` is unchanged (it gained no `chart_facts`); the
+  window's own `link::view::fixture_facts` builds a `--mock` chart's facts from the name the list
+  showed — a `--mock` `Candidate` has an age, not a DOB (the front door's own fixture shape, #673)
+  — so the headless walk exercises the panel's layout and wording but not a fixture DOB cell; the
+  DOB row is only real over a live node. Fixture mode refuses the link itself, so a `--mock` run
+  ends at the fixture-refusal line.
 - **The right-set refusal reuses `chart_set::check_displayed_set`.** `link_impl` names B's
   displayed set the same way every other chart command names its own — both of that function's
   failure arms (the set changed size, or a member no longer matches) fold to ONE panel sentence,
@@ -328,7 +330,7 @@ runbook section 9 (a human act).
   as `1950-01-01` must not read as a precise day it never claimed to be, which would look like a
   clash against a same-day fact that IS precise.
 - **A chart not held here reads "unknown — registration not yet received here" in EVERY row**,
-  including earlier recorded names, not only the fields this section named — the absence word is
+  including names struck as false, not only the fields this section named — the absence word is
   per-chart (`ChartFacts::held`), not per-field, so the wording is uniform across the whole
   column.
 - **Address cells always carry provenance**, not only "the clerk's first disambiguator" framing
@@ -341,12 +343,36 @@ runbook section 9 (a human act).
   called out as needed): same-chart is `RefusalScope::Input` (no retry by anyone ever changes the
   answer); a chart not held here, and a key that is not an enrolled human actor, are both
   `RefusalScope::NodeState` (the identical call succeeds once the chart or the enrolment arrives).
-  `link_report`'s error classification (`db_diagnosis::DeliberateRefusal`) now sees a verdict
-  instead of a bare `db error` (#702).
+  `link_error_view`'s error classification (`cairn_gui_live::error::data_error_from`, then the pure
+  `link_error_from` wording) now sees a verdict instead of a bare `db error` (#702). A
+  `NotProvisioned` refusal reads "This node cannot record the link yet: …" — not "until an operator
+  acts", because a chart not held here resolves by sync.
 - **The panel closes on ANY chart change** (`enterChart` as well as `closeChart`), not only on an
   explicit close, and closing on a chart change does not move focus — a panel that outlived its
   chart would let Compare/Link keep naming a chart no longer on screen. The Link button is
   disabled while a link is in flight (no double-submit under set-union semantics).
+- **Link signs over the sets that were COMPARED, both of them** (final whole-branch review). The
+  design named the opened chart's displayed set; as first built, Link sent the window's CURRENT set
+  at click time, so a re-read between Compare and Link (a sign-off's refresh after a peer's link)
+  could grow this record and the judgement would pass over a set nobody compared.
+  `ComparisonView` now carries `left_charts` beside `other_charts`; the webview captures the chart
+  synchronously at Compare and sends both sets back; a changed left set is refused as
+  `THIS_CHANGED` ("this record changed while you were comparing — nothing was done; compare
+  again"), worded like `OTHER_CHANGED` rather than the list's "reload the chart".
+- **The outcome names charts the comparison never showed.** `link_report` receives the compared
+  union; if the record now combines a chart outside it (a third chart linked to one side by the
+  time the judgement landed), the sentence adds "The record now also includes chart(s) … that were
+  not in the comparison — review them."
+- **The alias row is "Names struck as false"**, not "earlier recorded names": `patient_alias_pool`
+  holds names REPUDIATED as known-false (db/025), which a clerk must not read as former names.
+- **Where an answer lands.** Every panel message goes through `setMessage` (an empty status line
+  is `hidden`, and `[hidden]` wins in style.css — the first build's bare `.textContent` writes left
+  every refusal and the Outranked sentence invisible). A link answer that lands after the clinician
+  left the chart is still reported, prefixed "For chart <id>:", and the chart now open is not
+  re-read for it; opening or closing the panel drops in-flight Compare and search answers; a
+  refusal that cannot change on retry (`never` / `after_operator`) hides the Link button and
+  forgets the comparison, leaving it on screen with the sentence. Outranked reads "pressing Link
+  again records another judgement but changes nothing".
 
 ### R3 — the front door collapses by person
 

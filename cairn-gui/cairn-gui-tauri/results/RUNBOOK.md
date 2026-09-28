@@ -271,7 +271,9 @@ cargo run --release -p cairn-gui-tauri -- \
 ```
 
 **`--mock`** (no database; the fixture's second chart is reachable by typing a fragment of its
-name):
+name). Fixture mode READS everything and refuses only the WRITE, so a `--mock` run ends at the
+refusal line "fixture mode: this window is showing mock data and cannot write" in the panel's
+status line, never at "Linked …" — stop the stopwatch there:
 
 ```bash
 cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001
@@ -279,7 +281,7 @@ cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-0000000
 
 Start the stopwatch at the press of **"Same person as…"**, not before — opening the panel is
 part of the gesture, finding the chart (section 8) is not. Stop it when the outcome line reads
-"Linked — this record now combines N charts".
+"Linked — this record now combines N charts" (live), or at the fixture-refusal line (`--mock`).
 
 1. Press **"Same person as…"**.
 2. Type part of the other chart's name into the panel's own search.
@@ -301,13 +303,19 @@ single sample tells you nothing about the tail.
 
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
-- [ ] Opening the panel announces the veto findings **before** the table.
+- [ ] Pressing **Compare** announces the veto findings **before** the table (the findings appear
+      on Compare, not when the panel opens — nothing has been compared yet then).
 - [ ] The table's two column groups are announced as **"This record"** / **"Other record"**,
       not by position.
 - [ ] An absent fact reads as a word ("not recorded", or "unknown — registration not yet
       received here" for a chart not held on this node), never silence.
-- [ ] The Link button is reachable by Tab and announces when it is disabled (a link in flight,
-      or a comparison that could not be read in full).
+- [ ] The Link button is reachable by Tab and announces when it is disabled (a link in flight).
+      A comparison that could not be read in full shows NO Link button at all — it is hidden,
+      not disabled, and the panel names what could not be read.
+- [ ] Every outcome in the panel — a refusal, the fixture refusal, a failed Compare, an Outranked
+      link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
+      line, never silent. After a refusal that cannot change on retry, the Link button is gone
+      (compare again to get it back).
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
       or switching to a different chart closes the panel without moving focus.
 

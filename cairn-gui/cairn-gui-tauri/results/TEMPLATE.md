@@ -90,7 +90,7 @@ prompt? **yes / no**
 | Gesture | Mode | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|---|
 | "Same person as…" → Compare → read → Link → outcome line | live | | | | ≤ 20 s | |
-| "Same person as…" → Compare → read → Link → outcome line | `--mock` | | | | ≤ 20 s | |
+| "Same person as…" → Compare → read → Link → fixture-refusal line | `--mock` | | | | ≤ 20 s | |
 
 | Run | Findings shown | Key already unlocked? |
 |---|---|---|
@@ -102,10 +102,11 @@ prompt? **yes / no**
 
 | Compare-and-link accessibility check | Verdict | Notes |
 |---|---|---|
-| Veto findings announced before the table | | |
+| On Compare, veto findings announced before the table | | |
 | Column groups announced as "This record" / "Other record" | | |
 | An absent fact reads as a word, never silence | | |
-| Link button Tab-reachable and announces disabled state | | |
+| Link button Tab-reachable and announces disabled state (in flight); hidden, not disabled, for an incomplete comparison | | |
+| Every panel outcome (refusal, fixture refusal, failed Compare, Outranked) shown AND announced | | |
 | Close returns focus to "Same person as…"; a chart switch closes the panel without moving focus | | |
 
 ## Verdict
