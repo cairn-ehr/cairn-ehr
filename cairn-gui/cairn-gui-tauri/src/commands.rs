@@ -386,7 +386,10 @@ pub async fn cease_impl(
 
 /// Read one named chart, from the node or from fixtures. Callers resolve WHICH chart through
 /// `AppState::displayed_patient` first; this only reads.
-async fn read_chart_of(state: &AppState, patient: Uuid) -> Result<PatientMedicationList, String> {
+pub(crate) async fn read_chart_of(
+    state: &AppState,
+    patient: Uuid,
+) -> Result<PatientMedicationList, String> {
     let Some(db) = state.db.as_ref() else {
         use cairn_gui_data::port::ClinicalData;
         return cairn_gui_data::mock::MockData::with_fixtures()
