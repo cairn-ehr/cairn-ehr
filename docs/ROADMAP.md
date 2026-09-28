@@ -770,10 +770,11 @@ as of 2026-09-29 — the controller runs both after this entry was written).
     two-column table (**This record** / **Other record**), the other record's active medications read-only,
     **Link — same person**; closes on ANY chart change without moving focus; the Link button is disabled while a
     link is in flight; focus moves to the panel heading on open and back to "Same person as…" on close.
-- **Tests.** `patient/compare.rs`'s unit + DB tests (finding order, chart-set reads); `link/view.rs`'s
-  view-builder tests (moved to `link/view_tests.rs` for the 500-line guard); `link/mod.rs`'s `compare_impl` /
-  `link_impl` tests (`AppState::mock` + `shown`, not-on-screen, `OTHER_CHANGED`); the panel walked
-  manually/headless (no committed JS harness exists yet, #332).
+- **Tests.** `patient/compare.rs`'s own unit tests (finding order); `tests/chart_compare.rs`'s DB tests (the
+  chart-set reads and the set-vs-set clash, incl. `a_clash_with_a_third_chart_already_in_the_record_is_found`);
+  `link/view.rs`'s view-builder tests (moved to `link/view_tests.rs` for the 500-line guard); `link/mod.rs`'s
+  `compare_impl` / `link_impl` tests (`AppState::mock` + `shown`, not-on-screen, `OTHER_CHANGED`); the panel
+  walked manually/headless (no committed JS harness exists yet, #332).
 - **Filed:** none yet — the per-task reviews deferred a set of minors (recorded in the plan's own review ledger)
   to the controller's final whole-branch review, which triages them alongside the full gate run.
 - **§1.2:**

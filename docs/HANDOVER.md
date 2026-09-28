@@ -80,23 +80,24 @@
 > **⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707) — do not undo any of these:**
 > - **The comparison is SET against SET, never chart against chart.** With A open and already linked to C,
 >   linking B to A also joins B to C — `cross_vetoes` runs `cairn_match_veto` over every left×right pair across
->   BOTH sets, not one A–B pair, or a B–C clash (e.g. a date-of-birth conflict) would go unseen.
+>   BOTH sets, not one A–B pair, or a B–C clash would go unseen. Pinned by
+>   `chart_compare.rs::a_clash_with_a_third_chart_already_in_the_record_is_found`.
 > - **Every chart command names BOTH displayed sets**, widening decision 3 to the right-hand side: `link_impl`
->   checks the opened chart's set (`check_displayed_set`) AND `other_charts`, the OTHER record's displayed set —
->   a peer's link landing mid-review must not clip a chart into this record sight unseen. Both failure arms of
->   the right-set check fold to one sentence, `OTHER_CHANGED` ("the other record changed while you were
->   comparing — nothing was done; compare again").
+>   checks the opened chart's set AND `other_charts`, the OTHER record's displayed set — a peer's link landing
+>   mid-review must not clip a chart into this record sight unseen; both failure arms fold to one sentence,
+>   `OTHER_CHANGED`. Pinned by `link/mod.rs`'s `compare_is_bound_to_the_chart_on_screen`,
+>   `compare_refuses_a_changed_set`, `link_refuses_when_the_other_record_changed`.
 > - **A partially-read comparison offers no Link.** Reading stays available on a failed member read (availability
->   over consistency), but the judgement needs the whole picture — a comparison view is either linkable or it
->   is not, never linkable-with-caveats.
+>   over consistency), but the judgement needs the whole picture. Pinned by
+>   `view_tests.rs::a_partial_comparison_names_what_is_missing_and_cannot_link`.
 > - **Absence and precision wording live in `link/view.rs`, not in the node read or the JS panel.** A chart not
 >   held here reads "unknown — registration not yet received here" in EVERY row (not just DOB); a coarser-than-day
->   DOB names its precision (`FieldFact::precision`) so it never looks like a clash a same-day fact is not
->   (principle 4). Add a new fact to the panel through a view function, never a raw string literal in `link.js`.
+>   DOB names its precision (`FieldFact::precision`, principle 4). Pinned by
+>   `view_tests.rs::an_absent_fact_says_not_recorded_or_unknown` and `::a_coarse_dob_names_its_precision`.
 > - **`chart_link`'s pre-check refusals are marked verdicts — never revert to bare `anyhow::bail!`.** Same chart
 >   is `RefusalScope::Input`; a chart not held here or a non-human attester key is `RefusalScope::NodeState`
->   (#702) — both through `db_diagnosis::deliberate_refusal`/`node_state_refusal`, never a plain error the window
->   would classify as an outage to retry.
+>   (#702). Pinned by `chart_link.rs`'s `refusal_scope` assertions in `a_chart_cannot_be_linked_to_itself`,
+>   `a_chart_this_node_has_never_seen_is_refused_before_signing`, `a_non_human_key_is_refused_and_nothing_moves`.
 >
 > **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
