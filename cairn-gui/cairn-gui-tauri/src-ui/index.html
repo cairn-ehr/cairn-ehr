@@ -87,8 +87,40 @@
                combined, that no member's identity state is known, and why. An alert, not a polite
                status: it is the one place an under-review member would otherwise have said so. -->
           <p id="linked-charts-error" role="alert" hidden></p>
+          <button id="same-person" type="button">Same person as…</button>
           <button id="close-chart" type="button">Find another patient</button>
         </header>
+
+        <!-- "Same person as…" (R2b-1). An ordinary section, never a dialog: nothing blocks the
+             chart, and closing it just hides it. DOM ORDER IS CLINICAL — the disagreeing facts
+             come before the table, so a screen reader meets them first. Its safety is what it
+             SHOWS; there is no "are you sure?" (principle 3). -->
+        <section id="link-panel" aria-labelledby="link-heading" hidden>
+          <h2 id="link-heading" tabindex="-1">Is this the same person as another chart?</h2>
+          <form id="link-search" autocomplete="off">
+            <label for="link-name">Part of a name</label>
+            <input id="link-name" type="text" />
+            <label for="link-dob">Date of birth (optional)</label>
+            <input id="link-dob" type="text" placeholder="YYYY-MM-DD" />
+          </form>
+          <p id="link-search-status" role="status" aria-live="polite"></p>
+          <ul id="link-candidates" aria-label="Other charts matching this search"></ul>
+          <p id="link-problems" role="alert" hidden></p>
+          <ul id="link-findings" role="alert" aria-label="Facts that disagree between the two records" hidden></ul>
+          <table id="link-table" hidden>
+            <caption>The two records, side by side</caption>
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+          <section id="link-other-meds-section" aria-labelledby="link-other-meds-heading" hidden>
+            <h3 id="link-other-meds-heading">On the other record — not part of this one until linked</h3>
+            <ul id="link-other-meds-notes"></ul>
+            <ul id="link-other-meds"></ul>
+          </section>
+          <button id="link-confirm" type="button" hidden>Link — same person</button>
+          <p id="link-status" role="status" aria-live="polite"></p>
+          <button id="link-close" type="button">Close comparison</button>
+        </section>
 
         <!-- Who is signed in, and whether a key is held. Ambient, never modal: the clinician
              should see the lock, not discover it when a signature is refused. -->
@@ -137,5 +169,6 @@
     </main>
     <script src="main.js"></script>
     <script src="funnel.js"></script>
+    <script src="link.js"></script>
   </body>
 </html>

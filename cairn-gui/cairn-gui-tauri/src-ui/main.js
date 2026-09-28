@@ -276,12 +276,19 @@ function renderLockState(lock) {
     el("lock-state").textContent =
       "Fixture data — this window is showing a sample chart and cannot write to a record.";
     el("unlock-form").hidden = true;
+    // Fixture mode holds no signing key at all (link.js's `linkCompared` refuses to write in
+    // it regardless), so the Link button reads exactly as a locked one does — never as if a
+    // key were unlocked when there is none to unlock.
+    if (typeof updateLinkLock === "function") updateLinkLock(false);
     return;
   }
   el("lock-state").textContent = lock.unlocked
     ? "Signing as " + lock.kid + " — your key is unlocked."
     : "Your signing key is locked. Unlock it to sign off or stop a drug.";
   el("unlock-form").hidden = Boolean(lock.unlocked);
+  // `link.js` loads after this file and may not always be present (a future front-end could
+  // reuse `main.js` without it) — guarded rather than assumed, the same as `unlock-form`.
+  if (typeof updateLinkLock === "function") updateLinkLock(lock.unlocked);
 }
 
 async function pollLock() {

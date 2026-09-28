@@ -237,3 +237,21 @@ h1:focus-visible {
   outline: 3px solid Highlight;
   outline-offset: 2px;
 }
+
+/* ---- "Same person as…" panel (R2b-1) ---- */
+
+#link-panel {
+  margin-block: 1rem;
+}
+
+/* The "This record" / "Other record" spanning header reads as a label, not data. The general
+   `th, td { text-align: left }` rule already gives it that, but this states it explicitly with
+   the logical property, so a future RTL locale is not silently wrong here. */
+#link-table th[scope="colgroup"] {
+  text-align: start;
+}
+
+/* A disagreeing fact is the one thing on this panel that must not be skimmed past. */
+#link-findings li {
+  font-weight: 600;
+}
