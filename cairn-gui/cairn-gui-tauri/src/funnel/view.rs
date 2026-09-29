@@ -34,7 +34,8 @@ use uuid::Uuid;
 pub enum Retry {
     /// Nothing was decided; the same act may succeed now. Keep the button live.
     Now,
-    /// This node may not write until an operator acts; then the same act succeeds.
+    /// This node may not write until its state changes — an operator acts, or sync delivers what
+    /// is missing (a link over a chart not held here yet) — and then the same act succeeds.
     AfterOperator,
     /// A verdict, or nothing left to retry with. The way forward is to change the form or wait
     /// for the next search, never to press the same button again.

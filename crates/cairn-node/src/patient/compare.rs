@@ -71,7 +71,8 @@ pub struct ChartFacts {
     pub patient_id: Uuid,
     /// A `patient_chart` row exists — the same meaning as `person::ChartIdentity::held`.
     pub held: bool,
-    /// [`trust_of`]'s answer: a `chart_trust` state, `confirmed`, or `unknown` when not held.
+    /// [`trust_of`]'s answer: a `chart_trust` state (held or not), `confirmed` when held with
+    /// no trust row, or `unknown` when neither held nor carrying a trust row.
     pub trust: String,
     /// Legal first, then newest first — the order a front sheet would list them.
     pub names: Vec<NameFact>,
@@ -85,7 +86,9 @@ pub struct ChartFacts {
 
 // The name read repeats `patient_name_current`'s repudiation predicate (db/025) because it
 // must return EVERY retained name, not that view's one winner. `a_repudiated_name_moves_to_
-// the_aliases` pins that the two agree on what "repudiated" means.
+// the_aliases` pins the exclusion (a repudiated name leaves `names` and appears among the
+// aliases); it does not read the view, so a later change to db/025's predicate must be
+// mirrored here by hand.
 const NAMES_SQL: &str =
     "SELECT n.patient_id::text AS patient_id, n.value, n.use_raw, n.provenance \
      FROM patient_name n \
@@ -171,7 +174,7 @@ pub async fn chart_facts<C: GenericClient + Sync>(
         client,
         ALIASES_SQL,
         &ids,
-        "reading the charts' earlier names",
+        "reading the names struck from the charts as false",
     )
     .await?
     {
@@ -193,9 +196,13 @@ pub async fn chart_facts<C: GenericClient + Sync>(
                 provenance: row.get("provenance"),
                 precision: row.get("precision"),
             };
+            // Both fields named: FIELDS_SQL admits only these two today, but a field added to
+            // its IN list later (db/016 plans `deceased`) must fail loudly here, never land
+            // silently in "Sex at birth" (PR #707 review).
             match row.get::<_, String>("field").as_str() {
                 "dob" => f.dob = Some(fact),
-                _ => f.sex_at_birth = Some(fact), // the query admits only the two fields
+                "sex-at-birth" => f.sex_at_birth = Some(fact),
+                other => anyhow::bail!("unexpected demographic field {other:?} in the comparison"),
             }
         }
     }
@@ -247,16 +254,25 @@ pub struct VetoFinding {
     pub detail: String,
 }
 
-/// Hard vetoes first, then a stable order (left, right, kind), so the panel always reads the
-/// same way for the same records. Pure.
+/// Hard vetoes first, then a stable order (left, right, kind, subject), so the panel always
+/// reads the same way for the same records. `subject` is in the key because one pair can carry
+/// several `identifier` findings (one per shared system) and `VETO_SQL` has no ORDER BY. Pure.
 pub fn order_findings(mut findings: Vec<VetoFinding>) -> Vec<VetoFinding> {
     findings.sort_by(|x, y| {
-        (x.severity != "hard_veto", x.left, x.right, &x.kind).cmp(&(
-            y.severity != "hard_veto",
-            y.left,
-            y.right,
-            &y.kind,
-        ))
+        (
+            x.severity != "hard_veto",
+            x.left,
+            x.right,
+            &x.kind,
+            &x.subject,
+        )
+            .cmp(&(
+                y.severity != "hard_veto",
+                y.left,
+                y.right,
+                &y.kind,
+                &y.subject,
+            ))
     });
     findings
 }
@@ -336,5 +352,19 @@ mod tests {
             got,
             vec![("hard_veto", 1), ("hard_veto", 3), ("degrade_hold", 1)]
         );
+    }
+
+    /// PR #707 review: db/016 returns one `identifier` finding per shared system, so ONE pair
+    /// can carry several findings that tie on (severity, left, right, kind). `VETO_SQL` has no
+    /// ORDER BY, so without `subject` in the key they would keep whatever order Postgres chose.
+    #[test]
+    fn findings_that_tie_on_the_pair_are_ordered_by_subject() {
+        let mut medicare = finding("hard_veto", 1, 2, "identifier");
+        medicare.subject = "medicare".into();
+        let mut dva = finding("hard_veto", 1, 2, "identifier");
+        dva.subject = "dva".into();
+        let ordered = order_findings(vec![medicare, dva]);
+        let got: Vec<&str> = ordered.iter().map(|f| f.subject.as_str()).collect();
+        assert_eq!(got, vec!["dva", "medicare"]);
     }
 }

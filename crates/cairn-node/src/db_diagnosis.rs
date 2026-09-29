@@ -350,8 +350,10 @@ impl std::error::Error for LocalDbFault {
 pub enum RefusalScope {
     /// A verdict about the **input**: pointless to retry forever, by anybody.
     Input,
-    /// A verdict about **this node's provisioning state**: pointless to retry unchanged, but an
-    /// operator act makes the identical call succeed. The refusal names the command.
+    /// A verdict about **this node's state**: pointless to retry unchanged, but the identical call
+    /// succeeds once that state changes — by an operator act (the enrolment refusals, which name
+    /// the command) or by sync delivering what is missing (`chart_link`'s "not held here"
+    /// refusal, which no operator can hasten and which names no command).
     NodeState,
 }
 
@@ -441,18 +443,19 @@ pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
     })
 }
 
-/// Build a refusal that is a verdict about **this node's provisioning state**.
+/// Build a refusal that is a verdict about **this node's state**.
 ///
 /// Same marker, same *"retrying this unchanged is pointless"* guarantee, different way forward:
-/// the message names a command, and once an operator has run it the identical call succeeds. So
-/// a surface may — must — keep a way to try again, which it must NOT do for
-/// [`deliberate_refusal`].
+/// once the node's state changes, the identical call succeeds. So a surface may — must — keep a
+/// way to try again, which it must NOT do for [`deliberate_refusal`].
 ///
 /// `pub(crate)` for the reason [`deliberate_refusal`] gives: only this crate knows which of its
-/// own checks are decided by node state rather than by luck. The current call sites are the
-/// three [`crate::actor_enrolment`] refusals and `chart_link`'s held-chart and enrolled-human
-/// pre-checks (R2b-1), all minted after a read whose *answer* is stable until an operator
-/// changes it, which is exactly what this scope means (PR #661 review).
+/// own checks are decided by node state rather than by luck. The current call sites, each minted
+/// after a read whose *answer* stays the same until the node's state changes (PR #661 review):
+/// - the three [`crate::actor_enrolment`] refusals and `chart_link`'s enrolled-human pre-check —
+///   changed by an operator act, which the enrolment messages name;
+/// - `chart_link`'s held-chart pre-check (R2b-1) — changed by sync delivering the chart or the
+///   record joining the pair; no operator is involved and no command is named (PR #707 review).
 pub(crate) fn node_state_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),

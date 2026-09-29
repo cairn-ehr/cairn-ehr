@@ -195,7 +195,15 @@ function clearChart() {
   button.textContent = "Loading…";
 }
 
-async function refresh() {
+/**
+ * Re-read the open chart's medication list.
+ *
+ * `lead` is the outcome sentence of the act that prompted the re-read (a sign-off, a cease, a
+ * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
+ * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
+ * "Linked — …" sentence was replaced by "Could not read the chart").
+ */
+async function refresh(lead) {
   const patient = displayedPatient;
   if (patient === null) return;
   try {
@@ -205,7 +213,7 @@ async function refresh() {
     render(answer, patient);
   } catch (e) {
     if (patient !== displayedPatient) return;
-    say("Could not read the chart: " + e);
+    say((lead ? lead + " " : "") + "Could not read the chart: " + e);
   }
 }
 
@@ -245,7 +253,7 @@ async function signOff() {
   } catch (e) {
     say("Sign-off failed: " + e);
   }
-  await refresh();
+  await refresh(el("outcome").textContent);
 }
 
 async function cease(groupId, reason) {
@@ -268,7 +276,7 @@ async function cease(groupId, reason) {
   } catch (e) {
     say("Could not stop this drug: " + e);
   }
-  await refresh();
+  await refresh(el("outcome").textContent);
 }
 
 function renderLockState(lock) {

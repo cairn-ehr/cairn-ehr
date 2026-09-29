@@ -99,6 +99,7 @@ fn main() -> anyhow::Result<()> {
             funnel::commands::close_chart,
             link::compare_records,
             link::link_records,
+            link::search::link_search,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))

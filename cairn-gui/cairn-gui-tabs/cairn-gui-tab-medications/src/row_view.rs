@@ -27,8 +27,12 @@ pub struct MedListRowView {
     pub formulation: String,
     pub sig: String,
     pub started: String,
-    /// "current" or "ceased".
+    /// "current" or "ceased" — WORDING, for the table. Code that needs to know whether a drug
+    /// is current reads [`MedListRowView::current`] instead: a reworded or translated label
+    /// must never change which drugs a caller counts as current (PR #707 review).
     pub status_label: String,
+    /// True while the drug is active — the typed fact `status_label` words.
+    pub current: bool,
     /// Whose signature this line carries, and whether it is out of date.
     pub vouch_label: String,
     /// True when the sign-off gesture will sign this row. Derived from the SAME
@@ -78,6 +82,7 @@ pub(crate) fn build_row(
             MedicationStatus::Active => "current".into(),
             MedicationStatus::Ceased => "ceased".into(),
         },
+        current: row.status == MedicationStatus::Active,
         vouch_label: vouch_label(row),
         will_be_signed: row
             .members
@@ -201,6 +206,7 @@ mod tests {
         r.term = "little white pill".into();
         let view = build_view(&chart(vec![r]));
         assert_eq!(view.rows[0].primary, "little white pill");
+        assert!(view.rows[0].current, "an active drug is current");
     }
 
     #[test]
@@ -253,6 +259,10 @@ mod tests {
         let view = build_view(&chart(rows));
         assert_eq!(view.rows.len(), 1, "a struck line stays on the chart");
         assert_eq!(view.rows[0].status_label, "ceased");
+        assert!(
+            !view.rows[0].current,
+            "the typed fact agrees with the label"
+        );
         assert!(!view.rows[0].will_be_signed);
         assert!(
             !view.rows[0].can_cease,

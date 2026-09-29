@@ -280,7 +280,7 @@ async fn a_repudiated_name_moves_to_the_aliases() {
     assert_eq!(
         f.aliases,
         vec!["John DOE".to_string()],
-        "it is kept, apart, as an earlier name"
+        "it is kept, apart, as a name struck as false"
     );
 }
 

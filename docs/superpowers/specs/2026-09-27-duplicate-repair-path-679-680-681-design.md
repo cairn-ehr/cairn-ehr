@@ -270,7 +270,7 @@ a dialog (Esc / "Close comparison" hides it). DOM order is clinical:
 1. Veto findings first, `role="alert"`, plain facts, hard vetoes first; hidden when there are none
    — never "no conflicts", because an absent finding is not a clearance.
 2. One `<table>`: a column per chart under two `<colgroup>` headers, **This record** / **Other
-   record**; rows names (with use), earlier recorded names, DOB + provenance, sex at birth +
+   record**; rows names (with use), names struck as false, DOB + provenance, sex at birth +
    provenance, identifiers, addresses, identity state; every absence worded ("not recorded", or
    "unknown — registration not yet received here" when unheld).
 3. The other record's active medications, read-only, captioned *"On the other record — not part of
@@ -314,11 +314,12 @@ runbook section 9 (a human act).
   DOB row is only real over a live node. Fixture mode refuses the link itself, so a `--mock` run
   ends at the fixture-refusal line.
 - **The right-set refusal reuses `chart_set::check_displayed_set`.** `link_impl` names B's
-  displayed set the same way every other chart command names its own — both of that function's
-  failure arms (the set changed size, or a member no longer matches) fold to ONE panel sentence,
-  `OTHER_CHANGED` ("the other record changed while you were comparing — nothing was done; compare
-  again"), because the clerk does not need to know WHICH check tripped, only that the picture they
-  reviewed is stale.
+  displayed set the same way every other chart command names its own. That function has two
+  failure arms: `CHANGED` (the set read now differs from the one sent back) and `UNREADABLE` (the
+  list sent back is empty or does not parse). A changed set reads `OTHER_CHANGED` ("the other
+  record changed while you were comparing — nothing was done; compare again"); an unreadable one
+  keeps its own "could not tell which charts are on screen" wording — a window fault is not a
+  change to the record (the left-hand rule, applied to the right in the PR #707 review round).
 - **Link gesture timing is not recorded server-side.** `db/044_ui_gesture_timing.sql`'s
   `gesture_kind` CHECK admits only `'signoff'`/`'cease'` and would refuse a `link` row (as it
   already refuses registration); a widened CHECK is a migration this plan's Global Constraints
@@ -329,10 +330,12 @@ runbook section 9 (a human act).
   or `"day"`, else `"{value} ({precision} precision, {provenance})"` — a year-precision DOB stored
   as `1950-01-01` must not read as a precise day it never claimed to be, which would look like a
   clash against a same-day fact that IS precise.
-- **A chart not held here reads "unknown — registration not yet received here" in EVERY row**,
-  including names struck as false, not only the fields this section named — the absence word is
-  per-chart (`ChartFacts::held`), not per-field, so the wording is uniform across the whole
-  column.
+- **On a chart not held here, every ABSENT fact reads "unknown — registration not yet received
+  here"**, including names struck as false, not only the fields this section named — the absence
+  word is per-chart (`ChartFacts::held`), not per-field. Two exceptions: the Identity row shows the
+  trust state itself (`unknown`, or a `chart_trust` state when a row exists), and struck names that
+  HAVE arrived (a peer's repudiation can precede the registration on the sync door) are listed,
+  not hidden behind "unknown" (PR #707 review round).
 - **Address cells always carry provenance**, not only "the clerk's first disambiguator" framing
   above — matching every other fact cell's shape (never a bare value with no source).
 - **The other record's medication warnings are prefixed "On the other record: "**, and the
@@ -344,7 +347,9 @@ runbook section 9 (a human act).
   answer); a chart not held here, and a key that is not an enrolled human actor, are both
   `RefusalScope::NodeState` (the identical call succeeds once the chart or the enrolment arrives).
   `link_error_view`'s error classification (`cairn_gui_live::error::data_error_from`, then the pure
-  `link_error_from` wording) now sees a verdict instead of a bare `db error` (#702). A
+  `link_error_from` wording) now sees a verdict instead of an unmarked error it classified as an
+  outage (#702). `RefusalScope::NodeState`'s contract was widened to match: its state may change
+  by an operator act OR by sync, and only the enrolment refusals name a command. A
   `NotProvisioned` refusal reads "This node cannot record the link yet: …" — not "until an operator
   acts", because a chart not held here resolves by sync.
 - **The panel closes on ANY chart change** (`enterChart` as well as `closeChart`), not only on an
@@ -368,11 +373,35 @@ runbook section 9 (a human act).
 - **Where an answer lands.** Every panel message goes through `setMessage` (an empty status line
   is `hidden`, and `[hidden]` wins in style.css — the first build's bare `.textContent` writes left
   every refusal and the Outranked sentence invisible). A link answer that lands after the clinician
-  left the chart is still reported, prefixed "For chart <id>:", and the chart now open is not
-  re-read for it; opening or closing the panel drops in-flight Compare and search answers; a
-  refusal that cannot change on retry (`never` / `after_operator`) hides the Link button and
-  forgets the comparison, leaving it on screen with the sentence. Outranked reads "pressing Link
-  again records another judgement but changes nothing".
+  left the chart is still reported, prefixed "For chart <id>:", and the chart now open is re-read
+  only when the link changed it (it is one of the compared charts); opening or closing the panel
+  drops in-flight Compare and search answers; a refusal that cannot change on retry (`never` /
+  `after_operator`) hides the Link button and forgets the comparison, leaving it on screen with the
+  sentence. A LOCKED KEY is not such a refusal (`Retry::Now`): the button stays for after the
+  unlock. Outranked reads "pressing Link again records another judgement but changes nothing".
+- **Names and shapes.** The window module is `src/link/` (`mod.rs`, `view.rs` + `view_tests.rs`,
+  `search.rs`), not one `link.rs`; `link_report` takes `(effect, charts, compared)`, not
+  `&LinkOutcome`, so it can name uncompared charts; `chart_facts`' two `person.rs` reads
+  (`read_held`, `read_trusts`) name their step with `.context(…)`, and only its five own queries go
+  through `LocalDbFault`; the SQL binds ids as `$1::text[]::uuid[]`; and a `#link-problems` line
+  (what could not be read) sits ABOVE the findings — a partial comparison says so before anything
+  else.
+- **The PR #707 review round** (after the final whole-branch review):
+  - Identifier findings are never labelled "verified": db/016's identifier severity says whether
+    both values passed a format profile, not how either was sourced, so they read "Identifiers
+    differ (both in a checked format)" / "(format not checked)"; only a dob / sex-at-birth hard
+    veto (both winners provenance-rank ≥ 60) reads "Verified facts differ". Findings are ordered
+    with `subject` in the key, so several identifier findings on one pair read in a fixed order.
+  - The panel's search is its own `link_search` command (`link/search.rs`): `browse` minus this
+    record's charts, with a summary counting the rows shown — filtering in the webview had left
+    "1 existing chart(s) found." over an empty list. Debounced like the front door's.
+  - Only a WHOLE comparison arms Link in the webview (not only the hidden button); with this
+    record unread no "This record" head is drawn (a `colspan="0"` drew as 1, over the other
+    record's chart); a failed medication read says so in its own section.
+  - The other record's current drugs are selected by a typed `MedListRowView::current`, never by
+    the display label `"current"`.
+  - A failed re-read after a sign-off, cease or link is reported AFTER that act's outcome
+    (`refresh(lead)`), never instead of it.
 
 ### R3 — the front door collapses by person
 

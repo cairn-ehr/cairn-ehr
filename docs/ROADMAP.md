@@ -747,14 +747,15 @@ Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; des
 as-built note there now lists the deviations below). No new ADR — R2b-1 decides nothing the design had not
 already taken. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
 [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707) — per-task reviewed, final whole-branch review (opus) and its
-fix wave re-reviewed clean; awaiting the maintainer's merge.
+fix wave re-reviewed clean, then a `/review-pr` round whose findings are fixed on the branch (design as-built note,
+"The PR #707 review round"); awaiting the maintainer's merge.
 - **What R2b-1 built.**
   - `cairn_node::patient::compare` (new): `chart_facts` — every member chart's front-sheet facts (held, trust,
     every retained non-repudiated name with use + provenance, repudiated names as aliases, DOB and sex-at-birth
-    with provenance and precision, identifiers, current addresses), one `ANY($1::uuid[])` query per section,
-    each failure a `LocalDbFault` naming its step (#467 legibility guard); `cross_vetoes` — `cairn_match_veto`
-    over every left×right pair across BOTH displayed sets, never chart against chart, hard vetoes before
-    degrade-hold.
+    with provenance and precision, identifiers, current addresses), one `ANY($1::text[]::uuid[])` query per
+    section, each of its five own queries a `LocalDbFault` naming its step (#467 legibility guard);
+    `cross_vetoes` — `cairn_match_veto` over every left×right pair across BOTH displayed sets, never chart
+    against chart, hard vetoes before degrade-hold, then a fixed order (subject in the key).
   - `chart_link`'s pre-check refusals (same chart, a chart not held here, a non-human attester key) marked as
     verdicts (`RefusalScope::Input` / `NodeState`) through `db_diagnosis::deliberate_refusal` /
     `node_state_refusal`, replacing bare `anyhow::bail!`s the window would have read as an outage to retry (#702).
@@ -767,9 +768,11 @@ fix wave re-reviewed clean; awaiting the maintainer's merge.
     COMPARED (decision 3 widened to the right-hand side), refusing `THIS_CHANGED` / `OTHER_CHANGED`; no
     server-side gesture timing (db/044's `gesture_kind` CHECK admits only `signoff`/`cease`).
   - `src-ui/link.js` — the panel: findings first (`role="alert"`, hidden when empty — never "no conflicts"), the
-    two-column table (**This record** / **Other record**), the other record's active medications read-only,
-    **Link — same person**; closes on ANY chart change without moving focus; the Link button is disabled while a
-    link is in flight; focus moves to the panel heading on open and back to "Same person as…" on close.
+    two-column table (**This record** / **Other record**), the other record's current medications read-only,
+    **Link — same person**; closes on ANY chart change (focus then goes to the new chart, not back to the
+    panel's opener); the Link button is disabled while a link is in flight; focus moves to the panel heading on
+    open and back to "Same person as…" on close. Its search is `link/search.rs`'s `link_search` (this record's
+    charts left out in Rust, the summary counting the rows shown).
 - **Tests.** `patient/compare.rs`'s own unit tests (finding order); `tests/chart_compare.rs`'s DB tests (the
   chart-set reads and the set-vs-set clash, incl. `a_clash_with_a_third_chart_already_in_the_record_is_found`);
   `link/view.rs`'s view-builder tests (moved to `link/view_tests.rs` for the 500-line guard); `link/mod.rs`'s

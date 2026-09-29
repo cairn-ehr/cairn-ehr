@@ -44,6 +44,10 @@ pub struct FactRowView {
     pub cells: Vec<String>,
 }
 
+/// The medication section's own note when the other record's list could not be read.
+const MEDICATIONS_UNREAD: &str =
+    "The other record's medications could not be read — none are shown.";
+
 /// What `compare_records` hands the webview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ComparisonView {
@@ -62,7 +66,8 @@ pub struct ComparisonView {
     pub other_charts: Vec<String>,
     /// The other record's CURRENT medications, one line each.
     pub other_medications: Vec<String>,
-    /// Its list's own warnings (withheld / missing), or the empty-list sentence.
+    /// Its list's own warnings (withheld / missing), the empty-list sentence, or — when the
+    /// list could not be read — a sentence saying so.
     pub other_medication_notes: Vec<String>,
     /// What could NOT be read. Non-empty → `can_link` is false.
     pub problems: Vec<String>,
@@ -93,14 +98,34 @@ pub fn refused(text: impl Into<String>) -> ErrorView {
     }
 }
 
+/// Link pressed while the signing key is locked. NOT a verdict: nothing about the comparison
+/// was wrong, and once the clinician unlocks the key the identical Link succeeds — so it keeps
+/// the button (`Retry::Now`). As `Retry::Never` the webview took the comparison away and forced
+/// a second Compare, an act the paper workflow does not have (PR #707 review).
+pub fn key_locked() -> ErrorView {
+    ErrorView {
+        text: "your signing key is locked — unlock it, then press Link again".into(),
+        retry: Retry::Now,
+    }
+}
+
 /// One veto finding as a plain fact: which kind of disagreement, db/016's own words, and the
 /// two charts. No judgement words ("likely", "probably different") — a hard veto forces a
 /// human decision, it does not make it (§5.13). An unknown severity is shown verbatim.
+///
+/// The label depends on the KIND as well as the severity, because db/016's severity means
+/// different things per kind (PR #707 review, principle 4). A dob / sex-at-birth hard veto
+/// (`cairn_field_clash`) fires only when BOTH winners are verified (provenance rank ≥ 60), so
+/// "verified" is true there. An identifier's severity (`cairn_identifier_veto`) says only
+/// whether both values passed a format profile — two patient-stated numbers can be a hard veto
+/// — so an identifier line never claims verification.
 pub fn finding_line(f: &VetoFinding) -> String {
-    let label = match f.severity.as_str() {
-        "hard_veto" => "Verified facts differ",
-        "degrade_hold" => "Facts differ, not verified",
-        other => other,
+    let label = match (f.kind.as_str(), f.severity.as_str()) {
+        ("identifier", "hard_veto") => "Identifiers differ (both in a checked format)",
+        ("identifier", "degrade_hold") => "Identifiers differ (format not checked)",
+        (_, "hard_veto") => "Verified facts differ",
+        (_, "degrade_hold") => "Facts differ, not verified",
+        (_, other) => other,
     };
     format!(
         "{label} — {} — between chart {} and chart {}",
@@ -145,17 +170,20 @@ fn address_text(a: &AddressFact) -> String {
 
 /// The "Names struck as false" cell: `patient_alias_pool`, which holds the names REPUDIATED as
 /// known-false on this chart (db/025) — not earlier or former names, which is why the row is
-/// labelled for what it is (final review M5). A chart NOT held here says so (principle 4:
-/// nothing tells this node such a chart has NO struck names — only that its registration has
-/// not arrived — so "none" would be a false fact, the same distinction [`absent`] makes for
-/// every other row). On a chart held here, an empty pool IS a fact ("none"), not an unknown.
+/// labelled for what it is (final review M5).
+///
+/// Struck names that ARE here are always listed, held or not: a peer's repudiation can arrive
+/// before the registration (the sync door), and hiding it behind "unknown" would hide a fact
+/// this node has (PR #707 review). Only the ABSENCE depends on `held`: on a chart held here an
+/// empty pool IS a fact ("none"); on one not held, nothing says it has no struck names — only
+/// that its registration has not arrived — so the cell says [`absent`]'s "unknown" (principle 4).
 fn alias_cell(f: &ChartFacts) -> String {
-    if !f.held {
-        absent(f)
-    } else if f.aliases.is_empty() {
+    if !f.aliases.is_empty() {
+        f.aliases.join("; ")
+    } else if f.held {
         "none".into()
     } else {
-        f.aliases.join("; ")
+        absent(f)
     }
 }
 
@@ -242,7 +270,7 @@ pub fn medication_lines(list: &MedListView) -> (Vec<String>, Vec<String>) {
     let lines: Vec<String> = list
         .rows
         .iter()
-        .filter(|r| r.status_label == "current")
+        .filter(|r| r.current)
         .map(|r| format!("{} — {} — {}", r.primary, r.dose, r.sig))
         .collect();
     let mut notes: Vec<String> = [&list.withheld_message, &list.missing_message]
@@ -291,7 +319,9 @@ pub fn comparison_view(
             problems.push(format!(
                 "The other record's medications could not be read: {e}"
             ));
-            (vec![], vec![])
+            // Said in the section too, not only in `problems`: its heading over two empty
+            // lists would otherwise read as "no medications" (PR #707 review).
+            (vec![], vec![MEDICATIONS_UNREAD.to_string()])
         }
     };
     let charts: Vec<ChartFacts> = left.iter().chain(right.iter()).cloned().collect();

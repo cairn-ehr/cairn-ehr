@@ -2,8 +2,8 @@
 // from Rust (`link/view.rs`), every check from the backend (`link/mod.rs`). Classic script,
 // loaded after main.js and funnel.js, sharing their scope: `el`, `cell`, `setMessage`, `say`,
 // `refresh`, `displayedPatient`, `renderedPatient`, `renderedCharts` (main.js) and
-// `failureText` (funnel.js — its doc comment explains why a bare IPC failure needs its own
-// wording, not just Rust's).
+// `failureText`, `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC
+// failure needs its own wording, not just Rust's).
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`. `#link-status` is hidden whenever it is empty
 // (`clearComparison`), and style.css makes `[hidden]` win over everything: a bare
@@ -85,6 +85,7 @@ function closeLinkPanel(returnFocus) {
 function forgetInFlight() {
   compareToken += 1;
   linkRevision += 1;
+  debouncedLinkSearch.cancel();
 }
 
 /** Empty every part of the panel that a fresh search or a fresh comparison must replace. */
@@ -98,7 +99,11 @@ function clearComparison() {
   setMessage(el("link-status"), "");
 }
 
-/** Search other charts for a possible match, as the clerk types. */
+/**
+ * Search other charts for a possible match, as the clerk types (debounced below, like the front
+ * door's search). `link_search` leaves this record's own charts out and words the summary over
+ * the rows it returns — the webview filters nothing, so the line always counts what is shown.
+ */
 async function runLinkSearch() {
   const revision = ++linkRevision;
   const form = { revision, raw_name: el("link-name").value, birth_date: el("link-dob").value };
@@ -113,22 +118,18 @@ async function runLinkSearch() {
     return;
   }
   try {
-    const view = await invoke("browse", { form });
+    const view = await invoke("link_search", { form, charts: renderedCharts || [] });
     if (view.revision !== linkRevision) return; // a newer search is on its way
-    // Charts already in this record are left off: there is nothing to compare them against.
-    const inRecord = new Set(renderedCharts || []);
     list.replaceChildren(
-      ...view.candidates
-        .filter((c) => !inRecord.has(c.patient_id))
-        .map((c) => {
-          const li = document.createElement("li");
-          const b = document.createElement("button");
-          b.type = "button";
-          b.textContent = "Compare: " + c.name + " — " + c.age + " — identity " + c.trust;
-          b.addEventListener("click", () => compare(c.patient_id));
-          li.append(b);
-          return li;
-        }),
+      ...view.candidates.map((c) => {
+        const li = document.createElement("li");
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = "Compare: " + c.name + " — " + c.age + " — identity " + c.trust;
+        b.addEventListener("click", () => compare(c.patient_id));
+        li.append(b);
+        return li;
+      }),
     );
     setMessage(el("link-search-status"), view.summary);
   } catch (failure) {
@@ -154,8 +155,11 @@ async function compare(otherId) {
     });
     if (token !== compareToken) return; // a newer compare, or a close, came after this one
     renderComparison(view);
-    // Both sets as the BACKEND read them for this comparison — Link sends these back.
-    compared = { patientId, charts: view.left_charts, otherId, otherCharts: view.other_charts };
+    // Both sets as the BACKEND read them for this comparison — Link sends these back. Only a
+    // WHOLE comparison arms Link: the hidden button is not the only guard (PR #707 review).
+    compared = view.can_link
+      ? { patientId, charts: view.left_charts, otherId, otherCharts: view.other_charts }
+      : null;
   } catch (failure) {
     if (token !== compareToken) return;
     setMessage(el("link-status"), failureText(failure));
@@ -179,7 +183,12 @@ function renderComparison(view) {
   const table = el("link-table");
   const groups = document.createElement("tr");
   groups.append(cell("td", ""));
-  groups.append(cell("th", "This record", { scope: "colgroup", colspan: String(view.left_count) }));
+  // Guarded like the right-hand head: with this record unread, `left_count` is 0, and a
+  // `colspan="0"` is drawn as 1 — "This record" would sit over the OTHER record's first chart
+  // (PR #707 review).
+  if (view.left_count > 0) {
+    groups.append(cell("th", "This record", { scope: "colgroup", colspan: String(view.left_count) }));
+  }
   const right = view.columns.length - view.left_count;
   if (right > 0) groups.append(cell("th", "Other record", { scope: "colgroup", colspan: String(right) }));
   const heads = document.createElement("tr");
@@ -228,8 +237,8 @@ function updateLinkLock(unlocked) {
  * - `"chart"`: same chart, but the panel was closed or a newer comparison replaced it — the
  *   outcome goes on the chart's own `#outcome` line instead.
  * - `"elsewhere"`: the clinician has since left that chart. The outcome is still reported, named
- *   with the chart it was about, and the chart now open is NOT re-read for it: nothing about
- *   the new chart changed.
+ *   with the chart it was about. The chart now open is re-read only if the link changed it —
+ *   it is one of the compared charts (see `linkChanged`); otherwise nothing about it changed.
  */
 function linkAnswerPlace(sent, token) {
   if (displayedPatient !== sent.patientId) return "elsewhere";
@@ -245,6 +254,16 @@ function linkAnswerPlace(sent, token) {
 function sayAnywhere(text) {
   if (el("chart-view").hidden) el("browse-status").textContent = text;
   else say(text);
+}
+
+/**
+ * Whether a link that changed the record (`report.reload`) changed the chart open NOW: the
+ * clinician may have opened the other chart, or any chart of either compared set, before the
+ * answer landed — its combined list is then stale and must be re-read (PR #707 review).
+ */
+function linkChanged(sent, report) {
+  if (!report.reload || displayedPatient === null) return false;
+  return sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient);
 }
 
 /** Send the Link judgement for whatever `compare` last rendered. */
@@ -267,14 +286,16 @@ async function linkCompared() {
     });
     const place = linkAnswerPlace(sent, token);
     if (place === "elsewhere") {
-      sayAnywhere("For chart " + sent.patientId + ": " + report.sentence);
+      const text = "For chart " + sent.patientId + ": " + report.sentence;
+      sayAnywhere(text);
+      if (linkChanged(sent, report)) await refresh(text);
     } else if (report.reload) {
-      // Took effect: the record just changed under this chart, so the outcome belongs on the
-      // chart itself (`#outcome`, via `say`) — the panel that reported it is about to close,
-      // same chart, same `#same-person` button — and the medication list is re-read.
+      // Took effect (or StillJoined): the record just changed under this chart, so the outcome
+      // belongs on the chart itself (`#outcome`, via `say`) — the panel that reported it is
+      // about to close, same chart, same `#same-person` button — and the list is re-read.
       say(report.sentence);
       if (!el("link-panel").hidden) closeLinkPanel(true);
-      await refresh();
+      await refresh(report.sentence);
     } else if (place === "chart") {
       say(report.sentence);
     } else {
@@ -291,11 +312,13 @@ async function linkCompared() {
       say(text);
     } else {
       setMessage(el("link-status"), text);
-      // A verdict (or a node that needs an operator) will refuse the same comparison again:
-      // take the button away rather than invite a second identical click (final review M3).
-      // The comparison and the sentence stay on screen — what was refused is still legible.
-      // A bare IPC failure (no `retry`) and an outage (`"now"`) keep it: the outcome is unknown
-      // and a second identical link is harmless.
+      // A verdict (or a node whose state must change first) will refuse the same comparison
+      // again: take the button away rather than invite a second identical click (final review
+      // M3). For "not held here yet" that is also right on its own terms — the comparison was
+      // read over a chart whose facts are "unknown", so once sync delivers it the clinician
+      // should compare AGAIN, not link over the old panel. The comparison and the sentence stay
+      // on screen — what was refused is still legible. A bare IPC failure (no `retry`), an
+      // outage and a locked key (`"now"`) keep it: nothing about the comparison was wrong.
       if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
         compared = null;
         button.hidden = true;
@@ -309,7 +332,8 @@ async function linkCompared() {
 el("same-person").addEventListener("click", openLinkPanel);
 el("link-close").addEventListener("click", () => closeLinkPanel(true));
 el("link-confirm").addEventListener("click", linkCompared);
-el("link-search").addEventListener("input", runLinkSearch);
+const debouncedLinkSearch = debounce(runLinkSearch);
+el("link-search").addEventListener("input", debouncedLinkSearch);
 el("link-search").addEventListener("submit", (e) => e.preventDefault());
 el("link-panel").addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeLinkPanel(true);

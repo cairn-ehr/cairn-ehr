@@ -11,6 +11,7 @@
 //! other chart was shown by a list (`shown`), it is not already in the record, and — for the
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
+pub mod search;
 pub mod view;
 
 use crate::chart_set::{check_displayed_set, CHANGED};
@@ -20,8 +21,9 @@ use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 use view::{
-    comparison_view, fixture_facts, link_error_view, link_report, refused, ComparisonParts,
-    ComparisonView, LinkReportView, ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED,
+    comparison_view, fixture_facts, key_locked, link_error_view, link_report, refused,
+    ComparisonParts, ComparisonView, LinkReportView, ALREADY_IN_RECORD, NOT_ON_SCREEN,
+    OTHER_CHANGED, THIS_CHANGED,
 };
 
 /// A read's error as the text a comparison part carries (the operator chain, legible).
@@ -159,8 +161,16 @@ pub async fn link_impl(
 ) -> Result<LinkReportView, ErrorView> {
     let (patient, left, other, _) =
         resolve_pair(state, Act::Link, patient_id, &charts, other_id).await?;
-    let right = check_displayed_set(&chart_set_of(state, other).await?, &other_charts)
-        .map_err(|_| refused(OTHER_CHANGED))?;
+    // Only a CHANGED set is "the other record changed"; an unreadable one is a window fault
+    // and keeps its own wording — the right-hand twin of `resolve_pair`'s rule (PR #707 review).
+    let right =
+        check_displayed_set(&chart_set_of(state, other).await?, &other_charts).map_err(|e| {
+            if e == CHANGED {
+                refused(OTHER_CHANGED)
+            } else {
+                refused(e)
+            }
+        })?;
     // Both sets non-empty, so the union always builds; `single` is an unreachable fallback.
     let compared = ChartSet::new(left.members().iter().chain(right.members()).copied())
         .unwrap_or_else(|| ChartSet::single(patient));
@@ -169,11 +179,9 @@ pub async fn link_impl(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
-    // Linking is a clinical act, so taking the key counts as activity (`live_key`).
-    let (human_sk, human_kid) = state
-        .live_key(Now::read())
-        .await
-        .ok_or_else(|| refused("your signing key is locked — unlock it to link these charts"))?;
+    // Linking is a clinical act, so taking the key counts as activity (`live_key`). A locked
+    // key is not a verdict: `key_locked` keeps the Link button for after the unlock.
+    let (human_sk, human_kid) = state.live_key(Now::read()).await.ok_or_else(key_locked)?;
     let mut db = state
         .db
         .as_ref()
@@ -415,6 +423,30 @@ mod tests {
         );
     }
 
+    /// PR #707 review: the right-hand twin of the test above. An unreadable `other_charts` is
+    /// a window fault, not a change to the other record, so it keeps the "could not tell"
+    /// wording rather than "the other record changed".
+    #[tokio::test]
+    async fn an_unreadable_other_set_is_not_worded_as_a_change() {
+        let other = Uuid::from_u128(2);
+        let state = window_showing(&[other]).await;
+        let (p, charts) = on_screen();
+        let err = link_impl(
+            &state,
+            &p,
+            charts,
+            &other.to_string(),
+            vec!["not-a-uuid".into()],
+        )
+        .await
+        .unwrap_err();
+        assert_ne!(err.text, view::OTHER_CHANGED);
+        assert!(
+            err.text.contains("could not tell"),
+            "unreadable set should produce the read-failure message"
+        );
+    }
+
     #[tokio::test]
     async fn link_is_bound_to_the_chart_on_screen() {
         let other = Uuid::from_u128(2);
@@ -445,7 +477,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_refuses_a_chart_no_list_showed_before_anything_else() {
+    async fn link_refuses_a_chart_no_list_showed() {
         let state = window_showing(&[]).await;
         let (p, charts) = on_screen();
         let other = Uuid::from_u128(2).to_string();

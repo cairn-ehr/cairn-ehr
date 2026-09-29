@@ -47,7 +47,10 @@ fn a_full_comparison_is_linkable_and_names_the_other_record() {
     let v = comparison_view(parts(), &ChartSet::single(id(1)), &ChartSet::single(id(2)));
     assert!(v.can_link && v.problems.is_empty());
     assert_eq!(v.left_count, 1);
-    assert_eq!(v.columns.len(), 2);
+    // PR #707 review: ORDER, not just count — the webview heads the first `left_count`
+    // columns "This record", so a swapped chain would put that label over the other chart.
+    let order: Vec<&str> = v.columns.iter().map(|c| c.patient_id.as_str()).collect();
+    assert_eq!(order, vec![id(1).to_string(), id(2).to_string()]);
     assert_eq!(
         v.other_charts,
         vec![id(2).to_string()],
@@ -139,8 +142,8 @@ fn an_absent_fact_says_not_recorded_or_unknown() {
 }
 
 /// Controller ruling (principle 4): a coarse date must never read as a precise day. Day
-/// precision (and no precision facet at all, e.g. sex-at-birth) render as before; anything
-/// coarser says so, so "1950" is never mistaken for a verified "1950-01-01".
+/// precision renders as before; anything coarser says so, so "1950" is never mistaken for a
+/// verified "1950-01-01".
 #[test]
 fn a_coarse_dob_names_its_precision() {
     let coarse = ChartFacts {
@@ -235,15 +238,22 @@ fn no_findings_means_no_lines_and_no_clearance_sentence() {
 #[test]
 fn only_current_medications_are_listed_and_warnings_carry_over() {
     let (lines, notes) = medication_lines(&meds());
-    let current = meds()
+    // Counted from the TYPED source list, not from any display label (PR #707 review): a
+    // reworded status label must never empty this list into a false "no current medications".
+    let source = cairn_medication_view::fixtures::sample_chart();
+    let active = source
         .rows
         .iter()
-        .filter(|r| r.status_label == "current")
+        .filter(|r| r.status == cairn_medication_view::MedicationStatus::Active)
         .count();
+    assert!(
+        active > 0 && active < source.rows.len(),
+        "the fixture carries both current and ceased drugs"
+    );
     assert_eq!(
         lines.len(),
-        current,
-        "ceased drugs are not 'active medications'"
+        active,
+        "ceased drugs are not current medications"
     );
     // Fix round 1, Minor 5/6: the fixture chart carries a withheld AND a missing message
     // (cross-patient row, invisible group); both must survive, each prefixed so they read
@@ -308,6 +318,10 @@ fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
     assert!(took.sentence.contains("2 charts"));
     let lost = link_report(LinkEffect::Outranked, &ChartSet::single(id(1)), &set);
     assert!(!lost.reload, "a disagreement is shown, never reloaded away");
+    assert!(
+        !lost.sentence.contains("Linked"),
+        "a link that did not take effect is never called linked"
+    );
     assert!(
         lost.sentence.contains("NOT in effect"),
         "outranked link should mention it is not in effect"
@@ -383,4 +397,130 @@ fn an_outage_is_worded_not_confirmed_and_retryable() {
     assert_eq!(link_error_view(&outage).retry, Retry::Now);
     let text = link_error_view(&outage).text;
     assert!(text.contains("not confirmed"), "{text}");
+}
+
+/// PR #707 review: the veto check is the most safety-relevant read. If it fails, the panel
+/// shows no finding lines — and by design never says "no conflicts" — so the ONLY thing
+/// standing between the clinician and a link over a hidden hard veto is that Link is withheld.
+#[test]
+fn a_failed_veto_check_withholds_the_link() {
+    let mut p = parts();
+    p.findings = Err("statement timeout".into());
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
+    assert!(!v.can_link, "no link over a check that did not run");
+    assert!(v.findings.is_empty());
+    assert_eq!(v.problems.len(), 1);
+    assert!(
+        v.problems[0].contains("check for disagreeing facts could not be run"),
+        "the problem names the check that failed"
+    );
+}
+
+/// PR #707 review: with THIS record unread, no column belongs to it — `left_count` is 0 and
+/// the only columns are the other record's (the webview must then draw no "This record" head).
+#[test]
+fn unreadable_left_facts_leave_only_the_other_records_columns() {
+    let mut p = parts();
+    p.left = Err("boom".into());
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
+    assert!(!v.can_link);
+    assert_eq!(v.left_count, 0);
+    let order: Vec<&str> = v.columns.iter().map(|c| c.patient_id.as_str()).collect();
+    assert_eq!(order, vec![id(2).to_string()]);
+}
+
+/// Principle 4: a name recorded without a `use` facet is not "legal", and not blank.
+#[test]
+fn a_name_with_no_use_facet_says_so() {
+    let f = ChartFacts {
+        names: vec![NameFact {
+            value: "Jo Smith".into(),
+            use_: None,
+            provenance: "patient-stated".into(),
+        }],
+        ..held(1)
+    };
+    let rows = fact_rows(&[f]);
+    let names = rows.iter().find(|r| r.label == "Names").unwrap();
+    assert_eq!(
+        names.cells[0],
+        "Jo Smith (use not recorded, patient-stated)"
+    );
+}
+
+/// PR #707 review (principle 4): an identifier finding's severity says whether both values
+/// passed a format profile (db/016 `cairn_identifier_veto`), NOT whether either was verified —
+/// two patient-stated numbers can raise a hard veto. So an identifier line never says
+/// "verified", while a dob / sex-at-birth hard veto (both winners provenance-rank ≥ 60) does.
+#[test]
+fn an_identifier_finding_is_never_called_verified() {
+    let f = VetoFinding {
+        left: id(1),
+        right: id(2),
+        kind: "identifier".into(),
+        severity: "hard_veto".into(),
+        subject: "medicare".into(),
+        detail: "same system 'medicare', no shared normalized identifier".into(),
+    };
+    let hard = finding_line(&f);
+    assert!(
+        hard.starts_with("Identifiers differ (both in a checked format)"),
+        "an identifier hard veto is labelled by what it checked"
+    );
+    let hold = finding_line(&VetoFinding {
+        severity: "degrade_hold".into(),
+        ..f
+    });
+    assert!(
+        hold.starts_with("Identifiers differ (format not checked)"),
+        "an identifier degrade-hold is labelled by what it could not check"
+    );
+    assert!(
+        !hard.to_lowercase().contains("verified") && !hold.to_lowercase().contains("verified"),
+        "no identifier line claims verification"
+    );
+}
+
+/// PR #707 review: a failed medication read must not leave its section heading over two empty
+/// lists — that reads as "no medications". The section itself says the read failed.
+#[test]
+fn a_failed_medication_read_says_so_in_its_own_section() {
+    let mut p = parts();
+    p.other_medications = Err("connection reset".into());
+    let v = comparison_view(p, &ChartSet::single(id(1)), &ChartSet::single(id(2)));
+    assert!(v.other_medications.is_empty());
+    assert_eq!(
+        v.other_medication_notes,
+        vec!["The other record's medications could not be read — none are shown.".to_string()]
+    );
+}
+
+/// PR #707 review: a peer's repudiation can arrive before the registration (the sync door), so
+/// a chart NOT held here may already carry struck names. They are shown — only their ABSENCE
+/// on an unheld chart is "unknown".
+#[test]
+fn struck_names_on_a_chart_not_held_here_are_still_shown() {
+    let f = ChartFacts {
+        patient_id: id(2),
+        held: false,
+        trust: "unknown".into(),
+        aliases: vec!["Jon Smyth".into()],
+        ..ChartFacts::default()
+    };
+    let rows = fact_rows(&[f]);
+    let struck = rows
+        .iter()
+        .find(|r| r.label == "Names struck as false")
+        .unwrap();
+    assert_eq!(struck.cells[0], "Jon Smyth");
+}
+
+/// PR #707 review: a locked key is not a verdict — the clinician unlocks it in seconds and the
+/// identical Link then succeeds, so the refusal must keep the button (`Retry::Now`), never
+/// take the comparison away and force a second Compare.
+#[test]
+fn a_locked_key_is_not_a_verdict() {
+    let e = key_locked();
+    assert_eq!(e.retry, Retry::Now);
+    assert!(e.text.contains("unlock"), "it names the remedy");
 }

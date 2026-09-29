@@ -262,8 +262,7 @@ section 3) — finding the chart is measured separately, in section 8.
 opened (a plausible duplicate — same or a near-miss name):
 
 ```bash
-OTHER=$($NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
-    --confirm-new | sed -n 's/^registered patient //p')
+$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$PATIENT" --conn "$CONN" \
@@ -280,14 +279,15 @@ cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-0000000
 ```
 
 Start the stopwatch at the press of **"Same person as…"**, not before — opening the panel is
-part of the gesture, finding the chart (section 8) is not. Stop it when the outcome line reads
+part of the gesture; finding the chart you OPEN (section 8) is not. Finding the OTHER chart
+(step 2) is inside the stopwatch. Stop it when the outcome line reads
 "Linked — this record now combines N charts" (live), or at the fixture-refusal line (`--mock`).
 
 1. Press **"Same person as…"**.
 2. Type part of the other chart's name into the panel's own search.
 3. Press **Compare**.
 4. Read the panel: veto findings (if any), then the two-column table (**This record** / **Other
-   record**), then the other record's active medications.
+   record**), then the other record's current medications.
 5. Press **Link — same person**.
 
 Budget **review-and-link ≤ 20 s**, of which the side-by-side read is the load (§1.2 in the
@@ -315,9 +315,11 @@ single sample tells you nothing about the tail.
 - [ ] Every outcome in the panel — a refusal, the fixture refusal, a failed Compare, an Outranked
       link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
       line, never silent. After a refusal that cannot change on retry, the Link button is gone
-      (compare again to get it back).
+      (compare again to get it back). A locked key is NOT such a refusal: the button stays —
+      unlock, then press Link again.
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
-      or switching to a different chart closes the panel without moving focus.
+      or switching to a different chart closes the panel, and focus goes to the new chart's
+      heading (or to the front door) — not to "Same person as…".
 
 Record in the template's *Compare and link* section. **A figure outside the ≤ 20 s budget is a
 finding to file, never a budget to adjust** (§1.2's own rule, echoed here because this is the

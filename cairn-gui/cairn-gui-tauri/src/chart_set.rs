@@ -34,7 +34,8 @@ use uuid::Uuid;
 const UNREADABLE: &str = "this window could not tell which charts are on screen — reopen the chart";
 
 /// Why a command was refused when the set changed while its list was on screen. Crate-visible
-/// so `link::link_impl` can tell a CHANGED set from an unreadable one and reword only the former.
+/// so the link commands (`link::resolve_pair` for this record, `link::link_impl` for the other
+/// one) can tell a CHANGED set from an unreadable one and reword only the former.
 pub(crate) const CHANGED: &str =
     "the linked charts changed while this list was on screen — nothing was done; reload the chart";
 

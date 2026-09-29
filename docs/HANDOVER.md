@@ -4,8 +4,8 @@
 
 > [!NOTE]
 > **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — IS BUILT ON PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)
-> (2026-09-29): per-task and final whole-branch reviews clean, every gate green (PR body); AWAITING THE MAINTAINER'S
-> MERGE.** R2b is two PRs (maintainer, 2026-09-28): **R2b-1** "Same person as…" (link, this PR), then **R2b-2** "Not
+> (2026-09-29): per-task and final whole-branch reviews clean, then a `/review-pr` round (5 agents) whose 7 Important
+> findings and every accepted suggestion are fixed on the branch; every gate green; AWAITING THE MAINTAINER'S MERGE.** R2b is two PRs (maintainer, 2026-09-28): **R2b-1** "Same person as…" (link, this PR), then **R2b-2** "Not
 > the same person" (unlink + #699 (a)). R1 (PR #688) and R2a (PR #698) are merged. Repair path #679 · #680 · #681;
 > design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
 > [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
@@ -30,7 +30,8 @@
 >    attested `patient_link` row, #700).
 > 2. **Filed 2026-09-29 (R2b-1):** **#708** (`link_charts` should re-check both compared sets inside its
 >    transaction; plus a DB-gated window test of `compare_impl`/`link_impl`) · **#709** (a link outcome can go
->    unseen when it lands after the chart changed). **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
+>    unseen when it lands after the chart changed) · **#710** (review-round residuals: Link offered for an unheld
+>    chart, pre-load Compare wording, fixture facts, typed veto severity, one read snapshot). **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
 >    show on a held chart's record — a decision) · **#700** (auto-apply's human-judged skip has a race; a skipped
 >    proposal stays `pending`) · **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (a
 >    floor refusal through `chart_link` surfaces as a bare `db error` — addressed on PR #698, now pinned).
@@ -94,10 +95,20 @@
 > - **A partially-read comparison offers no Link.** Reading stays available on a failed member read (availability
 >   over consistency), but the judgement needs the whole picture. Pinned by
 >   `view_tests.rs::a_partial_comparison_names_what_is_missing_and_cannot_link`.
-> - **Absence and precision wording live in `link/view.rs`, not in the node read or the JS panel.** A chart not
->   held here reads "unknown — registration not yet received here" in EVERY row (not just DOB); a coarser-than-day
->   DOB names its precision (`FieldFact::precision`, principle 4). Pinned by
->   `view_tests.rs::an_absent_fact_says_not_recorded_or_unknown` and `::a_coarse_dob_names_its_precision`.
+> - **Absence and precision wording live in `link/view.rs`, not in the node read or the JS panel.** On a chart not
+>   held here every ABSENT fact reads "unknown — registration not yet received here" (not just DOB) — but struck
+>   names that HAVE arrived are listed; a coarser-than-day DOB names its precision (`FieldFact::precision`,
+>   principle 4). Pinned by `view_tests.rs::an_absent_fact_says_not_recorded_or_unknown`,
+>   `::struck_names_on_a_chart_not_held_here_are_still_shown`, `::a_coarse_dob_names_its_precision`.
+> - **An identifier finding is never labelled "verified".** db/016's identifier severity says whether both values
+>   passed a format profile, not how either was sourced; only a dob/sex-at-birth hard veto (both provenance-rank
+>   ≥ 60) is "Verified facts differ". Pinned by `view_tests.rs::an_identifier_finding_is_never_called_verified`.
+> - **A locked key is not a verdict** (`view::key_locked`, `Retry::Now`): the Link button survives it — as
+>   `Never` it forced a second Compare. Pinned by `view_tests.rs::a_locked_key_is_not_a_verdict`.
+> - **Code selects by a typed field, never a display label** (`MedListRowView::current`, not `status_label ==
+>   "current"`: a reworded label would have emptied the list into a false "no current medications"); and **the
+>   panel's search counts what it shows** (`link_search` filters this record's charts in Rust). Pinned by
+>   `view_tests.rs::only_current_medications_are_listed_and_warnings_carry_over` and `link/search.rs`'s tests.
 > - **`chart_link`'s pre-check refusals are marked verdicts — never revert to bare `anyhow::bail!`.** Same chart
 >   is `RefusalScope::Input`; a chart not held here or a non-human attester key is `RefusalScope::NodeState`
 >   (#702). Pinned by `chart_link.rs`'s `refusal_scope` assertions in `a_chart_cannot_be_linked_to_itself`,
@@ -431,9 +442,13 @@ review), controller ran the final whole-branch review and gates.
 - **⇒ A GUARD FILE'S COUNT PINS TRAVEL WITH THE CODE THAT MOVES.** `db_errors_stay_legible.rs` (#467) counts
   `LocalDbFault::new(` per file; `patient/compare.rs` needed both a sweep entry and `COMPARE_LOCAL_DB_FAULT_SITES` — a
   file missing from both passes with zero coverage (cf. the twin-registry and helper-registry pins).
-- **Mechanics:** `OTHER_CHANGED` folds two `check_displayed_set` failure arms into one sentence (the clerk needs "stale",
-  not which check); `chart_link`'s bare `anyhow::bail!`s became verdicts so the window tells a refusal from an outage
-  (#702, for this surface).
+- **Mechanics:** `OTHER_CHANGED` words only a CHANGED right-hand set — an unreadable one keeps "could not tell which
+  charts are on screen", like the left side (review round); `chart_link`'s bare `anyhow::bail!`s became verdicts so the
+  window tells a refusal from an outage (#702, for this surface), and `RefusalScope::NodeState`'s doc now admits a
+  state that sync (not only an operator) changes.
+- **⇒ `/review-pr` AFTER A CLEAN FINAL REVIEW STILL FOUND 7 IMPORTANT DEFECTS**, all in wording/state the earlier
+  reviews read as correct (a label claiming "verified", a colspan of 0, a filter on a display string). Five narrow
+  agents + controller verification of each claim (two were partly wrong) is worth its cost on a clinical surface.
 
 ### 2026-09-27 → 09-28 — R2a: the link precedence floor, the node's judgement, and its PR review (PR #698)
 
