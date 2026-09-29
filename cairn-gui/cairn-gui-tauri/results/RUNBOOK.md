@@ -252,3 +252,75 @@ match".
 
 Record in the template's *Front door* section. A figure outside its budget is the finding: file
 it, do not adjust the budget.
+
+## 9. Compare and link: "Same person as…" (R2b-1, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681))
+
+The repair path's own §1.2 figure. Start with a chart already open (`--patient <uuid>`, as in
+section 3) — finding the chart is measured separately, in section 8.
+
+**Live** — the node from section 0/2, with a second chart registered that is NOT the one you
+opened (a plausible duplicate — same or a near-miss name):
+
+```bash
+$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new
+cd cairn-gui
+cargo run --release -p cairn-gui-tauri -- \
+    --patient "$PATIENT" --conn "$CONN" \
+    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+```
+
+**`--mock`** (no database; the fixture's second chart is reachable by typing a fragment of its
+name). Fixture mode READS everything and refuses only the WRITE, so a `--mock` run ends at the
+refusal line "fixture mode: this window is showing mock data and cannot write" in the panel's
+status line, never at "Linked …" — stop the stopwatch there:
+
+```bash
+cargo run -p cairn-gui-tauri -- --mock --patient 00000000-0000-0000-0000-000000000001
+```
+
+Start the stopwatch at the press of **"Same person as…"**, not before — opening the panel is
+part of the gesture; finding the chart you OPEN (section 8) is not. Finding the OTHER chart
+(step 2) is inside the stopwatch. Stop it when the outcome line reads
+"Linked — this record now combines N charts" (live), or at the fixture-refusal line (`--mock`).
+
+1. Press **"Same person as…"**.
+2. Type part of the other chart's name into the panel's own search.
+3. Press **Compare**.
+4. Read the panel: veto findings (if any), then the two-column table (**This record** / **Other
+   record**), then the other record's current medications.
+5. Press **Link — same person**.
+
+Budget **review-and-link ≤ 20 s**, of which the side-by-side read is the load (§1.2 in the
+design page's R2b section). Record, per run:
+
+- the wall time from step 1 to the outcome line;
+- the number of veto findings shown (0 is a legitimate answer — the panel renders nothing for
+  an empty list, never "no conflicts");
+- whether the clinician's key was already unlocked, or the run also measures an unlock.
+
+Repeat at least five times (fresh chart pairs each time — `patient-register` again), because a
+single sample tells you nothing about the tail.
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Pressing **Compare** announces the veto findings **before** the table (the findings appear
+      on Compare, not when the panel opens — nothing has been compared yet then).
+- [ ] The table's two column groups are announced as **"This record"** / **"Other record"**,
+      not by position.
+- [ ] An absent fact reads as a word ("not recorded", or "unknown — registration not yet
+      received here" for a chart not held on this node), never silence.
+- [ ] The Link button is reachable by Tab and announces when it is disabled (a link in flight).
+      A comparison that could not be read in full shows NO Link button at all — it is hidden,
+      not disabled, and the panel names what could not be read.
+- [ ] Every outcome in the panel — a refusal, the fixture refusal, a failed Compare, an Outranked
+      link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
+      line, never silent. After a refusal that cannot change on retry, the Link button is gone
+      (compare again to get it back). A locked key is NOT such a refusal: the button stays —
+      unlock, then press Link again.
+- [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
+      or switching to a different chart closes the panel, and focus goes to the new chart's
+      heading (or to the front door) — not to "Same person as…".
+
+Record in the template's *Compare and link* section. **A figure outside the ≤ 20 s budget is a
+finding to file, never a budget to adjust** (§1.2's own rule, echoed here because this is the
+slice that first measures it).

@@ -1,0 +1,29 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - generic "Patient on this chart" [ref=e4]:
+      - heading "Open Patient" [active] [level=1] [ref=e5]
+      - paragraph [ref=e6]: 1980-01-01 (day)
+      - paragraph [ref=e7]: "Identity: confirmed"
+      - paragraph [ref=e8]: Chart 00000000-0000-0000-0000-000000000001
+      - button "Same person as…" [ref=e9] [cursor=pointer]
+      - button "Find another patient" [ref=e10] [cursor=pointer]
+    - region [ref=e11]:
+      - heading "Signing key" [level=2] [ref=e12]
+      - status [ref=e13]: Your signing key is locked. Unlock it to sign off or stop a drug.
+      - generic [ref=e14]:
+        - generic [ref=e15]: Passphrase for your signing key
+        - textbox "Passphrase for your signing key" [ref=e16]
+        - button "Unlock" [ref=e17] [cursor=pointer]
+    - table [ref=e18]:
+      - caption [ref=e19]: Current and ceased medications, with the clinician responsible for each
+      - rowgroup [ref=e20]:
+        - row [ref=e21]:
+          - columnheader "Medication" [ref=e22]
+          - columnheader "Dose" [ref=e23]
+          - columnheader "Status" [ref=e24]
+          - columnheader "Signature" [ref=e25]
+          - columnheader "Stop this drug" [ref=e26]
+      - rowgroup
+    - paragraph [ref=e27]: No medications.
+    - button "Nothing to sign off" [disabled] [ref=e28]
+    - status

@@ -128,7 +128,7 @@ pub async fn chart_identities<C: GenericClient + Sync>(
 /// registration (and by the older `patient.amended`/`note.added` types — see db/005's and
 /// db/047's `cairn_projection_apply` registrations of `patient_chart_apply`). The same relation
 /// `person_chart_trust` is built from, which is what makes its `confirmed` default honest.
-async fn read_held<C: GenericClient + Sync>(
+pub(crate) async fn read_held<C: GenericClient + Sync>(
     client: &C,
     id_strs: &[String],
 ) -> anyhow::Result<HashSet<Uuid>> {
@@ -182,7 +182,7 @@ async fn read_dobs<C: GenericClient + Sync>(
 
 /// `chart_trust.trust_state` for each id that has a row — what absence means is
 /// [`trust_of`]'s call, because it depends on whether the chart is held here at all.
-async fn read_trusts<C: GenericClient + Sync>(
+pub(crate) async fn read_trusts<C: GenericClient + Sync>(
     client: &C,
     id_strs: &[String],
 ) -> anyhow::Result<HashMap<Uuid, String>> {

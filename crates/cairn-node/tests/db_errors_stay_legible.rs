@@ -38,16 +38,18 @@
 //!
 //! # Scope, stated so coverage is not confused with aspiration
 //!
-//! Six files in `cairn-node`: `db.rs` (the file #467 was filed against, and the one that
+//! Seven files in `cairn-node`: `db.rs` (the file #467 was filed against, and the one that
 //! fails first on a fresh node), `safety.rs` (#473 — the clinical write path), `sync.rs`
 //! (#474 — the daemon loop), `auto_apply.rs` + `matcher_actor.rs` (#477 — the §5.7
 //! identity auto-apply ceremony, which links two patient charts with no human in the loop),
-//! and `chart_link.rs` (R2a — a human's link/unlink judgement, whose floor refusal is the
+//! `chart_link.rs` (R2a — a human's link/unlink judgement, whose floor refusal is the
 //! message the operator most needs; it was written after the #485 measurement below and
-//! joined the guard from its first review rather than adding to that backlog).
-//! The last two are one subsystem and were converted together: `auto_apply.rs` alone would
-//! have left `resolve_failure_line` — the line that fires when an epoch's actor cannot be
-//! resolved at all — rendering `resolve_matcher_actor`'s three unwrapped registry reads.
+//! joined the guard from its first review rather than adding to that backlog), and
+//! `patient/compare.rs` (R2b-1 — the comparison a human links on).
+//! `auto_apply.rs` and `matcher_actor.rs` are one subsystem and were converted together:
+//! `auto_apply.rs` alone would have left `resolve_failure_line` — the line that fires when an
+//! epoch's actor cannot be resolved at all — rendering `resolve_matcher_actor`'s three
+//! unwrapped registry reads.
 //!
 //! That is **not** every production file in this crate that talks to the database: **28**
 //! files under `crates/cairn-node/src/` execute SQL, so **23** sit outside `GUARDED`, and they
@@ -117,6 +119,7 @@ const GUARDED: &[&str] = &[
     "crates/cairn-node/src/chart_link.rs",
     "crates/cairn-node/src/db.rs",
     "crates/cairn-node/src/matcher_actor.rs",
+    "crates/cairn-node/src/patient/compare.rs",
     "crates/cairn-node/src/safety.rs",
     "crates/cairn-node/src/sync.rs",
 ];
@@ -226,6 +229,29 @@ fn every_postgres_call_in_a_chart_judgement_names_what_it_was_doing() {
          {CHART_LINK_LOCAL_DB_FAULT_SITES}. If you ADDED a postgres call, wrap it and bump the \
          constant. If this DROPPED, a call was reverted to a bare `?` — an operator would \
          learn the SQLSTATE of a refused judgement but not which step refused it."
+    );
+}
+
+/// How many `LocalDbFault`s `patient/compare.rs` builds: the `rows` helper covers
+/// `chart_facts`'s five reads; `cross_vetoes` has its own one. The two `person.rs` reads it
+/// reuses carry `.context(…)` instead — `person.rs` is outside `GUARDED` (#485).
+const COMPARE_LOCAL_DB_FAULT_SITES: usize = 2;
+
+/// Every postgres call the comparison makes names what it was doing (R2b-1).
+#[test]
+fn every_postgres_call_in_the_comparison_names_what_it_was_doing() {
+    let root = sources::repo_root();
+    let text = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/patient/compare.rs"))
+            .expect("compare.rs is in the tree"),
+    );
+    let found = text.matches("LocalDbFault::new(").count();
+    assert_eq!(
+        found, COMPARE_LOCAL_DB_FAULT_SITES,
+        "compare.rs builds {found} `LocalDbFault`s, expected {COMPARE_LOCAL_DB_FAULT_SITES}. \
+         If you ADDED a postgres call, wrap it and bump the constant. If this DROPPED, a call \
+         was reverted to a bare `?` — an operator would learn the SQLSTATE of a failed \
+         comparison but not which read of it failed."
     );
 }
 

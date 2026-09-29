@@ -85,6 +85,30 @@ prompt? **yes / no**
 | Opening a chart moves focus to the patient's name | | |
 | A failed search is announced as a failure, never as "no match" | | |
 
+## Compare and link — "Same person as…" (R2b-1, runbook §9)
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| "Same person as…" → Compare → read → Link → outcome line | live | | | | ≤ 20 s | |
+| "Same person as…" → Compare → read → Link → fixture-refusal line | `--mock` | | | | ≤ 20 s | |
+
+| Run | Findings shown | Key already unlocked? |
+|---|---|---|
+| 1 | | |
+| 2 | | |
+| 3 | | |
+| 4 | | |
+| 5 | | |
+
+| Compare-and-link accessibility check | Verdict | Notes |
+|---|---|---|
+| On Compare, veto findings announced before the table | | |
+| Column groups announced as "This record" / "Other record" | | |
+| An absent fact reads as a word, never silence | | |
+| Link button Tab-reachable and announces disabled state (in flight); hidden, not disabled, for an incomplete comparison | | |
+| Every panel outcome (refusal, fixture refusal, failed Compare, Outranked) shown AND announced | | |
+| Close returns focus to "Same person as…"; a chart switch closes the panel without moving focus | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

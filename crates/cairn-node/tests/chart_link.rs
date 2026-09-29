@@ -6,6 +6,7 @@
 use cairn_event::{generate_key, SigningKey};
 use cairn_node::chart_link::{link_charts, unlink_charts, LinkEffect, LinkVerb, Reviewer};
 use cairn_node::db;
+use cairn_node::db_diagnosis::{refusal_scope, RefusalScope};
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_postgres::Client;
@@ -680,10 +681,15 @@ async fn a_non_human_key_is_refused_and_nothing_moves() {
         human_sk: &sk_a,
         human_kid: &kid_a,
     };
-    let err = link_charts(&mut c, a, b, &agent, ORIGIN)
-        .await
-        .unwrap_err()
-        .to_string();
+    let err = link_charts(&mut c, a, b, &agent, ORIGIN).await.unwrap_err();
+    // #702's class: a verdict must be MARKED, or the window words it as an outage ("try again").
+    // NodeState: an operator's `enroll-human` makes the identical call succeed.
+    assert_eq!(
+        refusal_scope(&err),
+        Some(RefusalScope::NodeState),
+        "a non-human reviewer is a node-state verdict"
+    );
+    let err = err.to_string();
     assert!(err.contains("not an enrolled human"), "names why: {err}");
     assert_eq!(standing(&c, a, b).await, None, "no event landed");
     assert_eq!(
@@ -719,7 +725,13 @@ async fn a_chart_this_node_has_never_seen_is_refused_before_signing() {
         } else {
             unlink_charts(&mut c, stranger, a, &who, ORIGIN).await
         };
-        let err = r.unwrap_err().to_string();
+        let err = r.unwrap_err();
+        assert_eq!(
+            refusal_scope(&err),
+            Some(RefusalScope::NodeState),
+            "a chart not held here is a node-state verdict: it succeeds once the chart arrives"
+        );
+        let err = err.to_string();
         assert!(
             err.contains(&stranger.to_string()),
             "names the unknown chart: {err}"
@@ -751,10 +763,13 @@ async fn a_chart_cannot_be_linked_to_itself() {
         human_sk: &sk_h,
         human_kid: &kid_h,
     };
-    let err = link_charts(&mut c, a, a, &who, ORIGIN)
-        .await
-        .unwrap_err()
-        .to_string();
+    let err = link_charts(&mut c, a, a, &who, ORIGIN).await.unwrap_err();
+    assert_eq!(
+        refusal_scope(&err),
+        Some(RefusalScope::Input),
+        "the same chart twice is a verdict about the input, forever"
+    );
+    let err = err.to_string();
     assert!(err.contains("same chart"), "{err}");
 }
 

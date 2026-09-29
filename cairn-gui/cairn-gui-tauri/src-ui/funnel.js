@@ -329,6 +329,11 @@ function enterChart(header) {
   // chart, and nothing of the previous one is on screen (PR #674 review, Critical #1).
   displayedPatient = header.patient_id;
   clearChart();
+  // A "Same person as…" comparison open over the PREVIOUS chart must never linger over this
+  // one's header (controller ruling, R2b-1): `false` because focus is about to move to
+  // `#patient-heading` below, not back to a `#same-person` button that belonged to the old
+  // chart. Guarded: link.js may not be loaded (fixture-only builds, or a future front-end).
+  if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
   el("front-door").hidden = true;
   el("chart-view").hidden = false;
   showIdentity(header);
@@ -364,6 +369,10 @@ function resetFrontDoor() {
 async function closeChart() {
   displayedPatient = null;
   clearChart();
+  // Same reason as in `enterChart`: the chart underneath the panel is going away, so the
+  // panel must not survive it. `false` — focus is headed for the front door, not
+  // `#same-person`, which is about to be hidden along with the rest of `#chart-view`.
+  if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
   say("");
   try {
     await invoke("close_chart");

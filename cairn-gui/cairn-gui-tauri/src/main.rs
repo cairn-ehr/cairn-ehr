@@ -24,6 +24,7 @@
 mod chart_set;
 mod commands;
 mod funnel;
+mod link;
 mod state;
 
 use clap::Parser;
@@ -96,6 +97,9 @@ fn main() -> anyhow::Result<()> {
             funnel::commands::register,
             funnel::commands::open_chart,
             funnel::commands::close_chart,
+            link::compare_records,
+            link::link_records,
+            link::search::link_search,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
