@@ -29,6 +29,9 @@ use cairn_event::{event_address, sign, sign_attestation, EventBody, Hlc, Signing
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 
+pub mod admit;
+pub use admit::*;
+
 /// Which judgement the human made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkVerb {
@@ -96,8 +99,8 @@ pub fn compose_review_provenance(verb: LinkVerb, human_kid: &str) -> String {
 /// The human is the sole contributor and carries `responsibility` — which is what makes
 /// both write doors demand a verified human attestation token for this event.
 ///
-/// `about` is the chart the event's ENVELOPE (`patient_id`) is filed under, and must be
-/// `low` or `high` — [`assert_link_in_tx`] refuses anything else before calling this (the
+/// `about` is the chart the envelope is filed under — a subject, or for an unlink the chart the
+/// judgement was made from; see [`FiledUnder`]. [`assert_link_in_tx`] refuses a wrong one before calling this (the
 /// db/018 floor does not check it, and a wrong `about` would file an identity event in an
 /// unrelated patient's stream). The C1 convention is `low`; an unlink naming a chart not held here
 /// (see [`admit_judgement`]) is filed under the HELD chart instead, because db/005 step 8b refuses a local event
@@ -183,10 +186,10 @@ pub enum LinkEffect {
 /// three outcomes are unit-tested apart from the database.
 ///
 /// `agrees`: the pair's standing `patient_link` assertion says what this judgement says
-/// (see [`Asserted::agrees`]). `other_in_record`: the other chart reads as part of the
-/// filed-under chart's record.
-pub fn link_effect(verb: LinkVerb, agrees: bool, other_in_record: bool) -> LinkEffect {
-    match (verb, agrees, other_in_record) {
+/// (see [`Asserted::agrees`]). `still_joined`: the two subjects still
+/// read as one record (`high ∈ person_charts(low)`), read inside the judgement's transaction.
+pub fn link_effect(verb: LinkVerb, agrees: bool, still_joined: bool) -> LinkEffect {
+    match (verb, agrees, still_joined) {
         (_, false, _) => LinkEffect::Outranked,
         (LinkVerb::Unlink, true, true) => LinkEffect::StillJoined,
         _ => LinkEffect::TookEffect,
@@ -280,7 +283,8 @@ const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 ///
 /// Shared with `apply_proposal::apply_accepted_proposal`, so the matcher-proposal path
 /// and the chart-review path cannot drift. `low`/`high` must be canonical (`low < high`)
-/// and `about` one of them (see [`build_attested_assertion_body`]); both are checked here,
+/// and `filed` naming `low` or `high` — or, for an UNLINK only, the held chart whose record contains
+/// both ([`FiledUnder::RecordOf`], #699 (a)); both are checked here,
 /// before anything is locked or signed, because a reversed pair would lock and move no
 /// proposal row and a wrong `about` would misfile the event — and neither is visible to
 /// the database floor.
@@ -299,7 +303,7 @@ pub async fn assert_link_in_tx(
     verb: LinkVerb,
     low: Uuid,
     high: Uuid,
-    about: Uuid,
+    filed: FiledUnder,
     provenance: &str,
     confidence: Option<&str>,
     reviewer: &Reviewer<'_>,
@@ -309,10 +313,9 @@ pub async fn assert_link_in_tx(
         low < high,
         "a judgement's pair must be canonical and distinct: ({low}, {high})"
     );
-    anyhow::ensure!(
-        about == low || about == high,
-        "a judgement about ({low}, {high}) cannot be filed under chart {about}"
-    );
+    // Checked before anything is locked or signed: a wrong envelope chart is invisible to the
+    // database floor (db/018 reads the pair from the payload). See `admit::filing_for`.
+    let about = filing_for(verb, low, high, filed).map_err(anyhow::Error::msg)?;
     // LOCK ORDER: db/018's `patient_link_apply` trigger —
     // run inside `submit_event` below — takes the GLOBAL advisory lock
     // `pg_advisory_xact_lock(x'4341524E4C4B')` ('CARNLK') and holds it until this
@@ -441,56 +444,6 @@ pub async fn unlink_charts(
     judge(client, LinkVerb::Unlink, a, b, reviewer, node_origin).await
 }
 
-/// Whether a judgement may be made on this pair, given what this node holds — and if so,
-/// which chart its event is filed under. **Pure**, so the rule is unit-testable apart from
-/// the database.
-///
-/// - LINK needs BOTH charts held (a `patient_chart` row — see
-///   `patient::person::ChartIdentity::held`). The floor admits a link naming a chart that
-///   has not synced yet, correctly (offline-first); a human's deliberate act from this node
-///   has no such excuse, and a typo would otherwise attach a stranger's future chart to
-///   this person.
-/// - UNLINK attaches nothing, so that risk does not apply. It needs one chart held (the
-///   one the clinician has open) and the other either held too or already part of that
-///   chart's record here (`shared_record`) — the member line R1 displays for a chart whose
-///   registration has not reached this node. A never-linked stranger is still refused.
-///
-/// `Ok(about)`: the chart to file the event under — `low` by the C1 convention when both are
-/// held, else the one held chart (db/005 step 8b refuses a local event about a chart with
-/// no history here). `Err(text)`: the refusal, naming the chart(s) at fault.
-pub fn admit_judgement(
-    verb: LinkVerb,
-    (a, a_held): (Uuid, bool),
-    (b, b_held): (Uuid, bool),
-    shared_record: bool,
-) -> Result<Uuid, String> {
-    let (low, _) = canonical_pair(a, b);
-    let rule = "a link needs both charts held on this node; an unlink needs the chart you \
-                have open held here, and the other held too or already read as part of its \
-                record";
-    match (verb, a_held, b_held) {
-        (_, true, true) => Ok(low),
-        (_, false, false) => Err(format!(
-            "neither chart {a} nor chart {b} is held on this node — {rule}"
-        )),
-        (LinkVerb::Unlink, true, false) if shared_record => Ok(a),
-        (LinkVerb::Unlink, false, true) if shared_record => Ok(b),
-        // Exactly one chart unheld, and not admitted above. Say only what is true: for an
-        // unlink that means it is also outside the other's record; for a link, whether it
-        // is inside is beside the point.
-        (_, a_held, _) => {
-            let (unheld, other) = if a_held { (b, a) } else { (a, b) };
-            let outside = match verb {
-                LinkVerb::Unlink => format!(" and is not part of chart {other}'s record here"),
-                LinkVerb::Link => String::new(),
-            };
-            Err(format!(
-                "chart {unheld} is not held on this node{outside} — {rule}"
-            ))
-        }
-    }
-}
-
 /// Does this node hold `chart` itself (its `patient_chart` row, made by its registration)?
 async fn is_held(client: &tokio_postgres::Client, chart: Uuid) -> anyhow::Result<bool> {
     Ok(client
@@ -560,7 +513,7 @@ async fn judge(
         verb,
         low,
         high,
-        about,
+        FiledUnder::Subject(about),
         &provenance,
         None,
         reviewer,
@@ -573,8 +526,16 @@ async fn judge(
     let charts = crate::patient::person::person_charts(&tx, about)
         .await
         .context("reading the chart set the judgement leaves")?;
-    let other = if about == a { b } else { a };
-    let effect = link_effect(verb, asserted.agrees, charts.contains(&other));
+    // "Still joined?" is a question about the two SUBJECTS — do they still read as one
+    // record? — asked of the subjects themselves, never of the filed-under chart: once an
+    // unlink may be filed under a THIRD chart (#699 (a)), "is the other chart in the filed-under
+    // chart's record" answers StillJoined for every successful split (the far link of A–B–C,
+    // filed under A, leaves B in A's record). Read in this transaction, like `charts`.
+    let joined = crate::patient::person::person_charts(&tx, low)
+        .await
+        .context("reading whether the two charts still read as one record")?
+        .contains(&high);
+    let effect = link_effect(verb, asserted.agrees, joined);
 
     // The one failure that may have written: a connection lost DURING the commit leaves
     // its outcome unknown. Name the event so the operator looks before retrying.
@@ -695,44 +656,5 @@ mod tests {
         };
         assert!(w.is(&[1, 2, 3]));
         assert!(!w.is(&[1, 2, 4]));
-    }
-
-    #[test]
-    fn a_link_needs_both_charts_held() {
-        let (lo, hi) = pair();
-        assert_eq!(
-            admit_judgement(LinkVerb::Link, (hi, true), (lo, true), false),
-            Ok(lo)
-        );
-        // Even a chart already in the record: a link must not reach past this node.
-        let refusal = admit_judgement(LinkVerb::Link, (lo, true), (hi, false), true).unwrap_err();
-        assert!(refusal.contains(&hi.to_string()), "{refusal}");
-        assert!(
-            !refusal.contains("not part of"),
-            "true of this chart, so unsaid: {refusal}"
-        );
-    }
-
-    #[test]
-    fn an_unlink_may_name_a_displayed_member_not_held_here_but_not_a_stranger() {
-        let (lo, hi) = pair();
-        // Filed under whichever chart IS held, in either argument position.
-        assert_eq!(
-            admit_judgement(LinkVerb::Unlink, (hi, true), (lo, false), true),
-            Ok(hi)
-        );
-        assert_eq!(
-            admit_judgement(LinkVerb::Unlink, (lo, false), (hi, true), true),
-            Ok(hi)
-        );
-        let refusal =
-            admit_judgement(LinkVerb::Unlink, (hi, true), (lo, false), false).unwrap_err();
-        assert!(
-            refusal.contains(&lo.to_string()),
-            "names the stranger: {refusal}"
-        );
-        let refusal =
-            admit_judgement(LinkVerb::Unlink, (lo, false), (hi, false), true).unwrap_err();
-        assert!(refusal.contains(&lo.to_string()) && refusal.contains(&hi.to_string()));
     }
 }

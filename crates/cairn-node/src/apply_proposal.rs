@@ -146,7 +146,7 @@ pub async fn apply_accepted_proposal(
         crate::chart_link::LinkVerb::Link,
         low,
         high,
-        low, // filed under subject_a = low: the C1 convention, unchanged by R2a
+        crate::chart_link::FiledUnder::Subject(low), // subject_a = low: the C1 convention, unchanged by R2a
         &provenance,
         Some(&confidence),
         &reviewer,
