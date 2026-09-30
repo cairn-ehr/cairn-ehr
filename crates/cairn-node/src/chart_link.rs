@@ -234,8 +234,9 @@ const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 /// A plain re-read inside a READ COMMITTED transaction is not enough: a peer's unlink applied
 /// through the sync door could commit between the read and this judgement's submit, and the
 /// event would then be filed (and graded, db/048) under a chart whose record no longer holds
-/// either subject. So CARNLK — db/018's global identity lock, which every identity apply takes
-/// and holds until commit — is taken FIRST, and the record read after it. The caller has
+/// either subject. So CARNLK — db/018's global link lock, which every link/unlink apply (the only
+/// writer of a record's membership, `person_member`) takes and holds until commit — is taken
+/// FIRST, and the record read after it. The caller has
 /// already locked the proposal row, so the order stays row-then-CARNLK; `submit_event`'s own
 /// acquisition later in this transaction is a no-op re-acquire (advisory locks stack).
 async fn refuse_unless_record_holds_both(
@@ -247,11 +248,14 @@ async fn refuse_unless_record_holds_both(
     tx.execute("SELECT pg_advisory_xact_lock(x'4341524E4C4B'::bigint)", &[])
         .await
         .map_err(|e| {
-            LocalDbFault::new("taking the identity lock before re-reading the record", e)
+            LocalDbFault::new(
+                "taking the link lock (CARNLK) before re-reading the record",
+                e,
+            )
         })?;
     let record = crate::patient::person::person_charts(tx, opened)
         .await
-        .context("re-reading the open chart's record under the identity lock")?;
+        .context("re-reading the open chart's record under the link lock (CARNLK)")?;
     if record_holds_both(&record, low, high) {
         return Ok(());
     }
@@ -280,9 +284,10 @@ async fn refuse_unless_record_holds_both(
 /// other path that touches both, so two judgements on the same pair cannot deadlock.
 ///
 /// A `RecordOf` filing then takes CARNLK itself and re-reads that chart's record: the filing
-/// is only honest while the record holds both subjects, and CARNLK is what every identity apply
-/// (a peer's unlink arriving through the sync door included) holds until it commits — so the
-/// record read after taking it cannot change before this judgement commits. A record that no
+/// is only honest while the record holds both subjects, and CARNLK is what every link/unlink
+/// apply — the only writer of a record's membership, a peer's unlink arriving through the sync
+/// door included — holds until it commits, so the record read after taking it cannot change
+/// before this judgement commits. A record that no
 /// longer holds both is refused as a verdict about the input (reload and judge again).
 ///
 /// Errors roll the caller's transaction back when it drops: nothing is written and the

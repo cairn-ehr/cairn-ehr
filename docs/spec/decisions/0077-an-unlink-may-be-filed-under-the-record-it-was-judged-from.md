@@ -26,9 +26,9 @@ node, because the unlink it pointed to was refused here.
 **An unlink where neither subject is held here may be filed under the chart it was judged from** — the
 chart the clinician has open (`unlink-charts --from <chart>`, and the window's displayed chart) — provided
 that chart is held here and its record reads **both** subjects (checked before the judgement, and again
-inside its transaction after taking db/018's identity lock, before anything is signed — every identity apply
-holds that lock until it commits, so a peer's unlink arriving meanwhile cannot leave the event filed under a
-record that no longer holds the pair). **A `link` is never filed this way**: a link asserts two charts are one
+inside its transaction after taking db/018's link lock, before anything is signed — every link/unlink apply,
+the only writer of a record's membership (`person_member`), holds that lock until it commits, so a peer's
+unlink arriving meanwhile cannot leave the event filed under a record that no longer holds the pair). **A `link` is never filed this way**: a link asserts two charts are one
 person and needs both held, so the relaxation cannot reach it. The pair is always the event's **payload**;
 the envelope's chart is only the stream the event is filed in.
 

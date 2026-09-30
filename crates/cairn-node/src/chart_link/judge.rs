@@ -6,7 +6,7 @@
 //! flow: `judge` makes the legible pre-checks (is each chart held? may the judgement be made,
 //! and filed under which chart — the pure rule in `admit.rs`?), then opens ONE transaction that
 //! signs and submits through the parent's [`assert_link_in_tx`] (which re-checks a third-chart
-//! filing under the identity lock) and reads back what the judgement did, before committing.
+//! filing under the link lock (CARNLK)) and reads back what the judgement did, before committing.
 
 use super::{
     admit_judgement, assert_link_in_tx, canonical_pair, compose_review_provenance,
@@ -196,7 +196,7 @@ async fn judge(
     // so it must be a record that exists here and holds the pair (Ruling R5). Pre-checks for a
     // LEGIBLE refusal; db/005 step 8b is the enforcement for the filing (it refuses an event
     // filed under a chart with no history here), and a third-chart filing's record is read
-    // AGAIN by `assert_link_in_tx`, under the identity lock, before anything is signed.
+    // AGAIN by `assert_link_in_tx`, under the link lock (CARNLK), before anything is signed.
     let opened_chart = match (verb, opened) {
         (LinkVerb::Unlink, Some(o)) if o != a && o != b => {
             let record = crate::patient::person::person_charts(&*client, o)
@@ -239,7 +239,7 @@ async fn judge(
         .await
         .map_err(|e| LocalDbFault::new("opening the judgement's transaction", e))?;
     // A third-chart filing's record (the pre-check above) is re-read by `assert_link_in_tx`
-    // under the identity lock, before anything is signed — see the check there.
+    // under the link lock (CARNLK), before anything is signed — see the check there.
     let asserted = assert_link_in_tx(
         &tx,
         verb,

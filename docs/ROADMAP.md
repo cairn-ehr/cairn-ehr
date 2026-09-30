@@ -737,13 +737,14 @@ deviation. No ADR, no SQL object (generation stays **55**).
 Plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`; the design page's as-built note
 lists the deviations. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md)**
 (spec **v0.79**) records the maintainer's #699 (a) decision. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
-[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711), draft until the final whole-branch review and gates.
+[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711): final whole-branch review and gates, then a five-agent PR review
+whose fix wave is listed below.
 - **What R2b-2 built.**
   - `chart_link/admit.rs` (new, pure): `FiledUnder::{Subject, RecordOf}` and the admission rule — an unlink where
     neither subject is held is filed under the opened chart when it is held and its record holds both; a link
     never is; an opened chart unrelated to the pair is refused. `chart_link/judge.rs` (a pure move): the
-    judgement entry points, now asking "still joined?" of the SUBJECTS and re-checking a `RecordOf` record in the
-    transaction. CLI `unlink-charts --from <chart>`.
+    judgement entry points, now asking "still joined?" of the SUBJECTS. `assert_link_in_tx` re-checks a `RecordOf`
+    record under CARNLK before signing. CLI `unlink-charts --from <chart>`.
   - `patient::edges::record_edges` — the standing links inside a chart set (pair, attested, day recorded).
   - `cairn-gui-tauri/src/link/{record_links,unlink,unlink_view}.rs` — the pane's "How these charts are linked"
     list (per LINK, each with its own "Not the same person…"; a worded empty/unread case, "recorded {day} (UTC)"),
@@ -758,8 +759,15 @@ lists the deviations. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-un
   took effect, cycle says still joined, a receiver without the opened chart applies it, reprojection reproduces it,
   unrelated `--from` refused); `tests/record_edges.rs`; `tests/chart_link.rs` (third-chart unlink); the `link/*_tests`
   view-builder and command tests; the panel walked headless, R2b-1's visibility rule applied.
-- **Known gaps (deferred):** the in-transaction `RecordOf` re-check has no race test; `cairn-gui-tauri/src/chart_set.rs` (598)
-  exceeds the 500-line rule (`chart_link.rs` is now 446); a reload answer landing after the user opened the link panel moves
+- **PR review fix wave (2026-09-30).** The `RecordOf` re-check ran at READ COMMITTED before any lock and could race a
+  sync-door unlink (the event filed and graded under a record no longer holding the pair); it now takes CARNLK in
+  `assert_link_in_tx`, pinned by a deterministic race test that fails without it. Open-chart refusals say what they
+  are about (`AdmitRefusal`: not held → NodeState; record lacks the pair → Input, "reload the chart"). `THIS_CHANGED`
+  says "reload the chart and compare again"; `unlink.js` gained a field drift guard; ADR-0077's and the ADR index's
+  false or imprecise sentences corrected. Filed: #713 (commit-outcome-unknown retry can silently overrule a
+  colleague), #714 (typed pair / `JudgedFrom`), #715 (`link.js` drift guard).
+- **Known gaps (deferred, #712):** `cairn-gui-tauri/src/chart_set.rs` (598)
+  exceeds the 500-line rule; window→node and CLI `--from` wiring tests; a reload answer landing after the user opened the link panel moves
   focus to the patient heading. The runbook stopwatch is a human act.
 - **§1.2:**
   - **Paper counterpart:** the records clerk unclips two wrongly clipped folders and annotates the front sheet.

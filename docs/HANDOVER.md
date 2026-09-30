@@ -5,7 +5,10 @@
 > [!NOTE]
 > **⇒ R2b-2 — "NOT THE SAME PERSON" (UNLINK) + #699 (a) — IS BUILT ON PR
 > [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) (2026-09-30): per-task reviews, a final whole-branch review
-> (opus) and its fix rounds are done; both DB-gated sweeps and every CI gate green; AWAITING THE MAINTAINER'S MERGE.** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
+> (opus) and its fix rounds are done; then a second, five-agent PR review whose fix wave (the `RecordOf` re-check
+> now runs under CARNLK — it could race a sync-door unlink — plus refusal scopes, a JS drift guard, ADR-0077
+> corrections) is pushed with the affected DB suites and every local gate green; CI runs the full DB sweep on
+> the final head. AWAITING THE MAINTAINER'S MERGE.** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section + both as-built
 > notes), [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
 > and [ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md) (#699 (a)), spec
@@ -23,8 +26,11 @@
 >    #699 if they agree ADR-0077 resolves it; no closing keyword was used).
 > 2. **Open repair-path issues** (filed by R1–R2b-1): **#708** (`link_charts` should re-check both compared sets in its
 >    transaction + a DB-gated window test) · **#709** (a link outcome can go unseen when it lands after the chart
->    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf`
->    in-transaction race test, `chart_set.rs` size, window→node wiring test) · **#699** (DECIDED (a), built in
+>    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: `chart_set.rs`
+>    size, window→node and CLI `--from` wiring tests; the race test is DONE in #711) · **#713** (a judgement's
+>    "commit outcome unknown" is retry-now over a stale screen — a retry after a committed Outranked silently
+>    overrules a colleague) · **#714** (`CanonicalPair` / `JudgedFrom` newtypes) · **#715** (`link.js` drift
+>    guard) · **#699** (DECIDED (a), built in
 >    R2b-2, ADR-0077 — awaiting the maintainer's close) · **#700** (auto-apply's skip race handled on PR #698; a
 >    skipped proposal stays `pending`) ·
 >    **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (floor refusals as bare `db error` —
@@ -106,16 +112,20 @@
 >   `a_chart_this_node_has_never_seen_is_refused_before_signing`, `a_non_human_key_is_refused_and_nothing_moves`.
 >
 > **⇒ R2b-2'S DURABLE RULES ("Not the same person…", ADR-0077, PR #711) — do not undo any of these:**
-> - **`FiledUnder::RecordOf` is UNLINK-ONLY, and re-checked in the transaction.** A link filed under a third chart
->   is refused before anything is signed; a `RecordOf` unlink re-reads `person_charts(opened)` inside the
->   judgement's own transaction and refuses unless it holds both subjects. Pinned by `admit.rs`'s
->   `a_link_is_never_filed_under_a_third_chart` and `an_unlink_neither_held_is_filed_under_the_opened_record_that_holds_both`,
->   `record_holds_both`'s `a_record_holds_both_only_when_it_contains_each`, and `tests/unlink_from_record.rs`
->   (`the_open_chart_must_hold_both_in_its_record`, `without_an_open_chart_a_neither_held_unlink_is_still_refused`).
->   The in-transaction re-read has no race test (only the pure helper is unit-tested) — deferred, #712.
-> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under chart — else every
->   successful A–B–C split reads `StillJoined`. Pinned by `unlink_from_record.rs::a_chain_split_from_the_opened_chart_took_effect`
->   and `::a_link_on_a_cycle_is_recorded_and_says_still_joined`, and `tests/chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
+> - **`FiledUnder::RecordOf` is UNLINK-ONLY, and re-checked UNDER CARNLK in `assert_link_in_tx`.** A link filed
+>   under a third chart is refused before anything is signed; a `RecordOf` unlink takes db/018's CARNLK (after the
+>   proposal-row lock — order row→CARNLK) and only THEN re-reads `person_charts(opened)`. A re-read merely inside
+>   the READ COMMITTED transaction raced a sync-door unlink (PR #711 review). It lives in the signing core, not in
+>   `judge`, because `assert_link_in_tx` is `pub`. Pinned by `admit_tests.rs`'s `a_link_is_never_filed_under_a_third_chart`,
+>   and `tests/unlink_from_record.rs`'s `a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed`
+>   (parks the judgement on the advisory lock via `pg_stat_activity`; red without the fix) and
+>   `a_third_chart_filing_is_refused_at_the_signing_core_when_its_record_lacks_the_pair`.
+> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under or open chart —
+>   else a successful A–B–C split reads `StillJoined` whenever the near chart is the one asked about. Pinned in
+>   every orientation by `unlink_from_record.rs::a_split_reads_took_effect_whichever_way_round_the_pair_is_named`,
+>   plus `::an_unlink_on_a_cycle_is_recorded_and_says_still_joined` and `tests/chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
+>   The record REPORTED is the open chart's even when a subject carries the filing
+>   (`::the_record_shown_is_the_open_charts_even_when_a_subject_carries_the_filing`).
 > - **An opened chart / `--from` unrelated to the pair is REFUSED**, even when a held subject alone would admit the
 >   unlink (a stray flag is never silently ignored). Pinned by `admit.rs::an_unrelated_open_chart_is_refused_even_when_a_subject_is_held`
 >   and `unlink_from_record.rs::an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_held`.
@@ -132,11 +142,15 @@
 >   twin). A locked key names its own button (`key_locked_for`;
 >   `view_tests.rs::a_locked_key_names_the_button_that_was_pressed`); `standing_edge`'s unread list is
 >   `Retry::Now`, never `LINK_GONE` (`unlink.rs::an_unread_edge_list_is_retryable_and_not_a_verdict`).
-> - **`record_holds_both` is a NodeState refusal BEFORE the transaction and an Input refusal INSIDE it — do not
->   "harmonise" them.** Before: the chart/record may simply not have arrived yet (retry later). Inside: the record
->   changed while judging (reload). Same predicate, two verdicts; both in `crates/cairn-node/src/chart_link/judge.rs`.
-> - **The webview-fields guard scans only `main.js`**, so `renderLinks` (and every payload field it reads) must
->   live there — `commands.rs::the_webview_reads_no_field_the_backend_does_not_send`. Never say "by the matcher" for
+> - **An open chart's refusal scope follows the FACT, before and inside alike** (`AdmitRefusal`, `admit.rs`): not
+>   held here → `NodeState` (sync may deliver it, as for R2a's subjects); held but its record lacks the pair →
+>   `Input`, "reload the chart and judge again". The first build classed the pre-check NodeState by inheritance
+>   ("cannot record it yet", retry-after-operator — for a stale picture); PR #711 review. Pinned by
+>   `admit_tests.rs::each_refusal_says_what_it_is_a_verdict_about` and the DB tests' `refusal_scope` asserts.
+> - **The webview-fields guards scan `main.js`, `funnel.js` and `unlink.js`** (not `link.js` — #715), so
+>   `renderLinks` must live in `main.js` (`commands.rs::the_webview_reads_no_field_the_backend_does_not_send`), and
+>   `unlink.js`'s `report.reload` / `failure.retry` / `view.can_unlink` are pinned by
+>   `unlink_view_tests.rs::unlink_js_reads_no_field_the_backend_does_not_send`. Never say "by the matcher" for
 >   an un-attested link: a peer's human link with an un-enrolled attester is also un-attested ("without a
 >   clinician's confirmation on record here").
 >
@@ -428,7 +442,7 @@ through one — include it next.
 ---
 
 **Session date:** 2026-09-30 (**R2b-2 — "Not the same person" + #699 (a)**, ADR-0077, PR
-**[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711)**, draft) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
+**[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711)**, review fixes pushed, awaiting merge) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`, generation 55; #697 decided (b)) and R1 (ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075,
 PR #678) · 09-23 funnel 2c (PR #674) · 09-22 funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier:
 ROADMAP. · **Spec:** **v0.79** (newest
@@ -468,9 +482,14 @@ review), controller ran the sweeps and the final review.
   passed with `state = 'link'` deleted; only a query over a set holding BOTH charts bites.
 - **⇒ A DB-suite "ok" can be a self-skip** — the controller re-ran with `--nocapture` and looked for `skipped:`.
   **A "checked by the caller" doc is an unenforced promise** (`assert_link_in_tx` is `pub`): re-check in the transaction.
+- **⇒ "Inside the transaction" is not "serialized".** A READ COMMITTED re-read taken before the serializing lock
+  narrows a race and closes nothing: take the lock every writer holds (CARNLK) FIRST, then read. Test it
+  deterministically — park the victim on the lock (`pg_stat_activity.wait_event = 'advisory'`), commit the rival,
+  and mind any row lock the rival takes that the victim needs earlier (the sync door's clock merge would have
+  blocked the victim's own clock tick and hidden the race). Five review passes and an ADR fact-check missed it.
 - **⇒ Check `git ls-files` before declaring walk debris untracked** (`.playwright-mcp/` had two committed files; now
   removed and ignored).
-- **Mechanics:** `chart_link.rs` split (`admit.rs` pure, `judge.rs` entry points; 446 lines now); `cairn-gui-tauri/src/chart_set.rs`
+- **Mechanics:** `chart_link.rs` split (`admit.rs` pure + `admit_tests.rs`, `judge.rs` entry points); `cairn-gui-tauri/src/chart_set.rs`
   (598) remains over 500 (deferred, #712); runbook §10's stopwatch (≤ 15 s) is a HUMAN act.
 
 ### 2026-09-28 → 09-29 — R2b-1: the "Same person as…" panel (PR #707)

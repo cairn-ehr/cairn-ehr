@@ -41,7 +41,7 @@ impl FiledUnder {
 /// while reading A), and it is always checked (held? record holds both?) because its record is
 /// what the caller reports back (Ruling R5). Its two facts are a snapshot read before the
 /// judgement's transaction — for a legible refusal; the signing core re-reads the record under
-/// the identity lock before a third-chart filing is signed ([`super::assert_link_in_tx`]).
+/// the link lock (CARNLK) before a third-chart filing is signed ([`super::assert_link_in_tx`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenedChart {
     /// The open chart itself.
@@ -130,7 +130,7 @@ impl AdmitRefusal {
 /// Does `record` (a chart's `person_charts`) read BOTH subjects `a` and `b` as part of it?
 /// **Pure**, and the one predicate behind [`OpenedChart::holds_both`]: `judge` asks it before
 /// the transaction (for a legible refusal) and [`super::assert_link_in_tx`] asks it again under
-/// the identity lock before a third-chart filing is signed, so the two cannot drift.
+/// the link lock (CARNLK) before a third-chart filing is signed, so the two cannot drift.
 pub fn record_holds_both(record: &ChartSet, a: Uuid, b: Uuid) -> bool {
     record.contains(&a) && record.contains(&b)
 }
@@ -143,7 +143,7 @@ pub fn record_holds_both(record: &ChartSet, a: Uuid, b: Uuid) -> bool {
 ///
 /// Being pure, it CANNOT check that a `RecordOf` chart's record really contains both subjects,
 /// nor that the chart is held: [`super::assert_link_in_tx`] re-reads the record under the
-/// identity lock before signing, and db/005 step 8b refuses a chart with no history here.
+/// link lock (CARNLK) before signing, and db/005 step 8b refuses a chart with no history here.
 pub fn filing_for(
     verb: LinkVerb,
     low: Uuid,

@@ -177,9 +177,10 @@ fn chart_judgement_report(
         out.record_of,
         members.join(", ")
     ));
-    // Judged from one chart, filed under another — the open chart carrying a far link (#699 (a)),
-    // or a held subject carrying a judgement made from elsewhere: say where the event lives, so
-    // an operator looking for it in a chart's stream looks in the right one.
+    // Judged from one chart while a held subject carries the filing (a third `--from` chart, or
+    // `--from` naming the other subject): say where the event lives, so an operator looking for
+    // it in a chart's stream looks in the right one. (A #699 (a) filing under the open chart
+    // never prints this: there the two are the same chart.)
     if out.record_of != out.filed_under {
         lines.push(format!(
             "the judgement is filed under chart {}",
@@ -194,7 +195,7 @@ fn chart_judgement_report(
 struct ChartPairArgs {
     /// One chart of the pair (the order does not matter). The output shows the record of the
     /// chart judged from (`unlink-charts --from`), else of the chart the judgement is filed
-    /// under — always one held on this node.
+    /// under (which is always one held on this node).
     a: Uuid,
     /// The other chart of the pair.
     b: Uuid,
