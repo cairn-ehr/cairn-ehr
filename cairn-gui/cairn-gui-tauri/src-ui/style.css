@@ -255,3 +255,18 @@ h1:focus-visible {
 #link-findings li {
   font-weight: 600;
 }
+
+/* ---- "Not the same person" panel (R2b-2) ---- */
+
+#unlink-panel {
+  margin-block: 1rem;
+}
+
+#unlink-table th[scope="col"] {
+  text-align: start;
+}
+
+/* A disagreeing fact must not be skimmed past — same as the link panel. */
+#unlink-findings li {
+  font-weight: 600;
+}

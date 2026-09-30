@@ -334,6 +334,7 @@ function enterChart(header) {
   // `#patient-heading` below, not back to a `#same-person` button that belonged to the old
   // chart. Guarded: link.js may not be loaded (fixture-only builds, or a future front-end).
   if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
+  if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
   el("front-door").hidden = true;
   el("chart-view").hidden = false;
   showIdentity(header);
@@ -373,6 +374,7 @@ async function closeChart() {
   // panel must not survive it. `false` — focus is headed for the front door, not
   // `#same-person`, which is about to be hidden along with the rest of `#chart-view`.
   if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
+  if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
   say("");
   try {
     await invoke("close_chart");

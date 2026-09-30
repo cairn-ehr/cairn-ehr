@@ -87,6 +87,12 @@
                combined, that no member's identity state is known, and why. An alert, not a polite
                status: it is the one place an under-review member would otherwise have said so. -->
           <p id="linked-charts-error" role="alert" hidden></p>
+          <!-- The links that join this record's charts (R2b-2): one line per link, each with its
+               own "Not the same person…". Per LINK, never per chart — in A–C–B only a human can say
+               which clip is wrong (principle 2). Hidden for a chart linked to nothing. -->
+          <p id="record-links-label" hidden>How these charts are linked:</p>
+          <ul id="record-links" aria-labelledby="record-links-label" hidden></ul>
+          <p id="record-links-error" role="alert" hidden></p>
           <button id="same-person" type="button">Same person as…</button>
           <button id="close-chart" type="button">Find another patient</button>
         </header>
@@ -120,6 +126,22 @@
           <button id="link-confirm" type="button" hidden>Link — same person</button>
           <p id="link-status" role="status" aria-live="polite"></p>
           <button id="link-close" type="button">Close comparison</button>
+        </section>
+
+        <!-- "Not the same person" (R2b-2). Its own section, never a mode of the link panel: one
+             panel with two verbs could show one verb's button over the other's comparison. -->
+        <section id="unlink-panel" aria-labelledby="unlink-heading" hidden>
+          <h2 id="unlink-heading" tabindex="-1">Are these two charts the same person?</h2>
+          <p id="unlink-problems" role="alert" hidden></p>
+          <ul id="unlink-findings" role="alert" aria-label="Facts that disagree between the two charts" hidden></ul>
+          <table id="unlink-table" hidden>
+            <caption>The two linked charts, side by side</caption>
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+          <button id="unlink-confirm" type="button" hidden>Unlink — not the same person</button>
+          <p id="unlink-status" role="status" aria-live="polite" hidden></p>
+          <button id="unlink-close" type="button">Close comparison</button>
         </section>
 
         <!-- Who is signed in, and whether a key is held. Ambient, never modal: the clinician
@@ -170,5 +192,6 @@
     <script src="main.js"></script>
     <script src="funnel.js"></script>
     <script src="link.js"></script>
+    <script src="unlink.js"></script>
   </body>
 </html>

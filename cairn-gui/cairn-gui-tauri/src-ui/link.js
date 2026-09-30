@@ -226,6 +226,10 @@ function updateLinkLock(unlocked) {
   el("link-confirm").textContent = keyUnlocked
     ? "Link — same person"
     : "Link — same person (unlock your signing key first)";
+  // The unlink button obeys the same ambient lock rule (R2b-2); unlink.js loads after this file.
+  el("unlink-confirm").textContent = keyUnlocked
+    ? "Unlink — not the same person"
+    : "Unlink — not the same person (unlock your signing key first)";
 }
 
 /**
