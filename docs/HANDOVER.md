@@ -4,8 +4,8 @@
 
 > [!NOTE]
 > **⇒ R2b-2 — "NOT THE SAME PERSON" (UNLINK) + #699 (a) — IS BUILT ON PR
-> [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) (2026-09-30), DRAFT until the final whole-branch review +
-> gates.** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
+> [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) (2026-09-30): per-task reviews, a final whole-branch review
+> (opus) and its fix rounds are done; both DB-gated sweeps and every CI gate green; AWAITING THE MAINTAINER'S MERGE.** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section + both as-built
 > notes), [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
 > and [ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md) (#699 (a)), spec
@@ -20,7 +20,7 @@
 >    sign-off, with its own wording; do **#701** alongside), then **R3** (the front door collapses by person), **R4**
 >    (per-node matcher worker, #679 — proposes, never links), **R5** (banner + worklist, #680 — the worklist must
 >    filter pairs with an attested `patient_link` row, #700). Merge R2b-2 first (PR #711 — the maintainer closes
->    #699 if he agrees ADR-0077 resolves it; no closing keyword was used).
+>    #699 if they agree ADR-0077 resolves it; no closing keyword was used).
 > 2. **Open repair-path issues** (filed by R1–R2b-1): **#708** (`link_charts` should re-check both compared sets in its
 >    transaction + a DB-gated window test) · **#709** (a link outcome can go unseen when it lands after the chart
 >    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf`
@@ -34,7 +34,8 @@
 >    chart) · #690 (reconciling across LINKED charts is refused — a decision) · #691 · #692 · #693 · #694 · #695 ·
 >    #696; #333 and #220 gained comments.
 > 3. **Human acts still owed** (an agent cannot do them): the runbook stopwatch figures — now also a **linked
->    chart's open** — and the **live Tauri-IPC pass on a linked pair**. See *Four things still owed are HUMAN
+>    chart's open** and **runbook §10's unlink** (≤ 15 s) — and the **live Tauri-IPC pass on a linked pair**, including
+>    the #699 (a) third-chart unlink (B and C held only through a peer's links; §10's setup files under a subject). See *Four things still owed are HUMAN
 >    acts* below.
 > 4. **#620**, the only open item that can still change the wire (the COSE unprotected header is hashed into the
 >    content address but lies outside the signature); brainstorm first. Then **#626**, **#652 + #655** together,
@@ -457,8 +458,12 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 Plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`; subagent-driven (seven tasks, per-task
 review), controller ran the sweeps and the final review.
 - **⇒ A plan can mandate a false claim; a review that checks the code it describes catches it.** "Unlink again after
-  `Outranked` changes nothing" was false: the HLC merge at both sync doors (db/020, db/007) would normally make a retry
-  overrule the colleague's judgement (the sync door bounds its clock merge at 24 h of drift). Fixed at three sites.
+  `Outranked` changes nothing" was false: db/020 merges the peer's clock, so a retry would normally overrule the
+  colleague's judgement. **And the correction overstated too** — db/020 clamps that merge at 24 h of drift, so a peer
+  further ahead still wins: a fix to a false claim needs the same code-level check as the claim.
+- **⇒ An ADR is immutable at merge — fact-check it sentence by sentence against the SQL before merging.** ADR-0077's
+  first draft had one FALSE sentence (step 8b checks history, not "held") and seven imprecise ones; only a dedicated
+  per-sentence audit found them, after two reviews had passed the ADR.
 - **⇒ A test that cannot see its own predicate proves nothing — mutate to check.** `an_unlinked_pair_is_not_a_link`
   passed with `state = 'link'` deleted; only a query over a set holding BOTH charts bites.
 - **⇒ A DB-suite "ok" can be a self-skip** — the controller re-ran with `--nocapture` and looked for `skipped:`.
