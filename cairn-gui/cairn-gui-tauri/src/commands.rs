@@ -52,7 +52,9 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
     // NOT `?`: a failed read of the member identities must never hide the medication list
     // itself (availability over consistency). `chart_pane` turns it into a warning instead.
     let members = linked_members(state, &list.charts).await;
-    Ok(chart_pane(&list, members))
+    // Likewise the links: an unread list is worded in the pane, never a failed open.
+    let edges = crate::link::record_links::read_record_edges(state, &list.charts).await;
+    Ok(chart_pane(&list, members, edges))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -491,14 +493,22 @@ pub(crate) mod tests {
         let row_json = view_json["rows"][0].clone();
         // `med_list` sends the view INSIDE a pane, beside the linked charts' member lines. The
         // JS names the outer payload `pane`, the view `view` and each line `member`.
+        let that_link = crate::link::record_links::RecordLinkView {
+            low: String::new(),
+            high: String::new(),
+            text: String::new(),
+        };
         let member = MemberLine {
             patient_id: String::new(),
+            name: String::new(),
             text: String::new(),
         };
         let pane_json = serde_json::to_value(ChartPane {
             list: view,
             members: vec![member.clone()],
             members_error: None,
+            links: vec![that_link.clone()],
+            links_error: None,
         })
         .unwrap();
         let member_json = serde_json::to_value(&member).unwrap();
@@ -531,6 +541,10 @@ pub(crate) mod tests {
         for (binding, available) in [
             ("pane", serialized_keys(&pane_json)),
             ("member", serialized_keys(&member_json)),
+            (
+                "recordLink",
+                serialized_keys(&serde_json::to_value(&that_link).unwrap()),
+            ),
             ("view", serialized_keys(&view_json)),
             ("row", serialized_keys(&row_json)),
             ("report", report_keys),

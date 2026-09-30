@@ -348,7 +348,10 @@ impl std::error::Error for LocalDbFault {
 /// a verdict back into an accident. Pinned by `every_scope_is_still_a_refusal`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalScope {
-    /// A verdict about the **input**: pointless to retry forever, by anybody.
+    /// A verdict about the **input**: pointless to retry forever, by anybody. That includes the
+    /// PICTURE the caller judged from: a judgement made from a record that no longer holds the
+    /// pair is refused as input — the way forward is to re-read and judge again, never to wait
+    /// (see `deliberate_refusal`).
     Input,
     /// A verdict about **this node's state**: pointless to retry unchanged, but the identical call
     /// succeeds once that state changes — by an operator act (the enrolment refusals, which name
@@ -357,7 +360,9 @@ pub enum RefusalScope {
     NodeState,
 }
 
-/// A refusal this node raised **deliberately, in Rust, before any statement reached Postgres**.
+/// A refusal this node raised **deliberately, in Rust** — almost always before any statement
+/// reached Postgres; the few decided by a read (`chart_link`'s held-chart and record checks) say
+/// so at their call sites.
 ///
 /// # The question this answers
 ///
@@ -436,6 +441,14 @@ impl std::error::Error for DeliberateRefusal {}
 /// If the refusal is decided by how the node is *provisioned* rather than by what was typed —
 /// so that an operator act makes the identical call succeed — use [`node_state_refusal`]
 /// instead. Both are verdicts; only the way forward differs. See [`RefusalScope`].
+///
+/// **One argued extension — a stale picture (PR #711 review).** A human judgement made FROM a
+/// record is refused as input when that record, read here, does not hold the pair judged:
+/// `chart_link::admit`'s open-chart `LacksPair` arm (before the transaction) and
+/// `chart_link`'s `refuse_unless_record_holds_both` (inside it, under CARNLK). A read decides
+/// it, so a later sync could make the identical call succeed — but against a DIFFERENT record
+/// from the one the clinician looked at. The honest way forward is to re-read and judge again,
+/// which is what a no-retry refusal tells them; waiting, or retrying as-is, is never right.
 pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),
@@ -455,7 +468,9 @@ pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
 /// - the three [`crate::actor_enrolment`] refusals and `chart_link`'s enrolled-human pre-check —
 ///   changed by an operator act, which the enrolment messages name;
 /// - `chart_link`'s held-chart pre-check (R2b-1) — changed by sync delivering the chart or the
-///   record joining the pair; no operator is involved and no command is named (PR #707 review).
+///   record joining the pair; no operator is involved and no command is named (PR #707 review);
+/// - `chart_link::admit`'s open-chart `NotHeld` arm (R2b-2) — the chart judged from has no
+///   `patient_chart` row here yet; changed the same way (PR #711 review).
 pub(crate) fn node_state_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),

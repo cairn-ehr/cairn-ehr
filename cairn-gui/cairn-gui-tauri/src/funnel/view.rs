@@ -459,6 +459,12 @@ pub(crate) mod tests {
             serde_json::to_value(Retry::Now).unwrap(),
             serde_json::json!("now")
         );
+        // `link.js` and `unlink.js` compare against "never" (and "after_operator") to take the
+        // judgement button away after a verdict — renamed, the button would stay live on one.
+        assert_eq!(
+            serde_json::to_value(Retry::Never).unwrap(),
+            serde_json::json!("never")
+        );
     }
 
     #[test]

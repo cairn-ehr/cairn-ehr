@@ -109,6 +109,29 @@ prompt? **yes / no**
 | Every panel outcome (refusal, fixture refusal, failed Compare, Outranked) shown AND announced | | |
 | Close returns focus to "Same person as…"; a chart switch closes the panel without moving focus | | |
 
+## Unlink one link — "Not the same person…" (R2b-2, runbook §10)
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| "Not the same person…" → read → Unlink → outcome line | live | | | | ≤ 15 s | |
+
+| Run | Findings shown | Key already unlocked? |
+|---|---|---|
+| 1 | | |
+| 2 | | |
+| 3 | | |
+| 4 | | |
+| 5 | | |
+
+| Unlink accessibility check | Verdict | Notes |
+|---|---|---|
+| Each link's button announced with its own text | | |
+| Findings announced before the table | | |
+| An absent fact reads as a word, never silence | | |
+| The link and unlink panels are never open together | | |
+| Every outcome (refusal, Outranked, StillJoined, link gone) shown AND announced | | |
+| Close returns focus to the opening link's button; after a successful unlink focus is on the heading | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

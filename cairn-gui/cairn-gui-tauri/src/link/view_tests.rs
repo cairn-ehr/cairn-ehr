@@ -328,9 +328,13 @@ fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
     );
     // Final review M6: pressing Link again is not a no-op — it records another judgement.
     assert!(
+        !lost.sentence.contains("changes nothing"),
+        "a retry is not a no-op: it would normally overrule the other judgement"
+    );
+    assert!(
         lost.sentence
-            .ends_with("pressing Link again records another judgement but changes nothing."),
-        "outranked link should end with the pressing-again message"
+            .contains("would normally record a newer judgement that overrules theirs"),
+        "outranked link should say a retry would normally overrule"
     );
 }
 
@@ -523,4 +527,16 @@ fn a_locked_key_is_not_a_verdict() {
     let e = key_locked();
     assert_eq!(e.retry, Retry::Now);
     assert!(e.text.contains("unlock"), "it names the remedy");
+}
+
+#[test]
+fn a_locked_key_names_the_button_that_was_pressed() {
+    assert_eq!(
+        key_locked().text,
+        "your signing key is locked — unlock it, then press \"Link — same person\" again"
+    );
+    let e = key_locked_for("Unlink — not the same person");
+    assert_eq!(e.retry, Retry::Now);
+    assert!(e.text.contains("Unlink"), "it names the unlink button");
+    assert!(!e.text.contains("press \"Link\""), "never the opposite act");
 }

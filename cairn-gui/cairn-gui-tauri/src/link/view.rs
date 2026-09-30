@@ -25,10 +25,13 @@ pub const OTHER_CHANGED: &str =
 /// Refused because THIS record's charts changed between Compare and Link (final review I1).
 /// The Link sends back the left-hand set the comparison was built over, so a chart that joined
 /// this record after Compare (a peer's link, re-read by a sign-off's refresh) is caught here
-/// rather than signed over sight unseen. Worded like [`OTHER_CHANGED`], not like the medication
-/// list's "reload the chart": what was not seen is the comparison, so the remedy is to compare.
+/// rather than signed over sight unseen. The remedy is reload THEN compare: a Compare sends the
+/// list on screen (`renderedCharts`), which the same change may have left stale — "compare
+/// again" alone would be refused a second time with the list's own "reload the chart" (PR #711
+/// review). Shared by the unlink panel, whose Unlink sends back its comparison's set the same way.
 pub const THIS_CHANGED: &str =
-    "this record changed while you were comparing — nothing was done; compare again";
+    "this record changed while you were comparing — nothing was done; reload the chart and \
+     compare again";
 
 /// One chart's column heading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -87,6 +90,10 @@ pub struct ComparisonParts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LinkReportView {
     pub sentence: String,
+    /// Re-read the chart. `false` means the judgement did NOT change the record — only
+    /// [`LinkEffect::Outranked`] — and the webview relies on exactly that: `link.js` and
+    /// `unlink.js` keep the panel open and show the sentence there once, instead of closing it and
+    /// re-reading. A new `false` case must be worded for that panel.
     pub reload: bool,
 }
 
@@ -103,8 +110,15 @@ pub fn refused(text: impl Into<String>) -> ErrorView {
 /// the button (`Retry::Now`). As `Retry::Never` the webview took the comparison away and forced
 /// a second Compare, an act the paper workflow does not have (PR #707 review).
 pub fn key_locked() -> ErrorView {
+    key_locked_for("Link — same person")
+}
+
+/// [`key_locked`] for any judgement button: the message must name the button the clinician
+/// actually pressed — on a safety panel, naming the opposite act ("press Link" after an
+/// Unlink click) is a wrong instruction. Still `Retry::Now`.
+pub fn key_locked_for(button: &str) -> ErrorView {
     ErrorView {
-        text: "your signing key is locked — unlock it, then press Link again".into(),
+        text: format!("your signing key is locked — unlock it, then press \"{button}\" again"),
         retry: Retry::Now,
     }
 }
@@ -189,7 +203,7 @@ fn alias_cell(f: &ChartFacts) -> String {
 
 /// The column heading: the first current name (or its absence) and the chart id, whole — it is
 /// what ties the column to each medication row's source label.
-fn heading(f: &ChartFacts) -> String {
+pub(crate) fn heading(f: &ChartFacts) -> String {
     let name = f
         .names
         .first()
@@ -225,7 +239,7 @@ fn sex_cell(f: &ChartFacts) -> String {
 }
 
 /// The fact rows, in the order a front sheet is read. Each closure renders one chart's cell.
-fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
+pub(crate) fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
     type Cell = fn(&ChartFacts) -> String;
     let kinds: [(&str, Cell); 7] = [
         ("Names", |f| {
@@ -396,15 +410,16 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
                        are different people. The two judgements disagree — settle it with \
-                       the person who made the other one; pressing Link again records another \
-                       judgement but changes nothing."
+                       the person who made the other one. Linking again would normally record a newer \
+                       judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,
         },
-        // R2a never returns this for a link; worded honestly in case it ever does.
+        // R2a never returns this for a link; worded honestly in case it ever does — and true
+        // wherever it lands (an answer arriving with another chart open re-reads nothing).
         LinkEffect::StillJoined => LinkReportView {
-            sentence: "Recorded, but the record did not change the way a link should — the \
-                       chart is being re-read so you can see what it now combines."
+            sentence: "Recorded, but the record did not change the way a link should — check \
+                       what the chart now combines."
                 .into(),
             reload: true,
         },
@@ -428,20 +443,26 @@ pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
 /// `NotProvisioned` says "yet", not "until an operator acts": one of its causes (a chart this
 /// node does not hold yet) resolves by sync, with no operator involved (final review M4).
 pub fn link_error_from(error: DataError) -> ErrorView {
+    judgement_error_from("link", error)
+}
+
+/// A failed judgement worded for its act (`"link"` / `"unlink"`), by the classification the
+/// funnel uses — see [`link_error_from`], which is this with `"link"`.
+pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
     match error {
         DataError::Refused(t) => ErrorView {
-            text: format!("The link was refused: {t}"),
+            text: format!("The {act} was refused: {t}"),
             retry: Retry::Never,
         },
         DataError::NotProvisioned(t) => ErrorView {
-            text: format!("This node cannot record the link yet: {t}"),
+            text: format!("This node cannot record the {act} yet: {t}"),
             retry: Retry::AfterOperator,
         },
         DataError::Unavailable(t) => ErrorView {
-            text: format!("The link was not confirmed: {t}"),
+            text: format!("The {act} was not confirmed: {t}"),
             retry: Retry::Now,
         },
-        DataError::NotFound => refused("The link was not recorded."),
+        DataError::NotFound => refused(format!("The {act} was not recorded.")),
     }
 }
 

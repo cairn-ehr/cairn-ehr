@@ -45,6 +45,8 @@ let keyUnlocked = false;
  * told what just appeared, not left pointed at the button that opened it.
  */
 function openLinkPanel() {
+  // Mutually exclusive with the unlink panel (unlink.js may not be loaded).
+  if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
   forgetInFlight();
   compared = null;
   // A fresh visit, not a resumed one: a name typed before an earlier close, or that search's
@@ -226,6 +228,10 @@ function updateLinkLock(unlocked) {
   el("link-confirm").textContent = keyUnlocked
     ? "Link — same person"
     : "Link — same person (unlock your signing key first)";
+  // The unlink button obeys the same ambient lock rule (R2b-2); unlink.js loads after this file.
+  el("unlink-confirm").textContent = keyUnlocked
+    ? "Unlink — not the same person"
+    : "Unlink — not the same person (unlock your signing key first)";
 }
 
 /**

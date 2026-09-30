@@ -97,12 +97,15 @@ fn load_attester_key(
 
 /// `link-charts` / `unlink-charts`: unseal the human's key, make the judgement, and say
 /// what the chart now is. No node key is loaded — the event is the human's, signed and
-/// attested by them (ADR-0053); the node contributes only its HLC origin.
+/// attested by them (ADR-0053); the node contributes only its HLC origin. `opened` is
+/// `unlink-charts --from` (the chart judged from; #699 (a)) — always `None` for a link.
+#[allow(clippy::too_many_arguments)]
 async fn run_chart_judgement(
     conn: &str,
     verb: cairn_node::chart_link::LinkVerb,
     a: Uuid,
     b: Uuid,
+    opened: Option<Uuid>,
     attester_key: &std::path::Path,
     attester_passphrase: Option<String>,
 ) -> anyhow::Result<()> {
@@ -117,7 +120,7 @@ async fn run_chart_judgement(
     };
     let out = match verb {
         LinkVerb::Link => link_charts(&mut db, a, b, &reviewer, &origin).await?,
-        LinkVerb::Unlink => unlink_charts(&mut db, a, b, &reviewer, &origin).await?,
+        LinkVerb::Unlink => unlink_charts(&mut db, a, b, opened, &reviewer, &origin).await?,
     };
     for line in chart_judgement_report(verb, a, b, &out) {
         println!("{line}");
@@ -160,8 +163,8 @@ fn chart_judgement_report(
              the disagreement"
         ),
         (_, LinkEffect::StillJoined) => format!(
-            "recorded that {a} and {b} are different people — but {b} still reads as part \
-             of {a}'s record through another link; unlink that link too"
+            "recorded that {a} and {b} are different people — but they still read as one \
+             record through other links; unlink the link that is wrong"
         ),
     };
     let mut lines = vec![format!("{first}; event {}", out.event_id)];
@@ -171,17 +174,28 @@ fn chart_judgement_report(
     let members: Vec<String> = out.charts.members().iter().map(Uuid::to_string).collect();
     lines.push(format!(
         "chart {} now reads as: {}",
-        out.filed_under,
+        out.record_of,
         members.join(", ")
     ));
+    // Judged from one chart while a held subject carries the filing (a third `--from` chart, or
+    // `--from` naming the other subject): say where the event lives, so an operator looking for
+    // it in a chart's stream looks in the right one. (A #699 (a) filing under the open chart
+    // never prints this: there the two are the same chart.)
+    if out.record_of != out.filed_under {
+        lines.push(format!(
+            "the judgement is filed under chart {}",
+            out.filed_under
+        ));
+    }
     lines
 }
 
 /// The two charts and the human key of a `link-charts` / `unlink-charts` judgement.
 #[derive(clap::Args, Clone, Debug)]
 struct ChartPairArgs {
-    /// One chart of the pair (the order does not matter; the output names the chart the
-    /// judgement is filed under, which is always one held on this node).
+    /// One chart of the pair (the order does not matter). The output shows the record of the
+    /// chart judged from (`unlink-charts --from`), else of the chart the judgement is filed
+    /// under (which is always one held on this node).
     a: Uuid,
     /// The other chart of the pair.
     b: Uuid,
@@ -193,15 +207,36 @@ struct ChartPairArgs {
     attester_passphrase: Option<String>,
 }
 
-/// Which judgement a command makes, and about which charts. **Pure**, and the ONLY place
-/// the command → verb mapping is written: the dispatch calls it, and a test pins it — a
-/// swapped arm would otherwise record "different people" for `link-charts` with every
-/// other test green.
-fn chart_judgement(cmd: &Cmd) -> Option<(cairn_node::chart_link::LinkVerb, &ChartPairArgs)> {
+/// `unlink-charts`: the pair, plus the chart the judgement is made from.
+#[derive(clap::Args, Clone, Debug)]
+struct UnlinkArgs {
+    #[command(flatten)]
+    pair: ChartPairArgs,
+    /// The chart you are judging FROM. When it is a third chart (neither of the pair) it must be
+    /// held here with both charts in its record (checked; refused otherwise); naming one of the
+    /// pair needs no further check. Needed only when neither chart is held on this node
+    /// (#699 (a)); the judgement is then filed under this chart. The output shows the record
+    /// of this chart (else of the chart the judgement is filed under) and names the
+    /// filed-under chart when they differ.
+    #[arg(long)]
+    from: Option<Uuid>,
+}
+
+/// Which judgement a command makes, about which charts, and from which open chart (`--from`,
+/// unlink only). **Pure**, and the ONLY place the command → verb mapping is written: the
+/// dispatch calls it, and a test pins it — a swapped arm would otherwise record "different
+/// people" for `link-charts` with every other test green.
+fn chart_judgement(
+    cmd: &Cmd,
+) -> Option<(
+    cairn_node::chart_link::LinkVerb,
+    &ChartPairArgs,
+    Option<Uuid>,
+)> {
     use cairn_node::chart_link::LinkVerb;
     match cmd {
-        Cmd::LinkCharts(args) => Some((LinkVerb::Link, args)),
-        Cmd::UnlinkCharts(args) => Some((LinkVerb::Unlink, args)),
+        Cmd::LinkCharts(args) => Some((LinkVerb::Link, args, None)),
+        Cmd::UnlinkCharts(args) => Some((LinkVerb::Unlink, &args.pair, args.from)),
         _ => None,
     }
 }
@@ -2010,8 +2045,9 @@ enum Cmd {
     /// between these two charts can then join them (ADR-0076 decisions 4–5; a join through
     /// a THIRD chart is still possible, and is reported). If the two are joined only through
     /// another chart, the judgement is recorded and the output says the record is still
-    /// one. One chart may be a member not held here, if it reads as part of the other's.
-    UnlinkCharts(ChartPairArgs),
+    /// one. One chart may be a member not held here, if it reads as part of the other's; if
+    /// NEITHER is held here, name the chart you are judging from with --from (#699 (a)).
+    UnlinkCharts(UnlinkArgs),
 
     /// Record a medication the patient takes/took (clinical.medication.asserted).
     /// Mints a medication thread id. Only --term is required; it may be vague
@@ -4748,13 +4784,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::LinkCharts(_) | Cmd::UnlinkCharts(_) => {
-            let (verb, args) =
+            let (verb, args, opened) =
                 chart_judgement(&cli.cmd).expect("this arm matched a chart-judgement command");
             run_chart_judgement(
                 &cli.conn,
                 verb,
                 args.a,
                 args.b,
+                opened,
                 &args.attester_key,
                 args.attester_passphrase.clone(),
             )
@@ -6900,28 +6937,50 @@ mod tests {
         use cairn_node::chart_link::{LinkEffect, LinkOutcome, LinkVerb};
         let id = |n: u128| Uuid::from_u128(n);
         let (a, b, c) = (id(1), id(2), id(3));
-        let outcome = |members: Vec<Uuid>, effect, resolved| LinkOutcome {
+        // Filed under `b`; `record_of` is the chart judged from — `b` itself unless a test
+        // says otherwise.
+        let judged_from = |record_of: Uuid, members: Vec<Uuid>, effect, resolved| LinkOutcome {
             event_id: id(9),
             proposal_resolved: resolved,
             filed_under: b,
+            record_of,
             charts: cairn_medication_view::ChartSet::new(members).unwrap(),
             effect,
         };
+        let outcome = |members, effect, resolved| judged_from(b, members, effect, resolved);
+        let filed_line = format!("the judgement is filed under chart {b}");
+
+        // Judged from a THIRD chart `c` (#699 (a)): the record shown is `c`'s, and a further
+        // line says where the event is filed.
         let joined = super::chart_judgement_report(
             LinkVerb::Unlink,
             a,
             b,
-            &outcome(vec![a, b, c], LinkEffect::StillJoined, false),
+            &judged_from(c, vec![a, b, c], LinkEffect::StillJoined, false),
         );
         assert!(!joined[0].contains("unlinked"), "{joined:?}");
-        assert!(joined[0].contains("still reads as part of"), "{joined:?}");
+        assert!(joined[0].contains("still read as one record"), "{joined:?}");
         assert!(
-            joined.last().unwrap().contains(&c.to_string()),
-            "lists the set"
+            joined[0].contains("through other links; unlink the link that is wrong"),
+            "a cycle can hold several links: {joined:?}"
         );
         assert!(
-            joined.last().unwrap().starts_with(&format!("chart {b} ")),
-            "names the filed-under chart, not the first argument: {joined:?}"
+            joined[0].contains(&a.to_string()) && joined[0].contains(&b.to_string()),
+            "names both subjects: {joined:?}"
+        );
+        let shown = joined
+            .iter()
+            .find(|l| l.contains("now reads as"))
+            .expect("the record line");
+        assert!(
+            shown.starts_with(&format!("chart {c} ")),
+            "names the chart whose record it is (record_of), not the filed-under one: {joined:?}"
+        );
+        assert!(shown.contains(&a.to_string()), "lists the set");
+        assert_eq!(
+            joined.last(),
+            Some(&filed_line),
+            "record_of != filed_under: names where the event is filed"
         );
 
         let split = super::chart_judgement_report(
@@ -6933,6 +6992,14 @@ mod tests {
         assert!(
             split[0].contains("unlinked (not the same person)"),
             "{split:?}"
+        );
+        assert!(
+            split.last().unwrap().starts_with(&format!("chart {b} ")),
+            "{split:?}"
+        );
+        assert!(
+            !split.contains(&filed_line),
+            "record_of == filed_under: no separate filing line: {split:?}"
         );
 
         let linked = super::chart_judgement_report(
@@ -6993,14 +7060,51 @@ mod tests {
                 "/k",
             ])
             .unwrap();
-            let (verb, args) = super::chart_judgement(&cli.cmd).expect(verb_arg);
+            let (verb, args, opened) = super::chart_judgement(&cli.cmd).expect(verb_arg);
             assert_eq!(verb, expected, "{verb_arg}");
             assert_eq!(
                 (args.a.to_string(), args.b.to_string()),
                 (a.to_string(), b.to_string()),
                 "{verb_arg}: the charts, in the order named"
             );
+            assert_eq!(opened, None, "{verb_arg}: no --from, no open chart");
         }
+
+        // `unlink-charts --from` names the chart judged from (#699 (a)) …
+        let from = "0190a000-0000-7000-8000-000000000003";
+        let cli = super::Cli::try_parse_from([
+            "cairn-node",
+            "--conn",
+            "host=localhost",
+            "unlink-charts",
+            a,
+            b,
+            "--from",
+            from,
+            "--attester-key",
+            "/k",
+        ])
+        .unwrap();
+        let (verb, _, opened) = super::chart_judgement(&cli.cmd).expect("unlink-charts --from");
+        assert_eq!(verb, LinkVerb::Unlink);
+        assert_eq!(opened.map(|o| o.to_string()), Some(from.to_string()));
+        // … and a link has no such flag: it is never filed under a third chart.
+        assert!(
+            super::Cli::try_parse_from([
+                "cairn-node",
+                "--conn",
+                "host=localhost",
+                "link-charts",
+                a,
+                b,
+                "--from",
+                from,
+                "--attester-key",
+                "/k",
+            ])
+            .is_err(),
+            "link-charts --from is a parse error"
+        );
     }
 
     /// The two judgement verbs parse, and a missing attester key is a parse error rather

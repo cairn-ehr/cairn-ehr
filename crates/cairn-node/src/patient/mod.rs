@@ -12,6 +12,7 @@
 //! combined read (medication list now, allergies and the duplicate banner later) goes to
 //! agree on that set.
 pub mod compare;
+pub mod edges;
 pub mod person;
 pub mod register;
 pub mod search;

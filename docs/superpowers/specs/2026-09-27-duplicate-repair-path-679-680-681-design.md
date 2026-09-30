@@ -378,7 +378,7 @@ runbook section 9 (a human act).
   drops in-flight Compare and search answers; a refusal that cannot change on retry (`never` /
   `after_operator`) hides the Link button and forgets the comparison, leaving it on screen with the
   sentence. A LOCKED KEY is not such a refusal (`Retry::Now`): the button stays for after the
-  unlock. Outranked reads "pressing Link again records another judgement but changes nothing".
+  unlock. Outranked read "pressing Link again records another judgement but changes nothing" as first built — corrected in R2b-2: a retry would normally record a newer judgement that overrules the other.
 - **Names and shapes.** The window module is `src/link/` (`mod.rs`, `view.rs` + `view_tests.rs`,
   `search.rs`), not one `link.rs`; `link_report` takes `(effect, charts, compared)`, not
   `&LinkOutcome`, so it can name uncompared charts; `chart_facts`' two `person.rs` reads
@@ -402,6 +402,58 @@ runbook section 9 (a human act).
     the display label `"current"`.
   - A failed re-read after a sign-off, cease or link is reported AFTER that act's outcome
     (`refresh(lead)`), never instead of it.
+
+**As built (R2b-2, PR #711, 2026-09-30) — deviations from this design:**
+- **One list of links, not links under each member line** (maintainer, 2026-09-30). Under the member lines
+  the pane shows **"How these charts are linked"**: one entry per standing `patient_link` row, each with
+  its own **"Not the same person…"**. Per LINK, never per member — putting each link under both of its
+  charts would show every control twice. `cairn_node::patient::edges::record_edges` supplies the rows (pair,
+  attested, the day it was recorded); an unlinked pair is not a link (the query keeps `state = 'link'`, and a
+  test that queries a set holding BOTH charts pins it). A linked record whose read returned no links says so in
+  words, and an unreadable list says so and offers no unlink — never a blank.
+- **The un-attested wording is "without a clinician's confirmation on record here"**, not "by the matcher (not
+  reviewed)": a peer's human link whose attester is not enrolled here also stores `attested = false`, so
+  "matcher" can be untrue (principle 4). Each line reads "recorded {day} (UTC)" — the day is derived from
+  the stored millisecond wall clock, so the zone is stated, not implied.
+- **"Still joined?" is asked of the two SUBJECTS** (`high ∈ person_charts(low)`, read inside the judgement's
+  transaction), not of the filed-under chart. The audit found the design's `other ∈ person_charts(about)`
+  would, once a third chart could be the filing chart, turn on which subject was asked about: a successful
+  A–B–C split judged from A would answer `StillJoined` whenever that subject was the near chart B.
+- **#699 (a) is ADR-0077** (spec v0.79). `FiledUnder::{Subject, RecordOf}` lives in the new pure module
+  `chart_link/admit.rs`; `RecordOf` is unlink-only (a link filed under a third chart is refused before
+  anything is signed). CLI `unlink-charts --from <chart>`.
+- **`--from` / the opened chart is checked whenever it names a chart that is not a subject** (build ruling):
+  it must be held and its record must hold both subjects, or the unlink is refused — even when a held
+  subject alone would have admitted the unlink. The design's `record_of = opened.unwrap_or(about)` trusted
+  unchecked input and let the CLI print a record for a chart that does not exist. The refusal names what it
+  is about (PR #711 review): a chart not held here is `NodeState` (sync may deliver it); a record that does
+  not hold both is `Input` — "reload the chart and judge again", as the in-transaction re-check words it.
+- **A `RecordOf` filing's record is re-read by `assert_link_in_tx` under db/018's CARNLK** (PR #711 review).
+  As first built the re-read ran merely inside `judge`'s READ COMMITTED transaction, before any lock, so a
+  peer's unlink arriving through the sync door could commit between the read and the submit and leave the
+  event filed (and graded, db/048) under a record that no longer held the pair. The signing core now takes
+  CARNLK (row lock first, as every path does) and then re-reads; a deterministic DB test parks the judgement
+  on CARNLK, commits a peer's unlink meanwhile, and asserts the refusal.
+- **Module split:** the judgement entry points (`judge`, `link_charts`, `unlink_charts`, `LinkOutcome`, …) moved
+  to `chart_link/judge.rs` in a pure-move commit (house rule 4: `chart_link.rs` was 726 lines);
+  `chart_link/admit.rs` holds the pure admission rule.
+- **Outranked no longer says a retry "changes nothing"** — that was false. The sync door merges the peer's
+  HLC — the clinical door, db/020, the only one identity events arrive through — so pressing Unlink again would normally record a NEWER judgement that overrules the colleague's; it
+  does not settle the disagreement. The unlink panel says so, and the same correction was made to R2b-1's link
+  sentence (`link/view.rs`) and to `LinkEffect::Outranked`'s doc. (This also corrects the R2b-1 note above.)
+- **A locked key names its own button**: `key_locked_for(button)` (R2b-1's `key_locked` is
+  `key_locked_for("Link — same person")`), so an Unlink click never says "press Link again". The unlink commands' final
+  stage is the pure `standing_edge(edges, low, high, act)`: a present link (either order) passes; an absent one
+  is `LINK_GONE`; an unreadable edge list is `Retry::Now`, never `LINK_GONE` (a refusal is not an outage).
+- **The unlink panel is a separate `<section id="unlink-panel">`**, not a mode of the link panel (one panel with
+  two verbs can show the wrong verb's button over the other's comparison), and the two are **mutually
+  exclusive**: opening either closes the other (two opposite judgements on screen at once is cognitive load
+  paper-parity forbids). Focus: on open to the panel heading; on Close (Esc or "Close comparison") back to the
+  link button that opened it (by low/high, else the first); after a successful unlink — whose re-read
+  destroys the focused button — to the patient's heading. `renderLinks` lives in `main.js` (the
+  webview-fields guard scans only that file); `unlink.js` borrows `updateLinkLock`/`keyUnlocked`.
+- **No SQL object, no wire change:** `SCHEMA_GENERATION` stays 55. Gesture timing is not recorded server-side
+  (db/044's CHECK, as for link); the stopwatch is runbook §10's.
 
 ### R3 — the front door collapses by person
 

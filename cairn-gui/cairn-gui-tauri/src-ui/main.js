@@ -85,6 +85,35 @@ function renderMembers(members) {
   el("linked-charts-label").hidden = !linked;
 }
 
+/**
+ * The links joining this record's charts, one line each, each with its own "Not the same
+ * person…" (R2b-2). The button's accessible name carries the link's own text, so a screen
+ * reader hears WHICH link it undoes, not ten identical buttons.
+ */
+function renderLinks(links) {
+  const list = el("record-links");
+  list.replaceChildren(
+    ...links.map((recordLink) => {
+      const li = cell("li", recordLink.text + " ");
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = "Not the same person…";
+      b.setAttribute("aria-label", "Not the same person: " + recordLink.text);
+      b.dataset.low = recordLink.low;
+      b.dataset.high = recordLink.high;
+      // unlink.js loads after this file and may not be present (fixture-only builds).
+      b.addEventListener("click", () => {
+        if (typeof compareLinked === "function") compareLinked(recordLink.low, recordLink.high);
+      });
+      li.append(b);
+      return li;
+    }),
+  );
+  const any = links.length > 0;
+  list.hidden = !any;
+  el("record-links-label").hidden = !any;
+}
+
 function renderRow(row) {
   const tr = document.createElement("tr");
   // Marked in the DOM, not only by colour: colour alone is invisible to a screen reader
@@ -156,6 +185,8 @@ function render(pane, patient) {
   renderedCharts = view.charts;
   renderMembers(pane.members);
   setMessage(el("linked-charts-error"), pane.members_error);
+  renderLinks(pane.links);
+  setMessage(el("record-links-error"), pane.links_error);
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -185,6 +216,8 @@ function clearChart() {
   renderedCharts = null;
   renderMembers([]);
   setMessage(el("linked-charts-error"), "");
+  renderLinks([]);
+  setMessage(el("record-links-error"), "");
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");

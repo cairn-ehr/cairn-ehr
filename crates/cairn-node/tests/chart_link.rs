@@ -177,7 +177,7 @@ async fn different_people_is_an_unlink_on_a_pair_never_linked() {
         human_sk: &sk_h,
         human_kid: &kid_h,
     };
-    let out = unlink_charts(&mut c, a, b, &who, ORIGIN)
+    let out = unlink_charts(&mut c, a, b, None, &who, ORIGIN)
         .await
         .expect("unlink");
     assert_eq!(standing(&c, a, b).await, Some(("unlink".into(), true)));
@@ -202,7 +202,9 @@ async fn an_unlink_after_a_link_splits_the_set_again() {
         human_kid: &kid_h,
     };
     link_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
-    let out = unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
+    let out = unlink_charts(&mut c, a, b, None, &who, ORIGIN)
+        .await
+        .unwrap();
     assert_eq!(out.charts.members().len(), 1);
     assert_eq!(
         out.effect,
@@ -237,7 +239,7 @@ async fn an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split()
     link_charts(&mut c, a, mid, &who, ORIGIN).await.unwrap();
     link_charts(&mut c, mid, b, &who, ORIGIN).await.unwrap();
 
-    let out = unlink_charts(&mut c, a, b, &who, ORIGIN)
+    let out = unlink_charts(&mut c, a, b, None, &who, ORIGIN)
         .await
         .expect("the judgement is recorded even though it cannot split the record");
     assert_eq!(
@@ -303,7 +305,7 @@ async fn a_displayed_member_not_held_here_can_still_be_unlinked() {
         } else {
             (held, unheld)
         };
-        let out = unlink_charts(&mut c, first, second, &who, ORIGIN)
+        let out = unlink_charts(&mut c, first, second, None, &who, ORIGIN)
             .await
             .unwrap_or_else(|e| {
                 panic!("unheld_sorts_low={unheld_sorts_low}: a displayed member unlinks: {e}")
@@ -341,7 +343,7 @@ async fn an_unlink_needs_at_least_one_of_the_charts_held_here() {
         human_sk: &sk_h,
         human_kid: &kid_h,
     };
-    let err = unlink_charts(&mut c, x, y, &who, ORIGIN)
+    let err = unlink_charts(&mut c, x, y, None, &who, ORIGIN)
         .await
         .unwrap_err()
         .to_string();
@@ -373,7 +375,9 @@ async fn a_later_machine_link_from_a_peer_does_not_undo_the_reviewers_unlink() {
         human_sk: &sk_h,
         human_kid: &kid_h,
     };
-    unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
+    unlink_charts(&mut c, a, b, None, &who, ORIGIN)
+        .await
+        .unwrap();
 
     let wall: i64 = c
         .query_one("SELECT max(hlc_wall) FROM patient_link", &[])
@@ -497,7 +501,9 @@ async fn an_open_proposal_moves_with_the_judgement_in_the_same_transaction() {
         let (x, y) = (Uuid::now_v7(), Uuid::now_v7());
         register_pair(&c, &sk_a, &kid_a, x, y).await;
         seed_proposal(&c, x, y, open).await;
-        let out = unlink_charts(&mut c, y, x, &who, ORIGIN).await.unwrap();
+        let out = unlink_charts(&mut c, y, x, None, &who, ORIGIN)
+            .await
+            .unwrap();
         assert!(out.proposal_resolved);
         assert_eq!(
             proposal(&c, x, y).await,
@@ -531,7 +537,7 @@ async fn a_closed_proposal_is_left_exactly_as_it_was() {
             let before = proposal(&c, a, b).await;
             let out = match verb {
                 LinkVerb::Link => link_charts(&mut c, a, b, &who, ORIGIN).await,
-                LinkVerb::Unlink => unlink_charts(&mut c, a, b, &who, ORIGIN).await,
+                LinkVerb::Unlink => unlink_charts(&mut c, a, b, None, &who, ORIGIN).await,
             }
             .unwrap();
             assert!(
@@ -579,7 +585,7 @@ async fn a_judgement_a_later_one_outranks_is_recorded_but_says_it_did_not_take_e
         human_sk: &sk_h,
         human_kid: &kid_h,
     };
-    let out = unlink_charts(&mut c, a, b, &who, ORIGIN)
+    let out = unlink_charts(&mut c, a, b, None, &who, ORIGIN)
         .await
         .expect("recorded, though outranked");
     assert_eq!(out.effect, LinkEffect::Outranked);
@@ -634,7 +640,9 @@ async fn a_judgement_a_later_agreeing_one_outranks_still_took_effect() {
         human_sk: &sk_h,
         human_kid: &kid_h,
     };
-    let out = unlink_charts(&mut c, a, b, &who, ORIGIN).await.unwrap();
+    let out = unlink_charts(&mut c, a, b, None, &who, ORIGIN)
+        .await
+        .unwrap();
     assert_eq!(out.effect, LinkEffect::TookEffect);
     assert_eq!(out.charts.members(), &[a]);
     reset_clock(&c).await;
@@ -723,7 +731,7 @@ async fn a_chart_this_node_has_never_seen_is_refused_before_signing() {
         let r = if verb_is_link {
             link_charts(&mut c, a, stranger, &who, ORIGIN).await
         } else {
-            unlink_charts(&mut c, stranger, a, &who, ORIGIN).await
+            unlink_charts(&mut c, stranger, a, None, &who, ORIGIN).await
         };
         let err = r.unwrap_err();
         assert_eq!(
@@ -848,7 +856,7 @@ async fn a_judgement_locks_the_proposal_row_before_taking_the_link_lock() {
             human_sk: &sk_h_owned,
             human_kid: &kid_h_owned,
         };
-        unlink_charts(&mut c, a, b, &who, ORIGIN).await
+        unlink_charts(&mut c, a, b, None, &who, ORIGIN).await
     });
 
     // Poll `pg_stat_activity`, via T1's own connection, until the judgement's backend
