@@ -117,6 +117,7 @@ mod sources;
 const GUARDED: &[&str] = &[
     "crates/cairn-node/src/auto_apply.rs",
     "crates/cairn-node/src/chart_link.rs",
+    "crates/cairn-node/src/chart_link/judge.rs",
     "crates/cairn-node/src/db.rs",
     "crates/cairn-node/src/matcher_actor.rs",
     "crates/cairn-node/src/patient/compare.rs",
@@ -202,15 +203,24 @@ fn every_postgres_call_in_the_auto_apply_ceremony_names_what_it_was_doing() {
     );
 }
 
-/// How many `LocalDbFault`s `chart_link.rs` builds — every postgres call it makes itself.
+/// How many `LocalDbFault`s a chart judgement builds — every postgres call it makes itself,
+/// across the two files it now lives in ([`CHART_LINK_SOURCES`]).
 ///
-/// Seven: the standing-link read, the proposal-row lock, the submit (whose db/005 / db/018
-/// refusal is the message an operator most needs), the proposal resolution, the held-chart
-/// read, opening the transaction, and the commit. The commit is built directly rather than
-/// through `.map_err(|e| LocalDbFault::new(` because it adds the "outcome unknown" context,
-/// so this counts the bare form — safe here because, unlike `auto_apply.rs`, nothing in
-/// `chart_link.rs`'s test module builds one.
+/// Seven: in `chart_link.rs` the standing-link read, the proposal-row lock, the submit (whose
+/// db/005 / db/018 refusal is the message an operator most needs) and the proposal
+/// resolution; in `chart_link/judge.rs` the held-chart read, opening the transaction, and the
+/// commit. The commit is built directly rather than through `.map_err(|e| LocalDbFault::new(`
+/// because it adds the "outcome unknown" context, so this counts the bare form — safe here
+/// because, unlike `auto_apply.rs`, neither file's test module builds one.
 const CHART_LINK_LOCAL_DB_FAULT_SITES: usize = 7;
+
+/// The files a chart judgement's postgres calls live in: `judge.rs` was split out of
+/// `chart_link.rs` (house rule 4) with its three sites, so the pin counts both — a site moved
+/// between them must not read as one lost.
+const CHART_LINK_SOURCES: &[&str] = &[
+    "crates/cairn-node/src/chart_link.rs",
+    "crates/cairn-node/src/chart_link/judge.rs",
+];
 
 /// Every postgres call a human's link/unlink judgement makes names what it was doing —
 /// pinned by count, for the reason [`AUTO_APPLY_LOCAL_DB_FAULT_SITES`] gives: reverting a
@@ -218,14 +228,20 @@ const CHART_LINK_LOCAL_DB_FAULT_SITES: usize = 7;
 #[test]
 fn every_postgres_call_in_a_chart_judgement_names_what_it_was_doing() {
     let root = sources::repo_root();
-    let text = flattened_code(
-        &std::fs::read_to_string(root.join("crates/cairn-node/src/chart_link.rs"))
-            .expect("chart_link.rs is in the tree"),
-    );
-    let found = text.matches("LocalDbFault::new(").count();
+    let found: usize = CHART_LINK_SOURCES
+        .iter()
+        .map(|path| {
+            flattened_code(
+                &std::fs::read_to_string(root.join(path))
+                    .unwrap_or_else(|e| panic!("{path} is in the tree: {e}")),
+            )
+            .matches("LocalDbFault::new(")
+            .count()
+        })
+        .sum();
     assert_eq!(
         found, CHART_LINK_LOCAL_DB_FAULT_SITES,
-        "chart_link.rs builds {found} `LocalDbFault`s, expected \
+        "chart_link.rs + chart_link/judge.rs build {found} `LocalDbFault`s, expected \
          {CHART_LINK_LOCAL_DB_FAULT_SITES}. If you ADDED a postgres call, wrap it and bump the \
          constant. If this DROPPED, a call was reverted to a bare `?` — an operator would \
          learn the SQLSTATE of a refused judgement but not which step refused it."

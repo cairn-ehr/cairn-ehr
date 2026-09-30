@@ -1,6 +1,6 @@
 //! Who may make a link/unlink judgement from this node, and which chart its event is FILED
-//! under. **Pure** — no database — so every rule here is unit-tested on its own; `judge` in the
-//! parent module reads the facts (is each chart held? does a record contain the pair?) and asks.
+//! under. **Pure** — no database — so every rule here is unit-tested on its own; `judge` (in
+//! `judge.rs`) reads the facts (is each chart held? does a record contain the pair?) and asks.
 //!
 //! "Filed under" is the event ENVELOPE's `patient_id`: the chart whose `event_log` stream the
 //! event sits in. It is not what the event is ABOUT — db/018 reads the pair from the payload's
