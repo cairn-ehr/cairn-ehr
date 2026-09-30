@@ -435,7 +435,7 @@ runbook section 9 (a human act).
   does not settle the disagreement. The unlink panel says so, and the same correction was made to R2b-1's link
   sentence (`link/view.rs`) and to `LinkEffect::Outranked`'s doc. (This also corrects the R2b-1 note above.)
 - **A locked key names its own button**: `key_locked_for(button)` (R2b-1's `key_locked` is
-  `key_locked_for("Link")`), so an Unlink click never says "press Link again". The unlink commands' final
+  `key_locked_for("Link — same person")`), so an Unlink click never says "press Link again". The unlink commands' final
   stage is the pure `standing_edge(edges, low, high, act)`: a present link (either order) passes; an absent one
   is `LINK_GONE`; an unreadable edge list is `Retry::Now`, never `LINK_GONE` (a refusal is not an outage).
 - **The unlink panel is a separate `<section id="unlink-panel">`**, not a mode of the link panel (one panel with

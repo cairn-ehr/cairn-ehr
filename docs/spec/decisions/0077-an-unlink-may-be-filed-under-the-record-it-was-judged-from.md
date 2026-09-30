@@ -12,13 +12,14 @@
 
 ## Context
 
-R2a's `unlink_charts` refuses an unlink unless one of the two subject charts is held on this node, because
-the event is filed under a subject and db/005 step 8b admits only events filed under a held chart. #699's
+R2a's `unlink_charts` refuses an unlink unless one of the two subject charts is held on this node (has a
+`patient_chart` row), and files the event under a held subject. (db/005 step 8b is looser: it refuses only a
+local event filed under a chart with no history here — `cairn_patient_has_events`, db/001.) #699's
 scenario: chart A is held here and its record reads A, B and C through two links (A–B, B–C). B and C are
 not held here (their registrations have not arrived). The far link B–C is the wrong one. The clinician
 sees all three charts on A's record, judges from it, and is refused — although the record on screen is
 exactly the evidence for the judgement. The tool's own advice ("unlink that link too") was untrue on this
-node, because the only way to say it was refused.
+node, because the unlink it pointed to was refused here.
 
 ## Decision
 
@@ -29,12 +30,12 @@ transaction, not only before it). **A `link` is never filed this way**: a link a
 person and needs both held, so the relaxation cannot reach it. The pair is always the event's **payload**;
 the envelope's chart is only the stream the event is filed in.
 
-The maintainer chose this (a) over the alternatives in #699 on 2026-09-28. The window's reading of the
+The maintainer chose this (a) over the alternatives in #699 on 2026-09-28. This ADR's reading of the
 choice is deliberately narrow:
 
-- The filing chart is admitted only when it is **related to the pair** — a subject, or a chart whose record
-  holds both. An opened chart unrelated to the pair is refused even when a subject is held (a stray `--from`
-  must not be silently ignored, nor shown as a record the event never sat in).
+- An opened chart that is not a subject must be held here and read both subjects in its record, or the unlink
+  is refused — even when a held subject would carry the filing (a stray `--from` must not be silently
+  ignored, and the record reported back after the judgement must be one that holds the pair).
 - "Still joined?" — the question that decides between *TookEffect* and *StillJoined* — is asked of the
   **subjects**: `high ∈ person_charts(low)`. It used to be asked of the filed-under chart, which is the same
   answer whenever the filed-under chart is a subject, and wrong the moment it is a third chart (every
@@ -43,27 +44,36 @@ choice is deliberately narrow:
 ## Consequences
 
 An audit of every reader of identity events by chart, done before building (2026-09-30): every projection,
-flag, trust view, heal and re-fold pass (db/018, 019, 023–025, 039, 043, 054, 055), the sync doors and page
-selection (db/020, db/051, `cairn-sync`), the medium and the plaintext twin read the pair from the
-**payload**; none keys a link event on its envelope, and replication has no chart scope. So:
+flag, trust view, heal and re-fold pass (db/018, 019, 023–025, 039, 043, 054, 055), the medium and the
+plaintext twin read the pair from the **payload**; the sync doors and page selection (db/020, db/051,
+`cairn-sync`) do not read it at all, and replication has no chart scope. No reader takes the pair from the
+envelope; only two key a link event on its envelope chart — db/005 step 8b's admission check and db/048's
+chart-scoped sensitivity grade — both addressed below. So:
 
 - **No wire change, no new event type, no SQL object** (`SCHEMA_GENERATION` stays 55). The envelope's chart
-  was always free to differ from the payload subjects; nothing depended on it not doing so.
+  was always free to differ from the payload subjects (neither the db/018 floor nor any door checks it
+  against them); no reader's correctness depended on it — only db/048's grade selection follows it (below).
 - The event sits in the **opened chart's stream**. For a `RecordOf` filing `cairn_effective_sensitivity`
   (db/048) keys chart-scoped grades on the envelope, so the unlink takes the OPENED chart's grade and
   ignores BOTH subjects' grades (before, one subject's grade always applied). The exposure is bounded:
   the payload and the twin carry no patient data beyond the two subjects' ids, which the opened chart's
   reader already sees as member lines of the same record — the rest is the judgement's provenance (which
   clinician's key judged, and how).
-- A receiver that lacks the opened chart counts the event as "has events" — an existing pattern for any
-  replicated event — and still applies the unlink from its payload.
+- A receiver that lacks the opened chart admits the event (db/020) and from then on counts that chart as
+  having events (`cairn_patient_has_events`, db/001) — the existing pattern for any replicated event that
+  precedes its chart's registration — and still applies the unlink from its payload.
 - A reprojection reproduces the third-chart unlink from the payload, and a chain split from the opened
   chart reports *TookEffect* while an unlink on a cycle honestly reports *StillJoined*.
-- A retry after *Outranked* would normally record a **newer** judgement that overrules the colleague's
-  (the sync merge of a peer's clock is bounded at 24 h of drift: db/020 clamps it, and db/007 refuses a
-  node event that far ahead — so a peer further ahead keeps outranking), so the window never says a retry
-  "changes nothing".
+- A retry after *Outranked* would normally record a **newer** judgement that overrules the colleague's: a
+  peer's identity event arrives through db/020, which admits it unchanged but merges its clock into this
+  node's only up to now + 24 h (`cairn_max_hlc_drift_ms()`), so a peer more than 24 h ahead keeps outranking
+  a retry (db/007, the node-plane door, instead refuses a node event that far ahead; it carries no identity
+  events). So the window never says a retry "changes nothing".
 
-**Rejected:** relaxing `link` as well (a link across charts nobody here holds is a claim this node cannot
-even display); silently ignoring an unrelated `--from`; a per-member "unlink" that guesses which link is
-wrong (principle 2: the human picks the edge).
+## Rejected
+
+- Relaxing `link` as well (a link across charts nobody here holds is a claim this node cannot even display).
+- Silently ignoring an unrelated `--from`.
+- A per-member "unlink" that guesses which link is wrong (principle 2: the human picks the edge).
+- #699's (b) — keep the refusal and have *StillJoined* name the joining edge and where it can be unlinked (the
+  maintainer chose (a)).

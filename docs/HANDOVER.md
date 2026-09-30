@@ -23,9 +23,10 @@
 >    #699 if he agrees ADR-0077 resolves it; no closing keyword was used).
 > 2. **Open repair-path issues** (filed by R1–R2b-1): **#708** (`link_charts` should re-check both compared sets in its
 >    transaction + a DB-gated window test) · **#709** (a link outcome can go unseen when it lands after the chart
->    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf` in-transaction race test, `chart_set.rs` size,
->    window→node wiring test) · **#699** (DECIDED (a), built in R2b-2, ADR-0077 — awaiting the
->    maintainer's close) · **#700** (auto-apply's skip race handled on PR #698; a skipped proposal stays `pending`) ·
+>    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf`
+>    in-transaction race test, `chart_set.rs` size, window→node wiring test) · **#699** (DECIDED (a), built in
+>    R2b-2, ADR-0077 — awaiting the maintainer's close) · **#700** (auto-apply's skip race handled on PR #698; a
+>    skipped proposal stays `pending`) ·
 >    **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (floor refusals as bare `db error` —
 >    pinned) · **#703** (the generation heal can be used up by `cairn-sync init`) · **#704** (make db/019's
 >    `applied_event_id ⇔ applied` a CHECK) · **#705** (`link-charts` against an older-generation database judges under
@@ -125,10 +126,9 @@
 >   the other); after a successful unlink focus goes to the patient heading, not `<body>`. Walked headless, no
 >   committed JS harness (#332).
 > - **`Outranked` never says a retry "changes nothing"** — a retry would normally record a NEWER judgement that
->   overrules the other (the sync merge is
->   bounded at 24 h of drift — a peer further ahead keeps outranking). Pinned by
->   `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op`
->   (and `view_tests.rs`'s link twin). A locked key names its own button (`key_locked_for`;
+>   overrules the other (the sync merge is bounded at 24 h of drift — a peer further ahead keeps outranking).
+>   Pinned by `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op` (and `view_tests.rs`'s link
+>   twin). A locked key names its own button (`key_locked_for`;
 >   `view_tests.rs::a_locked_key_names_the_button_that_was_pressed`); `standing_edge`'s unread list is
 >   `Retry::Now`, never `LINK_GONE` (`unlink.rs::an_unread_edge_list_is_retryable_and_not_a_verdict`).
 > - **`record_holds_both` is a NodeState refusal BEFORE the transaction and an Input refusal INSIDE it — do not

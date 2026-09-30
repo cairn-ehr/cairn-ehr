@@ -749,7 +749,8 @@ lists the deviations. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-un
     list (per LINK, each with its own "Not the same person…"; a worded empty/unread case, "recorded {day} (UTC)"),
     `compare_linked` / `unlink_records` (bound to the chart on screen and the displayed set; refuse a link the record
     no longer has via the pure `standing_edge`), `LinkEffect` sentences (`StillJoined` points at the list;
-    `Outranked` says a retry would normally record a newer, overruling judgement — the sync door bounds its clock merge at 24 h of drift); `key_locked_for(button)`.
+    `Outranked` says a retry would normally record a newer, overruling
+    judgement — the sync door bounds its clock merge at 24 h of drift); `key_locked_for(button)`.
   - `src-ui/unlink.js` + `main.js`'s `renderLinks` — a separate unlink panel, mutually exclusive with the link
     panel; focus returns to the opening link's button, or the patient heading after a successful unlink.
   - Runbook §10 + template rows (review-and-unlink ≤ 15 s, live only).
