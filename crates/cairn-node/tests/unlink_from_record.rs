@@ -182,7 +182,7 @@ async fn a_chain_split_from_the_opened_chart_took_effect() {
 }
 
 #[tokio::test]
-async fn a_link_on_a_cycle_is_recorded_and_says_still_joined() {
+async fn an_unlink_on_a_cycle_is_recorded_and_says_still_joined() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;

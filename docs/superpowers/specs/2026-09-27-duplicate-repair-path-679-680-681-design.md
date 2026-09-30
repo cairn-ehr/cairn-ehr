@@ -417,21 +417,28 @@ runbook section 9 (a human act).
   the stored millisecond wall clock, so the zone is stated, not implied.
 - **"Still joined?" is asked of the two SUBJECTS** (`high ∈ person_charts(low)`, read inside the judgement's
   transaction), not of the filed-under chart. The audit found the design's `other ∈ person_charts(about)`
-  would answer `StillJoined` for every successful A–B–C split once a third chart could be the filing chart.
+  would, once a third chart could be the filing chart, turn on which subject was asked about: a successful
+  A–B–C split judged from A would answer `StillJoined` whenever that subject was the near chart B.
 - **#699 (a) is ADR-0077** (spec v0.79). `FiledUnder::{Subject, RecordOf}` lives in the new pure module
   `chart_link/admit.rs`; `RecordOf` is unlink-only (a link filed under a third chart is refused before
   anything is signed). CLI `unlink-charts --from <chart>`.
 - **`--from` / the opened chart is checked whenever it names a chart that is not a subject** (build ruling):
-  it must be held and its record must hold both subjects, or the unlink is refused
-  (`node_state_refusal`) — even when a held subject alone would have admitted the unlink. The design's
-  `record_of = opened.unwrap_or(about)` trusted unchecked input and let the CLI print a record for a chart
-  that does not exist. For a `RecordOf` filing the record is re-read inside the judgement's transaction; a
-  DB test of that race does not exist (the pure `record_holds_both` is unit-tested).
+  it must be held and its record must hold both subjects, or the unlink is refused — even when a held
+  subject alone would have admitted the unlink. The design's `record_of = opened.unwrap_or(about)` trusted
+  unchecked input and let the CLI print a record for a chart that does not exist. The refusal names what it
+  is about (PR #711 review): a chart not held here is `NodeState` (sync may deliver it); a record that does
+  not hold both is `Input` — "reload the chart and judge again", as the in-transaction re-check words it.
+- **A `RecordOf` filing's record is re-read by `assert_link_in_tx` under db/018's CARNLK** (PR #711 review).
+  As first built the re-read ran merely inside `judge`'s READ COMMITTED transaction, before any lock, so a
+  peer's unlink arriving through the sync door could commit between the read and the submit and leave the
+  event filed (and graded, db/048) under a record that no longer held the pair. The signing core now takes
+  CARNLK (row lock first, as every path does) and then re-reads; a deterministic DB test parks the judgement
+  on CARNLK, commits a peer's unlink meanwhile, and asserts the refusal.
 - **Module split:** the judgement entry points (`judge`, `link_charts`, `unlink_charts`, `LinkOutcome`, …) moved
-  to `chart_link/judge.rs` in a pure-move commit (house rule 4: `chart_link.rs` was 722 lines);
+  to `chart_link/judge.rs` in a pure-move commit (house rule 4: `chart_link.rs` was 726 lines);
   `chart_link/admit.rs` holds the pure admission rule.
-- **Outranked no longer says a retry "changes nothing"** — that was false. Both sync doors merge the peer's
-  HLC (db/020, db/007), so pressing Unlink again would normally record a NEWER judgement that overrules the colleague's; it
+- **Outranked no longer says a retry "changes nothing"** — that was false. The sync door merges the peer's
+  HLC — the clinical door, db/020, the only one identity events arrive through — so pressing Unlink again would normally record a NEWER judgement that overrules the colleague's; it
   does not settle the disagreement. The unlink panel says so, and the same correction was made to R2b-1's link
   sentence (`link/view.rs`) and to `LinkEffect::Outranked`'s doc. (This also corrects the R2b-1 note above.)
 - **A locked key names its own button**: `key_locked_for(button)` (R2b-1's `key_locked` is

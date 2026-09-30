@@ -415,10 +415,11 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
                 .into(),
             reload: false,
         },
-        // R2a never returns this for a link; worded honestly in case it ever does.
+        // R2a never returns this for a link; worded honestly in case it ever does — and true
+        // wherever it lands (an answer arriving with another chart open re-reads nothing).
         LinkEffect::StillJoined => LinkReportView {
-            sentence: "Recorded, but the record did not change the way a link should — the \
-                       chart is being re-read so you can see what it now combines."
+            sentence: "Recorded, but the record did not change the way a link should — check \
+                       what the chart now combines."
                 .into(),
             reload: true,
         },

@@ -25,8 +25,10 @@ node, because the unlink it pointed to was refused here.
 
 **An unlink where neither subject is held here may be filed under the chart it was judged from** — the
 chart the clinician has open (`unlink-charts --from <chart>`, and the window's displayed chart) — provided
-that chart is held here and its record reads **both** subjects (checked in the judgement's own
-transaction, not only before it). **A `link` is never filed this way**: a link asserts two charts are one
+that chart is held here and its record reads **both** subjects (checked before the judgement, and again
+inside its transaction after taking db/018's identity lock, before anything is signed — every identity apply
+holds that lock until it commits, so a peer's unlink arriving meanwhile cannot leave the event filed under a
+record that no longer holds the pair). **A `link` is never filed this way**: a link asserts two charts are one
 person and needs both held, so the relaxation cannot reach it. The pair is always the event's **payload**;
 the envelope's chart is only the stream the event is filed in.
 
@@ -35,18 +37,23 @@ choice is deliberately narrow:
 
 - An opened chart that is not a subject must be held here and read both subjects in its record, or the unlink
   is refused — even when a held subject would carry the filing (a stray `--from` must not be silently
-  ignored, and the record reported back after the judgement must be one that holds the pair).
+  ignored, and the record reported back must be one that held the pair when the clinician judged from it).
+  The refusal says what it is about: a chart not held here is this node's state (sync may deliver it); a
+  record that does not hold both is the picture judged from — reload the chart and judge again.
 - "Still joined?" — the question that decides between *TookEffect* and *StillJoined* — is asked of the
-  **subjects**: `high ∈ person_charts(low)`. It used to be asked of the filed-under chart, which is the same
-  answer whenever the filed-under chart is a subject, and wrong the moment it is a third chart (every
-  successful A–B–C split would have read "still joined").
+  **subjects**: `high ∈ person_charts(low)`. R2a asked whether the subject the event was *not* filed under
+  reads as part of the filed-under chart's record — the same answer whenever the filed-under chart is a
+  subject, and wrong the moment it is a third chart: the answer would then turn on which subject was asked
+  about, and a successful A–B–C split, judged from A, would read "still joined" whenever that subject was the
+  near chart B (which stays in A's record).
 
 ## Consequences
 
 An audit of every reader of identity events by chart, done before building (2026-09-30): every projection,
-flag, trust view, heal and re-fold pass (db/018, 019, 023–025, 039, 043, 054, 055), the medium and the
-plaintext twin read the pair from the **payload**; the sync doors and page selection (db/020, db/051,
-`cairn-sync`) do not read it at all, and replication has no chart scope. No reader takes the pair from the
+flag, trust view, heal and re-fold pass (db/018, 019, 023–025, 039, 043, 054, 055) and the plaintext twin
+read the pair from the **payload**; the sync doors, page selection and the medium (db/020, db/051,
+`cairn-sync`, `cairn-medium`, which carries events whole and replays them through the doors) do not read it
+at all, and replication has no chart scope. No reader takes the pair from the
 envelope; only two key a link event on its envelope chart — db/005 step 8b's admission check and db/048's
 chart-scoped sensitivity grade — both addressed below. So:
 
@@ -67,7 +74,7 @@ chart-scoped sensitivity grade — both addressed below. So:
 - A retry after *Outranked* would normally record a **newer** judgement that overrules the colleague's: a
   peer's identity event arrives through db/020, which admits it unchanged but merges its clock into this
   node's only up to now + 24 h (`cairn_max_hlc_drift_ms()`), so a peer more than 24 h ahead keeps outranking
-  a retry (db/007, the node-plane door, instead refuses a node event that far ahead; it carries no identity
+  a retry until this node's own clock reaches the peer's (db/007, the node-plane door, instead refuses a node event that far ahead; it carries no identity
   events). So the window never says a retry "changes nothing".
 
 ## Rejected
