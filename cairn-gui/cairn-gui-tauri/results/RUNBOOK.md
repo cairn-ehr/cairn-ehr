@@ -324,3 +324,53 @@ single sample tells you nothing about the tail.
 Record in the template's *Compare and link* section. **A figure outside the ≤ 20 s budget is a
 finding to file, never a budget to adjust** (§1.2's own rule, echoed here because this is the
 slice that first measures it).
+
+## 10. Unlink one link: "Not the same person…" (R2b-2, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) · [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699))
+
+The repair path's second §1.2 figure. **Live only** — fixture charts are never linked, so a `--mock`
+chart has no "How these charts are linked" list and nothing to unlink; there is no `--mock` variant to
+time. Set up a wrongly linked pair, then open one of its charts:
+
+```bash
+$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new   # note the chart id printed: A
+$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new   # ... and B
+$NODE link-charts "$A" "$B" --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+cd cairn-gui
+cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" --conn "$CONN" \
+    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+```
+
+(Set `A`/`B` to the ids the two register commands printed, and pass whatever key flags your `link-charts`
+run needs, as in section 9. For a three-chart chain, link A–B and B–C, open A, and unlink B–C — the link that does not touch the chart
+you opened.)
+
+Start the stopwatch at the press of **"Not the same person…"** on a link's line, not before — choosing
+WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then
+lays the two charts side by side. Stop it when the outcome line reads "Unlinked — chart(s) … are no
+longer part of this record" (or "Recorded that charts … are different people — but they still read as
+one record through other links …" for a chain, a legitimate outcome that also stops the clock).
+
+1. Press **"Not the same person…"** on the wrong link's line.
+2. Read the panel: findings (if any), then the two-column comparison of the two charts.
+3. Press **Unlink — not the same person**.
+
+Budget **review-and-unlink ≤ 15 s** (§1.2 in the design page's R2b section). Record, per run: the wall
+time from step 1 to the outcome line; the number of findings shown (0 is legitimate — nothing renders,
+never "no conflicts"); whether the key was already unlocked. Repeat at least five times with fresh pairs.
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] Each link's button is announced with its **own** text — which two charts, how the link was made
+      (a clinician's judgement, or without one on record here), and when — never a bare
+      "Not the same person…" repeated down the list.
+- [ ] Pressing the button announces the findings **before** the table.
+- [ ] An absent fact reads as a word, never silence.
+- [ ] Opening the unlink panel closes the link panel and vice versa — the two are never on screen
+      together.
+- [ ] Every outcome (refusal, Outranked, StillJoined, a link that is gone) is shown AND announced.
+- [ ] Close (Esc or "Close comparison") returns focus to the link button that opened the panel; after a
+      successful unlink, focus lands on the patient's heading, not `<body>`.
+
+Record in the template's *Unlink one link* section. **A figure outside the ≤ 15 s budget is a finding
+to file, never a budget to adjust.**
