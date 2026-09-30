@@ -72,7 +72,9 @@ chart-scoped sensitivity grade — both addressed below. So:
 
 ## Rejected
 
-- Relaxing `link` as well (a link across charts nobody here holds is a claim this node cannot even display).
+- Relaxing `link` as well. A link attaches charts to this person; from a node that holds neither, a typo
+  would join a stranger's chart sight unseen — R2a's reason for requiring both charts held for a link. An
+  unlink attaches nothing, so that risk does not carry over.
 - Silently ignoring an unrelated `--from`.
 - A per-member "unlink" that guesses which link is wrong (principle 2: the human picks the edge).
 - #699's (b) — keep the refusal and have *StillJoined* name the joining edge and where it can be unlinked (the
