@@ -677,7 +677,7 @@ all four; R1 builds the first.
   (DECIDED (b), 2026-09-27: withhold every line not on the opened chart while the set holds a doubted link).
 - **Next:** R2, split 2026-09-27 into R2a (built — next entry) and R2b, split again into **R2b-1** ("Same person
   as…"/link, built — see the 2026-09-29 entry below) and **R2b-2** ("Not the same person"/unlink + #699 (a),
-  next); then #697 (b), **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
+  next — planned 2026-09-30 in `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`); then #697 (b), **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
   proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
   forced 1 → target 1; signing off a combined list 1 → 1 → 1 (one gesture covers every line across both
@@ -748,7 +748,7 @@ as-built note there now lists the deviations below). No new ADR — R2b-1 decide
 already taken. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
 [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707) — per-task reviewed, final whole-branch review (opus) and its
 fix wave re-reviewed clean, then a `/review-pr` round whose findings are fixed on the branch (design as-built note,
-"The PR #707 review round"); awaiting the maintainer's merge.
+"The PR #707 review round"); merged 2026-09-29.
 - **What R2b-1 built.**
   - `cairn_node::patient::compare` (new): `chart_facts` — every member chart's front-sheet facts (held, trust,
     every retained non-repudiated name with use + provenance, repudiated names as aliases, DOB and sex-at-birth

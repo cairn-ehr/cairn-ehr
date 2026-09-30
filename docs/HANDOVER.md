@@ -3,9 +3,11 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — IS BUILT ON PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)
-> (2026-09-29): per-task and final whole-branch reviews clean, then a `/review-pr` round (5 agents) whose 7 Important
-> findings and every accepted suggestion are fixed on the branch; every gate green; AWAITING THE MAINTAINER'S MERGE.** R2b is two PRs (maintainer, 2026-09-28): **R2b-1** "Same person as…" (link, this PR), then **R2b-2** "Not
+> **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — MERGED (PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707),
+> 2026-09-29). R2b-2 IS PLANNED (2026-09-30):** `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`
+> — seven tasks, TDD; the #699 (a) audit is done (safe once "still joined?" asks the two subjects, not the filed-under
+> chart); the links render as ONE "How these charts are linked" list (maintainer, 2026-09-30). R2b is two PRs
+> (maintainer, 2026-09-28): **R2b-1** "Same person as…" (link, PR #707), then **R2b-2** "Not
 > the same person" (unlink + #699 (a)). R1 (PR #688) and R2a (PR #698) are merged. Repair path #679 · #680 · #681;
 > design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
 > [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
