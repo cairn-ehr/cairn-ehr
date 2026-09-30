@@ -86,7 +86,7 @@ The **reattribution event** — "event set E belongs to UUID-B, not UUID-A" — 
 | Event | Resolves | Adjudication |
 |---|---|---|
 | `assert` | Registration & demographic updates | Automatic |
-| `link` / `unlink` | Duplicates, John Doe identification, confessions; a human `unlink` of a never-linked pair records "different people" | Auto above threshold, else human; an attested assertion outranks an un-attested one ([ADR-0076](decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)) |
+| `link` / `unlink` | Duplicates, John Doe identification, confessions; a human `unlink` of a never-linked pair records "different people" | Auto above threshold, else human; an attested assertion outranks an un-attested one ([ADR-0076](decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)); an `unlink` neither of whose subjects is held here may be filed under the held chart it was judged from when that record reads both — a `link` never ([ADR-0077](decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md)) |
 | `identify` | Identity-pending → confirmed | Human; method recorded |
 | `repudiate` | Known-false assertions → alias pool | Human |
 | `reattribute` | Misfiled documentation; wrong-chart contamination; identity theft | Tiered: self-service (author, windowed) / one sign-off / two-person rule ([§5.5](#55-reattribution-one-primitive-tiered-workflows)) |
