@@ -440,11 +440,12 @@ pub async fn link_charts(
 /// One chart may be a member this node does not hold (R1 shows it; a peer's link named
 /// it), provided it reads as part of the other chart's record here.
 ///
-/// `opened` is the chart the clinician is judging FROM. It matters only when NEITHER chart
-/// is held here (#699 (a)): the far link B–C of an A–B–C record, read on a node holding only
-/// A. The judgement is then filed under `opened`, provided it is held here and its record
-/// reads both charts as part of it; otherwise the unlink is refused, as it is with `None`.
-/// Either way [`LinkOutcome::charts`] is `opened`'s record when given — the one on screen.
+/// `opened` is the chart the clinician is judging FROM — the one on screen, whose record
+/// [`LinkOutcome::charts`] then is. When it is not one of the pair it must be held here and
+/// its record must read both charts as part of it, or the unlink is refused before anything
+/// is signed. It carries the filing only when NEITHER chart is held here (#699 (a)): the far
+/// link B–C of an A–B–C record, read on a node holding only A; with `None` that case is
+/// refused.
 ///
 /// Errors: as [`link_charts`] — only "commit outcome unknown for event …" may have written.
 pub async fn unlink_charts(
@@ -506,19 +507,22 @@ async fn judge(
             .await
             .context("reading whether the two charts share a record here")?
             .contains(&b);
-    // Only read when it can change the answer: an unlink with neither chart held here, judged
-    // from an open chart (#699 (a)). Both are pre-checks for a LEGIBLE refusal; db/005 step 8b
-    // is the enforcement (it refuses an event filed under a chart with no history here), and
-    // the record is read AGAIN inside the transaction below, before anything is signed.
-    let opened_chart = match (verb, a_held || b_held, opened) {
-        (LinkVerb::Unlink, false, Some(o)) => {
+    // The chart an unlink is judged FROM, when it is a THIRD chart (not a subject): read so
+    // `admit_judgement` can check it — it may carry the filing when neither subject is held
+    // (#699 (a)), and whichever chart carries it, its record is what the caller is shown next,
+    // so it must be a record that exists here and holds the pair (Ruling R5). Pre-checks for a
+    // LEGIBLE refusal; db/005 step 8b is the enforcement for the filing (it refuses an event
+    // filed under a chart with no history here), and a third-chart filing's record is read
+    // AGAIN inside the transaction below, before anything is signed.
+    let opened_chart = match (verb, opened) {
+        (LinkVerb::Unlink, Some(o)) if o != a && o != b => {
             let record = crate::patient::person::person_charts(&*client, o)
                 .await
                 .context("reading the open chart's record")?;
             Some(OpenedChart {
                 chart: o,
                 held: is_held(client, o).await?,
-                holds_both: record.contains(&a) && record.contains(&b),
+                holds_both: record_holds_both(&record, a, b),
             })
         }
         _ => None,
@@ -560,7 +564,7 @@ async fn judge(
         let record = crate::patient::person::person_charts(&tx, o)
             .await
             .context("re-reading the open chart's record inside the judgement")?;
-        if !(record.contains(&a) && record.contains(&b)) {
+        if !record_holds_both(&record, a, b) {
             return Err(node_state_refusal(format!(
                 "chart {o}'s record no longer reads both {a} and {b} as part of it — the \
                  record changed while the judgement was being made; open it again"

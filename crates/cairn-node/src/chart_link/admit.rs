@@ -7,6 +7,7 @@
 //! `subject_a`/`subject_b`, never from the envelope (audit, R2b-2 plan). db/005 step 8b refuses a
 //! local event filed under a chart with no history here, so the filed-under chart must be HELD.
 use super::{canonical_pair, LinkVerb};
+use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 
 /// Which chart a judgement's event is filed under, and WHY that chart may carry it.
@@ -40,8 +41,30 @@ pub struct OpenedChart {
     pub chart: Uuid,
     /// A `patient_chart` row: db/005 step 8b will admit an event filed under it.
     pub held: bool,
-    /// Its record (`person_charts`) reads BOTH subjects as part of it, here.
+    /// Its record (`person_charts`) reads BOTH subjects as part of it, here — see
+    /// [`record_holds_both`].
     pub holds_both: bool,
+}
+
+impl OpenedChart {
+    /// Why a judgement cannot be made FROM this chart, or `None` if it can: it must be held
+    /// here, and its record must read both subjects. The wording completes "the chart you
+    /// have open (X) …".
+    fn unusable(self) -> Option<&'static str> {
+        match (self.held, self.holds_both) {
+            (true, true) => None,
+            (true, false) => Some("does not read both as part of its record"),
+            (false, _) => Some("is not held here"),
+        }
+    }
+}
+
+/// Does `record` (a chart's `person_charts`) read BOTH subjects `a` and `b` as part of it?
+/// **Pure**, and the one predicate behind [`OpenedChart::holds_both`]: `judge` asks it before
+/// the transaction (for a legible refusal) and again inside it (the check that guards a
+/// third-chart filing against the record changing in between), so the two cannot drift.
+pub fn record_holds_both(record: &ChartSet, a: Uuid, b: Uuid) -> bool {
+    record.contains(&a) && record.contains(&b)
 }
 
 /// Check a filing against the pair before anything is signed, and return the envelope chart.
@@ -92,6 +115,10 @@ pub fn filing_for(
 ///   an A–B–C record, judged while reading A. It is filed under that open chart
 ///   ([`FiledUnder::RecordOf`]). A held subject is still preferred whenever there is one, and
 ///   `opened` never admits a link.
+/// - An UNLINK's `opened` chart that is NOT one of the subjects is checked whichever chart
+///   the event is filed under: a judgement "made from" a chart that is not held here, or
+///   whose record does not hold both, is refused — otherwise a mistyped `--from` would be
+///   reported back as a record ("chart X now reads as: X") that does not exist here.
 ///
 /// `Ok(filed)`: the chart to file the event under, and why — `low` by the C1 convention when
 /// both are held, else the one held chart (db/005 step 8b refuses a local event about a chart
@@ -109,20 +136,17 @@ pub fn admit_judgement(
                 have open held here, and the other held too or already read as part of its \
                 record; or, for an unlink, the chart you have open held here with both in its \
                 record";
-    match (verb, a_held, b_held) {
+    let filed = match (verb, a_held, b_held) {
         (_, true, true) => Ok(FiledUnder::Subject(low)),
         (LinkVerb::Unlink, false, false) => match opened {
-            Some(o) if o.held && o.holds_both => Ok(FiledUnder::RecordOf(o.chart)),
-            Some(o) => Err(format!(
-                "neither chart {a} nor chart {b} is held on this node, and the chart you have \
-                 open ({}) {} — {rule}",
-                o.chart,
-                if o.held {
-                    "does not read both as part of its record"
-                } else {
-                    "is not held here either"
-                }
-            )),
+            Some(o) => match o.unusable() {
+                None => Ok(FiledUnder::RecordOf(o.chart)),
+                Some(why) => Err(format!(
+                    "neither chart {a} nor chart {b} is held on this node, and the chart you \
+                     have open ({}) {why} — {rule}",
+                    o.chart
+                )),
+            },
             None => Err(format!(
                 "neither chart {a} nor chart {b} is held on this node — {rule}"
             )),
@@ -145,7 +169,22 @@ pub fn admit_judgement(
                 "chart {unheld} is not held on this node{outside} — {rule}"
             ))
         }
+    }?;
+    // Reached only with a HELD subject deciding the filing (a third chart that decided it was
+    // checked above). An open chart that is not a subject must still be one this judgement can
+    // honestly be made from — the caller reports its record back as the result.
+    if let (LinkVerb::Unlink, FiledUnder::Subject(_), Some(o)) = (verb, filed, opened) {
+        if o.chart != a && o.chart != b {
+            if let Some(why) = o.unusable() {
+                return Err(format!(
+                    "the chart you have open ({}) {why}, so this judgement cannot be made \
+                     from it — {rule}",
+                    o.chart
+                ));
+            }
+        }
     }
+    Ok(filed)
 }
 
 #[cfg(test)]
@@ -274,6 +313,74 @@ mod tests {
             .unwrap_err();
             assert!(refusal.contains(&a.to_string()), "names the opened chart");
         }
+    }
+
+    /// Ruling R5: an open chart that is not a subject is checked even when a held subject
+    /// decides the filing — a mistyped `--from` is refused, never reported back as a record.
+    #[test]
+    fn an_unrelated_open_chart_is_refused_even_when_a_subject_is_held() {
+        let (lo, hi) = pair();
+        let x = Uuid::from_u128(9);
+        for (held, holds_both) in [(true, false), (false, false), (false, true)] {
+            let opened = OpenedChart {
+                chart: x,
+                held,
+                holds_both,
+            };
+            let refusal = admit_judgement(
+                LinkVerb::Unlink,
+                (lo, false),
+                (hi, true),
+                true,
+                Some(opened),
+            )
+            .unwrap_err();
+            assert!(refusal.contains(&x.to_string()), "names the opened chart");
+            let refusal = admit_judgement(
+                LinkVerb::Unlink,
+                (lo, true),
+                (hi, true),
+                false,
+                Some(opened),
+            )
+            .unwrap_err();
+            assert!(refusal.contains(&x.to_string()), "names the opened chart");
+        }
+    }
+
+    /// An open chart that IS a subject needs no further check: the subject rules already
+    /// decided what may be judged from it.
+    #[test]
+    fn an_open_subject_needs_no_extra_check() {
+        let (lo, hi) = pair();
+        let opened = OpenedChart {
+            chart: hi,
+            held: true,
+            holds_both: false,
+        };
+        assert_eq!(
+            admit_judgement(
+                LinkVerb::Unlink,
+                (lo, false),
+                (hi, true),
+                true,
+                Some(opened)
+            ),
+            Ok(FiledUnder::Subject(hi))
+        );
+    }
+
+    #[test]
+    fn a_record_holds_both_only_when_it_contains_each() {
+        let (lo, hi) = pair();
+        let x = Uuid::from_u128(9);
+        let both = ChartSet::new([x, lo, hi]).unwrap();
+        assert!(record_holds_both(&both, lo, hi));
+        assert!(record_holds_both(&both, hi, lo));
+        let one = ChartSet::new([x, lo]).unwrap();
+        assert!(!record_holds_both(&one, lo, hi));
+        assert!(!record_holds_both(&one, hi, lo));
+        assert!(!record_holds_both(&ChartSet::new([x]).unwrap(), lo, hi));
     }
 
     /// A held subject is still preferred: the third-chart arm is only for neither-held.

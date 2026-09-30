@@ -177,14 +177,23 @@ fn chart_judgement_report(
         out.record_of,
         members.join(", ")
     ));
+    // Judged from one chart, filed under another (#699 (a)): say where the event lives, so
+    // an operator looking for it in a chart's stream looks in the right one.
+    if out.record_of != out.filed_under {
+        lines.push(format!(
+            "the judgement is filed under chart {}",
+            out.filed_under
+        ));
+    }
     lines
 }
 
 /// The two charts and the human key of a `link-charts` / `unlink-charts` judgement.
 #[derive(clap::Args, Clone, Debug)]
 struct ChartPairArgs {
-    /// One chart of the pair (the order does not matter; the output names the chart the
-    /// judgement is filed under, which is always one held on this node).
+    /// One chart of the pair (the order does not matter; the output shows the record of the
+    /// chart judged from — `--from`, else the chart the judgement is filed under, which is
+    /// always one held on this node — and names the filed-under chart when they differ).
     a: Uuid,
     /// The other chart of the pair.
     b: Uuid,
@@ -202,8 +211,8 @@ struct UnlinkArgs {
     #[command(flatten)]
     pair: ChartPairArgs,
     /// The chart you are judging FROM — held here, its record reading both charts as part of
-    /// it. Needed only when neither chart is held on this node (#699 (a)); the judgement is then
-    /// filed under this chart.
+    /// it (checked; refused otherwise). Needed only when neither chart is held on this node
+    /// (#699 (a)); the judgement is then filed under this chart. The output shows its record.
     #[arg(long)]
     from: Option<Uuid>,
 }
@@ -6923,19 +6932,26 @@ mod tests {
         use cairn_node::chart_link::{LinkEffect, LinkOutcome, LinkVerb};
         let id = |n: u128| Uuid::from_u128(n);
         let (a, b, c) = (id(1), id(2), id(3));
-        let outcome = |members: Vec<Uuid>, effect, resolved| LinkOutcome {
+        // Filed under `b`; `record_of` is the chart judged from — `b` itself unless a test
+        // says otherwise.
+        let judged_from = |record_of: Uuid, members: Vec<Uuid>, effect, resolved| LinkOutcome {
             event_id: id(9),
             proposal_resolved: resolved,
             filed_under: b,
-            record_of: c,
+            record_of,
             charts: cairn_medication_view::ChartSet::new(members).unwrap(),
             effect,
         };
+        let outcome = |members, effect, resolved| judged_from(b, members, effect, resolved);
+        let filed_line = format!("the judgement is filed under chart {b}");
+
+        // Judged from a THIRD chart `c` (#699 (a)): the record shown is `c`'s, and a further
+        // line says where the event is filed.
         let joined = super::chart_judgement_report(
             LinkVerb::Unlink,
             a,
             b,
-            &outcome(vec![a, b, c], LinkEffect::StillJoined, false),
+            &judged_from(c, vec![a, b, c], LinkEffect::StillJoined, false),
         );
         assert!(!joined[0].contains("unlinked"), "{joined:?}");
         assert!(joined[0].contains("still read as one record"), "{joined:?}");
@@ -6943,13 +6959,19 @@ mod tests {
             joined[0].contains(&a.to_string()) && joined[0].contains(&b.to_string()),
             "names both subjects: {joined:?}"
         );
+        let shown = joined
+            .iter()
+            .find(|l| l.contains("now reads as"))
+            .expect("the record line");
         assert!(
-            joined.last().unwrap().contains(&c.to_string()),
-            "lists the set"
-        );
-        assert!(
-            joined.last().unwrap().starts_with(&format!("chart {c} ")),
+            shown.starts_with(&format!("chart {c} ")),
             "names the chart whose record it is (record_of), not the filed-under one: {joined:?}"
+        );
+        assert!(shown.contains(&a.to_string()), "lists the set");
+        assert_eq!(
+            joined.last(),
+            Some(&filed_line),
+            "record_of != filed_under: names where the event is filed"
         );
 
         let split = super::chart_judgement_report(
@@ -6961,6 +6983,14 @@ mod tests {
         assert!(
             split[0].contains("unlinked (not the same person)"),
             "{split:?}"
+        );
+        assert!(
+            split.last().unwrap().starts_with(&format!("chart {b} ")),
+            "{split:?}"
+        );
+        assert!(
+            !split.contains(&filed_line),
+            "record_of == filed_under: no separate filing line: {split:?}"
         );
 
         let linked = super::chart_judgement_report(

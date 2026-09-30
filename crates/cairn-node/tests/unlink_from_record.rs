@@ -353,3 +353,50 @@ async fn a_reprojection_reproduces_the_third_chart_unlink() {
     expected.sort();
     assert_eq!(set, expected, "A's record replays as A and B");
 }
+
+#[tokio::test]
+async fn an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_held() {
+    // Ruling R5: `--from` is checked whenever it names a THIRD chart, not only when it decides
+    // the filing. Here both subjects are held (so the event could be filed under one of them),
+    // but the chart named as "judged from" is either a typo (no chart here at all) or a held
+    // chart whose record does not contain the pair. Either way nothing is signed — otherwise
+    // the result would report "chart <typo> now reads as: <typo>", a record that does not exist.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b, d) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    common::submit_registration(&c, &sk_a, &kid_a, a, 1).await;
+    common::submit_registration(&c, &sk_a, &kid_a, b, 2).await;
+    common::submit_registration(&c, &sk_a, &kid_a, d, 3).await;
+    peer_link(&c, &sk_a, &kid_a, a, b, a, 50).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+
+    let typo = Uuid::now_v7();
+    for opened in [typo, d] {
+        let err = unlink_charts(&mut c, a, b, Some(opened), &who, ORIGIN)
+            .await
+            .expect_err("a judgement cannot be made from a chart unrelated to the pair");
+        assert_eq!(
+            refusal_scope(&err),
+            Some(RefusalScope::NodeState),
+            "a verdict about this node's state"
+        );
+        assert!(
+            err.to_string().contains(&opened.to_string()),
+            "names the open chart"
+        );
+    }
+    assert_eq!(
+        standing(&c, a, b).await,
+        Some(("link".into(), false)),
+        "nothing was written"
+    );
+    assert_eq!(attested_unlinks(&c).await, 0, "no judgement was signed");
+}
