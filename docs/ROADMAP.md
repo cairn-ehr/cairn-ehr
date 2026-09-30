@@ -677,7 +677,8 @@ all four; R1 builds the first.
   (DECIDED (b), 2026-09-27: withhold every line not on the opened chart while the set holds a doubted link).
 - **Next:** R2, split 2026-09-27 into R2a (built — next entry) and R2b, split again into **R2b-1** ("Same person
   as…"/link, built — see the 2026-09-29 entry below) and **R2b-2** ("Not the same person"/unlink + #699 (a),
-  next — planned 2026-09-30 in `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`); then #697 (b), **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
+  built 2026-09-30, PR [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) — see the entry below; plan
+  `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`); then #697 (b) + #701, **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
   proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
   forced 1 → target 1; signing off a combined list 1 → 1 → 1 (one gesture covers every line across both
@@ -798,6 +799,40 @@ fix wave re-reviewed clean, then a `/review-pr` round whose findings are fixed o
     "find" is already done). `M ≤ N`.
   - **Budget:** review-and-link ≤ 20 s, of which the side-by-side read is the load — measured by runbook §9
     (Task 7), a human act owed alongside the front door's and med-list's stopwatch figures.
+
+### 2026-09-30 — repair path R2b-2: "Not the same person…" (unlink) and #699 (a) built (PR #711)
+
+Plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`; the design page's as-built note
+lists the deviations. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md)**
+(spec **v0.79**) records the maintainer's #699 (a) decision. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
+[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711), draft until the final whole-branch review and gates.
+- **What R2b-2 built.**
+  - `chart_link/admit.rs` (new, pure): `FiledUnder::{Subject, RecordOf}` and the admission rule — an unlink where
+    neither subject is held is filed under the opened chart when it is held and its record holds both; a link
+    never is; an opened chart unrelated to the pair is refused. `chart_link/judge.rs` (a pure move): the
+    judgement entry points, now asking "still joined?" of the SUBJECTS and re-checking a `RecordOf` record in the
+    transaction. CLI `unlink-charts --from <chart>`.
+  - `patient::edges::record_edges` — the standing links inside a chart set (pair, attested, day recorded).
+  - `cairn-gui-tauri/src/link/{record_links,unlink,unlink_view}.rs` — the pane's "How these charts are linked"
+    list (per LINK, each with its own "Not the same person…"; a worded empty/unread case, "recorded {day} (UTC)"),
+    `compare_linked` / `unlink_records` (bound to the chart on screen and the displayed set; refuse a link the record
+    no longer has via the pure `standing_edge`), `LinkEffect` sentences (`StillJoined` points at the list;
+    `Outranked` says a retry records a newer, overruling judgement); `key_locked_for(button)`.
+  - `src-ui/unlink.js` + `main.js`'s `renderLinks` — a separate unlink panel, mutually exclusive with the link
+    panel; focus returns to the opening link's button, or the patient heading after a successful unlink.
+  - Runbook §10 + template rows (review-and-unlink ≤ 15 s, live only).
+- **Tests.** `admit.rs` unit tests (filing rule, `record_holds_both`); `tests/unlink_from_record.rs` (DB: chain split
+  took effect, cycle says still joined, a receiver without the opened chart applies it, reprojection reproduces it,
+  unrelated `--from` refused); `tests/record_edges.rs`; `tests/chart_link.rs` (third-chart unlink); the `link/*_tests`
+  view-builder and command tests; the panel walked headless, R2b-1's visibility rule applied.
+- **Known gaps (deferred):** the in-transaction `RecordOf` re-check has no race test; `chart_link.rs` (~660) and
+  `chart_set.rs` (573) exceed the 500-line rule; a reload answer landing after the user opened the link panel moves
+  focus to the patient heading. The runbook stopwatch is a human act.
+- **§1.2:**
+  - **Paper counterpart:** the records clerk unclips two wrongly clipped folders and annotates the front sheet.
+  - **Acts:** paper 2 (unclip, annotate) → forced 1 (the signed unlink; the click IS the signature, ADR-0053) →
+    target 2 ("Not the same person…" on the link's line, then "Unlink — not the same person"). `M ≤ N`.
+  - **Budget:** review-and-unlink ≤ 15 s, measured by runbook §10 — a human act owed alongside the other figures.
 
 ## Above the foundation line (NOT in this roadmap)
 

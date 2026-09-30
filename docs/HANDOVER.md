@@ -3,38 +3,29 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R2b-1 — "SAME PERSON AS…" (LINK) — MERGED (PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707),
-> 2026-09-29). R2b-2 IS PLANNED (2026-09-30):** `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`
-> — seven tasks, TDD; the #699 (a) audit is done (safe once "still joined?" asks the two subjects, not the filed-under
-> chart); the links render as ONE "How these charts are linked" list (maintainer, 2026-09-30). R2b is two PRs
-> (maintainer, 2026-09-28): **R2b-1** "Same person as…" (link, PR #707), then **R2b-2** "Not
-> the same person" (unlink + #699 (a)). R1 (PR #688) and R2a (PR #698) are merged. Repair path #679 · #680 · #681;
-> design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section),
-> [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
-> spec **v0.78**; plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`. Built:
-> `cairn_node::patient::compare` (`chart_facts`, `cross_vetoes` — over the SET, hard first); `chart_link` pre-check
-> refusals as verdicts (#702); `cairn-gui-tauri/src/link/{view,mod}.rs` (`compare_records`/`link_records`); `src-ui/link.js`.
+> **⇒ R2b-2 — "NOT THE SAME PERSON" (UNLINK) + #699 (a) — IS BUILT ON PR
+> [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) (2026-09-30), DRAFT until the final whole-branch review +
+> gates.** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section + both as-built
+> notes), [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
+> and [ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md) (#699 (a)), spec
+> **v0.79**; plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`. Built: `chart_link/{admit,judge}.rs`
+> (`FiledUnder`, the pure admission rule; `unlink-charts --from`); `patient::edges::record_edges`; the pane's
+> "How these charts are linked" list (one entry per link); `link/{record_links,unlink,unlink_view}.rs`
+> (`compare_linked`/`unlink_records`); `src-ui/unlink.js`; runbook §10. No SQL object (generation still 55).
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R2b-2 — "Not the same person" + #699 (a).** Per EDGE (the standing `patient_link` row), not per member —
->    each member line lists the links that actually join it, each with its own "Not the same person". **Show
->    `LinkOutcome::effect`, never assume it:** `StillJoined` (a member joined through a THIRD chart — the member
->    line must name the edge(s) that actually join it) and `Outranked` (a later judgement about the same pair
->    that says the OPPOSITE stands — a human disagreement to show, not retry) must not read as done. #699 (a)
->    decides the neither-held unlink (filed under the opened chart when both subjects read as part of its record)
->    — `unlink_charts` gains `opened`, `admit_judgement` a new arm, `assert_link_in_tx`'s `about` becomes a
->    `FiledUnder::{Subject, RecordOf}` enum, plus a plan task auditing every identity-by-`patient_id` reader for a
->    "filed-under ∈ subjects" assumption. See the design page's R2b-2 bullets. Then **#697 (b)** (decided: while a
->    set holds a doubted link, every line not on the opened chart is withheld from sign-off, with its own
->    wording; do #701 alongside), **R3** (the front door collapses by person), **R4** (per-node matcher worker,
->    #679 — proposes, never links), **R5** (banner + worklist, #680 — the worklist must filter pairs with an
->    attested `patient_link` row, #700).
+> 1. **#697 (b)** (decided: while a set holds a doubted link, every line not on the opened chart is withheld from
+>    sign-off, with its own wording; do **#701** alongside), then **R3** (the front door collapses by person), **R4**
+>    (per-node matcher worker, #679 — proposes, never links), **R5** (banner + worklist, #680 — the worklist must
+>    filter pairs with an attested `patient_link` row, #700). Merge R2b-2 first (PR #711 — the maintainer closes
+>    #699 if he agrees ADR-0077 resolves it; no closing keyword was used).
 > 2. **Filed 2026-09-29 (R2b-1):** **#708** (`link_charts` should re-check both compared sets inside its
 >    transaction; plus a DB-gated window test of `compare_impl`/`link_impl`) · **#709** (a link outcome can go
 >    unseen when it lands after the chart changed) · **#710** (review-round residuals: Link offered for an unheld
->    chart, pre-load Compare wording, fixture facts, typed veto severity, one read snapshot). **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here is refused, though both
->    show on a held chart's record — a decision) · **#700** (auto-apply's human-judged skip has a race; a skipped
+>    chart, pre-load Compare wording, fixture facts, typed veto severity, one read snapshot). **Filed 2026-09-27 (R2a):** **#699** (an unlink where neither chart is held here was refused, though both
+>    show on a held chart's record — DECIDED (a) and built in R2b-2, ADR-0077; awaiting the maintainer's close) · **#700** (auto-apply's human-judged skip has a race; a skipped
 >    proposal stays `pending`) · **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (a
 >    floor refusal through `chart_link` surfaces as a bare `db error` — addressed on PR #698, now pinned).
 >    **Filed 2026-09-28 (PR #698 review):** **#703** (the generation heal can be used up by `cairn-sync init` on
@@ -115,6 +106,37 @@
 >   is `RefusalScope::Input`; a chart not held here or a non-human attester key is `RefusalScope::NodeState`
 >   (#702). Pinned by `chart_link.rs`'s `refusal_scope` assertions in `a_chart_cannot_be_linked_to_itself`,
 >   `a_chart_this_node_has_never_seen_is_refused_before_signing`, `a_non_human_key_is_refused_and_nothing_moves`.
+>
+> **⇒ R2b-2'S DURABLE RULES ("Not the same person…", ADR-0077, PR #711) — do not undo any of these:**
+> - **`FiledUnder::RecordOf` is UNLINK-ONLY, and re-checked in the transaction.** A link filed under a third chart
+>   is refused before anything is signed; a `RecordOf` unlink re-reads `person_charts(opened)` inside the
+>   judgement's own transaction and refuses unless it holds both subjects. Pinned by `admit.rs`'s
+>   `a_link_is_never_filed_under_a_third_chart` and `an_unlink_neither_held_is_filed_under_the_opened_record_that_holds_both`,
+>   `record_holds_both`'s `a_record_holds_both_only_when_it_contains_each`, and `tests/unlink_from_record.rs`
+>   (`the_open_chart_must_hold_both_in_its_record`, `without_an_open_chart_a_neither_held_unlink_is_still_refused`).
+>   The in-transaction re-read has no race test (only the pure helper is unit-tested).
+> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under chart — else every
+>   successful A–B–C split reads `StillJoined`. Pinned by `unlink_from_record.rs::a_chain_split_from_the_opened_chart_took_effect`
+>   and `::a_link_on_a_cycle_is_recorded_and_says_still_joined`, and `chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
+> - **An opened chart / `--from` unrelated to the pair is REFUSED**, even when a held subject alone would admit the
+>   unlink (a stray flag is never silently ignored). Pinned by `admit.rs::an_unrelated_open_chart_is_refused_even_when_a_subject_is_held`
+>   and `unlink_from_record.rs::an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_held`.
+> - **The list is per LINK, never per member** (in A–C–B only a human can say which clip is wrong; per member the
+>   outcome is `StillJoined` by construction). `record_edges` keeps `state = 'link'` — an unlinked pair is not a
+>   link. Pinned by `tests/record_edges.rs::an_unlinked_pair_is_not_a_link` (queries a set holding BOTH charts —
+>   the first shape could not see its own predicate) and `record_links.rs::a_link_line_names_both_charts_how_it_was_made_and_when`.
+> - **The unlink panel is its OWN `<section>`, and the two panels are mutually exclusive** (opening either closes
+>   the other); after a successful unlink focus goes to the patient heading, not `<body>`. Walked headless, no
+>   committed JS harness (#332).
+> - **`Outranked` never says a retry "changes nothing"** — a retry records a NEWER judgement that overrules the
+>   other (HLC merge at both sync doors). Pinned by `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op`
+>   (and `view_tests.rs`'s link twin). A locked key names its own button (`key_locked_for`;
+>   `view_tests.rs::a_locked_key_names_the_button_that_was_pressed`); `standing_edge`'s unread list is
+>   `Retry::Now`, never `LINK_GONE` (`unlink.rs::an_unread_edge_list_is_retryable_and_not_a_verdict`).
+> - **The webview-fields guard scans only `main.js`**, so `renderLinks` (and every payload field it reads) must
+>   live there — `commands.rs::the_webview_reads_no_field_the_backend_does_not_send`. Never say "by the matcher" for
+>   an un-attested link: a peer's human link with an un-enrolled attester is also un-attested ("without a
+>   clinician's confirmation on record here").
 >
 > **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
@@ -403,13 +425,14 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-09-29 (**R2b-1 — "Same person as…" (link)**, PR
-**[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)**, draft; filed #708, #709) · 2026-09-27 (**R2a — the link
+**Session date:** 2026-09-30 (**R2b-2 — "Not the same person" + #699 (a)**, ADR-0077, PR
+**[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711)**, draft) · 09-29 (**R2b-1 — "Same person as…"**, PR
+**[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)**, merged; filed #708, #709) · 2026-09-27 (**R2a — the link
 precedence floor + `link_charts`/`unlink_charts`**, PR **[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)**,
 `db/055`, generation 55; #697 decided (b); filed #699–#702; earlier that day **R1 — the combined read**, ADR-0076, spec
 **v0.78**, `db/054`, PR #688, #334 repaired) · 09-26 **#671** (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · 09-22
-funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier: ROADMAP. · **Spec:** **v0.78** (newest
-ADR-0076; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
+funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
+ADR-0077; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
 implementation wording only) · **`SCHEMA_GENERATION`:** **55** (`db/055`) · **Phase:** architecture complete; **first
 production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication
 chart that reads linked charts as one.
@@ -420,7 +443,7 @@ push-alert open) · §5.3/§5.8 funnel (ADR-0061; precedence #345 at db/005 step
 `clinical.medication` 1–6b under born-sealed bodies (ADR-0052) + per-write human authorship (ADR-0053 — grading
 half-live until #245) · §5.9 stream through its read surface · med-list node tier (read + whole-list sign-off over a
 linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the compare-and-link
-panel (R2b-1, PR #707) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056 admit-uninterpreted floor · **the L3
+panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056 admit-uninterpreted floor · **the L3
 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates; `cairn-gui-tauri`, the iced shell FAILED
 a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine tested but **not wired**.
 
@@ -429,6 +452,27 @@ a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine tested
 ## Recent sessions — what to carry forward
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise.
+
+### 2026-09-30 — R2b-2: "Not the same person…" and #699 (a) (PR #711)
+
+Plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`; subagent-driven (seven tasks, per-task
+review), controller ran the sweeps and the final review.
+- **⇒ A PLAN CAN MANDATE A FALSE CLAIM, AND A REVIEW THAT CHECKS THE CODE IT DESCRIBES CATCHES IT.** The plan (and
+  #707's own sentence) said pressing Unlink again after `Outranked` "changes nothing"; the HLC merge at both sync
+  doors (db/020, db/007) makes a retry record a newer judgement that OVERRULES the colleague's. Fixed at three sites.
+- **⇒ A TEST THAT CANNOT SEE ITS OWN PREDICATE PROVES NOTHING — MUTATE TO CHECK.** The planned
+  `an_unlinked_pair_is_not_a_link` still passed with `state = 'link'` deleted; only a query over a set holding BOTH
+  charts bites. Same class as the `[hidden]` walk in R2b-1: name the assertion that would fail.
+- **⇒ A DB-SUITE "ok" CAN BE A SELF-SKIP.** The controller re-ran the DB suites with `--nocapture` and looked for
+  `skipped:` before accepting the implementer's green (trap 18's cousin).
+- **⇒ A PLAN'S "CHECKED BY THE CALLER" IS AN UNENFORCED PROMISE.** `filing_for`'s doc left record containment to the
+  caller and `assert_link_in_tx` is `pub`; the fix was an in-transaction re-read plus an unrelated-`--from` refusal
+  (the plan's `opened.unwrap_or(about)` trusted unchecked input).
+- **⇒ CHECK `git ls-files` BEFORE DECLARING WALK DEBRIS UNTRACKED.** R2b-1 had committed two `.playwright-mcp/`
+  files by accident; this slice's walk nearly did too. Now removed and ignored.
+- **Mechanics:** `chart_link.rs` was split (`admit.rs` pure, `judge.rs` entry points) — new guarded files go into
+  `db_errors_stay_legible.rs`; `chart_set.rs` (573) and `chart_link.rs` (~660) remain over 500 lines (deferred, file
+  an issue); runbook §10's stopwatch (≤ 15 s) is still a HUMAN act.
 
 ### 2026-09-28 → 09-29 — R2b-1: the "Same person as…" panel (PR #707)
 
