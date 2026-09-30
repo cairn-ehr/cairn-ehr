@@ -13,6 +13,7 @@
 //! right-hand side). Only then fixture mode, then the key.
 pub mod record_links;
 pub mod search;
+pub mod unlink;
 pub mod unlink_view;
 pub mod view;
 
@@ -30,14 +31,14 @@ use view::{
 
 /// A read's error as the text a comparison part carries (the operator chain, legible).
 /// A plain generic fn, not a closure: it is used at two different `T`s.
-fn as_text<T>(r: anyhow::Result<T>) -> Result<T, String> {
+pub(crate) fn as_text<T>(r: anyhow::Result<T>) -> Result<T, String> {
     r.map_err(|e| cairn_node::db_diagnosis::operator_chain(&e))
 }
 
 /// The record `patient` belongs to: its link component live, itself alone in fixture mode
 /// (fixture charts are never linked). A failure here is a READ that failed — nothing was
 /// judged — so it is worded as one, retryable, never as a link outcome.
-async fn chart_set_of(state: &AppState, patient: Uuid) -> Result<ChartSet, ErrorView> {
+pub(crate) async fn chart_set_of(state: &AppState, patient: Uuid) -> Result<ChartSet, ErrorView> {
     let Some(db) = state.db.as_ref() else {
         return Ok(ChartSet::single(patient));
     };

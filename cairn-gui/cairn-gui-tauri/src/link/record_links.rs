@@ -2,11 +2,10 @@
 //! link, each with its own "Not the same person…" in the webview. Per LINK, not per member
 //! chart (maintainer, 2026-09-30): each link appears once, so each control does too, and an
 //! unlink that leaves two charts joined through another link can point at one list.
-// Task 5 (the commands that call these) lands next; until then this is a binary crate with
-// no caller, so dead_code would fail clippy. REMOVE this allow when Task 5 wires them in.
-#![allow(dead_code)]
 
 use crate::chart_set::MemberLine;
+use crate::state::AppState;
+use cairn_medication_view::ChartSet;
 use cairn_node::patient::edges::RecordEdge;
 use serde::Serialize;
 use uuid::Uuid;
@@ -51,6 +50,24 @@ pub fn record_link_line(edge: &RecordEdge, members: &[MemberLine]) -> RecordLink
             edge.recorded_on
         ),
     }
+}
+
+/// Read the standing links of a record. Empty for a single chart (nothing joins it); an error,
+/// never an empty list, when a linked set cannot be read — see [`links_section`].
+pub async fn read_record_edges(
+    state: &AppState,
+    charts: &ChartSet,
+) -> Result<Vec<RecordEdge>, String> {
+    if !charts.is_linked() {
+        return Ok(vec![]);
+    }
+    let Some(db) = state.db.as_ref() else {
+        return Err("there is no database to read the links from".into());
+    };
+    let db = db.lock().await;
+    cairn_node::patient::edges::record_edges(&*db, charts)
+        .await
+        .map_err(|e| cairn_node::db_diagnosis::operator_chain(&e))
 }
 
 /// The list, or — when it could not be read — no lines and a sentence saying so. An unread

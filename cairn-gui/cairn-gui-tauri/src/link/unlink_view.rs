@@ -1,8 +1,5 @@
 //! Every sentence the "Not the same person" panel shows, as pure functions (R2b-2). The same
 //! rule as `view.rs`: on this panel the wording IS the safety content.
-// Task 5 (the commands that call these) lands next; until then this is a binary crate with
-// no caller, so dead_code would fail clippy. REMOVE this allow when Task 5 wires them in.
-#![allow(dead_code)]
 
 use super::view::{
     fact_rows, finding_line, heading, judgement_error_from, ColumnView, FactRowView, LinkReportView,

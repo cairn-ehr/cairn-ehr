@@ -99,6 +99,8 @@ fn main() -> anyhow::Result<()> {
             funnel::commands::close_chart,
             link::compare_records,
             link::link_records,
+            link::unlink::compare_linked,
+            link::unlink::unlink_records,
             link::search::link_search,
         ])
         .run(tauri::generate_context!())

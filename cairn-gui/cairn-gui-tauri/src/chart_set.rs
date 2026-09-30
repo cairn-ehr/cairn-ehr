@@ -196,6 +196,11 @@ pub struct ChartPane {
     /// clinician trusting the combination, and its line is gone. Without this warning a combined
     /// list would read as a single chart.
     pub members_error: Option<String>,
+    /// The standing links joining the record's charts, one line each (R2b-2) — empty for a
+    /// chart linked to nothing.
+    pub links: Vec<crate::link::record_links::RecordLinkView>,
+    /// Set when those links could not be read; the list and the member lines still show.
+    pub links_error: Option<String>,
 }
 
 /// Assemble the pane from one chart read and the outcome of reading its member names.
@@ -207,6 +212,7 @@ pub struct ChartPane {
 pub fn chart_pane(
     list: &PatientMedicationList,
     members: Result<Vec<MemberLine>, String>,
+    edges: Result<Vec<cairn_node::patient::edges::RecordEdge>, String>,
 ) -> ChartPane {
     let (members, members_error) = match members {
         Ok(members) => (members, None),
@@ -220,10 +226,14 @@ pub fn chart_pane(
             )),
         ),
     };
+    let (links, links_error) =
+        crate::link::record_links::links_section(edges, &members, list.charts.is_linked());
     ChartPane {
         list: build_view(list),
         members,
         members_error,
+        links,
+        links_error,
     }
 }
 
@@ -415,7 +425,7 @@ mod tests {
     fn a_failed_identity_read_keeps_the_list_and_says_so() {
         let mut list = cairn_medication_view::fixtures::sample_chart();
         list.charts = set(&[1, 0xB]);
-        let pane = chart_pane(&list, Err("connection reset".into()));
+        let pane = chart_pane(&list, Err("connection reset".into()), Ok(vec![]));
         assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
         assert!(pane.members.is_empty());
         let warning = pane
@@ -432,9 +442,23 @@ mod tests {
 
     #[test]
     fn a_successful_identity_read_carries_no_warning() {
-        let pane = chart_pane(&cairn_medication_view::fixtures::sample_chart(), Ok(vec![]));
+        let pane = chart_pane(
+            &cairn_medication_view::fixtures::sample_chart(),
+            Ok(vec![]),
+            Ok(vec![]),
+        );
         assert!(pane.members_error.is_none());
         assert_eq!(pane.list.charts.len(), 1);
+    }
+
+    /// Availability again: an unread link list is worded beside the list, never a failed open.
+    #[test]
+    fn a_failed_link_read_keeps_the_list_and_says_so() {
+        let list = cairn_medication_view::fixtures::sample_chart();
+        let pane = chart_pane(&list, Ok(vec![]), Err("x".into()));
+        assert_eq!(pane.list.rows.len(), list.rows.len());
+        assert!(pane.links.is_empty());
+        assert!(pane.links_error.is_some());
     }
 
     fn plan_row(cross_patient: bool, members: &[(u128, u128)]) -> MedicationRow {
