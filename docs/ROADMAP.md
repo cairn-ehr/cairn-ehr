@@ -825,8 +825,8 @@ lists the deviations. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-un
   took effect, cycle says still joined, a receiver without the opened chart applies it, reprojection reproduces it,
   unrelated `--from` refused); `tests/record_edges.rs`; `tests/chart_link.rs` (third-chart unlink); the `link/*_tests`
   view-builder and command tests; the panel walked headless, R2b-1's visibility rule applied.
-- **Known gaps (deferred):** the in-transaction `RecordOf` re-check has no race test; `chart_link.rs` (~660) and
-  `chart_set.rs` (573) exceed the 500-line rule; a reload answer landing after the user opened the link panel moves
+- **Known gaps (deferred):** the in-transaction `RecordOf` re-check has no race test; `cairn-gui-tauri/src/chart_set.rs` (598)
+  exceeds the 500-line rule (`chart_link.rs` is now 446); a reload answer landing after the user opened the link panel moves
   focus to the patient heading. The runbook stopwatch is a human act.
 - **§1.2:**
   - **Paper counterpart:** the records clerk unclips two wrongly clipped folders and annotates the front sheet.

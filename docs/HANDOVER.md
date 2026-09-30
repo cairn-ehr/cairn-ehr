@@ -117,7 +117,7 @@
 >   The in-transaction re-read has no race test (only the pure helper is unit-tested).
 > - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under chart — else every
 >   successful A–B–C split reads `StillJoined`. Pinned by `unlink_from_record.rs::a_chain_split_from_the_opened_chart_took_effect`
->   and `::a_link_on_a_cycle_is_recorded_and_says_still_joined`, and `chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
+>   and `::a_link_on_a_cycle_is_recorded_and_says_still_joined`, and `tests/chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
 > - **An opened chart / `--from` unrelated to the pair is REFUSED**, even when a held subject alone would admit the
 >   unlink (a stray flag is never silently ignored). Pinned by `admit.rs::an_unrelated_open_chart_is_refused_even_when_a_subject_is_held`
 >   and `unlink_from_record.rs::an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_held`.
@@ -471,8 +471,8 @@ review), controller ran the sweeps and the final review.
 - **⇒ CHECK `git ls-files` BEFORE DECLARING WALK DEBRIS UNTRACKED.** R2b-1 had committed two `.playwright-mcp/`
   files by accident; this slice's walk nearly did too. Now removed and ignored.
 - **Mechanics:** `chart_link.rs` was split (`admit.rs` pure, `judge.rs` entry points) — new guarded files go into
-  `db_errors_stay_legible.rs`; `chart_set.rs` (573) and `chart_link.rs` (~660) remain over 500 lines (deferred, file
-  an issue); runbook §10's stopwatch (≤ 15 s) is still a HUMAN act.
+  `db_errors_stay_legible.rs`; `chart_link.rs` is now 446 lines; `cairn-gui-tauri/src/chart_set.rs` (598) remains over 500
+  (deferred); runbook §10's stopwatch (≤ 15 s) is still a HUMAN act.
 
 ### 2026-09-28 → 09-29 — R2b-1: the "Same person as…" panel (PR #707)
 

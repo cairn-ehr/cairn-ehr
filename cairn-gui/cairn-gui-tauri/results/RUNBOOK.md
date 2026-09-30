@@ -331,19 +331,26 @@ The repair path's second §1.2 figure. **Live only** — fixture charts are neve
 chart has no "How these charts are linked" list and nothing to unlink; there is no `--mock` variant to
 time. Set up a wrongly linked pair, then open one of its charts:
 
+`$NODE` is section 3's (`cairn-node --conn $CONN --key $NODE_KEY`); `link-charts` takes only the
+human's `--attester-key` (the top-level `--key` is already in `$NODE`). Register three charts, then
+chain them A–B and B–C so that the wrong link (B–C) is the one that does not touch the chart you open:
+
 ```bash
-$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new   # note the chart id printed: A
-$NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 --confirm-new   # ... and B
-$NODE link-charts "$A" "$B" --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+reg() { $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+    --confirm-new | sed -n 's/^registered patient //p'; }
+A=$(reg); B=$(reg); C=$(reg)
+[ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ] || { echo "registration failed" >&2; exit 1; }
+$NODE link-charts "$A" "$B" --attester-key /tmp/dr-a.key
+$NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
 cd cairn-gui
 cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
     --key "$NODE_KEY" --attester-key /tmp/dr-a.key
 ```
 
-(Set `A`/`B` to the ids the two register commands printed, and pass whatever key flags your `link-charts`
-run needs, as in section 9. For a three-chart chain, link A–B and B–C, open A, and unlink B–C — the link that does not touch the chart
-you opened.)
+Open A and unlink **B–C**, the link on the list that does not touch the chart you opened. (For a
+single-link run, register only A and B and link them.) `/tmp/dr-a.key` is the human key enrolled
+earlier in this runbook; substitute your own.
 
 Start the stopwatch at the press of **"Not the same person…"** on a link's line, not before — choosing
 WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then
