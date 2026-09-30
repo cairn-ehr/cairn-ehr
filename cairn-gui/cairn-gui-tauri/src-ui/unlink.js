@@ -2,7 +2,7 @@
 // from Rust, every check from the backend. Classic script, loaded after main.js, funnel.js and
 // link.js, sharing their scope: `el`, `cell`, `setMessage`, `say`, `refresh`, `invoke`,
 // `displayedPatient`, `renderedPatient`, `renderedCharts` (main.js), `failureText` (funnel.js),
-// `sayAnywhere` (link.js). It mirrors link.js's rules — read its header — and is a SEPARATE
+// `sayAnywhere`, `updateLinkLock`, `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's rules — read its header — and is a SEPARATE
 // panel: one panel with two verbs could show one verb's button over the other's comparison.
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`: `#unlink-status` is hidden whenever empty and
@@ -17,6 +17,8 @@ let unlinkToken = 0;
  * `null` until a WHOLE comparison (`can_unlink`) has landed.
  */
 let unlinkCompared_ = null; // { patientId, charts, low, high }
+/** The link (low/high) whose button opened the panel: Close returns focus to that button. */
+let unlinkOpener = null;
 
 /** Empty every part of the panel that a fresh comparison must replace. */
 function clearUnlinkComparison() {
@@ -40,6 +42,9 @@ async function compareLinked(low, high) {
   const patientId = renderedPatient;
   const charts = renderedCharts;
   unlinkCompared_ = null; // until a whole answer lands, there is nothing an Unlink could be signed over
+  unlinkOpener = { low, high };
+  // The two panels are mutually exclusive: never one verb's button over the other's comparison.
+  if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
   clearUnlinkComparison();
   el("unlink-panel").hidden = false;
   el("unlink-heading").focus();
@@ -59,8 +64,7 @@ async function compareLinked(low, high) {
 /** Draw a comparison of the link's two charts: problems, findings, a two-column table. */
 function renderUnlinkComparison(view) {
   const problems = el("unlink-problems");
-  problems.textContent = view.problems.join(" ");
-  problems.hidden = view.problems.length === 0;
+  setMessage(problems, view.problems.join(" "));
 
   const findings = el("unlink-findings");
   findings.replaceChildren(...view.findings.map((f) => cell("li", f)));
@@ -96,9 +100,14 @@ function closeUnlinkPanel(returnFocus) {
   unlinkToken += 1;
   unlinkCompared_ = null;
   clearUnlinkComparison();
-  if (returnFocus && !el("record-links").hidden) {
-    const first = el("record-links").querySelector("button");
-    if (first) first.focus();
+  const opener = unlinkOpener;
+  unlinkOpener = null;
+  if (returnFocus) {
+    // The button that opened the panel, if it still exists; otherwise the first link's.
+    const buttons = [...el("record-links").querySelectorAll("button")];
+    const own = opener && buttons.find((b) => b.dataset.low === opener.low && b.dataset.high === opener.high);
+    const target = own || buttons[0];
+    if (target) target.focus();
   }
 }
 
@@ -140,8 +149,14 @@ async function unlinkCompared() {
       // The record changed under this chart: the outcome goes on the chart's own line, the
       // panel closes, and the list is re-read.
       say(report.sentence);
-      if (!el("unlink-panel").hidden) closeUnlinkPanel(true);
+      // `false`: the list is about to be re-drawn, which destroys any button focus would land
+      // on. Focus goes to the patient heading once the re-read is done.
+      if (!el("unlink-panel").hidden) closeUnlinkPanel(false);
       await refresh(report.sentence);
+      if (!el("unlink-panel").hidden || el("chart-view").hidden) return;
+      const heading = el("patient-heading");
+      heading.tabIndex = -1;
+      heading.focus();
     } else if (place === "chart") {
       say(report.sentence);
     } else {

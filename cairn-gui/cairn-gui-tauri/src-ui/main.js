@@ -99,7 +99,12 @@ function renderLinks(links) {
       b.type = "button";
       b.textContent = "Not the same person…";
       b.setAttribute("aria-label", "Not the same person: " + recordLink.text);
-      b.addEventListener("click", () => compareLinked(recordLink.low, recordLink.high));
+      b.dataset.low = recordLink.low;
+      b.dataset.high = recordLink.high;
+      // unlink.js loads after this file and may not be present (fixture-only builds).
+      b.addEventListener("click", () => {
+        if (typeof compareLinked === "function") compareLinked(recordLink.low, recordLink.high);
+      });
       li.append(b);
       return li;
     }),
