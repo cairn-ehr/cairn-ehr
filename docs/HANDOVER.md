@@ -23,7 +23,8 @@
 >    #699 if he agrees ADR-0077 resolves it; no closing keyword was used).
 > 2. **Open repair-path issues** (filed by R1–R2b-1): **#708** (`link_charts` should re-check both compared sets in its
 >    transaction + a DB-gated window test) · **#709** (a link outcome can go unseen when it lands after the chart
->    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf` in-transaction race test, `chart_set.rs` size, window→node wiring test) · **#699** (DECIDED (a), built in R2b-2, ADR-0077 — awaiting the
+>    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf` in-transaction race test, `chart_set.rs` size,
+>    window→node wiring test) · **#699** (DECIDED (a), built in R2b-2, ADR-0077 — awaiting the
 >    maintainer's close) · **#700** (auto-apply's skip race handled on PR #698; a skipped proposal stays `pending`) ·
 >    **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (floor refusals as bare `db error` —
 >    pinned) · **#703** (the generation heal can be used up by `cairn-sync init`) · **#704** (make db/019's
@@ -124,10 +125,15 @@
 >   the other); after a successful unlink focus goes to the patient heading, not `<body>`. Walked headless, no
 >   committed JS harness (#332).
 > - **`Outranked` never says a retry "changes nothing"** — a retry would normally record a NEWER judgement that
->   overrules the other (HLC merge at both sync doors, clamped at 24 h of drift — a peer further ahead keeps outranking). Pinned by `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op`
+>   overrules the other (the sync merge is
+>   bounded at 24 h of drift — a peer further ahead keeps outranking). Pinned by
+>   `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op`
 >   (and `view_tests.rs`'s link twin). A locked key names its own button (`key_locked_for`;
 >   `view_tests.rs::a_locked_key_names_the_button_that_was_pressed`); `standing_edge`'s unread list is
 >   `Retry::Now`, never `LINK_GONE` (`unlink.rs::an_unread_edge_list_is_retryable_and_not_a_verdict`).
+> - **`record_holds_both` is a NodeState refusal BEFORE the transaction and an Input refusal INSIDE it — do not
+>   "harmonise" them.** Before: the chart/record may simply not have arrived yet (retry later). Inside: the record
+>   changed while judging (reload). Same predicate, two verdicts; both in `crates/cairn-node/src/chart_link/judge.rs`.
 > - **The webview-fields guard scans only `main.js`**, so `renderLinks` (and every payload field it reads) must
 >   live there — `commands.rs::the_webview_reads_no_field_the_backend_does_not_send`. Never say "by the matcher" for
 >   an un-attested link: a peer's human link with an un-enrolled attester is also un-attested ("without a
@@ -451,8 +457,8 @@ ROADMAP carries the per-slice narrative and every open issue number; this keeps 
 Plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`; subagent-driven (seven tasks, per-task
 review), controller ran the sweeps and the final review.
 - **⇒ A plan can mandate a false claim; a review that checks the code it describes catches it.** "Unlink again after
-  `Outranked` changes nothing" was false: the HLC merge at both sync doors (db/020, db/007) makes a retry OVERRULE the
-  colleague's judgement. Fixed at three sites.
+  `Outranked` changes nothing" was false: the HLC merge at both sync doors (db/020, db/007) would normally make a retry
+  overrule the colleague's judgement (the sync door bounds its clock merge at 24 h of drift). Fixed at three sites.
 - **⇒ A test that cannot see its own predicate proves nothing — mutate to check.** `an_unlinked_pair_is_not_a_link`
   passed with `state = 'link'` deleted; only a query over a set holding BOTH charts bites.
 - **⇒ A DB-suite "ok" can be a self-skip** — the controller re-ran with `--nocapture` and looked for `skipped:`.

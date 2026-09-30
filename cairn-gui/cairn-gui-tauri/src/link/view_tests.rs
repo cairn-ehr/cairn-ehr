@@ -533,7 +533,7 @@ fn a_locked_key_is_not_a_verdict() {
 fn a_locked_key_names_the_button_that_was_pressed() {
     assert_eq!(
         key_locked().text,
-        "your signing key is locked — unlock it, then press \"Link\" again"
+        "your signing key is locked — unlock it, then press \"Link — same person\" again"
     );
     let e = key_locked_for("Unlink — not the same person");
     assert_eq!(e.retry, Retry::Now);

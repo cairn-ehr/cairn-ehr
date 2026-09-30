@@ -107,9 +107,36 @@ pub fn unlink_report(
     after: &ChartSet,
 ) -> LinkReportView {
     let mut view = effect_report(effect, low, high, before, after);
-    // Charts that joined the record concurrently were not in the comparison: name them,
-    // as `link_report` does, so they are reviewed rather than assumed.
     let joined = ids_not_in(after, before);
+    let left = ids_not_in(before, after);
+    if effect == LinkEffect::StillJoined && !(joined.is_empty() && left.is_empty()) {
+        // The record changed while the clinician judged (a peer's concurrent link/unlink). The
+        // generic StillJoined sentence says "this record did not change", which would now
+        // contradict what we append, so restate it without that claim and name the change.
+        view.sentence = format!(
+            "Recorded that charts {low} and {high} are different people — but they still read \
+             as one record through other links, so this unlink did not split them. The links \
+             still joining them are listed under \"How these charts are linked\"."
+        );
+        if !left.is_empty() {
+            view.sentence = format!(
+                "{} Meanwhile chart(s) {} left this record — review them.",
+                view.sentence,
+                left.join(", ")
+            );
+        }
+        if !joined.is_empty() {
+            view.sentence = format!(
+                "{} Meanwhile chart(s) {} joined this record — review them.",
+                view.sentence,
+                joined.join(", ")
+            );
+        }
+        return view;
+    }
+    // Charts that joined the record concurrently were not in the comparison: name them,
+    // as `link_report` does, so they are reviewed rather than assumed. (TookEffect already
+    // names its own leavers inside `effect_report`.)
     if !joined.is_empty() {
         view.sentence = format!(
             "{} The record now also includes chart(s) {} that were not in the comparison — \
@@ -117,19 +144,6 @@ pub fn unlink_report(
             view.sentence,
             joined.join(", ")
         );
-    }
-    // A StillJoined unlink says nothing about who left, but a peer's concurrent unlink may
-    // have taken charts out of the record: name them too (TookEffect already names its own
-    // leavers inside `effect_report`), so a shrunken record is reviewed, not assumed.
-    if effect == LinkEffect::StillJoined {
-        let left = ids_not_in(before, after);
-        if !left.is_empty() {
-            view.sentence = format!(
-                "{} Chart(s) {} are also no longer part of this record.",
-                view.sentence,
-                left.join(", ")
-            );
-        }
     }
     view
 }

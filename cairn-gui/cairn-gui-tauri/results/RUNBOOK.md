@@ -316,7 +316,7 @@ single sample tells you nothing about the tail.
       link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
       line, never silent. After a refusal that cannot change on retry, the Link button is gone
       (compare again to get it back). A locked key is NOT such a refusal: the button stays —
-      unlock, then press "Link" again.
+      unlock, then press "Link — same person" again.
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
       or switching to a different chart closes the panel, and focus goes to the new chart's
       heading (or to the front door) — not to "Same person as…".

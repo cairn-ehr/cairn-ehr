@@ -34,7 +34,8 @@ pub enum LinkEffect {
     /// judgement is stamped above the peer's and would NORMALLY outrank it — overruling the
     /// colleague without settling anything. "Normally", because the sync door clamps its
     /// merge at `cairn_max_hlc_drift_ms()` (24 h) of drift: a peer further ahead than that
-    /// is still admitted with its full wall clock and keeps outranking a local retry. It is a disagreement between humans for a human to settle.
+    /// is still admitted with its full wall clock and keeps outranking a local retry. It is a
+    /// disagreement between humans for a human to settle.
     Outranked,
     /// An UNLINK that stands on its own edge, but the second chart still reads as part of
     /// the first's record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and

@@ -194,7 +194,7 @@ fn still_joined_says_other_links() {
 }
 
 #[test]
-fn still_joined_also_names_charts_that_left_concurrently() {
+fn still_joined_names_charts_that_left_concurrently_without_claiming_no_change() {
     // Chart 4 was in the comparison but is gone from the record now (a peer unlinked it).
     let r = unlink_report(
         LinkEffect::StillJoined,
@@ -203,9 +203,14 @@ fn still_joined_also_names_charts_that_left_concurrently() {
         &set(&[1, 2, 3, 4]),
         &set(&[1, 2, 3]),
     );
-    assert!(r.sentence.contains("also no longer part of this record"));
+    assert!(
+        !r.sentence.contains("did not change"),
+        "the record did change, so the line must not say otherwise"
+    );
+    assert!(r.sentence.contains("did not split them"));
+    assert!(r.sentence.contains("left this record"));
     assert!(r.sentence.contains(&id(4).to_string()));
-    // Nothing left: no such sentence.
+    // Nothing changed: the plain sentence, no concurrent-change tail.
     let same = unlink_report(
         LinkEffect::StillJoined,
         id(2),
@@ -213,7 +218,27 @@ fn still_joined_also_names_charts_that_left_concurrently() {
         &set(&[1, 2, 3]),
         &set(&[1, 2, 3]),
     );
-    assert!(!same.sentence.contains("no longer part"));
+    assert!(same.sentence.contains("did not change"));
+    assert!(!same.sentence.contains("Meanwhile"));
+}
+
+#[test]
+fn still_joined_names_charts_that_joined_concurrently_without_claiming_no_change() {
+    // Chart 4 was not in the comparison but is on the record now (a peer linked it).
+    let r = unlink_report(
+        LinkEffect::StillJoined,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2, 3, 4]),
+    );
+    assert!(
+        !r.sentence.contains("did not change"),
+        "the record did change, so the line must not say otherwise"
+    );
+    assert!(r.sentence.contains("did not split them"));
+    assert!(r.sentence.contains("joined this record"));
+    assert!(r.sentence.contains(&id(4).to_string()));
 }
 
 #[test]

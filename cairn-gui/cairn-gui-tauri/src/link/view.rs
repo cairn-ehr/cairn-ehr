@@ -103,7 +103,7 @@ pub fn refused(text: impl Into<String>) -> ErrorView {
 /// the button (`Retry::Now`). As `Retry::Never` the webview took the comparison away and forced
 /// a second Compare, an act the paper workflow does not have (PR #707 review).
 pub fn key_locked() -> ErrorView {
-    key_locked_for("Link")
+    key_locked_for("Link — same person")
 }
 
 /// [`key_locked`] for any judgement button: the message must name the button the clinician
