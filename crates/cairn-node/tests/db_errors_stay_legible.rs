@@ -121,6 +121,7 @@ const GUARDED: &[&str] = &[
     "crates/cairn-node/src/db.rs",
     "crates/cairn-node/src/matcher_actor.rs",
     "crates/cairn-node/src/patient/compare.rs",
+    "crates/cairn-node/src/patient/edges.rs",
     "crates/cairn-node/src/safety.rs",
     "crates/cairn-node/src/sync.rs",
 ];
@@ -268,6 +269,27 @@ fn every_postgres_call_in_the_comparison_names_what_it_was_doing() {
          If you ADDED a postgres call, wrap it and bump the constant. If this DROPPED, a call \
          was reverted to a bare `?` — an operator would learn the SQLSTATE of a failed \
          comparison but not which read of it failed."
+    );
+}
+
+/// `patient/edges.rs` has ONE postgres call — the standing-links read.
+const EDGES_LOCAL_DB_FAULT_SITES: usize = 1;
+
+/// The link read names what it was doing (R2b-2).
+#[test]
+fn every_postgres_call_in_the_link_read_names_what_it_was_doing() {
+    let root = sources::repo_root();
+    let text = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/patient/edges.rs"))
+            .expect("edges.rs is in the tree"),
+    );
+    let found = text.matches("LocalDbFault::new(").count();
+    assert_eq!(
+        found, EDGES_LOCAL_DB_FAULT_SITES,
+        "edges.rs builds {found} `LocalDbFault`s, expected {EDGES_LOCAL_DB_FAULT_SITES}. \
+         If you ADDED a postgres call, wrap it and bump the constant. If this DROPPED, the \
+         call was reverted to a bare `?` — an operator would learn the SQLSTATE of a failed \
+         link read but not which step failed."
     );
 }
 
