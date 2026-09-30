@@ -493,6 +493,7 @@ pub(crate) mod tests {
         // JS names the outer payload `pane`, the view `view` and each line `member`.
         let member = MemberLine {
             patient_id: String::new(),
+            name: String::new(),
             text: String::new(),
         };
         let pane_json = serde_json::to_value(ChartPane {

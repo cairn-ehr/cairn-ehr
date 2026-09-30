@@ -189,7 +189,7 @@ fn alias_cell(f: &ChartFacts) -> String {
 
 /// The column heading: the first current name (or its absence) and the chart id, whole — it is
 /// what ties the column to each medication row's source label.
-fn heading(f: &ChartFacts) -> String {
+pub(crate) fn heading(f: &ChartFacts) -> String {
     let name = f
         .names
         .first()
@@ -225,7 +225,7 @@ fn sex_cell(f: &ChartFacts) -> String {
 }
 
 /// The fact rows, in the order a front sheet is read. Each closure renders one chart's cell.
-fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
+pub(crate) fn fact_rows(charts: &[ChartFacts]) -> Vec<FactRowView> {
     type Cell = fn(&ChartFacts) -> String;
     let kinds: [(&str, Cell); 7] = [
         ("Names", |f| {
@@ -428,20 +428,26 @@ pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
 /// `NotProvisioned` says "yet", not "until an operator acts": one of its causes (a chart this
 /// node does not hold yet) resolves by sync, with no operator involved (final review M4).
 pub fn link_error_from(error: DataError) -> ErrorView {
+    judgement_error_from("link", error)
+}
+
+/// A failed judgement worded for its act (`"link"` / `"unlink"`), by the classification the
+/// funnel uses — see [`link_error_from`], which is this with `"link"`.
+pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
     match error {
         DataError::Refused(t) => ErrorView {
-            text: format!("The link was refused: {t}"),
+            text: format!("The {act} was refused: {t}"),
             retry: Retry::Never,
         },
         DataError::NotProvisioned(t) => ErrorView {
-            text: format!("This node cannot record the link yet: {t}"),
+            text: format!("This node cannot record the {act} yet: {t}"),
             retry: Retry::AfterOperator,
         },
         DataError::Unavailable(t) => ErrorView {
-            text: format!("The link was not confirmed: {t}"),
+            text: format!("The {act} was not confirmed: {t}"),
             retry: Retry::Now,
         },
-        DataError::NotFound => refused("The link was not recorded."),
+        DataError::NotFound => refused(format!("The {act} was not recorded.")),
     }
 }
 

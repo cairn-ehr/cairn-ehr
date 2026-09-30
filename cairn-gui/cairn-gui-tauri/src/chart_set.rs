@@ -134,6 +134,9 @@ pub fn cease_plan(row: &MedicationRow, opened: Uuid) -> CeasePlan {
 pub struct MemberLine {
     /// The member chart's id — the same id a row's source label names.
     pub patient_id: String,
+    /// The display name as the line shows it — the name, or its worded absence — so a link line
+    /// can name both charts without a second read.
+    pub name: String,
     /// The whole line as the clinician reads it; see [`member_line`].
     pub text: String,
 }
@@ -170,6 +173,7 @@ pub fn member_line(identity: &ChartIdentity) -> MemberLine {
     };
     MemberLine {
         patient_id: identity.patient_id.to_string(),
+        name: name.to_string(),
         text: format!(
             "{name} · {born} · identity {}{not_held} · chart {}",
             identity.trust, identity.patient_id

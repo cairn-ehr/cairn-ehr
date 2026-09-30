@@ -11,7 +11,9 @@
 //! other chart was shown by a list (`shown`), it is not already in the record, and — for the
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
+pub mod record_links;
 pub mod search;
+pub mod unlink_view;
 pub mod view;
 
 use crate::chart_set::{check_displayed_set, CHANGED};
