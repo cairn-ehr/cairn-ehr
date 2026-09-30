@@ -35,3 +35,6 @@ untracked_for_brainstorming/
 
 # Local PDF exports of published essays (the .md source is the tracked original)
 docs/essays/*.pdf
+
+# Playwright MCP walk debris (console logs, page snapshots) - never commit
+.playwright-mcp/
