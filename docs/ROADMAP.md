@@ -694,111 +694,43 @@ all four; R1 builds the first.
 
 ### 2026-09-27 — repair path R2a: a human's link judgement outranks a machine's; the node can author one (PR #698)
 
-Plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`; ADR-0076 decisions 4–5; `db/055`,
-`SCHEMA_GENERATION` 54 → **55** (node loader list only; cairn-sync loads no identity migration, #284). PR
-[#698](https://github.com/cairn-ehr/cairn-ehr/pull/698), merged 2026-09-28. #681 stays open for R2b.
-- **What R2a built.**
-  - **db/018:** `patient_link.attested` (CREATE + paired ALTER, #207) holding the ONE definition of attested,
-    evaluated once per applied event. `cairn_link_overlay_wins` ranks attested first, then `cairn_hlc_overlay_wins`.
-    The applier, the #190 door refusal and the flag read-back all use it.
-  - **db/055:** a backfill, the generation bump whose loader heal re-folds winners the old order chose, and its
-    own re-fold of every pair whose standing winner is un-attested beside a vouched assertion — because a
-    cairn-sync-first load can use up the heal (#703).
-  - **`chart_link.rs`:** `link_charts`/`unlink_charts` with a `Reviewer` (the human key signs and attests; no
-    node-key fallback). Admission: `link` requires both charts to be held here; `unlink` also admits a displayed
-    member that is not held here, filed under the held chart (db/005 step 8b). Each judgement reads back, in its own
-    transaction, what now stands: `LinkOutcome::effect` is `TookEffect`, `Outranked` (a later judgement about the
-    same pair that says the opposite stands) or `StillJoined` (an unlink through a third chart). An open proposal moves in the
-    same transaction; closed ones are never touched. One lock order: proposal row, then CARNLK. Every postgres
-    call names its step (`chart_link.rs` is in the #467 legibility guard).
-  - `apply_accepted_proposal` is now a thin wrapper, still with no production caller.
-  - `auto_apply` answers "a human already judged" (`AutoOutcome::AlreadyJudged`, its own summary count) before the
-    veto re-check, and rolls back a matcher link that does not stand once submitted.
-  - CLI `link-charts` / `unlink-charts`.
-  - identity.md §5.2 states the mixed-fleet consequence.
-- **Tests.**
-  - `link_precedence.rs`: both arrival orders for every case, the triple collision, the local door, the veto flag in
-    both directions, column truthfulness, the upgrade re-fold.
-  - `chart_link.rs`: incl. a lock-order test that waits on `pg_stat_activity` Lock.
-  - An `auto_apply.rs` judged-pair skip, and `migration_replay_widening` + the #477 legibility pin updated.
-  - From the PR review (2026-09-28): the cairn-sync-first upgrade, the backfill never marking an unvouched token
-    attested, an outranked judgement, a losing matcher link rolled back, a floor refusal's step and reason, the
-    CLI's command → verb mapping, realistic closed proposals under both verbs plus db/019's invariant.
-- **Filed:** [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699) (neither-held unlink refused though both
-  show on a held chart's record — decide before R2b) · [#700](https://github.com/cairn-ehr/cairn-ehr/issues/700)
-  (auto-apply's judged-pair skip races; a skipped proposal stays `pending` — R5's worklist must filter it) ·
-  [#701](https://github.com/cairn-ehr/cairn-ehr/issues/701) (db/054 should read `pl.attested`) ·
-  [#702](https://github.com/cairn-ehr/cairn-ehr/issues/702) (a floor refusal via `chart_link` reads as a bare `db
-  error` — addressed on PR #698). **From the PR review (2026-09-28):**
-  [#703](https://github.com/cairn-ehr/cairn-ehr/issues/703) (cairn-sync can use up the generation heal; a node-only
-  migration relying on it is silently skipped) · [#704](https://github.com/cairn-ehr/cairn-ehr/issues/704)
-  (db/019's `applied_event_id ⇔ applied` as a CHECK) · [#705](https://github.com/cairn-ehr/cairn-ehr/issues/705)
-  (`link-charts` against a database at an older generation) · [#706](https://github.com/cairn-ehr/cairn-ehr/issues/706)
-  (R2a test follow-ups). #700's race half is handled on PR #698; its pending-forever half remains.
-- **§1.2:**
-  - **Paper counterpart:** clipping two folders together, or writing "NOT the same patient — checked" on both
-    covers.
-  - **Acts:** paper 3 → forced 3 → target 3 (2 from R5's banner). R2a adds no act, and it removes the paper
-    failure where a later clerk re-clips folders someone marked as different.
-  - **Budget** (review-and-link ≤ 20 s) owed by R2b's runbook pass.
+Merged 2026-09-28 (PR [#698](https://github.com/cairn-ehr/cairn-ehr/pull/698)); plan
+`docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`; ADR-0076 decisions 4–5; `db/055`,
+`SCHEMA_GENERATION` 54 → **55** (#284). Git and the plan carry the detail; in short:
+- **Built:** `patient_link.attested` (db/018) and `cairn_link_overlay_wins` — attested first, then HLC; db/055's backfill,
+  generation heal and own re-fold (#703); `chart_link` `link_charts`/`unlink_charts` with a human `Reviewer` (no node-key
+  fallback), reading back `LinkOutcome::effect` (`TookEffect`/`Outranked`/`StillJoined`) in the judgement's own
+  transaction, one lock order (proposal row, then CARNLK); `auto_apply` answers `AlreadyJudged`; CLI `link-charts` /
+  `unlink-charts`; identity.md §5.2 states the mixed-fleet consequence. Tests: `link_precedence.rs`, `chart_link.rs`
+  (incl. a `pg_stat_activity` lock-order test), `auto_apply.rs`, and the PR-review additions.
+- **Filed:** [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699) (neither-held unlink; decided (a) in R2b-2) ·
+  [#700](https://github.com/cairn-ehr/cairn-ehr/issues/700) (auto-apply's judged-pair skip races; a skipped proposal
+  stays `pending` — R5's worklist must filter it) · [#701](https://github.com/cairn-ehr/cairn-ehr/issues/701) (db/054
+  should read `pl.attested`) · [#702](https://github.com/cairn-ehr/cairn-ehr/issues/702) (a floor refusal reads as a
+  bare `db error` — addressed) · [#703](https://github.com/cairn-ehr/cairn-ehr/issues/703) ·
+  [#704](https://github.com/cairn-ehr/cairn-ehr/issues/704) · [#705](https://github.com/cairn-ehr/cairn-ehr/issues/705) ·
+  [#706](https://github.com/cairn-ehr/cairn-ehr/issues/706).
+- **§1.2:** paper 3 → forced 3 → target 3 (2 from R5's banner); R2a adds no act. Budget (review-and-link ≤ 20 s) owed
+  by the runbook pass.
 
 ### 2026-09-29 — repair path R2b-1: "Same person as…" (link) built (PR #707)
 
-Plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; design page's R2b section (an
-as-built note there now lists the deviations below). No new ADR — R2b-1 decides nothing the design had not
-already taken. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
-[#707](https://github.com/cairn-ehr/cairn-ehr/pull/707) — per-task reviewed, final whole-branch review (opus) and its
-fix wave re-reviewed clean, then a `/review-pr` round whose findings are fixed on the branch (design as-built note,
-"The PR #707 review round"); merged 2026-09-29.
-- **What R2b-1 built.**
-  - `cairn_node::patient::compare` (new): `chart_facts` — every member chart's front-sheet facts (held, trust,
-    every retained non-repudiated name with use + provenance, repudiated names as aliases, DOB and sex-at-birth
-    with provenance and precision, identifiers, current addresses), one `ANY($1::text[]::uuid[])` query per
-    section, each of its five own queries a `LocalDbFault` naming its step (#467 legibility guard);
-    `cross_vetoes` — `cairn_match_veto` over every left×right pair across BOTH displayed sets, never chart
-    against chart, hard vetoes before degrade-hold, then a fixed order (subject in the key).
-  - `chart_link`'s pre-check refusals (same chart, a chart not held here, a non-human attester key) marked as
-    verdicts (`RefusalScope::Input` / `NodeState`) through `db_diagnosis::deliberate_refusal` /
-    `node_state_refusal`, replacing bare `anyhow::bail!`s the window would have read as an outage to retry (#702).
-  - `cairn-gui-tauri/src/link/view.rs` — pure view builders: the comparison table's cells (names with use, DOB
-    with precision wording, sex at birth, identifiers, addresses, identity state), absence wording ("not
-    recorded" / "unknown — registration not yet received here", uniform per chart not per field), the other
-    record's medication notes ("On the other record: …"), `link_error_view` / `link_report`'s outcome sentences.
-  - `link/mod.rs` — `compare_records` / `link_records` commands: `compare_impl` reads over `displayed_patient` →
-    `check_displayed_set` → the other chart from `shown` → both sets' facts; `link_impl` names BOTH sets it
-    COMPARED (decision 3 widened to the right-hand side), refusing `THIS_CHANGED` / `OTHER_CHANGED`; no
-    server-side gesture timing (db/044's `gesture_kind` CHECK admits only `signoff`/`cease`).
-  - `src-ui/link.js` — the panel: findings first (`role="alert"`, hidden when empty — never "no conflicts"), the
-    two-column table (**This record** / **Other record**), the other record's current medications read-only,
-    **Link — same person**; closes on ANY chart change (focus then goes to the new chart, not back to the
-    panel's opener); the Link button is disabled while a link is in flight; focus moves to the panel heading on
-    open and back to "Same person as…" on close. Its search is `link/search.rs`'s `link_search` (this record's
-    charts left out in Rust, the summary counting the rows shown).
-- **Tests.** `patient/compare.rs`'s own unit tests (finding order); `tests/chart_compare.rs`'s DB tests (the
-  chart-set reads and the set-vs-set clash, incl. `a_clash_with_a_third_chart_already_in_the_record_is_found`);
-  `link/view.rs`'s view-builder tests (moved to `link/view_tests.rs` for the 500-line guard); `link/mod.rs`'s
-  `compare_impl` / `link_impl` tests (`AppState::mock` + `shown`, not-on-screen, `OTHER_CHANGED`); the panel
-  walked manually/headless (no committed JS harness exists yet, #332).
-- **Final whole-branch review fixes (same PR).** Every panel message now goes through `setMessage` (the first
-  build's refusals, failed Compare and Outranked sentence sat in a `hidden` status line — invisible and
-  unannounced); Link sends back BOTH compared sets (`ComparisonView::left_charts` beside `other_charts`) and a
-  changed left set is refused `THIS_CHANGED`; a link answer after a chart switch is reported "For chart <id>: …"
-  without re-reading the new chart; open/close drop in-flight answers; a never/after-operator refusal hides Link;
-  `link_error_from` (pure, all four `DataError` arms tested) no longer says an operator is needed for a
-  not-yet-held chart; the alias row is "Names struck as false" (`patient_alias_pool` = repudiated names);
-  `link_report` names any chart the record now combines that the comparison never showed.
-- **Filed:** [#708](https://github.com/cairn-ehr/cairn-ehr/issues/708) (`link_charts` should re-check both compared
-  chart sets inside the judgement's transaction — a ms-scale race; plus a DB-gated window test of
-  `compare_impl`/`link_impl`) · [#709](https://github.com/cairn-ehr/cairn-ehr/issues/709) (a link outcome can go unseen
-  when it lands after the chart changed — wants a durable outcome surface).
-- **§1.2:**
-  - **Paper counterpart:** the records clerk fetches the other folder, lays the two front sheets side by side,
-    and clips the folders together.
-  - **Acts:** paper 3 (fetch, lay side by side, clip) → forced 3 (find → Compare → Link; the Link click IS the
-    signature under the unlocked key, ADR-0053, so authorship adds no act) → target 3 (2 from R5's banner: the
-    "find" is already done). `M ≤ N`.
-  - **Budget:** review-and-link ≤ 20 s, of which the side-by-side read is the load — measured by runbook §9
-    (Task 7), a human act owed alongside the front door's and med-list's stopwatch figures.
+Merged 2026-09-29 (PR [#707](https://github.com/cairn-ehr/cairn-ehr/pull/707)); plan
+`docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; the design page's as-built note lists every
+deviation. No ADR, no SQL object (generation stays **55**).
+- **Built:** `cairn_node::patient::compare` (`chart_facts`; `cross_vetoes` over BOTH displayed sets, never chart against
+  chart); `chart_link`'s pre-check refusals as marked verdicts (#702); `cairn-gui-tauri/src/link/{view,mod,search}.rs`
+  (`compare_records`/`link_records`, absence and precision wording, `link_error_view`/`link_report`, `link_search`);
+  `src-ui/link.js` (findings first, two-column "This record"/"Other record", **Link — same person**). Link names BOTH
+  compared sets (`THIS_CHANGED`/`OTHER_CHANGED`); every panel message goes through `setMessage` (the first build's
+  refusals sat in a `hidden` line); a `/review-pr` round fixed 7 Important wording/state defects.
+- **Tests:** `patient/compare.rs`, `tests/chart_compare.rs`, `link/view_tests.rs`, `link/mod.rs`'s `compare_impl`/`link_impl`
+  tests; the panel walked headless (no committed JS harness, #332); house-rule 500-line split of the view tests (#467 guard).
+- **Filed:** [#708](https://github.com/cairn-ehr/cairn-ehr/issues/708) (`link_charts` should re-check both compared sets in
+  its transaction) · [#709](https://github.com/cairn-ehr/cairn-ehr/issues/709) (a link outcome can go unseen when it lands
+  after the chart changed) · [#710](https://github.com/cairn-ehr/cairn-ehr/issues/710) (review-round residuals).
+- **§1.2:** paper 3 (fetch, lay side by side, clip) → forced 3 (find → Compare → Link; the click IS the signature) → target 3
+  (2 from R5's banner). Budget review-and-link ≤ 20 s, measured by runbook §9 — a human act.
 
 ### 2026-09-30 — repair path R2b-2: "Not the same person…" (unlink) and #699 (a) built (PR #711)
 
