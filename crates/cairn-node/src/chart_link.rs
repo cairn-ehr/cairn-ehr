@@ -99,13 +99,14 @@ pub fn compose_review_provenance(verb: LinkVerb, human_kid: &str) -> String {
 /// The human is the sole contributor and carries `responsibility` — which is what makes
 /// both write doors demand a verified human attestation token for this event.
 ///
-/// `about` is the chart the envelope is filed under — a subject, or for an unlink the chart the
-/// judgement was made from; see [`FiledUnder`]. [`assert_link_in_tx`] refuses a wrong one before calling this (the
-/// db/018 floor does not check it, and a wrong `about` would file an identity event in an
-/// unrelated patient's stream). The C1 convention is `low`; an unlink naming a chart not held here
-/// (see [`admit_judgement`]) is filed under the HELD chart instead, because db/005 step 8b refuses a local event
-/// about a chart with no history on this node. The payload's subjects stay canonical
-/// either way — db/018 reads the pair from them, never from the envelope.
+/// `about` is the chart the envelope is filed under — a subject, or for an unlink the chart
+/// the judgement was made from; see [`FiledUnder`]. [`assert_link_in_tx`] refuses a wrong one
+/// before calling this (the db/018 floor does not check it, and a wrong `about` would file an
+/// identity event in an unrelated patient's stream). The C1 convention is `low`; an unlink
+/// naming a chart not held here (see [`admit_judgement`]) is filed under the HELD chart
+/// instead, because db/005 step 8b refuses a local event about a chart with no history on
+/// this node. The payload's subjects stay canonical either way — db/018 reads the pair from
+/// them, never from the envelope.
 #[allow(clippy::too_many_arguments)]
 pub fn build_attested_assertion_body(
     verb: LinkVerb,
@@ -204,9 +205,14 @@ pub struct LinkOutcome {
     /// Whether an OPEN `match_proposal` for the pair moved (`applied` / `rejected`).
     pub proposal_resolved: bool,
     /// The chart the event is filed under — always one this node HOLDS (see
-    /// [`admit_judgement`]), whichever order the caller named the two charts in.
+    /// [`admit_judgement`]): a subject, or for an unlink judged from an open record, that
+    /// chart (#699 (a)) — whichever order the caller named the two charts in.
     pub filed_under: Uuid,
-    /// The chart set of [`LinkOutcome::filed_under`], read inside the judgement's own
+    /// The chart whose record [`LinkOutcome::charts`] is: the chart the judgement was made
+    /// from when the caller named one (`unlink_charts`'s `opened`), else
+    /// [`LinkOutcome::filed_under`].
+    pub record_of: Uuid,
+    /// The chart set of [`LinkOutcome::record_of`], read inside the judgement's own
     /// transaction: what that chart reads as, now that the judgement is recorded.
     pub charts: ChartSet,
     /// What the judgement did to the record — see [`LinkEffect`].
@@ -283,11 +289,12 @@ const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 ///
 /// Shared with `apply_proposal::apply_accepted_proposal`, so the matcher-proposal path
 /// and the chart-review path cannot drift. `low`/`high` must be canonical (`low < high`)
-/// and `filed` naming `low` or `high` — or, for an UNLINK only, the held chart whose record contains
-/// both ([`FiledUnder::RecordOf`], #699 (a)); both are checked here,
-/// before anything is locked or signed, because a reversed pair would lock and move no
-/// proposal row and a wrong `about` would misfile the event — and neither is visible to
-/// the database floor.
+/// and `filed` naming `low` or `high` — or, for an UNLINK only, the held chart whose record
+/// contains both ([`FiledUnder::RecordOf`], #699 (a)); both are checked here, before anything
+/// is locked or signed, because a reversed pair would lock and move no proposal row and a
+/// wrong filing would misfile the event — and neither is visible to the database floor. (That
+/// a `RecordOf` chart's record really contains both is the CALLER's check: `judge` re-reads
+/// it in this same transaction.)
 ///
 /// Locks the pair's `match_proposal` row (if any) FIRST, before signing or submitting
 /// anything — see the inline comment at the top of the body for why: it keeps this
@@ -420,7 +427,7 @@ pub async fn link_charts(
     reviewer: &Reviewer<'_>,
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
-    judge(client, LinkVerb::Link, a, b, reviewer, node_origin).await
+    judge(client, LinkVerb::Link, a, b, None, reviewer, node_origin).await
 }
 
 /// "Not the same person": record the reviewer's attested judgement that two charts are two
@@ -433,15 +440,31 @@ pub async fn link_charts(
 /// One chart may be a member this node does not hold (R1 shows it; a peer's link named
 /// it), provided it reads as part of the other chart's record here.
 ///
+/// `opened` is the chart the clinician is judging FROM. It matters only when NEITHER chart
+/// is held here (#699 (a)): the far link B–C of an A–B–C record, read on a node holding only
+/// A. The judgement is then filed under `opened`, provided it is held here and its record
+/// reads both charts as part of it; otherwise the unlink is refused, as it is with `None`.
+/// Either way [`LinkOutcome::charts`] is `opened`'s record when given — the one on screen.
+///
 /// Errors: as [`link_charts`] — only "commit outcome unknown for event …" may have written.
 pub async fn unlink_charts(
     client: &mut tokio_postgres::Client,
     a: Uuid,
     b: Uuid,
+    opened: Option<Uuid>,
     reviewer: &Reviewer<'_>,
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
-    judge(client, LinkVerb::Unlink, a, b, reviewer, node_origin).await
+    judge(
+        client,
+        LinkVerb::Unlink,
+        a,
+        b,
+        opened,
+        reviewer,
+        node_origin,
+    )
+    .await
 }
 
 /// Does this node hold `chart` itself (its `patient_chart` row, made by its registration)?
@@ -458,12 +481,14 @@ async fn is_held(client: &tokio_postgres::Client, chart: Uuid) -> anyhow::Result
 
 /// The shared body of both entry points: pre-checks (legible refusals before anything is
 /// signed), then ONE transaction that writes the judgement AND reads back what it did — so
-/// once the commit succeeds there is nothing left that can fail.
+/// once the commit succeeds there is nothing left that can fail. `opened`: the chart the
+/// judgement is made from, if the caller named one (see [`unlink_charts`]).
 async fn judge(
     client: &mut tokio_postgres::Client,
     verb: LinkVerb,
     a: Uuid,
     b: Uuid,
+    opened: Option<Uuid>,
     reviewer: &Reviewer<'_>,
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
@@ -481,11 +506,29 @@ async fn judge(
             .await
             .context("reading whether the two charts share a record here")?
             .contains(&b);
+    // Only read when it can change the answer: an unlink with neither chart held here, judged
+    // from an open chart (#699 (a)). Both are pre-checks for a LEGIBLE refusal; db/005 step 8b
+    // is the enforcement (it refuses an event filed under a chart with no history here), and
+    // the record is read AGAIN inside the transaction below, before anything is signed.
+    let opened_chart = match (verb, a_held || b_held, opened) {
+        (LinkVerb::Unlink, false, Some(o)) => {
+            let record = crate::patient::person::person_charts(&*client, o)
+                .await
+                .context("reading the open chart's record")?;
+            Some(OpenedChart {
+                chart: o,
+                held: is_held(client, o).await?,
+                holds_both: record.contains(&a) && record.contains(&b),
+            })
+        }
+        _ => None,
+    };
     // A verdict about this NODE's state: the identical call succeeds once the chart (or the
     // record joining them) has arrived here. Marked, so a surface words it as a verdict and
     // never as an outage to retry (#702).
-    let about = admit_judgement(verb, (a, a_held), (b, b_held), shared_record)
+    let filed = admit_judgement(verb, (a, a_held), (b, b_held), shared_record, opened_chart)
         .map_err(node_state_refusal)?;
+    let about = filed.chart();
     // Legibility only; the db/005 gate is the enforcement (a raw-SQL client skipping this
     // still cannot attest with a non-human key).
     if !crate::identify::attester_is_enrolled_human(client, reviewer.human_kid)
@@ -508,22 +551,40 @@ async fn judge(
         .transaction()
         .await
         .map_err(|e| LocalDbFault::new("opening the judgement's transaction", e))?;
+    // A third-chart filing rests on a fact about the RECORD (the open chart's record holds
+    // both subjects), and the record can change between the pre-check above and this
+    // transaction (a peer's unlink syncing in). Re-read it here, before anything is signed:
+    // a refusal now rolls the transaction back with nothing written. `filing_for` cannot
+    // check this — it is pure.
+    if let FiledUnder::RecordOf(o) = filed {
+        let record = crate::patient::person::person_charts(&tx, o)
+            .await
+            .context("re-reading the open chart's record inside the judgement")?;
+        if !(record.contains(&a) && record.contains(&b)) {
+            return Err(node_state_refusal(format!(
+                "chart {o}'s record no longer reads both {a} and {b} as part of it — the \
+                 record changed while the judgement was being made; open it again"
+            )));
+        }
+    }
     let asserted = assert_link_in_tx(
         &tx,
         verb,
         low,
         high,
-        FiledUnder::Subject(about),
+        filed,
         &provenance,
         None,
         reviewer,
         hlc,
     )
     .await?;
-    // What the filed-under chart (always one held here) now reads as — read BEFORE the
-    // commit, in the same transaction, so a failure here rolls the judgement back rather
-    // than leaving a committed event behind an error.
-    let charts = crate::patient::person::person_charts(&tx, about)
+    // The record the clinician judged FROM (the open chart), else the filed-under chart —
+    // what the caller shows next. Read BEFORE the commit, in the same transaction, so a
+    // failure here rolls the judgement back rather than leaving a committed event behind an
+    // error.
+    let record_of = opened.unwrap_or(about);
+    let charts = crate::patient::person::person_charts(&tx, record_of)
         .await
         .context("reading the chart set the judgement leaves")?;
     // "Still joined?" is a question about the two SUBJECTS — do they still read as one
@@ -550,6 +611,7 @@ async fn judge(
         event_id: asserted.event_id,
         proposal_resolved: asserted.proposal_resolved,
         filed_under: about,
+        record_of,
         charts,
         effect,
     })
