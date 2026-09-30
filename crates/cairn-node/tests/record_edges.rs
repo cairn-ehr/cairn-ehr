@@ -114,6 +114,10 @@ async fn a_chain_has_two_links_each_with_its_standing() {
         assert_eq!((edge.low, edge.high), (l, h), "canonical pair, ordered");
         assert_eq!(edge.attested, att, "the standing's attestation");
         assert!(is_a_day(&edge.recorded_on), "recorded_on is YYYY-MM-DD");
+        if !att {
+            // The peer's link carries a fixed wall of 60 ms: exactly the epoch's day, in UTC.
+            assert_eq!(edge.recorded_on, "1970-01-01", "ms to UTC day, exactly");
+        }
     }
 }
 
@@ -138,6 +142,13 @@ async fn an_unlinked_pair_is_not_a_link() {
         .await
         .expect("unlink");
 
+    // The set holding BOTH charts is the one that bites: a single-chart set is emptied by the
+    // both-ends test alone, so only here does `state = 'link'` carry the weight.
+    let both = ChartSet::new([a, b]).expect("two charts make a set");
+    assert!(
+        record_edges(&c, &both).await.unwrap().is_empty(),
+        "an unlink row joins nothing even when both ends are in the set"
+    );
     let alone = ChartSet::single(a);
     assert!(record_edges(&c, &alone).await.unwrap().is_empty());
     let set_b = person_charts(&c, b).await.unwrap();
