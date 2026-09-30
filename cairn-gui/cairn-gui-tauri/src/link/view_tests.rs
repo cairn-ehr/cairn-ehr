@@ -328,9 +328,13 @@ fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
     );
     // Final review M6: pressing Link again is not a no-op — it records another judgement.
     assert!(
+        !lost.sentence.contains("changes nothing"),
+        "a retry is not a no-op: it would overrule the other judgement"
+    );
+    assert!(
         lost.sentence
-            .ends_with("pressing Link again records another judgement but changes nothing."),
-        "outranked link should end with the pressing-again message"
+            .contains("would record a newer judgement that overrules theirs"),
+        "outranked link should say a retry would overrule"
     );
 }
 

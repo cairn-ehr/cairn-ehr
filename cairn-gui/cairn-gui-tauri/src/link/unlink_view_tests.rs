@@ -126,3 +126,100 @@ fn an_unlink_error_is_worded_as_an_unlink() {
     );
     assert!(v.text.starts_with("The unlink was refused"));
 }
+
+#[test]
+fn outranked_does_not_call_a_retry_a_no_op() {
+    let r = unlink_report(
+        LinkEffect::Outranked,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2, 3]),
+    );
+    assert!(!r.sentence.contains("changes nothing"));
+    assert!(r
+        .sentence
+        .contains("would record a newer judgement that overrules theirs"));
+}
+
+#[test]
+fn a_took_effect_that_split_nothing_is_not_called_unlinked() {
+    let r = unlink_report(
+        LinkEffect::TookEffect,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2, 3]),
+    );
+    assert!(!r.sentence.starts_with("Unlinked"));
+    assert!(r.sentence.contains("did not change"));
+    assert!(r.reload);
+}
+
+#[test]
+fn a_split_uses_plural_agreement() {
+    let r = unlink_report(
+        LinkEffect::TookEffect,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2]),
+    );
+    assert!(r.sentence.contains("are no longer part of this record"));
+}
+
+#[test]
+fn charts_that_joined_concurrently_are_named() {
+    let r = unlink_report(
+        LinkEffect::TookEffect,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2, 4]),
+    );
+    assert!(r.sentence.contains("also includes chart(s)"));
+    assert!(r.sentence.contains(&id(4).to_string()));
+}
+
+#[test]
+fn still_joined_says_other_links() {
+    let r = unlink_report(
+        LinkEffect::StillJoined,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2, 3]),
+    );
+    assert!(r.sentence.contains("through other links"));
+}
+
+#[test]
+fn an_unread_low_chart_is_named_and_cannot_unlink() {
+    let mut p = parts();
+    p.low = Err("gone".into());
+    let v = unlink_comparison_view(p, &set(&[1, 2]), id(1), id(2));
+    assert!(!v.can_unlink);
+    assert!(v.problems.iter().any(|m| m.contains(&id(1).to_string())));
+}
+
+#[test]
+fn every_unlink_error_arm_is_worded_as_an_unlink() {
+    use crate::link::view::judgement_error_from as f;
+    use cairn_gui_data::port::DataError;
+    assert!(f("unlink", DataError::NotProvisioned("x".into()))
+        .text
+        .starts_with("This node cannot record the unlink yet"));
+    assert!(f("unlink", DataError::Unavailable("x".into()))
+        .text
+        .starts_with("The unlink was not confirmed"));
+    assert_eq!(
+        f("unlink", DataError::NotFound).text,
+        "The unlink was not recorded."
+    );
+}
+
+#[test]
+fn the_link_gone_text_says_nothing_was_done() {
+    assert!(LINK_GONE.contains("no longer part of this record"));
+    assert!(LINK_GONE.contains("nothing was done"));
+}

@@ -29,8 +29,10 @@ pub enum LinkEffect {
     TookEffect,
     /// Another assertion about the SAME pair that says the OPPOSITE outranks it — a later
     /// human judgement (higher HLC; e.g. a peer's, from a clock ahead of this node's). The
-    /// direct edge still stands as that other judgement says. Judging again changes
-    /// nothing; it is a disagreement between humans for a human to settle.
+    /// direct edge still stands as that other judgement says. Judging again is NOT a
+    /// no-op: both sync doors merge the peer's HLC into this node's clock, so the next local
+    /// judgement is stamped above the peer's and would outrank it — overruling the colleague
+    /// without settling anything. It is a disagreement between humans for a human to settle.
     Outranked,
     /// An UNLINK that stands on its own edge, but the second chart still reads as part of
     /// the first's record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and

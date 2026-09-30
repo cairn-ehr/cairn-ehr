@@ -396,8 +396,8 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
                        are different people. The two judgements disagree — settle it with \
-                       the person who made the other one; pressing Link again records another \
-                       judgement but changes nothing."
+                       the person who made the other one. Linking again would record a newer \
+                       judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,
         },

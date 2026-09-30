@@ -109,19 +109,53 @@ pub fn unlink_report(
     before: &ChartSet,
     after: &ChartSet,
 ) -> LinkReportView {
+    let mut view = effect_report(effect, low, high, before, after);
+    // Charts that joined the record concurrently were not in the comparison: name them,
+    // as `link_report` does, so they are reviewed rather than assumed.
+    let joined = ids_not_in(after, before);
+    if !joined.is_empty() {
+        view.sentence = format!(
+            "{} The record now also includes chart(s) {} that were not in the comparison — \
+             review them.",
+            view.sentence,
+            joined.join(", ")
+        );
+    }
+    view
+}
+
+/// The ids in `from` that `other` does not have.
+fn ids_not_in(from: &ChartSet, other: &ChartSet) -> Vec<String> {
+    from.members()
+        .iter()
+        .filter(|c| !other.contains(c))
+        .map(Uuid::to_string)
+        .collect()
+}
+
+/// The sentence for each [`LinkEffect`], before [`unlink_report`] adds anything about charts
+/// the comparison did not show.
+fn effect_report(
+    effect: LinkEffect,
+    low: Uuid,
+    high: Uuid,
+    before: &ChartSet,
+    after: &ChartSet,
+) -> LinkReportView {
     match effect {
         LinkEffect::TookEffect => {
-            let left: Vec<String> = before
-                .members()
-                .iter()
-                .filter(|c| !after.contains(c))
-                .map(Uuid::to_string)
-                .collect();
+            let left = ids_not_in(before, after);
             let sentence = if left.is_empty() {
-                "Unlinked — the two charts are recorded as different people.".to_string()
+                // An unlink that took effect but split nothing contradicts itself; say so
+                // rather than claim a split (mirrors `effect_report`'s link StillJoined arm).
+                format!(
+                    "Recorded that charts {low} and {high} are different people, but this record \
+                     did not change the way an unlink should — the chart is being re-read so you \
+                     can see what it now combines."
+                )
             } else {
                 format!(
-                    "Unlinked — chart(s) {} no longer part of this record.",
+                    "Unlinked — chart(s) {} are no longer part of this record.",
                     left.join(", ")
                 )
             };
@@ -133,7 +167,7 @@ pub fn unlink_report(
         LinkEffect::StillJoined => LinkReportView {
             sentence: format!(
                 "Recorded that charts {low} and {high} are different people — but they still read \
-                 as one record through another link, so this record did not change. The links \
+                 as one record through other links, so this record did not change. The links \
                  still joining them are listed under \"How these charts are linked\"."
             ),
             reload: true,
@@ -141,8 +175,8 @@ pub fn unlink_report(
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
                        are the same person. The two judgements disagree — settle it with the \
-                       person who made the other one; unlinking again records another judgement \
-                       but changes nothing."
+                       person who made the other one. Unlinking again would record a newer \
+                       judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,
         },

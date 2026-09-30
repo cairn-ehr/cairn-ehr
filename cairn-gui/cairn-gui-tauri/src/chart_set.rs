@@ -342,6 +342,20 @@ mod tests {
         );
     }
 
+    /// `MemberLine::name` carries the absence word, so a link line never names a chart blank.
+    #[test]
+    fn a_member_name_carries_the_absence_word() {
+        let mk = |held: bool| ChartIdentity {
+            patient_id: Uuid::from_u128(5),
+            held,
+            name: None,
+            birth_date: None,
+            trust: "unknown".into(),
+        };
+        assert_eq!(member_line(&mk(true)).name, "(no name recorded)");
+        assert_eq!(member_line(&mk(false)).name, "(name unknown)");
+    }
+
     /// A linked chart whose registration has not reached this node: an absent fact is
     /// UNKNOWN, not "not recorded", and the line carries the `unknown` trust `trust_of` gives
     /// it rather than a borrowed "confirmed".

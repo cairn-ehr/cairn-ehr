@@ -45,7 +45,7 @@ pub fn record_link_line(edge: &RecordEdge, members: &[MemberLine]) -> RecordLink
         low: edge.low.to_string(),
         high: edge.high.to_string(),
         text: format!(
-            "{} and {} — {how}, recorded {}",
+            "{} and {} — {how}, recorded {} (UTC)",
             chart_label(edge.low, members),
             chart_label(edge.high, members),
             edge.recorded_on
@@ -55,11 +55,24 @@ pub fn record_link_line(edge: &RecordEdge, members: &[MemberLine]) -> RecordLink
 
 /// The list, or — when it could not be read — no lines and a sentence saying so. An unread
 /// list must never render as an empty one: that reads as "nothing joins these charts".
+///
+/// `linked` is whether the record's chart set has more than one chart. A linked record whose
+/// read returned NO edges is contradictory (something joins these charts), so it is said, not
+/// shown blank; an unlinked single chart legitimately has none and stays silent.
 pub fn links_section(
     edges: Result<Vec<RecordEdge>, String>,
     members: &[MemberLine],
+    linked: bool,
 ) -> (Vec<RecordLinkView>, Option<String>) {
     match edges {
+        Ok(edges) if edges.is_empty() && linked => (
+            vec![],
+            Some(
+                "No standing link joining these charts could be read here — reload the chart \
+                 before undoing any."
+                    .to_string(),
+            ),
+        ),
         Ok(edges) => (
             edges.iter().map(|e| record_link_line(e, members)).collect(),
             None,
@@ -100,7 +113,7 @@ mod tests {
         let human = record_link_line(&edge(true), &members);
         assert!(human.text.contains("SMITH John") && human.text.contains("SMYTHE John"));
         assert!(human.text.contains("by a clinician's judgement"));
-        assert!(human.text.contains("2026-09-28"));
+        assert!(human.text.contains("2026-09-28 (UTC)"));
         assert_eq!(human.low, Uuid::from_u128(1).to_string());
         let machine = record_link_line(&edge(false), &members);
         assert!(machine
@@ -121,7 +134,7 @@ mod tests {
     /// Review Focus 5.
     #[test]
     fn an_unread_link_list_says_so_and_offers_no_unlink() {
-        let (links, error) = links_section(Err("connection reset".into()), &[]);
+        let (links, error) = links_section(Err("connection reset".into()), &[], true);
         assert!(links.is_empty());
         let error = error.expect("an unread list is said, never shown empty");
         assert!(error.contains("could not be read"));
@@ -130,8 +143,21 @@ mod tests {
 
     #[test]
     fn a_read_list_carries_no_error() {
-        let (links, error) = links_section(Ok(vec![edge(true)]), &[]);
+        let (links, error) = links_section(Ok(vec![edge(true)]), &[], true);
         assert_eq!(links.len(), 1);
         assert!(error.is_none());
+    }
+
+    #[test]
+    fn a_linked_record_with_no_edges_read_says_so() {
+        let (links, error) = links_section(Ok(vec![]), &[], true);
+        assert!(links.is_empty());
+        assert!(error.expect("never blank").contains("reload the chart"));
+    }
+
+    #[test]
+    fn a_single_chart_with_no_edges_is_silent() {
+        let (links, error) = links_section(Ok(vec![]), &[], false);
+        assert!(links.is_empty() && error.is_none());
     }
 }
