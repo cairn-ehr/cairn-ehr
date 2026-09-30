@@ -458,7 +458,8 @@ mod tests {
         let pane = chart_pane(&list, Ok(vec![]), Err("x".into()));
         assert_eq!(pane.list.rows.len(), list.rows.len());
         assert!(pane.links.is_empty());
-        assert!(pane.links_error.is_some());
+        let warning = pane.links_error.expect("the failure is reported");
+        assert!(warning.contains("could not be read"), "{warning}");
     }
 
     fn plan_row(cross_patient: bool, members: &[(u128, u128)]) -> MedicationRow {

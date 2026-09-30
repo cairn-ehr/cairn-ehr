@@ -17,12 +17,13 @@ use super::unlink_view::{
     unlink_comparison_view, unlink_error_view, unlink_report, UnlinkComparisonView, UnlinkParts,
     LINK_GONE,
 };
-use super::view::{key_locked, refused, LinkReportView, THIS_CHANGED};
+use super::view::{key_locked_for, refused, LinkReportView, THIS_CHANGED};
 use super::{as_text, chart_set_of};
 use crate::chart_set::{check_displayed_set, CHANGED};
 use crate::funnel::view::{ErrorView, Retry};
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
+use cairn_node::patient::edges::RecordEdge;
 use uuid::Uuid;
 
 /// Which command is asking [`resolve_edge`] — it decides only how a CHANGED set is worded.
@@ -59,19 +60,37 @@ async fn resolve_edge(
         return Err(refused(LINK_GONE));
     };
     let (low, high) = cairn_node::chart_link::canonical_pair(low, high);
-    // A failed read is a window fault, not a verdict on the link: retryable, nothing done.
-    let edges = read_record_edges(state, &set)
-        .await
-        .map_err(|e| ErrorView {
-            text: format!(
+    let edges = read_record_edges(state, &set).await;
+    standing_edge(edges, low, high, act)?;
+    Ok((patient, set, low, high))
+}
+
+/// The membership stage as a pure function: `low`/`high` must already be canonical. A failed
+/// read is a window fault, not a verdict on the link — retryable, worded per act (a Compare
+/// changed nothing, so it does not say "nothing was done"); a link the record does not have
+/// reads [`LINK_GONE`].
+fn standing_edge(
+    edges: Result<Vec<RecordEdge>, String>,
+    low: Uuid,
+    high: Uuid,
+    act: Act,
+) -> Result<(), ErrorView> {
+    let edges = edges.map_err(|e| ErrorView {
+        text: match act {
+            Act::Compare => {
+                format!("Could not read the links joining this record's charts: {e}")
+            }
+            Act::Unlink => format!(
                 "Could not read the links joining this record's charts — nothing was done: {e}"
             ),
-            retry: Retry::Now,
-        })?;
-    if !edges.iter().any(|e| (e.low, e.high) == (low, high)) {
-        return Err(refused(LINK_GONE));
+        },
+        retry: Retry::Now,
+    })?;
+    if edges.iter().any(|e| (e.low, e.high) == (low, high)) {
+        Ok(())
+    } else {
+        Err(refused(LINK_GONE))
     }
-    Ok((patient, set, low, high))
 }
 
 /// "Not the same person…" — read the link's two charts side by side. Read-only.
@@ -115,7 +134,10 @@ pub async fn unlink_impl(
         ));
     }
     // An unlink is a clinical act, so taking the key counts as activity (`live_key`).
-    let (human_sk, human_kid) = state.live_key(Now::read()).await.ok_or_else(key_locked)?;
+    let (human_sk, human_kid) = state
+        .live_key(Now::read())
+        .await
+        .ok_or_else(|| key_locked_for("Unlink — not the same person"))?;
     let mut db = state
         .db
         .as_ref()
@@ -192,7 +214,10 @@ mod tests {
         let err = compare_linked_impl(&state, &Uuid::from_u128(9).to_string(), vec![], "1", "2")
             .await
             .unwrap_err();
-        assert!(err.text.contains("not the chart"));
+        assert!(
+            err.text.contains("not the chart"),
+            "must refuse a chart that is not on screen"
+        );
     }
 
     #[tokio::test]
@@ -201,7 +226,10 @@ mod tests {
         let err = unlink_impl(&state, &Uuid::from_u128(9).to_string(), vec![], "1", "2")
             .await
             .unwrap_err();
-        assert!(err.text.contains("not the chart"));
+        assert!(
+            err.text.contains("not the chart"),
+            "must refuse a chart that is not on screen"
+        );
     }
 
     #[tokio::test]
@@ -248,6 +276,8 @@ mod tests {
         assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
     }
 
+    /// Cannot tell the membership stage from compare's `db None` -> LINK_GONE; the pure
+    /// `standing_edge` tests pin the membership stage.
     #[tokio::test]
     async fn compare_linked_refuses_a_link_the_record_no_longer_has() {
         let state = AppState::mock(Some(fixture()));
@@ -266,5 +296,41 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+    }
+
+    fn edge(a: u128, b: u128) -> RecordEdge {
+        RecordEdge {
+            low: Uuid::from_u128(a),
+            high: Uuid::from_u128(b),
+            attested: true,
+            recorded_on: "2026-09-28".into(),
+        }
+    }
+
+    #[test]
+    fn a_present_link_passes_however_the_pair_was_ordered() {
+        let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        assert!(standing_edge(Ok(vec![edge(1, 2)]), l, h, Act::Unlink).is_ok());
+        let (l, h) = cairn_node::chart_link::canonical_pair(h, l);
+        assert!(standing_edge(Ok(vec![edge(1, 2)]), l, h, Act::Unlink).is_ok());
+    }
+
+    #[test]
+    fn an_absent_link_is_gone() {
+        let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(3));
+        let err = standing_edge(Ok(vec![edge(1, 2)]), l, h, Act::Unlink).unwrap_err();
+        assert_eq!(err.text, LINK_GONE);
+    }
+
+    #[test]
+    fn an_unread_edge_list_is_retryable_and_not_a_verdict() {
+        let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let err = standing_edge(Err("boom".into()), l, h, Act::Unlink).unwrap_err();
+        assert_eq!(err.retry, Retry::Now);
+        assert_ne!(err.text, LINK_GONE);
+        assert!(err.text.contains("nothing was done"));
+        let err = standing_edge(Err("boom".into()), l, h, Act::Compare).unwrap_err();
+        assert_eq!(err.retry, Retry::Now);
+        assert!(!err.text.contains("nothing was done"));
     }
 }

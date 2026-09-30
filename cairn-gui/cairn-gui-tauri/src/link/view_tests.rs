@@ -528,3 +528,15 @@ fn a_locked_key_is_not_a_verdict() {
     assert_eq!(e.retry, Retry::Now);
     assert!(e.text.contains("unlock"), "it names the remedy");
 }
+
+#[test]
+fn a_locked_key_names_the_button_that_was_pressed() {
+    assert_eq!(
+        key_locked().text,
+        "your signing key is locked — unlock it, then press Link again"
+    );
+    let e = key_locked_for("Unlink — not the same person");
+    assert_eq!(e.retry, Retry::Now);
+    assert!(e.text.contains("Unlink"), "it names the unlink button");
+    assert!(!e.text.contains("press Link"), "never the opposite act");
+}
