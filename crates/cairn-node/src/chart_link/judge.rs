@@ -1,18 +1,18 @@
 //! The two public entry points of a human's link/unlink judgement — [`link_charts`] and
 //! [`unlink_charts`] — and what they report back ([`LinkOutcome`], [`LinkEffect`]).
 //!
-//! Split out of `chart_link.rs` (house rule 4: files under 500 lines) with no change in
-//! behaviour; every item is re-exported by the parent, so `chart_link::unlink_charts` and
-//! friends keep their paths. The flow: `judge` makes the legible pre-checks (is each chart
-//! held? may the judgement be made, and filed under which chart — the pure rule in
-//! `admit.rs`?), then opens ONE transaction that signs and submits through the parent's
-//! [`assert_link_in_tx`] and reads back what the judgement did, before committing.
+//! Lives apart from `chart_link.rs` (house rule 4: files under 500 lines); every item is
+//! re-exported by the parent, so `chart_link::unlink_charts` and friends keep their paths. The
+//! flow: `judge` makes the legible pre-checks (is each chart held? may the judgement be made,
+//! and filed under which chart — the pure rule in `admit.rs`?), then opens ONE transaction that
+//! signs and submits through the parent's [`assert_link_in_tx`] (which re-checks a third-chart
+//! filing under the identity lock) and reads back what the judgement did, before committing.
 
 use super::{
     admit_judgement, assert_link_in_tx, canonical_pair, compose_review_provenance,
-    record_holds_both, FiledUnder, LinkVerb, OpenedChart, Reviewer,
+    record_holds_both, AdmitRefusal, LinkVerb, OpenedChart, Reviewer,
 };
-use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault};
+use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault, RefusalScope};
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
@@ -30,12 +30,13 @@ pub enum LinkEffect {
     /// Another assertion about the SAME pair that says the OPPOSITE outranks it — a later
     /// human judgement (higher HLC; e.g. a peer's, from a clock ahead of this node's). The
     /// direct edge still stands as that other judgement says. Judging again is NOT a
-    /// no-op: both sync doors merge the peer's HLC into this node's clock, so the next local
-    /// judgement is stamped above the peer's and would NORMALLY outrank it — overruling the
-    /// colleague without settling anything. "Normally", because the sync door clamps its
-    /// merge at `cairn_max_hlc_drift_ms()` (24 h) of drift: a peer further ahead than that
-    /// is still admitted with its full wall clock and keeps outranking a local retry. It is a
-    /// disagreement between humans for a human to settle.
+    /// no-op: the clinical sync door (db/020, the only door an identity event arrives
+    /// through) merges the peer's HLC into this node's clock, so the next local judgement is
+    /// stamped above the peer's and would NORMALLY outrank it — overruling the colleague
+    /// without settling anything. "Normally", because that door clamps its merge at
+    /// `cairn_max_hlc_drift_ms()` (24 h) of drift: a peer further ahead than that is still
+    /// admitted with its full wall clock and keeps outranking a local retry until this node's
+    /// own clock reaches the peer's. It is a disagreement between humans for a human to settle.
     Outranked,
     /// An UNLINK that stands on its own edge, but the second chart still reads as part of
     /// the first's record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and
@@ -55,7 +56,12 @@ pub fn link_effect(verb: LinkVerb, agrees: bool, still_joined: bool) -> LinkEffe
     match (verb, agrees, still_joined) {
         (_, false, _) => LinkEffect::Outranked,
         (LinkVerb::Unlink, true, true) => LinkEffect::StillJoined,
-        _ => LinkEffect::TookEffect,
+        (LinkVerb::Unlink, true, false) => LinkEffect::TookEffect,
+        (LinkVerb::Link, true, true) => LinkEffect::TookEffect,
+        // A standing link that does not join its own two charts contradicts db/018's component
+        // recompute (both run under CARNLK, in this transaction). Named rather than hidden in a
+        // wildcard; the link's own assertion stands, which is all this judgement can say.
+        (LinkVerb::Link, true, false) => LinkEffect::TookEffect,
     }
 }
 
@@ -148,6 +154,15 @@ async fn is_held(client: &tokio_postgres::Client, chart: Uuid) -> anyhow::Result
         .get(0))
 }
 
+/// Mark an [`admit_judgement`] refusal with the scope it names, so a surface offers the right
+/// way forward: wait for this node (`NodeState`), or re-read and judge again (`Input`).
+fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
+    match refusal.scope {
+        RefusalScope::NodeState => node_state_refusal(refusal.text),
+        RefusalScope::Input => deliberate_refusal(refusal.text),
+    }
+}
+
 /// The shared body of both entry points: pre-checks (legible refusals before anything is
 /// signed), then ONE transaction that writes the judgement AND reads back what it did — so
 /// once the commit succeeds there is nothing left that can fail. `opened`: the chart the
@@ -181,7 +196,7 @@ async fn judge(
     // so it must be a record that exists here and holds the pair (Ruling R5). Pre-checks for a
     // LEGIBLE refusal; db/005 step 8b is the enforcement for the filing (it refuses an event
     // filed under a chart with no history here), and a third-chart filing's record is read
-    // AGAIN inside the transaction below, before anything is signed.
+    // AGAIN by `assert_link_in_tx`, under the identity lock, before anything is signed.
     let opened_chart = match (verb, opened) {
         (LinkVerb::Unlink, Some(o)) if o != a && o != b => {
             let record = crate::patient::person::person_charts(&*client, o)
@@ -195,11 +210,11 @@ async fn judge(
         }
         _ => None,
     };
-    // A verdict about this NODE's state: the identical call succeeds once the chart (or the
-    // record joining them) has arrived here. Marked, so a surface words it as a verdict and
-    // never as an outage to retry (#702).
+    // A verdict — about this node's state (a chart not held here: sync may deliver it) or about
+    // the picture judged from (an open chart whose record lacks the pair: re-read it). Marked
+    // either way, so a surface words it as a verdict and never as an outage to retry (#702).
     let filed = admit_judgement(verb, (a, a_held), (b, b_held), shared_record, opened_chart)
-        .map_err(node_state_refusal)?;
+        .map_err(refusal_error)?;
     let about = filed.chart();
     // Legibility only; the db/005 gate is the enforcement (a raw-SQL client skipping this
     // still cannot attest with a non-human key).
@@ -223,26 +238,8 @@ async fn judge(
         .transaction()
         .await
         .map_err(|e| LocalDbFault::new("opening the judgement's transaction", e))?;
-    // A third-chart filing rests on a fact about the RECORD (the open chart's record holds
-    // both subjects), and the record can change between the pre-check above and this
-    // transaction (a peer's unlink syncing in). Re-read it here, before anything is signed:
-    // a refusal now rolls the transaction back with nothing written. `filing_for` cannot
-    // check this — it is pure.
-    if let FiledUnder::RecordOf(o) = filed {
-        let record = crate::patient::person::person_charts(&tx, o)
-            .await
-            .context("re-reading the open chart's record inside the judgement")?;
-        if !record_holds_both(&record, a, b) {
-            // A changed record is stale INPUT (the caller judged from a picture that no
-            // longer holds), not a not-yet node state: the same call refuses the same way
-            // until the caller re-reads, so it is a verdict about the input.
-            return Err(deliberate_refusal(format!(
-                "chart {o}'s record no longer reads both {a} and {b} as part of it — the \
-                 record changed while you were judging — nothing was done; reload the chart \
-                 and judge again"
-            )));
-        }
-    }
+    // A third-chart filing's record (the pre-check above) is re-read by `assert_link_in_tx`
+    // under the identity lock, before anything is signed — see the check there.
     let asserted = assert_link_in_tx(
         &tx,
         verb,
@@ -264,10 +261,11 @@ async fn judge(
         .await
         .context("reading the chart set the judgement leaves")?;
     // "Still joined?" is a question about the two SUBJECTS — do they still read as one
-    // record? — asked of the subjects themselves, never of the filed-under chart: once an
-    // unlink may be filed under a THIRD chart (#699 (a)), "is the other chart in the filed-under
-    // chart's record" answers StillJoined for every successful split (the far link of A–B–C,
-    // filed under A, leaves B in A's record). Read in this transaction, like `charts`.
+    // record? — asked of the subjects themselves, never of the filed-under or open chart: once
+    // an unlink may be filed under a THIRD chart (#699 (a)), "is a subject in that chart's
+    // record" is true after a successful split whenever the subject asked about is the near one
+    // (the far link of A–B–C, judged from A, leaves B in A's record), so the answer would turn
+    // on argument order. Read in this transaction, like `charts`.
     let joined = crate::patient::person::person_charts(&tx, low)
         .await
         .context("reading whether the two charts still read as one record")?

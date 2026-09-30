@@ -22,7 +22,8 @@
 //! attests directly and submits through the 3-argument `submit_event` door — never the
 //! medication seal path.
 
-use crate::db_diagnosis::LocalDbFault;
+use crate::db_diagnosis::{deliberate_refusal, LocalDbFault};
+use anyhow::Context;
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
 };
@@ -227,6 +228,42 @@ pub async fn standing_link(
 /// records how an open proposal was first answered.
 const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 
+/// The one fact a third-chart filing ([`FiledUnder::RecordOf`]) rests on — `opened`'s record
+/// holds both subjects — checked where it cannot go stale before the commit.
+///
+/// A plain re-read inside a READ COMMITTED transaction is not enough: a peer's unlink applied
+/// through the sync door could commit between the read and this judgement's submit, and the
+/// event would then be filed (and graded, db/048) under a chart whose record no longer holds
+/// either subject. So CARNLK — db/018's global identity lock, which every identity apply takes
+/// and holds until commit — is taken FIRST, and the record read after it. The caller has
+/// already locked the proposal row, so the order stays row-then-CARNLK; `submit_event`'s own
+/// acquisition later in this transaction is a no-op re-acquire (advisory locks stack).
+async fn refuse_unless_record_holds_both(
+    tx: &tokio_postgres::Transaction<'_>,
+    opened: Uuid,
+    low: Uuid,
+    high: Uuid,
+) -> anyhow::Result<()> {
+    tx.execute("SELECT pg_advisory_xact_lock(x'4341524E4C4B'::bigint)", &[])
+        .await
+        .map_err(|e| {
+            LocalDbFault::new("taking the identity lock before re-reading the record", e)
+        })?;
+    let record = crate::patient::person::person_charts(tx, opened)
+        .await
+        .context("re-reading the open chart's record under the identity lock")?;
+    if record_holds_both(&record, low, high) {
+        return Ok(());
+    }
+    // A changed record is stale INPUT (the caller judged from a picture that no longer holds),
+    // not a not-yet node state: the same call refuses the same way until the caller re-reads.
+    Err(deliberate_refusal(format!(
+        "chart {opened}'s record no longer reads both {low} and {high} as part of it — the \
+         record changed while you were judging — nothing was done; reload the chart and judge \
+         again"
+    )))
+}
+
 /// Sign, attest and submit one judgement inside the caller's transaction, then move an
 /// OPEN proposal for the pair and read back whether the event stands. See [`Asserted`].
 ///
@@ -235,14 +272,18 @@ const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 /// and `filed` naming `low` or `high` — or, for an UNLINK only, the held chart whose record
 /// contains both ([`FiledUnder::RecordOf`], #699 (a)); both are checked here, before anything
 /// is locked or signed, because a reversed pair would lock and move no proposal row and a
-/// wrong filing would misfile the event — and neither is visible to the database floor. (That
-/// a `RecordOf` chart's record really contains both is the CALLER's check: `judge` re-reads
-/// it in this same transaction.)
+/// wrong filing would misfile the event — and neither is visible to the database floor.
 ///
 /// Locks the pair's `match_proposal` row (if any) FIRST, before signing or submitting
 /// anything — see the inline comment at the top of the body for why: it keeps this
 /// function's lock order (row, then db/018's CARNLK advisory lock) the same as every
 /// other path that touches both, so two judgements on the same pair cannot deadlock.
+///
+/// A `RecordOf` filing then takes CARNLK itself and re-reads that chart's record: the filing
+/// is only honest while the record holds both subjects, and CARNLK is what every identity apply
+/// (a peer's unlink arriving through the sync door included) holds until it commits — so the
+/// record read after taking it cannot change before this judgement commits. A record that no
+/// longer holds both is refused as a verdict about the input (reload and judge again).
 ///
 /// Errors roll the caller's transaction back when it drops: nothing is written and the
 /// proposal does not move (the db/005 gate refuses a non-human attester, db/018 a
@@ -291,6 +332,9 @@ pub async fn assert_link_in_tx(
     )
     .await
     .map_err(|e| LocalDbFault::new("locking the pair's match proposal", e))?;
+    if let FiledUnder::RecordOf(opened) = filed {
+        refuse_unless_record_holds_both(tx, opened, low, high).await?;
+    }
 
     let event_id = Uuid::now_v7();
     let body = build_attested_assertion_body(
@@ -414,7 +458,7 @@ mod tests {
             assert_eq!(
                 b.patient_id,
                 lo.to_string(),
-                "an identity event is about subject_a = low"
+                "filed under subject_a = low, by the C1 convention"
             );
             assert_eq!(b.payload["subject_a"], lo.to_string());
             assert_eq!(b.payload["subject_b"], hi.to_string());

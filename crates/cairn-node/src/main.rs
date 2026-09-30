@@ -177,7 +177,8 @@ fn chart_judgement_report(
         out.record_of,
         members.join(", ")
     ));
-    // Judged from one chart, filed under another (#699 (a)): say where the event lives, so
+    // Judged from one chart, filed under another — the open chart carrying a far link (#699 (a)),
+    // or a held subject carrying a judgement made from elsewhere: say where the event lives, so
     // an operator looking for it in a chart's stream looks in the right one.
     if out.record_of != out.filed_under {
         lines.push(format!(
@@ -191,8 +192,9 @@ fn chart_judgement_report(
 /// The two charts and the human key of a `link-charts` / `unlink-charts` judgement.
 #[derive(clap::Args, Clone, Debug)]
 struct ChartPairArgs {
-    /// One chart of the pair (the order does not matter; the output shows the record of the
-    /// chart the judgement is filed under, which is always one held on this node).
+    /// One chart of the pair (the order does not matter). The output shows the record of the
+    /// chart judged from (`unlink-charts --from`), else of the chart the judgement is filed
+    /// under — always one held on this node.
     a: Uuid,
     /// The other chart of the pair.
     b: Uuid,
@@ -209,8 +211,9 @@ struct ChartPairArgs {
 struct UnlinkArgs {
     #[command(flatten)]
     pair: ChartPairArgs,
-    /// The chart you are judging FROM — held here, its record reading both charts as part of
-    /// it (checked; refused otherwise). Needed only when neither chart is held on this node
+    /// The chart you are judging FROM. When it is a third chart (neither of the pair) it must be
+    /// held here with both charts in its record (checked; refused otherwise); naming one of the
+    /// pair needs no further check. Needed only when neither chart is held on this node
     /// (#699 (a)); the judgement is then filed under this chart. The output shows the record
     /// of this chart (else of the chart the judgement is filed under) and names the
     /// filed-under chart when they differ.

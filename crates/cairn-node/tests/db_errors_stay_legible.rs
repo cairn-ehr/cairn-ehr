@@ -207,13 +207,14 @@ fn every_postgres_call_in_the_auto_apply_ceremony_names_what_it_was_doing() {
 /// How many `LocalDbFault`s a chart judgement builds — every postgres call it makes itself,
 /// across the two files it now lives in ([`CHART_LINK_SOURCES`]).
 ///
-/// Seven: in `chart_link.rs` the standing-link read, the proposal-row lock, the submit (whose
+/// Eight: in `chart_link.rs` the standing-link read, the proposal-row lock, the identity lock a
+/// third-chart filing takes before re-reading its record (PR #711 review), the submit (whose
 /// db/005 / db/018 refusal is the message an operator most needs) and the proposal
 /// resolution; in `chart_link/judge.rs` the held-chart read, opening the transaction, and the
 /// commit. The commit is built directly rather than through `.map_err(|e| LocalDbFault::new(`
 /// because it adds the "outcome unknown" context, so this counts the bare form — safe here
 /// because, unlike `auto_apply.rs`, neither file's test module builds one.
-const CHART_LINK_LOCAL_DB_FAULT_SITES: usize = 7;
+const CHART_LINK_LOCAL_DB_FAULT_SITES: usize = 8;
 
 /// The files a chart judgement's postgres calls live in: `judge.rs` was split out of
 /// `chart_link.rs` (house rule 4) with its three sites, so the pin counts both — a site moved

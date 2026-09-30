@@ -142,8 +142,9 @@ async fn an_unlinked_pair_is_not_a_link() {
         .await
         .expect("unlink");
 
-    // The set holding BOTH charts is the one that bites: a single-chart set is emptied by the
-    // both-ends test alone, so only here does `state = 'link'` carry the weight.
+    // The set holding BOTH charts is the one that bites: both ends of the row are in the set, so
+    // only `state = 'link'` can exclude it. (The both-ends test is pinned on its own by
+    // `a_link_with_one_end_outside_the_set_is_not_listed`.)
     let both = ChartSet::new([a, b]).expect("two charts make a set");
     assert!(
         record_edges(&c, &both).await.unwrap().is_empty(),
@@ -171,4 +172,38 @@ async fn a_single_chart_has_no_links() {
     common::submit_registration(&c, &sk_a, &kid_a, a, 1).await;
     let set = person_charts(&c, a).await.unwrap();
     assert!(record_edges(&c, &set).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_link_with_one_end_outside_the_set_is_not_listed() {
+    // `record_edges` lists links whose BOTH ends are in the set (`low = ANY … AND high = ANY …`).
+    // A standing link with one end outside must not appear: the pane would offer a link to a chart
+    // that is not a member of the record shown, and the window's `standing_edge` check would
+    // accept a pair half outside the displayed set. Chain A–B–C; ask for {A, B} and for {B, C}.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    common::submit_registration(&c, &sk_a, &kid_a, a, 1).await;
+    peer_link(&c, &sk_a, &kid_a, a, b, a, 50).await;
+    peer_link(&c, &sk_a, &kid_a, b, cc, a, 51).await;
+
+    for (x, y) in [(a, b), (b, cc)] {
+        let set = ChartSet::new([x, y]).expect("two charts make a set");
+        let pairs: Vec<(Uuid, Uuid)> = record_edges(&c, &set)
+            .await
+            .expect("edges read")
+            .iter()
+            .map(|e| (e.low, e.high))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![canonical_pair(x, y)],
+            "only the link inside the set is listed"
+        );
+    }
 }

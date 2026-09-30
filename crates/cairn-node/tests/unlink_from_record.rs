@@ -10,15 +10,19 @@
 //! here, and db/018 reads the pair from the payload, never from the envelope.
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
-use cairn_event::{generate_key, SigningKey};
-use cairn_node::chart_link::{canonical_pair, unlink_charts, LinkEffect, LinkVerb, Reviewer};
+use cairn_event::{generate_key, sign, SigningKey};
+use cairn_node::chart_link::{
+    assert_link_in_tx, canonical_pair, unlink_charts, FiledUnder, LinkEffect, LinkVerb, Reviewer,
+};
 use cairn_node::db;
 use cairn_node::db_diagnosis::{refusal_scope, RefusalScope};
+use std::time::Duration;
+use tokio::time::timeout;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 mod common;
-use common::{apply_remote_raw, link_assertion_event};
+use common::{apply_remote_attested, apply_remote_raw, link_assertion_event};
 
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
@@ -228,14 +232,19 @@ async fn the_open_chart_must_hold_both_in_its_record() {
     let err = unlink_charts(&mut c, b, cc, Some(d), &who, ORIGIN)
         .await
         .expect_err("D is held, but its record does not hold B and C");
+    // A held chart whose record lacks the pair is a stale or wrong picture (the INPUT), not a
+    // node that has yet to receive something: the same class the in-transaction re-check gives
+    // the same fact, so the clinician is told to reload, never to wait (PR #711 review).
     assert_eq!(
         refusal_scope(&err),
-        Some(RefusalScope::NodeState),
-        "a verdict about this node's state"
+        Some(RefusalScope::Input),
+        "a verdict about the picture judged from"
     );
+    let text = err.to_string();
+    assert!(text.contains(&d.to_string()), "names the open chart");
     assert!(
-        err.to_string().contains(&d.to_string()),
-        "names the open chart"
+        text.contains("does not read both") && text.contains("reload the chart"),
+        "says why, and what to do: {text}"
     );
     assert_eq!(
         standing(&c, b, cc).await,
@@ -276,25 +285,27 @@ async fn without_an_open_chart_a_neither_held_unlink_is_still_refused() {
 async fn a_receiver_without_the_opened_chart_applies_the_unlink() {
     // The audit's sync pin, in one database: a peer filed an unlink under a chart Z that this
     // node has never seen. The sync door admits it anyway and projects the pair from the
-    // PAYLOAD — the envelope's chart is where the event is filed, not what it is about.
+    // PAYLOAD — the envelope's chart is where the event is filed, not what it is about. The
+    // event is the one R2b-2 actually makes — a human's ATTESTED unlink — so the pin also shows
+    // the receiver keeps its rank (decision 5) without the envelope chart (PR #711 review).
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
     let (_a, b, cc) = chain(&c, &sk_a, &kid_a).await;
     let z = Uuid::now_v7();
-    let mut ev = link_assertion_event(&kid_a, b, cc, LinkVerb::Unlink, 60, 0, "peer-z", false);
+    let mut ev = link_assertion_event(&kid_h, b, cc, LinkVerb::Unlink, 60, 0, "peer-z", true);
     ev.patient_id = z.to_string();
-    apply_remote_raw(&c, &sk_a, ev)
+    apply_remote_attested(&c, &sk_h, ev, &sk_h, &kid_h)
         .await
-        .expect("the sync door admits an unlink filed under a chart unseen here");
+        .expect("the sync door admits an attested unlink filed under a chart unseen here");
     assert_eq!(
-        standing(&c, b, cc).await.map(|(state, _)| state),
-        Some("unlink".into()),
-        "projected from the payload's pair"
+        standing(&c, b, cc).await,
+        Some(("unlink".into(), true)),
+        "projected from the payload's pair, still attested"
     );
 }
 
@@ -378,20 +389,21 @@ async fn an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_h
         human_kid: &kid_h,
     };
 
+    // A chart this node does not hold is a verdict about the node (sync may yet deliver it, as
+    // for R2a's "not held here"); a held chart whose record lacks the pair is a verdict about the
+    // picture judged from (PR #711 review). Each names the chart and says which it is.
     let typo = Uuid::now_v7();
-    for opened in [typo, d] {
+    for (opened, scope, why) in [
+        (typo, RefusalScope::NodeState, "is not held here"),
+        (d, RefusalScope::Input, "does not read both"),
+    ] {
         let err = unlink_charts(&mut c, a, b, Some(opened), &who, ORIGIN)
             .await
             .expect_err("a judgement cannot be made from a chart unrelated to the pair");
-        assert_eq!(
-            refusal_scope(&err),
-            Some(RefusalScope::NodeState),
-            "a verdict about this node's state"
-        );
-        assert!(
-            err.to_string().contains(&opened.to_string()),
-            "names the open chart"
-        );
+        assert_eq!(refusal_scope(&err), Some(scope), "{opened}");
+        let text = err.to_string();
+        assert!(text.contains(&opened.to_string()), "names the open chart");
+        assert!(text.contains(why), "says why: {text}");
     }
     assert_eq!(
         standing(&c, a, b).await,
@@ -399,4 +411,257 @@ async fn an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_h
         "nothing was written"
     );
     assert_eq!(attested_unlinks(&c).await, 0, "no judgement was signed");
+}
+
+/// Register `a`, then two more charts in sort order `lo_chart < hi_chart`, and link `a` to the
+/// NEAR one and the near one to the FAR one — all three held here, the links a peer machine's.
+/// `near_is_low` picks which of the two sorts low, so a test can put the near chart on either
+/// side of the canonical pair. Returns `(a, near, far)`.
+async fn held_chain(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    near_is_low: bool,
+) -> (Uuid, Uuid, Uuid) {
+    // `now_v7` is monotonic within a process, so mint order IS sort order.
+    let (a, lo_chart, hi_chart) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let (near, far) = if near_is_low {
+        (lo_chart, hi_chart)
+    } else {
+        (hi_chart, lo_chart)
+    };
+    common::submit_registration(c, sk, kid, a, 1).await;
+    common::submit_registration(c, sk, kid, near, 2).await;
+    common::submit_registration(c, sk, kid, far, 3).await;
+    peer_link(c, sk, kid, a, near, a, 50).await;
+    peer_link(c, sk, kid, near, far, a, 51).await;
+    (a, near, far)
+}
+
+#[tokio::test]
+async fn the_record_shown_is_the_open_charts_even_when_a_subject_carries_the_filing() {
+    // All three charts held: the far link near–far is filed under a SUBJECT (low, by C1), yet the
+    // record reported back must be A's — the chart on screen — or the window would tell the
+    // clinician reading A that A's own members left "this record". Run with the far chart on
+    // either side of the pair: when it sorts low it carries the filing, and a report of the
+    // FILED-UNDER chart's record ({far}) instead of A's would be caught (PR #711 review).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    for near_is_low in [true, false] {
+        let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+        let (a, near, far) = held_chain(&c, &sk_a, &kid_a, near_is_low).await;
+        let who = Reviewer {
+            human_sk: &sk_h,
+            human_kid: &kid_h,
+        };
+        let out = unlink_charts(&mut c, near, far, Some(a), &who, ORIGIN)
+            .await
+            .expect("the far link unlinks when judged from A");
+        let (lo, _) = canonical_pair(near, far);
+        assert_eq!(out.filed_under, lo, "both held: filed under low (C1)");
+        assert_eq!(out.record_of, a, "the record shown is the open chart's");
+        assert_eq!(
+            out.effect,
+            LinkEffect::TookEffect,
+            "near_is_low={near_is_low}"
+        );
+        let mut expected = [a, near];
+        expected.sort();
+        assert_eq!(
+            out.charts.members(),
+            &expected[..],
+            "A's record is now A and the near chart (near_is_low={near_is_low})"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_split_reads_took_effect_whichever_way_round_the_pair_is_named() {
+    // "Still joined?" is asked of the two SUBJECTS. Asked of anything else — the first-named
+    // chart, or `high`, in the OPEN chart's record — it answers StillJoined for exactly one
+    // orientation of a successful split, because the near chart stays in A's record. So every
+    // orientation is run: the near chart sorting low or high, named first or second.
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    for near_is_low in [true, false] {
+        for near_first in [true, false] {
+            let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+            // Only A is held (the #699 (a) picture); B and C arrive through a peer's links.
+            let a = Uuid::now_v7();
+            let (lo_chart, hi_chart) = (Uuid::now_v7(), Uuid::now_v7());
+            let (near, far) = if near_is_low {
+                (lo_chart, hi_chart)
+            } else {
+                (hi_chart, lo_chart)
+            };
+            common::submit_registration(&c, &sk_a, &kid_a, a, 1).await;
+            peer_link(&c, &sk_a, &kid_a, a, near, a, 50).await;
+            peer_link(&c, &sk_a, &kid_a, near, far, a, 51).await;
+            let who = Reviewer {
+                human_sk: &sk_h,
+                human_kid: &kid_h,
+            };
+            let (x, y) = if near_first { (near, far) } else { (far, near) };
+            let out = unlink_charts(&mut c, x, y, Some(a), &who, ORIGIN)
+                .await
+                .expect("the far link unlinks");
+            assert_eq!(
+                out.effect,
+                LinkEffect::TookEffect,
+                "near_is_low={near_is_low} near_first={near_first}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_third_chart_filing_is_refused_at_the_signing_core_when_its_record_lacks_the_pair() {
+    // `assert_link_in_tx` is public (apply_proposal uses it; a future importer or façade may),
+    // so the one rule a `RecordOf` filing rests on — the chart's record holds both subjects — is
+    // checked THERE, not only by `judge`. Here the core is called directly with a held chart D
+    // whose record is just {D}: without that check D would carry an identity event about two
+    // strangers, at D's sensitivity grade (PR #711 review).
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (_a, b, cc) = chain(&c, &sk_a, &kid_a).await;
+    let d = Uuid::now_v7();
+    common::submit_registration(&c, &sk_a, &kid_a, d, 2).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let (lo, hi) = canonical_pair(b, cc);
+    let hlc = db::next_hlc(&c, ORIGIN).await.unwrap();
+    let tx = c.transaction().await.unwrap();
+    let err = assert_link_in_tx(
+        &tx,
+        LinkVerb::Unlink,
+        lo,
+        hi,
+        FiledUnder::RecordOf(d),
+        "chart-review unlinked-by:test",
+        None,
+        &who,
+        hlc,
+    )
+    .await
+    .expect_err("D's record does not hold the pair");
+    tx.rollback().await.unwrap();
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Input));
+    let text = err.to_string();
+    assert!(text.contains(&d.to_string()), "names the chart: {text}");
+    assert_eq!(
+        standing(&c, b, cc).await,
+        Some(("link".into(), false)),
+        "nothing was written"
+    );
+    assert_eq!(attested_unlinks(&c).await, 0, "no judgement was signed");
+}
+
+#[tokio::test]
+async fn a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed() {
+    // The third-chart filing rests on A's record holding B and C. A peer's A–B unlink can arrive
+    // through the sync door at any moment; a re-read that is merely INSIDE the judgement's
+    // READ COMMITTED transaction can still read the record before that peer commits, and then
+    // file B–C under A after A's record has stopped holding either (PR #711 review, finding 1).
+    // The re-read must therefore come after taking db/018's CARNLK, the one lock every identity
+    // apply holds until it commits.
+    //
+    // Deterministic, not timing-based: T1 (a second connection) holds CARNLK; the judgement is
+    // fired and observed PARKED on that advisory lock (`pg_stat_activity`); only then does T1
+    // apply the peer's A–B unlink and commit. With the re-read before the lock, the judgement had
+    // already passed it and files under A; with the re-read after the lock, it sees the new record
+    // and refuses. (T1 applies the unlink only AFTER the judgement parks: the sync door's clock
+    // merge row-locks the node clock, which would otherwise block the judgement's own clock tick
+    // BEFORE its transaction and hide the race.)
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b, cc) = chain(&c, &sk_a, &kid_a).await;
+
+    let mut t1 = db::connect(&base)
+        .await
+        .expect("second connection to CAIRN_TEST_PG");
+    let t1_tx = t1.transaction().await.unwrap();
+    t1_tx
+        .execute("SELECT pg_advisory_xact_lock(x'4341524E4C4B'::bigint)", &[])
+        .await
+        .unwrap();
+
+    let judgement_pid: i32 = c
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let (sk_h_owned, kid_h_owned) = (sk_h.clone(), kid_h.clone());
+    let handle = tokio::spawn(async move {
+        let who = Reviewer {
+            human_sk: &sk_h_owned,
+            human_kid: &kid_h_owned,
+        };
+        let out = unlink_charts(&mut c, b, cc, Some(a), &who, ORIGIN).await;
+        (c, out)
+    });
+
+    // Wait (bounded) until the judgement is parked on an ADVISORY lock — CARNLK, which T1 holds.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let row = t1_tx
+            .query_one(
+                "SELECT wait_event_type, wait_event FROM pg_stat_activity WHERE pid = $1",
+                &[&judgement_pid],
+            )
+            .await
+            .unwrap();
+        let (kind, event): (Option<String>, Option<String>) = (row.get(0), row.get(1));
+        if kind.as_deref() == Some("Lock") && event.as_deref() == Some("advisory") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the judgement never parked on CARNLK within 5s (last: {kind:?}/{event:?})"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // The peer's unlink of A–B, delivered through the sync door inside T1, then committed.
+    let ev = link_assertion_event(&kid_a, a, b, LinkVerb::Unlink, 70, 0, "peer-mid", false);
+    let signed = sign(&ev, &sk_a).unwrap();
+    t1_tx
+        .execute("SELECT apply_remote_event($1)", &[&signed.signed_bytes])
+        .await
+        .expect("the peer's unlink is admitted");
+    t1_tx.commit().await.unwrap();
+
+    let (_c, out) = timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("the judgement finished within 5s of CARNLK being released")
+        .expect("the spawned task did not panic");
+    let err = out.expect_err("A's record no longer holds B and C: nothing may be filed under A");
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Input));
+    let text = err.to_string();
+    assert!(text.contains("reload the chart"), "{text}");
+    assert_eq!(
+        standing(&t1, b, cc).await,
+        Some(("link".into(), false)),
+        "B–C still stands: nothing was written"
+    );
+    assert_eq!(attested_unlinks(&t1).await, 0, "no judgement was signed");
 }
