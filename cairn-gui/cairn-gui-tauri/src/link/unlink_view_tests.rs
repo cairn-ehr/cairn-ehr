@@ -271,3 +271,66 @@ fn the_link_gone_text_says_nothing_was_done() {
     assert!(LINK_GONE.contains("no longer part of this record"));
     assert!(LINK_GONE.contains("nothing was done"));
 }
+
+/// THE UNLINK PANEL'S DRIFT GUARD — the guard `commands.rs` keeps for `main.js` and
+/// `funnel::commands` for `funnel.js` (PR #711 review). `unlink.js` is untyped, so a Rust field
+/// rename renders `undefined` instead of breaking the build. Here that is not cosmetic:
+/// `report.reload` undefined sends every split down the Outranked path (panel left open, chart
+/// never re-read beside an "Unlinked" sentence), and `failure.retry` undefined leaves the Unlink
+/// button live on a verdict.
+#[test]
+fn unlink_js_reads_no_field_the_backend_does_not_send() {
+    use crate::commands::tests::fields_read_in;
+    use crate::funnel::view::{ErrorView, Retry};
+    use std::collections::BTreeSet;
+    let js = include_str!("../../src-ui/unlink.js");
+    let view = unlink_comparison_view(parts(), &set(&[1, 2]), id(1), id(2));
+    let keys = |v: serde_json::Value| -> BTreeSet<String> {
+        v.as_object()
+            .expect("payload must serialize to an object")
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let payloads = [
+        ("view", serde_json::to_value(&view).unwrap()),
+        ("col", serde_json::to_value(&view.columns[0]).unwrap()),
+        ("row", serde_json::to_value(&view.rows[0]).unwrap()),
+        (
+            "report",
+            serde_json::to_value(LinkReportView {
+                sentence: String::new(),
+                reload: true,
+            })
+            .unwrap(),
+        ),
+        (
+            "failure",
+            serde_json::to_value(ErrorView {
+                text: String::new(),
+                retry: Retry::Never,
+            })
+            .unwrap(),
+        ),
+    ];
+    for (binding, payload) in payloads {
+        let available = keys(payload);
+        let read = fields_read_in(js, binding);
+        assert!(
+            !read.is_empty(),
+            "unlink.js no longer reads `{binding}` at all — rename the binding in this guard, \
+             don't delete it"
+        );
+        for field in read {
+            assert!(
+                available.contains(&field),
+                "unlink.js reads `{binding}.{field}`, which the backend does not send. \
+                 Available: {available:?}"
+            );
+        }
+    }
+    // The other direction, for the fields whose SILENCE is the dangerous failure.
+    assert!(fields_read_in(js, "report").contains("reload"));
+    assert!(fields_read_in(js, "failure").contains("retry"));
+    assert!(fields_read_in(js, "view").contains("can_unlink"));
+}

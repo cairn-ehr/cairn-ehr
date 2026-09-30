@@ -11,6 +11,10 @@
 //! other chart was shown by a list (`shown`), it is not already in the record, and — for the
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
+//!
+//! Its sibling gesture, "Not the same person…" (R2b-2 — undo ONE link of a combined record),
+//! lives in `unlink.rs` with its own rule order and its own panel; `record_links.rs` reads the
+//! "How these charts are linked" list both gestures sit beside, and `unlink_view.rs` words it.
 pub mod record_links;
 pub mod search;
 pub mod unlink;
@@ -68,7 +72,8 @@ enum Act {
 /// For Compare, `charts` is the medication list's displayed set, and a changed set keeps the
 /// list's own wording ("reload the chart"). For Link, `charts` is the set the COMPARISON was
 /// built over (`ComparisonView::left_charts`, sent back by the webview), so a changed set means
-/// the comparison is stale and is worded [`THIS_CHANGED`] ("compare again") — final review I1.
+/// the comparison is stale and is worded [`THIS_CHANGED`] ("reload the chart and compare
+/// again") — final review I1.
 /// An unreadable set is a window fault, not a change, and keeps its own wording either way.
 async fn resolve_pair(
     state: &AppState,

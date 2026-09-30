@@ -331,7 +331,7 @@ The repair path's second §1.2 figure. **Live only** — fixture charts are neve
 chart has no "How these charts are linked" list and nothing to unlink; there is no `--mock` variant to
 time. Set up a wrongly linked pair, then open one of its charts:
 
-`$NODE` is section 3's (`cairn-node --conn $CONN --key $NODE_KEY`); `link-charts` takes only the
+`$NODE` is section 2's (`cairn-node --conn $CONN --key $NODE_KEY`); `link-charts` takes only the
 human's `--attester-key` (the top-level `--key` is already in `$NODE`). Register three charts, then
 chain them A–B and B–C so that the wrong link (B–C) is the one that does not touch the chart you open:
 

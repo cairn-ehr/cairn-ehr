@@ -12,7 +12,9 @@ use serde::Serialize;
 use uuid::Uuid;
 
 /// Refused because the link is no longer one of the record's standing links — a peer's unlink
-/// landed, or this clinician already undid it — so there is nothing left to judge.
+/// landed, or this clinician already undid it — so there is nothing left to judge. Also the
+/// answer, by design, to a link id that does not parse and to a Compare with no database: in each
+/// case there is no standing link to act on, and nothing is guessed.
 pub const LINK_GONE: &str =
     "that link is no longer part of this record — nothing was done; reload the chart";
 
@@ -171,11 +173,12 @@ fn effect_report(
             let left = ids_not_in(before, after);
             let sentence = if left.is_empty() {
                 // An unlink that took effect but split nothing contradicts itself; say so
-                // rather than claim a split (mirrors `effect_report`'s link StillJoined arm).
+                // rather than claim a split (mirrors `view.rs`'s `effect_report`, its link
+                // StillJoined arm). Worded to be true wherever it lands: when the answer arrives
+                // with another chart open, nothing is re-read for it.
                 format!(
                     "Recorded that charts {low} and {high} are different people, but this record \
-                     did not change the way an unlink should — the chart is being re-read so you \
-                     can see what it now combines."
+                     did not change the way an unlink should — check what the chart now combines."
                 )
             } else {
                 format!(

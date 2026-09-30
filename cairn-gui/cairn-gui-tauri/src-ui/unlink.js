@@ -134,53 +134,70 @@ async function unlinkCompared() {
   // Disabled for the whole round trip: a double click must never send a second judgement.
   button.disabled = true;
   try {
-    const report = await invoke("unlink_records", {
-      patientId: sent.patientId,
-      charts: sent.charts,
-      low: sent.low,
-      high: sent.high,
-    });
-    const place = unlinkAnswerPlace(sent, token);
-    if (place === "elsewhere") {
-      const text = "For chart " + sent.patientId + ": " + report.sentence;
-      sayAnywhere(text);
-      if (unlinkChanged(sent, report)) await refresh(text);
-    } else if (report.reload) {
-      // The record changed under this chart: the outcome goes on the chart's own line, the
-      // panel closes, and the list is re-read.
-      say(report.sentence);
-      // `false`: the list is about to be re-drawn, which destroys any button focus would land
-      // on. Focus goes to the patient heading once the re-read is done.
-      if (!el("unlink-panel").hidden) closeUnlinkPanel(false);
-      await refresh(report.sentence);
-      if (!el("unlink-panel").hidden || !el("link-panel").hidden || el("chart-view").hidden) return;
-      const heading = el("patient-heading");
-      heading.tabIndex = -1;
-      heading.focus();
-    } else if (place === "chart") {
-      say(report.sentence);
-    } else {
-      // Outranked: the panel stays open and says this ONCE.
-      setMessage(el("unlink-status"), report.sentence);
+    let report;
+    // ONLY the backend call is caught: once it returns, the judgement is recorded, and a fault in
+    // the drawing below must never be reported as the unlink failing (PR #711 review).
+    try {
+      report = await invoke("unlink_records", {
+        patientId: sent.patientId,
+        charts: sent.charts,
+        low: sent.low,
+        high: sent.high,
+      });
+    } catch (failure) {
+      showUnlinkFailure(sent, token, failure, button);
+      return;
     }
-  } catch (failure) {
-    const place = unlinkAnswerPlace(sent, token);
-    const text = failureText(failure);
-    if (place === "elsewhere") {
-      sayAnywhere("For chart " + sent.patientId + ": " + text);
-    } else if (place === "chart") {
-      say(text);
-    } else {
-      setMessage(el("unlink-status"), text);
-      // A verdict, or a node whose state must change first, will refuse the same comparison
-      // again: take the button away. A bare IPC failure or a locked key keeps it.
-      if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
-        unlinkCompared_ = null;
-        button.hidden = true;
-      }
-    }
+    await showUnlinkReport(sent, token, report);
   } finally {
     button.disabled = false;
+  }
+}
+
+/** A recorded unlink: say what it did, where the clinician is now, and re-read if it changed. */
+async function showUnlinkReport(sent, token, report) {
+  const place = unlinkAnswerPlace(sent, token);
+  if (place === "elsewhere") {
+    const text = "For chart " + sent.patientId + ": " + report.sentence;
+    sayAnywhere(text);
+    if (unlinkChanged(sent, report)) await refresh(text);
+  } else if (report.reload) {
+    // The record changed under this chart: the outcome goes on the chart's own line, the
+    // panel closes, and the list is re-read.
+    say(report.sentence);
+    // `false`: the list is about to be re-drawn, which destroys any button focus would land
+    // on. Focus goes to the patient heading once the re-read is done.
+    if (!el("unlink-panel").hidden) closeUnlinkPanel(false);
+    await refresh(report.sentence);
+    if (!el("unlink-panel").hidden || !el("link-panel").hidden || el("chart-view").hidden) return;
+    const heading = el("patient-heading");
+    heading.tabIndex = -1;
+    heading.focus();
+  } else if (place === "chart") {
+    say(report.sentence);
+  } else {
+    // Outranked (`reload` false — see `LinkReportView::reload`): the panel stays open and says
+    // this ONCE.
+    setMessage(el("unlink-status"), report.sentence);
+  }
+}
+
+/** An unlink the backend refused or never reached: nothing was recorded. */
+function showUnlinkFailure(sent, token, failure, button) {
+  const place = unlinkAnswerPlace(sent, token);
+  const text = failureText(failure);
+  if (place === "elsewhere") {
+    sayAnywhere("For chart " + sent.patientId + ": " + text);
+  } else if (place === "chart") {
+    say(text);
+  } else {
+    setMessage(el("unlink-status"), text);
+    // A verdict, or a node whose state must change first, will refuse the same comparison
+    // again: take the button away. A bare IPC failure or a locked key keeps it.
+    if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
+      unlinkCompared_ = null;
+      button.hidden = true;
+    }
   }
 }
 

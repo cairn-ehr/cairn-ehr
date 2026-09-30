@@ -8,7 +8,8 @@
 //!
 //! Both commands apply the chart-command rules IN THIS ORDER, each pinned by a test: the chart
 //! on screen (`displayed_patient`), the displayed set (`check_displayed_set`), the link is still
-//! one of that set's standing links (`record_edges`). Only then fixture mode, then the key.
+//! one of that set's standing links (`record_edges`). The Unlink then checks fixture mode, then
+//! the key; the Compare, which writes nothing, needs neither (with no database it refuses).
 //! The link is named by its two charts; the node is told which chart it is judged FROM, so an
 //! unlink of a link whose charts are not held here is filed under the open chart (#699 (a)).
 
@@ -33,8 +34,21 @@ enum Act {
     Unlink,
 }
 
-/// The screen checks both commands share, in the order the module doc gives. Returns the
-/// opened chart, its displayed set, and the link's canonical `(low, high)`.
+/// What [`resolve_edge`] establishes: every field named, because three chart ids of one type
+/// side by side is a swap that compiles — and at the node call a swap would sign an attested
+/// "different people" about the wrong pair (PR #711 review).
+struct ResolvedEdge {
+    /// The chart on screen: the one the judgement is made FROM.
+    opened: Uuid,
+    /// Its displayed set, as checked against what the webview sent.
+    set: ChartSet,
+    /// The link's lower chart (canonical order).
+    low: Uuid,
+    /// The link's higher chart.
+    high: Uuid,
+}
+
+/// The screen checks both commands share, in the order the module doc gives.
 ///
 /// For Compare a changed set keeps the list's own wording ("reload the chart"); for Unlink
 /// `charts` is the set the COMPARISON was made from, so a change means the comparison is stale
@@ -47,7 +61,7 @@ async fn resolve_edge(
     charts: &[String],
     low: &str,
     high: &str,
-) -> Result<(Uuid, ChartSet, Uuid, Uuid), ErrorView> {
+) -> Result<ResolvedEdge, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let set = check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(|e| {
         if act == Act::Unlink && e == CHANGED {
@@ -62,7 +76,12 @@ async fn resolve_edge(
     let (low, high) = cairn_node::chart_link::canonical_pair(low, high);
     let edges = read_record_edges(state, &set).await;
     standing_edge(edges, low, high, act)?;
-    Ok((patient, set, low, high))
+    Ok(ResolvedEdge {
+        opened: patient,
+        set,
+        low,
+        high,
+    })
 }
 
 /// The membership stage as a pure function: `low`/`high` must already be canonical. A failed
@@ -101,21 +120,22 @@ pub async fn compare_linked_impl(
     low: &str,
     high: &str,
 ) -> Result<UnlinkComparisonView, ErrorView> {
-    let (_, set, low, high) =
-        resolve_edge(state, Act::Compare, patient_id, &charts, low, high).await?;
+    let edge = resolve_edge(state, Act::Compare, patient_id, &charts, low, high).await?;
     // Fixture charts are never linked, so `resolve_edge` cannot pass without a database;
     // refuse defensively rather than invent a comparison.
     let Some(db) = state.db.as_ref() else {
         return Err(refused(LINK_GONE));
     };
     let db = db.lock().await;
-    let (l, h) = (ChartSet::single(low), ChartSet::single(high));
+    let (l, h) = (ChartSet::single(edge.low), ChartSet::single(edge.high));
     let parts = UnlinkParts {
         low: as_text(cairn_node::patient::compare::chart_facts(&*db, &l).await),
         high: as_text(cairn_node::patient::compare::chart_facts(&*db, &h).await),
         findings: as_text(cairn_node::patient::compare::cross_vetoes(&*db, &l, &h).await),
     };
-    Ok(unlink_comparison_view(parts, &set, low, high))
+    Ok(unlink_comparison_view(
+        parts, &edge.set, edge.low, edge.high,
+    ))
 }
 
 /// "Unlink — not the same person" — the attested judgement on ONE link, then what it did.
@@ -126,8 +146,7 @@ pub async fn unlink_impl(
     low: &str,
     high: &str,
 ) -> Result<LinkReportView, ErrorView> {
-    let (patient, set, low, high) =
-        resolve_edge(state, Act::Unlink, patient_id, &charts, low, high).await?;
+    let edge = resolve_edge(state, Act::Unlink, patient_id, &charts, low, high).await?;
     if state.is_mock() {
         return Err(refused(
             "fixture mode: this window is showing mock data and cannot write",
@@ -152,9 +171,9 @@ pub async fn unlink_impl(
     // stopwatch measures this gesture.
     let outcome = cairn_node::chart_link::unlink_charts(
         &mut db,
-        low,
-        high,
-        Some(patient),
+        edge.low,
+        edge.high,
+        Some(edge.opened),
         &reviewer,
         &state.node_origin,
     )
@@ -162,9 +181,9 @@ pub async fn unlink_impl(
     .map_err(|e| unlink_error_view(&e))?;
     Ok(unlink_report(
         outcome.effect,
-        low,
-        high,
-        &set,
+        edge.low,
+        edge.high,
+        &edge.set,
         &outcome.charts,
     ))
 }

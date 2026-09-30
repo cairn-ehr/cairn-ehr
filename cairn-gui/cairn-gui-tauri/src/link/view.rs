@@ -25,10 +25,13 @@ pub const OTHER_CHANGED: &str =
 /// Refused because THIS record's charts changed between Compare and Link (final review I1).
 /// The Link sends back the left-hand set the comparison was built over, so a chart that joined
 /// this record after Compare (a peer's link, re-read by a sign-off's refresh) is caught here
-/// rather than signed over sight unseen. Worded like [`OTHER_CHANGED`], not like the medication
-/// list's "reload the chart": what was not seen is the comparison, so the remedy is to compare.
+/// rather than signed over sight unseen. The remedy is reload THEN compare: a Compare sends the
+/// list on screen (`renderedCharts`), which the same change may have left stale — "compare
+/// again" alone would be refused a second time with the list's own "reload the chart" (PR #711
+/// review). Shared by the unlink panel, whose Unlink sends back its comparison's set the same way.
 pub const THIS_CHANGED: &str =
-    "this record changed while you were comparing — nothing was done; compare again";
+    "this record changed while you were comparing — nothing was done; reload the chart and \
+     compare again";
 
 /// One chart's column heading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -87,6 +90,10 @@ pub struct ComparisonParts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LinkReportView {
     pub sentence: String,
+    /// Re-read the chart. `false` means the judgement did NOT change the record — only
+    /// [`LinkEffect::Outranked`] — and the webview relies on exactly that: `link.js` and
+    /// `unlink.js` keep the panel open and show the sentence there once, instead of closing it and
+    /// re-reading. A new `false` case must be worded for that panel.
     pub reload: bool,
 }
 
