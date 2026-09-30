@@ -316,7 +316,7 @@ single sample tells you nothing about the tail.
       link ("Recorded, but NOT in effect …") — is both SHOWN and announced in the panel's status
       line, never silent. After a refusal that cannot change on retry, the Link button is gone
       (compare again to get it back). A locked key is NOT such a refusal: the button stays —
-      unlock, then press Link again.
+      unlock, then press "Link" again.
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to "Same person as…"; opening
       or switching to a different chart closes the panel, and focus goes to the new chart's
       heading (or to the front door) — not to "Same person as…".
@@ -348,7 +348,11 @@ cargo run --release -p cairn-gui-tauri -- \
     --key "$NODE_KEY" --attester-key /tmp/dr-a.key
 ```
 
-Open A and unlink **B–C**, the link on the list that does not touch the chart you opened. (For a
+Open A and unlink **B–C**, the link on the list that does not touch the chart you opened. **Note:**
+this setup registers all three charts locally, so the unlink is filed under a subject (B or C), NOT under
+the opened chart — it does not exercise the third-chart filing of ADR-0077 (#699 (a)). That live pass —
+B and C held only through a peer, the unlink filed under the opened A — is still OWED (the human live
+Tauri-IPC pass). To try a cycle instead, also `link-charts "$A" "$C"` in the setup. (For a
 single-link run, register only A and B and link them.) `/tmp/dr-a.key` is the human key enrolled
 earlier in this runbook; substitute your own.
 
@@ -356,7 +360,7 @@ Start the stopwatch at the press of **"Not the same person…"** on a link's lin
 WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then
 lays the two charts side by side. Stop it when the outcome line reads "Unlinked — chart(s) … are no
 longer part of this record" (or "Recorded that charts … are different people — but they still read as
-one record through other links …" for a chain, a legitimate outcome that also stops the clock).
+one record through other links …" for a cycle (A–B, B–C, A–C: unlinking one edge leaves the other two joining the charts), a legitimate outcome that also stops the clock).
 
 1. Press **"Not the same person…"** on the wrong link's line.
 2. Read the panel: findings (if any), then the two-column comparison of the two charts.

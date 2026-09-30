@@ -31,8 +31,10 @@ pub enum LinkEffect {
     /// human judgement (higher HLC; e.g. a peer's, from a clock ahead of this node's). The
     /// direct edge still stands as that other judgement says. Judging again is NOT a
     /// no-op: both sync doors merge the peer's HLC into this node's clock, so the next local
-    /// judgement is stamped above the peer's and would outrank it — overruling the colleague
-    /// without settling anything. It is a disagreement between humans for a human to settle.
+    /// judgement is stamped above the peer's and would NORMALLY outrank it — overruling the
+    /// colleague without settling anything. "Normally", because the sync door clamps its
+    /// merge at `cairn_max_hlc_drift_ms()` (24 h) of drift: a peer further ahead than that
+    /// is still admitted with its full wall clock and keeps outranking a local retry. It is a disagreement between humans for a human to settle.
     Outranked,
     /// An UNLINK that stands on its own edge, but the second chart still reads as part of
     /// the first's record through ANOTHER link (A–C–B: unlinking A from B leaves A–C and
@@ -230,9 +232,13 @@ async fn judge(
             .await
             .context("re-reading the open chart's record inside the judgement")?;
         if !record_holds_both(&record, a, b) {
-            return Err(node_state_refusal(format!(
+            // A changed record is stale INPUT (the caller judged from a picture that no
+            // longer holds), not a not-yet node state: the same call refuses the same way
+            // until the caller re-reads, so it is a verdict about the input.
+            return Err(deliberate_refusal(format!(
                 "chart {o}'s record no longer reads both {a} and {b} as part of it — the \
-                 record changed while the judgement was being made; open it again"
+                 record changed while you were judging — nothing was done; reload the chart \
+                 and judge again"
             )));
         }
     }

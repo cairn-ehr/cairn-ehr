@@ -378,7 +378,7 @@ runbook section 9 (a human act).
   drops in-flight Compare and search answers; a refusal that cannot change on retry (`never` /
   `after_operator`) hides the Link button and forgets the comparison, leaving it on screen with the
   sentence. A LOCKED KEY is not such a refusal (`Retry::Now`): the button stays for after the
-  unlock. Outranked read "pressing Link again records another judgement but changes nothing" as first built — corrected in R2b-2: a retry records a newer judgement that overrules the other.
+  unlock. Outranked read "pressing Link again records another judgement but changes nothing" as first built — corrected in R2b-2: a retry would normally record a newer judgement that overrules the other.
 - **Names and shapes.** The window module is `src/link/` (`mod.rs`, `view.rs` + `view_tests.rs`,
   `search.rs`), not one `link.rs`; `link_report` takes `(effect, charts, compared)`, not
   `&LinkOutcome`, so it can name uncompared charts; `chart_facts`' two `person.rs` reads
@@ -431,7 +431,7 @@ runbook section 9 (a human act).
   to `chart_link/judge.rs` in a pure-move commit (house rule 4: `chart_link.rs` was 722 lines);
   `chart_link/admit.rs` holds the pure admission rule.
 - **Outranked no longer says a retry "changes nothing"** — that was false. Both sync doors merge the peer's
-  HLC (db/020, db/007), so pressing Unlink again records a NEWER judgement that overrules the colleague's; it
+  HLC (db/020, db/007), so pressing Unlink again would normally record a NEWER judgement that overrules the colleague's; it
   does not settle the disagreement. The unlink panel says so, and the same correction was made to R2b-1's link
   sentence (`link/view.rs`) and to `LinkEffect::Outranked`'s doc. (This also corrects the R2b-1 note above.)
 - **A locked key names its own button**: `key_locked_for(button)` (R2b-1's `key_locked` is

@@ -139,7 +139,7 @@ fn outranked_does_not_call_a_retry_a_no_op() {
     assert!(!r.sentence.contains("changes nothing"));
     assert!(r
         .sentence
-        .contains("would record a newer judgement that overrules theirs"));
+        .contains("would normally record a newer judgement that overrules theirs"));
 }
 
 #[test]
@@ -191,6 +191,29 @@ fn still_joined_says_other_links() {
         &set(&[1, 2, 3]),
     );
     assert!(r.sentence.contains("through other links"));
+}
+
+#[test]
+fn still_joined_also_names_charts_that_left_concurrently() {
+    // Chart 4 was in the comparison but is gone from the record now (a peer unlinked it).
+    let r = unlink_report(
+        LinkEffect::StillJoined,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3, 4]),
+        &set(&[1, 2, 3]),
+    );
+    assert!(r.sentence.contains("also no longer part of this record"));
+    assert!(r.sentence.contains(&id(4).to_string()));
+    // Nothing left: no such sentence.
+    let same = unlink_report(
+        LinkEffect::StillJoined,
+        id(2),
+        id(3),
+        &set(&[1, 2, 3]),
+        &set(&[1, 2, 3]),
+    );
+    assert!(!same.sentence.contains("no longer part"));
 }
 
 #[test]

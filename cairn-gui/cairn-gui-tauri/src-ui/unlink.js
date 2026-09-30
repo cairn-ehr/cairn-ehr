@@ -153,7 +153,7 @@ async function unlinkCompared() {
       // on. Focus goes to the patient heading once the re-read is done.
       if (!el("unlink-panel").hidden) closeUnlinkPanel(false);
       await refresh(report.sentence);
-      if (!el("unlink-panel").hidden || el("chart-view").hidden) return;
+      if (!el("unlink-panel").hidden || !el("link-panel").hidden || el("chart-view").hidden) return;
       const heading = el("patient-heading");
       heading.tabIndex = -1;
       heading.focus();

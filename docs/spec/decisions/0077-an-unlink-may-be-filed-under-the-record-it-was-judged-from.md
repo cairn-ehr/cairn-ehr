@@ -49,15 +49,17 @@ selection (db/020, db/051, `cairn-sync`), the medium and the plaintext twin read
 
 - **No wire change, no new event type, no SQL object** (`SCHEMA_GENERATION` stays 55). The envelope's chart
   was always free to differ from the payload subjects; nothing depended on it not doing so.
-- The event sits in the **opened chart's stream** and takes that chart's effective sensitivity grade
-  (`cairn_effective_sensitivity`, db/048). Today the other subject's grade is already ignored, so no new
-  gap opens.
+- The event sits in the **opened chart's stream**. For a `RecordOf` filing `cairn_effective_sensitivity`
+  (db/048) keys chart-scoped grades on the envelope, so the unlink takes the OPENED chart's grade and
+  ignores BOTH subjects' grades (before, one subject's grade always applied). The exposure is bounded:
+  the payload and the twin carry only the two subjects' ids, which the opened chart's reader already
+  sees as member lines of the same record.
 - A receiver that lacks the opened chart counts the event as "has events" — an existing pattern for any
   replicated event — and still applies the unlink from its payload.
 - A reprojection reproduces the third-chart unlink from the payload, and a chain split from the opened
   chart reports *TookEffect* while an unlink on a cycle honestly reports *StillJoined*.
-- A retry after *Outranked* records a **newer** judgement that overrules the colleague's (HLC merge at both
-  sync doors), so the window never says a retry "changes nothing".
+- A retry after *Outranked* would normally record a **newer** judgement that overrules the colleague's (HLC
+  merge at both sync doors, clamped at 24 h of drift, so a peer further ahead keeps outranking), so the window never says a retry "changes nothing".
 
 **Rejected:** relaxing `link` as well (a link across charts nobody here holds is a claim this node cannot
 even display); silently ignoring an unrelated `--from`; a per-member "unlink" that guesses which link is

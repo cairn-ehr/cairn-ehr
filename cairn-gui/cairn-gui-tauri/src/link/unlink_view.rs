@@ -118,6 +118,19 @@ pub fn unlink_report(
             joined.join(", ")
         );
     }
+    // A StillJoined unlink says nothing about who left, but a peer's concurrent unlink may
+    // have taken charts out of the record: name them too (TookEffect already names its own
+    // leavers inside `effect_report`), so a shrunken record is reviewed, not assumed.
+    if effect == LinkEffect::StillJoined {
+        let left = ids_not_in(before, after);
+        if !left.is_empty() {
+            view.sentence = format!(
+                "{} Chart(s) {} are also no longer part of this record.",
+                view.sentence,
+                left.join(", ")
+            );
+        }
+    }
     view
 }
 
@@ -172,7 +185,7 @@ fn effect_report(
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
                        are the same person. The two judgements disagree — settle it with the \
-                       person who made the other one. Unlinking again would record a newer \
+                       person who made the other one. Unlinking again would normally record a newer \
                        judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,

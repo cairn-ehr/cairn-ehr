@@ -23,7 +23,7 @@
 >    #699 if he agrees ADR-0077 resolves it; no closing keyword was used).
 > 2. **Open repair-path issues** (filed by R1–R2b-1): **#708** (`link_charts` should re-check both compared sets in its
 >    transaction + a DB-gated window test) · **#709** (a link outcome can go unseen when it lands after the chart
->    changed) · **#710** (R2b-1 review residuals) · **#699** (DECIDED (a), built in R2b-2, ADR-0077 — awaiting the
+>    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: the `RecordOf` in-transaction race test, `chart_set.rs` size, window→node wiring test) · **#699** (DECIDED (a), built in R2b-2, ADR-0077 — awaiting the
 >    maintainer's close) · **#700** (auto-apply's skip race handled on PR #698; a skipped proposal stays `pending`) ·
 >    **#701** (db/054's doubted-link check should read `pl.attested`) · **#702** (floor refusals as bare `db error` —
 >    pinned) · **#703** (the generation heal can be used up by `cairn-sync init`) · **#704** (make db/019's
@@ -109,7 +109,7 @@
 >   `a_link_is_never_filed_under_a_third_chart` and `an_unlink_neither_held_is_filed_under_the_opened_record_that_holds_both`,
 >   `record_holds_both`'s `a_record_holds_both_only_when_it_contains_each`, and `tests/unlink_from_record.rs`
 >   (`the_open_chart_must_hold_both_in_its_record`, `without_an_open_chart_a_neither_held_unlink_is_still_refused`).
->   The in-transaction re-read has no race test (only the pure helper is unit-tested).
+>   The in-transaction re-read has no race test (only the pure helper is unit-tested) — deferred, #712.
 > - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under chart — else every
 >   successful A–B–C split reads `StillJoined`. Pinned by `unlink_from_record.rs::a_chain_split_from_the_opened_chart_took_effect`
 >   and `::a_link_on_a_cycle_is_recorded_and_says_still_joined`, and `tests/chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
@@ -123,8 +123,8 @@
 > - **The unlink panel is its OWN `<section>`, and the two panels are mutually exclusive** (opening either closes
 >   the other); after a successful unlink focus goes to the patient heading, not `<body>`. Walked headless, no
 >   committed JS harness (#332).
-> - **`Outranked` never says a retry "changes nothing"** — a retry records a NEWER judgement that overrules the
->   other (HLC merge at both sync doors). Pinned by `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op`
+> - **`Outranked` never says a retry "changes nothing"** — a retry would normally record a NEWER judgement that
+>   overrules the other (HLC merge at both sync doors, clamped at 24 h of drift — a peer further ahead keeps outranking). Pinned by `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op`
 >   (and `view_tests.rs`'s link twin). A locked key names its own button (`key_locked_for`;
 >   `view_tests.rs::a_locked_key_names_the_button_that_was_pressed`); `standing_edge`'s unread list is
 >   `Retry::Now`, never `LINK_GONE` (`unlink.rs::an_unread_edge_list_is_retryable_and_not_a_verdict`).
@@ -460,7 +460,7 @@ review), controller ran the sweeps and the final review.
 - **⇒ Check `git ls-files` before declaring walk debris untracked** (`.playwright-mcp/` had two committed files; now
   removed and ignored).
 - **Mechanics:** `chart_link.rs` split (`admit.rs` pure, `judge.rs` entry points; 446 lines now); `cairn-gui-tauri/src/chart_set.rs`
-  (598) remains over 500 (deferred); runbook §10's stopwatch (≤ 15 s) is a HUMAN act.
+  (598) remains over 500 (deferred, #712); runbook §10's stopwatch (≤ 15 s) is a HUMAN act.
 
 ### 2026-09-28 → 09-29 — R2b-1: the "Same person as…" panel (PR #707)
 

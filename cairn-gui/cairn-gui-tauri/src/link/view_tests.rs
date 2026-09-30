@@ -333,7 +333,7 @@ fn a_link_that_took_effect_reloads_and_one_outranked_does_not() {
     );
     assert!(
         lost.sentence
-            .contains("would record a newer judgement that overrules theirs"),
+            .contains("would normally record a newer judgement that overrules theirs"),
         "outranked link should say a retry would overrule"
     );
 }
@@ -533,10 +533,10 @@ fn a_locked_key_is_not_a_verdict() {
 fn a_locked_key_names_the_button_that_was_pressed() {
     assert_eq!(
         key_locked().text,
-        "your signing key is locked — unlock it, then press Link again"
+        "your signing key is locked — unlock it, then press \"Link\" again"
     );
     let e = key_locked_for("Unlink — not the same person");
     assert_eq!(e.retry, Retry::Now);
     assert!(e.text.contains("Unlink"), "it names the unlink button");
-    assert!(!e.text.contains("press Link"), "never the opposite act");
+    assert!(!e.text.contains("press \"Link\""), "never the opposite act");
 }

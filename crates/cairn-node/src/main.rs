@@ -164,7 +164,7 @@ fn chart_judgement_report(
         ),
         (_, LinkEffect::StillJoined) => format!(
             "recorded that {a} and {b} are different people — but they still read as one \
-             record through another link; unlink that link too"
+             record through other links; unlink the link that is wrong"
         ),
     };
     let mut lines = vec![format!("{first}; event {}", out.event_id)];
@@ -192,8 +192,7 @@ fn chart_judgement_report(
 #[derive(clap::Args, Clone, Debug)]
 struct ChartPairArgs {
     /// One chart of the pair (the order does not matter; the output shows the record of the
-    /// chart judged from — `--from`, else the chart the judgement is filed under, which is
-    /// always one held on this node — and names the filed-under chart when they differ).
+    /// chart the judgement is filed under, which is always one held on this node).
     a: Uuid,
     /// The other chart of the pair.
     b: Uuid,
@@ -212,7 +211,9 @@ struct UnlinkArgs {
     pair: ChartPairArgs,
     /// The chart you are judging FROM — held here, its record reading both charts as part of
     /// it (checked; refused otherwise). Needed only when neither chart is held on this node
-    /// (#699 (a)); the judgement is then filed under this chart. The output shows its record.
+    /// (#699 (a)); the judgement is then filed under this chart. The output shows the record
+    /// of this chart (else of the chart the judgement is filed under) and names the
+    /// filed-under chart when they differ.
     #[arg(long)]
     from: Option<Uuid>,
 }
@@ -6955,6 +6956,10 @@ mod tests {
         );
         assert!(!joined[0].contains("unlinked"), "{joined:?}");
         assert!(joined[0].contains("still read as one record"), "{joined:?}");
+        assert!(
+            joined[0].contains("through other links; unlink the link that is wrong"),
+            "a cycle can hold several links: {joined:?}"
+        );
         assert!(
             joined[0].contains(&a.to_string()) && joined[0].contains(&b.to_string()),
             "names both subjects: {joined:?}"

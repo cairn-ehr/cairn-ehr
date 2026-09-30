@@ -111,7 +111,7 @@ pub fn key_locked() -> ErrorView {
 /// Unlink click) is a wrong instruction. Still `Retry::Now`.
 pub fn key_locked_for(button: &str) -> ErrorView {
     ErrorView {
-        text: format!("your signing key is locked — unlock it, then press {button} again"),
+        text: format!("your signing key is locked — unlock it, then press \"{button}\" again"),
         retry: Retry::Now,
     }
 }
@@ -403,7 +403,7 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
                        are different people. The two judgements disagree — settle it with \
-                       the person who made the other one. Linking again would record a newer \
+                       the person who made the other one. Linking again would normally record a newer \
                        judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,
