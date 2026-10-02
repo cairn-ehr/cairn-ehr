@@ -18,8 +18,8 @@
 use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
-    format_hazard_groups, sign_off_targets, withheld_group_ids, withheld_rows, MedicationStatus,
-    PatientMedicationList, WithheldLine, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+    format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus, PatientMedicationList,
+    WithheldLine, DOUBTED_LINK_INSTRUCTION, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -92,6 +92,8 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
 }
 
 /// The withheld-lines report: displayed lines that need a signature and will not get one.
+/// One sentence per reason, each with its own remedy (#697). A line with both reasons is
+/// named in both.
 ///
 /// PUBLIC because two surfaces render it — the chart *before* the gesture ("these lines
 /// will not be signed") and the outcome *after* it ("these lines were not signed"). Those
@@ -103,17 +105,36 @@ pub fn withheld_report(
     withheld: &[WithheldLine],
     separation_targets: &BTreeMap<Uuid, Vec<Uuid>>,
 ) -> Option<String> {
-    if withheld.is_empty() {
-        return None;
+    // The group ids of the lines whose reasons satisfy `pick`, in the order given.
+    let groups = |pick: fn(&WithheldLine) -> bool| -> Vec<Uuid> {
+        withheld
+            .iter()
+            .filter(|l| pick(l))
+            .map(|l| l.group_id)
+            .collect()
+    };
+    let outside = groups(|l| l.reasons.outside_set);
+    let doubted = groups(|l| l.reasons.doubted_link);
+    let mut parts = Vec::new();
+    if !outside.is_empty() {
+        parts.push(format!(
+            "{} line(s) on this chart still need a signature but will NOT be signed: {}. {}",
+            outside.len(),
+            format_hazard_groups(&outside, separation_targets),
+            SEPARATION_INSTRUCTION
+        ));
     }
-    // Wording is unchanged for now; each line already carries its reasons (#697).
-    let withheld = withheld_group_ids(withheld);
-    Some(format!(
-        "{} line(s) on this chart still need a signature but will NOT be signed: {}. {}",
-        withheld.len(),
-        format_hazard_groups(&withheld, separation_targets),
-        SEPARATION_INSTRUCTION
-    ))
+    if !doubted.is_empty() {
+        parts.push(format!(
+            "{} line(s) on this record still need a signature but will NOT be signed from this \
+             chart — the record holds a link this node doubts, and they are not recorded only \
+             on this chart: {}. {}",
+            doubted.len(),
+            format_hazard_groups(&doubted, separation_targets),
+            DOUBTED_LINK_INSTRUCTION
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// The incomplete-chart report: groups with no row at all.
@@ -293,6 +314,46 @@ mod tests {
             message.contains(&uid(2).to_string()),
             "the OTHER patient's thread id is the argument they cannot otherwise get: {message}"
         );
+    }
+
+    /// #697 part 1: a doubted-link line's report names the LINK judgement, never separation.
+    #[test]
+    fn a_doubted_link_report_names_the_link_judgement_not_separation() {
+        let mut hazard = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        hazard.cross_patient = true;
+        hazard.wrong_chart.doubted_link = true;
+        let message = build_view(&chart(vec![hazard]))
+            .withheld_message
+            .expect("reported");
+        assert!(message.contains("unlink-charts"), "{message}");
+        assert!(
+            message.contains(&uid(1).to_string()),
+            "the line is named: {message}"
+        );
+        assert!(!message.contains("medication-separate"), "{message}");
+    }
+
+    #[test]
+    fn a_line_with_both_reasons_is_reported_under_both_remedies() {
+        let mut hazard = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        hazard.cross_patient = true;
+        hazard.wrong_chart = cairn_medication_view::WrongChartReasons {
+            outside_set: true,
+            doubted_link: true,
+        };
+        let message = build_view(&chart(vec![hazard]))
+            .withheld_message
+            .expect("reported");
+        assert!(message.contains("medication-separate"), "{message}");
+        assert!(message.contains("unlink-charts"), "{message}");
     }
 
     /// The half with no row at all: a group the node knows this record has a thread in, but

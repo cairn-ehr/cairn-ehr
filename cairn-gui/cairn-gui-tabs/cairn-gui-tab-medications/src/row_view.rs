@@ -162,16 +162,29 @@ fn flags(row: &MedicationRow) -> Vec<String> {
     if row.coding_conflict {
         out.push("two different drug identities in this group".to_string());
     }
-    if row.cross_patient {
+    if let Some(why) = row.withheld_because() {
         // Per-row, and in the row's own words, because this is where the clinician is
-        // looking when they wonder why the line has no signature badge. The message names
-        // the DOSE risk specifically: the displayed dose comes from a whole-group pick that
-        // ignores patient, so it may be the other patient's (issue #334).
-        out.push(
-            "shared with another patient's record — the dose shown may not be this \
-             patient's, so this line cannot be signed"
-                .to_string(),
-        );
+        // looking when they wonder why the line has no signature badge. One sentence per
+        // REASON (#697): each names its own cause, and the report names each remedy.
+        if why.outside_set {
+            // The displayed dose comes from a whole-group pick that ignores patient, so it
+            // may be the other patient's (issue #334).
+            out.push(
+                "shared with another patient's record — the dose shown may not be this \
+                 patient's, so this line cannot be signed"
+                    .to_string(),
+            );
+        }
+        if why.doubted_link {
+            // #697 (b): the record holds a link the node doubts, and this line is not on the
+            // opened chart alone — signing it could vouch for a possible stranger's drug.
+            out.push(
+                "this record holds a link this node doubts, and this line is not recorded only \
+                 on the chart you opened — it may be another person's, so it cannot be signed \
+                 from here"
+                    .to_string(),
+            );
+        }
     }
     out
 }
@@ -308,6 +321,45 @@ mod tests {
             build_view(&chart(vec![r])).rows[0].dose,
             "dose not recorded"
         );
+    }
+
+    /// #697 (b): a doubted-link line says WHY in its own words — not "shared with another
+    /// patient's record", which names the wrong cause.
+    #[test]
+    fn a_doubted_link_line_names_the_doubted_link_not_another_patient() {
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        r.cross_patient = true;
+        r.wrong_chart.doubted_link = true;
+        let flags = &build_view(&chart(vec![r])).rows[0].flags;
+        assert!(flags.iter().any(|f| f.contains("doubts")), "{flags:?}");
+        assert!(
+            !flags.iter().any(|f| f.contains("another patient")),
+            "{flags:?}"
+        );
+    }
+
+    #[test]
+    fn a_line_with_both_reasons_says_both() {
+        let mut r = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        r.cross_patient = true;
+        r.wrong_chart = cairn_medication_view::WrongChartReasons {
+            outside_set: true,
+            doubted_link: true,
+        };
+        let flags = &build_view(&chart(vec![r])).rows[0].flags;
+        assert!(
+            flags.iter().any(|f| f.contains("another patient")),
+            "{flags:?}"
+        );
+        assert!(flags.iter().any(|f| f.contains("doubts")), "{flags:?}");
     }
 
     /// The withheld line is SHOWN — hiding a drug is the worse failure — but it is not a
