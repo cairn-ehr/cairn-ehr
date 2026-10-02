@@ -104,8 +104,12 @@ GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_age
 --    winner was applied). A human-attested link is the human decision the veto exists to
 --    force, so it is never doubted here.
 --
---    SECURITY DEFINER is kept unchanged (#701 touches only what "attested" reads): the answer
---    is one boolean about a set the caller already holds, and search_path is pinned.
+--    SECURITY DEFINER is no longer strictly required: the old reasons
+--    (cairn_attestation_vouched locked away by db/001; event_log attester columns under the
+--    #405 column floor) no longer apply, and every remaining callee is granted directly to
+--    cairn_agent. It is kept so this slice makes no privilege change (issue #718 decides
+--    whether to drop it); the answer is one boolean about a set the caller already holds,
+--    and search_path is pinned.
 CREATE OR REPLACE FUNCTION cairn_chart_set_has_doubted_link(p_charts uuid[])
 RETURNS boolean
 LANGUAGE sql STABLE
