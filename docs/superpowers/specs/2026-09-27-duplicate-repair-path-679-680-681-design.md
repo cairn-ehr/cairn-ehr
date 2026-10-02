@@ -128,6 +128,51 @@ before it can be repaired (R2); R4/R5 consume both.
 >   - **A cease on such a line stops only the opened chart's threads.**
 >   - Whether a doubted set should also withhold the other member's one-chart lines is open (#697).
 
+#### R1b — a doubted set withholds every line not on the opened chart (#697 (b), #701; designed 2026-10-03)
+
+The maintainer decided #697 option (b) on 2026-09-27. While the chart set holds a doubted link, every
+line not recorded on the opened chart is withheld from sign-off, with its own cause and remedy. A
+signature is a claim about a person, and a hard veto is positive evidence against the link. Visibility
+does not change: hiding the line would be the hazard if the two charts are one person.
+
+- **The rule.** It is pure, in `cairn-node`'s `medication/read.rs`, and returns *reasons*, not a single bool:
+  - `outside_set`: the group reaches a chart outside the set. Unchanged.
+  - `doubted_link`: the set holds a doubted link, and the group's charts are not exactly `{opened}`.
+    An empty chart list is not `{opened}`, so the rule over-warns there.
+
+  Both can hold at once. `doubted_link` absorbs R1's "multi-chart line in a doubted set". The read is
+  handed the opened chart: `list_patient_medications` passes its `patient`.
+- **The row's shape is additive and fail-safe.**
+  - `MedicationRow::cross_patient` keeps its meaning, "withheld as a wrong-chart hazard". Every
+    existing reader, such as sign-off targeting and `cease_plan`, therefore stays correct unchanged.
+  - A new `wrong_chart: WrongChartReasons { outside_set, doubted_link }` sits beside it. Both are built
+    by one constructor, so `cross_patient == wrong_chart.any()` holds by construction; a DB test pins it.
+  - Rejected: narrowing `cross_patient` back to "outside only". A reader that checked only that field
+    would then under-warn.
+- **Wording.** One shared constant per reason, as with `SEPARATION_INSTRUCTION`. They are used on the
+  row, in the window's withheld report, in the CLI's list and in its sign-off output.
+  - The outside-set wording is unchanged.
+  - The doubted-link wording says the line was not recorded on the opened chart and may be another
+    person's.
+  - Its remedy (`DOUBTED_LINK_INSTRUCTION`) is a human judgement of the link, never thread separation:
+    - **not one person:** "Not the same person…" beside the link (CLI `unlink-charts`);
+    - **one person:** confirm with `link-charts`. The window cannot confirm a standing link yet (**#716**).
+
+  A line carrying both reasons gets both sentences.
+- **Sign-off after the fact.** `withheld_rows` returns each withheld group with its reasons, and
+  `SignOffOutcome::withheld` carries them. The "were NOT signed" report can then word each reason
+  from what the orchestrator did, not from a re-read.
+- **Cease.** No change. `cease_plan` already stops only the opened chart's threads on any
+  `cross_patient` line. For a doubted-set line that sits only on another member it therefore writes
+  nothing and names every thread it held back.
+- **#701.** `cairn_chart_set_has_doubted_link` reads the stored `patient_link.attested` (R2a's one
+  definition). It no longer re-derives attestation through an `event_log` join, which a legacy row
+  with a NULL `content_address` fell out of. This changes a function body only; no generation bump.
+- **§1.2.** The paper counterpart is two folders clipped together while one page is in doubt: you sign
+  for your own patient's page and not for the doubtful one until someone settles the clip. Reading
+  and the sign-off gesture are unchanged (1 → 1 → 1). The withheld line's cost falls only on a doubted
+  set, and it is lifted by one judgement: unlink (window) or confirm (CLI until #716).
+
 ### R2 — link and unlink from an open chart (#681) + the precedence floor
 
 - **Gesture**: header control **"Same person as…"** → the front door's search (only a chart some
