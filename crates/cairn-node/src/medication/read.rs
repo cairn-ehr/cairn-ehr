@@ -78,12 +78,12 @@ pub async fn list_patient_medications(
 
 /// Read one medication list over a chart set that `person_charts` just answered.
 ///
-/// PRIVATE ON PURPOSE. Its hazard rule (`medication::hazard::wrong_chart_reasons`) is relative to the set it is
-/// handed, so re-reading a STALE set — the set a clinician was shown before an unlink — would
-/// read a group spanning the two now-separate charts as "inside the set" and drop its
-/// cross-patient withholding. The right response to a changed set is ADR-0076 decision 3's:
-/// refuse and reload (`signoff.rs::ensure_same_charts`), never re-read the old set. The only
-/// caller is `list_patient_medications`, which always reads the CURRENT set.
+/// PRIVATE ON PURPOSE. Its hazard rule (`medication::hazard::wrong_chart_reasons`) is relative to
+/// the set it is handed, so re-reading a STALE set — the set a clinician was shown before an
+/// unlink — would read a group spanning the two now-separate charts as "inside the set" and
+/// drop its cross-patient withholding. The right response to a changed set is ADR-0076
+/// decision 3's: refuse and reload (`signoff.rs::ensure_same_charts`), never re-read the old
+/// set. The only caller is `list_patient_medications`, which always reads the CURRENT set.
 ///
 /// Ceased rows are retained deliberately. A struck line stays visible on a paper drug
 /// chart; dropping it here would lose that parity and would hide a drug the clinician may
@@ -209,8 +209,10 @@ async fn list_chart_set_medications(
 
     let groups_missing_from_chart = missing_groups(groups.iter().copied(), &seen_groups);
 
-    // The membership of every group this chart calls hazardous — the arguments to the
-    // `medication-separate` remedy all three warnings name. Scoped to the hazardous groups
+    // The membership of every group this chart calls hazardous. It is listed for both kinds of
+    // hazard: separation (`medication-separate`, whose arguments these are) is the remedy only
+    // for the outside-the-set case; a doubted-link line's remedy is a judgement of the link
+    // (DOUBTED_LINK_INSTRUCTION). Scoped to the hazardous groups
     // rather than fetched for the whole chart: in normal operation both sets are empty and
     // this costs no query at all (`read_group_member_threads` returns early), whereas
     // whole-chart membership would be a second O(all members) read per chart open for data
@@ -416,8 +418,9 @@ async fn read_group_charts(
 /// through `cairn_medication_thread_patient` — the statement, else an ORPHAN CESSATION (a
 /// stop event that arrived before the statement it stops, db/033 PR #219 finding 3) — so a
 /// group reaching another person only through such a thread is still caught. Whether a
-/// listed group is a HAZARD is not this query's call: that is `medication::hazard::wrong_chart_reasons` against
-/// the set, because two charts of the same person are no longer two people (ADR-0076).
+/// listed group is a HAZARD is not this query's call: that is
+/// `medication::hazard::wrong_chart_reasons` against the set, because two charts of the same
+/// person are no longer two people (ADR-0076).
 async fn read_cross_patient_charts(
     client: &(impl tokio_postgres::GenericClient + Sync),
     groups: &[Uuid],
@@ -481,7 +484,8 @@ async fn read_coding_conflict_groups(
 
 /// Whether the set holds a link this node doubts (db/054 `cairn_chart_set_has_doubted_link`:
 /// an un-attested standing link that db/018 flagged on arrival, or that trips the hard veto
-/// now — see that function for why both) — an input to `medication::hazard::wrong_chart_reasons`.
+/// now — see that function for why both) — an input to
+/// `medication::hazard::wrong_chart_reasons`.
 ///
 /// A set of one cannot hold a link, so it is answered without a query: a never-linked chart
 /// costs exactly the statements it cost before.
@@ -515,12 +519,13 @@ async fn read_group_set(
 }
 
 /// Pure tests for the SQL builder and `missing_groups`. The hazard rule's own pure tests live
-/// with it in `medication::hazard`. The chart model's own pure tests (the hazard-group renderer, the
-/// repair instruction, the `--json` serializability of the whole struct) moved with it to
+/// with it in `medication::hazard`. The chart model's own pure tests (the hazard-group renderer,
+/// the repair instruction, the `--json` serializability of the whole struct) moved with it to
 /// `cairn_medication_view::chart` — a test that stays behind when its subject moves is how
 /// two copies of one rule start to drift. The DB-backed behaviour of this module lives in
 /// `crates/cairn-node/tests/medication_read.rs` (one chart) and
-/// `crates/cairn-node/tests/combined_read.rs` (a chart set, and the never-linked golden).
+/// `crates/cairn-node/tests/combined_read.rs` (a chart set, and the never-linked golden) and
+/// `crates/cairn-node/tests/doubted_link_withholds.rs` (the doubted-link rule).
 #[cfg(test)]
 mod tests {
     use super::*;

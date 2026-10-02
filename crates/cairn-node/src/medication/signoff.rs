@@ -54,10 +54,10 @@ pub struct SignOffOutcome {
     /// Displayed lines (GROUP ids) that still need a signature but were deliberately NOT
     /// signed — a group reaching a chart outside the set (issue #334) or, while the set holds
     /// a doubted link, any group not recorded only on the opened chart (#697 (b)): in both
-    /// the displayed dose may belong to another patient. The caller MUST surface these: "signed off 11"
-    /// over a chart of 12 outstanding lines is a false completeness claim, which is the
-    /// same defect class as vouching for a list with a missing line. Empty in normal
-    /// operation. Each line carries its reasons (#697), so a renderer words each with its own
+    /// the displayed dose may belong to another patient. The caller MUST surface these:
+    /// "signed off 11" over a chart of 12 outstanding lines is a false completeness
+    /// claim, which is the same defect class as vouching for a list with a missing line.
+    /// Empty in normal operation. Each line carries its reasons (#697), so a renderer words each with its own
     /// remedy. See `cairn_medication_view::withheld_rows`.
     pub withheld: Vec<cairn_medication_view::WithheldLine>,
     /// Each hazardous group's FULL member-thread list — the arguments to the

@@ -101,8 +101,8 @@ mod tests {
         );
     }
 
-    /// Review focus 1: a line shared between the opened chart and the other member is withheld
-    /// for the DOUBTED reason — it lies inside the set, so it is not the outside case.
+    /// Guards the shared-line case: a line shared between the opened chart and the other member
+    /// is withheld for the DOUBTED reason — it lies inside the set, so it is not the outside case.
     #[test]
     fn in_a_doubted_set_a_line_shared_with_the_opened_chart_is_withheld() {
         let r = wrong_chart_reasons(&set12(), u(1), true, &[u(1), u(2)]);

@@ -4,12 +4,14 @@
 //! reason; the opened chart's own lines stay signable; a human judging the link lifts it. Also
 //! #701: the doubted-link test reads the stored `patient_link.attested`.
 //!
-//! The first two tests moved here from `combined_read.rs` (R1), where the rule withheld only
-//! MULTI-chart lines; the first one's one-chart assertion is the line #697 (b) reverses.
+//! Two tests moved here from `combined_read.rs` (R1), where the rule withheld only MULTI-chart
+//! lines: `a_doubted_set_withholds_every_line_not_on_the_opened_chart` (1st in this file) and
+//! `a_group_across_a_link_the_veto_now_refuses_is_withheld` (4th). The first one's one-chart
+//! assertion is the line #697 (b) reverses.
 //!
 //! DB-gated on $CAIRN_TEST_PG, serialized via `db::test_serial_guard` taken BEFORE connecting.
-//! Key material is minted at runtime (house rule 6). The small builders below are file-local
-//! copies of `combined_read.rs`'s (one line each; below the bar for `common/`).
+//! Key material is minted at runtime (house rule 6). `chart`, `assert_one` and `group`
+//! below are copies of `combined_read.rs`'s; the other helpers are new in this file.
 mod common;
 use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
 use cairn_event::SigningKey;
@@ -176,7 +178,7 @@ async fn a_doubted_set_withholds_every_line_not_on_the_opened_chart() {
         .all(|w| w.reasons == DOUBTED));
 }
 
-/// Review focus 2: opened from X, the rule mirrors - X's own line is signable, A's is not.
+/// Guards the mirror case: opened from X, the rule mirrors - X's own line is signable, A's is not.
 #[tokio::test]
 async fn seen_from_the_other_chart_the_withholding_mirrors() {
     let Some(base) = cs() else {
@@ -327,4 +329,54 @@ async fn verified_dob(
     )
     .await
     .expect("dob accepted");
+}
+
+/// #701: the doubted-link test reads the STORED `patient_link.attested` (R2a's one definition,
+/// evaluated when the winner was applied), not a second spelling re-derived through an
+/// `event_log` join. The UPDATE below simulates nothing real: it makes the two spellings
+/// DISAGREE, so the answer shows which one the function reads.
+#[tokio::test]
+async fn the_doubted_link_check_reads_the_stored_attested_column() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
+    verified_dob(&c, &sk, &kid, a, "1980-07-15", 20).await;
+    verified_dob(&c, &sk, &kid, x, "1975-01-02", 21).await;
+    let ids = vec![a.to_string(), x.to_string()];
+    async fn doubted(c: &Client, ids: &[String]) -> bool {
+        c.query_one(
+            "SELECT cairn_chart_set_has_doubted_link($1::text[]::uuid[])",
+            &[&ids],
+        )
+        .await
+        .unwrap()
+        .get::<_, bool>(0)
+    }
+    assert!(
+        doubted(&c, &ids).await,
+        "precondition: un-attested and the veto trips now"
+    );
+
+    let (lo, hi) = (a.min(x), a.max(x));
+    c.execute(
+        "UPDATE patient_link SET attested = TRUE \
+         WHERE low = $1::text::uuid AND high = $2::text::uuid",
+        &[&lo.to_string(), &hi.to_string()],
+    )
+    .await
+    .unwrap();
+    assert!(
+        !doubted(&c, &ids).await,
+        "the function must read pl.attested — a re-derivation would still say doubted"
+    );
 }

@@ -99,12 +99,12 @@ GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_age
 --          (a peer's link syncing ahead of the clashing DOB) never raise the flag — issue
 --          #220. Evaluating it here at read time closes that gap for this read, whatever
 --          #220's fix to the flag itself turns out to be.
---    "Attested" is db/018's one definition: an attester key is present AND
---    cairn_attestation_vouched holds. A human-attested link is the human decision the veto
---    exists to force, so it is never doubted here.
+--    "Attested" is read from the STORED patient_link.attested column (#701; R2a's one
+--    definition: an attester key is present AND cairn_attestation_vouched held when the
+--    winner was applied). A human-attested link is the human decision the veto exists to
+--    force, so it is never doubted here.
 --
---    SECURITY DEFINER because cairn_attestation_vouched is locked away from runtime roles
---    (db/001) and event_log's attester columns sit under the #405 column floor; the answer
+--    SECURITY DEFINER is kept unchanged (#701 touches only what "attested" reads): the answer
 --    is one boolean about a set the caller already holds, and search_path is pinned.
 CREATE OR REPLACE FUNCTION cairn_chart_set_has_doubted_link(p_charts uuid[])
 RETURNS boolean
@@ -116,12 +116,15 @@ AS $$
         SELECT 1 FROM link_veto_flag f
         WHERE f.low = ANY(p_charts) AND f.high = ANY(p_charts)
     ) OR EXISTS (
+        -- #701: the STORED winner attestation (R2a, ADR-0076 decision 5 - one definition,
+        -- evaluated when the winner was applied). Never re-derive it through event_log: that
+        -- is a second spelling, and the join dropped a legacy row whose content_address is
+        -- NULL (pre-#115).
         SELECT 1
         FROM patient_link pl
-        JOIN event_log el ON el.content_address = pl.content_address
         WHERE pl.state = 'link'
           AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
-          AND NOT (el.attester_key IS NOT NULL AND cairn_attestation_vouched(el.event_id))
+          AND NOT pl.attested
           AND cairn_has_hard_veto(pl.low, pl.high)
     )
 $$;
