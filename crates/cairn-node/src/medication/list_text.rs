@@ -19,8 +19,16 @@
 //! formatting over `ChartSet`/`Vec<Uuid>`, so they belong in functions a unit test can
 //! drive directly — not buried in a 150-line `println!` arm that only a full CLI run
 //! exercises.
+//!
+//! The withheld-line wording lives here for the same reason: when #697 split "withheld" into two
+//! reasons (a group spanning patients, a link this node doubts), each needed its own sentence AND
+//! its own remedy, and that branching is string logic a unit test can drive without a database.
 use crate::patient::person::ChartIdentity;
-use cairn_medication_view::ChartSet;
+use cairn_medication_view::{
+    format_hazard_groups, ChartSet, WithheldLine, WrongChartReasons, DOUBTED_LINK_INSTRUCTION,
+    SEPARATION_INSTRUCTION,
+};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 /// The list-level header naming the chart set a combined read covers.
@@ -90,6 +98,76 @@ pub fn member_lines(members: &[ChartIdentity]) -> Vec<String> {
             format!("  chart {}: identity {}{not_held}", m.patient_id, m.trust)
         })
         .collect()
+}
+
+/// The CLI's warning lines under one withheld row of `medication-list` — one per reason, each
+/// with its own remedy (#697), then the group's member threads once (the remedy's arguments;
+/// this row lists only this record's half of a cross-patient group, #338 finding 1).
+pub fn row_hazard_lines(
+    why: WrongChartReasons,
+    group: Uuid,
+    targets: &BTreeMap<Uuid, Vec<Uuid>>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if why.outside_set {
+        out.push(format!(
+            "    ! this group's member threads span more than one patient — the dose shown may \
+             belong to the other patient, so this line CANNOT be signed off (issue #334). {}",
+            SEPARATION_INSTRUCTION
+        ));
+    }
+    if why.doubted_link {
+        out.push(format!(
+            "    ! this record holds a link this node doubts, and this line is not recorded only \
+             on the chart you opened — it may be another person's, so it CANNOT be signed off \
+             from here (issue #697). {}",
+            DOUBTED_LINK_INSTRUCTION
+        ));
+    }
+    if why.any() {
+        out.push(format!("      {}", format_hazard_groups(&[group], targets)));
+    }
+    out
+}
+
+/// The sign-off outcome's report of lines withheld from the gesture — printed in EVERY
+/// outcome, never folded into the success line: "signed off 11" over a twelfth outstanding
+/// line reads as a finished chart. One block per reason, each with its own remedy (#697).
+pub fn withheld_signoff_lines(
+    withheld: &[WithheldLine],
+    targets: &BTreeMap<Uuid, Vec<Uuid>>,
+) -> Vec<String> {
+    let pick = |f: fn(&WithheldLine) -> bool| -> Vec<Uuid> {
+        withheld
+            .iter()
+            .filter(|l| f(l))
+            .map(|l| l.group_id)
+            .collect()
+    };
+    let mut out = Vec::new();
+    let outside = pick(|l| l.reasons.outside_set);
+    if !outside.is_empty() {
+        out.push(format!(
+            "! {} medication line(s) still need a signature but were NOT signed: their group's \
+             member threads span more than one patient, so the dose displayed may belong to the \
+             other patient (issue #334). {} Then sign off again.",
+            outside.len(),
+            SEPARATION_INSTRUCTION
+        ));
+        out.push(format!("    {}", format_hazard_groups(&outside, targets)));
+    }
+    let doubted = pick(|l| l.reasons.doubted_link);
+    if !doubted.is_empty() {
+        out.push(format!(
+            "! {} medication line(s) still need a signature but were NOT signed from this chart: \
+             the record holds a link this node doubts, and these lines are not recorded only on \
+             the chart you opened (issue #697). {} Then sign off again.",
+            doubted.len(),
+            DOUBTED_LINK_INSTRUCTION
+        ));
+        out.push(format!("    {}", format_hazard_groups(&doubted, targets)));
+    }
+    out
 }
 
 /// Render a slice of chart/thread ids as the comma-separated form both functions above
@@ -178,5 +256,61 @@ mod tests {
             row_source_suffix(&[], true),
             Some(" — recorded on chart(s) (not read)".to_string())
         );
+    }
+
+    fn both() -> WrongChartReasons {
+        WrongChartReasons {
+            outside_set: true,
+            doubted_link: true,
+        }
+    }
+
+    #[test]
+    fn a_doubted_link_row_names_the_link_judgement_not_separation() {
+        let why = WrongChartReasons {
+            outside_set: false,
+            doubted_link: true,
+        };
+        let text = row_hazard_lines(why, u(1), &BTreeMap::new()).join("\n");
+        assert!(text.contains("doubts"), "{text}");
+        assert!(text.contains("unlink-charts"), "{text}");
+        assert!(!text.contains("medication-separate"), "{text}");
+        assert!(!text.contains("more than one patient"), "{text}");
+    }
+
+    #[test]
+    fn a_row_with_both_reasons_prints_both_and_its_threads_once() {
+        let targets = BTreeMap::from([(u(1), vec![u(1), u(2)])]);
+        let lines = row_hazard_lines(both(), u(1), &targets);
+        let text = lines.join("\n");
+        assert!(
+            text.contains("medication-separate") && text.contains("unlink-charts"),
+            "{text}"
+        );
+        assert_eq!(text.matches(&u(2).to_string()).count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_signoff_report_words_each_reason_with_its_own_remedy() {
+        let w = |n, outside_set, doubted_link| WithheldLine {
+            group_id: u(n),
+            reasons: WrongChartReasons {
+                outside_set,
+                doubted_link,
+            },
+        };
+        let text =
+            withheld_signoff_lines(&[w(1, true, false), w(2, false, true)], &BTreeMap::new())
+                .join("\n");
+        assert!(
+            text.contains("1 medication line(s) still need a signature but were NOT signed: their"),
+            "{text}"
+        );
+        assert!(
+            text.contains("medication-separate") && text.contains("unlink-charts"),
+            "{text}"
+        );
+        assert!(text.contains("Then sign off again."), "{text}");
+        assert!(withheld_signoff_lines(&[], &BTreeMap::new()).is_empty());
     }
 }

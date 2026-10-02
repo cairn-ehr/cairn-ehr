@@ -5292,30 +5292,16 @@ async fn main() -> anyhow::Result<()> {
                     if row.coding_conflict {
                         println!("    ! two different drug anchors in this group");
                     }
-                    if row.cross_patient {
-                        // Since #334's fix, this group is shown on BOTH charts it reaches —
-                        // this patient's and the other patient's each see their own row for
-                        // it, flagged and withheld on both sides; it is not displayed here
-                        // merely because this patient happened to win a DISTINCT ON
-                        // tiebreak. The dose shown may still be the other patient's (the
-                        // group's display winner isn't scoped per-patient), so the line
-                        // cannot be signed. The member-thread list is printed with it
-                        // because the remedy named here takes thread ids, and `row.members`
-                        // holds only the threads on this chart SET, never the other
-                        // patient's half of the group.
-                        println!(
-                            "    ! this group's member threads span more than one patient — \
-                             the dose shown may belong to the other patient, so this line \
-                             CANNOT be signed off (issue #334). {}",
-                            cairn_node::medication::read::SEPARATION_INSTRUCTION
-                        );
-                        println!(
-                            "      {}",
-                            cairn_node::medication::read::format_hazard_groups(
-                                &[row.group_id],
-                                &list.separation_targets
-                            )
-                        );
+                    // One warning per reason the line is withheld, with its own remedy and the
+                    // group's member threads — worded in `list_text` (#697).
+                    if let Some(why) = row.withheld_because() {
+                        for line in cairn_node::medication::list_text::row_hazard_lines(
+                            why,
+                            row.group_id,
+                            &list.separation_targets,
+                        ) {
+                            println!("{line}");
+                        }
                     }
                 }
                 if !list.groups_missing_from_chart.is_empty() {
@@ -5440,29 +5426,16 @@ async fn main() -> anyhow::Result<()> {
                     charts.join(", ")
                 );
             }
-            if !out.withheld.is_empty() {
-                let withheld_ids = cairn_medication_view::withheld_group_ids(&out.withheld);
-                // Printed in EVERY outcome, never folded into the success line. "Signed off
-                // 11 medication thread(s)" on a chart with a twelfth outstanding line reads
-                // as a finished chart; the whole point of withholding rather than refusing
-                // is that the clinician is told precisely which line they still own.
-                println!(
-                    "! {} medication line(s) still need a signature but were NOT signed: their \
-                     group's member threads span more than one patient, so the dose displayed \
-                     may belong to the other patient (issue #334). {} Then sign off again.",
-                    out.withheld.len(),
-                    cairn_node::medication::read::SEPARATION_INSTRUCTION
-                );
-                // The member threads, not just the group id: they ARE the remedy's
-                // arguments, and this patient's own row lists only their half of the group
-                // (#338 review finding 1).
-                println!(
-                    "    {}",
-                    cairn_node::medication::read::format_hazard_groups(
-                        &withheld_ids,
-                        &out.separation_targets
-                    )
-                );
+            // Printed in EVERY outcome, never folded into the success line. "Signed off
+            // 11 medication thread(s)" on a chart with a twelfth outstanding line reads
+            // as a finished chart; the whole point of withholding rather than refusing
+            // is that the clinician is told precisely which line they still own. Worded
+            // per reason, with the member threads (the remedy's arguments), in `list_text`.
+            for line in cairn_node::medication::list_text::withheld_signoff_lines(
+                &out.withheld,
+                &out.separation_targets,
+            ) {
+                println!("{line}");
             }
             if !out.groups_missing_from_chart.is_empty() {
                 // Also printed in EVERY outcome, success included (#339). Sign-off no
