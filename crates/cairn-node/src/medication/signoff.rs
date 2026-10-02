@@ -56,8 +56,9 @@ pub struct SignOffOutcome {
     /// belong to the group's other patient. The caller MUST surface these: "signed off 11"
     /// over a chart of 12 outstanding lines is a false completeness claim, which is the
     /// same defect class as vouching for a list with a missing line. Empty in normal
-    /// operation. See `cairn_medication_view::withheld_rows`.
-    pub withheld: Vec<Uuid>,
+    /// operation. Each line carries its reasons (#697), so a renderer words each with its own
+    /// remedy. See `cairn_medication_view::withheld_rows`.
+    pub withheld: Vec<cairn_medication_view::WithheldLine>,
     /// Each hazardous group's FULL member-thread list — the arguments to the
     /// `medication-separate` remedy the caller is told to run. Carried through verbatim
     /// from `PatientMedicationList::separation_targets`, so it is a SUPERSET of `withheld`:
@@ -488,6 +489,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            wrong_chart: Default::default(),
             source_charts: vec![],
         }
     }

@@ -160,6 +160,7 @@ async fn list_chart_set_medications(
                 reconciliation_flagged: reconciliation_flagged.contains(&group_id),
                 coding_conflict: coding_conflict.contains(&group_id),
                 cross_patient: cross_patient.contains(&group_id),
+                wrong_chart: Default::default(), // filled by Task 2
                 // Every group here came from `members`, which reads the same
                 // `medication_thread_group` view as `read_group_charts`, so an entry exists
                 // unless a concurrent separation re-keyed the group between the two

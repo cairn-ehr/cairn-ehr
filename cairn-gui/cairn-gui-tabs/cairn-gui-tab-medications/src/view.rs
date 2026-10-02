@@ -18,8 +18,8 @@
 use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
-    format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus, PatientMedicationList,
-    MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+    format_hazard_groups, sign_off_targets, withheld_group_ids, withheld_rows, MedicationStatus,
+    PatientMedicationList, WithheldLine, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -100,16 +100,18 @@ pub fn build_view(list: &PatientMedicationList) -> MedListView {
 /// so the after-the-fact caller can pass `SignOffOutcome::withheld`, which is what the
 /// orchestrator actually did rather than what a re-read says it would do now.
 pub fn withheld_report(
-    withheld: &[Uuid],
+    withheld: &[WithheldLine],
     separation_targets: &BTreeMap<Uuid, Vec<Uuid>>,
 ) -> Option<String> {
     if withheld.is_empty() {
         return None;
     }
+    // Wording is unchanged for now; each line already carries its reasons (#697).
+    let withheld = withheld_group_ids(withheld);
     Some(format!(
         "{} line(s) on this chart still need a signature but will NOT be signed: {}. {}",
         withheld.len(),
-        format_hazard_groups(withheld, separation_targets),
+        format_hazard_groups(&withheld, separation_targets),
         SEPARATION_INSTRUCTION
     ))
 }

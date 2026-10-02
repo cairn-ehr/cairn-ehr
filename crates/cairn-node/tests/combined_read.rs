@@ -8,7 +8,7 @@
 mod common;
 use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
 use cairn_event::SigningKey;
-use cairn_medication_view::{sign_off_targets, withheld_rows, ChartSet};
+use cairn_medication_view::{sign_off_targets, withheld_group_ids, withheld_rows, ChartSet};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
@@ -117,11 +117,13 @@ fn name_roles(v: &mut Value, roles: &HashMap<String, String>) {
 /// Strip the fields Task 3 of R1 ADDED (`charts`, each row's `source_charts`, each member's
 /// `patient_id`). The golden pins everything that existed BEFORE the combined read, so the
 /// new fields — whose values the combined read is entitled to derive differently — are not
-/// part of it; they are pinned by the tests that are about them.
+/// part of it; they are pinned by the tests that are about them. R1b added each row's
+/// `wrong_chart` (the reasons behind `cross_patient`), stripped for the same reason.
 fn strip_new_fields(list: &mut Value) {
     list.as_object_mut().unwrap().remove("charts");
     for row in list["rows"].as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("source_charts");
+        row.as_object_mut().unwrap().remove("wrong_chart");
         for member in row["members"].as_array_mut().unwrap() {
             member.as_object_mut().unwrap().remove("patient_id");
         }
@@ -441,7 +443,7 @@ async fn a_group_reaching_outside_the_set_is_still_a_hazard() {
         "the group reaches a chart that is not this person"
     );
     assert_eq!(
-        withheld_rows(&list.rows),
+        withheld_group_ids(&withheld_rows(&list.rows)),
         vec![tb],
         "and is withheld from sign-off"
     );
@@ -523,7 +525,7 @@ async fn a_group_across_a_vetoed_link_is_still_withheld() {
         "a group spanning a vetoed pair is a wrong-chart hazard"
     );
     assert_eq!(
-        withheld_rows(&list.rows),
+        withheld_group_ids(&withheld_rows(&list.rows)),
         vec![ta],
         "the line (reported by its group id) is withheld from sign-off"
     );
@@ -677,7 +679,7 @@ async fn a_group_reaching_outside_only_through_an_orphan_cessation_is_a_hazard()
         row.cross_patient,
         "yet the group reaches another chart, through the cessation alone"
     );
-    assert_eq!(withheld_rows(&list.rows), vec![ta]);
+    assert_eq!(withheld_group_ids(&withheld_rows(&list.rows)), vec![ta]);
 
     submit_link_event(&c, &sk, &kid, a, other, 10, true).await;
     let linked = list_patient_medications(&c, a).await.unwrap();

@@ -65,6 +65,31 @@ pub struct MemberVouch {
     pub patient_id: Uuid,
 }
 
+/// WHY a line is withheld from sign-off as a wrong-chart hazard (#697). Two independent facts,
+/// either of which is enough, and both of which can hold at once:
+///
+/// - `outside_set`: the group reaches a chart OUTSIDE the set the list was read over, so some
+///   thread on this line is recorded on another person's chart (issue #334). Remedy: separate
+///   the threads (`SEPARATION_INSTRUCTION`).
+/// - `doubted_link`: the set holds a link this node DOUBTS (an un-attested link its hard veto
+///   flagged, or trips now — db/054), and this line is not recorded only on the opened chart.
+///   A signature is a claim about a person, and the node has positive evidence the other
+///   member may be someone else. Remedy: a human judges the LINK (`DOUBTED_LINK_INSTRUCTION`).
+///
+/// Built by `cairn-node`'s `medication::hazard::wrong_chart_reasons`, the one rule.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrongChartReasons {
+    pub outside_set: bool,
+    pub doubted_link: bool,
+}
+
+impl WrongChartReasons {
+    /// Whether either reason holds.
+    pub fn any(&self) -> bool {
+        self.outside_set || self.doubted_link
+    }
+}
+
 /// One displayed row = one medication GROUP.
 ///
 /// A group is what `patient_medication_current` emits: reconciled duplicate threads
@@ -108,16 +133,15 @@ pub struct MedicationRow {
     /// Two different drug anchors inside one reconciled group
     /// (`medication_group_coding_conflict`) — a possible mis-reconciliation.
     pub coding_conflict: bool,
-    /// This line may carry another person's dose, so it is withheld from sign-off — a
-    /// standing wrong-chart hazard (issue #334). True when the group's threads reach a chart
-    /// OUTSIDE the chart set the list was read over, by either of two sources (the
-    /// statement-derived `source_charts`, or `medication_group_cross_patient`, which also sees
-    /// a thread known only through an orphan cessation); and, while the set holds a link
-    /// this node doubts (an un-attested link its hard veto flagged or trips now), when the
-    /// group spans more than one chart at all. A group spanning two linked charts of the same
-    /// person is otherwise not a hazard (ADR-0076). The rule is `cairn-node`'s
-    /// `medication::read::is_wrong_chart_hazard`.
+    /// This line is withheld from sign-off as a wrong-chart hazard; `wrong_chart` says why
+    /// (#697). Kept, rather than replaced by `wrong_chart`, so any reader that checks only this
+    /// flag stays fail-safe. The rule is `cairn-node`'s `medication::hazard::wrong_chart_reasons`.
     pub cross_patient: bool,
+    /// Why `cross_patient` is set (#697): the reasons a renderer words, each with its own
+    /// remedy. Read through `withheld_because`, never directly: that is where a row whose flag
+    /// and reasons disagree is resolved in the fail-safe direction.
+    #[serde(default)]
+    pub wrong_chart: WrongChartReasons,
     /// The charts owning at least one member thread of this group, sorted. The row names
     /// where the drug was recorded so a clinician reading a combined list — one read over
     /// several linked charts (ADR-0076) — can tell which chart a line came from, rather than
@@ -131,6 +155,30 @@ pub struct MedicationRow {
 }
 
 impl MedicationRow {
+    /// Whether this line must be withheld from sign-off as a wrong-chart hazard. Either signal
+    /// is enough, so a builder that sets only one of the two fields still withholds the line
+    /// (fail-safe; the read sets both from one rule).
+    pub fn is_wrong_chart_hazard(&self) -> bool {
+        self.cross_patient || self.wrong_chart.any()
+    }
+
+    /// The reasons to word for a withheld line, or `None` when it is not withheld. A hazard
+    /// with no recorded reason (a builder that predates #697) is worded as reaching outside the
+    /// set — the only meaning the flag had before.
+    pub fn withheld_because(&self) -> Option<WrongChartReasons> {
+        if !self.is_wrong_chart_hazard() {
+            return None;
+        }
+        Some(if self.wrong_chart.any() {
+            self.wrong_chart
+        } else {
+            WrongChartReasons {
+                outside_set: true,
+                doubted_link: false,
+            }
+        })
+    }
+
     /// The name the clinician actually sees: the coded display name when the drug has been
     /// coded, else the term exactly as asserted. Every renderer and the sort MUST use this, or
     /// the chart is ordered by a string the reader cannot see (a coded chart would sort under
@@ -164,6 +212,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            wrong_chart: WrongChartReasons::default(),
             source_charts: vec![],
         }
     }
@@ -206,5 +255,43 @@ mod tests {
             coded.display_name() < plain.display_name(),
             "by displayed name, Lipitor comes first — the opposite order"
         );
+    }
+
+    /// A row the read marked a hazard but gave no reason (an older builder, a test fixture) is
+    /// still a hazard, and is worded as the pre-#697 case: reaching outside the set.
+    #[test]
+    fn a_hazard_with_no_recorded_reason_is_worded_as_reaching_outside() {
+        let mut r = row("warfarin", None);
+        r.cross_patient = true;
+        assert!(r.is_wrong_chart_hazard());
+        assert_eq!(
+            r.withheld_because(),
+            Some(WrongChartReasons {
+                outside_set: true,
+                doubted_link: false
+            })
+        );
+    }
+
+    /// The converse disagreement — a reason with the flag down — fails safe: it is a hazard.
+    #[test]
+    fn a_reason_without_the_flag_is_still_a_hazard() {
+        let mut r = row("warfarin", None);
+        r.wrong_chart.doubted_link = true;
+        assert!(r.is_wrong_chart_hazard());
+        assert_eq!(
+            r.withheld_because(),
+            Some(WrongChartReasons {
+                outside_set: false,
+                doubted_link: true
+            })
+        );
+    }
+
+    #[test]
+    fn an_ordinary_row_is_not_withheld() {
+        let r = row("warfarin", None);
+        assert!(!r.is_wrong_chart_hazard());
+        assert_eq!(r.withheld_because(), None);
     }
 }

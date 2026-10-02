@@ -17,9 +17,10 @@ pub mod row;
 pub mod targeting;
 
 pub use chart::{
-    format_hazard_groups, PatientMedicationList, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+    format_hazard_groups, PatientMedicationList, DOUBTED_LINK_INSTRUCTION,
+    MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 pub use chart_set::ChartSet;
 pub use display::{short_kid, DISPLAYED_KID_CHARS};
-pub use row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
-pub use targeting::{sign_off_targets, withheld_rows};
+pub use row::{MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons};
+pub use targeting::{sign_off_targets, withheld_group_ids, withheld_rows, WithheldLine};

@@ -33,7 +33,7 @@
 mod common;
 
 use cairn_event::SigningKey;
-use cairn_medication_view::{MedicationStatus, VouchState};
+use cairn_medication_view::{withheld_group_ids, MedicationStatus, VouchState};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::signoff::sign_off_medication_list;
@@ -598,7 +598,7 @@ async fn a_cross_patient_group_shows_on_both_charts_flagged() {
             "a cross-patient line must not be signed: its displayed dose may be another patient's"
         );
         assert_eq!(
-            out.withheld,
+            withheld_group_ids(&out.withheld),
             vec![thread_a],
             "the withheld line must be REPORTED"
         );
@@ -704,7 +704,7 @@ async fn a_hazardous_line_never_blocks_a_sound_one() {
     // AND the hazardous line is still surfaced — signing what it can must never become
     // silence about what it cannot.
     assert_eq!(
-        out.withheld,
+        withheld_group_ids(&out.withheld),
         vec![thread_a],
         "the hazardous line must be reported alongside the successful sign-off"
     );

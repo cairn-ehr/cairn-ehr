@@ -5441,6 +5441,7 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             if !out.withheld.is_empty() {
+                let withheld_ids = cairn_medication_view::withheld_group_ids(&out.withheld);
                 // Printed in EVERY outcome, never folded into the success line. "Signed off
                 // 11 medication thread(s)" on a chart with a twelfth outstanding line reads
                 // as a finished chart; the whole point of withholding rather than refusing
@@ -5458,7 +5459,7 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "    {}",
                     cairn_node::medication::read::format_hazard_groups(
-                        &out.withheld,
+                        &withheld_ids,
                         &out.separation_targets
                     )
                 );

@@ -40,6 +40,24 @@ pub const SEPARATION_INSTRUCTION: &str =
      different patients and a vouch would record the wrong chart for one of them. Separation \
      is deliberately never blocked (db/033).";
 
+/// What to do about a line withheld because the record holds a DOUBTED link (#697 (b)) —
+/// worded once, for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
+///
+/// WHY NOT THE SEPARATION REMEDY. Both charts are members of the record on screen; the node
+/// only doubts that they are one person. Separating threads is right only if they are two
+/// people, and even then the LINK is what is wrong. A human judging the link resolves both
+/// cases. An attested link outranks the machine's (ADR-0076 decision 5); an attested unlink
+/// splits the record. The window cannot yet confirm a link that already stands (#716), so the
+/// confirm half names the CLI verb.
+pub const DOUBTED_LINK_INSTRUCTION: &str =
+    "A clinician must judge the doubted link: it joins two charts without a clinician's \
+     confirmation on record here, and the node's hard identity check found a clash between \
+     them. If they are NOT the same person, unlink them — \"Not the same person…\" beside that \
+     link under \"How these charts are linked\" in the window, or `unlink-charts <chart_a> \
+     <chart_b>`. If they ARE the same person, confirm the link with `link-charts <chart_a> \
+     <chart_b>` (the window cannot confirm a link that already stands yet). Either judgement \
+     lifts this hold. Do not separate the threads: the doubt is about the link, not the drug.";
+
 /// What to do about a group the node knows this chart set holds a thread in, but which has
 /// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
 /// for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
@@ -265,5 +283,18 @@ mod tests {
         let list = PatientMedicationList::empty(ChartSet::single(one));
         assert_eq!(list.charts.members(), &[one]);
         assert!(list.rows.is_empty());
+    }
+
+    /// #697 part 1: a doubted link's remedy is a judgement of the LINK — both verbs, the window's
+    /// gesture by its label — and never thread separation.
+    #[test]
+    fn the_doubted_link_remedy_names_both_judgements_and_never_separation() {
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("`unlink-charts "));
+        // "link-charts" alone would be satisfied by "unlink-charts": pin the confirm verb by
+        // its own backtick-opened spelling.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("`link-charts "));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("Not the same person"));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("How these charts are linked"));
+        assert!(!DOUBTED_LINK_INSTRUCTION.contains("medication-separate"));
     }
 }
