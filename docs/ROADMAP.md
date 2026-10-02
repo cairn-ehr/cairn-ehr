@@ -677,7 +677,7 @@ all four; R1 builds the first.
   (DECIDED (b), 2026-09-27: withhold every line not on the opened chart while the set holds a doubted link).
 - **Next:** R2, split 2026-09-27 into R2a (built — next entry) and R2b, split again into **R2b-1** ("Same person
   as…"/link, built — see the 2026-09-29 entry below) and **R2b-2** ("Not the same person"/unlink + #699 (a),
-  built 2026-09-30, PR [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) — see the entry below; plan
+  merged 2026-09-30, PR [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) — see the entry below; plan
   `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`); then #697 (b) + #701, **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 —
   proposes, never links), **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart paper 1 →
@@ -735,7 +735,7 @@ deviation. No ADR, no SQL object (generation stays **55**).
 ### 2026-09-30 — repair path R2b-2: "Not the same person…" (unlink) and #699 (a) built (PR #711)
 
 Plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`; the design page's as-built note
-lists the deviations. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md)**
+lists the deviations. Merged 2026-09-30. **[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md)**
 (spec **v0.79**) records the maintainer's #699 (a) decision. No SQL object; `SCHEMA_GENERATION` stays **55**. PR
 [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711): final whole-branch review and gates, then a five-agent PR review
 whose fix wave is listed below.

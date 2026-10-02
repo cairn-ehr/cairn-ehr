@@ -3,12 +3,8 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R2b-2 — "NOT THE SAME PERSON" (UNLINK) + #699 (a) — IS BUILT ON PR
-> [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711) (2026-09-30): per-task reviews, a final whole-branch review
-> (opus) and its fix rounds are done; then a second, five-agent PR review whose fix wave (the `RecordOf` re-check
-> now runs under CARNLK — it could race a sync-door unlink — plus refusal scopes, a JS drift guard, ADR-0077
-> corrections) is pushed with the affected DB suites and every local gate green; CI runs the full DB sweep on
-> the final head. AWAITING THE MAINTAINER'S MERGE.** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
+> **⇒ R2b-2 — "NOT THE SAME PERSON" (UNLINK) + #699 (a) — MERGED 2026-09-30 (PR
+> [#711](https://github.com/cairn-ehr/cairn-ehr/pull/711)).** R2b-1 (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R2b section + both as-built
 > notes), [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
 > and [ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md) (#699 (a)), spec
@@ -22,8 +18,8 @@
 > 1. **#697 (b)** (decided: while a set holds a doubted link, every line not on the opened chart is withheld from
 >    sign-off, with its own wording; do **#701** alongside), then **R3** (the front door collapses by person), **R4**
 >    (per-node matcher worker, #679 — proposes, never links), **R5** (banner + worklist, #680 — the worklist must
->    filter pairs with an attested `patient_link` row, #700). Merge R2b-2 first (PR #711 — the maintainer closes
->    #699 if they agree ADR-0077 resolves it; no closing keyword was used).
+>    filter pairs with an attested `patient_link` row, #700). #699 stays open until the maintainer
+>    closes it (ADR-0077 resolves it; no closing keyword was used).
 > 2. **Open repair-path issues** (filed by R1–R2b-1): **#708** (`link_charts` should re-check both compared sets in its
 >    transaction + a DB-gated window test) · **#709** (a link outcome can go unseen when it lands after the chart
 >    changed) · **#710** (R2b-1 review residuals) · **#712** (R2b-2 deferred residuals: `chart_set.rs`
@@ -442,7 +438,7 @@ through one — include it next.
 ---
 
 **Session date:** 2026-09-30 (**R2b-2 — "Not the same person" + #699 (a)**, ADR-0077, PR
-**[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711)**, review fixes pushed, awaiting merge) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
+**[#711](https://github.com/cairn-ehr/cairn-ehr/pull/711)**, merged) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`, generation 55; #697 decided (b)) and R1 (ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075,
 PR #678) · 09-23 funnel 2c (PR #674) · 09-22 funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier:
 ROADMAP. · **Spec:** **v0.79** (newest
