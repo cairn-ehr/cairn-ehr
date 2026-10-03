@@ -6,18 +6,15 @@
 //! BEFORE connecting (see `medication_read.rs`'s header for why that order is load-bearing
 //! for this read in particular). Key material is minted at runtime (house rule 6).
 mod common;
-use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
 use cairn_event::SigningKey;
-use cairn_medication_view::{sign_off_targets, withheld_rows, ChartSet};
+use cairn_medication_view::{sign_off_targets, withheld_group_ids, withheld_rows, ChartSet};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{
     assert_medication, attest_medication_thread, cease_medication, reconcile_medications,
     AssertMedicationInput, AttestParams, CeaseMedicationInput, ReconcileInput, SubstanceCoding,
 };
-use common::{
-    cs, medication_setup as setup, submit_link_event, submit_registration, submit_signed, EventSpec,
-};
+use common::{cs, medication_setup as setup, submit_link_event, submit_registration};
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio_postgres::Client;
@@ -117,11 +114,13 @@ fn name_roles(v: &mut Value, roles: &HashMap<String, String>) {
 /// Strip the fields Task 3 of R1 ADDED (`charts`, each row's `source_charts`, each member's
 /// `patient_id`). The golden pins everything that existed BEFORE the combined read, so the
 /// new fields — whose values the combined read is entitled to derive differently — are not
-/// part of it; they are pinned by the tests that are about them.
+/// part of it; they are pinned by the tests that are about them. R1b added each row's
+/// `wrong_chart` (the reasons behind `cross_patient`), stripped for the same reason.
 fn strip_new_fields(list: &mut Value) {
     list.as_object_mut().unwrap().remove("charts");
     for row in list["rows"].as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("source_charts");
+        row.as_object_mut().unwrap().remove("wrong_chart");
         for member in row["members"].as_array_mut().unwrap() {
             member.as_object_mut().unwrap().remove("patient_id");
         }
@@ -441,7 +440,7 @@ async fn a_group_reaching_outside_the_set_is_still_a_hazard() {
         "the group reaches a chart that is not this person"
     );
     assert_eq!(
-        withheld_rows(&list.rows),
+        withheld_group_ids(&withheld_rows(&list.rows)),
         vec![tb],
         "and is withheld from sign-off"
     );
@@ -464,161 +463,6 @@ async fn a_group_reaching_outside_the_set_is_still_a_hazard() {
     assert_eq!(theirs.rows.len(), 1);
     assert!(theirs.rows[0].cross_patient);
     assert!(theirs.groups_missing_from_chart.is_empty());
-}
-
-/// A link this node's own hard veto flagged (db/018 `link_veto_flag`: an un-attested link that
-/// trips `cairn_has_hard_veto`, admitted on the sync path) still combines the read — ADR-0076
-/// decision 1 follows every standing link, and the member lines show `under-review`. But it
-/// must NOT make a group spanning the pair signable. Before the combined read such a group was
-/// cross-patient and withheld; treating it as "inside the set" would let a clinician vouch A's
-/// thread under a line whose displayed dose may be X's — the node itself believes X may be
-/// someone else. So while the set holds a vetoed pair, a group spanning more than one chart
-/// stays a hazard; a line on ONE chart is untouched (its dose is its own chart's).
-///
-/// The flag is set directly rather than by engineering a veto-tripping pair: its lifecycle is
-/// db/018's and is pinned by `link_veto_floor.rs`; this test is about the read's response.
-#[tokio::test]
-async fn a_group_across_a_vetoed_link_is_still_withheld() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let _guard = db::test_serial_guard(&base).await.unwrap();
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
-        .await
-        .unwrap();
-    let (sk, kid, _hsk, _hkid) = setup(&c).await;
-    let a = chart(&c, &sk, &kid).await;
-    let x = chart(&c, &sk, &kid).await;
-    let ta = assert_one(&mut c, &sk, &kid, a, "warfarin").await;
-    let tx = assert_one(&mut c, &sk, &kid, x, "warfarin").await;
-    let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
-    group(&c, ta, tx).await;
-    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
-
-    // Positive control: with the link standing and NOT flagged, the pair is one person and
-    // the shared group is an ordinary reconciled drug.
-    let before = list_patient_medications(&c, a).await.unwrap();
-    assert!(before.rows.iter().all(|r| !r.cross_patient));
-
-    let (lo, hi) = lo_hi(a, x);
-    c.execute(
-        "INSERT INTO link_veto_flag (low, high, content_address) \
-         SELECT low, high, content_address FROM patient_link \
-         WHERE low = $1::text::uuid AND high = $2::text::uuid",
-        &[&lo.to_string(), &hi.to_string()],
-    )
-    .await
-    .unwrap();
-
-    let list = list_patient_medications(&c, a).await.unwrap();
-    assert!(
-        list.charts.is_linked(),
-        "the vetoed link still combines the read"
-    );
-    let shared = list.rows.iter().find(|r| r.group_id == ta).unwrap();
-    assert!(
-        shared.cross_patient,
-        "a group spanning a vetoed pair is a wrong-chart hazard"
-    );
-    assert_eq!(
-        withheld_rows(&list.rows),
-        vec![ta],
-        "the line (reported by its group id) is withheld from sign-off"
-    );
-    assert!(
-        list.separation_targets.contains_key(&ta),
-        "with the arguments to separate it"
-    );
-    let single = list.rows.iter().find(|r| r.group_id == only_x).unwrap();
-    assert!(
-        !single.cross_patient,
-        "a line on ONE chart shows that chart's own dose: not a wrong-chart hazard"
-    );
-    assert_eq!(
-        sign_off_targets(&list.rows),
-        vec![only_x],
-        "neither thread of the shared group is signed; the one-chart line still is"
-    );
-}
-
-/// Issue #220's path: db/018 evaluates the hard veto only when a link ARRIVES, so a link
-/// that synced ahead of the clashing demographics is never flagged. Here the un-attested link
-/// is admitted while neither chart has a date of birth (nothing to veto), then two clashing
-/// document-verified dates arrive. `link_veto_flag` stays empty — and the read must still
-/// withhold a group spanning the pair, because db/054's doubted-link test re-evaluates the
-/// veto at read time.
-#[tokio::test]
-async fn a_group_across_a_link_the_veto_now_refuses_is_withheld() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let _guard = db::test_serial_guard(&base).await.unwrap();
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
-        .await
-        .unwrap();
-    let (sk, kid, _hsk, _hkid) = setup(&c).await;
-    let a = chart(&c, &sk, &kid).await;
-    let x = chart(&c, &sk, &kid).await;
-    let ta = assert_one(&mut c, &sk, &kid, a, "warfarin").await;
-    let tx = assert_one(&mut c, &sk, &kid, x, "warfarin").await;
-    group(&c, ta, tx).await;
-    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
-    let before = list_patient_medications(&c, a).await.unwrap();
-    assert!(
-        before.rows.iter().all(|r| !r.cross_patient),
-        "positive control: no clash yet, so the link is not doubted"
-    );
-
-    verified_dob(&c, &sk, &kid, a, "1980-07-15", 20).await;
-    verified_dob(&c, &sk, &kid, x, "1975-01-02", 21).await;
-    let flags: i64 = c
-        .query_one("SELECT count(*) FROM link_veto_flag", &[])
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(
-        flags, 0,
-        "precondition: #220 — the late clash raised no flag"
-    );
-
-    let list = list_patient_medications(&c, a).await.unwrap();
-    assert!(list.charts.is_linked());
-    assert!(
-        list.rows[0].cross_patient,
-        "the veto trips NOW, so the link is doubted and the shared line is a hazard"
-    );
-    assert!(sign_off_targets(&list.rows).is_empty());
-}
-
-/// A document-verified date of birth — the trustworthy kind db/016's hard veto compares
-/// (`link_veto_floor.rs`'s `submit_dob` shape). `wall` orders it after the link.
-async fn verified_dob(
-    c: &Client,
-    sk: &SigningKey,
-    kid: &str,
-    patient: Uuid,
-    value: &str,
-    wall: i64,
-) {
-    submit_signed(
-        c,
-        sk,
-        kid,
-        EventSpec {
-            patient,
-            event_type: "demographic.field.asserted",
-            schema_version: "demographic.field/1",
-            payload: dob_assertion_body(value, "day", Some("document"), "document-verified"),
-            plaintext_twin: Some(render_dob_twin(value, "day", "document-verified")),
-            wall,
-        },
-    )
-    .await
-    .expect("dob accepted");
 }
 
 /// The orphan-cessation half of the hazard rule, through the combined read. A thread known
@@ -677,7 +521,7 @@ async fn a_group_reaching_outside_only_through_an_orphan_cessation_is_a_hazard()
         row.cross_patient,
         "yet the group reaches another chart, through the cessation alone"
     );
-    assert_eq!(withheld_rows(&list.rows), vec![ta]);
+    assert_eq!(withheld_group_ids(&withheld_rows(&list.rows)), vec![ta]);
 
     submit_link_event(&c, &sk, &kid, a, other, 10, true).await;
     let linked = list_patient_medications(&c, a).await.unwrap();

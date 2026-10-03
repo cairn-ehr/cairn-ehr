@@ -97,9 +97,10 @@ pub struct CeasePlan {
 /// Plan a cease of `row` from the chart the clinician opened.
 ///
 /// An ordinary line stops every member thread, each on its own chart. A line withheld as a
-/// WRONG-CHART HAZARD (`MedicationRow::cross_patient`) stops only the threads on the opened
+/// WRONG-CHART HAZARD (`MedicationRow::is_wrong_chart_hazard`) stops only the threads on the opened
 /// chart: the node itself says this line may carry another person's drug — the group reaches
-/// a chart outside the set, or spans a link the node doubts — so "stop this drug" can only
+/// a chart outside the set, or the set holds a link the node doubts and the line is not
+/// recorded only on the opened chart — so "stop this drug" can only
 /// be trusted to mean it for the patient in front of the clinician. The other threads are
 /// held back and NAMED, never skipped in silence (ADR-0060 decision 2); they can be stopped
 /// from their own chart. Without this, Stop on a line spanning a doubted link would write a
@@ -108,14 +109,15 @@ pub struct CeasePlan {
 /// This holds back more than strictly needed when the other thread is on a linked chart of
 /// the same person (a hazard line reaching OUTSIDE the set also spans the set): stopping less
 /// and saying so is the safe error. A never-linked chart is unaffected — all its members are
-/// on the opened chart. Pure, so the rule is tested without a database.
+/// on the opened chart. A doubted-set line on another member only (#697 (b)) is held back
+/// entirely. Pure, so the rule is tested without a database.
 pub fn cease_plan(row: &MedicationRow, opened: Uuid) -> CeasePlan {
     let mut plan = CeasePlan {
         write: vec![],
         held_back: vec![],
     };
     for m in &row.members {
-        if !row.cross_patient || m.patient_id == opened {
+        if !row.is_wrong_chart_hazard() || m.patient_id == opened {
             plan.write.push((m.medication_id, m.patient_id));
         } else {
             plan.held_back.push(format!(
@@ -474,6 +476,27 @@ mod tests {
             })
             .collect();
         row
+    }
+
+    /// #697 (b): in a doubted set a line recorded only on ANOTHER member is withheld; ceasing
+    /// it from this chart writes nothing and names every thread it held back.
+    #[test]
+    fn a_hazard_line_only_on_another_member_ceases_nothing_from_here() {
+        let plan = cease_plan(&plan_row(true, &[(11, 2)]), Uuid::from_u128(1));
+        assert!(plan.write.is_empty());
+        assert_eq!(plan.held_back.len(), 1);
+        assert!(plan.held_back[0].contains(&Uuid::from_u128(11).to_string()));
+    }
+
+    /// The reason alone withholds: `cross_patient` unset, `wrong_chart.doubted_link` set. Guards
+    /// `cease_plan` against reverting to reading `row.cross_patient` only.
+    #[test]
+    fn a_doubted_link_reason_alone_holds_back_another_members_thread() {
+        let mut row = plan_row(false, &[(11, 2)]);
+        row.wrong_chart.doubted_link = true;
+        let plan = cease_plan(&row, Uuid::from_u128(1));
+        assert!(plan.write.is_empty());
+        assert_eq!(plan.held_back.len(), 1);
     }
 
     /// An ordinary line on a combined list: every thread stopped, each on its OWN chart.

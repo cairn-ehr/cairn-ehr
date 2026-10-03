@@ -14,7 +14,7 @@
 //! something to report.
 use crate::chart::PatientMedicationList;
 use crate::chart_set::ChartSet;
-use crate::row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
+use crate::row::{MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -42,6 +42,7 @@ fn base(group: u128, term: &str, amount: &str, unit: &str) -> MedicationRow {
         reconciliation_flagged: false,
         coding_conflict: false,
         cross_patient: false,
+        wrong_chart: WrongChartReasons::default(),
         // The ordinary fixture rows all live on the one fixture chart; the cross-patient
         // row overrides this below to name BOTH charts its group spans.
         source_charts: vec![uid(1)],
@@ -96,6 +97,7 @@ pub fn sample_rows() -> Vec<MedicationRow> {
     let mut cross_patient = base(60, "warfarin", "5", "mg");
     cross_patient.members = vec![member(60, VouchState::Absent)];
     cross_patient.cross_patient = true;
+    cross_patient.wrong_chart.outside_set = true;
     // The group's member threads span TWO charts (this one and the other patient's) — the
     // whole reason the row is flagged. `source_charts` names both, not just the one this
     // chart is being read from.

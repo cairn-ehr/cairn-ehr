@@ -1,10 +1,10 @@
 //! The one definition of what a single sign-off gesture attests (#288).
-use crate::row::{MedicationRow, MedicationStatus};
+use crate::row::{MedicationRow, MedicationStatus, WrongChartReasons};
 use uuid::Uuid;
 
 /// Whether a displayed line is one this gesture may sign at all.
 ///
-/// Two exclusions, for two different reasons:
+/// Three exclusions, for different reasons:
 ///
 /// - **Ceased.** A struck line on a paper chart is not re-signed. Ceased rows stay visible
 ///   for parity, but they are never targets.
@@ -15,9 +15,15 @@ use uuid::Uuid;
 ///   patient's drug name. A signature is a claim of responsibility for what the line SAYS,
 ///   and the node knows it may be saying something it cannot stand behind.
 ///
-/// Both are line-level. The rest of the chart stays signable — see `withheld_rows`.
+/// - **Doubted link (#697 (b)).** The set's links are in doubt (db/054: an un-attested link the
+///   hard identity check flagged or trips now, or a clinician's unlink between charts other
+///   links still join)
+///   and this line is not recorded only on the opened chart: a signature is a claim about a
+///   person, and the node has positive evidence the other member may be someone else.
+///
+/// All of these are line-level. The rest of the chart stays signable — see `withheld_rows`.
 fn is_signable_line(row: &MedicationRow) -> bool {
-    row.status == MedicationStatus::Active && !row.cross_patient
+    row.status == MedicationStatus::Active && !row.is_wrong_chart_hazard()
 }
 
 /// Which threads a single sign-off gesture attests.
@@ -43,6 +49,15 @@ pub fn sign_off_targets(rows: &[MedicationRow]) -> Vec<Uuid> {
     targets
 }
 
+/// One displayed line that still needs a signature and will deliberately not get one, with
+/// the reasons it is withheld — so every surface can word each reason with its own remedy
+/// (#697), before the gesture and after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WithheldLine {
+    pub group_id: Uuid,
+    pub reasons: WrongChartReasons,
+}
+
 /// The lines this gesture deliberately leaves UNSIGNED although they still need a
 /// signature — returned as GROUP ids, because a group is the line the clinician sees.
 ///
@@ -53,25 +68,54 @@ pub fn sign_off_targets(rows: &[MedicationRow]) -> Vec<Uuid> {
 /// `sign_off_targets`, so the rule for *what is signed* and the rule for *what is reported
 /// as not signed* cannot drift apart — the same reason the whole crate exists.
 ///
+/// Each line carries its reasons, so a renderer never words a doubted-link line with the
+/// separation remedy.
+///
 /// Only lines that would OTHERWISE have been signed are reported. A cross-patient line
 /// everyone has already vouched is not an outstanding action, and warning about it would
 /// train the reader to ignore the warning.
-pub fn withheld_rows(rows: &[MedicationRow]) -> Vec<Uuid> {
-    let mut withheld: Vec<Uuid> = rows
+pub fn withheld_rows(rows: &[MedicationRow]) -> Vec<WithheldLine> {
+    let mut withheld: Vec<WithheldLine> = rows
         .iter()
-        .filter(|row| !is_signable_line(row) && row.status == MedicationStatus::Active)
-        .filter(|row| row.members.iter().any(|m| m.vouch.needs_signature()))
-        .map(|row| row.group_id)
+        .filter_map(|row| {
+            withheld_reasons(row).map(|reasons| WithheldLine {
+                group_id: row.group_id,
+                reasons,
+            })
+        })
         .collect();
-    withheld.sort();
-    withheld.dedup();
+    withheld.sort_by_key(|line| line.group_id);
+    withheld.dedup_by_key(|line| line.group_id);
     withheld
+}
+
+/// Why THIS gesture withholds `row`, or `None` when it does not: the per-row form of
+/// `withheld_rows`, and the one rule both use. A line is withheld when it is a wrong-chart
+/// hazard (`MedicationRow::hazard_reasons`) AND would otherwise have been signed: ACTIVE, with
+/// a member still needing a signature. A ceased or fully-vouched hazard line is not withheld:
+/// there is nothing on it to sign.
+///
+/// PUBLIC so a renderer that words one row can ask the same question the report answers. A
+/// row that says "see the note below" must be one the note is printed for (PR #717 review:
+/// the CLI asked the status-blind `hazard_reasons` and pointed at a note that never came).
+pub fn withheld_reasons(row: &MedicationRow) -> Option<WrongChartReasons> {
+    let outstanding = row.status == MedicationStatus::Active
+        && row.members.iter().any(|m| m.vouch.needs_signature());
+    if !outstanding {
+        return None;
+    }
+    row.hazard_reasons()
+}
+
+/// The group ids of `lines`, in order — the argument `format_hazard_groups` takes.
+pub fn withheld_group_ids(lines: &[WithheldLine]) -> Vec<Uuid> {
+    lines.iter().map(|line| line.group_id).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::row::{MedicationRow, MedicationStatus, MemberVouch, VouchState};
+    use crate::row::{MedicationRow, MedicationStatus, MemberVouch, VouchState, WrongChartReasons};
 
     /// Deterministic uuids without a random source: `Uuid::from_u128` makes each id
     /// readable in a failure message and stable across runs.
@@ -96,6 +140,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            wrong_chart: WrongChartReasons::default(),
             source_charts: vec![uid(999)],
         }
     }
@@ -245,7 +290,7 @@ mod tests {
         ];
         rows[0].cross_patient = true;
         assert_eq!(sign_off_targets(&rows), vec![uid(2)]);
-        assert_eq!(withheld_rows(&rows), vec![uid(1)]);
+        assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
     }
 
     /// Withholding is reported by GROUP id, because that is the line the clinician sees.
@@ -284,5 +329,98 @@ mod tests {
             vec![member(1, VouchState::Absent)],
         )];
         assert!(withheld_rows(&rows).is_empty());
+    }
+
+    /// #697 (b): a doubted-link reason alone withholds the line, and the report carries it.
+    #[test]
+    fn a_doubted_link_line_is_withheld_with_its_reason() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].cross_patient = true;
+        rows[0].wrong_chart.doubted_link = true;
+        assert!(sign_off_targets(&rows).is_empty());
+        assert_eq!(
+            withheld_rows(&rows),
+            vec![WithheldLine {
+                group_id: uid(1),
+                reasons: WrongChartReasons {
+                    outside_set: false,
+                    doubted_link: true
+                },
+            }]
+        );
+        assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
+    }
+
+    /// A ceased line is not withheld, even under a doubted link: a CEASED line on the other
+    /// member of a doubted set is shown, never signed, and never reported as withheld — it
+    /// needs no signature, so a "will NOT be signed" report about it would be noise.
+    #[test]
+    fn a_ceased_doubted_link_line_is_not_reported_as_withheld() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Ceased,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].cross_patient = true;
+        rows[0].wrong_chart.doubted_link = true;
+        assert!(withheld_rows(&rows).is_empty());
+    }
+
+    /// The SIGNING path withholds on the reason alone (PR #717 review). Every other test here
+    /// sets `cross_patient` beside the reason, so a revert of `is_signable_line` to reading the
+    /// flag alone would pass them all; this one would not. `cease_plan` has the same guard.
+    #[test]
+    fn a_doubted_link_reason_without_the_flag_is_never_a_target() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].wrong_chart.doubted_link = true;
+        assert!(!rows[0].cross_patient, "precondition: the flag is down");
+        assert!(sign_off_targets(&rows).is_empty());
+        assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
+    }
+
+    /// `withheld_reasons` is the per-row form of `withheld_rows`: a hazard line is withheld only
+    /// while it is ACTIVE and still needs a signature. A renderer that points at the withheld
+    /// report must ask this, not the status-blind `hazard_reasons`.
+    #[test]
+    fn withheld_reasons_needs_an_active_line_still_needing_a_signature() {
+        let doubted = |status, vouch| {
+            let mut r = row(1, status, vec![member(1, vouch)]);
+            r.wrong_chart.doubted_link = true;
+            r.cross_patient = true;
+            r
+        };
+        let reasons = WrongChartReasons {
+            outside_set: false,
+            doubted_link: true,
+        };
+        assert_eq!(
+            withheld_reasons(&doubted(MedicationStatus::Active, VouchState::Absent)),
+            Some(reasons)
+        );
+        assert_eq!(
+            withheld_reasons(&doubted(MedicationStatus::Ceased, VouchState::Absent)),
+            None
+        );
+        assert_eq!(
+            withheld_reasons(&doubted(
+                MedicationStatus::Active,
+                VouchState::Fresh { by: "dr_b".into() }
+            )),
+            None
+        );
+        let ordinary = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        assert_eq!(withheld_reasons(&ordinary), None);
     }
 }

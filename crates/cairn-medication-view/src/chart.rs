@@ -23,8 +23,9 @@ use uuid::Uuid;
 /// The one sentence that tells an operator how to clear a cross-patient group.
 ///
 /// It is a const, not several hand-written copies, because it is quoted by every
-/// user-facing message about the hazard (the CLI's withheld-line warning, the CLI's chart
-/// warnings, and now the window's row warning). A remedy that drifts between them is worse
+/// user-facing message about the OUTSIDE-the-set hazard (the CLI's withheld-line warning, the
+/// CLI's chart warnings, and the window's report). A doubted-link line deliberately does not
+/// quote it: its remedy is [`DOUBTED_LINK_INSTRUCTION`]. A remedy that drifts between them is worse
 /// than no remedy: the operator learns to distrust whichever one they read second.
 ///
 /// WHY `medication-separate` AND WHY WITHOUT `--attest-as`. Separation is the repair
@@ -39,6 +40,46 @@ pub const SEPARATION_INSTRUCTION: &str =
      threads listed below — run it WITHOUT `--attest-as`, because the threads belong to \
      different patients and a vouch would record the wrong chart for one of them. Separation \
      is deliberately never blocked (db/033).";
+
+/// What to do about a line withheld because the record holds a DOUBTED link (#697 (b)) —
+/// worded once, for every renderer, for the same reason as [`SEPARATION_INSTRUCTION`].
+///
+/// THE CAUSES IT NAMES. db/054 `cairn_chart_set_has_doubted_link` finds doubt three ways, and
+/// the text covers all three in two clauses: an un-attested link the hard identity check flagged
+/// when it arrived, or trips now ("has found a clash" — a flag raised on arrival is not
+/// re-checked when demographics later change, so "finds" could be false), and a clinician's
+/// attested unlink between two charts that other links still join (the A–C–X bridge).
+///
+/// WHY NOT THE SEPARATION REMEDY FIRST. Both charts are members of the record on screen; the
+/// node only doubts that they are one person. Separating threads is right only if they are two
+/// people, and even then the LINK is what is wrong — so the links are judged first. An attested
+/// link outranks the machine's (ADR-0076 decision 5); an attested unlink splits the record, or
+/// is recorded but leaves it joined through another link. The window cannot yet confirm a link
+/// that already stands (#716), so the confirm half names the CLI verb, with its required
+/// `--attester-key` (both verbs refuse to run without one). Each verb's holding rule is named
+/// because the record can list a member whose registration has not reached this node: an
+/// unlink needs `--from` only when NEITHER chart is held, but a link needs BOTH held
+/// (`cairn-node` `chart_link::admit_judgement`) — a deliberate act from this node must not
+/// attach a chart it has never seen.
+///
+/// WHY NOT "EITHER JUDGEMENT LIFTS THIS HOLD". It is false in reachable cases: with two doubted
+/// links, judging one leaves the hold; in the A–C–X bridge, unlinking A–X leaves the record
+/// joined; and after an unlink a line shared by the two charts reaches OUTSIDE the record, so it
+/// stays withheld under the separation remedy instead. The text says only what is always true:
+/// the hold lifts once no link is in doubt, and a separation may follow — the list will say.
+pub const DOUBTED_LINK_INSTRUCTION: &str =
+    "A clinician must judge this record's links. A link is in doubt when it joins two charts \
+     without a clinician's confirmation on record here and the node's hard identity check has \
+     found a clash between them, or when a clinician has recorded that two of the record's \
+     charts are different people while other links still join them. In the window, \
+     \"Not the same person…\" beside a link under \"How these charts are linked\" unlinks it. \
+     In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key <key-file>` unlinks (add \
+     `--from <open_chart>` when neither chart is held on this node), and `link-charts <chart_a> \
+     <chart_b> --attester-key <key-file>` confirms a link — both charts must be held on this \
+     node to link them (the window cannot confirm a link that already stands yet). The hold \
+     lifts once no link in the record is in doubt. After an unlink, a line shared between the \
+     two charts may then reach a chart outside the record, and its threads must then be \
+     separated — the list will say so. Judge the links before separating any threads.";
 
 /// What to do about a group the node knows this chart set holds a thread in, but which has
 /// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
@@ -84,10 +125,14 @@ pub const MISSING_GROUP_INSTRUCTION: &str =
 pub struct PatientMedicationList {
     pub rows: Vec<MedicationRow>,
     pub groups_missing_from_chart: Vec<Uuid>,
-    /// For each group this chart flags as a cross-patient hazard — whether it is displayed
-    /// here (`MedicationRow::cross_patient`) or invisible here
+    /// For each group this chart flags as a wrong-chart hazard — whether it is displayed
+    /// here (`MedicationRow::is_wrong_chart_hazard`, for either reason) or invisible here
     /// (`groups_missing_from_chart`) — the group's FULL member-thread list, including
     /// members belonging to OTHER patients. Sorted, and empty in normal operation.
+    ///
+    /// The threads are the separation remedy's arguments only for a group reaching OUTSIDE the
+    /// set; for a doubted-link line they only say which threads are held, because that remedy
+    /// is a judgement of the links (#697).
     ///
     /// WHY THIS EXISTS (#338 review finding 1). Every message about a cross-patient group
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything
@@ -131,9 +176,10 @@ impl PatientMedicationList {
 /// The member threads are the whole point (#338 review finding 1): the remedy those
 /// messages name (`medication-separate`, see [`SEPARATION_INSTRUCTION`]) takes two THREAD
 /// ids, so a message printing only the group id sends the operator looking for arguments
-/// the node never shows them. A group with no locally-known membership degrades honestly to
-/// "unknown locally" rather than inventing a list — the same acknowledged-uncertainty
-/// direction as the rest of this model.
+/// the node never shows them. (For a doubted-link line the threads only say which threads are
+/// held: that remedy, [`DOUBTED_LINK_INSTRUCTION`], judges links and takes CHART ids.) A group
+/// with no locally-known membership degrades honestly to "unknown locally" rather than
+/// inventing a list — the same acknowledged-uncertainty direction as the rest of this model.
 ///
 /// Public because four call sites render it — the CLI's withheld-line warning, the CLI's
 /// chart warnings, the sign-off report, and the window's per-row warning. Four hand-written
@@ -265,5 +311,35 @@ mod tests {
         let list = PatientMedicationList::empty(ChartSet::single(one));
         assert_eq!(list.charts.members(), &[one]);
         assert!(list.rows.is_empty());
+    }
+
+    /// #697 part 1: a doubted link's remedy is a judgement of the LINK — both verbs, the window's
+    /// gesture by its label — and never thread separation.
+    #[test]
+    fn the_doubted_link_remedy_names_both_judgements_and_never_separation() {
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("`unlink-charts "));
+        // "link-charts" alone would be satisfied by "unlink-charts": pin the confirm verb by
+        // its own backtick-opened spelling.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("`link-charts "));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("Not the same person"));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("How these charts are linked"));
+        assert!(!DOUBTED_LINK_INSTRUCTION.contains("medication-separate"));
+    }
+
+    /// Final review F1b: every sentence must hold in every case the text is shown. "Either
+    /// judgement lifts this hold" was false (two doubted links; the A–C–X bridge; a shared line
+    /// reaching outside after an unlink); both verbs refuse without a human key; and separation
+    /// may follow a judgement, so the text orders them rather than forbidding one.
+    #[test]
+    fn the_doubted_link_remedy_is_true_in_every_case_it_is_shown() {
+        assert!(!DOUBTED_LINK_INSTRUCTION.contains("Either judgement lifts"));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("--attester-key"));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("Judge the links before separating"));
+        // Residual R1: a LINK needs both charts held here (admit_judgement); a record can list
+        // a member whose registration has not arrived, so the confirm verb must say so.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("both charts must be held on this node"));
+        // Both causes db/054 can report: the hard check's clash, and a human's unlink.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("hard identity check"));
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("different people"));
     }
 }

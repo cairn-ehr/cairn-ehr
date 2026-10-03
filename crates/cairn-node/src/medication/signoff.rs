@@ -52,14 +52,18 @@ pub struct SignOffOutcome {
     /// HAS one", so only the second is ever said out loud.
     pub active_rows: usize,
     /// Displayed lines (GROUP ids) that still need a signature but were deliberately NOT
-    /// signed — today, only cross-patient groups (issue #334), whose displayed dose may
-    /// belong to the group's other patient. The caller MUST surface these: "signed off 11"
-    /// over a chart of 12 outstanding lines is a false completeness claim, which is the
-    /// same defect class as vouching for a list with a missing line. Empty in normal
-    /// operation. See `cairn_medication_view::withheld_rows`.
-    pub withheld: Vec<Uuid>,
-    /// Each hazardous group's FULL member-thread list — the arguments to the
-    /// `medication-separate` remedy the caller is told to run. Carried through verbatim
+    /// signed — a group reaching a chart outside the set (issue #334) or, while the set holds
+    /// a doubted link, any group not recorded only on the opened chart (#697 (b)): in both
+    /// the displayed dose may belong to another patient. The caller MUST surface these:
+    /// "signed off 11" over a chart of 12 outstanding lines is a false completeness
+    /// claim, which is the same defect class as vouching for a list with a missing line.
+    /// Empty in normal operation. Each line carries its reasons (#697), so a renderer words
+    /// each with its own remedy. See `cairn_medication_view::withheld_rows`.
+    pub withheld: Vec<cairn_medication_view::WithheldLine>,
+    /// Each hazardous group's FULL member-thread list — for a group reaching outside the set,
+    /// the arguments to the `medication-separate` remedy the caller is told to run; for a
+    /// doubted-link group, only which threads are held (that remedy judges the links, #697).
+    /// Carried through verbatim
     /// from `PatientMedicationList::separation_targets`, so it is a SUPERSET of `withheld`:
     /// it also covers cross-patient groups that needed no signature and were therefore
     /// never withheld. Look up the groups you are reporting; do not iterate it as if it
@@ -132,7 +136,9 @@ pub struct SignOffOutcome {
 ///
 /// This function does NOT refuse over an incomplete or partly-untrustworthy chart. It signs
 /// every line it can show and stand behind, and REPORTS the rest — `withheld` for lines
-/// present but untrustworthy (cross-patient dose bleed), `groups_missing_from_chart` for
+/// present but untrustworthy (reaching a chart outside the set — cross-patient dose bleed,
+/// #334 — or not only on the opened chart while the record's links are in doubt, #697 (b)),
+/// `groups_missing_from_chart` for
 /// content the chart could not display at all, `failed` for lines whose write errored. All
 /// three must be surfaced by the caller; signing what it can must never become silence
 /// about what it cannot.
@@ -215,9 +221,10 @@ pub async fn sign_off_medication_list(
         ensure_same_charts(shown, &first_read.charts, "while this list was on screen")?;
     }
 
-    // Lines that need a signature but are not safe to sign (cross-patient dose bleed,
-    // issue #334). Withheld per LINE, never per chart — see the #339 note on this
-    // function: nothing wrong with one line may block another.
+    // Lines that need a signature but are not safe to sign: reaching a chart outside the set
+    // (cross-patient dose bleed, issue #334), or not only on the opened chart while the
+    // record's links are in doubt (#697 (b)). Withheld per LINE, never per chart — see the
+    // #339 note on this function: nothing wrong with one line may block another.
     let withheld = cairn_medication_view::withheld_rows(&first_read.rows);
     let active_rows = first_read
         .rows
@@ -488,6 +495,7 @@ mod tests {
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: false,
+            wrong_chart: Default::default(),
             source_charts: vec![],
         }
     }

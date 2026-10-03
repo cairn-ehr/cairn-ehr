@@ -128,6 +128,93 @@ before it can be repaired (R2); R4/R5 consume both.
 >   - **A cease on such a line stops only the opened chart's threads.**
 >   - Whether a doubted set should also withhold the other member's one-chart lines is open (#697).
 
+#### R1b — a doubted set withholds every line not on the opened chart (#697 (b), #701; designed 2026-10-03)
+
+The maintainer decided #697 option (b) on 2026-09-27. While the chart set holds a doubted link, every
+line not recorded on the opened chart is withheld from sign-off, with its own cause and remedy. A
+signature is a claim about a person, and a hard veto is positive evidence against the link. Visibility
+does not change: hiding the line would be the hazard if the two charts are one person.
+
+- **The rule.** It is pure, in `cairn-node`'s `medication/read.rs`, and returns *reasons*, not a single bool:
+  - `outside_set`: the group reaches a chart outside the set. Unchanged.
+  - `doubted_link`: the set holds a doubted link, and the group's charts are not exactly `{opened}`.
+    An empty chart list is not `{opened}`, so the rule over-warns there.
+
+  Both can hold at once. `doubted_link` absorbs R1's "multi-chart line in a doubted set". The read is
+  handed the opened chart: `list_patient_medications` passes its `patient`.
+- **The row's shape is additive and fail-safe.**
+  - `MedicationRow::cross_patient` keeps its meaning, "withheld as a wrong-chart hazard". Every
+    existing reader, such as sign-off targeting and `cease_plan`, therefore stays correct unchanged.
+  - A new `wrong_chart: WrongChartReasons { outside_set, doubted_link }` sits beside it. Both are built
+    by one constructor, so `cross_patient == wrong_chart.any()` holds by construction; a DB test pins it.
+  - Rejected: narrowing `cross_patient` back to "outside only". A reader that checked only that field
+    would then under-warn.
+- **Wording.** One shared constant per reason, as with `SEPARATION_INSTRUCTION`. They are used on the
+  row, in the window's withheld report, in the CLI's list and in its sign-off output.
+  - The outside-set wording is unchanged.
+  - The doubted-link wording says the line was not recorded on the opened chart and may be another
+    person's.
+  - Its remedy (`DOUBTED_LINK_INSTRUCTION`) is a human judgement of the link, never thread separation:
+    - **not one person:** "Not the same person…" beside the link (CLI `unlink-charts`);
+    - **one person:** confirm with `link-charts`. The window cannot confirm a standing link yet (**#716**).
+
+  A line carrying both reasons gets both sentences.
+- **Sign-off after the fact.** `withheld_rows` returns each withheld group with its reasons, and
+  `SignOffOutcome::withheld` carries them. The "were NOT signed" report can then word each reason
+  from what the orchestrator did, not from a re-read.
+- **Cease.** No change. `cease_plan` already stops only the opened chart's threads on any
+  `cross_patient` line. For a doubted-set line that sits only on another member it therefore writes
+  nothing and names every thread it held back.
+- **#701.** `cairn_chart_set_has_doubted_link` reads the stored `patient_link.attested` (R2a's one
+  definition). It no longer re-derives attestation through an `event_log` join, which a legacy row
+  with a NULL `content_address` fell out of. This changes a function body only; no generation bump.
+- **§1.2.** The paper counterpart is two folders clipped together while one page is in doubt: you sign
+  for your own patient's page and not for the doubtful one until someone settles the clip. Reading
+  and the sign-off gesture are unchanged (1 → 1 → 1). The withheld line's cost falls only on a doubted
+  set, and it is lifted by one judgement: unlink (window) or confirm (CLI until #716).
+
+> [!NOTE]
+> **As built (2026-10-03, PR #717), where the build departed from the bullets above:**
+> - **The rule lives in `cairn-node`'s `medication/hazard.rs`** (`wrong_chart_reasons`, pure), not in
+>   `read.rs`. The two row fields come from **one reasons map** in `read.rs`, not from a constructor.
+>   Every production reader goes through `MedicationRow::is_wrong_chart_hazard()` (either signal is
+>   enough) or `hazard_reasons()` (a hazard with no recorded reason is worded as the outside case;
+>   blind to status). What sign-off withholds is `targeting::withheld_reasons()` / `withheld_rows()`.
+> - **"Doubted" gained a third case (maintainer decision during the final review):** an ATTESTED
+>   unlink between two charts that are still in one set. It catches the A–C–X bridge: A–X is doubted,
+>   and a sparse chart C, linked to both, trips no veto. A clinician unlinks A–X and the record stays
+>   one through C. db/054 used to look only at `state = 'link'` rows, so it then found no doubt, and
+>   every X line became signable from A just after a human attested that A and X are different
+>   people. Pinned by `doubted_link_withholds.rs`'s bridge test.
+> - **"Either judgement lifts this hold" was dropped.** It was false in reachable cases: after an
+>   unlink a shared line reaches outside the set and stays withheld with the separation remedy;
+>   confirming one of two doubted links leaves the hold; and the bridge case above. The remedy now
+>   says the hold lifts once no link is in doubt, and to judge the links before separating threads.
+>   It names `--attester-key`, `--from` (an unlink where neither chart is held) and that a link
+>   needs both charts held. A row says "the node cannot yet vouch that it is this patient's" and
+>   "until the record's links are no longer in doubt".
+> - **The CLI prints the long remedy once, below the list** (`list_text::doubted_link_note`, decided
+>   by the status-aware `withheld_rows`), not under every row. The outside-set row lines stay
+>   byte-identical to before (pinned by a golden).
+> - **The §1.2 count above is per doubted link.** "Lifted by one judgement" holds for one doubted
+>   link. Two doubted links take two acts, and in the A–C–X bridge CONFIRMING A–C or C–X never lifts
+>   it: the act is a human A–X relink, or an unlink of A–C or C–X that takes X out of A's record.
+> - **The PR review round** (after the final review):
+>   - **Pointers.** `withheld_because()` became `hazard_reasons()`, because the CLI had pointed every
+>     hazard row at a note printed only for withheld ones. Only a line `withheld_reasons()` reports
+>     now says "cannot be signed until …" or points below the list, in the CLI and the window alike.
+>   - **Member charts.** The rule also judges each member thread's own chart, which is the chart
+>     sign-off writes to.
+>   - **Construction.** `MedicationRow` and `WrongChartReasons` lost `Deserialize`.
+>   - **Tests.** The bridge test gained a line on the bridge chart, so its lift can fail. New tests:
+>     a human relink lifts the bridge; an un-attested unlink is no doubt (a deliberate under-warn,
+>     now stated in db/054 and `hazard.rs`); another record's doubt leaves this one alone.
+> - **#718:** db/054's SECURITY DEFINER no longer has a reason since #701; it is kept, and the
+>   decision is filed. **#719:** the review residuals (items 3–4 fixed for the doubted line in the
+>   review round). **#720:** make `wrong_chart` the only Rust source of truth. #716 and #335 gained
+>   comments (the window cannot show which link is in doubt; the doubt state can change between
+>   display and sign-off, with or without a human act).
+
 ### R2 — link and unlink from an open chart (#681) + the precedence floor
 
 - **Gesture**: header control **"Same person as…"** → the front door's search (only a chart some

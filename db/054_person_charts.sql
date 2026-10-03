@@ -87,25 +87,46 @@ $$;
 GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_agent;
 
 -- 3. Whether a chart set holds a link this node DOUBTS — an input to the medication read's
---    wrong-chart hazard rule (cairn-node medication/read.rs, is_wrong_chart_hazard).
+--    wrong-chart hazard rule (cairn-node medication/hazard.rs, wrong_chart_reasons; read by
+--    medication/read.rs).
 --
 --    ADR-0076 decision 1 combines every standing link, including an un-attested one the
 --    node's hard veto (db/016) would refuse at its own door. Such a pair may be two people,
 --    so a medication group spanning it must stay withheld from sign-off, as it was before
---    the combined read. Two ways a link is doubted:
---      (a) db/018 flagged it on arrival (link_veto_flag), or
---      (b) it is an un-attested standing link that trips cairn_has_hard_veto NOW. db/018
---          evaluates the veto only when the link arrives, so demographics arriving later
---          (a peer's link syncing ahead of the clashing DOB) never raise the flag — issue
---          #220. Evaluating it here at read time closes that gap for this read, whatever
---          #220's fix to the flag itself turns out to be.
---    "Attested" is db/018's one definition: an attester key is present AND
---    cairn_attestation_vouched holds. A human-attested link is the human decision the veto
---    exists to force, so it is never doubted here.
+--    the combined read. Three ways the set holds a doubted link:
+--      (a) db/018 flagged a link on arrival (link_veto_flag), or
+--      (b) an un-attested standing link trips cairn_has_hard_veto NOW. db/018 evaluates the
+--          veto only when the link arrives, so demographics arriving later (a peer's link
+--          syncing ahead of the clashing DOB) never raise the flag — issue #220. Evaluating
+--          it here at read time closes that gap for this read, whatever #220's fix to the
+--          flag itself turns out to be.
+--      (c) a clinician has ATTESTED an unlink between two charts that are BOTH still in the
+--          set — other links join them (A–C–X: unlinking A from X leaves A–C and C–X
+--          standing; LinkEffect::StillJoined). That unlink is positive evidence the set
+--          holds two people, so the links still joining them are in doubt, whatever (a) and
+--          (b) say of each one. Without this case the A–C–X bridge went unnoticed: with no
+--          clash on either machine link (a sparse chart C, e.g. a John Doe with no DOB),
+--          every line of X became signable from A minutes after a human said A and X are
+--          different people (maintainer decision 2026-10-03, #697 (b)). It holds until X
+--          leaves A's set (another unlink) or a human links A–X after all. Case (c) is why
+--          p_charts must be ONE chart's record (person_charts), as the medication read passes
+--          it: on an arbitrary list it would also count a pair a human has already split.
+--    "Attested" is read from the STORED patient_link.attested column (#701; R2a's one
+--    definition: an attester key is present AND cairn_attestation_vouched held when the
+--    winner was applied). A human-attested LINK is the human decision the veto exists to
+--    force, so it is never doubted by (b); a human-attested UNLINK is the decision (c) obeys.
+--    NOT COVERED, deliberately: an UN-attested unlink inside the set is not a doubt. Only a
+--    human's "not the same person" is; counting a machine's or a peer agent's would let any
+--    unreviewed writer freeze sign-off on a record (ADR-0030). An under-warn, so stated here
+--    and pinned by cairn-node tests/doubted_link_withholds.rs.
 --
---    SECURITY DEFINER because cairn_attestation_vouched is locked away from runtime roles
---    (db/001) and event_log's attester columns sit under the #405 column floor; the answer
---    is one boolean about a set the caller already holds, and search_path is pinned.
+--    SECURITY DEFINER is no longer strictly required: the old reasons
+--    (cairn_attestation_vouched locked away by db/001; event_log attester columns under the
+--    #405 column floor) no longer apply to this body, which reads neither, and everything it
+--    reads (link_veto_flag, patient_link, cairn_has_hard_veto) is granted directly to
+--    cairn_agent. It is kept so this slice makes no privilege change (issue #718 decides
+--    whether to drop it); the answer is one boolean about a set the caller already holds,
+--    and search_path is pinned.
 CREATE OR REPLACE FUNCTION cairn_chart_set_has_doubted_link(p_charts uuid[])
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -116,13 +137,23 @@ AS $$
         SELECT 1 FROM link_veto_flag f
         WHERE f.low = ANY(p_charts) AND f.high = ANY(p_charts)
     ) OR EXISTS (
+        -- #701: the STORED winner attestation (R2a, ADR-0076 decision 5 - one definition,
+        -- evaluated when the winner was applied). Never re-derive it through event_log: that
+        -- is a second spelling, and the join dropped a legacy row whose content_address is
+        -- NULL (pre-#115).
         SELECT 1
         FROM patient_link pl
-        JOIN event_log el ON el.content_address = pl.content_address
         WHERE pl.state = 'link'
           AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
-          AND NOT (el.attester_key IS NOT NULL AND cairn_attestation_vouched(el.event_id))
+          AND NOT pl.attested
           AND cairn_has_hard_veto(pl.low, pl.high)
+    ) OR EXISTS (
+        -- (c): a human's "not the same person" about two charts this set still joins.
+        SELECT 1
+        FROM patient_link pl
+        WHERE pl.state = 'unlink'
+          AND pl.attested
+          AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
     )
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) FROM PUBLIC;

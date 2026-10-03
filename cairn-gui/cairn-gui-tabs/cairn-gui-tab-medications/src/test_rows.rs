@@ -5,6 +5,7 @@
 //! and a fixture that differs between the two files makes their assertions incomparable.
 use cairn_medication_view::{
     ChartSet, MedicationRow, MedicationStatus, MemberVouch, PatientMedicationList, VouchState,
+    WrongChartReasons,
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -35,6 +36,7 @@ pub(crate) fn row(
         reconciliation_flagged: false,
         coding_conflict: false,
         cross_patient: false,
+        wrong_chart: WrongChartReasons::default(),
         source_charts: vec![uid(999)],
     }
 }
