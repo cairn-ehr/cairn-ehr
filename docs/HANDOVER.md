@@ -3,256 +3,200 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R3 — THE FRONT DOOR COLLAPSES BY PERSON — IN DESIGN (2026-10-03, branch `feat/r3-front-door-by-person`).**
-> **R1b (PR [#717](https://github.com/cairn-ehr/cairn-ehr/pull/717)) is MERGED**, as are R2b-2 (PR #711), R2b-1
-> (PR #707), R2a (PR #698) and R1 (PR #688). Repair path #679 · #680 · #681; design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R1b section + its as-built note),
-> ADR-0076, ADR-0077, spec **v0.79**; plan `docs/superpowers/plans/2026-10-03-repair-path-r1b-doubted-link-withholds.md`.
-> Built: `WrongChartReasons` / `WithheldLine` / `DOUBTED_LINK_INSTRUCTION` (`cairn-medication-view`);
-> `medication/hazard.rs`; db/054 reads `pl.attested` and counts an attested unlink inside the set as a doubt (no
-> generation bump, still 55); per-reason wording in the window and the CLI (`list_text`).
+> **⇒ R3 — THE FRONT DOOR COLLAPSES BY PERSON (ADR-0076 decision 6) — BUILT ON PR
+> [#721](https://github.com/cairn-ehr/cairn-ehr/pull/721) (2026-10-03): seven tasks with per-task reviews, an opus
+> final review, one fix wave (re-reviewed clean), and every local gate over the final code (the DB sweep: 2498 passed,
+> 0 failed, none skipped). AWAITING THE MAINTAINER'S MERGE.** R1b (PR #717), R2b-2 (PR #711), R2b-1 (PR #707), R2a
+> (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R3 section + its as-built note),
+> ADR-0076, ADR-0077, spec **v0.79**; plan `docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`.
+> Built: `PersonRow` / `group_by_person` / `CandidateList::displayed_charts()` / `TrustState::Unknown`
+> (`cairn-patient-search`); `patient/search_person.rs` and `patient/candidate_text.rs` (`cairn-node`); `funnel/rows.rs`
+> (`cairn-gui-tauri`). No SQL change; `SCHEMA_GENERATION` stays 55.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R3** (the front door collapses by person), then **R4** (per-node matcher worker, #679 — proposes, never links),
->    **R5** (banner + worklist, #680 — the worklist must filter pairs with an attested `patient_link` row, #700).
->    Plan each from the design page's section. **#716** (the window cannot confirm a standing link, nor show WHICH
->    link is in doubt) is the natural small slice beside them. #699 stays open until the maintainer closes it.
+> 1. **R4** (per-node matcher worker, #679 — proposes, never links), then **R5** (banner + worklist, #680 — the
+>    worklist must filter pairs with an attested `patient_link` row, #700). Plan each from the design page's section.
+>    **#716** (the window cannot confirm a standing link, nor show WHICH link is in doubt) is the natural small slice
+>    beside them, and **#723** (the front door calls a doubted set "One person") belongs with R5's doubt work. #699
+>    stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** **#708** (`link_charts` should re-check both compared sets in its transaction) ·
 >    **#709** (a link outcome can go unseen when it lands after the chart changed) · **#710** (R2b-1 residuals) ·
 >    **#712** (R2b-2 residuals: `chart_set.rs` size, wiring tests) · **#713** (a retry after a committed Outranked
 >    silently overrules a colleague) · **#714** (`CanonicalPair` / `JudgedFrom` newtypes) · **#715** (`link.js` drift
->    guard) · **#716** · **#718** (db/054's SECURITY DEFINER has no reason since #701 — drop or keep) · **#719** (R1b
->    residuals) · **#720** (`wrong_chart` as the only Rust source of truth; `cross_patient` computed for `--json`) ·
->    **#699** (built, ADR-0077 — awaiting the close) · **#700** · **#702** (pinned) · **#703** (the
->    generation heal can be used up by `cairn-sync init`) · **#704** · **#705** · **#706** · **From R1:** #689 (db/034
->    admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a decision) · #691 ·
->    #692 · #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
-> 3. **Human acts still owed** (an agent cannot do them): the runbook stopwatch figures — also a **linked chart's
->    open** and **runbook §10's unlink** (≤ 15 s) — and the **live Tauri-IPC pass on a linked pair**, including the
->    #699 (a) third-chart unlink and now a **doubted** pair (the withheld lines' wording on screen and to VoiceOver).
->    See *Four things still owed are HUMAN acts* below.
+>    guard; R3 guarded only its search read) · **#716** · **#718** (db/054's SECURITY DEFINER has no reason since #701)
+>    · **#719** (R1b residuals) · **#720** (`wrong_chart` as the only Rust source of truth) · **#722** (the `--mock`
+>    window has no linked pair) · **#723** · **#699** (built, ADR-0077 — awaiting the close) · **#700** · **#702**
+>    (pinned) · **#703** (the generation heal can be used up by `cairn-sync init`) · **#704** · **#705** · **#706** ·
+>    **From R1:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts —
+>    a decision) · #691 · #692 · #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
+> 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
+>    **runbook §10's unlink** (≤ 15 s), and the **live Tauri-IPC + VoiceOver pass on a linked pair**: the #699 (a)
+>    third-chart unlink, a **doubted** pair's withheld lines, and R3's person row (label announced, each member opens).
 > 4. **#620**, the only open item that can still change the wire (the COSE unprotected header is hashed into the
 >    content address but lies outside the signature); brainstorm first. Then **#626**, **#652 + #655** together,
 >    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
+>
+> **⇒ R3'S DURABLE RULES (ADR-0076 decision 6, PR #721) — do not undo any of these:**
+> - **Rows are built ONLY by `group_by_person`** (`cairn-patient-search/src/person.rs`: pure, shared so any picker
+>   agrees with the node on what a row is; `search.rs` its only production caller). A row sits at its best-ranked
+>   member; matched members first in rank order, then unmatched members oldest first; every chart exactly once; the
+>   seven ADR-0075 keys still rank CHARTS. Pinned by `person.rs`'s tests and `tests/search_by_person.rs`.
+> - **The signed list is ONLY `CandidateList::displayed_charts()`** — every member of every row shown, in row order;
+>   whatever signs or prints candidates follows it. Pinned by `attestation.rs::a_linked_row_signs_every_member_in_row_order`,
+>   the end-to-end `search_by_person.rs::a_registration_signs_every_member_of_a_linked_row` and
+>   `candidate_text.rs::the_printed_chart_order_is_the_attested_order`.
+> - **The cap counts ROWS and never splits one** (`withheld` counts people, never signed; `shown_charts` is what is
+>   signed). Pinned by `prompt.rs::the_cap_counts_people_and_never_splits_a_linked_row`.
+> - **A chart not held here reads `Unknown` and never sets `incomplete`** (a deliberate change to a SIGNED flag);
+>   **a HELD chart with no readable name does, matched or not** (`search_person.rs::display_name_for`). Pinned by
+>   `search_person.rs`'s `a_chart_not_held_here_reads_unknown_never_confirmed` and
+>   `a_held_chart_with_no_name_ever_is_still_unreadable`, and `search_by_person.rs`'s
+>   `a_matched_chart_not_held_here_with_no_name_is_not_a_partial_search`.
+> - **A missing component fails the search — never a row of one** (one person in two prompt places is the
+>   duplicate-creating failure): `MissingComponent`, and `read_components` refuses a component lacking its own chart.
+>   Pinned by `person.rs::a_chart_with_no_component_read_is_an_error_never_a_silent_row_of_one` and
+>   `search_person.rs::a_component_that_omits_its_own_chart_is_refused`.
+> - **Every member of every row shown can be opened, and nothing else** (`AppState::shown` via `remember_shown`, from
+>   `CandidateList::charts()`); the window never picks the chart for the clerk. Pinned by `commands.rs`'s
+>   `a_member_the_search_did_not_match_can_be_opened` and `an_id_on_no_row_is_still_refused`.
+> - **Over single-chart rows every sentence is byte-identical to before R3** — goldens
+>   `view.rs::single_chart_summaries_are_byte_identical_to_before_r3`,
+>   `candidate_text.rs::golden_two_never_linked_rows_print_exactly_as_before_r3`,
+>   `link/search.rs::only_this_records_own_chart_matched`. People-vs-charts wording lives in `funnel/rows.rs`.
+> - **The linked-row label reaches a screen reader through `aria-describedby`** on every member button (`funnel.js`
+>   `personItem`; Tab never lands on the label). **No test pins it** (#332); the live VoiceOver pass checks it.
 >
 > **⇒ R1b'S DURABLE RULES (#697 (b), #701, PR #717) — do not undo any of these:**
 > - **A doubted set withholds every line not recorded ONLY on the opened chart** (`medication::hazard::wrong_chart_reasons`,
 >   pure, given the opened chart; an EMPTY chart list is not "only on the opened chart"). The opened chart's own lines
 >   stay signable; the line stays on screen. Pinned by `hazard.rs`'s tests and `tests/doubted_link_withholds.rs`
 >   (incl. the mirror test opened from the OTHER chart — the only test that proves `opened` is used).
-> - **`cross_patient` is KEPT and set from the same reasons map as `wrong_chart`** — every production reader goes
+> - **`cross_patient` is KEPT and set from the same reasons map as `wrong_chart`**; every production reader goes
 >   through `MedicationRow::is_wrong_chart_hazard()` (either signal withholds) or `hazard_reasons()` (a reasonless
->   hazard is worded as the outside case). Never read `wrong_chart` or `cross_patient` alone in new code (#720 would
->   make `wrong_chart` the only Rust field).
+>   hazard is worded as the outside case). Never read either field alone in new code (#720).
 > - **`hazard_reasons()` is STATUS-BLIND; `withheld_reasons()` / `withheld_rows()` say what THIS gesture withholds.**
->   Anything that tells the reader a line "cannot be signed until …" or points at the withheld report must ask
->   `withheld_reasons()` — the PR review found the CLI pointing ceased and already-signed rows at a note never printed.
+>   Anything that says a line "cannot be signed until …" or points at the withheld report asks `withheld_reasons()`.
 > - **The rule judges every chart a group touches, INCLUDING each member thread's own chart** (`read.rs`
 >   `touched_charts`) — the chart sign-off writes to. A row missing from the reasons map is a hazard (`row_reasons`).
 > - **"Doubted" has THREE cases in db/054 `cairn_chart_set_has_doubted_link`:** a `link_veto_flag` row; an UN-attested
->   standing link that trips the hard veto now (#220's path); and an ATTESTED unlink between two charts still in the
->   set (the A–C–X bridge — without it, unlinking A–X while C joins them made X's lines signable from A). It reads the
->   STORED `pl.attested` (#701) — never re-derive attestation through `event_log`. It must be handed one record's
->   charts (`person_charts`); its only production caller does.
+>   standing link that trips the hard veto now (#220's path); an ATTESTED unlink between two charts still in the set
+>   (the A–C–X bridge). It reads the STORED `pl.attested` (#701) — never re-derive attestation through `event_log` —
+>   and must be handed one record's charts (`person_charts`).
 > - **The doubted remedy is a judgement of the LINKS, never thread separation, and never promises "either judgement
->   lifts this hold"** (`DOUBTED_LINK_INSTRUCTION`; false after an unlink of a shared line, with two doubted links, and
->   in the bridge). Each sentence must stay true in every case shown — the final review found three that were not.
-> - **The CLI prints the long remedy ONCE below the list** (`list_text::doubted_link_note`, decided by the status-aware
->   `withheld_rows`); the outside-set row lines stay byte-identical to before (golden in `list_text.rs`).
-> - **An UN-attested unlink inside the set is deliberately NOT a doubt** (stated in db/054 and `hazard.rs`, pinned by
->   a DB test): counting an agent's unlink would let any unreviewed writer freeze sign-off.
+>   lifts this hold"** (`DOUBTED_LINK_INSTRUCTION`). Each sentence must stay true in every case shown.
+> - **The CLI prints the long remedy ONCE below the list** (`list_text::doubted_link_note`, decided by `withheld_rows`);
+>   the outside-set row lines stay byte-identical (golden in `list_text.rs`).
+> - **An UN-attested unlink inside the set is deliberately NOT a doubt** (db/054, `hazard.rs`, a DB test): counting an
+>   agent's unlink would let any unreviewed writer freeze sign-off.
 >
 > **⇒ THE LINK PRECEDENCE FLOOR'S DURABLE RULES (R2a, ADR-0076 decision 5) — do not undo any of these:**
-> - **`patient_link`'s winner order is ATTESTED FIRST, then HLC** (`cairn_link_overlay_wins`, db/018). A total
->   order, so every node converges. "Attested" is ONE definition (`attester_key IS NOT NULL AND
->   cairn_attestation_vouched(event_id)`), evaluated ONCE per applied event and STORED with the winner — safe
->   because a vouch never changes after first projection (db/043 gate 1 runs before gate 4). Never add a second
->   spelling; a new reader reads `pl.attested`.
-> - **`db/055`'s EXISTENCE is load-bearing** — it moved the generation to 55, and the loader's generation-change
->   heal re-decides winners the old order chose. A column backfill cannot. **Never fold db/055 into db/018.**
->   **And never delete its re-fold block**: cairn-sync shares the generation and heals with the OLD applier, so
->   a cairn-sync-first load would otherwise use up the heal (#703). A peer still on an older binary ranks the
->   old way until it upgrades (stated in identity.md §5.2).
-> - **Recorded is not took effect.** db/018 admits an assertion that loses the overlay. Every judgement path
->   reads back, in its own transaction, what now stands (`chart_link::standing_link`): a human judgement
->   reports `LinkEffect` (by whether the standing assertion AGREES — a later agreeing one is not a
->   disagreement), auto-apply rolls back a matcher link that is not itself the winner rather than mark it applied.
-> - **One lock order everywhere: the `match_proposal` row, then db/018's CARNLK advisory lock**
->   (`chart_link::assert_link_in_tx` pre-locks the row; `auto_apply` and `apply_accepted_proposal` read it `FOR
->   UPDATE` first). Reversing it deadlocks a same-pair race (40P01). Pinned by a `pg_stat_activity` Lock-wait
->   test in `tests/chart_link.rs`.
-> - **A judgement is a human's**: `link_charts`/`unlink_charts` take a `Reviewer` (the human key signs AND
->   attests); there is no node-key fallback. `link` needs BOTH charts held here; `unlink` also admits a displayed
->   member not held here (same record), and is then filed under the HELD chart (db/005 step 8b). Only OPEN
->   proposals (`pending`/`accepted`/`review`) move; closed rows are never touched (`applied`/`auto_applied` by
->   db/019's invariant; `rejected`/`retracted` by design — `patient_link` holds what stands).
+> - **`patient_link`'s winner order is ATTESTED FIRST, then HLC** (`cairn_link_overlay_wins`, db/018), a total order.
+>   "Attested" is ONE definition (`attester_key IS NOT NULL AND cairn_attestation_vouched(event_id)`), evaluated ONCE
+>   per applied event and STORED with the winner; a new reader reads `pl.attested`, never a second spelling.
+> - **`db/055`'s EXISTENCE is load-bearing** (generation 55; the loader's heal re-decides winners the old order chose).
+>   **Never fold it into db/018, and never delete its re-fold block** — cairn-sync heals with the OLD applier, so a
+>   cairn-sync-first load would use up the heal (#703). A peer on an older binary ranks the old way (identity.md §5.2).
+> - **Recorded is not took effect**: every judgement path reads back, in its own transaction, what now stands
+>   (`chart_link::standing_link`, `LinkEffect`); auto-apply rolls back a matcher link that is not itself the winner.
+> - **One lock order: the `match_proposal` row, then db/018's CARNLK** (reversed, a same-pair race deadlocks, 40P01;
+>   a `pg_stat_activity` Lock-wait test in `tests/chart_link.rs`).
+> - **A judgement is a human's** (`Reviewer`: the human key signs AND attests; no node-key fallback). `link` needs BOTH
+>   charts held; `unlink` also admits a displayed member not held here, filed under the HELD chart (db/005 step 8b).
+>   Only OPEN proposals move.
 >
-> **⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707) — do not undo any of these:**
-> - **The comparison is SET against SET, never chart against chart.** With A open and already linked to C,
->   linking B to A also joins B to C — `cross_vetoes` runs `cairn_match_veto` over every left×right pair across
->   BOTH sets, not one A–B pair, or a B–C clash would go unseen. Pinned by
->   `chart_compare.rs::a_clash_with_a_third_chart_already_in_the_record_is_found`.
-> - **Link names BOTH COMPARED sets**, widening decision 3 to the right-hand side: `ComparisonView` carries
->   `left_charts` and `other_charts`, the webview sends exactly those back (never its current `renderedCharts`,
->   which a re-read can grow between Compare and Link), and `link_impl` refuses a changed left set as
->   `THIS_CHANGED` and a changed right set as `OTHER_CHANGED` — a judgement is never signed over a set nobody
->   compared. Pinned by `link/mod.rs`'s `compare_is_bound_to_the_chart_on_screen`,
->   `compare_refuses_a_changed_set`, `link_refuses_when_this_record_changed`,
->   `link_refuses_when_the_other_record_changed`, `link_is_bound_to_the_chart_on_screen`.
-> - **Every panel message goes through `setMessage`, never a bare `.textContent`.** An empty status line is
->   `hidden`, and style.css's `[hidden]` wins — a bare write puts the words in the DOM but never on screen nor
->   in the screen reader (the first build's refusals and Outranked sentence were all invisible). No JS harness
->   pins it (#332): a headless walk must assert `getComputedStyle(el).display !== "none"`, not text.
-> - **A partially-read comparison offers no Link.** Reading stays available on a failed member read (availability
->   over consistency), but the judgement needs the whole picture. Pinned by
->   `view_tests.rs::a_partial_comparison_names_what_is_missing_and_cannot_link`.
-> - **Absence and precision wording live in `link/view.rs`, not in the node read or the JS panel.** On a chart not
->   held here every ABSENT fact reads "unknown — registration not yet received here" (not just DOB) — but struck
->   names that HAVE arrived are listed; a coarser-than-day DOB names its precision (`FieldFact::precision`,
->   principle 4). Pinned by `view_tests.rs::an_absent_fact_says_not_recorded_or_unknown`,
->   `::struck_names_on_a_chart_not_held_here_are_still_shown`, `::a_coarse_dob_names_its_precision`.
-> - **An identifier finding is never labelled "verified".** db/016's identifier severity says whether both values
->   passed a format profile, not how either was sourced; only a dob/sex-at-birth hard veto (both provenance-rank
->   ≥ 60) is "Verified facts differ". Pinned by `view_tests.rs::an_identifier_finding_is_never_called_verified`.
-> - **A locked key is not a verdict** (`view::key_locked`, `Retry::Now`): the Link button survives it — as
->   `Never` it forced a second Compare. Pinned by `view_tests.rs::a_locked_key_is_not_a_verdict`.
-> - **Code selects by a typed field, never a display label** (`MedListRowView::current`, not `status_label ==
->   "current"`: a reworded label would have emptied the list into a false "no current medications"); and **the
->   panel's search counts what it shows** (`link_search` filters this record's charts in Rust). Pinned by
->   `view_tests.rs::only_current_medications_are_listed_and_warnings_carry_over` and `link/search.rs`'s tests.
-> - **`chart_link`'s pre-check refusals are marked verdicts — never revert to bare `anyhow::bail!`.** Same chart
->   is `RefusalScope::Input`; a chart not held here or a non-human attester key is `RefusalScope::NodeState`
->   (#702). Pinned by `chart_link.rs`'s `refusal_scope` assertions in `a_chart_cannot_be_linked_to_itself`,
->   `a_chart_this_node_has_never_seen_is_refused_before_signing`, `a_non_human_key_is_refused_and_nothing_moves`.
+> **⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707) — do not undo any of these** (pins: `chart_compare.rs`,
+> `link/mod.rs`, `link/view_tests.rs`, `chart_link.rs`, each named after its rule):
+> - **The comparison is SET against SET** — `cross_vetoes` over every left×right pair of BOTH sets, or a B–C clash goes
+>   unseen. **Link names BOTH COMPARED sets** (`left_charts`/`other_charts` sent back verbatim; `link_impl` refuses a
+>   changed set as `THIS_CHANGED` / `OTHER_CHANGED`).
+> - **Every panel message goes through `setMessage`, never a bare `.textContent`** (an empty status line is `hidden`).
+>   No JS harness pins it (#332): a headless walk must assert `getComputedStyle(el).display !== "none"`.
+> - **A partially-read comparison offers no Link.** **Absence and precision wording lives in `link/view.rs`** (on a
+>   chart not held here every ABSENT fact reads "unknown — registration not yet received here"; arrived struck names
+>   are listed; a coarse DOB names its precision). **An identifier finding is never "verified"**; only a dob/sex-at-
+>   birth hard veto (both provenance-rank ≥ 60) is "Verified facts differ". **A locked key is not a verdict**
+>   (`Retry::Now`).
+> - **Code selects by a typed field, never a display label** (`MedListRowView::current`); **the panel's search counts
+>   what it shows**. **`chart_link`'s pre-check refusals are marked verdicts — never a bare `anyhow::bail!`** (same
+>   chart → `RefusalScope::Input`; not held or a non-human key → `NodeState`, #702).
 >
-> **⇒ R2b-2'S DURABLE RULES ("Not the same person…", ADR-0077, PR #711) — do not undo any of these:**
-> - **`FiledUnder::RecordOf` is UNLINK-ONLY, and re-checked UNDER CARNLK in `assert_link_in_tx`.** A link filed
->   under a third chart is refused before anything is signed; a `RecordOf` unlink takes db/018's CARNLK (after the
->   proposal-row lock — order row→CARNLK) and only THEN re-reads `person_charts(opened)`. A re-read merely inside
->   the READ COMMITTED transaction raced a sync-door unlink (PR #711 review). It lives in the signing core, not in
->   `judge`, because `assert_link_in_tx` is `pub`. Pinned by `admit_tests.rs`'s `a_link_is_never_filed_under_a_third_chart`,
->   and `tests/unlink_from_record.rs`'s `a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed`
->   (parks the judgement on the advisory lock via `pg_stat_activity`; red without the fix) and
->   `a_third_chart_filing_is_refused_at_the_signing_core_when_its_record_lacks_the_pair`.
-> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under or open chart —
->   else a successful A–B–C split reads `StillJoined` whenever the near chart is the one asked about. Pinned in
->   every orientation by `unlink_from_record.rs::a_split_reads_took_effect_whichever_way_round_the_pair_is_named`,
->   plus `::an_unlink_on_a_cycle_is_recorded_and_says_still_joined` and `tests/chart_link.rs::an_unlink_through_a_third_chart_is_recorded_and_says_it_did_not_split`.
->   The record REPORTED is the open chart's even when a subject carries the filing
->   (`::the_record_shown_is_the_open_charts_even_when_a_subject_carries_the_filing`).
-> - **An opened chart / `--from` unrelated to the pair is REFUSED**, even when a held subject alone would admit the
->   unlink (a stray flag is never silently ignored). Pinned by `admit.rs::an_unrelated_open_chart_is_refused_even_when_a_subject_is_held`
->   and `unlink_from_record.rs::an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_held`.
-> - **The list is per LINK, never per member** (in A–C–B only a human can say which clip is wrong; per member the
->   outcome is `StillJoined` by construction). `record_edges` keeps `state = 'link'` — an unlinked pair is not a
->   link. Pinned by `tests/record_edges.rs::an_unlinked_pair_is_not_a_link` (queries a set holding BOTH charts —
->   the first shape could not see its own predicate) and `record_links.rs::a_link_line_names_both_charts_how_it_was_made_and_when`.
-> - **The unlink panel is its OWN `<section>`, and the two panels are mutually exclusive** (opening either closes
->   the other); after a successful unlink focus goes to the patient heading, not `<body>`. Walked headless, no
->   committed JS harness (#332).
-> - **`Outranked` never says a retry "changes nothing"** — a retry would normally record a NEWER judgement that
->   overrules the other (the sync merge is bounded at 24 h of drift — a peer further ahead keeps outranking).
->   Pinned by `unlink_view_tests.rs::outranked_does_not_call_a_retry_a_no_op` (and `view_tests.rs`'s link
->   twin). A locked key names its own button (`key_locked_for`;
->   `view_tests.rs::a_locked_key_names_the_button_that_was_pressed`); `standing_edge`'s unread list is
->   `Retry::Now`, never `LINK_GONE` (`unlink.rs::an_unread_edge_list_is_retryable_and_not_a_verdict`).
-> - **An open chart's refusal scope follows the FACT, before and inside alike** (`AdmitRefusal`, `admit.rs`): not
->   held here → `NodeState` (sync may deliver it, as for R2a's subjects); held but its record lacks the pair →
->   `Input`, "reload the chart and judge again". The first build classed the pre-check NodeState by inheritance
->   ("cannot record it yet", retry-after-operator — for a stale picture); PR #711 review. Pinned by
->   `admit_tests.rs::each_refusal_says_what_it_is_a_verdict_about` and the DB tests' `refusal_scope` asserts.
-> - **The webview-fields guards scan `main.js`, `funnel.js` and `unlink.js`** (not `link.js` — #715), so
->   `renderLinks` must live in `main.js` (`commands.rs::the_webview_reads_no_field_the_backend_does_not_send`), and
->   `unlink.js`'s `report.reload` / `failure.retry` / `view.can_unlink` are pinned by
->   `unlink_view_tests.rs::unlink_js_reads_no_field_the_backend_does_not_send`. Never say "by the matcher" for
->   an un-attested link: a peer's human link with an un-enrolled attester is also un-attested ("without a
->   clinician's confirmation on record here").
+> **⇒ R2b-2'S DURABLE RULES ("Not the same person…", ADR-0077, PR #711) — do not undo any of these** (pins:
+> `admit_tests.rs`, `tests/unlink_from_record.rs`, `tests/chart_link.rs`, `tests/record_edges.rs`, `unlink_view_tests.rs`):
+> - **`FiledUnder::RecordOf` is UNLINK-ONLY, re-checked UNDER CARNLK in `assert_link_in_tx`** (after the proposal-row
+>   lock), then `person_charts(opened)` is re-read — a re-read merely inside READ COMMITTED raced a sync-door unlink.
+>   It lives in the signing core because `assert_link_in_tx` is `pub`
+>   (`a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed` parks on the advisory lock).
+> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under or open chart
+>   (`a_split_reads_took_effect_whichever_way_round_the_pair_is_named`); the record REPORTED is the open chart's.
+> - **An opened chart / `--from` unrelated to the pair is REFUSED**, even when a held subject alone would admit it.
+>   **The list is per LINK, never per member**; `record_edges` keeps `state = 'link'`
+>   (`an_unlinked_pair_is_not_a_link` queries a set holding BOTH charts).
+> - **The unlink panel is its OWN `<section>`; the two panels are mutually exclusive**; after an unlink focus goes to
+>   the patient heading (walked headless, #332). **`Outranked` never says a retry "changes nothing"** (the sync merge
+>   is bounded at 24 h of drift). A locked key names its own button; `standing_edge`'s unread list is `Retry::Now`.
+> - **An open chart's refusal scope follows the FACT** (`AdmitRefusal`): not held → `NodeState`; held but its record
+>   lacks the pair → `Input`, "reload the chart and judge again".
+> - **The webview-fields guards scan `main.js`, `funnel.js` and `unlink.js`**; `link.js` has only its search read
+>   guarded (R3) — the rest is #715. `renderLinks` stays in `main.js`
+>   (`commands.rs::the_webview_reads_no_field_the_backend_does_not_send`). Never say "by the matcher" for an
+>   un-attested link ("without a clinician's confirmation on record here").
 >
 > **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
-> - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET, never
->   the per-patient `patient_medication_reconciliation_flag`.** The view groups by `patient_id`, so the same
->   drug on two LINKED charts is two groups on two patients and never flagged — "simplifying" back to it
->   re-hides two unflagged lines for one drug, a double-dose reading hazard. Its dup_key must stay identical
->   (whitespace-normalised) to db/033's; `medication_dup_key_drift.rs` pins it.
-> - **The medication read selects groups by MEMBERSHIP over the chart set.** Filtering the views by their
->   `patient_id` (the display winner) is the #334 defect returning. A line is a wrong-chart hazard when the group
->   reaches a chart OUTSIDE the set, OR (since R1b, #697 (b)) the set holds a **doubted link** and the line is not
->   recorded only on the opened chart — see R1b's rules above. `list_chart_set_medications` is PRIVATE:
->   re-reading a stale displayed set would silently drop the withholding.
-> - **A cease on a wrong-chart-hazard line stops only the opened chart's threads** and names the rest
->   (`chart_set::cease_plan`, via `is_wrong_chart_hazard()`) — never writes a cessation onto a chart that may be
->   someone else's; a doubted-set line only on another member writes nothing.
-> - **`MedicationRow::display_chart`** (serialized `patient_id`) is the chart the group DISPLAYS under — not
->   "the chart this line is on", never a write target. Use `source_charts` / `MemberVouch::patient_id`.
-> - **A linked chart whose registration is not held here** (`ChartIdentity::held`, a `patient_chart` row)
->   reads trust `unknown` (`person::trust_of`), never the no-row default `confirmed`.
-> - **A missing group is no longer the cross-patient case**: its reports use `MISSING_GROUP_INSTRUCTION`
->   (reload / projection repair), never the separation remedy.
-> - **EVERY CHART COMMAND NAMES THE DISPLAYED CHART SET, not just the chart** (ADR-0076 decision 3; widens
->   PR #674's Critical below). `displayed_patient` is still checked FIRST, then the set
->   (`cairn-gui-tauri/src/chart_set.rs`). `sign_off_medication_list(…, displayed: Option<&ChartSet>)`
->   refuses when the displayed set ≠ the first read, or the first read ≠ the second; `None` is the CLI
->   (skips only the displayed compare).
-> - **Sign-off and cease act on each thread's OWN chart** (`MemberVouch::patient_id`), never the opened
->   chart — the floor does not yet enforce it (**#689**).
-> - **A failed member-identity read keeps the list and shows a warning** (availability over consistency):
->   `ChartPane { list, members, members_error }`. Never let the header's completeness hide the drugs.
-> - **A never-linked chart gains no header, label or line** — pinned by the golden
->   `combined_read.rs::a_never_linked_chart_reads_exactly_as_before`, captured BEFORE the read was
->   rewritten. `groups_missing_from_chart` is now empty by construction; sign-off's handling of a non-empty
->   one has no DB coverage (same class as #333).
+> - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET**, never the
+>   per-patient `patient_medication_reconciliation_flag` (it groups by `patient_id`, so one drug on two LINKED charts
+>   is never flagged — a double-dose reading hazard). Its dup_key stays db/033's (`medication_dup_key_drift.rs`).
+> - **The medication read selects groups by MEMBERSHIP over the chart set** (filtering by `patient_id` is the #334
+>   defect returning); `list_chart_set_medications` is PRIVATE. **A cease on a wrong-chart-hazard line stops only the
+>   opened chart's threads** and names the rest (`chart_set::cease_plan`).
+> - **`MedicationRow::display_chart`** (serialized `patient_id`) is where the group DISPLAYS, never a write target —
+>   use `source_charts` / `MemberVouch::patient_id`. **Sign-off and cease act on each thread's OWN chart**; the floor
+>   does not yet enforce it (**#689**).
+> - **A linked chart not held here reads trust `unknown`** (`person::trust_of`) — the search shares it since R3. **A
+>   missing group** uses `MISSING_GROUP_INSTRUCTION`, never the separation remedy.
+> - **EVERY CHART COMMAND NAMES THE DISPLAYED CHART SET** (ADR-0076 decision 3): `displayed_patient` FIRST, then the set
+>   (`cairn-gui-tauri/src/chart_set.rs`); `sign_off_medication_list(…, displayed: Option<&ChartSet>)` refuses a changed
+>   set; `None` is the CLI. **A failed member-identity read keeps the list and warns** (`ChartPane::members_error`).
+> - **A never-linked chart gains no header, label or line** (golden
+>   `combined_read.rs::a_never_linked_chart_reads_exactly_as_before`). Sign-off over a non-empty
+>   `groups_missing_from_chart` has no DB coverage (same class as #333).
 >
-> **⇒ THE FUNNEL'S DURABLE RULES — do not undo any of these** (full text: the funnel design page's dated
-> notes and ROADMAP's funnel entries):
-> - **`search_patients` RANKS BY SEVEN KEYS** (`cairn_patient_search::rank_candidates`, inputs in
->   `patient/search_rank.rs`): passes → identifier matched → a §5.4 callsign typed WHOLE → name tokens
->   matched (exact or a ≥3-byte prefix, as `db/046` matches; callsigns never split) → DOB near-miss →
->   tokens matched EXACTLY → chart age. It only REORDERS. Each key has a victim if dropped (an MRN-only
->   match buried, a whole-callsign John Doe sunk below every "Ed …", "Alex" tying every namesake); plain
->   `ids.sort()` shows the OLDEST charts. `patient_search_ranking.rs` fails on it. Tokens are counted over the
->   RETAINED names (`patient_name`, repudiated included — #349), never `patient_name_current`.
-> - **`incomplete` is the SEARCH's partiality only; truncation is `withheld`** (ADR-0075). Folding them
->   back re-creates #671. `attestation_through_the_port.rs` pins both halves. **Never raise `PROMPT_CAP`
->   to make a number look better.**
-> - **The raw typed name travels WITH its token** (`FunnelSession`); a search for an older form revision
->   is DROPPED; the webview forgets its held token synchronously on every edit.
-> - **`require_provisioned` runs in the window's register command, BEFORE `take`**, not inside
->   `PatientRegistration::register` (a pre-check in the port would leave the port suites' db/005 proofs
->   green and empty).
-> - **Only a candidate some list on screen showed can be opened** (`AppState::shown`).
-> - **EVERY CHART COMMAND NAMES THE CHART ON SCREEN** (`AppState::displayed_patient`; 2c's Critical — a
->   sign-off once signed patient B on a review of patient A's list). A chart command acts on the chart
->   DRAWN (`renderedPatient`), each has a `*_impl` pinned by a not-on-screen test, and `open_patient` is
->   private to `funnel`. **Never let a new chart command resolve `open_patient()` alone.** A registration
->   never writes, or switches charts, behind an open chart (`register_impl` + `open_after_registering`).
-> - **A click within 800 ms of a step-3 prompt landing is "show me", never "register"**
->   (`PROMPT_READ_GUARD_MS`) — SOFT POLICY, stays in `funnel.js` (decided 2026-09-23, #677).
-> - **The launch probe matches all four `ActorStanding` arms**, never a boolean (a `Retired` key meets
->   db/004's resurrection refusal, #152); pair the standing with the key it was probed for (#670).
-> - **Every sentence and its retry advice lives in `funnel/view.rs`** (`Retry::{Now, AfterOperator,
->   Never}`). A refusal (`P0001`, `DeliberateRefusal`) and an outage are different clinical facts; the
->   non-`P0001` remainder is #655.
-> - **`TokenStore::settle` is the sanctioned end of a `take`**; a success INVALIDATES; `discard` does NOT
->   clear `in_flight`. **A dropped `register` future still latches the store (#669), and `register` is
->   cancellation-unsafe (#649): never race it against a timeout or `select!`.**
-> - **The step-3 trigger is advisory, never a gate** (a mononymous patient or an unknown DOB registers).
-> - **Nothing provisions an actor on a write path.** `init` enrols; `enroll-device-actor` is the remedy;
->   `enrolment_is_never_a_write_side_effect.rs` scans every shipped `.rs` — **when it goes red, do not add
->   your call site to `ALLOWED`.** `resolve_matcher_actor` still enrols (#663); what a SUPERSEDED key
->   classifies as is undecided (#666 first, then #664). **`init` must not `?` its enrolment.**
-> - **`cairn-gui-live` is where a DB-backed port implementation goes.** The P0001 rule has three homes
->   (#652). The `gui` job declares `CAIRN_ALLOW_DB_SKIP=1` on the STEP; deleting it is invisible (#656).
->   Derived truncate lists miss identity-stream tables (#658).
-> - **`--mock` holds ONE `MockData` for the window's life** (half of #668); its matching rule is NOT
->   db/046's — never generalise a timing from it.
+> **⇒ THE FUNNEL'S DURABLE RULES — do not undo any of these** (full text: the funnel design page's dated notes):
+> - **`search_patients` RANKS BY SEVEN KEYS** (`rank_candidates`, inputs in `patient/search_rank.rs`): passes →
+>   identifier → a §5.4 callsign typed WHOLE → name tokens (exact or a ≥3-byte prefix, as `db/046`; callsigns never
+>   split) → DOB near-miss → EXACT tokens → chart age. It only REORDERS; each key has a victim if dropped
+>   (`patient_search_ranking.rs`). Tokens count over the RETAINED names (`patient_name`, #349).
+> - **`incomplete` is the SEARCH's partiality only; truncation is `withheld`** (ADR-0075; folding them re-creates #671;
+>   `attestation_through_the_port.rs`). **Never raise `PROMPT_CAP` to make a number look better.**
+> - **The raw typed name travels WITH its token** (`FunnelSession`); an older revision's search is DROPPED; the
+>   webview forgets its token on every edit. **`require_provisioned` runs in the register command, BEFORE `take`.**
+> - **Only a chart some list on screen showed can be opened** (`AppState::shown`; since R3 every member of a row).
+>   **EVERY CHART COMMAND NAMES THE CHART ON SCREEN** (`AppState::displayed_patient`; 2c's Critical — a sign-off once
+>   signed patient B on a review of A's list): each has a `*_impl` pinned by a not-on-screen test; `open_patient` is
+>   private to `funnel` — **never let a new chart command resolve `open_patient()` alone.** A registration never
+>   writes, or switches charts, behind an open chart (`register_impl` + `open_after_registering`).
+> - **A click within 800 ms of a prompt landing is "show me", never "register"** (`PROMPT_READ_GUARD_MS`, SOFT POLICY
+>   in `funnel.js`, #677). **The launch probe matches all four `ActorStanding` arms** (a `Retired` key meets db/004's
+>   resurrection refusal, #152), paired with the key it probed (#670).
+> - **Every sentence and its retry advice lives in `funnel/view.rs`** (`Retry::{Now, AfterOperator, Never}`; person-row
+>   wording in `funnel/rows.rs`). A refusal (`P0001`, `DeliberateRefusal`) is not an outage; the remainder is #655.
+> - **`TokenStore::settle` ends a `take`**; a success INVALIDATES; `discard` does NOT clear `in_flight`. **A dropped
+>   `register` future still latches the store (#669) and `register` is cancellation-unsafe (#649): never race it
+>   against a timeout or `select!`.** The step-3 trigger is advisory, never a gate.
+> - **Nothing provisions an actor on a write path** (`enrolment_is_never_a_write_side_effect.rs` — **when it goes red,
+>   do not add your call site to `ALLOWED`**). `resolve_matcher_actor` still enrols (#663); a SUPERSEDED key's class is
+>   undecided (#666, then #664). **`init` must not `?` its enrolment.**
+> - **`cairn-gui-live` holds the DB-backed ports.** The P0001 rule has three homes (#652); the `gui` job's step-level
+>   `CAIRN_ALLOW_DB_SKIP=1` is load-bearing and its deletion invisible (#656); derived truncate lists miss identity
+>   tables (#658). **`--mock` holds ONE `MockData`** (half of #668); its matching is NOT db/046's and it has no link
+>   concept — every mock row is a person of one (#722).
 >
-> **Open from the funnel run:** #355 · #645 · #647 · #649 · #650 · #652 · #655 · #656 · #657 (multi-event
-> rollback untested in both trees) · #658 · #662 · #663 · #664 · #665 · #666 · #667 · #668 · #669 · #670
-> · #672 (identifier entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads `operator_chain`
-> text) · #682 (an NFD trailing accent is lost) · #683 · #684 (`1980-3-7` misses `1980-03-07` in db/046's
-> DOB pass — a SET gap) · #685 · #686.
+> **Open from the funnel run:** #355 · #645 · #647 · #649 · #650 · #652 · #655 · #656 · #657 (multi-event rollback
+> untested in both trees) · #658 · #662 · #663 · #664 · #665 · #666 · #667 · #668 · #669 · #670 · #672 (identifier
+> entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads `operator_chain` text) · #682 (an NFD trailing
+> accent is lost) · #683 · #684 (`1980-3-7` misses `1980-03-07` in db/046's DOB pass — a SET gap) · #685 · #686.
 >
 > **⇒ THE NODE PLANE AND DR ARE CLOSED OUT; NO DECIDED-AND-UNBUILT ITEM REMAINS THERE.** Newest first:
 > #621 ([ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md)), #619
@@ -264,19 +208,17 @@
 >   `restore_reads_the_clinical_plane.rs` and `restore_cli_surface.rs::a_scripted_restore_brings_the_clinical_record_back`,
 >   never `dr_clinical_guarantee_gap.rs`'s counts. **Never cite ADR-0026 decision 1's promise 2** as met: no
 >   node-default key tier exists (ADR-0067).
-> - **The pen-release rule (#578):** a pen row carrying a wrapped DEK is released only when custody for its
->   event is SETTLED (`cairn_release_pen_row`, db/052; `pen_rows_leave_through_one_door.rs`). #585:
->   nothing reads Postgres notices.
-> - **`verify-backup` (#567)** fails `backup SHORT` only on evidence; operators run it AFTER `backup`.
+> - **The pen-release rule (#578):** a pen row carrying a wrapped DEK is released only when custody for its event is
+>   SETTLED (`cairn_release_pen_row`, db/052; `pen_rows_leave_through_one_door.rs`). #585: nothing reads Postgres
+>   notices. **`verify-backup` (#567)** fails `backup SHORT` only on evidence; operators run it AFTER `backup`.
 >   Residuals #551 · #553 · #589 · #590 · #591 · #592.
-> - **#527/#562's triage note is false**; the real fix is **#575** (the minted recovery code reaches
->   stderr). A retry after a crashed restore must move the installed `<key>.unwrap` aside first (#596).
-> - **Open decisions (none a patch):** #575 · #602 (any client can set `cairn.remote_apply`) · #611 · #613 ·
->   #620. **Restore residuals:** #616 · #617 · #596–#599. **Races (reasoned, not reproduced):** #603 ·
->   #604. **PR #601's wave:** #605 · #606 · #607 · #608 · #609 · #610. **Node plane:** #268 · #301 (both
->   `loop:needs-human`) · #569. **From #619/#621:** #622 · #624 · #625 · #626 · #628 · #629 · #631 · #632 ·
->   #633 · #634. **Search:** #636 · #637 (the materialised token table — the right fix for the ~860 ms Pi
->   floor, its own slice) · #639 · #640 · #641 · #643.
+> - **#527/#562's triage note is false**; the real fix is **#575** (the minted recovery code reaches stderr). A retry
+>   after a crashed restore must move the installed `<key>.unwrap` aside first (#596).
+> - **Open decisions (none a patch):** #575 · #602 (any client can set `cairn.remote_apply`) · #611 · #613 · #620.
+>   **Restore residuals:** #616 · #617 · #596–#599. **Races (reasoned, not reproduced):** #603 · #604. **PR #601's
+>   wave:** #605 · #606 · #607 · #608 · #609 · #610. **Node plane:** #268 · #301 (both `loop:needs-human`) · #569.
+>   **From #619/#621:** #622 · #624 · #625 · #626 · #628 · #629 · #631 · #632 · #633 · #634. **Search:** #636 · #637
+>   (the materialised token table — the right fix for the ~860 ms Pi floor, its own slice) · #639 · #640 · #641 · #643.
 > - **Still broken, named rather than assumed away:** #549 · #552 · #536 · #502 item 4 · #101 items 2–3 ·
 >   #583 · #586 · #587 · #556–#563.
 
@@ -295,108 +237,96 @@
 > commit: the slip lives in the commit message and fixing it needs a force-push. Residuals **#547**, **#548**.
 
 > [!IMPORTANT]
-> **Eighteen traps. Each is a step a next session takes in good faith.** The full argument for each is in
-> its ADR, its test's header or ROADMAP; this list keeps the rule, the pin and the tempting wrong fix.
+> **Eighteen traps. Each is a step a next session takes in good faith.** The full argument for each is in its ADR,
+> its test's header or ROADMAP; this keeps the rule, the pin and the tempting wrong fix.
 >
-> 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** (`keystore::adopt_derived_unwrap_secret`);
->    calling it anywhere else re-creates the #495 coupling. `unwrap_secret_is_not_derived.rs` sweeps every
->    shipping tree and asserts every allow-list entry is still live: **when it fails, delete the entry;
->    never add one.** The sweep and `is_a_test_gate_attribute` (pgrx's `#[cfg(any(test, feature =
->    "pg_test"))]`) move **together**.
-> 2. **Registering the unwrap key is PROVISIONING, not a write-path side effect** (ADR-0066 decision 6). A
->    database recreated under an existing key file needs `cairn-node establish-unwrap-key` before its first
->    sealed write. Never make a red fixture green by weakening `ensure_unwrap_key`.
-> 3. **`cairn-sync`'s ONE derived fallback** (no `<key>.unwrap` AND the derived key equals the registered
->    one → start, warn every startup). An absent file may fall back; a present-but-unusable one never may.
->    **Never simplify those two into one arm.** Retiring the fallback is **#514**.
-> 4. **⇒ NEVER RUN `establish-unwrap-key` ON A RESTORED NODE WHOSE EXPORT COULD NOT BE READ.** It registers a
->    secret derived from the NEW seed and the singleton registrar then refuses the real key permanently.
->    Recover the export first; the way out is another restore into a fresh database.
-> 5. **⇒ `Secret32` DOES NOT SEPARATE ONE SECRET ROLE FROM ANOTHER (#511).** `Secret32::from_bytes(sk.to_bytes())`
->    compiles. The count is pinned per file in `secret32_conversions_are_named.rs` — exactly **two** sites turn
->    the signing seed into an unwrap secret (the ADR-0066 migration and trap 3's fallback); a third is the
->    defect returning. `unwrap_secret_is_the_signing_seed` and `secret_opens_the_carried_custody` are not
->    made redundant by the types.
-> 6. **`init` refuses a database that already has custody registered** (it reads `node_unwrap_key` first);
->    the remedy it names is `establish-unwrap-key` — see trap 4 first on a restored node.
-> 7. **⇒ A BODY SHREDDED AFTER A CAPTURE KEEPS ITS DEK ON THAT MEDIUM. THAT IS NOT A LEAK — DO NOT "FIX" IT.**
->    A backup restores the state at capture time; invalidating old backups is policy (rotation, the
->    clinic's call — principle 9; ADR-0067 decision 2). **Never filter old segments.** Pinned by
->    `medium_point_in_time.rs::a_medium_restores_the_state_at_capture_time`. Operator half owed: **#589**.
-> 8. **⇒ A PEN ROW WHOSE DEK "BELONGS TO ANOTHER NODE" IS STILL RETAINED (#578).** *"Did not open with the key
->    we have right now"* is not *"not ours"* — the right `<key>.unwrap` may be on a USB stick. The escape is
->    db/021's human `acked`. Pinned by `requeue_releases_custody.rs::a_penned_dek_from_another_node_is_kept_until_a_human_decides_otherwise`
->    and `requeue_retains_unlanded_custody.rs`. **The look-alike narrow fix:** keying the guard on the opened
->    `dek` rather than the row's own `dek_wrapped` passes the headline test and skips the check whenever the
->    key did not open. Do not drop the Rust check because the floor also catches it — it says WHY.
-> 9. **RETIRED — HISTORY (#584, ADR-0070).** Live residue: **do not remove or move the
->    `cairn_project_late_custody` calls.** In both doors they sit AFTER the substitution guard, and in db/020
->    BEFORE the `cairn.remote_apply` clear; wrapping db/005's call in `cairn.remote_apply = 'on'` turns a
->    strict refusal into a flag. Pinned in `late_custody_reaches_the_chart.rs`, each placement pin with its
->    own positive control. (#597's notice is still misleading.)
-> 10. **⇒ WHEN `late_custody_guards.rs` FIRES, THE GUARD IS RIGHT.** Every function that `INSERT`s into
->     `event_clear` calls `cairn_project_late_custody` (writer set pinned: `apply_remote_event`,
->     `submit_event`), and every registered applier that reads custody is `heal_safe = TRUE`. **Wrong
->     fixes:** registering a custody reader `heal_safe = false` (the chart silently owes a rebuild — **#610**),
->     flipping a non-idempotent one to `TRUE`, exempting a writer. A third writer is a DECISION. A custody
->     read hidden in a helper, a `MERGE`, or dynamic `EXECUTE` is invisible to the guard — review by hand.
-> 11. **⇒ `restore` EXITS 3 FOR AN INCOMPLETE RECOVERY; A TEST EXPECTING 1 IS THE BUG (#594, ADR-0071).**
->     Exit 1 = the ceremony was BLOCKED, checked FIRST. **Wrong fixes:** asserting `success()` for a torn
->     medium; making a wrong recovery code exit 1 (its end state is the no-registry state, 3); "simplifying"
->     `past_chain_break` to the medium's clinical total (M8). The precedence has exactly ONE test,
->     `restore_cli_surface.rs::without_the_flag_a_piped_restore_still_inherits_no_custody` — never weaken
->     it to `!success()`. `restore_exit_vocabulary.rs` pins the value and
->     `exit_incomplete_matches_cairn_nodes_restore` the agreement. ⚠️ **`!status.success()` IS NO LONGER AN
->     ASSERTION — write `Some(n)`.** ⚠️ An ACKED pen row is counted in `penned` and `requeue` will not clear
->     it; do not subtract acked rows. Residuals **#611**, **#616**.
-> 12. **⇒ THE SUBSTITUTION REFUSAL HAS ONE HOME (`cairn_refuse_substitution`, db/053), AND A DOOR CALLS IT.**
->     It compares `IS DISTINCT FROM` ("cannot tell" is a refusal); a fourth inline copy is the #608 `<>`
->     fail-open returning (`substitution_guard_is_single_source.rs`). db/005/db/020 read under `GET
->     DIAGNOSTICS` (hot path); **db/009 reads unconditionally — do NOT "tidy" it into a `ROW_COUNT` check**,
->     and its guard sits AFTER the `IF/ELSE` (M7). A db/009 refusal aborts the WHOLE restore, correctly. A
->     DEFERRED clinical record is REPORTED, never an exit-3 cause. It guards all five event-log doors; the
->     inventory is `substitution_guard_covers_every_writer.rs` over `pg_proc`. Residuals #608, #605, #569,
->     #622.
-> 13. **⇒ THE NODE PLANE'S SUBSTITUTION REFUSAL LIVES IN EACH DOOR'S TAIL; THE PULLER ASKS THE TABLE, NOT THE
->     ERROR (#619, ADR-0073).** An arm that `RETURN`s early bypasses the guard (the genesis arm, safe only
->     for want of an `ON CONFLICT`), and the catalogue guard will NOT notice a new one. **Wrong fixes:** a
->     dedicated SQLSTATE (P0001 is a contract, #228); matching the sentence; penning only when the GUARD
->     raised (`a_rival_refused_by_an_earlier_check_is_still_penned`); turning the failed-lookup freeze into a
->     skip (`node_substitution_lookup_freezes.rs`, M10); computing `offered` over the whole frame (#268's
->     alarm fatigue, M11). A sixth writer: give it the call. Residuals #620, #622, #605.
-> 14. **⇒ A DOOR THAT LETS POSTGRES RAISE ON CALLER-SUPPLIED BYTES BREAKS THE P0001 CONTRACT (#621,
->     ADR-0074).** Every signed-bytes field goes through a P0001 helper (`cairn_uuid_or_raise` on
->     `pg_input_is_valid`, `cairn_hlc_nonneg_or_raise`, `cairn_node_role_or_raise`);
->     `node_door_input_guards.rs` fails on a bare `::uuid`. **Wrong moves:** a REGEX narrower than the cast
->     (M9); re-inlining the role list into the CHECK (M10); `USING ERRCODE`; deleting the CHECKs (they are the
->     raw-SQL floor). ⚠️ **The puller's default for an UNKNOWN SQLSTATE is pen; "tightening" it to freeze
->     reinstates #621.** The local classes (`08 40 42 53 55 57 58`, no SQLSTATE) must equal `cairn-sync`'s
->     (`sqlstate_classes_agree.rs`; merging the copies is #626); **`XX001`/`XX002` are LOCAL** on both planes.
->     A pen row of this kind leaves only by applying or an ack. **The role CHECK stays `NOT VALID`** (a
->     validating pair would re-scan on every connect and could stop a node STARTING). Known exception:
->     `cairn_body`'s `22P05` on a NUL (**#628**). Residuals #626, #629, #605, #268, #625, #631, #632, #633,
->     #634.
-> 15. **⇒ THREE THINGS IN `db/046`'s PASS 3 LOOK LIKE NOISE AND ARE EACH WORTH HUNDREDS OF MS ON A PI (#639).**
->     (a) **`OFFSET 0` is an optimisation fence, not a limit** — removing it changes no result, so nothing
->     fails. (b) **The lateral is `UNION ALL` on purpose** (the branch `DISTINCT` + outer `UNION` dedupe).
->     (c) **The parts-branch skip must test `lower(normalize(pn.value, NFC))`** — U+0130 `İ` lowercases to
->     `i` + U+0307; dropping the `lower` LOSES A TOKEN (ICU only). `the_subset_argument_holds_for_every_unicode_code_point`
->     checks all 1,114,111 code points; `the_subset_probe_still_describes_the_query_db046_runs` pins the
->     composed expression. **A probe list is a sample, not an argument; a neutrality claim needs a test that
->     can see a GAIN; re-measure with `scripts/measure_patient_search.py`, do not reason.** Residuals #641,
->     #640, #643, #637.
-> 16. **⇒ A GUARD AND THE THING IT GUARDS MUST BE ASKED ABOUT THE SAME STRING.** Pin the COMPOSED expression as
->     a literal (`include_str!` + `contains`), not its pieces.
-> 17. **⇒ LOCAL POSTGRES IS ICU, CI's IS libc, AND `lower()` DIFFERS** (full vs simple case mapping). It burned
->     a CI run in each direction. Derive such rows from the SERVER (`patient_search_equivalence.rs`'s
->     `full_case_mapping`). To reproduce CI: `CREATE DATABASE cairn_test_libc TEMPLATE template0
->     LOCALE_PROVIDER libc LOCALE 'en_US.UTF-8' ENCODING UTF8;` + `CREATE EXTENSION cairn_pgx;`. **Any test
->     touching case, collation or character classes runs against both before pushing.**
-> 18. **⇒ A TARGETED `cargo test --test X` REPORTING `ok` IS NOT PROOF — ONLY THE SWEEP IS (#661).** A targeted
->     run reported `ok` twice against source it contradicts; the sweep failed it. Most likely a stale test
->     binary (shared `target/`, a running rust-analyzer) — silent and green, worse than the loud exit-101
->     kill. **Gate on the sweep**; use `CARGO_TARGET_DIR=/tmp/…` when an IDE is open; re-run every CI gate in
->     CI's order AFTER the final edit.
+> 1. **`derive_unwrap_secret` is the ADOPTION MIGRATION ONLY** (`keystore::adopt_derived_unwrap_secret`); anywhere
+>    else re-creates the #495 coupling. `unwrap_secret_is_not_derived.rs` sweeps every shipping tree and asserts each
+>    allow-list entry is live: **when it fails, delete the entry; never add one.** It and `is_a_test_gate_attribute`
+>    (pgrx's `#[cfg(any(test, feature = "pg_test"))]`) move **together**.
+> 2. **Registering the unwrap key is PROVISIONING, not a write-path side effect** (ADR-0066 decision 6): a database
+>    recreated under an existing key file needs `cairn-node establish-unwrap-key` before its first sealed write. Never
+>    make a red fixture green by weakening `ensure_unwrap_key`.
+> 3. **`cairn-sync`'s ONE derived fallback** (no `<key>.unwrap` AND the derived key equals the registered one → start,
+>    warn every startup). An absent file may fall back; a present-but-unusable one never may — **never merge those two
+>    arms.** Retiring the fallback is **#514**.
+> 4. **⇒ NEVER RUN `establish-unwrap-key` ON A RESTORED NODE WHOSE EXPORT COULD NOT BE READ.** It registers a secret
+>    from the NEW seed and the singleton registrar then refuses the real key for good; recover the export, or restore
+>    again into a fresh database.
+> 5. **⇒ `Secret32` DOES NOT SEPARATE ONE SECRET ROLE FROM ANOTHER (#511)** — `Secret32::from_bytes(sk.to_bytes())`
+>    compiles. `secret32_conversions_are_named.rs` pins exactly **two** seed→unwrap-secret sites (the ADR-0066
+>    migration, trap 3's fallback); a third is the defect returning. `unwrap_secret_is_the_signing_seed` and
+>    `secret_opens_the_carried_custody` are not made redundant by the types.
+> 6. **`init` refuses a database that already has custody registered** (it reads `node_unwrap_key` first) and names
+>    `establish-unwrap-key` as the remedy — on a restored node read trap 4 first.
+> 7. **⇒ A BODY SHREDDED AFTER A CAPTURE KEEPS ITS DEK ON THAT MEDIUM. NOT A LEAK — DO NOT "FIX" IT.** A backup
+>    restores the state at capture time; invalidating old backups is rotation policy (principle 9; ADR-0067 decision
+>    2). **Never filter old segments** (`medium_point_in_time.rs::a_medium_restores_the_state_at_capture_time`).
+>    Operator half owed: **#589**.
+> 8. **⇒ A PEN ROW WHOSE DEK "BELONGS TO ANOTHER NODE" IS STILL RETAINED (#578).** *"Did not open with the key we
+>    have now"* is not *"not ours"* (the right `<key>.unwrap` may be on a USB stick); the escape is db/021's human
+>    `acked`. Pinned by `requeue_releases_custody.rs::a_penned_dek_from_another_node_is_kept_until_a_human_decides_otherwise`
+>    and `requeue_retains_unlanded_custody.rs`. **Look-alike fix:** keying the guard on the opened `dek`, not the
+>    row's `dek_wrapped`, passes the headline test and skips the check whenever the key did not open. Keep the Rust
+>    check although the floor also catches it — it says WHY.
+> 9. **RETIRED (#584, ADR-0070); live residue: never remove or move the `cairn_project_late_custody` calls** — in both
+>    doors AFTER the substitution guard, in db/020 BEFORE the `cairn.remote_apply` clear (wrapping db/005's call in
+>    `cairn.remote_apply = 'on'` turns a strict refusal into a flag). Pinned in `late_custody_reaches_the_chart.rs`,
+>    each placement with its own positive control. (#597's notice is still misleading.)
+> 10. **⇒ WHEN `late_custody_guards.rs` FIRES, THE GUARD IS RIGHT.** Every `event_clear` writer (`apply_remote_event`,
+>     `submit_event`) calls `cairn_project_late_custody`; every applier reading custody is `heal_safe = TRUE`. **Wrong
+>     fixes:** a custody reader `heal_safe = false` (a silent owed rebuild — **#610**), flipping a non-idempotent one
+>     to `TRUE`, exempting a writer. A third writer is a DECISION; a custody read in a helper, `MERGE` or dynamic
+>     `EXECUTE` is invisible to the guard — review by hand.
+> 11. **⇒ `restore` EXITS 3 FOR AN INCOMPLETE RECOVERY; A TEST EXPECTING 1 IS THE BUG (#594, ADR-0071).** Exit 1 =
+>     BLOCKED, checked FIRST. **Wrong fixes:** `success()` for a torn medium; a wrong recovery code exiting 1 (its end
+>     state is the no-registry state, 3); "simplifying" `past_chain_break` to the medium's clinical total (M8). The
+>     precedence's ONE test is `restore_cli_surface.rs::without_the_flag_a_piped_restore_still_inherits_no_custody`
+>     — never weaken it to `!success()`; `restore_exit_vocabulary.rs` pins the value,
+>     `exit_incomplete_matches_cairn_nodes_restore` the agreement. ⚠️ **Write `Some(n)`, never `!status.success()`.**
+>     ⚠️ An ACKED pen row counts in `penned` and `requeue` will not clear it; do not subtract it. Residuals **#611**,
+>     **#616**.
+> 12. **⇒ THE SUBSTITUTION REFUSAL HAS ONE HOME (`cairn_refuse_substitution`, db/053), AND A DOOR CALLS IT.** `IS
+>     DISTINCT FROM` ("cannot tell" is a refusal); a fourth inline copy is #608's `<>` fail-open returning
+>     (`substitution_guard_is_single_source.rs`). db/005/db/020 read under `GET DIAGNOSTICS`; **db/009 reads
+>     unconditionally — do NOT "tidy" it into a `ROW_COUNT` check**, its guard AFTER the `IF/ELSE` (M7); a db/009
+>     refusal aborts the WHOLE restore, correctly. A DEFERRED clinical record is REPORTED, never an exit-3 cause. All
+>     five event-log doors: `substitution_guard_covers_every_writer.rs` over `pg_proc`. Residuals #608, #605, #569, #622.
+> 13. **⇒ THE NODE PLANE'S SUBSTITUTION REFUSAL LIVES IN EACH DOOR'S TAIL; THE PULLER ASKS THE TABLE, NOT THE ERROR
+>     (#619, ADR-0073).** An early `RETURN` bypasses the guard (the genesis arm, safe only for want of an `ON
+>     CONFLICT`) and the catalogue guard will NOT notice a new one. **Wrong fixes:** a dedicated SQLSTATE (P0001 is a
+>     contract, #228); matching the sentence; penning only when the GUARD raised
+>     (`a_rival_refused_by_an_earlier_check_is_still_penned`); a skip for the failed-lookup freeze
+>     (`node_substitution_lookup_freezes.rs`, M10); `offered` over the whole frame (#268's alarm fatigue, M11). A
+>     sixth writer gets the call. Residuals #620, #622, #605.
+> 14. **⇒ A DOOR THAT LETS POSTGRES RAISE ON CALLER-SUPPLIED BYTES BREAKS THE P0001 CONTRACT (#621, ADR-0074).** Every
+>     signed-bytes field goes through a P0001 helper (`cairn_uuid_or_raise` on `pg_input_is_valid`,
+>     `cairn_hlc_nonneg_or_raise`, `cairn_node_role_or_raise`); `node_door_input_guards.rs` fails on a bare `::uuid`.
+>     **Wrong moves:** a REGEX narrower than the cast (M9); re-inlining the role list into the CHECK (M10); `USING
+>     ERRCODE`; deleting the CHECKs (the raw-SQL floor). ⚠️ **The puller's default for an UNKNOWN SQLSTATE is pen;
+>     "tightening" it to freeze reinstates #621.** The local classes (`08 40 42 53 55 57 58`, no SQLSTATE) equal
+>     `cairn-sync`'s (`sqlstate_classes_agree.rs`; merging the copies is #626); **`XX001`/`XX002` are LOCAL**. Such a
+>     pen row leaves only by applying or an ack. **The role CHECK stays `NOT VALID`** (a validating pair re-scans on
+>     every connect). Known exception: `cairn_body`'s `22P05` on a NUL (**#628**). Residuals #626, #629, #605, #268,
+>     #625, #631, #632, #633, #634.
+> 15. **⇒ THREE THINGS IN `db/046`'s PASS 3 LOOK LIKE NOISE AND ARE EACH WORTH HUNDREDS OF MS ON A PI (#639).** (a)
+>     **`OFFSET 0` is an optimisation fence** — removing it changes no result, so nothing fails. (b) **The lateral is
+>     `UNION ALL` on purpose.** (c) **The parts-branch skip must test `lower(normalize(pn.value, NFC))`** — U+0130 `İ`
+>     lowercases to `i` + U+0307; dropping `lower` LOSES A TOKEN (ICU only).
+>     `the_subset_argument_holds_for_every_unicode_code_point` checks all 1,114,111 code points;
+>     `the_subset_probe_still_describes_the_query_db046_runs` pins the composed expression. **A probe list is a sample,
+>     not an argument; re-measure with `scripts/measure_patient_search.py`, do not reason.** Residuals #641, #640,
+>     #643, #637.
+> 16. **⇒ A GUARD AND THE THING IT GUARDS MUST BE ASKED ABOUT THE SAME STRING** — pin the COMPOSED expression as a
+>     literal (`include_str!` + `contains`), not its pieces.
+> 17. **⇒ LOCAL POSTGRES IS ICU, CI's IS libc, AND `lower()` DIFFERS** (full vs simple case mapping). Derive such rows
+>     from the SERVER (`patient_search_equivalence.rs`'s `full_case_mapping`). To reproduce CI: `CREATE DATABASE
+>     cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE 'en_US.UTF-8' ENCODING UTF8;` + `CREATE EXTENSION
+>     cairn_pgx;`. **Any test touching case, collation or character classes runs against both before pushing.**
+> 18. **⇒ A TARGETED `cargo test --test X` REPORTING `ok` IS NOT PROOF — ONLY THE SWEEP IS (#661).** A stale test
+>     binary (shared `target/`, a running rust-analyzer) reported `ok` twice against source it contradicts — silent
+>     and green. **Gate on the sweep**; `CARGO_TARGET_DIR=/tmp/…` when an IDE is open; re-run every CI gate in CI's
+>     order AFTER the final edit.
 
 **The §5.9 thread ([#232](https://github.com/cairn-ehr/cairn-ehr/issues/232)): parts A+B (authority floor + operator
 surface) BUILT, enforcing nothing beyond display/emission; C+D DESIGNED, C1 the next §5.9 BUILD.** Read
@@ -404,13 +334,11 @@ surface) BUILT, enforcing nothing beyond display/emission; C+D DESIGNED, C1 the 
 (db/048's `NOT EXISTS`) — **#245**'s first SQL counterpart, not its mirror; operator-surface §1.2 budget met (residual
 **#436**). **C+D (ADR-0065)** are a custody ladder (admission → named nodes → named actors) under one invariant:
 **narrowing changes the cost and noise of reading, never whether content can be REACHED** (audited break-glass at every
-rung; rung-1 glass is a NETWORK act, **#498**). The node's DEK is the keyring, the floor the glass (LOCAL); C and D are
-inseparable; custody composes by INTERSECTION, which can EMPTY (**#499**); it narrows on `event`/`patient`, never
-`thread`. **C1** = rung 1 (`custody.nodes`, both doors, serve-door withholding) + audited break-glass + in-chart
-location signal; rung 2 is **#496** (needs a reader identity, §5.11); chart-wide `patient` is out of C1 (#499).
-Related: **#494** (ADR-0052's `event_dek` sentence vs the built table), **#377**, **#235** (shred authorization hooks),
-**#236** (FTS/RAG must build on `event_clear`).
-
+rung; rung-1 glass is a NETWORK act, **#498**). The node's DEK is the keyring, the floor the glass (LOCAL); custody
+composes by INTERSECTION, which can EMPTY (**#499**); it narrows on `event`/`patient`, never `thread`. **C1** = rung 1
+(`custody.nodes`, both doors, serve-door withholding) + audited break-glass + in-chart location signal; rung 2 is
+**#496** (needs a reader identity, §5.11). Related: **#494** (ADR-0052's `event_dek` sentence vs the built table),
+**#377**, **#235** (shred authorization hooks), **#236** (FTS/RAG must build on `event_clear`).
 **Two §5.9 facts that outlive their slices.** `REVOKE SELECT (column)` is inert while a table-level grant stands, so
 `cairn_agent` holds an explicit 23-column grant on `event_log` omitting `safety` — a new column must be granted in db/049
 §8 (`safety_read_grants.rs`), and that grant is cost-raising, not a floor (**#425**, **#427**; **#432** asks whether a
@@ -418,31 +346,28 @@ node should attempt one at all). Slice-65 follow-ons: **#374**, **#378** (withdr
 the UI must warn today), **#379**, **#436** (#374/#379 each need a DECISION). The `arrayref` residue is **#454**.
 
 > [!IMPORTANT]
-> **Two code traps that outlive their slices, because both look like tidy-ups.**
->
-> 1. **`content_address IS NOT NULL` is the "did anything win" test — never `subject_kind <> 'none'`**
->    (`none` is a legal open-vocabulary value; ADR-0062 E6).
-> 2. **Unknown ranks MAX in `db/048`/`db/049`, inverting `db/040`'s `ELSE 0`.** There rank 0 withholds reject
->    power (safe); here it would withhold protection. ADR-0065 adds a third member that agrees for a
->    DIFFERENT reason (it withholds quiet access, reachable by break-glass) — do not carry that
->    justification into a site where reachability is not guaranteed.
+> **Two code traps that outlive their slices, because both look like tidy-ups.** (1) **`content_address IS NOT
+> NULL` is the "did anything win" test — never `subject_kind <> 'none'`** (`none` is a legal open-vocabulary value;
+> ADR-0062 E6). (2) **Unknown ranks MAX in `db/048`/`db/049`, inverting `db/040`'s `ELSE 0`.** There rank 0
+> withholds reject power (safe); here it would withhold protection. ADR-0065 adds a third member that agrees for a
+> DIFFERENT reason (it withholds quiet access, reachable by break-glass) — do not carry that justification into a
+> site where reachability is not guaranteed.
 
 **Four things still owed are HUMAN acts an agent cannot do:** (1) **the §1.2 stopwatch figures** — follow
 [`cairn-gui/cairn-gui-tauri/results/RUNBOOK.md`](../cairn-gui/cairn-gui-tauri/results/RUNBOOK.md) into a dated
 `TEMPLATE.md` copy: sections 1–7 for the med-list gestures (only the *write* half is measured, median 222 ms,
-**PARTIAL**; write-cost half **#360** unwired; now also a **linked chart's open**, budget ≤ the single-chart open) and
+**PARTIAL**; write-cost half **#360** unwired; also a **linked chart's open**, budget ≤ the single-chart open) and
 **section 8 for the front door** (find ≤ 5 s, register ≤ 20 s, live and `--mock`; db/044's `gesture_kind` CHECK still
 refuses a registration timing row until widened); (2) **the accessibility pass** — a live VoiceOver run through the
-runbook's checks, front door included, keyboard-only, and on a **linked pair** (the source-chart label, #691); DOM
-assertions automated by **#332**; (3)+(4) **make CI jobs REQUIRED status checks** (**#444**, admin-only — "clippy +
-cargo test (cairn-gui)", "cargo doc (API surface)", and `CodeQL (rust)`). **If a measurement falls outside its budget,
-that is the finding — file an issue, never adjust the budget.**
+runbook's checks, front door included, keyboard-only, and on a **linked pair** (the source-chart label, #691; R3's
+person-row label); DOM assertions automated by **#332**; (3)+(4) **make CI jobs REQUIRED status checks** (**#444**,
+admin-only — "clippy + cargo test (cairn-gui)", "cargo doc (API surface)", and `CodeQL (rust)`). **If a measurement
+falls outside its budget, that is the finding — file an issue, never adjust the budget.**
 
 **Other build candidates** (nothing blocks a choice): the **drugref term→anchor lookup** (the §9 advisory tier; closes
 the coded↔uncoded case ADR-0059 decision 5 leaves open; needs a connection-model decision; `safety_class_map` its empty
 seam) · **the node/actor plane's two divergences** — db/007 fail-closes on an unmappable type (**#301**), and the node
-puller skips-and-advances a verifiable refusal where the clinical one pens it (**#268**); neither symmetric, both
-`loop:needs-human`.
+puller skips-and-advances a verifiable refusal where the clinical one pens it (**#268**); both `loop:needs-human`.
 
 **Standing gate:** whole-project review cycles repeat periodically; no release for clinical use before repeated cycles
 pass cleanly. Last full pass 2026-07-15 (#187–#217), fully closed; the runnable clinical surface has never been
@@ -456,26 +381,27 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-03 (**R1b — a doubted set withholds every line not on the opened chart**, #697 (b) + #701,
-PR **[#717](https://github.com/cairn-ehr/cairn-ehr/pull/717)**, merged) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
-`db/055`, generation 55; #697 decided (b)) and R1 (ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075,
-PR #678) · 09-23 funnel 2c (PR #674) · 09-22 funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier:
-ROADMAP. · **Spec:** **v0.79** (newest
+**Session date:** 2026-10-03 (**R3 — the front door collapses by person**, ADR-0076 decision 6, PR
+**[#721](https://github.com/cairn-ehr/cairn-ehr/pull/721)**, awaiting merge; earlier the same day R1b, PR #717, merged) ·
+09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`, generation 55) and R1
+(ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · 09-22
+funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
 ADR-0077; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
 implementation wording only) · **`SCHEMA_GENERATION`:** **55** (`db/055`) · **Phase:** architecture complete; **first
-production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door onto a medication
-chart that reads linked charts as one.
+production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one row per
+person) onto a medication chart that reads linked charts as one.
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waits on a clinical-note surface) · §5.4 John-Doe (§5.12
-push-alert open) · §5.3/§5.8 funnel (ADR-0061; precedence #345 at db/005 step 8b; ranking ADR-0075) ·
-`clinical.medication` 1–6b under born-sealed bodies (ADR-0052) + per-write human authorship (ADR-0053 — grading
-half-live until #245) · §5.9 stream through its read surface · med-list node tier (read + whole-list sign-off over a
-linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the compare-and-link
-panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) + a doubted set withholds
-every line not on the opened chart (R1b, PR #717) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056 admit-uninterpreted floor · **the L3
-reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates; `cairn-gui-tauri`, the iced shell FAILED
-a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine tested but **not wired**.
+push-alert open) · §5.3/§5.8 funnel (ADR-0061; precedence #345 at db/005 step 8b; ranking ADR-0075; one row per
+PERSON since R3, PR #721) · `clinical.medication` 1–6b under born-sealed bodies (ADR-0052) + per-write human authorship
+(ADR-0053 — grading half-live until #245) · §5.9 stream through its read surface · med-list node tier (read + whole-list
+sign-off over a linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the
+compare-and-link panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) + a doubted set
+withholds every line not on the opened chart (R1b, PR #717) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
+admit-uninterpreted floor · **the L3 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates;
+`cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine
+tested but **not wired**.
 
 ---
 
@@ -483,30 +409,39 @@ a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine tested
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise.
 
+### 2026-10-03 — R3: the front door collapses by person (PR #721)
+
+Brainstorm (two maintainer decisions: each member line is its own open target; browse collapses too, not only the
+prompt) → design addendum → plan (seven tasks) → subagent-driven, an opus final review, one fix wave re-reviewed clean.
+- **⇒ An interrupted subagent's uncommitted work is evidence, not debris.** Task 2's first implementer was interrupted
+  mid-migration; the second finished its edits instead of discarding them. Read `git status` before re-dispatching.
+- **⇒ A migration task with mechanical rules keeps a wide change reviewable.** Task 2 turned `candidates` into rows of
+  one across 19 files in both cargo trees with behaviour unchanged by construction, so each later task changed
+  behaviour in one place and its review could see it.
+- **⇒ A plan can silently drop what the design asked for.** The design's "a register over a linked row signs both
+  ids" had no task; the final review caught it, and the end-to-end DB test now reads `search.displayed` back. Diff the
+  design's test list against the plan's before building.
+- **⇒ A count claim needs the member it can be false for.** "N chart(s) of this record also matched" was false for a
+  linked member the search did not match (R10); a new grouping is the moment to re-read every sentence that counts.
+- **Mechanics:** pre-flight rulings in the SDD ledger (R1–R11) resolved plan conflicts before dispatch (a task that
+  could not compile as written; a test fixture that could not fail on the property it named). Filed #722, #723.
+
 ### 2026-10-03 — R1b: a doubted set withholds every line not on the opened chart (PR #717)
 
-Brainstorm → design addendum → plan (six tasks) → subagent-driven, an opus final review, one fix wave + a residual round.
 - **⇒ A remedy sentence is a safety claim — walk it through every case it is shown in.** "Either judgement lifts this
-  hold" passed five task reviews; the final review found it false in three reachable cases, and in one (the A–C–X
-  bridge) following it made another person's drugs signable. The fix wave's own suggested wording was untrue in three
-  more places ("until judged", "finds a clash", the link verb's holding rule) — the implementer and re-reviewer caught them.
-- **⇒ A predicate keyed on standing LINKS misses standing UNLINKS.** A human's "different people" inside a still-joined
-  set is the strongest doubt there is; db/054 looked only at `state = 'link'`. Ask what each identity verb leaves behind.
+  hold" passed five task reviews; the final review found it false in three reachable cases, and in the A–C–X bridge
+  following it made another person's drugs signable. The fix wave's own wording was untrue in three more places.
+- **⇒ A predicate keyed on standing LINKS misses standing UNLINKS.** Ask what each identity verb leaves behind.
 - **⇒ Keep the old flag, add the reasons beside it, route every reader through one method** — a fail-safe way to split a
-  boolean into causes without an under-warning reader in between (`is_wrong_chart_hazard()` / `hazard_reasons()`).
-- **⇒ Subagent reports miscount** (two swapped test counts this session): re-run the DB suites yourself and read the log.
-- **Mechanics:** a status-blind helper behind a status-aware claim ("withheld from sign-off") is a principle-4 bug —
-  decide such notes from `withheld_rows`. The fix round decided the NOTE that way and left the ROW's pointer on the
-  status-blind helper (then named `withheld_because`); the PR review caught it. **⇒ Rename a helper whose name
-  overclaims** (`hazard_reasons`), and give the per-row question its own function (`withheld_reasons`).
-- **⇒ A "the hold lifts" assertion must hold a line that can still be held.** The bridge test's lift checked only the
-  opened chart's own line, signable either way, so a set-filter mutant in db/054 passed; it needed a line on the
-  bridge chart. Mutation-check an SQL predicate by editing db/*.sql and REBUILDING (it is `include_str!`).
+  boolean into causes (`is_wrong_chart_hazard()` / `hazard_reasons()`). **⇒ Rename a helper whose name overclaims**,
+  and give the per-row question its own function (`withheld_reasons`): a status-blind helper behind a status-aware
+  claim is a principle-4 bug.
+- **⇒ A "the hold lifts" assertion must hold a line that can still be held**; mutation-check an SQL predicate by editing
+  db/*.sql and REBUILDING (it is `include_str!`). **⇒ Subagent reports miscount** — re-run the DB suites yourself.
 - Filed #716 comment, #335 comments, #718, #719 (+ update), #720.
 
 ### 2026-09-27 → 09-30 — repair path R2a, R2b-1, R2b-2 (PRs #698, #707, #711)
 
-Subagent-driven throughout; each plan carries its review ledger.
 - **⇒ A plan can mandate a false claim, and a correction can overstate too** ("unlink again after `Outranked` changes
   nothing" was false; db/020 clamps the clock merge at 24 h). **⇒ Fact-check an ADR sentence by sentence against the
   SQL before merge** (ADR-0077: one false + seven imprecise sentences after two passing reviews).
@@ -515,23 +450,18 @@ Subagent-driven throughout; each plan carries its review ledger.
   invert a lock order** (test on `wait_event_type = 'Lock'`, never a sleep). **⇒ Recorded is not took effect.**
 - **⇒ A migration that changes a projection's order must re-decide what the old order decided** (db/055; #703); **a stored
   derived value is safe only if its input cannot change after it is stored.**
-- **⇒ A test that cannot see its own predicate proves nothing — mutate to check**; a DB-suite "ok" can be a self-skip;
-  a headless walk must assert visibility, not `textContent`; `/review-pr` after a clean final review still found 7
-  Important defects; a guard file's count pins travel with the code that moves; push early (house rule 8).
-- **Mechanics:** `chart_link.rs` split into `admit.rs`/`judge.rs`; `cairn-gui-tauri/src/chart_set.rs` is over 500 (#712);
-  check `git ls-files` before calling walk debris untracked; `event_log.body` IS the payload.
+- **⇒ A test that cannot see its own predicate proves nothing — mutate to check**; a DB-suite "ok" can be a self-skip; a
+  headless walk must assert visibility, not `textContent`; `/review-pr` after a clean final review still found 7
+  Important defects; a guard file's count pins travel with the code that moves. `chart_set.rs` is over 500 (#712).
 
-### 2026-09-22 → 09-26 — funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678)
+### 2026-08-20 → 09-26 — the restore, node-plane, door and search slices; funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678)
 
+Narrative: ROADMAP; durable rules: traps 7–18 and the funnel's rules; each plan carries its review ledger.
 - **Ask what the desk will do before designing what it must attest** (#671); a design's quantitative assumption is a
   claim. **When a slice makes a constant variable, audit every reader.** **A sweep without all three DB strings is not a
   sweep**; grep every claim about the tree (#654); an atomicity probe that never reaches the server is decoration (#657);
   a new DB suite in a non-root tree runs nowhere until wired (#656); a derived truncate list is only as good as its
   predicate (#658).
-
-### 2026-08-20 → 09-21 — the restore, node-plane, door and search slices
-
-Narrative: ROADMAP; durable rules: traps 7–18; each plan carries its review ledger.
 - **An issue's scenario and scope are CLAIMS** — read the code for what it MISSED. **A guard only ever green proved
   nothing** (#586); **"untestable" is a claim — try a `SET ROLE` seam first.** **A mutation is the RED phase of a pin over
   shipped behaviour.** **Copying a guard spreads its fail-open** (#608). **A door returning `Ok` is not the record coming
@@ -575,13 +505,12 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ The repair path, R2 → R5** — see ⇒ NEXT.
+- **⇒ The repair path, R4 → R5** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
-  restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain: #549 · #551 · #552 · #553 · #525 · #541
-  (no CI job compiles `cairn_pgx`'s `pg_test`) · #531/#329 (decompose `cairn-sync/src/main.rs` — maintainer picks one) ·
-  #532 · #534 · #535 · #536 · #537 · #538 · #556–#563 · #569 · #575 · #589–#592 · #596–#599 · #602–#611 · #613 · #616 · #617 · #620 · #622 ·
-  #624–#626 · #628 · #629. (Ranges absorb issues that leave them: re-check against GitHub.)
+  restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain, beyond ⇒ NEXT's node-plane list: #525 ·
+  #541 (no CI job compiles `cairn_pgx`'s `pg_test`) · #531/#329 (decompose `cairn-sync/src/main.rs` — maintainer picks
+  one) · #532 · #534 · #535 · #537 · #538 · #624–#626. (Ranges absorb issues that leave them: re-check against GitHub.)
 - **§5.9 parts C/D** (#232) — above.
 - **`clinical.medication` — slices 1–6b DONE, read over a linked set since R1.** Next: #690 (reconciling across linked
   charts), the **drugref term→anchor lookup**, fuzzy/automatic reconciliation + a Tier-A dictionary, structured
@@ -604,13 +533,13 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
   for the in-DB floor.
 - **Landing-page polish** — a non-developer page for the generated site (`web/`).
 
-**Blocked on hardware / external access:**
-- **Bet B — Pi compute-cost run** ([Spike 0001 §9](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md)): PASS twice.
-  Remaining: fold the un-caveated B4 number into ADR-0015 to drop "provisional"; **#272** (reproject bench on the Pi).
-- **easyGP session** — port [ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)'s
-  deferred items with live schema access (`rx!`/`tx!` parser + state machine; formulation/drug source + forced-manual
-  rule table; prefetch warming daemon). Pre-read `scratch/ui-sketches/easygp-prefetch-notes.md`.
-- **Byte-tier throughput lever** — connection reuse / persistent streaming instead of one TCP connection per slice.
+**Blocked on hardware / external access:** **Bet B — Pi compute-cost run**
+([Spike 0001 §9](spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md)): PASS twice; fold the un-caveated B4 number into
+ADR-0015 to drop "provisional"; **#272** (reproject bench on the Pi). **easyGP session** — port
+[ADR-0020](spec/decisions/0020-active-write-thin-encounters-and-the-delete-vs-erase-distinction.md)'s deferred items with
+live schema access (`rx!`/`tx!` parser + state machine; formulation/drug source + forced-manual rule table; prefetch
+warming daemon); pre-read `scratch/ui-sketches/easygp-prefetch-notes.md`. **Byte-tier throughput lever** — connection
+reuse / persistent streaming instead of one TCP connection per slice.
 
 ---
 

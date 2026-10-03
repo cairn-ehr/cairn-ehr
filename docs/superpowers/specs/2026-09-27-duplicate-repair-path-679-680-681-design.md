@@ -636,6 +636,58 @@ adds no act. Measurement is the runbook's front-door section (section 8), a huma
 
 **Out of scope:** a demographic winner across members; R4/R5; links in the mock.
 
+> [!NOTE]
+> **As built (2026-10-03, PR #721), where the build departed from the bullets above:**
+> - **`group_by_person` lives in the SHARED crate** (`cairn-patient-search/src/person.rs`, beside `PersonRow`,
+>   `EmptyRow` and `MissingComponent`), not in `search_person.rs`. It is pure, and any picker must agree with the
+>   node on what a row is, exactly as it must agree on what was displayed. The node's `patient/search_person.rs`
+>   holds what feeds and renders it: `read_components` (the one `unnest` × `cairn_person_charts` statement),
+>   `display_name_for` and `trust_state_for`. `search.rs` is the only production caller of `group_by_person`, and
+>   the mock builds rows of one with `PersonRow::each_alone`.
+> - **A component missing its own chart is refused** (`assemble_components`, called by `read_components`).
+>   `group_by_person` trusts that every component contains the chart it is keyed by; one that did not would drop
+>   that chart from every row, silently. db/054 always unions the chart in, so this cannot fire today; it is
+>   refused, as `person::person_charts` refuses, rather than guessed around. Pinned by
+>   `search_person.rs::a_component_that_omits_its_own_chart_is_refused`; a chart with NO component read is
+>   `MissingComponent` (`person.rs::a_chart_with_no_component_read_is_an_error_never_a_silent_row_of_one`).
+> - **The people/charts phrase lives in `cairn-gui-tauri`'s `funnel/rows.rs`**, not in `view.rs`: `people_phrase`
+>   (the step-3 prompt's "N existing patient(s) (C charts)") and `charts_suffix`, which the link panel's search line
+>   shares. `browse_summary` keeps its own arms, each a golden sentence. `PromptCounts` gained `shown_charts`.
+> - **The "Same person as…" panel's search collapses by person too** (`link/search.rs`). With linked rows it says
+>   "N other patient(s) found (C charts)". This record's own row is left out WHOLE, unmatched members included, and
+>   a linked own record is named as a record: "This record (N charts) also matched and is not listed." The old
+>   "N chart(s) of this record also matched" would be false for a member the search did not match (principle 4).
+>   A single-chart own record keeps the old sentence verbatim. Pinned by
+>   `this_records_whole_row_is_left_out_even_its_unmatched_member` and `only_this_records_own_chart_matched`.
+> - **A HELD member with no readable name sets `incomplete` whether or not the search matched it**
+>   (`display_name_for`'s doc; `search_person.rs::a_held_chart_with_no_name_ever_is_still_unreadable`). It is on
+>   screen and signed as displayed, and the node could not read it, so the build errs toward warning. The cost is
+>   a rare over-set flag on a signed registration.
+> - **A MATCHED chart not held here no longer sets `incomplete`.** Before R3 it read "(name unavailable)" and set
+>   the SIGNED flag; now it reads "(registration not yet received here)", trust `Unknown`, and the search is
+>   complete. This is a deliberate change to a signed flag, pinned by the DB test
+>   `search_by_person.rs::a_matched_chart_not_held_here_with_no_name_is_not_a_partial_search`.
+> - **The linked-row label reaches a screen reader through `aria-describedby`.** Tab lands on a member's open
+>   button, never on the label, so `funnel.js`'s `personItem` points every member button at the label's id. No
+>   automated test pins it (a JS harness is #332); the live VoiceOver pass on a linked pair is owed.
+> - **`link.js`'s search result is guarded.** Its binding is named `found`, so
+>   `link/search.rs::link_js_search_reads_no_field_the_backend_does_not_send` can scan exactly that payload. The
+>   comparison view's fields stay unguarded; that is #715.
+> - **The CLI's text moved into `cairn-node`'s `patient/candidate_text.rs`** (`candidate_lines`, `ellipsize`,
+>   `NAME_COLUMN_WIDTH`), out of `main.rs`, so it is pinned by goldens. A linked member prints under its row as
+>   "↳ linked: …" in the same columns. `the_printed_chart_order_is_the_attested_order` pins print order ==
+>   `displayed_charts()`.
+> - **An end-to-end registration test** (`search_by_person.rs::a_registration_signs_every_member_of_a_linked_row`)
+>   registers through `register_patient` after a search that matched only one chart of a linked pair, reads the
+>   stored `search.displayed` back from `event_log`, and finds both charts, matched member first. The "Tests" list
+>   above asks for a register over a linked row that signs both ids; the plan had no task for it, and the final
+>   review restored it at the node (the pure half is `attestation.rs::a_linked_row_signs_every_member_in_row_order`).
+>   The window's half is `commands.rs`'s `a_member_the_search_did_not_match_can_be_opened` and
+>   `an_id_on_no_row_is_still_refused` (`AppState::shown` is filled from `CandidateList::charts()`, every member).
+> - **Filed:** #722 (the `--mock` window has no linked pair, so a person row cannot be walked in `--mock`) and #723
+>   (the front door calls a doubted set "One person"; its wording belongs with R5's doubt work, and R1b already
+>   surfaces the doubt on open).
+
 ### R4 — the commit-time worker (#679)
 
 - **Targeted blocking**: `candidate_pairs_for(conn, patient)` runs the six `_GROUPS_SQL` passes (and
