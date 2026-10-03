@@ -5304,6 +5304,12 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
+                // The doubted-link remedy, ONCE for the whole list: each withheld row above
+                // points here rather than repeating it (`list_text::doubted_link_note`).
+                if let Some(note) = cairn_node::medication::list_text::doubted_link_note(&list.rows)
+                {
+                    println!("{note}");
+                }
                 if !list.groups_missing_from_chart.is_empty() {
                     println!(
                         "! {} medication group(s) with locally-known content for this patient \

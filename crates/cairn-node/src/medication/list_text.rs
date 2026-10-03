@@ -21,12 +21,13 @@
 //! exercises.
 //!
 //! The withheld-line wording lives here for the same reason: when #697 split "withheld" into two
-//! reasons (a group spanning patients, a link this node doubts), each needed its own sentence AND
-//! its own remedy, and that branching is string logic a unit test can drive without a database.
+//! reasons (a group spanning patients, a record whose links are in doubt), each needed its own
+//! sentence AND its own remedy, and that branching is string logic a unit test can drive
+//! without a database.
 use crate::patient::person::ChartIdentity;
 use cairn_medication_view::{
-    format_hazard_groups, ChartSet, WithheldLine, WrongChartReasons, DOUBTED_LINK_INSTRUCTION,
-    SEPARATION_INSTRUCTION,
+    format_hazard_groups, ChartSet, MedicationRow, WithheldLine, WrongChartReasons,
+    DOUBTED_LINK_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -100,9 +101,16 @@ pub fn member_lines(members: &[ChartIdentity]) -> Vec<String> {
         .collect()
 }
 
-/// The CLI's warning lines under one withheld row of `medication-list` — one per reason, each
-/// with its own remedy (#697), then the group's member threads once (the remedy's arguments;
-/// this row lists only this record's half of a cross-patient group, #338 finding 1).
+/// The CLI's warning lines under one withheld row of `medication-list` — one per reason (#697),
+/// then the group's member threads once. For a line reaching outside the set those threads are
+/// the separation remedy's arguments (this row lists only this record's half of a cross-patient
+/// group, #338 finding 1); for a doubted-link line they only say which threads are held — that
+/// remedy is a judgement of the links and takes CHART ids, which the list header names.
+///
+/// The outside-set warning carries its remedy inline. The doubted-link warning carries its
+/// CAUSE only and points below the list: its remedy ([`DOUBTED_LINK_INSTRUCTION`]) is one
+/// for the whole record, not per line, so [`doubted_link_note`] prints it ONCE — repeating its
+/// ~1000 characters under every withheld row buried the list it was explaining (final review).
 pub fn row_hazard_lines(
     why: WrongChartReasons,
     group: Uuid,
@@ -117,17 +125,39 @@ pub fn row_hazard_lines(
         ));
     }
     if why.doubted_link {
-        out.push(format!(
-            "    ! this record holds a link this node doubts, and this line is not recorded only \
-             on the chart you opened — it may be another person's, so it CANNOT be signed off \
-             from here (issue #697). {}",
-            DOUBTED_LINK_INSTRUCTION
-        ));
+        out.push(DOUBTED_ROW_LINE.to_string());
     }
     if why.any() {
         out.push(format!("      {}", format_hazard_groups(&[group], targets)));
     }
     out
+}
+
+/// The doubted-link warning under one row: the cause, true for every line it is printed under.
+/// "Cannot yet vouch that it is this patient's" rather than "may be another person's": the
+/// line's own chart may be human-linked to the opened one while ANOTHER link is doubted. "Until
+/// the links are no longer in doubt" rather than "until they are judged": in the A–C–X bridge
+/// every link can have a human judgement and the record still holds a doubt (db/054 case (c)).
+const DOUBTED_ROW_LINE: &str =
+    "    ! this record's links are in doubt, and this line is not recorded only on the chart you \
+     opened — the node cannot yet vouch that it is this patient's, so it CANNOT be signed off \
+     until the record's links are no longer in doubt — see the note below the list (issue #697).";
+
+/// The ONE note printed after `medication-list`'s rows when any row is withheld for a doubted
+/// link, carrying the remedy [`row_hazard_lines`] points to; `None` when no row is (so a list
+/// without a doubted link — every never-linked chart among them — gains nothing). Pure over the
+/// rows, so `main.rs` only prints it.
+pub fn doubted_link_note(rows: &[MedicationRow]) -> Option<String> {
+    let any_doubted = rows
+        .iter()
+        .filter_map(MedicationRow::withheld_because)
+        .any(|why| why.doubted_link);
+    any_doubted.then(|| {
+        format!(
+            "! This record's links are in doubt, so the line(s) marked above are withheld from \
+             sign-off (issue #697). {DOUBTED_LINK_INSTRUCTION}"
+        )
+    })
 }
 
 /// The sign-off outcome's report of lines withheld from the gesture — printed in EVERY
@@ -159,9 +189,11 @@ pub fn withheld_signoff_lines(
     let doubted = pick(|l| l.reasons.doubted_link);
     if !doubted.is_empty() {
         out.push(format!(
-            "! {} medication line(s) still need a signature but were NOT signed from this chart: \
-             the record holds a link this node doubts, and these lines are not recorded only on \
-             the chart you opened (issue #697). {} Then sign off again.",
+            "! {} medication line(s) still need a signature but were NOT signed: this record's \
+             links are in doubt, and these lines are not recorded only on the chart you opened, \
+             so the node cannot yet vouch that they are this patient's; they will NOT be signed \
+             until the record's links are no longer in doubt (issue #697). {} Then sign off \
+             again.",
             doubted.len(),
             DOUBTED_LINK_INSTRUCTION
         ));
@@ -272,10 +304,80 @@ mod tests {
             doubted_link: true,
         };
         let text = row_hazard_lines(why, u(1), &BTreeMap::new()).join("\n");
-        assert!(text.contains("doubts"), "{text}");
-        assert!(text.contains("unlink-charts"), "{text}");
+        assert!(text.contains("in doubt"), "{text}");
+        assert!(text.contains("see the note below the list"), "{text}");
+        assert!(
+            !text.contains(DOUBTED_LINK_INSTRUCTION),
+            "the remedy is printed once, below the list, not under every row: {text}"
+        );
         assert!(!text.contains("medication-separate"), "{text}");
         assert!(!text.contains("more than one patient"), "{text}");
+    }
+
+    /// The outside-set warning is byte-for-byte what it was before the doubted-link reason
+    /// existed: a list that holds no doubted link must not change by one character.
+    #[test]
+    fn the_outside_set_row_warning_is_unchanged() {
+        let why = WrongChartReasons {
+            outside_set: true,
+            doubted_link: false,
+        };
+        let targets = BTreeMap::from([(u(1), vec![u(1), u(2)])]);
+        assert_eq!(
+            row_hazard_lines(why, u(1), &targets),
+            vec![
+                format!(
+                    "    ! this group's member threads span more than one patient — the dose \
+                     shown may belong to the other patient, so this line CANNOT be signed off \
+                     (issue #334). {SEPARATION_INSTRUCTION}"
+                ),
+                format!("      group {} (member threads: {}, {})", u(1), u(1), u(2)),
+            ]
+        );
+    }
+
+    /// A list row withheld for the given reasons (only the fields `withheld_because` reads).
+    fn list_row(group: u128, outside_set: bool, doubted_link: bool) -> MedicationRow {
+        let wrong_chart = WrongChartReasons {
+            outside_set,
+            doubted_link,
+        };
+        MedicationRow {
+            group_id: u(group),
+            display_chart: u(1),
+            term: "metformin".into(),
+            coding_display: None,
+            formulation: None,
+            dose_amount: None,
+            dose_unit: None,
+            sig: None,
+            started_value: None,
+            started_precision: None,
+            status: cairn_medication_view::MedicationStatus::Active,
+            members: vec![],
+            reconciliation_flagged: false,
+            coding_conflict: false,
+            cross_patient: wrong_chart.any(),
+            wrong_chart,
+            source_charts: vec![],
+        }
+    }
+
+    #[test]
+    fn the_doubted_link_note_is_printed_once_for_the_whole_list() {
+        let rows = [list_row(1, false, true), list_row(2, true, true)];
+        let note = doubted_link_note(&rows).expect("two doubted rows: one note");
+        assert_eq!(note.matches(DOUBTED_LINK_INSTRUCTION).count(), 1, "{note}");
+        assert!(note.starts_with("! "), "{note}");
+    }
+
+    #[test]
+    fn no_doubted_row_means_no_note() {
+        assert_eq!(doubted_link_note(&[]), None);
+        assert_eq!(
+            doubted_link_note(&[list_row(1, false, false), list_row(2, true, false)]),
+            None
+        );
     }
 
     #[test]
@@ -284,7 +386,7 @@ mod tests {
         let lines = row_hazard_lines(both(), u(1), &targets);
         let text = lines.join("\n");
         assert!(
-            text.contains("medication-separate") && text.contains("unlink-charts"),
+            text.contains("medication-separate") && text.contains("see the note below the list"),
             "{text}"
         );
         assert_eq!(text.matches(&u(2).to_string()).count(), 1, "{text}");
@@ -311,6 +413,15 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Then sign off again."), "{text}");
+        assert!(
+            text.contains("were NOT signed: this record's links are in doubt"),
+            "{text}"
+        );
+        assert!(
+            text.contains("will NOT be signed until the record's links are no longer in doubt"),
+            "{text}"
+        );
+        assert!(!text.contains("from this chart"), "{text}");
         assert!(withheld_signoff_lines(&[], &BTreeMap::new()).is_empty());
     }
 }

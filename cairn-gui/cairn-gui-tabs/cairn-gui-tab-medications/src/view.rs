@@ -126,9 +126,10 @@ pub fn withheld_report(
     }
     if !doubted.is_empty() {
         parts.push(format!(
-            "{} line(s) on this record still need a signature but will NOT be signed from this \
-             chart — the record holds a link this node doubts, and they are not recorded only \
-             on this chart: {}. {}",
+            "{} line(s) on this record still need a signature but will NOT be signed until the \
+             record's links are no longer in doubt — this record's links are in doubt, and they \
+             are not recorded only on this chart, so the node cannot yet vouch that they are \
+             this patient's: {}. {}",
             doubted.len(),
             format_hazard_groups(&doubted, separation_targets),
             DOUBTED_LINK_INSTRUCTION
@@ -335,6 +336,14 @@ mod tests {
             "the line is named: {message}"
         );
         assert!(!message.contains("medication-separate"), "{message}");
+        // Final review F2: true for a line on A and X seen from X too, and when the line's own
+        // chart is human-linked while another link is doubted.
+        assert!(
+            message.contains("will NOT be signed until the record's links are no longer in doubt"),
+            "{message}"
+        );
+        assert!(message.contains("cannot yet vouch"), "{message}");
+        assert!(!message.contains("from this chart"), "{message}");
     }
 
     #[test]

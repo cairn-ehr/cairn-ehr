@@ -176,12 +176,17 @@ fn flags(row: &MedicationRow) -> Vec<String> {
             );
         }
         if why.doubted_link {
-            // #697 (b): the record holds a link the node doubts, and this line is not on the
-            // opened chart alone — signing it could vouch for a possible stranger's drug.
+            // #697 (b): the record's links are in doubt (db/054: a link the hard identity check
+            // clashes on, or a clinician's unlink between charts other links still join), and
+            // this line is not on the opened chart alone — signing it could vouch for a possible
+            // stranger's drug. "Cannot yet vouch that it is this patient's", not "may be another
+            // person's": the line's own chart may be human-linked to this one while ANOTHER link
+            // is doubted. "No longer in doubt", not "judged": in the A–C–X bridge every link can
+            // carry a human judgement and the record still holds a doubt.
             out.push(
-                "this record holds a link this node doubts, and this line is not recorded only \
-                 on the chart you opened — it may be another person's, so it cannot be signed \
-                 from here"
+                "this record's links are in doubt, and this line is not recorded only on the \
+                 chart you opened — the node cannot yet vouch that it is this patient's, so it \
+                 cannot be signed until the record's links are no longer in doubt"
                     .to_string(),
             );
         }
@@ -335,7 +340,12 @@ mod tests {
         r.cross_patient = true;
         r.wrong_chart.doubted_link = true;
         let flags = &build_view(&chart(vec![r])).rows[0].flags;
-        assert!(flags.iter().any(|f| f.contains("doubts")), "{flags:?}");
+        assert!(flags.iter().any(|f| f.contains("in doubt")), "{flags:?}");
+        assert!(
+            flags.iter().any(|f| f.contains("cannot yet vouch")
+                && f.contains("until the record's links are no longer in doubt")),
+            "{flags:?}"
+        );
         assert!(
             !flags.iter().any(|f| f.contains("another patient")),
             "{flags:?}"
@@ -359,7 +369,7 @@ mod tests {
             flags.iter().any(|f| f.contains("another patient")),
             "{flags:?}"
         );
-        assert!(flags.iter().any(|f| f.contains("doubts")), "{flags:?}");
+        assert!(flags.iter().any(|f| f.contains("in doubt")), "{flags:?}");
     }
 
     /// The withheld line is SHOWN — hiding a drug is the worse failure — but it is not a
