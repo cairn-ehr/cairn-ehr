@@ -6,7 +6,10 @@
 //! `incomplete`; and a never-linked search is exactly one row per chart, as before.
 mod common;
 
-use cairn_event::demographics::{name_assertion_body, render_name_twin};
+use cairn_event::demographics::{
+    identifier_assertion_body, name_assertion_body, render_identifier_twin, render_name_twin,
+    IdentifierAssertion,
+};
 use cairn_node::{db, patient::search::search_patients};
 use cairn_patient_search::{CandidateList, SearchQuery, TrustState};
 use common::{body_from_spec, chart_named, cs, submit_link_event, EventSpec};
@@ -206,4 +209,96 @@ async fn a_never_linked_search_is_one_row_per_chart() {
     assert!(list.people.iter().all(|p| !p.is_linked()));
     // Equal strength throughout, so the ranking ends on its id tie-break (UUIDv7: oldest first).
     assert_eq!(rows(&list), vec![vec![one], vec![two], vec![three]]);
+}
+
+/// A MATCHED chart this node does not hold (no registration; only an identifier assertion
+/// arrived, through the remote door) and that has no name. Before R3 this read
+/// "(name unavailable)" and set the SIGNED `incomplete` flag; now it is "not yet received
+/// here", trust `Unknown`, and the search is NOT partial (the flag changed on purpose).
+#[tokio::test]
+async fn a_matched_chart_not_held_here_with_no_name_is_not_a_partial_search() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &EXTRA).await;
+
+    let far = Uuid::now_v7();
+    let a = IdentifierAssertion {
+        value: "98765",
+        system: "MRN",
+        provenance: "document-verified",
+        normalized: None,
+        profile: None,
+        use_: None,
+    };
+    let event = body_from_spec(
+        Uuid::now_v7(),
+        &kid,
+        EventSpec {
+            patient: far,
+            event_type: "demographic.identifier.asserted",
+            schema_version: "demographic.identifier/1",
+            payload: identifier_assertion_body(&a),
+            plaintext_twin: Some(render_identifier_twin(&a)),
+            wall: 10,
+        },
+    );
+    common::apply_remote_raw(&c, &sk, event).await.unwrap();
+
+    let query = SearchQuery::new("", None, &[("MRN".to_string(), "98765".to_string())]);
+    let list = search_patients(&c, &query, "2026-10-03").await.unwrap();
+    assert_eq!(rows(&list), vec![vec![far]]);
+    let m = &list.people[0].members()[0];
+    assert_eq!(m.display_name, "(registration not yet received here)");
+    assert_eq!(m.trust, TrustState::Unknown);
+    assert!(!list.incomplete, "{:?}", list.incomplete_reason);
+}
+
+/// End to end: a linked row is signed WHOLE. The search matched only "Ann Lee"; the stored
+/// registration's `search.displayed` must still name both charts, matched member first.
+#[tokio::test]
+async fn a_registration_signs_every_member_of_a_linked_row() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &EXTRA).await;
+    let lee = chart_named(&c, &sk, &kid, 10, "Ann Lee").await;
+    let ngo = chart_named(&c, &sk, &kid, 20, "Bea Ngo").await;
+    submit_link_event(&c, &sk, &kid, lee, ngo, 30, true).await;
+
+    let query = SearchQuery::new("lee", None, &[]);
+    let list = search_patients(&c, &query, "2026-10-03").await.unwrap();
+    let pid = cairn_node::patient::register::register_patient(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        Some("Ann Leigh"),
+        &query,
+        &list,
+    )
+    .await
+    .expect("registration accepted");
+
+    let row = c
+        .query_one(
+            "SELECT (body -> 'search' -> 'displayed')::text FROM event_log \
+             WHERE patient_id::text = $1 AND event_type = 'identity.registration.asserted'",
+            &[&pid.to_string()],
+        )
+        .await
+        .unwrap();
+    let raw: String = row.get(0);
+    let stored: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&raw)
+        .expect("displayed is a JSON array")
+        .iter()
+        .map(|s| Uuid::parse_str(s).unwrap())
+        .collect();
+    assert_eq!(stored, vec![lee, ngo]);
 }

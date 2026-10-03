@@ -414,7 +414,10 @@ mod tests {
         };
         remember_shown(&state, &list).await;
         let stranger = uuid::Uuid::from_u128(99).to_string();
-        assert!(open_chart_impl(&state, &stranger).await.is_err());
+        let refused = open_chart_impl(&state, &stranger)
+            .await
+            .expect_err("an id on no row is refused");
+        assert!(refused.contains("not in a list on screen"), "{refused}");
     }
 
     /// THE FRONT DOOR'S DRIFT GUARD — the same guard `commands.rs` keeps for `main.js`.

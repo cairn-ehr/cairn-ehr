@@ -631,6 +631,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_linked_row_in_a_partial_search_says_both_things() {
+        let s = prompt_summary(&PromptCounts {
+            shown: 3,
+            shown_charts: 4,
+            withheld: 0,
+            incomplete: true,
+        });
+        assert!(s.contains("3 existing patient(s) (4 charts)"), "{s}");
+        assert!(s.contains("the list is not complete"), "{s}");
+    }
+
+    #[test]
     fn a_candidate_renders_its_age_and_trust() {
         let v = candidate_view(&sample_candidate());
         assert_eq!(v.age, "46 y");

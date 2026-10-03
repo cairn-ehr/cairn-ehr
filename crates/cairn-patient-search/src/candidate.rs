@@ -272,6 +272,30 @@ mod tests {
     }
 
     #[test]
+    fn a_list_with_a_linked_row_survives_a_serde_round_trip() {
+        // The wire shape of a person row with TWO members: it must serialize as a JSON array
+        // (what a peer or the window reads) and come back equal, member order included.
+        let member = |n: u128, name: &str| Candidate {
+            patient_id: Uuid::from_u128(n),
+            display_name: name.into(),
+            age: None,
+            trust: TrustState::Unconfirmed,
+            last_activity: None,
+            locale: None,
+            photo_ref: None,
+        };
+        let list = CandidateList {
+            people: vec![PersonRow::new(vec![member(1, "Ann Lee"), member(2, "Bea Ngo")]).unwrap()],
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        let value = serde_json::to_value(&list).unwrap();
+        assert_eq!(value["people"][0].as_array().map(Vec::len), Some(2));
+        let round: CandidateList = serde_json::from_value(value).unwrap();
+        assert_eq!(round, list);
+    }
+
+    #[test]
     fn unknown_trust_is_a_token_and_round_trips() {
         // R3: a chart this node does not hold the registration of (synced ahead, or outside
         // sync scope) has no trust state to show. "unknown" says so honestly rather than
