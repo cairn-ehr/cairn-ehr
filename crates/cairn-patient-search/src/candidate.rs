@@ -22,6 +22,10 @@ pub enum TrustState {
     Confirmed,
     Unconfirmed,
     UnderReview,
+    /// This node does not hold the chart's registration; it synced ahead, or lies outside
+    /// this node's sync scope (R1's `person::trust_of`). Said honestly rather than guessed
+    /// at (principle 4): showing "confirmed" for a chart we cannot vouch for would be a lie.
+    Unknown,
 }
 
 impl TrustState {
@@ -30,6 +34,7 @@ impl TrustState {
             TrustState::Confirmed => "confirmed",
             TrustState::Unconfirmed => "unconfirmed",
             TrustState::UnderReview => "under-review",
+            TrustState::Unknown => "unknown",
         }
     }
 }
@@ -234,6 +239,22 @@ mod tests {
         assert_eq!(
             round, list,
             "the reason must survive the wire, not just the flag"
+        );
+    }
+
+    #[test]
+    fn unknown_trust_is_a_token_and_round_trips() {
+        // R3: a chart this node does not hold the registration of (synced ahead, or outside
+        // sync scope) has no trust state to show. "unknown" says so honestly rather than
+        // inventing "confirmed".
+        assert_eq!(TrustState::Unknown.as_str(), "unknown");
+        assert_eq!(
+            serde_json::to_string(&TrustState::Unknown).unwrap(),
+            "\"unknown\""
+        );
+        assert_eq!(
+            serde_json::from_str::<TrustState>("\"unknown\"").unwrap(),
+            TrustState::Unknown
         );
     }
 

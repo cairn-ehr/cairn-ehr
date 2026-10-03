@@ -12,11 +12,13 @@
 //! `today` as an argument so the whole crate is unit-testable and the edge owns the clock.
 pub mod attestation;
 pub mod candidate;
+pub mod person;
 pub mod query;
 pub mod rank;
 
 pub use attestation::SearchAttestation;
 pub use candidate::{age_years, Age, Candidate, CandidateList, TrustState};
+pub use person::{group_by_person, MissingComponent, PersonRow};
 pub use query::{name_tokens, SearchQuery};
 pub use rank::{
     callsign_typed_whole, is_dob_near_miss, rank_candidates, tokens_exactly_matched,
