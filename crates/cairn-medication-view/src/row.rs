@@ -71,10 +71,11 @@ pub struct MemberVouch {
 /// - `outside_set`: the group reaches a chart OUTSIDE the set the list was read over, so some
 ///   thread on this line is recorded on another person's chart (issue #334). Remedy: separate
 ///   the threads (`SEPARATION_INSTRUCTION`).
-/// - `doubted_link`: the set holds a link this node DOUBTS (an un-attested link its hard veto
-///   flagged, or trips now — db/054), and this line is not recorded only on the opened chart.
-///   A signature is a claim about a person, and the node has positive evidence the other
-///   member may be someone else. Remedy: a human judges the LINK (`DOUBTED_LINK_INSTRUCTION`).
+/// - `doubted_link`: the set holds a link this node DOUBTS (db/054: an un-attested link its
+///   hard veto flagged, or trips now; or a clinician's attested unlink between two charts the
+///   set still joins), and this line is not recorded only on the opened chart. A signature is
+///   a claim about a person, and the node has positive evidence the other member may be
+///   someone else. Remedy: a human judges the LINKS (`DOUBTED_LINK_INSTRUCTION`).
 ///
 /// Built by `cairn-node`'s `medication::hazard::wrong_chart_reasons`, the one rule.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

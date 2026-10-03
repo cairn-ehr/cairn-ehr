@@ -484,7 +484,8 @@ async fn read_coding_conflict_groups(
 
 /// Whether the set holds a link this node doubts (db/054 `cairn_chart_set_has_doubted_link`:
 /// an un-attested standing link that db/018 flagged on arrival, or that trips the hard veto
-/// now — see that function for why both) — an input to
+/// now, or a clinician's attested unlink between two charts the set still joins — see that
+/// function for why all three) — an input to
 /// `medication::hazard::wrong_chart_reasons`.
 ///
 /// A set of one cannot hold a link, so it is answered without a query: a never-linked chart

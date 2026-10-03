@@ -1,7 +1,8 @@
 //! #697 (b): while a chart set holds a DOUBTED link (db/054 `cairn_chart_set_has_doubted_link`:
-//! an un-attested link db/018 flagged, or that trips the hard veto now), every medication line
+//! an un-attested link db/018 flagged, or that trips the hard veto now, or a clinician's
+//! attested unlink between two charts the set still joins), every medication line
 //! not recorded only on the OPENED chart is withheld from sign-off, carrying the `doubted_link`
-//! reason; the opened chart's own lines stay signable; a human judging the link lifts it. Also
+//! reason; the opened chart's own lines stay signable; humans judging the links lift it. Also
 //! #701: the doubted-link test reads the stored `patient_link.attested`.
 //!
 //! Two tests moved here from `combined_read.rs` (R1), where the rule withheld only MULTI-chart
@@ -19,7 +20,7 @@ use cairn_medication_view::{
     sign_off_targets, withheld_group_ids, withheld_rows, MedicationRow, PatientMedicationList,
     WrongChartReasons,
 };
-use cairn_node::chart_link::{link_charts, Reviewer};
+use cairn_node::chart_link::{link_charts, unlink_charts, LinkEffect, Reviewer};
 use cairn_node::db;
 use cairn_node::medication::read::list_patient_medications;
 use cairn_node::medication::{assert_medication, AssertMedicationInput};
@@ -379,4 +380,80 @@ async fn the_doubted_link_check_reads_the_stored_attested_column() {
         !doubted(&c, &ids).await,
         "the function must read pl.attested — a re-derivation would still say doubted"
     );
+}
+
+/// F1a, the A–C–X bridge (maintainer decision 2026-10-03): an ATTESTED unlink between two
+/// charts that are BOTH still in the set is a clinician's record that the set holds two
+/// people, so the set holds a doubted link. Here neither machine link trips the veto (no
+/// dates of birth — a sparse chart such as a John Doe), so before the third case db/054 found
+/// NO doubt: minutes after a human said "A and X are different people", X's line was
+/// signable from A, through C. Lifted only when X really leaves A's record.
+#[tokio::test]
+async fn an_attested_unlink_inside_the_set_is_a_doubted_link() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let bridge = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
+    let only_a = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    submit_link_event(&c, &sk, &kid, a, bridge, 10, true).await;
+    submit_link_event(&c, &sk, &kid, bridge, x, 11, true).await;
+
+    // Positive control: two machine links, no clash, no human judgement — one person.
+    let before = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&before);
+    assert_eq!(
+        before.charts.members(),
+        sorted(vec![a, bridge, x]).as_slice()
+    );
+    assert!(before.rows.iter().all(|r| !r.cross_patient));
+
+    let who = Reviewer {
+        human_sk: &hsk,
+        human_kid: &hkid,
+    };
+    let out = unlink_charts(&mut c, a, x, Some(a), &who, ORIGIN)
+        .await
+        .unwrap();
+    assert_eq!(
+        out.effect,
+        LinkEffect::StillJoined,
+        "precondition: the bridge keeps A and X in one record"
+    );
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&list);
+    assert_eq!(
+        list.charts.members(),
+        sorted(vec![a, bridge, x]).as_slice(),
+        "still joined through the bridge chart"
+    );
+    assert_eq!(
+        row_of(&list, only_x).wrong_chart,
+        DOUBTED,
+        "a human said X is another person: X's line must not be signed from A"
+    );
+    assert_eq!(sign_off_targets(&list.rows), vec![only_a]);
+
+    // The lift: unlink the bridge from X, so X leaves A's record and nothing is in doubt.
+    let out = unlink_charts(&mut c, bridge, x, Some(a), &who, ORIGIN)
+        .await
+        .unwrap();
+    assert_eq!(out.effect, LinkEffect::TookEffect);
+    let lifted = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&lifted);
+    assert_eq!(lifted.charts.members(), sorted(vec![a, bridge]).as_slice());
+    assert!(
+        lifted.rows.iter().all(|r| !r.cross_patient),
+        "nothing is withheld once X is out"
+    );
+    assert_eq!(sign_off_targets(&lifted.rows), vec![only_a]);
 }

@@ -9,11 +9,13 @@
 //! 1. `outside_set` — the group reaches a chart OUTSIDE the set the list was read over.
 //!    Linked charts are one person (ADR-0076 decision 1); a chart outside the set is not.
 //! 2. `doubted_link` — the set holds a link this node DOUBTS (db/054
-//!    `cairn_chart_set_has_doubted_link`: un-attested, and flagged by db/018 or tripping the
-//!    hard veto now) and the line is not recorded ONLY on the opened chart. The maintainer's
-//!    #697 option (b): a signature is a claim about a person, and a hard veto is positive
-//!    evidence the other member may be someone else. The line stays visible — hiding it would
-//!    be the hazard if the two charts ARE one person — and a human judging the link lifts it.
+//!    `cairn_chart_set_has_doubted_link`: an un-attested link flagged by db/018 or tripping the
+//!    hard veto now, or a clinician's attested unlink between two charts the set still joins)
+//!    and the line is not recorded ONLY on the opened chart. The maintainer's #697 option (b):
+//!    a signature is a claim about a person, and a hard veto or a human's "not the same person"
+//!    is positive evidence the other member may be someone else. The line stays visible —
+//!    hiding it would be the hazard if the two charts ARE one person — and humans judging the
+//!    links lift it once db/054 finds no doubt left.
 //!    The rule does not read the link graph to find WHICH pair is doubted: every line not on the
 //!    opened chart is withheld. That over-warns in a set of three or more, the direction this
 //!    module always errs in.
