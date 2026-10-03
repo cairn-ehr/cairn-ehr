@@ -55,7 +55,11 @@ pub const SEPARATION_INSTRUCTION: &str =
 /// link outranks the machine's (ADR-0076 decision 5); an attested unlink splits the record, or
 /// is recorded but leaves it joined through another link. The window cannot yet confirm a link
 /// that already stands (#716), so the confirm half names the CLI verb, with its required
-/// `--attester-key` (both verbs refuse to run without one).
+/// `--attester-key` (both verbs refuse to run without one). Each verb's holding rule is named
+/// because the record can list a member whose registration has not reached this node: an
+/// unlink needs `--from` only when NEITHER chart is held, but a link needs BOTH held
+/// (`cairn-node` `chart_link::admit_judgement`) — a deliberate act from this node must not
+/// attach a chart it has never seen.
 ///
 /// WHY NOT "EITHER JUDGEMENT LIFTS THIS HOLD". It is false in reachable cases: with two doubted
 /// links, judging one leaves the hold; in the A–C–X bridge, unlinking A–X leaves the record
@@ -70,11 +74,11 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
      \"Not the same person…\" beside a link under \"How these charts are linked\" unlinks it. \
      In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key <key-file>` unlinks (add \
      `--from <open_chart>` when neither chart is held on this node), and `link-charts <chart_a> \
-     <chart_b> --attester-key <key-file>` confirms a link (the window cannot confirm a link that \
-     already stands yet). The hold lifts once no link in the record is in doubt. After an \
-     unlink, a line shared between the two charts may then reach a chart outside the record, \
-     and its threads must then be separated — the list will say so. Judge the links before \
-     separating any threads.";
+     <chart_b> --attester-key <key-file>` confirms a link — both charts must be held on this \
+     node to link them (the window cannot confirm a link that already stands yet). The hold \
+     lifts once no link in the record is in doubt. After an unlink, a line shared between the \
+     two charts may then reach a chart outside the record, and its threads must then be \
+     separated — the list will say so. Judge the links before separating any threads.";
 
 /// What to do about a group the node knows this chart set holds a thread in, but which has
 /// NO line on the list (`PatientMedicationList::groups_missing_from_chart`) — worded ONCE,
@@ -168,9 +172,9 @@ impl PatientMedicationList {
 /// messages name (`medication-separate`, see [`SEPARATION_INSTRUCTION`]) takes two THREAD
 /// ids, so a message printing only the group id sends the operator looking for arguments
 /// the node never shows them. (For a doubted-link line the threads only say which threads are
-/// held: that remedy, [`DOUBTED_LINK_INSTRUCTION`], judges links and takes CHART ids.) A group with no locally-known membership degrades honestly to
-/// "unknown locally" rather than inventing a list — the same acknowledged-uncertainty
-/// direction as the rest of this model.
+/// held: that remedy, [`DOUBTED_LINK_INSTRUCTION`], judges links and takes CHART ids.) A group
+/// with no locally-known membership degrades honestly to "unknown locally" rather than
+/// inventing a list — the same acknowledged-uncertainty direction as the rest of this model.
 ///
 /// Public because four call sites render it — the CLI's withheld-line warning, the CLI's
 /// chart warnings, the sign-off report, and the window's per-row warning. Four hand-written
@@ -326,6 +330,9 @@ mod tests {
         assert!(!DOUBTED_LINK_INSTRUCTION.contains("Either judgement lifts"));
         assert!(DOUBTED_LINK_INSTRUCTION.contains("--attester-key"));
         assert!(DOUBTED_LINK_INSTRUCTION.contains("Judge the links before separating"));
+        // Residual R1: a LINK needs both charts held here (admit_judgement); a record can list
+        // a member whose registration has not arrived, so the confirm verb must say so.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("both charts must be held on this node"));
         // Both causes db/054 can report: the hard check's clash, and a human's unlink.
         assert!(DOUBTED_LINK_INSTRUCTION.contains("hard identity check"));
         assert!(DOUBTED_LINK_INSTRUCTION.contains("different people"));

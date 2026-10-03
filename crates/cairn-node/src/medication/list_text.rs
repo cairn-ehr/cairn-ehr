@@ -26,7 +26,7 @@
 //! without a database.
 use crate::patient::person::ChartIdentity;
 use cairn_medication_view::{
-    format_hazard_groups, ChartSet, MedicationRow, WithheldLine, WrongChartReasons,
+    format_hazard_groups, withheld_rows, ChartSet, MedicationRow, WithheldLine, WrongChartReasons,
     DOUBTED_LINK_INSTRUCTION, SEPARATION_INSTRUCTION,
 };
 use std::collections::BTreeMap;
@@ -143,15 +143,19 @@ const DOUBTED_ROW_LINE: &str =
      opened — the node cannot yet vouch that it is this patient's, so it CANNOT be signed off \
      until the record's links are no longer in doubt — see the note below the list (issue #697).";
 
-/// The ONE note printed after `medication-list`'s rows when any row is withheld for a doubted
-/// link, carrying the remedy [`row_hazard_lines`] points to; `None` when no row is (so a list
+/// The ONE note printed after `medication-list`'s rows when any line is withheld for a doubted
+/// link, carrying the remedy [`row_hazard_lines`] points to; `None` when none is (so a list
 /// without a doubted link — every never-linked chart among them — gains nothing). Pure over the
 /// rows, so `main.rs` only prints it.
+///
+/// "Withheld" is decided by `withheld_rows` — the same status-aware rule sign-off uses (an
+/// ACTIVE line still needing a signature) — not by `MedicationRow::withheld_because` alone,
+/// which ignores status: a doubted record whose only off-chart line is CEASED withholds
+/// nothing, and a note saying lines "are withheld from sign-off" would be untrue there.
 pub fn doubted_link_note(rows: &[MedicationRow]) -> Option<String> {
-    let any_doubted = rows
+    let any_doubted = withheld_rows(rows)
         .iter()
-        .filter_map(MedicationRow::withheld_because)
-        .any(|why| why.doubted_link);
+        .any(|line| line.reasons.doubted_link);
     any_doubted.then(|| {
         format!(
             "! This record's links are in doubt, so the line(s) marked above are withheld from \
@@ -336,7 +340,8 @@ mod tests {
         );
     }
 
-    /// A list row withheld for the given reasons (only the fields `withheld_because` reads).
+    /// An ACTIVE, unsigned list row withheld for the given reasons (only the fields
+    /// `withheld_rows` reads matter).
     fn list_row(group: u128, outside_set: bool, doubted_link: bool) -> MedicationRow {
         let wrong_chart = WrongChartReasons {
             outside_set,
@@ -354,7 +359,11 @@ mod tests {
             started_value: None,
             started_precision: None,
             status: cairn_medication_view::MedicationStatus::Active,
-            members: vec![],
+            members: vec![cairn_medication_view::MemberVouch {
+                medication_id: u(group),
+                vouch: cairn_medication_view::VouchState::Absent,
+                patient_id: u(2),
+            }],
             reconciliation_flagged: false,
             coding_conflict: false,
             cross_patient: wrong_chart.any(),
@@ -369,6 +378,15 @@ mod tests {
         let note = doubted_link_note(&rows).expect("two doubted rows: one note");
         assert_eq!(note.matches(DOUBTED_LINK_INSTRUCTION).count(), 1, "{note}");
         assert!(note.starts_with("! "), "{note}");
+    }
+
+    /// Residual R2: a ceased line needs no signature, so it is never withheld — a doubted
+    /// record whose only off-chart line is ceased must not claim lines are withheld.
+    #[test]
+    fn a_ceased_doubted_row_alone_means_no_note() {
+        let mut ceased = list_row(1, false, true);
+        ceased.status = cairn_medication_view::MedicationStatus::Ceased;
+        assert_eq!(doubted_link_note(&[ceased]), None);
     }
 
     #[test]
