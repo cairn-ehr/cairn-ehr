@@ -245,7 +245,9 @@ async fn read_candidate_passes<C: GenericClient + Sync>(
 /// The §4.2 display-winner name for each candidate, or the John Doe callsign — whichever
 /// `patient_name_current` (db/012) currently picks. A candidate with no row here has never
 /// had ANY name asserted (possible: a chart matched by identifier or dob alone); such a
-/// candidate is never dropped by the caller, only reported `incomplete`.
+/// candidate is never dropped by the caller. Only a HELD nameless chart is reported
+/// `incomplete` (see `search_person::display_name_for`); one not held here reads
+/// "(registration not yet received here)" and is not a partial search.
 async fn read_display_names<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],

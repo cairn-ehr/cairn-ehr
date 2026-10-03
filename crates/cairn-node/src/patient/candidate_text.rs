@@ -7,7 +7,7 @@
 
 use cairn_patient_search::CandidateList;
 
-/// Width of the `name` column in `print_candidates`' fixed-column layout. Both the header's
+/// Width of the `name` column in `candidate_lines`' fixed-column layout. Both the header's
 /// `{:<name_w$}` and `ellipsize`'s ceiling read from here so the two can never drift apart.
 pub const NAME_COLUMN_WIDTH: usize = 28;
 
@@ -77,7 +77,7 @@ fn chart_line(c: &cairn_patient_search::Candidate, name: &str) -> String {
 /// Every line `patient-search` / `patient-register` print for `list`, in order. **Pure.**
 ///
 /// One line per candidate, in the exact order the list carries them (`patient-register`
-/// attests this same order - see `register::build_registration_body`'s doc - so the print order
+/// attests this same order — see `register::build_registration_body`'s doc — so the print order
 /// and the attested order must never be allowed to drift apart).
 ///
 /// The `incomplete` reason is the LAST line, deliberately AFTER every candidate row rather than
@@ -114,7 +114,7 @@ pub fn candidate_lines(list: &CandidateList) -> Vec<String> {
             }
         }
     }
-    // Deliberately last - see the fn doc. Do not hoist this above the loop.
+    // Deliberately last — see the fn doc. Do not hoist this above the loop.
     if list.incomplete {
         let reason = list
             .incomplete_reason
@@ -240,6 +240,23 @@ mod tests {
         // The member keeps the same columns (here: unconfirmed, no age) as a row of its own.
         assert!(lines[2].contains("unconfirmed"), "{}", lines[2]);
         assert!(lines[3].starts_with(&id(0xc).to_string()));
+    }
+
+    #[test]
+    fn the_printed_chart_order_is_the_attested_order() {
+        // `patient-register` signs `displayed_charts()`; what the clerk reads must be that
+        // same sequence, linked members included, or they sign charts in a different order
+        // than they saw them.
+        let row =
+            PersonRow::new(vec![full(0xa, "Jane CITIZEN"), bare(0xb, "Mary SMYTHE")]).unwrap();
+        let l = list(vec![row, PersonRow::alone(bare(0xc, "Doe"))]);
+        let printed: Vec<String> = candidate_lines(&l)
+            .iter()
+            .skip(1) // the header
+            .map(|line| line.split_whitespace().next().unwrap().to_string())
+            .collect();
+        let attested: Vec<String> = l.displayed_charts().iter().map(Uuid::to_string).collect();
+        assert_eq!(printed, attested);
     }
 
     #[test]

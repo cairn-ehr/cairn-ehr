@@ -115,6 +115,11 @@ impl DisplayName {
 /// A name that arrived is shown whether or not the chart is held. With no name: struck-only
 /// reads `Withheld`; otherwise a chart held here is `Unreadable` and one not held here is
 /// `NotReceived`. Pure, so the four-way rule is tested without a database.
+///
+/// A HELD chart with no readable name is `Unreadable`, and that sets `incomplete` whether or
+/// not the search matched it: it is on screen and signed as displayed, and the node could
+/// not read it (the spec's "keeps today's rule"). This errs toward warning, which is the
+/// safe direction for a registration attestation.
 pub(super) fn display_name_for(
     id: Uuid,
     names: &HashMap<Uuid, String>,

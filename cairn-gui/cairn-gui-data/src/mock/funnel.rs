@@ -112,7 +112,7 @@ impl MockData {
         }
         let patients = self.patients.lock().expect("fixture population");
         CandidateList {
-            // One row per chart for now (R3 Task 3 is where charts first group into people).
+            // The mock has no link concept, so every mock row is a person of one.
             people: PersonRow::each_alone(
                 patients
                     .iter()

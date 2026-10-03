@@ -20,7 +20,7 @@ use cairn_gui_funnel::FormSnapshot;
 ///
 /// `own_charts` counts CHARTS (every chart of every row left out), because that is what the clerk
 /// recognises as "this record". With one chart per person the sentences are the pre-R3 ones
-/// verbatim.
+/// verbatim; a linked record (more than one own chart) is named as a record, not as matched charts.
 pub fn link_search_summary(
     other_people: usize,
     other_charts: usize,
@@ -48,8 +48,13 @@ pub fn link_search_summary(
     };
     if own_charts == 0 {
         base
-    } else {
+    } else if own_charts == 1 {
         format!("{base} {own_charts} chart(s) of this record also matched and are not listed.")
+    } else {
+        // A linked record: the search may have matched only ONE of its charts (the rest ride
+        // along in the row), so "N charts of this record matched" would be false. Say the
+        // record matched, with its size.
+        format!("{base} This record ({own_charts} charts) also matched and is not listed.")
     }
 }
 
@@ -189,7 +194,7 @@ mod tests {
         assert_eq!(v.people[0].members[0].patient_id, "x");
         assert_eq!(
             v.summary,
-            "1 other chart(s) found. 2 chart(s) of this record also matched and are not listed."
+            "1 other chart(s) found. This record (2 charts) also matched and is not listed."
         );
     }
 
