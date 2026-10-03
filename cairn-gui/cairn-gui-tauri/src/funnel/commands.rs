@@ -66,7 +66,11 @@ pub fn browse_view(revision: u64, list: &CandidateList) -> BrowseView {
         revision,
         // The view still lists CHARTS (one per row today); the person-shaped view is R3 Task 5.
         candidates: list.charts().map(candidate_view).collect(),
-        summary: browse_summary(list.charts().count(), incomplete_reason.is_some()),
+        summary: browse_summary(
+            list.people.len(),
+            list.charts().count(),
+            incomplete_reason.is_some(),
+        ),
         incomplete_reason,
     }
 }

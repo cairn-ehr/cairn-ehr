@@ -121,8 +121,8 @@ impl std::fmt::Debug for AttestedSearch {
             .field(
                 "displayed",
                 &format_args!(
-                    "<{} candidate(s), redacted>",
-                    self.displayed.as_list().charts().count()
+                    "<{} chart(s), redacted>",
+                    self.displayed.as_list().displayed_charts().len()
                 ),
             )
             .finish()

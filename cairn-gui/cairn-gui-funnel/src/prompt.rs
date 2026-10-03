@@ -43,7 +43,7 @@
 
 use cairn_patient_search::CandidateList;
 
-/// The most candidates the step-3 prompt shows.
+/// The most PEOPLE the step-3 prompt shows (ADR-0076 D6: a row, however many charts it links).
 ///
 /// A **clinical** decision — how many existing charts a clerk is shown before being allowed
 /// to create another — not a layout detail, so it is named and pinned by a test rather than
@@ -86,7 +86,7 @@ pub const PROMPT_CAP: usize = 5;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptList {
     list: CandidateList,
-    /// How many candidates the node returned that this prompt did not show. Shown on screen
+    /// How many PEOPLE (rows) the node returned that this prompt did not show. Shown on screen
     /// (ADR-0075 decision 4), never signed — see the module doc.
     withheld: usize,
 }
@@ -100,7 +100,7 @@ impl PromptList {
         &self.list
     }
 
-    /// How many further candidates matched but are not shown — for the on-screen line
+    /// How many further people matched but are not shown — for the on-screen line
     /// ("the 5 closest of 103"), never for the signature. Read-only, like [`Self::as_list`].
     pub fn withheld(&self) -> usize {
         self.withheld
@@ -114,6 +114,7 @@ impl PromptList {
     pub fn counts(&self) -> PromptCounts {
         PromptCounts {
             shown: self.list.people.len(),
+            shown_charts: self.list.charts().count(),
             withheld: self.withheld,
             incomplete: self.list.incomplete,
         }
@@ -128,16 +129,19 @@ impl PromptList {
 /// construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptCounts {
-    /// Rows on screen — the ones a registration signs as displayed.
+    /// PEOPLE on screen (rows) — the unit the cap counts.
     pub shown: usize,
-    /// Further candidates that matched but are not shown. Said, never signed (ADR-0075).
+    /// The charts those people hold — the ones a registration signs as displayed (ADR-0076 D6).
+    /// Equals `shown` while every row is one chart; the announcement names it only when it differs.
+    pub shown_charts: usize,
+    /// Further PEOPLE that matched but are not shown. Said, never signed (ADR-0075).
     pub withheld: usize,
     /// The SEARCH was partial (the node could not read a chart it matched) — ADR-0061's meaning.
     pub incomplete: bool,
 }
 
 impl PromptCounts {
-    /// Everything the node returned: the "M" of "the N closest of M". Owned here, not
+    /// Every person the node returned: the "M" of "the N closest of M". Owned here, not
     /// recomputed by each caller.
     pub fn total(&self) -> usize {
         self.shown + self.withheld
@@ -164,8 +168,10 @@ pub fn bound_for_prompt(list: &CandidateList) -> PromptList {
 /// zero cap is useless but still honest — `withheld` says it showed nobody, which is a
 /// different statement from the search having matched nobody.
 ///
-/// Order is preserved exactly. `SearchAttestation::from_displayed` reads the candidate vector
-/// in order, so a reorder here would silently change what gets signed.
+/// Order is preserved exactly. `SearchAttestation::from_displayed` reads the row vector (flattened
+/// by `displayed_charts()`) in order, so a reorder here would silently change what gets signed.
+/// The cap cuts between ROWS and never inside one: a linked person's charts are shown and signed
+/// together, because the attestation must name exactly what the screen shows.
 fn bound_to(list: &CandidateList, cap: usize) -> PromptList {
     PromptList {
         list: CandidateList {
@@ -241,8 +247,39 @@ mod tests {
         }
     }
 
+    /// One row of plain candidates, grouped as given (more than one id = a linked person).
+    fn row(ids: &[u128]) -> PersonRow {
+        PersonRow::new(ids.iter().copied().map(candidate).collect()).expect("a non-empty row")
+    }
+
     fn ids(list: &CandidateList) -> Vec<Uuid> {
         list.displayed_charts()
+    }
+
+    #[test]
+    fn the_cap_counts_people_and_never_splits_a_linked_row() {
+        // Review Focus 4: the fifth row is a linked pair; a sixth person is cut.
+        let list = CandidateList {
+            people: vec![
+                row(&[1]),
+                row(&[2]),
+                row(&[3]),
+                row(&[4]),
+                row(&[5, 6]),
+                row(&[7]),
+            ],
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        let p = bound_for_prompt(&list);
+        assert_eq!(p.as_list().people.len(), PROMPT_CAP);
+        assert_eq!(
+            p.as_list().displayed_charts().len(),
+            6,
+            "both charts of the fifth row are signed"
+        );
+        let c = p.counts();
+        assert_eq!((c.shown, c.shown_charts, c.withheld), (5, 6, 1));
     }
 
     #[test]
@@ -270,6 +307,7 @@ mod tests {
             counts,
             PromptCounts {
                 shown: 5,
+                shown_charts: 5,
                 withheld: 3,
                 incomplete: true
             }
