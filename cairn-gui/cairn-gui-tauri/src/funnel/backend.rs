@@ -135,6 +135,6 @@ mod tests {
             .search(&SearchQuery::new("mich", None, &[]))
             .await
             .unwrap();
-        assert!(!list.candidates.is_empty());
+        assert!(!list.people.is_empty());
     }
 }

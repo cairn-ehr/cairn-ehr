@@ -183,11 +183,7 @@ async fn main() -> anyhow::Result<()> {
     // A registration act carries the search that preceded it (ADR-0061). A genuinely empty
     // candidate list is the honest shape for a clerk registering someone the node has never
     // seen, which every patient here is.
-    let displayed = CandidateList {
-        candidates: Vec::new(),
-        incomplete: false,
-        incomplete_reason: None,
-    };
+    let displayed = CandidateList::empty();
 
     let started = Instant::now();
     let mut events = 0usize;

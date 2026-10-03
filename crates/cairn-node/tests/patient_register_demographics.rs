@@ -47,7 +47,7 @@ const EXTRA_TABLES: [&str; 2] = ["patient_registration", "patient_name"];
 /// registers a never-before-seen name).
 fn no_candidates() -> CandidateList {
     CandidateList {
-        candidates: vec![],
+        people: vec![],
         incomplete: false,
         incomplete_reason: None,
     }
@@ -175,20 +175,20 @@ async fn a_registered_patient_is_findable_by_a_later_search_on_the_same_name() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the chart just registered must be found by a later search on its own name: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, pid);
-    assert_eq!(list.candidates[0].display_name, name);
+    assert_eq!(list.people[0].members()[0].patient_id, pid);
+    assert_eq!(list.people[0].members()[0].display_name, name);
 
     // And by dob alone too, since a dob event was also asserted.
     let dob_query = SearchQuery::new("", Some(dob), &[]);
     let by_dob = search_patients(&c, &dob_query, "2026-08-05")
         .await
         .expect("search succeeds");
-    assert_eq!(by_dob.candidates.len(), 1, "found by dob too: {by_dob:?}");
-    assert_eq!(by_dob.candidates[0].patient_id, pid);
+    assert_eq!(by_dob.charts().count(), 1, "found by dob too: {by_dob:?}");
+    assert_eq!(by_dob.people[0].members()[0].patient_id, pid);
 }
 
 #[tokio::test]
@@ -252,11 +252,11 @@ async fn a_year_only_birth_date_asserts_year_precision_never_a_fabricated_day() 
         .await
         .expect("search succeeds");
     assert_eq!(
-        by_year.candidates.len(),
+        by_year.charts().count(),
         1,
         "a year-only registration must be findable by the same year-only date: {by_year:?}"
     );
-    assert_eq!(by_year.candidates[0].patient_id, pid);
+    assert_eq!(by_year.people[0].members()[0].patient_id, pid);
 
     let by_month = search_patients(
         &c,
@@ -266,12 +266,12 @@ async fn a_year_only_birth_date_asserts_year_precision_never_a_fabricated_day() 
     .await
     .expect("search succeeds");
     assert_eq!(
-        by_month.candidates.len(),
+        by_month.charts().count(),
         1,
         "a month-only registration must be findable by the same partial date, and the \
          year-only chart must not leak into it: {by_month:?}"
     );
-    assert_eq!(by_month.candidates[0].patient_id, pid_month);
+    assert_eq!(by_month.people[0].members()[0].patient_id, pid_month);
 }
 
 #[tokio::test]
@@ -457,12 +457,12 @@ async fn an_identifier_only_registration_asserts_an_identifier_and_no_name_or_do
         .await
         .expect("search succeeds");
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "an identifier-only chart must be findable by its identifier, or it is unreachable \
          by every search this slice ships: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, pid);
+    assert_eq!(list.people[0].members()[0].patient_id, pid);
 }
 
 // --- final review, C1: the identifiers the funnel searched on must be PERSISTED ---
@@ -501,12 +501,12 @@ async fn a_registered_patient_is_findable_by_a_later_search_on_the_identifier_al
         .await
         .expect("search succeeds");
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the chart just registered must be found by a later search on the identifier it was \
          registered with: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, pid);
+    assert_eq!(list.people[0].members()[0].patient_id, pid);
 }
 
 #[tokio::test]
@@ -558,11 +558,11 @@ async fn a_padded_identifier_at_registration_is_found_by_the_unpadded_search() {
         .await
         .expect("search succeeds");
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "a clean, unpadded search must find the chart registered from a padded paste: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, pid);
+    assert_eq!(list.people[0].members()[0].patient_id, pid);
 }
 
 #[tokio::test]
@@ -607,11 +607,11 @@ async fn every_supplied_identifier_lands_and_each_one_finds_the_chart() {
             .await
             .expect("search succeeds");
         assert_eq!(
-            list.candidates.len(),
+            list.charts().count(),
             1,
             "searching {pair:?} alone must find the chart: {list:?}"
         );
-        assert_eq!(list.candidates[0].patient_id, pid);
+        assert_eq!(list.people[0].members()[0].patient_id, pid);
     }
 
     // Wire level: registration + name + two identifiers, no phantom extras.

@@ -113,7 +113,7 @@ impl PromptList {
     /// 103" (review of #678). Named fields make a swap visible at the call site.
     pub fn counts(&self) -> PromptCounts {
         PromptCounts {
-            shown: self.list.candidates.len(),
+            shown: self.list.people.len(),
             withheld: self.withheld,
             incomplete: self.list.incomplete,
         }
@@ -169,7 +169,7 @@ pub fn bound_for_prompt(list: &CandidateList) -> PromptList {
 fn bound_to(list: &CandidateList, cap: usize) -> PromptList {
     PromptList {
         list: CandidateList {
-            candidates: list.candidates.iter().take(cap).cloned().collect(),
+            people: list.people.iter().take(cap).cloned().collect(),
             // ONLY the node's own partiality (ADR-0075 decision 3, restoring ADR-0061's
             // meaning): the search could not read some candidate. Being cut is `withheld`.
             // Copied, never recomputed, so a list the node called partial can never be
@@ -185,7 +185,7 @@ fn bound_to(list: &CandidateList, cap: usize) -> PromptList {
                 None
             },
         },
-        withheld: list.candidates.len().saturating_sub(cap),
+        withheld: list.people.len().saturating_sub(cap),
     }
 }
 
@@ -206,7 +206,7 @@ pub fn node_reason(list: &CandidateList) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_patient_search::{Candidate, TrustState};
+    use cairn_patient_search::{Candidate, PersonRow, TrustState};
     use uuid::Uuid;
 
     /// A candidate distinguishable by its id, which is the only field bounding touches.
@@ -235,14 +235,14 @@ mod tests {
     /// (`CandidateList`'s fields are public), so it needs a builder that can express it.
     fn list_with(n: u128, incomplete: bool, incomplete_reason: Option<&str>) -> CandidateList {
         CandidateList {
-            candidates: (1..=n).map(candidate).collect(),
+            people: PersonRow::each_alone((1..=n).map(candidate).collect()),
             incomplete,
             incomplete_reason: incomplete_reason.map(str::to_string),
         }
     }
 
     fn ids(list: &CandidateList) -> Vec<Uuid> {
-        list.candidates.iter().map(|c| c.patient_id).collect()
+        list.displayed_charts()
     }
 
     #[test]
@@ -293,7 +293,7 @@ mod tests {
         let bounded = bound_for_prompt(&list_of(PROMPT_CAP as u128, None));
         assert_eq!(bounded.withheld(), 0);
         assert!(!bounded.as_list().incomplete);
-        assert_eq!(bounded.as_list().candidates.len(), PROMPT_CAP);
+        assert_eq!(bounded.as_list().people.len(), PROMPT_CAP);
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
         // THE OTHER SIDE OF THAT BOUNDARY: a six-candidate result shows five and must say it
         // left ONE out — `saturating_sub` off by one would hide exactly that one.
         let bounded = bound_for_prompt(&list_of(PROMPT_CAP as u128 + 1, None));
-        assert_eq!(bounded.as_list().candidates.len(), PROMPT_CAP);
+        assert_eq!(bounded.as_list().people.len(), PROMPT_CAP);
         assert_eq!(bounded.withheld(), 1);
     }
 
@@ -382,7 +382,7 @@ mod tests {
         // count is what separates a search that matched nobody from a prompt that showed
         // nobody.
         let bounded = bound_to(&list_of(4, None), 0);
-        assert!(bounded.as_list().candidates.is_empty());
+        assert!(bounded.as_list().people.is_empty());
         assert_eq!(bounded.withheld(), 4);
         assert!(!bounded.as_list().incomplete);
     }
@@ -393,7 +393,7 @@ mod tests {
         // partial would teach a clerk to distrust the one result the funnel most needs them
         // to trust before they create a chart.
         let bounded = bound_for_prompt(&list_of(0, None));
-        assert!(bounded.as_list().candidates.is_empty());
+        assert!(bounded.as_list().people.is_empty());
         assert!(!bounded.as_list().incomplete);
         assert_eq!(bounded.as_list().incomplete_reason, None);
         assert_eq!(bounded.withheld(), 0);

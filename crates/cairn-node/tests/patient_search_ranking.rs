@@ -73,12 +73,13 @@ async fn the_chart_sharing_name_and_birth_date_outranks_older_name_only_charts()
         .await
         .expect("search succeeds");
 
-    assert_eq!(list.candidates.len(), 7, "the SET is unchanged: {list:?}");
+    assert_eq!(list.charts().count(), 7, "the SET is unchanged: {list:?}");
     assert_eq!(
-        list.candidates[0].patient_id, dup,
+        list.people[0].members()[0].patient_id,
+        dup,
         "the chart matching name AND dob must come first, not the oldest chart: {list:?}"
     );
-    let rest: Vec<_> = list.candidates[1..].iter().map(|c| c.patient_id).collect();
+    let rest: Vec<_> = list.charts().skip(1).map(|c| c.patient_id).collect();
     assert_eq!(rest, older, "single-pass ties keep id (chart-age) order");
 }
 
@@ -139,7 +140,7 @@ async fn a_wrong_dob_duplicate_outranks_namesakes_by_tokens_and_near_miss() {
         .await
         .expect("search succeeds");
 
-    let ids: Vec<_> = list.candidates.iter().map(|c| c.patient_id).collect();
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
     assert_eq!(ids.len(), 8, "the SET is unchanged: {list:?}");
     assert_eq!(
         ids[0], dup,
@@ -216,7 +217,7 @@ async fn an_identifier_only_match_outranks_one_token_namesakes() {
         .await
         .expect("search succeeds");
 
-    let ids: Vec<_> = list.candidates.iter().map(|c| c.patient_id).collect();
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
     assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
     assert_eq!(ids[0], dup, "the identifier match comes first: {list:?}");
     assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
@@ -243,7 +244,7 @@ async fn a_duplicate_found_by_a_typed_prefix_outranks_one_token_namesakes() {
         .await
         .expect("search succeeds");
 
-    let ids: Vec<_> = list.candidates.iter().map(|c| c.patient_id).collect();
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
     assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
     assert_eq!(
         ids[0], dup,
@@ -288,7 +289,7 @@ async fn a_callsign_is_not_split_into_name_tokens_for_ranking() {
         .await
         .expect("search succeeds");
 
-    let ids: Vec<_> = list.candidates.iter().map(|c| c.patient_id).collect();
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
     assert_eq!(
         ids,
         vec![namesake, jd],
@@ -334,12 +335,13 @@ async fn a_callsign_typed_whole_outranks_namesakes_of_its_parts() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         7,
         "the typed callsign's part \"ed\" finds every Ed, so the SET is all seven: {list:?}"
     );
     assert_eq!(
-        list.candidates[0].patient_id, jd,
+        list.people[0].members()[0].patient_id,
+        jd,
         "the John Doe whose callsign was typed whole must come first: {list:?}"
     );
 }
@@ -396,7 +398,7 @@ async fn a_chart_found_by_its_repudiated_name_still_ranks_by_it() {
         .await
         .expect("search succeeds");
 
-    let ids: Vec<_> = list.candidates.iter().map(|c| c.patient_id).collect();
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
     assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
     assert_eq!(
         ids[0], fabricated,

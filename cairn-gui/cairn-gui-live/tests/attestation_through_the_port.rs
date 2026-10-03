@@ -53,7 +53,7 @@ async fn nobody_matched_is_an_empty_list_not_a_failure() {
         .await
         .expect("a search that matches nothing still SUCCEEDS");
 
-    assert!(found.candidates.is_empty(), "got: {:?}", found.candidates);
+    assert!(found.people.is_empty(), "got: {:?}", found.people);
     assert!(
         !found.incomplete,
         "an exhaustive search that found nothing is COMPLETE — marking it partial would tell \
@@ -88,9 +88,9 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
 
     let before = live.search(&query, TODAY).await.expect("the browse search");
     assert!(
-        before.candidates.is_empty(),
+        before.people.is_empty(),
         "the fixture starts empty: {:?}",
-        before.candidates
+        before.people
     );
 
     let mut store = TokenStore::new();
@@ -116,7 +116,7 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
         .search(&by_name_only, TODAY)
         .await
         .expect("the browse search");
-    let ids: Vec<_> = after.candidates.iter().map(|c| c.patient_id).collect();
+    let ids: Vec<_> = after.displayed_charts();
     assert!(
         ids.contains(&created),
         "the chart just registered must be findable by the NAME it was registered under — \
@@ -130,8 +130,7 @@ async fn a_registration_creates_a_chart_the_next_search_finds() {
     // between two same-name charts on the step-3 prompt; a drifting one is how the clerk fails
     // to recognise the chart that is already there.
     let found = after
-        .candidates
-        .iter()
+        .charts()
         .find(|c| c.patient_id == created)
         .expect("just asserted it is in the list");
     let age = found
@@ -192,18 +191,13 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
     let query = SearchQuery::new(shared, None, &[]);
     let raw = live.search(&query, TODAY).await.expect("the step-3 search");
     assert!(
-        raw.candidates.len() > PROMPT_CAP,
+        raw.people.len() > PROMPT_CAP,
         "the fixture must OVERFLOW the prompt or this test proves nothing — got {}",
-        raw.candidates.len()
+        raw.people.len()
     );
 
     let prompt = bound_for_prompt(&raw);
-    let shown: Vec<_> = prompt
-        .as_list()
-        .candidates
-        .iter()
-        .map(|c| c.patient_id)
-        .collect();
+    let shown = prompt.as_list().displayed_charts();
 
     let mut store = TokenStore::new();
     let token = store.record(query, prompt).expect("a token");
@@ -252,7 +246,7 @@ async fn the_stored_attestation_names_what_the_prompt_bounded_and_nothing_more()
         !common::stored_incomplete(&reader, created).await,
         "{} candidates were cut from the prompt, but the search read every chart it matched: \
          truncation is not an incompleteness of the search (ADR-0075 decision 3)",
-        raw.candidates.len() - PROMPT_CAP
+        raw.people.len() - PROMPT_CAP
     );
 }
 

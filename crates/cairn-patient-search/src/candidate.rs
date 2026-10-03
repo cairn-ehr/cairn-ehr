@@ -1,5 +1,6 @@
 //! One row of a candidate list — what §5.8 item 1 requires be shown before a chart may be
 //! created: photo, age, locale, last visit, and (Cairn's addition) the chart's trust state.
+use crate::person::PersonRow;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -139,10 +140,14 @@ pub struct Candidate {
     pub photo_ref: Option<String>,
 }
 
-/// The candidates plus what the node knows it could NOT show.
+/// The person rows plus what the node knows it could NOT show.
+///
+/// R3: the unit a clerk sees is a PERSON (a [`PersonRow`], one or more linked charts), not a
+/// chart. What a registration attests to is still the flat list of CHART ids, via
+/// [`CandidateList::displayed_charts`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateList {
-    pub candidates: Vec<Candidate>,
+    pub people: Vec<PersonRow>,
     /// True when the SEARCH was partial: the node could not read something it matched.
     /// ADR-0060 decision 2: partial completion is reported, never implied — a clerk must never
     /// believe an exhaustive search happened when it did not.
@@ -154,6 +159,30 @@ pub struct CandidateList {
     pub incomplete: bool,
     /// Human-readable reason, shown beside the list. `Some` whenever `incomplete`.
     pub incomplete_reason: Option<String>,
+}
+
+impl CandidateList {
+    /// A complete search that matched nothing.
+    pub fn empty() -> CandidateList {
+        CandidateList {
+            people: Vec::new(),
+            incomplete: false,
+            incomplete_reason: None,
+        }
+    }
+
+    /// Every chart of every row, in row order (members in their row order). The one flattening
+    /// from rows back to charts; callers that mean "charts" use this, never `people`.
+    pub fn charts(&self) -> impl Iterator<Item = &Candidate> {
+        self.people.iter().flat_map(|row| row.members().iter())
+    }
+
+    /// The chart ids a registration attests it was shown — THE flattening
+    /// `SearchAttestation::from_displayed` signs. ADR-0076 D6: `displayed` names every member of
+    /// every row shown, so a linked row's charts are attested individually.
+    pub fn displayed_charts(&self) -> Vec<Uuid> {
+        self.charts().map(|c| c.patient_id).collect()
+    }
 }
 
 #[cfg(test)]
@@ -230,7 +259,7 @@ mod tests {
         // implied. A `#[serde(skip)]` or a renamed field on the reason would silently drop
         // the "why" and leave a bare `incomplete: true` a clerk cannot act on.
         let list = CandidateList {
-            candidates: vec![],
+            people: vec![],
             incomplete: true,
             incomplete_reason: Some("2 candidates could not be read".into()),
         };

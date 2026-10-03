@@ -28,7 +28,7 @@ use crate::state::AppState;
 use cairn_gui_funnel::{
     bound_for_prompt, node_reason, trigger_state, FormSnapshot, Recorded, Restored, SearchToken,
 };
-use cairn_patient_search::{Candidate, CandidateList};
+use cairn_patient_search::CandidateList;
 use serde::Serialize;
 
 /// What the front door needs at launch, and after any reload.
@@ -64,8 +64,9 @@ pub fn browse_view(revision: u64, list: &CandidateList) -> BrowseView {
     let incomplete_reason = node_reason(list).map(str::to_string);
     BrowseView {
         revision,
-        candidates: list.candidates.iter().map(candidate_view).collect(),
-        summary: browse_summary(list.candidates.len(), incomplete_reason.is_some()),
+        // The view still lists CHARTS (one per row today); the person-shaped view is R3 Task 5.
+        candidates: list.charts().map(candidate_view).collect(),
+        summary: browse_summary(list.charts().count(), incomplete_reason.is_some()),
         incomplete_reason,
     }
 }
@@ -103,10 +104,10 @@ impl PromptView {
     }
 }
 
-/// Remember candidates that are now on screen, so `open_chart` will open them.
-async fn remember_shown(state: &AppState, candidates: &[Candidate]) {
+/// Remember every chart that is now on screen, so `open_chart` will open them.
+async fn remember_shown(state: &AppState, list: &CandidateList) {
     let mut shown = state.shown.lock().await;
-    for c in candidates {
+    for c in list.charts() {
         shown.insert(c.patient_id, c.clone());
     }
 }
@@ -169,7 +170,7 @@ pub async fn browse_impl(state: &AppState, form: FormSnapshot) -> Result<BrowseV
         .search(&form.query())
         .await
         .map_err(|e| search_error_view(&e))?;
-    remember_shown(state, &list.candidates).await;
+    remember_shown(state, &list).await;
     Ok(browse_view(form.revision, &list))
 }
 
@@ -203,14 +204,14 @@ pub async fn prompt_search_impl(
     let recorded = state.funnel.lock().await.record(&form, prompt);
     match recorded {
         Ok(Recorded::Current(token)) => {
-            remember_shown(state, &bounded.candidates).await;
+            remember_shown(state, &bounded).await;
             Ok(PromptView {
                 revision: form.revision,
                 waiting: None,
                 stale: false,
                 token: Some(token),
                 summary: Some(prompt_summary(&counts)),
-                candidates: bounded.candidates.iter().map(candidate_view).collect(),
+                candidates: bounded.charts().map(candidate_view).collect(),
                 incomplete_reason: bounded.incomplete_reason,
             })
         }
@@ -401,7 +402,7 @@ mod tests {
                 serde_json::to_value(browse_view(
                     0,
                     &CandidateList {
-                        candidates: vec![],
+                        people: vec![],
                         incomplete: false,
                         incomplete_reason: None,
                     },
@@ -879,7 +880,7 @@ mod tests {
     #[test]
     fn a_bare_incomplete_flag_reaches_the_browse_view() {
         let list = cairn_patient_search::CandidateList {
-            candidates: vec![],
+            people: vec![],
             incomplete: true,
             incomplete_reason: None,
         };

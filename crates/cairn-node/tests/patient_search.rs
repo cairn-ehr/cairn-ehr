@@ -804,11 +804,11 @@ async fn a_candidate_carries_name_age_trust_and_last_activity() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "exactly one chart on file: {list:?}"
     );
-    let cand = &list.candidates[0];
+    let cand = &list.people[0].members()[0];
     assert_eq!(cand.patient_id, p);
     assert_eq!(cand.display_name, "John Smith");
     assert_eq!(
@@ -873,11 +873,11 @@ async fn an_identity_pending_chart_comes_back_marked_unconfirmed() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the john doe chart must be found by its callsign: {list:?}"
     );
-    let cand = &list.candidates[0];
+    let cand = &list.people[0].members()[0];
     assert_eq!(cand.patient_id, pid);
     assert_eq!(
         cand.trust,
@@ -931,11 +931,11 @@ async fn a_chart_with_no_readable_name_is_reported_incomplete_never_dropped() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the unreadable candidate must still be present, never dropped: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, p);
+    assert_eq!(list.people[0].members()[0].patient_id, p);
     assert!(
         list.incomplete,
         "an unreadable display field must mark the list incomplete: {list:?}"
@@ -988,7 +988,7 @@ async fn an_empty_query_yields_an_empty_complete_list() {
         .expect("search succeeds");
 
     assert!(
-        list.candidates.is_empty(),
+        list.people.is_empty(),
         "an empty query must yield an empty list, not the whole population: {list:?}"
     );
     assert!(
@@ -1038,11 +1038,11 @@ async fn a_hyphenated_surname_is_found_by_typing_the_surname_alone() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the hyphenated surname, typed alone, must find the chart: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, p);
+    assert_eq!(list.people[0].members()[0].patient_id, p);
 }
 
 #[tokio::test]
@@ -1087,11 +1087,11 @@ async fn an_identifier_with_a_materialised_key_is_found_by_its_printed_form() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the printed-form search must find the chart: {list:?}"
     );
-    assert_eq!(list.candidates[0].patient_id, p);
+    assert_eq!(list.people[0].members()[0].patient_id, p);
 }
 
 #[tokio::test]
@@ -1167,14 +1167,14 @@ async fn a_candidates_photo_reference_is_the_original_rendition_not_whichever_is
         .await
         .expect("search succeeds");
 
-    assert_eq!(list.candidates.len(), 1, "the photographed chart: {list:?}");
+    assert_eq!(list.charts().count(), 1, "the photographed chart: {list:?}");
     assert_eq!(
-        list.candidates[0].photo_ref.as_deref(),
+        list.people[0].members()[0].photo_ref.as_deref(),
         Some(original.digest_hex.as_str()),
         "photo_ref must be the ORIGINAL rendition, found by role, not whichever sits first: {list:?}"
     );
     assert_ne!(
-        list.candidates[0].photo_ref.as_deref(),
+        list.people[0].members()[0].photo_ref.as_deref(),
         Some(preview.digest_hex.as_str()),
         "must never return the preview's digest: {list:?}"
     );
@@ -1271,12 +1271,12 @@ async fn two_tied_original_renditions_resolve_to_the_same_digest_every_time() {
             .await
             .expect("search succeeds");
         assert_eq!(
-            list.candidates.len(),
+            list.charts().count(),
             1,
             "attempt {attempt}: the tied-original chart: {list:?}"
         );
         assert_eq!(
-            list.candidates[0].photo_ref.as_deref(),
+            list.people[0].members()[0].photo_ref.as_deref(),
             Some(expected.as_str()),
             "attempt {attempt}: the tie must resolve to the SAME digest every run: {list:?}"
         );
@@ -1383,11 +1383,11 @@ async fn a_repudiated_only_name_reads_as_withheld_not_incomplete() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the chart must still be found, never dropped: {list:?}"
     );
-    assert_eq!(list.candidates[0].display_name, "(name withheld)");
+    assert_eq!(list.people[0].members()[0].display_name, "(name withheld)");
     assert!(
         !list.incomplete,
         "a by-design repudiated-name absence must NOT count as a read failure: {list:?}"
@@ -1479,12 +1479,13 @@ async fn a_repudiation_naming_no_asserted_name_still_counts_as_incomplete() {
         .expect("search succeeds");
 
     assert_eq!(
-        list.candidates.len(),
+        list.charts().count(),
         1,
         "the chart must still be found, never dropped: {list:?}"
     );
     assert_eq!(
-        list.candidates[0].display_name, "(name unavailable)",
+        list.people[0].members()[0].display_name,
+        "(name unavailable)",
         "an unrelated repudiation must NOT be read as this chart's own withheld name: {list:?}"
     );
     assert!(

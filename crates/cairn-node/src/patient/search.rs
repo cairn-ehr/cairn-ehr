@@ -38,7 +38,7 @@ use super::search_rank::{
     normalise_query_tokens, passes_from_db, rank_keys, read_retained_names, MatchedPasses,
 };
 use cairn_patient_search::{
-    age_years, rank_candidates, Age, Candidate, CandidateList, SearchQuery, TrustState,
+    age_years, rank_candidates, Age, Candidate, CandidateList, PersonRow, SearchQuery, TrustState,
 };
 use std::collections::{HashMap, HashSet};
 use tokio_postgres::GenericClient;
@@ -165,7 +165,8 @@ pub async fn search_patients<C: GenericClient + Sync>(
     };
 
     Ok(CandidateList {
-        candidates,
+        // One row per chart for now: R3 Task 3 is where charts first group into people.
+        people: PersonRow::each_alone(candidates),
         incomplete,
         incomplete_reason,
     })
@@ -174,11 +175,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
 /// The "found nothing, and that is the whole truth" list — shared by both short-circuits
 /// above (empty query; a real search that genuinely matched no chart).
 fn empty_list() -> CandidateList {
-    CandidateList {
-        candidates: vec![],
-        incomplete: false,
-        incomplete_reason: None,
-    }
+    CandidateList::empty()
 }
 
 /// `chart_trust.trust_state` is a closed, DB-defined vocabulary (db/024): a row present

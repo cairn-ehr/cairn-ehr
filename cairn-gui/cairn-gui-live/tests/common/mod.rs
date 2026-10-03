@@ -161,7 +161,7 @@ pub fn identity(origin: &str) -> cairn_node::identity::Identity {
 /// things to keep true.
 pub fn nothing_found() -> cairn_patient_search::CandidateList {
     cairn_patient_search::CandidateList {
-        candidates: vec![],
+        people: vec![],
         incomplete: false,
         incomplete_reason: None,
     }

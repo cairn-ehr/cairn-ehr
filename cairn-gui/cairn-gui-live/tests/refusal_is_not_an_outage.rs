@@ -369,7 +369,7 @@ async fn a_failed_search_is_an_error_not_an_empty_list() {
             "a search that could not run returned Ok({} candidates). An empty list on this \
              screen MEANS 'nobody matched, create a new chart' — reporting a failure as one is \
              how the funnel manufactures the duplicate it exists to prevent.",
-            list.candidates.len()
+            list.charts().count()
         ),
         Err(other) => {
             panic!("a dead connection decided nothing about this search, and arrived as {other:?}")
@@ -428,9 +428,9 @@ async fn a_refused_registration_leaves_the_connection_usable() {
         .await
         .expect("the connection must still answer a read after a rolled-back refusal");
     assert!(
-        found.candidates.is_empty(),
+        found.people.is_empty(),
         "the refusal rolled back, so nothing should have been created: {:?}",
-        found.candidates
+        found.people
     );
 
     // And now a WRITE on that same `Client`. Rather than build a second `LiveData` — which

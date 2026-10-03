@@ -4227,7 +4227,7 @@ async fn main() -> anyhow::Result<()> {
             let list = cairn_node::patient::search::search_patients(&db, &query, &today).await?;
             print_candidates(&list);
 
-            if !list.candidates.is_empty() && !confirm_new {
+            if !list.people.is_empty() && !confirm_new {
                 // STOP HERE. This is NOT a confirmation dialog — principle 3 explicitly
                 // forbids those as a safety mechanism, because a dialog habituates a busy
                 // clerk to click through without reading. This is instead the PAPER
@@ -4243,7 +4243,7 @@ async fn main() -> anyhow::Result<()> {
                     "{} candidate(s) already on file for this search (printed above) — \
                      re-run with --confirm-new to register a new chart anyway, or use one of \
                      the patient_ids shown instead",
-                    list.candidates.len()
+                    list.charts().count()
                 );
             }
 
@@ -5667,7 +5667,7 @@ fn ellipsize(s: &str, width: usize) -> String {
 /// terminal behind a long candidate list and never be seen; printed last, it is the last thing
 /// on screen no matter how many rows precede it.
 fn print_candidates(list: &cairn_patient_search::CandidateList) {
-    if list.candidates.is_empty() {
+    if list.people.is_empty() {
         println!("no candidates found");
     } else {
         // `{:name_w$}` on both this header and the row below, from ONE constant, so the
@@ -5681,7 +5681,7 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
             "last activity",
             name_w = NAME_COLUMN_WIDTH
         );
-        for c in &list.candidates {
+        for c in list.charts() {
             let age = c
                 .age
                 .as_ref()

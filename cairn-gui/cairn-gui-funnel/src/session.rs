@@ -211,7 +211,7 @@ impl FunnelSession {
 mod tests {
     use super::*;
     use crate::prompt::bound_for_prompt;
-    use cairn_patient_search::{Candidate, CandidateList, TrustState};
+    use cairn_patient_search::{Candidate, CandidateList, PersonRow, TrustState};
     use uuid::Uuid;
 
     fn candidate(n: u128) -> Candidate {
@@ -237,7 +237,7 @@ mod tests {
     /// A one-candidate prompt, bounded the only way `record` accepts.
     fn prompt(n: u128) -> PromptList {
         bound_for_prompt(&CandidateList {
-            candidates: vec![candidate(n)],
+            people: PersonRow::each_alone(vec![candidate(n)]),
             incomplete: false,
             incomplete_reason: None,
         })
@@ -278,7 +278,7 @@ mod tests {
         let (attested, name) = s.take_for_register(newer).unwrap().into_parts();
         assert_eq!(name, "John Smith");
         assert_eq!(
-            attested.displayed().candidates[0].patient_id,
+            attested.displayed().people[0].members()[0].patient_id,
             Uuid::from_u128(2)
         );
     }
