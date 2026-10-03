@@ -488,6 +488,17 @@ mod tests {
         assert!(plan.held_back[0].contains(&Uuid::from_u128(11).to_string()));
     }
 
+    /// The reason alone withholds: `cross_patient` unset, `wrong_chart.doubted_link` set. Guards
+    /// `cease_plan` against reverting to reading `row.cross_patient` only.
+    #[test]
+    fn a_doubted_link_reason_alone_holds_back_another_members_thread() {
+        let mut row = plan_row(false, &[(11, 2)]);
+        row.wrong_chart.doubted_link = true;
+        let plan = cease_plan(&row, Uuid::from_u128(1));
+        assert!(plan.write.is_empty());
+        assert_eq!(plan.held_back.len(), 1);
+    }
+
     /// An ordinary line on a combined list: every thread stopped, each on its OWN chart.
     #[test]
     fn an_ordinary_line_ceases_every_thread_on_its_own_chart() {

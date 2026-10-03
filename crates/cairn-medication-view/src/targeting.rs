@@ -15,9 +15,10 @@ use uuid::Uuid;
 ///   patient's drug name. A signature is a claim of responsibility for what the line SAYS,
 ///   and the node knows it may be saying something it cannot stand behind.
 ///
-/// - **Doubted link (#697 (b)).** The set holds a link this node doubts and this line is not
-///   recorded only on the opened chart: a signature is a claim about a person, and the node
-///   has positive evidence the other member may be someone else.
+/// - **Doubted link (#697 (b)).** The set's links are in doubt (db/054: a link the hard
+///   identity check clashes on, or a clinician's unlink between charts other links still join)
+///   and this line is not recorded only on the opened chart: a signature is a claim about a
+///   person, and the node has positive evidence the other member may be someone else.
 ///
 /// All of these are line-level. The rest of the chart stays signable — see `withheld_rows`.
 fn is_signable_line(row: &MedicationRow) -> bool {
@@ -337,8 +338,9 @@ mod tests {
         assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
     }
 
-    /// Review focus 4: a CEASED line on the other member of a doubted set is shown, never
-    /// signed, and never reported as withheld — it needs no signature.
+    /// A ceased line is not withheld, even under a doubted link: a CEASED line on the other
+    /// member of a doubted set is shown, never signed, and never reported as withheld — it
+    /// needs no signature, so a "will NOT be signed" report about it would be noise.
     #[test]
     fn a_ceased_doubted_link_line_is_not_reported_as_withheld() {
         let mut rows = vec![row(

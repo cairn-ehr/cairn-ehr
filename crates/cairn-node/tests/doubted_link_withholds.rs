@@ -457,3 +457,49 @@ async fn an_attested_unlink_inside_the_set_is_a_doubted_link() {
     );
     assert_eq!(sign_off_targets(&lifted.rows), vec![only_a]);
 }
+
+/// Both reasons on one row, THROUGH the database: `outside_set` is computed by the read from
+/// the groups' charts, `doubted_link` by db/054 — the pure test in `hazard.rs` cannot show
+/// that the read wires both. A–X is a flagged (doubted) link; O is an outsider linked to
+/// nothing. A line spanning X and O reaches outside the set AND is not only on A; so does a
+/// line spanning A and O (touching O, it is not "only on the opened chart").
+#[tokio::test]
+async fn a_line_can_be_withheld_for_both_reasons_at_once() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let outsider = chart(&c, &sk, &kid).await;
+    let tx = assert_one(&mut c, &sk, &kid, x, "warfarin").await;
+    let to = assert_one(&mut c, &sk, &kid, outsider, "warfarin").await;
+    let ta = assert_one(&mut c, &sk, &kid, a, "digoxin").await;
+    let ta_o = assert_one(&mut c, &sk, &kid, outsider, "digoxin").await;
+    group(&c, tx, to).await;
+    group(&c, ta, ta_o).await;
+    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
+    flag_link(&c, a, x).await;
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&list);
+    assert_eq!(list.charts.members(), sorted(vec![a, x]).as_slice());
+    let both = WrongChartReasons {
+        outside_set: true,
+        doubted_link: true,
+    };
+    assert_eq!(row_of(&list, tx).wrong_chart, both, "X+O: both reasons");
+    assert_eq!(
+        row_of(&list, ta).wrong_chart,
+        both,
+        "A+O: outside the set, and touching O it is not only on A"
+    );
+    assert!(sign_off_targets(&list.rows).is_empty());
+    assert!(withheld_rows(&list.rows).iter().all(|w| w.reasons == both));
+}

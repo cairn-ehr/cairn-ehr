@@ -134,7 +134,9 @@ pub struct SignOffOutcome {
 ///
 /// This function does NOT refuse over an incomplete or partly-untrustworthy chart. It signs
 /// every line it can show and stand behind, and REPORTS the rest — `withheld` for lines
-/// present but untrustworthy (cross-patient dose bleed), `groups_missing_from_chart` for
+/// present but untrustworthy (reaching a chart outside the set — cross-patient dose bleed,
+/// #334 — or not only on the opened chart while the record's links are in doubt, #697 (b)),
+/// `groups_missing_from_chart` for
 /// content the chart could not display at all, `failed` for lines whose write errored. All
 /// three must be surfaced by the caller; signing what it can must never become silence
 /// about what it cannot.
@@ -217,9 +219,10 @@ pub async fn sign_off_medication_list(
         ensure_same_charts(shown, &first_read.charts, "while this list was on screen")?;
     }
 
-    // Lines that need a signature but are not safe to sign (cross-patient dose bleed,
-    // issue #334). Withheld per LINE, never per chart — see the #339 note on this
-    // function: nothing wrong with one line may block another.
+    // Lines that need a signature but are not safe to sign: reaching a chart outside the set
+    // (cross-patient dose bleed, issue #334), or not only on the opened chart while the
+    // record's links are in doubt (#697 (b)). Withheld per LINE, never per chart — see the
+    // #339 note on this function: nothing wrong with one line may block another.
     let withheld = cairn_medication_view::withheld_rows(&first_read.rows);
     let active_rows = first_read
         .rows
