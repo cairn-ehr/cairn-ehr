@@ -16,4 +16,5 @@ pub mod edges;
 pub mod person;
 pub mod register;
 pub mod search;
+mod search_person;
 mod search_rank;

@@ -1728,3 +1728,42 @@ async fn a_two_byte_latin_prefix_is_still_gated() {
         "'mic' is three bytes and must still match; got {allowed:?}"
     );
 }
+
+/// The latent trust defect R3 closes: a matched chart whose registration this node does not
+/// hold has no `chart_trust` row, which used to read `Confirmed`. "No row" is not evidence
+/// about a chart never received (principle 4): it reads `Unknown`.
+#[tokio::test]
+async fn a_matched_chart_this_node_does_not_hold_reads_unknown() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let elsewhere = Uuid::now_v7();
+    let name = "Hemi Unheld";
+    let event = common::body_from_spec(
+        Uuid::now_v7(),
+        &kid,
+        EventSpec {
+            patient: elsewhere,
+            event_type: "demographic.field.asserted",
+            schema_version: "demographic.field/1",
+            payload: name_assertion_body(name, Some("legal"), "patient-stated"),
+            plaintext_twin: Some(render_name_twin(name, Some("legal"), "patient-stated")),
+            wall: 10,
+        },
+    );
+    common::apply_remote_raw(&c, &sk, event).await.unwrap();
+    let list = cairn_node::patient::search::search_patients(
+        &c,
+        &SearchQuery::new("hemi", None, &[]),
+        "2026-10-03",
+    )
+    .await
+    .unwrap();
+    let found: Vec<_> = list.charts().collect();
+    assert_eq!(found.len(), 1, "the unheld chart is found by its name");
+    assert_eq!(found[0].trust, TrustState::Unknown);
+}
