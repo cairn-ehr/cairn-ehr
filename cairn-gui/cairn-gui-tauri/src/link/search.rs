@@ -36,11 +36,8 @@ pub fn link_search_summary(
         }
     } else {
         // "chart(s)" while each person is one chart; "patient(s) (C charts)" once rows are linked.
-        let noun = if other_charts == other_people {
-            "chart(s)"
-        } else {
-            "patient(s)"
-        };
+        let linked = other_charts != other_people;
+        let noun = if linked { "patient(s)" } else { "chart(s)" };
         let charts = charts_suffix(other_people, other_charts);
         let partial = if incomplete {
             " — the list is not complete"
@@ -194,6 +191,31 @@ mod tests {
             v.summary,
             "1 other chart(s) found. 2 chart(s) of this record also matched and are not listed."
         );
+    }
+
+    /// `link.js` is untyped, so a Rust rename renders `undefined`. This guards ONLY the search
+    /// answer (`found` in `runLinkSearch`); the comparison view's guard is the rest of #715.
+    #[test]
+    fn link_js_search_reads_no_field_the_backend_does_not_send() {
+        use crate::commands::tests::fields_read_in;
+        let js = include_str!("../../src-ui/link.js");
+        let sent = serde_json::to_value(link_search_view(
+            browse_rows(&[&["x", "y"]], false),
+            &["a".into()],
+        ))
+        .unwrap();
+        let available: Vec<String> = sent.as_object().unwrap().keys().cloned().collect();
+        let read = fields_read_in(js, "found");
+        assert!(
+            read.contains("people") && read.contains("summary"),
+            "{read:?}"
+        );
+        for field in read {
+            assert!(
+                available.contains(&field),
+                "link.js reads `found.{field}`, which the backend does not send: {available:?}"
+            );
+        }
     }
 
     #[test]

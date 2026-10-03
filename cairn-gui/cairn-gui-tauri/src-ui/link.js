@@ -131,12 +131,11 @@ async function runLinkSearch() {
     return;
   }
   try {
-    const view = await invoke("link_search", { form, charts: renderedCharts || [] });
-    if (view.revision !== linkRevision) return; // a newer search is on its way
-    list.replaceChildren(
-      ...view.people.map((row) => personItem(row, compareItem)),
-    );
-    setMessage(el("link-search-status"), view.summary);
+    // Named `found` (not `view`) so the webview-fields guard can scan exactly this payload.
+    const found = await invoke("link_search", { form, charts: renderedCharts || [] });
+    if (found.revision !== linkRevision) return; // a newer search is on its way
+    list.replaceChildren(...found.people.map((row) => personItem(row, compareItem)));
+    setMessage(el("link-search-status"), found.summary);
   } catch (failure) {
     if (revision !== linkRevision) return;
     list.replaceChildren();

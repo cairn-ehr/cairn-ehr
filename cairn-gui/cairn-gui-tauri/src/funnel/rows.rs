@@ -43,9 +43,9 @@ pub fn person_row_view(row: &PersonRow) -> PersonRowView {
     }
 }
 
-/// " ({charts} charts)" when the charts outnumber the people, else nothing. The one place the
-/// "people, with charts named only when they differ" rule lives, so every sentence that counts
-/// both says it the same way.
+/// " ({charts} charts)" when the charts outnumber the people, else nothing. Shared by
+/// [`people_phrase`] and the link panel's search line so those two name charts the same way
+/// (`browse_summary` keeps its own arms, each pinned by a golden sentence).
 pub fn charts_suffix(people: usize, charts: usize) -> String {
     if charts == people {
         String::new()
@@ -55,7 +55,7 @@ pub fn charts_suffix(people: usize, charts: usize) -> String {
 }
 
 /// "{n} existing patient(s)", naming the charts only when they outnumber the people. Serves the
-/// browse line, the step-3 announcement and (through [`charts_suffix`]) the link panel's line.
+/// step-3 announcement; the link panel's line shares [`charts_suffix`].
 pub fn people_phrase(people: usize, charts: usize) -> String {
     format!(
         "{people} existing patient(s){}",

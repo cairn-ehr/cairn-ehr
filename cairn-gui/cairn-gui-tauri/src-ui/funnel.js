@@ -102,15 +102,22 @@ function candidateItem(cand, verb, statusFor) {
  * linked charts") and a nested list with a button per member: the clerk opens the chart they
  * reached for, and the combined record reads either way.
  */
+let personRowCount = 0; // makes each linked row's label id unique
+
 function personItem(row, memberItem) {
   if (row.members.length === 1) return memberItem(row.members[0]);
   const li = document.createElement("li");
   li.className = "person-row";
   const label = document.createElement("span");
   label.className = "person-row-label";
+  label.id = "person-row-label-" + ++personRowCount;
   label.textContent = row.label;
   const members = document.createElement("ul");
-  members.append(...row.members.map(memberItem));
+  const items = row.members.map(memberItem);
+  // Tab lands on a button, not on the label: describe every member button by the row's label so
+  // a screen reader says "One person — 2 linked charts" along with the chart's own text.
+  for (const item of items) item.querySelector("button").setAttribute("aria-describedby", label.id);
+  members.append(...items);
   li.append(label, members);
   return li;
 }
