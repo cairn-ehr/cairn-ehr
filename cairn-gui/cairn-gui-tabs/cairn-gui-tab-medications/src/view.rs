@@ -19,7 +19,8 @@ use crate::row_view::build_row;
 pub use crate::row_view::MedListRowView;
 use cairn_medication_view::{
     format_hazard_groups, sign_off_targets, withheld_rows, MedicationStatus, PatientMedicationList,
-    WithheldLine, DOUBTED_LINK_INSTRUCTION, MISSING_GROUP_INSTRUCTION, SEPARATION_INSTRUCTION,
+    WithheldLine, WrongChartReasons, DOUBTED_LINK_INSTRUCTION, MISSING_GROUP_INSTRUCTION,
+    SEPARATION_INSTRUCTION,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -105,16 +106,18 @@ pub fn withheld_report(
     withheld: &[WithheldLine],
     separation_targets: &BTreeMap<Uuid, Vec<Uuid>>,
 ) -> Option<String> {
-    // The group ids of the lines whose reasons satisfy `pick`, in the order given.
-    let groups = |pick: fn(&WithheldLine) -> bool| -> Vec<Uuid> {
+    // The group ids of the lines whose reasons satisfy `pick`, in the order given. Each line's
+    // reasons go through `worded`, so a line whose set is empty is still counted (as the
+    // outside case) rather than falling through both blocks below.
+    let groups = |pick: fn(WrongChartReasons) -> bool| -> Vec<Uuid> {
         withheld
             .iter()
-            .filter(|l| pick(l))
+            .filter(|l| pick(l.reasons.worded()))
             .map(|l| l.group_id)
             .collect()
     };
-    let outside = groups(|l| l.reasons.outside_set);
-    let doubted = groups(|l| l.reasons.doubted_link);
+    let outside = groups(|r| r.outside_set);
+    let doubted = groups(|r| r.doubted_link);
     let mut parts = Vec::new();
     if !outside.is_empty() {
         parts.push(format!(
@@ -344,6 +347,18 @@ mod tests {
         );
         assert!(message.contains("cannot yet vouch"), "{message}");
         assert!(!message.contains("from this chart"), "{message}");
+    }
+
+    /// The report prints one block per reason, so a withheld line with an empty reason set
+    /// must still be counted — worded as the pre-#697 outside case — not silently dropped.
+    #[test]
+    fn a_withheld_line_with_no_recorded_reason_is_still_reported() {
+        let line = WithheldLine {
+            group_id: uid(1),
+            reasons: cairn_medication_view::WrongChartReasons::default(),
+        };
+        let message = withheld_report(&[line], &BTreeMap::new()).expect("reported");
+        assert!(message.contains(&uid(1).to_string()), "{message}");
     }
 
     #[test]

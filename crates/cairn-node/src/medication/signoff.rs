@@ -60,8 +60,10 @@ pub struct SignOffOutcome {
     /// Empty in normal operation. Each line carries its reasons (#697), so a renderer words
     /// each with its own remedy. See `cairn_medication_view::withheld_rows`.
     pub withheld: Vec<cairn_medication_view::WithheldLine>,
-    /// Each hazardous group's FULL member-thread list — the arguments to the
-    /// `medication-separate` remedy the caller is told to run. Carried through verbatim
+    /// Each hazardous group's FULL member-thread list — for a group reaching outside the set,
+    /// the arguments to the `medication-separate` remedy the caller is told to run; for a
+    /// doubted-link group, only which threads are held (that remedy judges the links, #697).
+    /// Carried through verbatim
     /// from `PatientMedicationList::separation_targets`, so it is a SUPERSET of `withheld`:
     /// it also covers cross-patient groups that needed no signature and were therefore
     /// never withheld. Look up the groups you are reporting; do not iterate it as if it

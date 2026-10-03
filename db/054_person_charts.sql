@@ -87,7 +87,8 @@ $$;
 GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_agent;
 
 -- 3. Whether a chart set holds a link this node DOUBTS — an input to the medication read's
---    wrong-chart hazard rule (cairn-node medication/read.rs, is_wrong_chart_hazard).
+--    wrong-chart hazard rule (cairn-node medication/hazard.rs, wrong_chart_reasons; read by
+--    medication/read.rs).
 --
 --    ADR-0076 decision 1 combines every standing link, including an un-attested one the
 --    node's hard veto (db/016) would refuse at its own door. Such a pair may be two people,
@@ -114,10 +115,15 @@ GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_age
 --    definition: an attester key is present AND cairn_attestation_vouched held when the
 --    winner was applied). A human-attested LINK is the human decision the veto exists to
 --    force, so it is never doubted by (b); a human-attested UNLINK is the decision (c) obeys.
+--    NOT COVERED, deliberately: an UN-attested unlink inside the set is not a doubt. Only a
+--    human's "not the same person" is; counting a machine's or a peer agent's would let any
+--    unreviewed writer freeze sign-off on a record (ADR-0030). An under-warn, so stated here
+--    and pinned by cairn-node tests/doubted_link_withholds.rs.
 --
 --    SECURITY DEFINER is no longer strictly required: the old reasons
 --    (cairn_attestation_vouched locked away by db/001; event_log attester columns under the
---    #405 column floor) no longer apply, and every remaining callee is granted directly to
+--    #405 column floor) no longer apply to this body, which reads neither, and everything it
+--    reads (link_veto_flag, patient_link, cairn_has_hard_veto) is granted directly to
 --    cairn_agent. It is kept so this slice makes no privilege change (issue #718 decides
 --    whether to drop it); the answer is one boolean about a set the caller already holds,
 --    and search_path is pinned.

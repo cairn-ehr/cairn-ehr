@@ -178,7 +178,8 @@ does not change: hiding the line would be the hazard if the two charts are one p
 > - **The rule lives in `cairn-node`'s `medication/hazard.rs`** (`wrong_chart_reasons`, pure), not in
 >   `read.rs`. The two row fields come from **one reasons map** in `read.rs`, not from a constructor.
 >   Every production reader goes through `MedicationRow::is_wrong_chart_hazard()` (either signal is
->   enough) or `withheld_because()` (a hazard with no recorded reason is worded as the outside case).
+>   enough) or `hazard_reasons()` (a hazard with no recorded reason is worded as the outside case;
+>   blind to status). What sign-off withholds is `targeting::withheld_reasons()` / `withheld_rows()`.
 > - **"Doubted" gained a third case (maintainer decision during the final review):** an ATTESTED
 >   unlink between two charts that are still in one set. It catches the A–C–X bridge: A–X is doubted,
 >   and a sparse chart C, linked to both, trips no veto. A clinician unlinks A–X and the record stays
@@ -195,9 +196,24 @@ does not change: hiding the line would be the hazard if the two charts are one p
 > - **The CLI prints the long remedy once, below the list** (`list_text::doubted_link_note`, decided
 >   by the status-aware `withheld_rows`), not under every row. The outside-set row lines stay
 >   byte-identical to before (pinned by a golden).
+> - **The §1.2 count above is per doubted link.** "Lifted by one judgement" holds for one doubted
+>   link. Two doubted links take two acts, and in the A–C–X bridge CONFIRMING A–C or C–X never lifts
+>   it: the act is a human A–X relink, or an unlink of A–C or C–X that takes X out of A's record.
+> - **The PR review round** (after the final review):
+>   - **Pointers.** `withheld_because()` became `hazard_reasons()`, because the CLI had pointed every
+>     hazard row at a note printed only for withheld ones. Only a line `withheld_reasons()` reports
+>     now says "cannot be signed until …" or points below the list, in the CLI and the window alike.
+>   - **Member charts.** The rule also judges each member thread's own chart, which is the chart
+>     sign-off writes to.
+>   - **Construction.** `MedicationRow` and `WrongChartReasons` lost `Deserialize`.
+>   - **Tests.** The bridge test gained a line on the bridge chart, so its lift can fail. New tests:
+>     a human relink lifts the bridge; an un-attested unlink is no doubt (a deliberate under-warn,
+>     now stated in db/054 and `hazard.rs`); another record's doubt leaves this one alone.
 > - **#718:** db/054's SECURITY DEFINER no longer has a reason since #701; it is kept, and the
->   decision is filed. **#719:** the review residuals. #716 and #335 gained comments (the window
->   cannot show which link is in doubt; the doubt state can change between display and sign-off).
+>   decision is filed. **#719:** the review residuals (items 3–4 fixed for the doubted line in the
+>   review round). **#720:** make `wrong_chart` the only Rust source of truth. #716 and #335 gained
+>   comments (the window cannot show which link is in doubt; the doubt state can change between
+>   display and sign-off, with or without a human act).
 
 ### R2 — link and unlink from an open chart (#681) + the precedence floor
 

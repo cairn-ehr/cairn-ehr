@@ -78,7 +78,10 @@ pub struct MemberVouch {
 ///   someone else. Remedy: a human judges the LINKS (`DOUBTED_LINK_INSTRUCTION`).
 ///
 /// Built by `cairn-node`'s `medication::hazard::wrong_chart_reasons`, the one rule.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Serialize only, like `MedicationRow`: nothing reads either back, and a deserializer would
+/// be a second way to build a row, outside the one rule.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct WrongChartReasons {
     pub outside_set: bool,
     pub doubted_link: bool,
@@ -89,6 +92,22 @@ impl WrongChartReasons {
     pub fn any(&self) -> bool {
         self.outside_set || self.doubted_link
     }
+
+    /// The reasons a renderer words for a line it knows is a hazard: these, or, when none is
+    /// set, the outside-the-set reason (the only meaning the hazard flag had before #697).
+    /// Renderers print one block per reason, so a hazard with an empty set would otherwise
+    /// print nothing and vanish from the report. One fallback, used by `hazard_reasons` and by
+    /// every renderer of a `WithheldLine`.
+    pub fn worded(self) -> Self {
+        if self.any() {
+            self
+        } else {
+            WrongChartReasons {
+                outside_set: true,
+                doubted_link: false,
+            }
+        }
+    }
 }
 
 /// One displayed row = one medication GROUP.
@@ -98,7 +117,11 @@ impl WrongChartReasons {
 /// per-THREAD, so the row carries its members and each member's vouch. That group/thread
 /// asymmetry is the most defect-prone seam in this slice — see the tests in
 /// `targeting.rs` and `crates/cairn-node/tests/medication_read.rs`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Serialize only (the CLI's `--json`). Do NOT derive `Deserialize`: nothing reads a row back,
+/// and a deserializer would build one whose hazard fields no rule set — the same reason
+/// `ChartSet` has none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MedicationRow {
     pub group_id: Uuid,
     /// The chart the GROUP displays under: the list view's single display winner
@@ -134,14 +157,13 @@ pub struct MedicationRow {
     /// Two different drug anchors inside one reconciled group
     /// (`medication_group_coding_conflict`) — a possible mis-reconciliation.
     pub coding_conflict: bool,
-    /// This line is withheld from sign-off as a wrong-chart hazard; `wrong_chart` says why
-    /// (#697). Kept, rather than replaced by `wrong_chart`, so any reader that checks only this
-    /// flag stays fail-safe. The rule is `cairn-node`'s `medication::hazard::wrong_chart_reasons`.
+    /// This line is a wrong-chart hazard, never a sign-off target; `wrong_chart` says why
+    /// (#697). Kept, rather than replaced by `wrong_chart`, because the `--json` output's
+    /// readers check this key. The rule is `cairn-node`'s `medication::hazard::wrong_chart_reasons`.
     pub cross_patient: bool,
     /// Why `cross_patient` is set (#697): the reasons a renderer words, each with its own
-    /// remedy. Read through `withheld_because`, never directly: that is where a row whose flag
-    /// and reasons disagree is resolved in the fail-safe direction.
-    #[serde(default)]
+    /// remedy. Read through `is_wrong_chart_hazard` or `hazard_reasons`, never directly: that is
+    /// where a row whose flag and reasons disagree is resolved in the fail-safe direction.
     pub wrong_chart: WrongChartReasons,
     /// The charts owning at least one member thread of this group, sorted. The row names
     /// where the drug was recorded so a clinician reading a combined list — one read over
@@ -163,21 +185,19 @@ impl MedicationRow {
         self.cross_patient || self.wrong_chart.any()
     }
 
-    /// The reasons to word for a withheld line, or `None` when it is not withheld. A hazard
-    /// with no recorded reason (a builder that predates #697) is worded as reaching outside the
-    /// set — the only meaning the flag had before.
-    pub fn withheld_because(&self) -> Option<WrongChartReasons> {
-        if !self.is_wrong_chart_hazard() {
-            return None;
-        }
-        Some(if self.wrong_chart.any() {
-            self.wrong_chart
-        } else {
-            WrongChartReasons {
-                outside_set: true,
-                doubted_link: false,
-            }
-        })
+    /// Why this line is a wrong-chart hazard, or `None` when it is not one. A hazard with no
+    /// recorded reason (a builder that predates #697) is worded as reaching outside the set
+    /// (`WrongChartReasons::worded`).
+    ///
+    /// BLIND TO STATUS AND VOUCH. A ceased or already-signed hazard line returns `Some`, but
+    /// sign-off withholds nothing from it: nothing on it needs a signature. Whether THIS
+    /// gesture withholds a line is `targeting::withheld_reasons`, and anything that tells the
+    /// reader a line "cannot be signed" or points at the withheld report must ask that one.
+    /// (Named `withheld_because` until the PR #717 review found the CLI pointing every hazard
+    /// row at a note printed only for withheld ones.)
+    pub fn hazard_reasons(&self) -> Option<WrongChartReasons> {
+        self.is_wrong_chart_hazard()
+            .then(|| self.wrong_chart.worded())
     }
 
     /// The name the clinician actually sees: the coded display name when the drug has been
@@ -266,7 +286,7 @@ mod tests {
         r.cross_patient = true;
         assert!(r.is_wrong_chart_hazard());
         assert_eq!(
-            r.withheld_because(),
+            r.hazard_reasons(),
             Some(WrongChartReasons {
                 outside_set: true,
                 doubted_link: false
@@ -281,7 +301,7 @@ mod tests {
         r.wrong_chart.doubted_link = true;
         assert!(r.is_wrong_chart_hazard());
         assert_eq!(
-            r.withheld_because(),
+            r.hazard_reasons(),
             Some(WrongChartReasons {
                 outside_set: false,
                 doubted_link: true
@@ -290,9 +310,45 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_row_is_not_withheld() {
+    fn an_ordinary_row_is_not_a_hazard() {
         let r = row("warfarin", None);
         assert!(!r.is_wrong_chart_hazard());
-        assert_eq!(r.withheld_because(), None);
+        assert_eq!(r.hazard_reasons(), None);
+    }
+
+    /// `hazard_reasons` is blind to status and vouch on purpose: a CEASED line in a doubted
+    /// record is still not this patient's for certain. Whether sign-off withholds it is a
+    /// separate, status-aware question (`targeting::withheld_reasons`) — the PR #717 review
+    /// found a note gated on one and a pointer gated on the other.
+    #[test]
+    fn hazard_reasons_ignores_status() {
+        let mut r = row("warfarin", None);
+        r.status = MedicationStatus::Ceased;
+        r.wrong_chart.doubted_link = true;
+        assert_eq!(
+            r.hazard_reasons(),
+            Some(WrongChartReasons {
+                outside_set: false,
+                doubted_link: true
+            })
+        );
+    }
+
+    /// A line reported as withheld must carry a reason a renderer can word: the renderers
+    /// print one block per reason, so an empty set would drop the line from the report.
+    #[test]
+    fn an_empty_reason_set_is_worded_as_reaching_outside() {
+        assert_eq!(
+            WrongChartReasons::default().worded(),
+            WrongChartReasons {
+                outside_set: true,
+                doubted_link: false
+            }
+        );
+        let doubted = WrongChartReasons {
+            outside_set: false,
+            doubted_link: true,
+        };
+        assert_eq!(doubted.worded(), doubted);
     }
 }

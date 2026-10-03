@@ -736,7 +736,10 @@ CREATE INDEX IF NOT EXISTS event_deferred_type_idx ON event_deferred (event_type
 -- .attester_key owes the same exclusion — and so does a new reader of
 -- patient_link.attested (db/018), which is a DERIVED STORE of the vouch: it is
 -- written from this exclusion when a link winner is applied, so it must never be
--- recomputed from attester_key alone.
+-- recomputed from attester_key alone. Its readers (recount with
+-- `git grep -n attested -- db crates`): db/018 itself (read-back, ranking), db/054's
+-- cairn_chart_set_has_doubted_link (#701), db/055's re-fold, and cairn-node's
+-- chart_link.rs (the link door's read-back), patient/edges.rs and auto_apply.rs.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
     event_id UUID PRIMARY KEY REFERENCES event_log(event_id) ON DELETE CASCADE
@@ -750,8 +753,9 @@ CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
 --              a derived store of the vouch that db/018's own read-back and ranking use
 --              instead of asking again;
 --   * db/034 — medication_attestation_apply;
---   * db/054 — cairn_chart_set_has_doubted_link;
 --   * db/055 — the patient_link.attested backfill.
+-- (db/054's cairn_chart_set_has_doubted_link no longer calls it: since #701 it reads the
+-- stored patient_link.attested. A grep still finds db/054, in comments only.)
 -- More will arrive with the next type that reads event_log.attester_key. Hand-written copies
 -- of one predicate are places to change in step; a named function makes each call site read
 -- as the QUESTION being asked rather than the mechanism, which is the point of the marker.

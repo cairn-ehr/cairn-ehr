@@ -10,7 +10,9 @@
 //! comes in as `targets`, the set `view::build_view` computed with ONE call to the shared
 //! `sign_off_targets` rule — the rule the node's orchestrator uses — so the badge on a row and
 //! the count on the button can never disagree (see the `view` module doc).
-use cairn_medication_view::{short_kid, MedicationRow, MedicationStatus, VouchState};
+use cairn_medication_view::{
+    short_kid, withheld_reasons, MedicationRow, MedicationStatus, VouchState,
+};
 use serde::Serialize;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -162,7 +164,7 @@ fn flags(row: &MedicationRow) -> Vec<String> {
     if row.coding_conflict {
         out.push("two different drug identities in this group".to_string());
     }
-    if let Some(why) = row.withheld_because() {
+    if let Some(why) = row.hazard_reasons() {
         // Per-row, and in the row's own words, because this is where the clinician is
         // looking when they wonder why the line has no signature badge. One sentence per
         // REASON (#697): each names its own cause, and the report names each remedy.
@@ -176,19 +178,24 @@ fn flags(row: &MedicationRow) -> Vec<String> {
             );
         }
         if why.doubted_link {
-            // #697 (b): the record's links are in doubt (db/054: a link the hard identity check
-            // clashes on, or a clinician's unlink between charts other links still join), and
-            // this line is not on the opened chart alone — signing it could vouch for a possible
-            // stranger's drug. "Cannot yet vouch that it is this patient's", not "may be another
-            // person's": the line's own chart may be human-linked to this one while ANOTHER link
-            // is doubted. "No longer in doubt", not "judged": in the A–C–X bridge every link can
-            // carry a human judgement and the record still holds a doubt.
-            out.push(
-                "this record's links are in doubt, and this line is not recorded only on the \
-                 chart you opened — the node cannot yet vouch that it is this patient's, so it \
-                 cannot be signed until the record's links are no longer in doubt"
-                    .to_string(),
-            );
+            // #697 (b): the record's links are in doubt (db/054: an un-attested link the hard
+            // identity check flagged or trips now, or a clinician's unlink between charts other
+            // links still join), and this line is not on the opened chart alone — signing it
+            // could vouch for a possible stranger's drug. "Cannot yet vouch that it is this
+            // patient's", not "may be another person's": the line's own chart may be
+            // human-linked to this one while ANOTHER link is doubted. "No longer in doubt", not
+            // "judged": in the A–C–X bridge every link can carry a human judgement and the
+            // record still holds a doubt. The "cannot be signed until" half only when sign-off
+            // withholds the line (`withheld_reasons`): a ceased or already-signed line needs no
+            // signature, and promising one later would be untrue (PR #717 review).
+            let cause = "this record's links are in doubt, and this line is not recorded only \
+                         on the chart you opened — the node cannot yet vouch that it is this \
+                         patient's";
+            out.push(if withheld_reasons(row).is_some() {
+                format!("{cause}, so it cannot be signed until the record's links are no longer in doubt")
+            } else {
+                cause.to_string()
+            });
         }
     }
     out
@@ -350,6 +357,40 @@ mod tests {
             !flags.iter().any(|f| f.contains("another patient")),
             "{flags:?}"
         );
+    }
+
+    /// PR #717 review: a doubted line with nothing to sign — ceased, or signed before the
+    /// doubt arose — still says the doubt, but not "cannot be signed until …": that promises a
+    /// later signature for a line that needs none (and a ceased line is never signed).
+    #[test]
+    fn a_doubted_line_nothing_withholds_promises_no_later_signature() {
+        let mut ceased = row(
+            1,
+            MedicationStatus::Ceased,
+            vec![member(1, VouchState::Absent)],
+        );
+        let mut signed = row(
+            2,
+            MedicationStatus::Active,
+            vec![member(2, VouchState::Fresh { by: "dr_b".into() })],
+        );
+        for r in [&mut ceased, &mut signed] {
+            r.cross_patient = true;
+            r.wrong_chart.doubted_link = true;
+        }
+        let view = build_view(&chart(vec![ceased, signed]));
+        for r in &view.rows {
+            assert!(
+                r.flags.iter().any(|f| f.contains("cannot yet vouch")),
+                "{:?}",
+                r.flags
+            );
+            assert!(
+                !r.flags.iter().any(|f| f.contains("cannot be signed")),
+                "{:?}",
+                r.flags
+            );
+        }
     }
 
     #[test]

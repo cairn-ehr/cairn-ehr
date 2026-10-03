@@ -6,9 +6,10 @@
 //! #701: the doubted-link test reads the stored `patient_link.attested`.
 //!
 //! Two tests moved here from `combined_read.rs` (R1), where the rule withheld only MULTI-chart
-//! lines: `a_doubted_set_withholds_every_line_not_on_the_opened_chart` (1st in this file) and
-//! `a_group_across_a_link_the_veto_now_refuses_is_withheld` (4th). The first one's one-chart
-//! assertion is the line #697 (b) reverses.
+//! lines: `a_doubted_set_withholds_every_line_not_on_the_opened_chart` (1st in this file; it was
+//! `a_group_across_a_vetoed_link_is_still_withheld` there) and
+//! `a_group_across_a_link_the_veto_now_refuses_is_withheld` (4th, same name). The first one's
+//! one-chart assertion is the line #697 (b) reverses.
 //!
 //! DB-gated on $CAIRN_TEST_PG, serialized via `db::test_serial_guard` taken BEFORE connecting.
 //! Key material is minted at runtime (house rule 6). `chart`, `assert_one` and `group`
@@ -104,6 +105,18 @@ fn assert_flag_agrees(list: &PatientMedicationList) {
     for r in &list.rows {
         assert_eq!(r.cross_patient, r.wrong_chart.any(), "row {}", r.group_id);
     }
+}
+
+/// db/054's answer for one record's charts, asked directly.
+async fn set_doubted(c: &Client, charts: &[Uuid]) -> bool {
+    let ids: Vec<String> = charts.iter().map(Uuid::to_string).collect();
+    c.query_one(
+        "SELECT cairn_chart_set_has_doubted_link($1::text[]::uuid[])",
+        &[&ids],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
 
 fn sorted(mut v: Vec<Uuid>) -> Vec<Uuid> {
@@ -387,7 +400,8 @@ async fn the_doubted_link_check_reads_the_stored_attested_column() {
 /// people, so the set holds a doubted link. Here neither machine link trips the veto (no
 /// dates of birth — a sparse chart such as a John Doe), so before the third case db/054 found
 /// NO doubt: minutes after a human said "A and X are different people", X's line was
-/// signable from A, through C. Lifted only when X really leaves A's record.
+/// signable from A, through C. Lifted here by X leaving A's record; a human relinking A–X lifts
+/// it too (`a_human_relink_lifts_the_bridge_doubt`).
 #[tokio::test]
 async fn an_attested_unlink_inside_the_set_is_a_doubted_link() {
     let Some(base) = cs() else {
@@ -405,6 +419,9 @@ async fn an_attested_unlink_inside_the_set_is_a_doubted_link() {
     let x = chart(&c, &sk, &kid).await;
     let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
     let only_a = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    // A line on the bridge chart: the one line whose state after the lift shows whether the
+    // doubt really lifted (A's own line is signable either way).
+    let only_bridge = assert_one(&mut c, &sk, &kid, bridge, "atorvastatin").await;
     submit_link_event(&c, &sk, &kid, a, bridge, 10, true).await;
     submit_link_event(&c, &sk, &kid, bridge, x, 11, true).await;
 
@@ -441,9 +458,15 @@ async fn an_attested_unlink_inside_the_set_is_a_doubted_link() {
         DOUBTED,
         "a human said X is another person: X's line must not be signed from A"
     );
+    assert_eq!(
+        row_of(&list, only_bridge).wrong_chart,
+        DOUBTED,
+        "every line not on the opened chart is held while the record holds a doubt"
+    );
     assert_eq!(sign_off_targets(&list.rows), vec![only_a]);
 
     // The lift: unlink the bridge from X, so X leaves A's record and nothing is in doubt.
+    // The A–X unlink still stands, with X now OUTSIDE the set: it must no longer count.
     let out = unlink_charts(&mut c, bridge, x, Some(a), &who, ORIGIN)
         .await
         .unwrap();
@@ -452,10 +475,169 @@ async fn an_attested_unlink_inside_the_set_is_a_doubted_link() {
     assert_flag_agrees(&lifted);
     assert_eq!(lifted.charts.members(), sorted(vec![a, bridge]).as_slice());
     assert!(
-        lifted.rows.iter().all(|r| !r.cross_patient),
+        lifted.rows.iter().all(|r| !r.is_wrong_chart_hazard()),
         "nothing is withheld once X is out"
     );
-    assert_eq!(sign_off_targets(&lifted.rows), vec![only_a]);
+    assert_eq!(
+        sign_off_targets(&lifted.rows),
+        sorted(vec![only_a, only_bridge]),
+        "the bridge chart's line is signable again: an unlink reaching outside the set is no doubt"
+    );
+}
+
+/// The other way out of the bridge doubt: a human relinks A–X. Both judgements are attested,
+/// so the later one wins (ADR-0076 decision 5), the pair's standing state is a link again, and
+/// nothing in the set is in doubt.
+#[tokio::test]
+async fn a_human_relink_lifts_the_bridge_doubt() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let bridge = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
+    let only_a = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    submit_link_event(&c, &sk, &kid, a, bridge, 10, true).await;
+    submit_link_event(&c, &sk, &kid, bridge, x, 11, true).await;
+    let who = Reviewer {
+        human_sk: &hsk,
+        human_kid: &hkid,
+    };
+    let out = unlink_charts(&mut c, a, x, Some(a), &who, ORIGIN)
+        .await
+        .unwrap();
+    assert_eq!(out.effect, LinkEffect::StillJoined, "precondition");
+    let held = list_patient_medications(&c, a).await.unwrap();
+    assert_eq!(
+        row_of(&held, only_x).wrong_chart,
+        DOUBTED,
+        "precondition: the bridge doubt holds X's line"
+    );
+
+    link_charts(&mut c, a, x, &who, ORIGIN).await.unwrap();
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&list);
+    assert!(
+        list.rows.iter().all(|r| !r.is_wrong_chart_hazard()),
+        "the relink is the standing judgement: nothing is in doubt"
+    );
+    assert_eq!(sign_off_targets(&list.rows), sorted(vec![only_a, only_x]));
+}
+
+/// The deliberate under-warn (`medication::hazard`'s NOT COVERED note): an UN-attested unlink
+/// between two charts a bridge still joins is not a doubt. Only a human's "not the same person"
+/// is; counting a machine's or a peer agent's would let any unreviewed writer freeze sign-off.
+#[tokio::test]
+async fn an_unattested_unlink_inside_the_set_is_not_a_doubt() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let a = chart(&c, &sk, &kid).await;
+    let bridge = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
+    let only_a = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    submit_link_event(&c, &sk, &kid, a, bridge, 10, true).await;
+    submit_link_event(&c, &sk, &kid, bridge, x, 11, true).await;
+    submit_link_event(&c, &sk, &kid, a, x, 12, true).await;
+    submit_link_event(&c, &sk, &kid, a, x, 13, false).await;
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&list);
+    assert_eq!(
+        list.charts.members(),
+        sorted(vec![a, bridge, x]).as_slice(),
+        "precondition: the bridge still joins A and X"
+    );
+    assert!(
+        list.rows.iter().all(|r| !r.is_wrong_chart_hazard()),
+        "a machine's unlink is no human judgement: nothing is held"
+    );
+    assert_eq!(sign_off_targets(&list.rows), sorted(vec![only_a, only_x]));
+}
+
+/// A doubt is a fact about ONE record. db/054 is handed one record's charts and every case
+/// filters on them, so a doubted link in ANOTHER record on this node — of each of the three
+/// kinds — must leave this record's lines signable. Without the `ANY(p_charts)` filters, one bad
+/// synced link anywhere would freeze sign-off on every combined record.
+#[tokio::test]
+async fn a_doubt_in_another_record_leaves_this_record_alone() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("TRUNCATE patient_link, person_member, link_veto_flag")
+        .await
+        .unwrap();
+    let (sk, kid, hsk, hkid) = setup(&c).await;
+
+    // This record: A–X, an undoubted machine link.
+    let a = chart(&c, &sk, &kid).await;
+    let x = chart(&c, &sk, &kid).await;
+    let only_x = assert_one(&mut c, &sk, &kid, x, "amlodipine").await;
+    let only_a = assert_one(&mut c, &sk, &kid, a, "metformin").await;
+    submit_link_event(&c, &sk, &kid, a, x, 10, true).await;
+
+    // Case (a) elsewhere: B–Y, a flagged link.
+    let b = chart(&c, &sk, &kid).await;
+    let y = chart(&c, &sk, &kid).await;
+    let only_y = assert_one(&mut c, &sk, &kid, y, "warfarin").await;
+    submit_link_event(&c, &sk, &kid, b, y, 11, true).await;
+    flag_link(&c, b, y).await;
+
+    // Case (b) elsewhere: D–E, an un-attested link the veto trips now.
+    let d = chart(&c, &sk, &kid).await;
+    let e = chart(&c, &sk, &kid).await;
+    submit_link_event(&c, &sk, &kid, d, e, 12, true).await;
+    verified_dob(&c, &sk, &kid, d, "1980-07-15", 20).await;
+    verified_dob(&c, &sk, &kid, e, "1975-01-02", 21).await;
+
+    // Case (c) elsewhere: F–G–H, with an attested unlink F–H the bridge G still spans.
+    let f = chart(&c, &sk, &kid).await;
+    let g = chart(&c, &sk, &kid).await;
+    let h = chart(&c, &sk, &kid).await;
+    submit_link_event(&c, &sk, &kid, f, g, 13, true).await;
+    submit_link_event(&c, &sk, &kid, g, h, 14, true).await;
+    let who = Reviewer {
+        human_sk: &hsk,
+        human_kid: &hkid,
+    };
+    let out = unlink_charts(&mut c, f, h, Some(f), &who, ORIGIN)
+        .await
+        .unwrap();
+    assert_eq!(out.effect, LinkEffect::StillJoined, "precondition");
+
+    // Positive control: the other record IS doubted, so the doubt is real, just not ours.
+    let other = list_patient_medications(&c, b).await.unwrap();
+    assert_eq!(row_of(&other, only_y).wrong_chart, DOUBTED, "precondition");
+    assert!(set_doubted(&c, &[d, e]).await, "precondition: case (b)");
+    assert!(set_doubted(&c, &[f, g, h]).await, "precondition: case (c)");
+
+    let list = list_patient_medications(&c, a).await.unwrap();
+    assert_flag_agrees(&list);
+    assert_eq!(list.charts.members(), sorted(vec![a, x]).as_slice());
+    assert!(
+        list.rows.iter().all(|r| !r.is_wrong_chart_hazard()),
+        "another record's doubt must not hold this record's lines"
+    );
+    assert_eq!(sign_off_targets(&list.rows), sorted(vec![only_a, only_x]));
 }
 
 /// Both reasons on one row, THROUGH the database: `outside_set` is computed by the read from

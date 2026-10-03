@@ -23,8 +23,9 @@ use uuid::Uuid;
 /// The one sentence that tells an operator how to clear a cross-patient group.
 ///
 /// It is a const, not several hand-written copies, because it is quoted by every
-/// user-facing message about the hazard (the CLI's withheld-line warning, the CLI's chart
-/// warnings, and now the window's row warning). A remedy that drifts between them is worse
+/// user-facing message about the OUTSIDE-the-set hazard (the CLI's withheld-line warning, the
+/// CLI's chart warnings, and the window's report). A doubted-link line deliberately does not
+/// quote it: its remedy is [`DOUBTED_LINK_INSTRUCTION`]. A remedy that drifts between them is worse
 /// than no remedy: the operator learns to distrust whichever one they read second.
 ///
 /// WHY `medication-separate` AND WHY WITHOUT `--attest-as`. Separation is the repair
@@ -124,10 +125,14 @@ pub const MISSING_GROUP_INSTRUCTION: &str =
 pub struct PatientMedicationList {
     pub rows: Vec<MedicationRow>,
     pub groups_missing_from_chart: Vec<Uuid>,
-    /// For each group this chart flags as a cross-patient hazard — whether it is displayed
-    /// here (`MedicationRow::cross_patient`) or invisible here
+    /// For each group this chart flags as a wrong-chart hazard — whether it is displayed
+    /// here (`MedicationRow::is_wrong_chart_hazard`, for either reason) or invisible here
     /// (`groups_missing_from_chart`) — the group's FULL member-thread list, including
     /// members belonging to OTHER patients. Sorted, and empty in normal operation.
+    ///
+    /// The threads are the separation remedy's arguments only for a group reaching OUTSIDE the
+    /// set; for a doubted-link line they only say which threads are held, because that remedy
+    /// is a judgement of the links (#697).
     ///
     /// WHY THIS EXISTS (#338 review finding 1). Every message about a cross-patient group
     /// points the operator at `medication-separate`, which takes TWO THREAD IDS. Everything

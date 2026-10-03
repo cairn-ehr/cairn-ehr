@@ -722,21 +722,29 @@ as-built note lists the deviations; **[ADR-0077](spec/decisions/0077-an-unlink-m
 Plan `docs/superpowers/plans/2026-10-03-repair-path-r1b-doubted-link-withholds.md`; design page section R1b + its as-built
 note. No new SQL object; db/054's `cairn_chart_set_has_doubted_link` body changed; `SCHEMA_GENERATION` stays **55**.
 - **Built:** `WrongChartReasons { outside_set, doubted_link }` on `MedicationRow` beside the kept, fail-safe
-  `cross_patient`; `is_wrong_chart_hazard()` / `withheld_because()`; `WithheldLine`; `DOUBTED_LINK_INSTRUCTION`
-  (`cairn-medication-view`). The pure rule `cairn-node` `medication/hazard.rs::wrong_chart_reasons`, given the opened
+  `cross_patient`; `is_wrong_chart_hazard()` / `hazard_reasons()` (status-blind) / `withheld_reasons()` (what THIS
+  gesture withholds); `WithheldLine`; `DOUBTED_LINK_INSTRUCTION` (`cairn-medication-view`). The pure rule `cairn-node` `medication/hazard.rs::wrong_chart_reasons`, given the opened
   chart: in a doubted set every line not recorded ONLY on the opened chart is withheld (#697 (b)). db/054 reads the
   stored `pl.attested` (#701) and counts an ATTESTED unlink between two charts still in the set as a doubt (the A–C–X
   bridge; the maintainer's decision in the final review). Per-reason wording in the window (row flags, withheld report)
-  and the CLI (`list_text::row_hazard_lines`, `withheld_signoff_lines`, one `doubted_link_note` below the list).
-- **Tests:** `hazard.rs` units (mutation-checked); `tests/doubted_link_withholds.rs` (7 DB tests: the rule, the mirror,
-  a human link lifts it, #220's path, #701, the bridge, both reasons through the read); view and `list_text` tests incl.
-  a golden for the unchanged outside-set CLI strings; `cease_plan`'s reason-only path.
+  and the CLI (`list_text::row_hazard_lines`, `withheld_signoff_lines`, one `doubted_link_note` below the list); only
+  a WITHHELD line says "cannot be signed until …" or points below the list. The rule judges every chart a group
+  touches, including each member thread's own chart (the chart sign-off writes to).
+- **Tests:** `hazard.rs` and `read.rs` units (mutation-checked); `tests/doubted_link_withholds.rs` (10 DB tests: the
+  rule, the mirror, a human link lifts it, #220's path, #701, the bridge (with a line on the bridge chart, so the lift
+  can fail), a human relink lifts the bridge, an un-attested unlink is no doubt, another record's doubt leaves this one
+  alone, both reasons through the read; the bridge and isolation tests mutation-checked against db/054); view and
+  `list_text` tests incl. a golden for the unchanged outside-set CLI strings; the reason-only path through both
+  `sign_off_targets` and `cease_plan`.
 - **Filed:** #716 (the window cannot confirm a standing link; comment: nor show which link is in doubt) · #718 (db/054's
-  SECURITY DEFINER no longer has a reason) · #719 (residuals). Commented #335 (the doubt state can change between
-  display and sign-off).
+  SECURITY DEFINER no longer has a reason) · #719 (residuals; its items 3–4 fixed for the doubted line in the PR
+  review round) · #720 (make `wrong_chart` the only Rust source of truth). Commented #335 (the doubt state can change
+  between display and sign-off, with or without a human act).
 - **§1.2:** paper counterpart: two clipped folders, one page in doubt — you sign for your own patient's pages only.
-  Reading 1 → 1 → 1; sign-off 1 → 1 → 1; lifting the hold 1 → 1 → 1 (unlink in the window; confirm CLI-only until
-  #716). `M ≤ N`; no new act, no new read.
+  Reading 1 → 1 → 1; sign-off 1 → 1 → 1; lifting the hold 1 → 1 → 1 **per doubted link** (unlink in the window;
+  confirm CLI-only until #716). Two doubted links take two acts, and in the A–C–X bridge CONFIRMING A–C or C–X never
+  lifts it — the act is a human A–X relink, or an unlink of A–C or C–X that takes X out of A's record. `M ≤ N`; no new
+  act, no new read.
 
 ## Above the foundation line (NOT in this roadmap)
 

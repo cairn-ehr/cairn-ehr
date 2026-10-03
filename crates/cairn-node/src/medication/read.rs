@@ -97,7 +97,8 @@ pub async fn list_patient_medications(
 /// 3. the rows of the two list views for exactly those groups.
 /// 4. per group: the charts its threads sit on (`source_charts`) and why it is a wrong-chart
 ///    hazard, if it is (`cross_patient` and `wrong_chart`, both from
-///    `medication::hazard::wrong_chart_reasons` over the set and the `opened` chart) —
+///    `medication::hazard::wrong_chart_reasons` over the set, the `opened` chart, and every
+///    chart the group touches, `touched_charts`) —
 ///    reaching another chart of the same person is not a hazard, reaching someone else's is,
 ///    and so is any line not recorded only on the opened chart while the set holds a link the
 ///    node doubts (#697 (b)).
@@ -117,24 +118,14 @@ async fn list_chart_set_medications(
     let coding_conflict = read_coding_conflict_groups(client, charts).await?;
     let doubted = set_has_doubted_link(client, charts).await?;
 
-    // Each group's wrong-chart reasons (`medication::hazard`), over EVERY chart it touches.
-    // Two sources name those charts: `source_charts` (statement-derived,
-    // `medication_thread_group`) and `medication_group_cross_patient.patients`, which ALSO
-    // sees a thread known only through an orphan cessation (db/033, PR #219 finding 3) — the
-    // reason the latter is read at all. The rule runs over their union: either one naming a
-    // chart is enough. Over-warn, never under-warn.
-    let empty: Vec<Uuid> = Vec::new();
+    // Each group's wrong-chart reasons (`medication::hazard`), over EVERY chart it touches
+    // (`touched_charts`: the union of three sources, any one naming a chart is enough).
+    // Over-warn, never under-warn.
     let reasons: HashMap<Uuid, WrongChartReasons> = groups
         .iter()
         .copied()
         .map(|g| {
-            let touched: Vec<Uuid> = group_charts
-                .get(&g)
-                .unwrap_or(&empty)
-                .iter()
-                .chain(reached.get(&g).unwrap_or(&empty))
-                .copied()
-                .collect();
+            let touched = touched_charts(g, &group_charts, &reached, &members);
             (g, wrong_chart_reasons(charts, opened, doubted, &touched))
         })
         .collect();
@@ -167,10 +158,10 @@ async fn list_chart_set_medications(
                 members: members.get(&group_id).cloned().unwrap_or_default(),
                 reconciliation_flagged: reconciliation_flagged.contains(&group_id),
                 coding_conflict: coding_conflict.contains(&group_id),
-                // ONE rule sets both: `cross_patient` is kept for fail-safe readers, and
+                // ONE rule sets both: `cross_patient` is kept for the `--json` readers, and
                 // `wrong_chart` says why (#697).
-                cross_patient: reasons.get(&group_id).is_some_and(WrongChartReasons::any),
-                wrong_chart: reasons.get(&group_id).copied().unwrap_or_default(),
+                cross_patient: row_reasons(&reasons, group_id).any(),
+                wrong_chart: row_reasons(&reasons, group_id),
                 // Every group here came from `members`, which reads the same
                 // `medication_thread_group` view as `read_group_charts`, so an entry exists
                 // unless a concurrent separation re-keyed the group between the two
@@ -231,6 +222,41 @@ async fn list_chart_set_medications(
         groups_missing_from_chart,
         separation_targets,
         charts: charts.clone(),
+    })
+}
+
+/// Every chart group `g` touches, from the three sources the read has — sorted, de-duplicated:
+///
+/// - `group_charts` (`medication_thread_group`, statement-derived): `source_charts`.
+/// - `reached` (`medication_group_cross_patient.patients`), which ALSO sees a thread known only
+///   through an orphan cessation (db/033, PR #219 finding 3) — the reason it is read at all.
+/// - the charts of the group's `members` (`MemberVouch::patient_id`): the charts sign-off
+///   WRITES to. Read in a separate statement (READ COMMITTED), so a separation landing between
+///   two statements can leave a member on a chart the first two no longer name — the rule must
+///   judge the very charts a signature would go to (PR #717 review).
+fn touched_charts(
+    g: Uuid,
+    group_charts: &HashMap<Uuid, Vec<Uuid>>,
+    reached: &HashMap<Uuid, Vec<Uuid>>,
+    members: &HashMap<Uuid, Vec<MemberVouch>>,
+) -> Vec<Uuid> {
+    let listed = [group_charts.get(&g), reached.get(&g)]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .copied();
+    let member_charts = members.get(&g).into_iter().flatten().map(|m| m.patient_id);
+    sorted_unique(listed.chain(member_charts))
+}
+
+/// A row's wrong-chart reasons, looked up in the map the read built over `groups`. Every row
+/// is bound to those same groups, so a miss cannot happen today; if it ever did, the row's
+/// charts would be unknown, and unknown must not read as safe — so it is withheld, worded as
+/// the pre-#697 outside case. The one fallback in this rule that could otherwise under-warn.
+fn row_reasons(reasons: &HashMap<Uuid, WrongChartReasons>, group: Uuid) -> WrongChartReasons {
+    reasons.get(&group).copied().unwrap_or(WrongChartReasons {
+        outside_set: true,
+        doubted_link: false,
     })
 }
 
@@ -543,6 +569,52 @@ mod tests {
             "the two list queries must differ ONLY in the view they read"
         );
         assert!(current.contains("WHERE medication_id = ANY($1::text[]::uuid[])"));
+    }
+
+    fn u(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    /// PR #717 review: the hazard rule must judge the chart each member thread is on, because
+    /// that is the chart sign-off WRITES to (`MemberVouch::patient_id`). Here the statement view
+    /// has (mid-separation) already moved the group to chart 1 alone, but a member read just
+    /// before still puts a thread on chart 2 — so the group is not "only on the opened chart".
+    #[test]
+    fn a_groups_member_threads_charts_count_as_touched() {
+        let group_charts = HashMap::from([(u(10), vec![u(1)])]);
+        let members = HashMap::from([(
+            u(10),
+            vec![MemberVouch {
+                medication_id: u(20),
+                vouch: VouchState::Absent,
+                patient_id: u(2),
+            }],
+        )]);
+        let touched = touched_charts(u(10), &group_charts, &HashMap::new(), &members);
+        assert!(
+            touched.contains(&u(1)) && touched.contains(&u(2)),
+            "{touched:?}"
+        );
+        let set = ChartSet::new([u(1), u(2)]).unwrap();
+        assert!(wrong_chart_reasons(&set, u(1), true, &touched).doubted_link);
+    }
+
+    #[test]
+    fn touched_charts_unions_every_source() {
+        let group_charts = HashMap::from([(u(10), vec![u(1)])]);
+        let reached = HashMap::from([(u(10), vec![u(3)])]);
+        let touched = touched_charts(u(10), &group_charts, &reached, &HashMap::new());
+        assert_eq!(touched, vec![u(1), u(3)]);
+        assert!(touched_charts(u(11), &group_charts, &reached, &HashMap::new()).is_empty());
+    }
+
+    /// A row whose group the hazard map lacks cannot occur today (rows are bound to the same
+    /// groups), but if it ever did, its charts are unknown — and unknown must not read as safe.
+    #[test]
+    fn a_row_missing_from_the_hazard_map_is_a_hazard() {
+        let reasons = HashMap::from([(u(10), WrongChartReasons::default())]);
+        assert!(!row_reasons(&reasons, u(10)).any());
+        assert!(row_reasons(&reasons, u(11)).any());
     }
 
     #[test]

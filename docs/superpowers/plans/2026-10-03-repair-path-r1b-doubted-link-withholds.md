@@ -344,6 +344,11 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
      lifts this hold. Do not separate the threads: the doubt is about the link, not the drug.";
 ```
 
+> [!WARNING]
+> **Superseded — do not copy.** The final review found "Either judgement lifts this hold" false in
+> reachable cases. The shipped constant is in `crates/cairn-medication-view/src/chart.rs`; the
+> design page's R1b as-built note says why.
+
   `lib.rs`: export `DOUBTED_LINK_INSTRUCTION`, `WrongChartReasons`, `WithheldLine` and
   `withheld_group_ids`. In `fixtures.rs`, add `wrong_chart: WrongChartReasons::default(),` to the
   literal at line 44. The `cross_patient` sample line (line 98) also gets
@@ -1310,7 +1315,8 @@ git commit -m "feat(R1b): the CLI words a doubted-link line and its remedy separ
 - **Steps:** reading the combined list is paper 1 → architecture-forced 1 → UI target 1. A sign-off
   is paper 1 → 1 → 1 (one gesture signs every signable line). The withheld lines are named in the
   same report, so the clinician never has to work out which lines were skipped. Lifting the hold is
-  paper 1 (settle the clip) → forced 1 (one attested judgement of the link) → UI target 1 for unlink
+  paper 1 (settle the clip) → forced 1 (one attested judgement of the link — per doubted link; see
+  the design page's R1b as-built note for the A–C–X bridge) → UI target 1 for unlink
   ("Not the same person…" in the window). Confirming takes the same one act, but only in the CLI
   until **#716**: that is the one gap, filed rather than hidden. `M ≤ N` everywhere. R1b adds no act;
   it moves the doubted-set lines from signable to withheld.

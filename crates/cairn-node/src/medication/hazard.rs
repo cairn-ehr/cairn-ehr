@@ -19,6 +19,11 @@
 //!    The rule does not read the link graph to find WHICH pair is doubted: every line not on the
 //!    opened chart is withheld. That over-warns in a set of three or more, the direction this
 //!    module always errs in.
+//!
+//! NOT COVERED, deliberately (an under-warn, so stated): an UN-attested unlink between two
+//! charts the set still joins is not a doubt. Only a human's "not the same person" is (design
+//! D4); counting a machine's or a peer agent's unlink would let any unreviewed writer freeze
+//! sign-off on a record (ADR-0030). Pinned by `tests/doubted_link_withholds.rs`.
 use cairn_medication_view::{ChartSet, WrongChartReasons};
 use uuid::Uuid;
 
@@ -35,8 +40,8 @@ fn only_on_opened(opened: Uuid, group_charts: &[Uuid]) -> bool {
 }
 
 /// The reasons a group touching `group_charts` is a wrong-chart hazard, read over `set` from
-/// the `opened` chart. `group_charts` is the union of the two sources the read has (see
-/// `read.rs`); duplicates are harmless.
+/// the `opened` chart. `group_charts` is every chart the group touches, the union of the read's
+/// three sources (`read.rs` `touched_charts`); duplicates are harmless.
 pub(crate) fn wrong_chart_reasons(
     set: &ChartSet,
     opened: Uuid,
@@ -81,7 +86,7 @@ mod tests {
     }
 
     /// The opened chart's own line shows that chart's own dose and vouches only for the
-    /// patient whose chart is open: signable, doubted link or not. Duplicates (the two sources
+    /// patient whose chart is open: signable, doubted link or not. Duplicates (the read's sources
     /// overlap) must not read as two charts.
     #[test]
     fn in_a_doubted_set_a_line_only_on_the_opened_chart_is_signable() {

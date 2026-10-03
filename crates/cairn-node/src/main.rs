@@ -5292,16 +5292,15 @@ async fn main() -> anyhow::Result<()> {
                     if row.coding_conflict {
                         println!("    ! two different drug anchors in this group");
                     }
-                    // One warning per reason the line is withheld, with its own remedy and the
-                    // group's member threads — worded in `list_text` (#697).
-                    if let Some(why) = row.withheld_because() {
-                        for line in cairn_node::medication::list_text::row_hazard_lines(
-                            why,
-                            row.group_id,
-                            &list.separation_targets,
-                        ) {
-                            println!("{line}");
-                        }
+                    // One warning per reason the line is a wrong-chart hazard, then the group's
+                    // member threads — worded in `list_text` (#697). The outside-set warning
+                    // carries its remedy; a doubted-link warning points at the note below only
+                    // when sign-off withholds the line. Nothing printed for an ordinary line.
+                    for line in cairn_node::medication::list_text::row_hazard_lines(
+                        row,
+                        &list.separation_targets,
+                    ) {
+                        println!("{line}");
                     }
                 }
                 // The doubted-link remedy, ONCE for the whole list: each withheld row above
@@ -5436,7 +5435,7 @@ async fn main() -> anyhow::Result<()> {
             // 11 medication thread(s)" on a chart with a twelfth outstanding line reads
             // as a finished chart; the whole point of withholding rather than refusing
             // is that the clinician is told precisely which line they still own. Worded
-            // per reason, with the member threads (the remedy's arguments), in `list_text`.
+            // per reason, each with its own remedy and the member threads, in `list_text`.
             for line in cairn_node::medication::list_text::withheld_signoff_lines(
                 &out.withheld,
                 &out.separation_targets,

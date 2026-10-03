@@ -15,8 +15,9 @@ use uuid::Uuid;
 ///   patient's drug name. A signature is a claim of responsibility for what the line SAYS,
 ///   and the node knows it may be saying something it cannot stand behind.
 ///
-/// - **Doubted link (#697 (b)).** The set's links are in doubt (db/054: a link the hard
-///   identity check clashes on, or a clinician's unlink between charts other links still join)
+/// - **Doubted link (#697 (b)).** The set's links are in doubt (db/054: an un-attested link the
+///   hard identity check flagged or trips now, or a clinician's unlink between charts other
+///   links still join)
 ///   and this line is not recorded only on the opened chart: a signature is a claim about a
 ///   person, and the node has positive evidence the other member may be someone else.
 ///
@@ -76,10 +77,8 @@ pub struct WithheldLine {
 pub fn withheld_rows(rows: &[MedicationRow]) -> Vec<WithheldLine> {
     let mut withheld: Vec<WithheldLine> = rows
         .iter()
-        .filter(|row| row.status == MedicationStatus::Active)
-        .filter(|row| row.members.iter().any(|m| m.vouch.needs_signature()))
         .filter_map(|row| {
-            row.withheld_because().map(|reasons| WithheldLine {
+            withheld_reasons(row).map(|reasons| WithheldLine {
                 group_id: row.group_id,
                 reasons,
             })
@@ -88,6 +87,24 @@ pub fn withheld_rows(rows: &[MedicationRow]) -> Vec<WithheldLine> {
     withheld.sort_by_key(|line| line.group_id);
     withheld.dedup_by_key(|line| line.group_id);
     withheld
+}
+
+/// Why THIS gesture withholds `row`, or `None` when it does not: the per-row form of
+/// `withheld_rows`, and the one rule both use. A line is withheld when it is a wrong-chart
+/// hazard (`MedicationRow::hazard_reasons`) AND would otherwise have been signed: ACTIVE, with
+/// a member still needing a signature. A ceased or fully-vouched hazard line is not withheld:
+/// there is nothing on it to sign.
+///
+/// PUBLIC so a renderer that words one row can ask the same question the report answers. A
+/// row that says "see the note below" must be one the note is printed for (PR #717 review:
+/// the CLI asked the status-blind `hazard_reasons` and pointed at a note that never came).
+pub fn withheld_reasons(row: &MedicationRow) -> Option<WrongChartReasons> {
+    let outstanding = row.status == MedicationStatus::Active
+        && row.members.iter().any(|m| m.vouch.needs_signature());
+    if !outstanding {
+        return None;
+    }
+    row.hazard_reasons()
 }
 
 /// The group ids of `lines`, in order — the argument `format_hazard_groups` takes.
@@ -351,5 +368,59 @@ mod tests {
         rows[0].cross_patient = true;
         rows[0].wrong_chart.doubted_link = true;
         assert!(withheld_rows(&rows).is_empty());
+    }
+
+    /// The SIGNING path withholds on the reason alone (PR #717 review). Every other test here
+    /// sets `cross_patient` beside the reason, so a revert of `is_signable_line` to reading the
+    /// flag alone would pass them all; this one would not. `cease_plan` has the same guard.
+    #[test]
+    fn a_doubted_link_reason_without_the_flag_is_never_a_target() {
+        let mut rows = vec![row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        )];
+        rows[0].wrong_chart.doubted_link = true;
+        assert!(!rows[0].cross_patient, "precondition: the flag is down");
+        assert!(sign_off_targets(&rows).is_empty());
+        assert_eq!(withheld_group_ids(&withheld_rows(&rows)), vec![uid(1)]);
+    }
+
+    /// `withheld_reasons` is the per-row form of `withheld_rows`: a hazard line is withheld only
+    /// while it is ACTIVE and still needs a signature. A renderer that points at the withheld
+    /// report must ask this, not the status-blind `hazard_reasons`.
+    #[test]
+    fn withheld_reasons_needs_an_active_line_still_needing_a_signature() {
+        let doubted = |status, vouch| {
+            let mut r = row(1, status, vec![member(1, vouch)]);
+            r.wrong_chart.doubted_link = true;
+            r.cross_patient = true;
+            r
+        };
+        let reasons = WrongChartReasons {
+            outside_set: false,
+            doubted_link: true,
+        };
+        assert_eq!(
+            withheld_reasons(&doubted(MedicationStatus::Active, VouchState::Absent)),
+            Some(reasons)
+        );
+        assert_eq!(
+            withheld_reasons(&doubted(MedicationStatus::Ceased, VouchState::Absent)),
+            None
+        );
+        assert_eq!(
+            withheld_reasons(&doubted(
+                MedicationStatus::Active,
+                VouchState::Fresh { by: "dr_b".into() }
+            )),
+            None
+        );
+        let ordinary = row(
+            1,
+            MedicationStatus::Active,
+            vec![member(1, VouchState::Absent)],
+        );
+        assert_eq!(withheld_reasons(&ordinary), None);
     }
 }

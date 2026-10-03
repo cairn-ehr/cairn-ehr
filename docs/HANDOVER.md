@@ -5,7 +5,8 @@
 > [!NOTE]
 > **⇒ R1b — A DOUBTED SET WITHHOLDS EVERY LINE NOT ON THE OPENED CHART (#697 (b), #701) — BUILT ON PR
 > [#717](https://github.com/cairn-ehr/cairn-ehr/pull/717) (2026-10-03): per-task reviews, an opus final review, one
-> fix wave and its residual round, every local gate. AWAITING THE MAINTAINER'S MERGE.** R2b-2 (PR #711), R2b-1
+> fix wave and its residual round, a five-reviewer PR review and its fix round, every local gate. AWAITING THE
+> MAINTAINER'S MERGE.** R2b-2 (PR #711), R2b-1
 > (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R1b section + its as-built note),
 > ADR-0076, ADR-0077, spec **v0.79**; plan `docs/superpowers/plans/2026-10-03-repair-path-r1b-doubted-link-withholds.md`.
@@ -24,7 +25,8 @@
 >    **#712** (R2b-2 residuals: `chart_set.rs` size, wiring tests) · **#713** (a retry after a committed Outranked
 >    silently overrules a colleague) · **#714** (`CanonicalPair` / `JudgedFrom` newtypes) · **#715** (`link.js` drift
 >    guard) · **#716** · **#718** (db/054's SECURITY DEFINER has no reason since #701 — drop or keep) · **#719** (R1b
->    residuals) · **#699** (built, ADR-0077 — awaiting the close) · **#700** · **#702** (pinned) · **#703** (the
+>    residuals) · **#720** (`wrong_chart` as the only Rust source of truth; `cross_patient` computed for `--json`) ·
+>    **#699** (built, ADR-0077 — awaiting the close) · **#700** · **#702** (pinned) · **#703** (the
 >    generation heal can be used up by `cairn-sync init`) · **#704** · **#705** · **#706** · **From R1:** #689 (db/034
 >    admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a decision) · #691 ·
 >    #692 · #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
@@ -43,8 +45,14 @@
 >   stay signable; the line stays on screen. Pinned by `hazard.rs`'s tests and `tests/doubted_link_withholds.rs`
 >   (incl. the mirror test opened from the OTHER chart — the only test that proves `opened` is used).
 > - **`cross_patient` is KEPT and set from the same reasons map as `wrong_chart`** — every production reader goes
->   through `MedicationRow::is_wrong_chart_hazard()` (either signal withholds) or `withheld_because()` (a reasonless
->   hazard is worded as the outside case). Never read `wrong_chart` or `cross_patient` alone in new code.
+>   through `MedicationRow::is_wrong_chart_hazard()` (either signal withholds) or `hazard_reasons()` (a reasonless
+>   hazard is worded as the outside case). Never read `wrong_chart` or `cross_patient` alone in new code (#720 would
+>   make `wrong_chart` the only Rust field).
+> - **`hazard_reasons()` is STATUS-BLIND; `withheld_reasons()` / `withheld_rows()` say what THIS gesture withholds.**
+>   Anything that tells the reader a line "cannot be signed until …" or points at the withheld report must ask
+>   `withheld_reasons()` — the PR review found the CLI pointing ceased and already-signed rows at a note never printed.
+> - **The rule judges every chart a group touches, INCLUDING each member thread's own chart** (`read.rs`
+>   `touched_charts`) — the chart sign-off writes to. A row missing from the reasons map is a hazard (`row_reasons`).
 > - **"Doubted" has THREE cases in db/054 `cairn_chart_set_has_doubted_link`:** a `link_veto_flag` row; an UN-attested
 >   standing link that trips the hard veto now (#220's path); and an ATTESTED unlink between two charts still in the
 >   set (the A–C–X bridge — without it, unlinking A–X while C joins them made X's lines signable from A). It reads the
@@ -55,6 +63,8 @@
 >   in the bridge). Each sentence must stay true in every case shown — the final review found three that were not.
 > - **The CLI prints the long remedy ONCE below the list** (`list_text::doubted_link_note`, decided by the status-aware
 >   `withheld_rows`); the outside-set row lines stay byte-identical to before (golden in `list_text.rs`).
+> - **An UN-attested unlink inside the set is deliberately NOT a doubt** (stated in db/054 and `hazard.rs`, pinned by
+>   a DB test): counting an agent's unlink would let any unreviewed writer freeze sign-off.
 >
 > **⇒ THE LINK PRECEDENCE FLOOR'S DURABLE RULES (R2a, ADR-0076 decision 5) — do not undo any of these:**
 > - **`patient_link`'s winner order is ATTESTED FIRST, then HLC** (`cairn_link_overlay_wins`, db/018). A total
@@ -485,10 +495,16 @@ Brainstorm → design addendum → plan (six tasks) → subagent-driven, an opus
 - **⇒ A predicate keyed on standing LINKS misses standing UNLINKS.** A human's "different people" inside a still-joined
   set is the strongest doubt there is; db/054 looked only at `state = 'link'`. Ask what each identity verb leaves behind.
 - **⇒ Keep the old flag, add the reasons beside it, route every reader through one method** — a fail-safe way to split a
-  boolean into causes without an under-warning reader in between (`is_wrong_chart_hazard()` / `withheld_because()`).
+  boolean into causes without an under-warning reader in between (`is_wrong_chart_hazard()` / `hazard_reasons()`).
 - **⇒ Subagent reports miscount** (two swapped test counts this session): re-run the DB suites yourself and read the log.
-- **Mechanics:** a status-blind helper (`withheld_because`) behind a status-aware claim ("withheld from sign-off") is a
-  principle-4 bug — decide such notes from `withheld_rows`. Filed #716 comment, #335 comment, #718, #719.
+- **Mechanics:** a status-blind helper behind a status-aware claim ("withheld from sign-off") is a principle-4 bug —
+  decide such notes from `withheld_rows`. The fix round decided the NOTE that way and left the ROW's pointer on the
+  status-blind helper (then named `withheld_because`); the PR review caught it. **⇒ Rename a helper whose name
+  overclaims** (`hazard_reasons`), and give the per-row question its own function (`withheld_reasons`).
+- **⇒ A "the hold lifts" assertion must hold a line that can still be held.** The bridge test's lift checked only the
+  opened chart's own line, signable either way, so a set-filter mutant in db/054 passed; it needed a line on the
+  bridge chart. Mutation-check an SQL predicate by editing db/*.sql and REBUILDING (it is `include_str!`).
+- Filed #716 comment, #335 comments, #718, #719 (+ update), #720.
 
 ### 2026-09-27 → 09-30 — repair path R2a, R2b-1, R2b-2 (PRs #698, #707, #711)
 
