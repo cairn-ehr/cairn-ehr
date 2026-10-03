@@ -24,7 +24,7 @@ mod common;
 
 use cairn_node::db;
 use cairn_node::patient::register::register_patient;
-use cairn_patient_search::{Candidate, CandidateList, SearchQuery, TrustState};
+use cairn_patient_search::{Candidate, CandidateList, PersonRow, SearchQuery, TrustState};
 use common::{cs, setup};
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -107,7 +107,7 @@ async fn registering_mints_a_chart_and_records_what_was_displayed() {
     // test in patient_registration.rs's floor suite).
     let displayed_ids = [Uuid::now_v7(), Uuid::now_v7()];
     let list = CandidateList {
-        candidates: displayed_ids.iter().map(|id| candidate(*id)).collect(),
+        people: PersonRow::each_alone(displayed_ids.iter().map(|id| candidate(*id)).collect()),
         incomplete: false,
         incomplete_reason: None,
     };
@@ -152,7 +152,7 @@ async fn the_attestation_round_trips_from_the_displayed_list_to_the_stored_body(
     let mut ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
     ids.reverse();
     let list = CandidateList {
-        candidates: ids.iter().map(|id| candidate(*id)).collect(),
+        people: PersonRow::each_alone(ids.iter().map(|id| candidate(*id)).collect()),
         incomplete: false,
         incomplete_reason: None,
     };
@@ -184,7 +184,7 @@ async fn a_search_the_node_knew_was_partial_is_attested_as_incomplete() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let list = CandidateList {
-        candidates: vec![candidate(Uuid::now_v7())],
+        people: PersonRow::each_alone(vec![candidate(Uuid::now_v7())]),
         incomplete: true,
         incomplete_reason: Some("one chart unreadable".into()),
     };
@@ -242,7 +242,7 @@ async fn registering_with_no_human_author_succeeds() {
     let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
 
     let list = CandidateList {
-        candidates: vec![],
+        people: vec![],
         incomplete: false,
         incomplete_reason: None,
     };

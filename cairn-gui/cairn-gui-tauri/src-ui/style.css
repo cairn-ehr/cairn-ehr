@@ -214,6 +214,17 @@ tr[data-flag="true"] td {
   margin: 0.15rem 0;
 }
 
+/* A person row (R3): one label over a nested list, a button per linked chart. */
+.person-row > ul {
+  list-style: none;
+  margin: 0.25rem 0 0 1.25rem;
+  padding: 0;
+}
+
+.person-row-label {
+  font-weight: 600;
+}
+
 #browse-form label,
 #register-form label {
   display: block;

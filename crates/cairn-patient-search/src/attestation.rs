@@ -13,7 +13,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchAttestation {
     pub query: SearchQuery,
-    /// The candidate ids that were on the screen, in display order.
+    /// The chart ids that were on the screen, in display order (every member of every person
+    /// row — `CandidateList::displayed_charts`, ADR-0076 D6).
     pub displayed: Vec<Uuid>,
     /// Carried straight through from the list — never re-decided here. It means the SEARCH was
     /// partial (see `CandidateList::incomplete`), never that fewer rows were shown than matched
@@ -26,7 +27,7 @@ impl SearchAttestation {
     pub fn from_displayed(query: &SearchQuery, list: &CandidateList) -> Self {
         Self {
             query: query.clone(),
-            displayed: list.candidates.iter().map(|c| c.patient_id).collect(),
+            displayed: list.displayed_charts(),
             incomplete: list.incomplete,
         }
     }
@@ -36,6 +37,7 @@ impl SearchAttestation {
 mod tests {
     use super::*;
     use crate::candidate::{Candidate, CandidateList, TrustState};
+    use crate::person::PersonRow;
     use uuid::Uuid;
 
     fn candidate(n: u128) -> Candidate {
@@ -53,7 +55,7 @@ mod tests {
     #[test]
     fn the_attestation_names_exactly_what_the_list_held_in_order() {
         let list = CandidateList {
-            candidates: vec![candidate(1), candidate(2)],
+            people: PersonRow::each_alone(vec![candidate(1), candidate(2)]),
             incomplete: false,
             incomplete_reason: None,
         };
@@ -64,12 +66,29 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_row_signs_every_member_in_row_order() {
+        let list = CandidateList {
+            people: vec![
+                PersonRow::new(vec![candidate(5), candidate(2)]).unwrap(),
+                PersonRow::alone(candidate(9)),
+            ],
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        let a = SearchAttestation::from_displayed(&SearchQuery::new("smith", None, &[]), &list);
+        assert_eq!(
+            a.displayed,
+            vec![Uuid::from_u128(5), Uuid::from_u128(2), Uuid::from_u128(9)]
+        );
+    }
+
+    #[test]
     fn incompleteness_propagates_from_the_list_it_was_built_from() {
         // The whole reason this constructor exists: the surface that DISPLAYS and the act
         // that ATTESTS must not be able to disagree. A registration must never swear to a
         // complete search over a list the node knew was partial.
         let list = CandidateList {
-            candidates: vec![candidate(7)],
+            people: PersonRow::each_alone(vec![candidate(7)]),
             incomplete: true,
             incomplete_reason: Some("one chart unreadable".into()),
         };
@@ -80,7 +99,7 @@ mod tests {
     #[test]
     fn an_empty_list_attests_to_an_empty_search_not_to_no_search() {
         let list = CandidateList {
-            candidates: vec![],
+            people: vec![],
             incomplete: false,
             incomplete_reason: None,
         };

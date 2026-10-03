@@ -1,5 +1,6 @@
 //! One row of a candidate list — what §5.8 item 1 requires be shown before a chart may be
 //! created: photo, age, locale, last visit, and (Cairn's addition) the chart's trust state.
+use crate::person::PersonRow;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -22,6 +23,10 @@ pub enum TrustState {
     Confirmed,
     Unconfirmed,
     UnderReview,
+    /// This node does not hold the chart's registration; it synced ahead, or lies outside
+    /// this node's sync scope (R1's `person::trust_of`). Said honestly rather than guessed
+    /// at (principle 4): showing "confirmed" for a chart we cannot vouch for would be a lie.
+    Unknown,
 }
 
 impl TrustState {
@@ -30,6 +35,7 @@ impl TrustState {
             TrustState::Confirmed => "confirmed",
             TrustState::Unconfirmed => "unconfirmed",
             TrustState::UnderReview => "under-review",
+            TrustState::Unknown => "unknown",
         }
     }
 }
@@ -134,10 +140,14 @@ pub struct Candidate {
     pub photo_ref: Option<String>,
 }
 
-/// The candidates plus what the node knows it could NOT show.
+/// The person rows plus what the node knows it could NOT show.
+///
+/// R3: the unit a clerk sees is a PERSON (a [`PersonRow`], one or more linked charts), not a
+/// chart. What a registration attests to is still the flat list of CHART ids, via
+/// [`CandidateList::displayed_charts`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateList {
-    pub candidates: Vec<Candidate>,
+    pub people: Vec<PersonRow>,
     /// True when the SEARCH was partial: the node could not read something it matched.
     /// ADR-0060 decision 2: partial completion is reported, never implied — a clerk must never
     /// believe an exhaustive search happened when it did not.
@@ -149,6 +159,30 @@ pub struct CandidateList {
     pub incomplete: bool,
     /// Human-readable reason, shown beside the list. `Some` whenever `incomplete`.
     pub incomplete_reason: Option<String>,
+}
+
+impl CandidateList {
+    /// A complete search that matched nothing.
+    pub fn empty() -> CandidateList {
+        CandidateList {
+            people: Vec::new(),
+            incomplete: false,
+            incomplete_reason: None,
+        }
+    }
+
+    /// Every chart of every row, in row order (members in their row order). The one flattening
+    /// from rows back to charts; callers that mean "charts" use this, never `people`.
+    pub fn charts(&self) -> impl Iterator<Item = &Candidate> {
+        self.people.iter().flat_map(|row| row.members().iter())
+    }
+
+    /// The chart ids a registration attests it was shown — THE flattening
+    /// `SearchAttestation::from_displayed` signs. ADR-0076 D6: `displayed` names every member of
+    /// every row shown, so a linked row's charts are attested individually.
+    pub fn displayed_charts(&self) -> Vec<Uuid> {
+        self.charts().map(|c| c.patient_id).collect()
+    }
 }
 
 #[cfg(test)]
@@ -225,7 +259,7 @@ mod tests {
         // implied. A `#[serde(skip)]` or a renamed field on the reason would silently drop
         // the "why" and leave a bare `incomplete: true` a clerk cannot act on.
         let list = CandidateList {
-            candidates: vec![],
+            people: vec![],
             incomplete: true,
             incomplete_reason: Some("2 candidates could not be read".into()),
         };
@@ -234,6 +268,46 @@ mod tests {
         assert_eq!(
             round, list,
             "the reason must survive the wire, not just the flag"
+        );
+    }
+
+    #[test]
+    fn a_list_with_a_linked_row_survives_a_serde_round_trip() {
+        // The wire shape of a person row with TWO members: it must serialize as a JSON array
+        // (what a peer or the window reads) and come back equal, member order included.
+        let member = |n: u128, name: &str| Candidate {
+            patient_id: Uuid::from_u128(n),
+            display_name: name.into(),
+            age: None,
+            trust: TrustState::Unconfirmed,
+            last_activity: None,
+            locale: None,
+            photo_ref: None,
+        };
+        let list = CandidateList {
+            people: vec![PersonRow::new(vec![member(1, "Ann Lee"), member(2, "Bea Ngo")]).unwrap()],
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        let value = serde_json::to_value(&list).unwrap();
+        assert_eq!(value["people"][0].as_array().map(Vec::len), Some(2));
+        let round: CandidateList = serde_json::from_value(value).unwrap();
+        assert_eq!(round, list);
+    }
+
+    #[test]
+    fn unknown_trust_is_a_token_and_round_trips() {
+        // R3: a chart this node does not hold the registration of (synced ahead, or outside
+        // sync scope) has no trust state to show. "unknown" says so honestly rather than
+        // inventing "confirmed".
+        assert_eq!(TrustState::Unknown.as_str(), "unknown");
+        assert_eq!(
+            serde_json::to_string(&TrustState::Unknown).unwrap(),
+            "\"unknown\""
+        );
+        assert_eq!(
+            serde_json::from_str::<TrustState>("\"unknown\"").unwrap(),
+            TrustState::Unknown
         );
     }
 

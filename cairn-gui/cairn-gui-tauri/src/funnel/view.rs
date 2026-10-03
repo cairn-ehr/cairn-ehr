@@ -17,6 +17,7 @@
 //! every time, so a retry button would be a precise untruth — the clerk's way forward is to
 //! change what was typed. A node-state verdict (`NotProvisioned`) is pointless to retry until
 //! an operator has acted, and then succeeds.
+use crate::funnel::rows::people_phrase;
 use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
     MissingPart, PromptCounts, Restored, TokenError, TriggerState, MIN_NAME_TOKENS,
@@ -186,7 +187,7 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
 /// new chart, so a search that did not finish must never say it (principle 4) — even when it
 /// showed nobody, which is exactly when the list, and anything nested in it, is hidden.
 ///
-/// `withheld` is how many further candidates matched but are not shown (ADR-0075, #671): said
+/// `withheld` is how many further PEOPLE matched but are not shown (ADR-0075, #671): said
 /// as "the N closest of M", a count and a way to narrow — never as "not complete". That word
 /// is reserved for `incomplete`, because it changes whether "no match" can be trusted, and
 /// being cut to five does not. The prompt is a nudge; being cut is its normal state.
@@ -196,6 +197,7 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
 pub fn prompt_summary(counts: &PromptCounts) -> String {
     let PromptCounts {
         shown,
+        shown_charts,
         withheld,
         incomplete,
     } = *counts;
@@ -219,14 +221,16 @@ pub fn prompt_summary(counts: &PromptCounts) -> String {
         0 => "No existing chart matched what is typed. Registering will record that search."
             .to_string(),
         n if withheld > 0 => format!(
-            "{n} existing patient(s) might be this person — the {n} closest of {} matches, \
+            "{} might be this person — the {n} closest of {} matches, \
              listed below{partial}; type more to narrow. Pressing Register now means none of \
              these.",
+            people_phrase(n, shown_charts),
             counts.total()
         ),
         n => format!(
-            "{n} existing patient(s) might be this person — listed below{partial}. Pressing \
-             Register now means none of these."
+            "{} might be this person — listed below{partial}. Pressing \
+             Register now means none of these.",
+            people_phrase(n, shown_charts)
         ),
     }
 }
@@ -235,14 +239,21 @@ pub fn prompt_summary(counts: &PromptCounts) -> String {
 ///
 /// Browse attests nothing, but a clerk who reads "No existing chart matched" here goes on to
 /// register, so the same rule holds: a partial answer never reads as a complete one.
-pub fn browse_summary(shown: usize, incomplete: bool) -> String {
-    match (shown, incomplete) {
+pub fn browse_summary(people: usize, charts: usize, incomplete: bool) -> String {
+    match (people, incomplete) {
         (0, false) => "No existing chart matched.".to_string(),
         (0, true) => {
             "The search did not finish, and showed nobody — this is NOT a \"no match\".".to_string()
         }
-        (n, false) => format!("{n} existing chart(s) found."),
-        (n, true) => format!("{n} existing chart(s) found — the list is not complete."),
+        // One chart per person: today's text, verbatim. Otherwise count people, name charts.
+        (n, false) if charts == n => format!("{n} existing chart(s) found."),
+        (n, true) if charts == n => {
+            format!("{n} existing chart(s) found — the list is not complete.")
+        }
+        (n, false) => format!("{n} existing patient(s) found ({charts} charts)."),
+        (n, true) => {
+            format!("{n} existing patient(s) found ({charts} charts) — the list is not complete.")
+        }
     }
 }
 
@@ -380,6 +391,7 @@ pub(crate) mod tests {
     fn counts(shown: usize, withheld: usize, incomplete: bool) -> PromptCounts {
         PromptCounts {
             shown,
+            shown_charts: shown,
             withheld,
             incomplete,
         }
@@ -498,7 +510,7 @@ pub(crate) mod tests {
         let s = prompt_summary(&counts(0, 0, true));
         assert!(!s.contains("No existing chart matched"), "{s}");
         assert!(s.contains("NOT"), "{s}");
-        let b = browse_summary(0, true);
+        let b = browse_summary(0, 0, true);
         assert!(!b.contains("No existing chart matched"), "{b}");
         assert!(b.contains("NOT"), "{b}");
     }
@@ -562,15 +574,72 @@ pub(crate) mod tests {
     #[test]
     fn a_partial_list_with_rows_says_so_in_its_announcement() {
         assert!(prompt_summary(&counts(2, 0, true)).contains("not complete"));
-        assert!(browse_summary(2, true).contains("not complete"));
-        assert!(!browse_summary(2, false).contains("not complete"));
+        assert!(browse_summary(2, 2, true).contains("not complete"));
+        assert!(!browse_summary(2, 2, false).contains("not complete"));
     }
 
     /// The browse announcement, from Rust like every other sentence on this screen.
     #[test]
     fn the_browse_announces_how_many_charts_it_found() {
-        assert!(browse_summary(4, false).contains('4'));
-        assert!(browse_summary(0, false).contains("No existing chart matched"));
+        assert!(browse_summary(4, 4, false).contains('4'));
+        assert!(browse_summary(0, 0, false).contains("No existing chart matched"));
+    }
+
+    /// R3 goldens: when every row is one chart the announcements are byte-identical to what
+    /// they were before the front door collapsed by person.
+    #[test]
+    fn single_chart_summaries_are_byte_identical_to_before_r3() {
+        assert_eq!(browse_summary(3, 3, false), "3 existing chart(s) found.");
+        assert_eq!(
+            browse_summary(3, 3, true),
+            "3 existing chart(s) found — the list is not complete."
+        );
+        assert_eq!(
+            prompt_summary(&counts(5, 98, false)),
+            "5 existing patient(s) might be this person — the 5 closest of 103 matches, \
+             listed below; type more to narrow. Pressing Register now means none of these."
+        );
+        assert_eq!(
+            prompt_summary(&counts(3, 0, true)),
+            "3 existing patient(s) might be this person — listed below, but the list is not \
+             complete (the reason follows). Pressing Register now means none of these."
+        );
+    }
+
+    #[test]
+    fn a_linked_row_is_counted_as_one_person_and_its_charts_are_named() {
+        assert_eq!(
+            browse_summary(3, 4, false),
+            "3 existing patient(s) found (4 charts)."
+        );
+        assert_eq!(
+            browse_summary(3, 4, true),
+            "3 existing patient(s) found (4 charts) — the list is not complete."
+        );
+        let s = prompt_summary(&PromptCounts {
+            shown: 5,
+            shown_charts: 6,
+            withheld: 98,
+            incomplete: false,
+        });
+        assert!(
+            s.starts_with(
+                "5 existing patient(s) (6 charts) might be this person — the 5 closest of 103"
+            ),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn a_linked_row_in_a_partial_search_says_both_things() {
+        let s = prompt_summary(&PromptCounts {
+            shown: 3,
+            shown_charts: 4,
+            withheld: 0,
+            incomplete: true,
+        });
+        assert!(s.contains("3 existing patient(s) (4 charts)"), "{s}");
+        assert!(s.contains("the list is not complete"), "{s}");
     }
 
     #[test]

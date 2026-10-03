@@ -11,9 +11,11 @@
 //! of whatever event happens to carry the `patient_id` first) and why the attestation NAMES
 //! candidates rather than counting them. This module is where that requirement is discharged
 //! for the STANDARD path: a clerk typed a search, saw a `CandidateList`, and chose to create
-//! anyway. `register_patient` therefore mints ONLY `RegistrationClass::Standard` — the §5.4
-//! John Doe path (`john_doe::register_john_doe`) has nothing to search with and is registered
-//! elsewhere, and the §5.6 pseudonymous path is likewise out of scope here.
+//! anyway. (The list is of PERSON rows; the attestation signs the flattened CHART ids via
+//! `CandidateList::displayed_charts`, ADR-0076 D6.) `register_patient` therefore mints ONLY
+//! `RegistrationClass::Standard` — the §5.4 John Doe path (`john_doe::register_john_doe`)
+//! has nothing to search with and is registered elsewhere, and the §5.6 pseudonymous path
+//! is likewise out of scope here.
 //!
 //! No human-author requirement is added here, and none should ever be added: ADR-0061 decision 4
 //! records the REJECTED alternative at length — authorship confidence is a GRADE, not a gate
@@ -558,7 +560,7 @@ pub async fn register_patient(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cairn_patient_search::{Candidate, TrustState};
+    use cairn_patient_search::{Candidate, PersonRow, TrustState};
 
     fn hlc(wall: i64) -> Hlc {
         Hlc {
@@ -585,7 +587,7 @@ mod tests {
         let pid = Uuid::from_u128(1);
         let displayed_ids = [Uuid::from_u128(10), Uuid::from_u128(11)];
         let list = CandidateList {
-            candidates: displayed_ids.iter().map(|id| candidate(*id)).collect(),
+            people: PersonRow::each_alone(displayed_ids.iter().map(|id| candidate(*id)).collect()),
             incomplete: false,
             incomplete_reason: None,
         };

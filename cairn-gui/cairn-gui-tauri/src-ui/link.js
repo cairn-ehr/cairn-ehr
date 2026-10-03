@@ -101,6 +101,17 @@ function clearComparison() {
   setMessage(el("link-status"), "");
 }
 
+/** One member chart as a Compare button — every member of a linked row is its own target. */
+function compareItem(c) {
+  const li = document.createElement("li");
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = "Compare: " + c.name + " — " + c.age + " — identity " + c.trust;
+  b.addEventListener("click", () => compare(c.patient_id));
+  li.append(b);
+  return li;
+}
+
 /**
  * Search other charts for a possible match, as the clerk types (debounced below, like the front
  * door's search). `link_search` leaves this record's own charts out and words the summary over
@@ -120,20 +131,11 @@ async function runLinkSearch() {
     return;
   }
   try {
-    const view = await invoke("link_search", { form, charts: renderedCharts || [] });
-    if (view.revision !== linkRevision) return; // a newer search is on its way
-    list.replaceChildren(
-      ...view.candidates.map((c) => {
-        const li = document.createElement("li");
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = "Compare: " + c.name + " — " + c.age + " — identity " + c.trust;
-        b.addEventListener("click", () => compare(c.patient_id));
-        li.append(b);
-        return li;
-      }),
-    );
-    setMessage(el("link-search-status"), view.summary);
+    // Named `found` (not `view`) so the webview-fields guard can scan exactly this payload.
+    const found = await invoke("link_search", { form, charts: renderedCharts || [] });
+    if (found.revision !== linkRevision) return; // a newer search is on its way
+    list.replaceChildren(...found.people.map((row) => personItem(row, compareItem)));
+    setMessage(el("link-search-status"), found.summary);
   } catch (failure) {
     if (revision !== linkRevision) return;
     list.replaceChildren();

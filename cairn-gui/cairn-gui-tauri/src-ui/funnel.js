@@ -97,6 +97,32 @@ function candidateItem(cand, verb, statusFor) {
 }
 
 /**
+ * One PERSON row (ADR-0076 decision 6). A chart never linked renders exactly as before — one
+ * item, one button. Linked charts are one item holding the Rust-worded label ("One person — 2
+ * linked charts") and a nested list with a button per member: the clerk opens the chart they
+ * reached for, and the combined record reads either way.
+ */
+let personRowCount = 0; // makes each linked row's label id unique
+
+function personItem(row, memberItem) {
+  if (row.members.length === 1) return memberItem(row.members[0]);
+  const li = document.createElement("li");
+  li.className = "person-row";
+  const label = document.createElement("span");
+  label.className = "person-row-label";
+  label.id = "person-row-label-" + ++personRowCount;
+  label.textContent = row.label;
+  const members = document.createElement("ul");
+  const items = row.members.map(memberItem);
+  // Tab lands on a button, not on the label: describe every member button by the row's label so
+  // a screen reader says "One person — 2 linked charts" along with the chart's own text.
+  for (const item of items) item.querySelector("button").setAttribute("aria-describedby", label.id);
+  members.append(...items);
+  li.append(label, members);
+  return li;
+}
+
+/**
  * Enable or disable every candidate row on the front door. Disabled while a registration saves:
  * the clerk has just said "none of these", and a click on one of them before the save lands
  * would leave the window between a chart they recognised and a new chart they created. The
@@ -130,7 +156,9 @@ async function runBrowse() {
     if (browseView.revision !== browseRevision) return; // a newer browse is on its way
     setMessage(el("browse-incomplete"), browseView.incomplete_reason);
     list.replaceChildren(
-      ...browseView.candidates.map((cand) => candidateItem(cand, "Open chart", "browse-status")),
+      ...browseView.people.map((row) =>
+        personItem(row, (cand) => candidateItem(cand, "Open chart", "browse-status")),
+      ),
     );
     // From Rust (`view::browse_summary`): "nobody matched" and "the search did not finish"
     // lead to opposite acts, so neither is worded here.
@@ -208,11 +236,13 @@ function renderPrompt(prompt) {
   // which "partial" and "nobody matched" must not be confused.
   setMessage(el("prompt-incomplete"), prompt.incomplete_reason);
   el("prompt-list").replaceChildren(
-    ...prompt.candidates.map((cand) =>
-      candidateItem(cand, "This is them — open chart", "prompt-status"),
+    ...prompt.people.map((row) =>
+      personItem(row, (cand) =>
+        candidateItem(cand, "This is them — open chart", "prompt-status"),
+      ),
     ),
   );
-  promptHadRows = prompt.candidates.length > 0;
+  promptHadRows = prompt.people.length > 0;
   el("prompt").hidden = !promptHadRows;
   setRegisterButton(registerLabel(), true);
 }

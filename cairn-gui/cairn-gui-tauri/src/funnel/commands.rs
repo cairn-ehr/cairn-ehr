@@ -17,18 +17,18 @@
 //!   └ register(token) -----------------------> new chart        ("none of these")
 //! register clicked with no token yet --------> prompt_search(form, force=true) first
 //! ```
+use crate::funnel::rows::{person_row_view, PersonRowView};
 use crate::funnel::view::{
-    browse_summary, candidate_view, header_from_candidate, header_from_registration,
-    prompt_summary, register_behind_open_chart_view, register_error_view,
-    registered_behind_open_chart_view, search_error_view, token_error_view, waiting_sentence,
-    CandidateView, ChartHeaderView, ErrorView,
+    browse_summary, header_from_candidate, header_from_registration, prompt_summary,
+    register_behind_open_chart_view, register_error_view, registered_behind_open_chart_view,
+    search_error_view, token_error_view, waiting_sentence, ChartHeaderView, ErrorView,
 };
 use crate::funnel::window::OpenChart;
 use crate::state::AppState;
 use cairn_gui_funnel::{
     bound_for_prompt, node_reason, trigger_state, FormSnapshot, Recorded, Restored, SearchToken,
 };
-use cairn_patient_search::{Candidate, CandidateList};
+use cairn_patient_search::CandidateList;
 use serde::Serialize;
 
 /// What the front door needs at launch, and after any reload.
@@ -48,7 +48,8 @@ pub struct FunnelStatus {
 #[derive(Debug, Serialize)]
 pub struct BrowseView {
     pub revision: u64,
-    pub candidates: Vec<CandidateView>,
+    /// One entry per PERSON (R3): linked charts share a row, each member its own open target.
+    pub people: Vec<PersonRowView>,
     /// The announcement (`view::browse_summary`) — from Rust, so "nobody matched" and "the
     /// search did not finish" cannot be confused by a sentence no test pins.
     pub summary: String,
@@ -64,8 +65,12 @@ pub fn browse_view(revision: u64, list: &CandidateList) -> BrowseView {
     let incomplete_reason = node_reason(list).map(str::to_string);
     BrowseView {
         revision,
-        candidates: list.candidates.iter().map(candidate_view).collect(),
-        summary: browse_summary(list.candidates.len(), incomplete_reason.is_some()),
+        people: list.people.iter().map(person_row_view).collect(),
+        summary: browse_summary(
+            list.people.len(),
+            list.charts().count(),
+            incomplete_reason.is_some(),
+        ),
         incomplete_reason,
     }
 }
@@ -82,7 +87,7 @@ pub struct PromptView {
     /// What `register` must be handed to attest THIS prompt. `None` means Register may not use it.
     pub token: Option<SearchToken>,
     /// Exactly the bounded list a registration would attest — what is shown IS what is signed.
-    pub candidates: Vec<CandidateView>,
+    pub people: Vec<PersonRowView>,
     /// The sentence announcing this prompt, present whenever `token` is (`view::prompt_summary`).
     pub summary: Option<String>,
     pub incomplete_reason: Option<String>,
@@ -96,17 +101,17 @@ impl PromptView {
             waiting: Some(sentence),
             stale: false,
             token: None,
-            candidates: vec![],
+            people: vec![],
             summary: None,
             incomplete_reason: None,
         }
     }
 }
 
-/// Remember candidates that are now on screen, so `open_chart` will open them.
-async fn remember_shown(state: &AppState, candidates: &[Candidate]) {
+/// Remember every chart that is now on screen, so `open_chart` will open them.
+async fn remember_shown(state: &AppState, list: &CandidateList) {
     let mut shown = state.shown.lock().await;
-    for c in candidates {
+    for c in list.charts() {
         shown.insert(c.patient_id, c.clone());
     }
 }
@@ -169,7 +174,7 @@ pub async fn browse_impl(state: &AppState, form: FormSnapshot) -> Result<BrowseV
         .search(&form.query())
         .await
         .map_err(|e| search_error_view(&e))?;
-    remember_shown(state, &list.candidates).await;
+    remember_shown(state, &list).await;
     Ok(browse_view(form.revision, &list))
 }
 
@@ -203,14 +208,14 @@ pub async fn prompt_search_impl(
     let recorded = state.funnel.lock().await.record(&form, prompt);
     match recorded {
         Ok(Recorded::Current(token)) => {
-            remember_shown(state, &bounded.candidates).await;
+            remember_shown(state, &bounded).await;
             Ok(PromptView {
                 revision: form.revision,
                 waiting: None,
                 stale: false,
                 token: Some(token),
                 summary: Some(prompt_summary(&counts)),
-                candidates: bounded.candidates.iter().map(candidate_view).collect(),
+                people: bounded.people.iter().map(person_row_view).collect(),
                 incomplete_reason: bounded.incomplete_reason,
             })
         }
@@ -372,6 +377,49 @@ mod tests {
     use crate::funnel::view::{candidate_view, header_opened_by_id};
     use std::collections::BTreeSet;
 
+    /// A linked person row of two charts, ids 1 and 2.
+    fn two_chart_row() -> cairn_patient_search::PersonRow {
+        let chart = |n: u128| {
+            let mut c = sample_candidate();
+            c.patient_id = uuid::Uuid::from_u128(n);
+            c
+        };
+        cairn_patient_search::PersonRow::new(vec![chart(1), chart(2)]).unwrap()
+    }
+
+    /// The maintainer's decision: every member line on screen is its own open target, including
+    /// a member the search itself did not match (it only rides along in the row).
+    #[tokio::test]
+    async fn a_member_the_search_did_not_match_can_be_opened() {
+        let state = AppState::mock(None);
+        let row = two_chart_row();
+        let b = row.members()[1].patient_id;
+        let list = CandidateList {
+            people: vec![row],
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        remember_shown(&state, &list).await;
+        let header = open_chart_impl(&state, &b.to_string()).await.unwrap();
+        assert_eq!(header.patient_id, b.to_string());
+    }
+
+    #[tokio::test]
+    async fn an_id_on_no_row_is_still_refused() {
+        let state = AppState::mock(None);
+        let list = CandidateList {
+            people: vec![two_chart_row()],
+            incomplete: false,
+            incomplete_reason: None,
+        };
+        remember_shown(&state, &list).await;
+        let stranger = uuid::Uuid::from_u128(99).to_string();
+        let refused = open_chart_impl(&state, &stranger)
+            .await
+            .expect_err("an id on no row is refused");
+        assert!(refused.contains("not in a list on screen"), "{refused}");
+    }
+
     /// THE FRONT DOOR'S DRIFT GUARD — the same guard `commands.rs` keeps for `main.js`.
     ///
     /// `funnel.js` is untyped, so a Rust field rename does not break the build: it renders
@@ -383,7 +431,9 @@ mod tests {
         let js = include_str!("../../src-ui/funnel.js");
         let header = header_opened_by_id(uuid::Uuid::nil());
         let cand = candidate_view(&sample_candidate());
-        let payloads: [(&str, serde_json::Value); 6] = [
+        // A LINKED sample, so `label` is present and `members` has more than one entry.
+        let linked = person_row_view(&two_chart_row());
+        let payloads: [(&str, serde_json::Value); 7] = [
             (
                 "status",
                 serde_json::to_value(FunnelStatus {
@@ -396,12 +446,13 @@ mod tests {
             ),
             ("header", serde_json::to_value(&header).unwrap()),
             ("cand", serde_json::to_value(&cand).unwrap()),
+            ("row", serde_json::to_value(&linked).unwrap()),
             (
                 "browseView",
                 serde_json::to_value(browse_view(
                     0,
                     &CandidateList {
-                        candidates: vec![],
+                        people: vec![two_chart_row()],
                         incomplete: false,
                         incomplete_reason: None,
                     },
@@ -443,6 +494,10 @@ mod tests {
         assert!(fields_read_in(js, "browseView").contains("summary"));
         assert!(fields_read_in(js, "prompt").contains("incomplete_reason"));
         assert!(fields_read_in(js, "prompt").contains("stale"));
+        // A linked row is drawn from its Rust-worded label and its members; losing either read
+        // would draw an unlabelled or empty person.
+        assert!(fields_read_in(js, "row").contains("members"));
+        assert!(fields_read_in(js, "row").contains("label"));
         assert!(fields_read_in(js, "failure").contains("retry"));
         assert!(fields_read_in(js, "status").contains("provisioning"));
     }
@@ -459,7 +514,7 @@ mod tests {
     async fn browse_then_open_a_displayed_candidate_opens_that_chart() {
         let state = AppState::mock(None);
         let list = browse_impl(&state, f(1, "mich", "")).await.unwrap();
-        let id = list.candidates[0].patient_id.clone();
+        let id = list.people[0].members[0].patient_id.clone();
         let header = open_chart_impl(&state, &id).await.unwrap();
         assert_eq!(header.patient_id, id);
         assert_eq!(state.open_patient().await.unwrap().to_string(), id);
@@ -481,7 +536,7 @@ mod tests {
         let p = prompt_search_impl(&state, f(1, "Samantha Michaelowski", "1975"), true)
             .await
             .unwrap();
-        let id = p.candidates[0].patient_id.clone();
+        let id = p.people[0].members[0].patient_id.clone();
         browse_impl(&state, f(1, "zzzz-nobody", "")).await.unwrap();
         open_chart_impl(&state, &id).await.expect("still on screen");
     }
@@ -504,8 +559,9 @@ mod tests {
         close_chart_impl(&state).await;
         let found = browse_impl(&state, f(2, "quixote", "")).await.unwrap();
         assert!(found
-            .candidates
+            .people
             .iter()
+            .flat_map(|r| &r.members)
             .any(|c| c.patient_id == header.patient_id));
     }
 
@@ -565,7 +621,7 @@ mod tests {
             "one search, one chart"
         );
         let found = browse_impl(&state, f(2, "byron", "")).await.unwrap();
-        assert_eq!(found.candidates.len(), 1, "{found:?}");
+        assert_eq!(found.people.len(), 1, "{found:?}");
     }
 
     #[tokio::test]
@@ -727,7 +783,7 @@ mod tests {
         let p = prompt_search_impl(&state, f(rev, "Zanzibar Newcomer", ""), true)
             .await
             .unwrap();
-        assert_eq!(p.candidates.len(), cairn_gui_funnel::PROMPT_CAP, "{p:?}");
+        assert_eq!(p.people.len(), cairn_gui_funnel::PROMPT_CAP, "{p:?}");
         // ADR-0075: a cut prompt says how many it did not show, and does NOT call the search
         // partial — that word is kept for a search that could not read a chart.
         assert!(
@@ -746,8 +802,9 @@ mod tests {
             "a cut prompt must say how many it cut: {p:?}"
         );
         let shown: Vec<uuid::Uuid> = p
-            .candidates
+            .people
             .iter()
+            .flat_map(|r| &r.members)
             .map(|c| c.patient_id.parse().unwrap())
             .collect();
         let header = register_impl(&state, p.token.unwrap()).await.unwrap();
@@ -775,7 +832,12 @@ mod tests {
             .unwrap();
         let withheld = registered
             .iter()
-            .find(|id| !p.candidates.iter().any(|c| c.patient_id == id.to_string()))
+            .find(|id| {
+                !p.people
+                    .iter()
+                    .flat_map(|r| &r.members)
+                    .any(|c| c.patient_id == id.to_string())
+            })
             .expect("one more than the cap was registered");
         assert!(open_chart_impl(&state, &withheld.to_string())
             .await
@@ -795,8 +857,9 @@ mod tests {
         close_chart_impl(&state).await;
         let found = browse_impl(&state, f(2, "quixote", "")).await.unwrap();
         let row = found
-            .candidates
+            .people
             .iter()
+            .flat_map(|r| &r.members)
             .find(|c| c.patient_id == header.patient_id)
             .unwrap();
         assert_eq!(header.trust, row.trust);
@@ -810,7 +873,7 @@ mod tests {
         let p = prompt_search_impl(&state, f(1, "Samantha Michaelowski", "1975"), true)
             .await
             .unwrap();
-        let recognised = p.candidates[0].patient_id.clone();
+        let recognised = p.people[0].members[0].patient_id.clone();
         open_chart_impl(&state, &recognised).await.unwrap();
         let err = register_impl(&state, p.token.unwrap()).await.unwrap_err();
         assert_eq!(err.retry, Retry::Never);
@@ -879,7 +942,7 @@ mod tests {
     #[test]
     fn a_bare_incomplete_flag_reaches_the_browse_view() {
         let list = cairn_patient_search::CandidateList {
-            candidates: vec![],
+            people: vec![],
             incomplete: true,
             incomplete_reason: None,
         };

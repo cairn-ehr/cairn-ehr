@@ -121,8 +121,8 @@ impl std::fmt::Debug for AttestedSearch {
             .field(
                 "displayed",
                 &format_args!(
-                    "<{} candidate(s), redacted>",
-                    self.displayed.as_list().candidates.len()
+                    "<{} chart(s), redacted>",
+                    self.displayed.as_list().displayed_charts().len()
                 ),
             )
             .finish()
@@ -494,7 +494,7 @@ impl TokenStore {
 mod tests {
     use super::*;
     use crate::prompt::bound_for_prompt;
-    use cairn_patient_search::{Candidate, TrustState};
+    use cairn_patient_search::{Candidate, PersonRow, TrustState};
     use uuid::Uuid;
 
     fn candidate(n: u128) -> Candidate {
@@ -515,7 +515,7 @@ mod tests {
     /// truthful, and these tests are about custody rather than about the bounding.
     fn list_of(n: u128) -> PromptList {
         bound_for_prompt(&CandidateList {
-            candidates: (1..=n).map(candidate).collect(),
+            people: PersonRow::each_alone((1..=n).map(candidate).collect()),
             incomplete: false,
             incomplete_reason: None,
         })
@@ -805,7 +805,7 @@ mod tests {
         let mut store = TokenStore::new();
         let token = store.record(query("Nobody Atall"), list_of(0)).unwrap();
         let attested = store.take(token).unwrap();
-        assert!(attested.displayed().candidates.is_empty());
+        assert!(attested.displayed().people.is_empty());
         assert!(!attested.query().is_empty());
     }
 

@@ -34,11 +34,14 @@
 //! driver feature, and every other jsonb parameter in this crate already uses the text-cast
 //! idiom, so following it here keeps the binding convention uniform rather than one-off.
 
+use super::person;
+use super::search_person::{display_name_for, read_components, trust_state_for};
 use super::search_rank::{
     normalise_query_tokens, passes_from_db, rank_keys, read_retained_names, MatchedPasses,
 };
 use cairn_patient_search::{
-    age_years, rank_candidates, Age, Candidate, CandidateList, SearchQuery, TrustState,
+    age_years, group_by_person, rank_candidates, Age, Candidate, CandidateList, PersonRow,
+    SearchQuery,
 };
 use std::collections::{HashMap, HashSet};
 use tokio_postgres::GenericClient;
@@ -67,10 +70,19 @@ pub async fn search_patients<C: GenericClient + Sync>(
     }
 
     let passes = read_candidate_passes(client, query).await?;
-    let ids: Vec<Uuid> = passes.iter().map(|p| p.id).collect();
-    if ids.is_empty() {
+    let matched: Vec<Uuid> = passes.iter().map(|p| p.id).collect();
+    if matched.is_empty() {
         return Ok(empty_list());
     }
+
+    // R3 (ADR-0076 decision 6): the front door lists PEOPLE. Read each matched chart's link
+    // component first, so every display read below covers EVERY member of every person
+    // shown - a registration signs "displayed" over exactly what these reads return.
+    let components = read_components(client, &matched).await?;
+    let mut ids: Vec<Uuid> = components.values().flatten().copied().collect();
+    ids.sort();
+    ids.dedup();
+    let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
 
     let names = read_display_names(client, &ids).await?;
     // N4 (review round 2, #344): only pay for the repudiation-vs-never-asserted distinction
@@ -87,11 +99,14 @@ pub async fn search_patients<C: GenericClient + Sync>(
     } else {
         read_names_ever_asserted(client, &missing_names).await?
     };
+    // Whether this node holds each chart's registration: a member can be known only from a
+    // link, and "no trust row" means `confirmed` only for a chart that exists here.
+    let held = person::read_held(client, &id_strs).await?;
     let dobs = read_dob(client, &ids).await?;
-    // ADR-0075: rank BEFORE assembling, so `candidates` below is built in display order.
-    // `rank_candidates` only reorders — `ranked_ids` holds exactly the ids read above, and every
-    // read and the assembly after it use `ranked_ids`, so the list is built in display order.
-    let retained = read_retained_names(client, &ids).await?;
+    // ADR-0075: rank BEFORE assembling. Only the charts the search MATCHED are ranked (an
+    // unmatched member has no rank keys); `group_by_person` then places each person at the
+    // position of their best-ranked chart and appends the unmatched members after it.
+    let retained = read_retained_names(client, &matched).await?;
     let query_tokens = normalise_query_tokens(client, &query.name_tokens).await?;
     let ranked_ids = rank_candidates(rank_keys(
         &passes,
@@ -100,58 +115,51 @@ pub async fn search_patients<C: GenericClient + Sync>(
         &retained,
         &dobs,
     ));
-    let trust_states = read_trust_states(client, &ranked_ids).await?;
-    let last_activity = read_last_activity(client, &ranked_ids).await?;
-    let locales = read_locale(client, &ranked_ids).await?;
-    let photo_refs = read_photo_refs(client, &ranked_ids).await?;
+    // A chart without its component would drop out of every row: fail the search loudly.
+    let groups = group_by_person(&ranked_ids, &components)?;
+    let trust_states = read_trust_states(client, &ids).await?;
+    let last_activity = read_last_activity(client, &ids).await?;
+    let locales = read_locale(client, &ids).await?;
+    let photo_refs = read_photo_refs(client, &ids).await?;
 
     // The one field a candidate cannot honestly render as `None`: `Candidate::display_name`
     // is a plain `String`, not `Option<String>`, because a nameless row on a search results
     // list is meaningless to a clerk. Every OTHER field is already `Option`-typed in the
     // shared model, so a missing dob/trust-row/last-activity/locale/photo degrades silently
     // and correctly to `None` — that is an honest "unknown", not a read failure, and must
-    // NOT itself flip `incomplete` (see the John-Doe test: no `patient_chart` row is normal).
+    // NOT itself flip `incomplete`. A chart's `patient_chart` row exists once its
+    // registration has been received (#345), so "no row" now means "not held here".
     let mut unreadable_names = 0usize;
-    let candidates: Vec<Candidate> = ranked_ids
+    let mut candidate_for = |id: &Uuid| -> Candidate {
+        // Never drop the candidate: a silently-dropped row is precisely the
+        // duplicate-creating failure this funnel exists to prevent. See `DisplayName`.
+        let name = display_name_for(*id, &names, &ever_named, &held);
+        if name.is_unreadable() {
+            unreadable_names += 1;
+        }
+        let age = dobs.get(id).and_then(|(dob, basis)| {
+            age_years(dob, today).map(|years| Age {
+                years,
+                basis: basis.clone(),
+            })
+        });
+        Candidate {
+            patient_id: *id,
+            display_name: name.text(),
+            age,
+            trust: trust_state_for(held.contains(id), trust_states.get(id).map(String::as_str)),
+            last_activity: last_activity.get(id).cloned(),
+            locale: locales.get(id).cloned(),
+            photo_ref: photo_refs.get(id).cloned(),
+        }
+    };
+    let people: Vec<PersonRow> = groups
         .iter()
-        .map(|id| {
-            let display_name = match names.get(id) {
-                Some(name) => name.clone(),
-                // db/025: a chart whose ONLY asserted name(s) were struck as known-false has
-                // NO winner row in `patient_name_current` BY DESIGN — showing the known-false
-                // name back would be a precise untruth (principle 4), so the view withholds
-                // it on purpose. That is an honest "name withheld", not a failed read, and
-                // must NOT count toward `incomplete` the way a genuine read failure does.
-                // `ever_named` answers this precisely — see `read_names_ever_asserted`'s doc.
-                None if ever_named.contains(id) => "(name withheld)".to_string(),
-                None => {
-                    unreadable_names += 1;
-                    // Never drop the candidate: a silently-dropped row is precisely the
-                    // duplicate-creating failure this funnel exists to prevent. An honest
-                    // placeholder keeps the chart visible while `incomplete` (below) tells
-                    // the clerk the read was not exhaustive.
-                    "(name unavailable)".to_string()
-                }
-            };
-            let age = dobs.get(id).and_then(|(dob, basis)| {
-                age_years(dob, today).map(|years| Age {
-                    years,
-                    basis: basis.clone(),
-                })
-            });
-            Candidate {
-                patient_id: *id,
-                display_name,
-                age,
-                trust: trust_states
-                    .get(id)
-                    .map_or(TrustState::Confirmed, |s| trust_state_from_db(s)),
-                last_activity: last_activity.get(id).cloned(),
-                locale: locales.get(id).cloned(),
-                photo_ref: photo_refs.get(id).cloned(),
-            }
+        .map(|group| {
+            PersonRow::new(group.iter().map(&mut candidate_for).collect())
+                .ok_or_else(|| anyhow::anyhow!("a person row was grouped with no chart in it"))
         })
-        .collect();
+        .collect::<anyhow::Result<_>>()?;
 
     let (incomplete, incomplete_reason) = if unreadable_names > 0 {
         (
@@ -165,7 +173,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
     };
 
     Ok(CandidateList {
-        candidates,
+        people,
         incomplete,
         incomplete_reason,
     })
@@ -174,28 +182,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
 /// The "found nothing, and that is the whole truth" list — shared by both short-circuits
 /// above (empty query; a real search that genuinely matched no chart).
 fn empty_list() -> CandidateList {
-    CandidateList {
-        candidates: vec![],
-        incomplete: false,
-        incomplete_reason: None,
-    }
-}
-
-/// `chart_trust.trust_state` is a closed, DB-defined vocabulary (db/024): a row present
-/// there is, by construction, either `'unconfirmed'` or `'under-review'` — never
-/// `'confirmed'`, which the view represents by ABSENCE of a row (mirrored by
-/// `read_trust_states`'s `map_or` above). A string this match does not recognise can only
-/// mean a future db/0xx trust source this Rust code has not been taught about yet; failing
-/// toward `UnderReview` (the more cautious of the two known states — the same "sharper
-/// caution wins" rule `chart_trust`'s own view comment states) is the safe direction,
-/// exactly as principle 4 asks: an uncertain read must never silently look more confident
-/// than it is.
-fn trust_state_from_db(trust_state: &str) -> TrustState {
-    match trust_state {
-        "unconfirmed" => TrustState::Unconfirmed,
-        "under-review" => TrustState::UnderReview,
-        _ => TrustState::UnderReview,
-    }
+    CandidateList::empty()
 }
 
 /// Call `cairn_search_candidates` once and return each DISTINCT patient id it names with how
@@ -258,7 +245,9 @@ async fn read_candidate_passes<C: GenericClient + Sync>(
 /// The §4.2 display-winner name for each candidate, or the John Doe callsign — whichever
 /// `patient_name_current` (db/012) currently picks. A candidate with no row here has never
 /// had ANY name asserted (possible: a chart matched by identifier or dob alone); such a
-/// candidate is never dropped by the caller, only reported `incomplete`.
+/// candidate is never dropped by the caller. Only a HELD nameless chart is reported
+/// `incomplete` (see `search_person::display_name_for`); one not held here reads
+/// "(registration not yet received here)" and is not a partial search.
 async fn read_display_names<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
@@ -343,9 +332,9 @@ async fn read_dob<C: GenericClient + Sync>(
 }
 
 /// `chart_trust` for each candidate — the same view `common::trust_of` (the identity test
-/// suites' helper) reads. A candidate with NO row here is, by that view's own construction
-/// (db/024's header comment), in the default `confirmed` state; the caller's `map_or`
-/// applies that default rather than this function inventing a fabricated row for it.
+/// suites' helper) reads. What a MISSING row means depends on whether the chart is held here
+/// (`confirmed` if so, `unknown` if not): the caller applies `search_person::trust_state_for`
+/// rather than this function inventing a fabricated row for it.
 async fn read_trust_states<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],

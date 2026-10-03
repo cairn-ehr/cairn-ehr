@@ -34,7 +34,7 @@ use crate::mock::fixtures::FixturePatient;
 use crate::mock::MockData;
 use crate::port::{DataError, PatientRegistration, PatientSearch};
 use cairn_gui_funnel::AttestedSearch;
-use cairn_patient_search::{age_years, Age, Candidate, CandidateList, SearchQuery};
+use cairn_patient_search::{age_years, Age, Candidate, CandidateList, PersonRow, SearchQuery};
 use uuid::Uuid;
 
 /// Does this fixture match the query, under the fixture rule?
@@ -108,22 +108,21 @@ impl MockData {
         // `search_patients`: "found nothing" for an empty query is a true, exhaustive
         // answer, so the list is COMPLETE rather than partial.
         if query.is_empty() {
-            return CandidateList {
-                candidates: vec![],
-                incomplete: false,
-                incomplete_reason: None,
-            };
+            return CandidateList::empty();
         }
         let patients = self.patients.lock().expect("fixture population");
         CandidateList {
-            candidates: patients
-                .iter()
-                .filter(|p| matches(p, query))
-                .map(|p| as_candidate(p, today))
-                // `map`, never `filter_map`: a row that matched must appear. This was a
-                // `filter_map` over a fallible id parse, which could delete a matching chart
-                // while the two lines below still swore the list was complete.
-                .collect(),
+            // The mock has no link concept, so every mock row is a person of one.
+            people: PersonRow::each_alone(
+                patients
+                    .iter()
+                    .filter(|p| matches(p, query))
+                    .map(|p| as_candidate(p, today))
+                    // `map`, never `filter_map`: a row that matched must appear. This was a
+                    // `filter_map` over a fallible id parse, which could delete a matching chart
+                    // while the two lines below still swore the list was complete.
+                    .collect(),
+            ),
             // Now literally true, and true BY CONSTRUCTION rather than by assertion: every
             // fixture that matches becomes a candidate, so there is no drop path that could
             // withhold one. `bound_for_prompt` adds the display-side partiality later, if any.
@@ -174,15 +173,7 @@ impl MockData {
         self.attested_displays
             .lock()
             .expect("the attested displays")
-            .push((
-                id,
-                attested
-                    .displayed()
-                    .candidates
-                    .iter()
-                    .map(|c| c.patient_id)
-                    .collect(),
-            ));
+            .push((id, attested.displayed().displayed_charts()));
         id
     }
 }
@@ -242,10 +233,7 @@ mod tests {
     const TODAY: &str = "2026-09-22";
 
     fn found(list: &CandidateList) -> Vec<String> {
-        list.candidates
-            .iter()
-            .map(|c| c.display_name.clone())
-            .collect()
+        list.charts().map(|c| c.display_name.clone()).collect()
     }
 
     async fn browse(data: &MockData, name: &str) -> CandidateList {
@@ -292,9 +280,9 @@ mod tests {
         // search that hid identity-pending charts would manufacture a duplicate every time.
         let data = MockData::with_fixtures();
         let list = browse(&data, "unknown-ed-site1-2026-07-03-00ab").await;
-        assert_eq!(list.candidates.len(), 1);
+        assert_eq!(list.charts().count(), 1);
         assert_eq!(
-            list.candidates[0].trust,
+            list.people[0].members()[0].trust,
             cairn_patient_search::TrustState::Unconfirmed
         );
     }
@@ -305,7 +293,7 @@ mod tests {
         // distrust the one result the funnel most needs them to trust before creating a
         // chart.
         let list = browse(&MockData::with_fixtures(), "nobodyatall").await;
-        assert!(list.candidates.is_empty());
+        assert!(list.people.is_empty());
         assert!(!list.incomplete);
     }
 
@@ -322,7 +310,7 @@ mod tests {
             .search(&SearchQuery::new("   ", None, &[]), TODAY)
             .await
             .unwrap();
-        assert!(list.candidates.is_empty());
+        assert!(list.people.is_empty());
         assert!(!list.incomplete);
     }
 
@@ -334,7 +322,7 @@ mod tests {
         // every fixture must answer `demographics`.
         let data = MockData::with_fixtures();
         for name in ["amina", "mich", "fyodorowksi", "brien", "wu", "unknown-ed"] {
-            for candidate in browse(&data, name).await.candidates {
+            for candidate in browse(&data, name).await.charts() {
                 data.demographics(&candidate.patient_id.to_string())
                     .unwrap_or_else(|e| {
                         panic!(
@@ -354,10 +342,13 @@ mod tests {
         // beside a patient's name on a wrong-chart-prevention surface.
         let data = MockData::with_fixtures();
         let doe = browse(&data, "unknown-ed").await;
-        assert!(doe.candidates[0].age.is_none(), "a year is not a birthday");
+        assert!(
+            doe.people[0].members()[0].age.is_none(),
+            "a year is not a birthday"
+        );
 
         let amina = browse(&data, "amina").await;
-        assert_eq!(amina.candidates[0].age.as_ref().unwrap().years, 42);
+        assert_eq!(amina.people[0].members()[0].age.as_ref().unwrap().years, 42);
     }
 
     #[tokio::test]
@@ -366,7 +357,7 @@ mod tests {
         // the clerk just created cannot then be found.
         let data = MockData::with_fixtures();
         let typed = "Bakhtiyarov Ruslan";
-        assert!(browse(&data, "bakhtiyarov").await.candidates.is_empty());
+        assert!(browse(&data, "bakhtiyarov").await.people.is_empty());
 
         let mut store = TokenStore::new();
         let query = SearchQuery::new(typed, Some("1988-05-05"), &[]);
@@ -379,14 +370,7 @@ mod tests {
         let id = data.register(attested, Some(typed)).await.unwrap();
         store.commit();
         let again = browse(&data, "bakhtiyarov").await;
-        assert_eq!(
-            again
-                .candidates
-                .iter()
-                .map(|c| c.patient_id)
-                .collect::<Vec<_>>(),
-            vec![id]
-        );
+        assert_eq!(again.displayed_charts(), vec![id]);
         // …and it can be opened, like any other candidate.
         assert!(data.demographics(&id.to_string()).is_ok());
     }
@@ -411,12 +395,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(found.candidates.len(), 1);
-        assert_eq!(found.candidates[0].patient_id, id);
+        assert_eq!(found.charts().count(), 1);
+        assert_eq!(found.people[0].members()[0].patient_id, id);
         assert!(
-            !found.candidates[0].display_name.trim().is_empty(),
+            !found.people[0].members()[0].display_name.trim().is_empty(),
             "an absent name must read as absent, never as a blank a clerk cannot see: {:?}",
-            found.candidates[0].display_name
+            found.people[0].members()[0].display_name
         );
     }
 
@@ -452,7 +436,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            invented_precision.candidates.is_empty(),
+            invented_precision.people.is_empty(),
             "a year must not silently become 1 January"
         );
     }
@@ -471,7 +455,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(right_system.candidates.len(), 1, "her MRN must find her");
+        assert_eq!(right_system.charts().count(), 1, "her MRN must find her");
 
         let wrong_system = data
             .search(
@@ -481,7 +465,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            wrong_system.candidates.is_empty(),
+            wrong_system.people.is_empty(),
             "12345 is her MRN, not her National id — matching it as one is a wrong chart"
         );
     }
@@ -508,7 +492,7 @@ mod tests {
         let data = MockData::with_fixtures();
         let list = browse(&data, "mich").await;
         assert_eq!(
-            list.candidates[0].trust,
+            list.people[0].members()[0].trust,
             cairn_patient_search::TrustState::Confirmed
         );
     }
@@ -520,7 +504,7 @@ mod tests {
         // have is the precise-untruth shape principle 4 forbids.
         let data = MockData::with_fixtures();
         let amina = browse(&data, "amina").await;
-        let age = amina.candidates[0]
+        let age = amina.people[0].members()[0]
             .age
             .as_ref()
             .expect("a full date gives an age");
@@ -553,14 +537,14 @@ mod tests {
         assert_eq!(d.sex, "not recorded", "the funnel asks for no sex at all");
         let candidate = browse(&data, "bakhtiyarov").await;
         assert_eq!(
-            candidate.candidates[0].trust,
+            candidate.people[0].members()[0].trust,
             cairn_patient_search::TrustState::Confirmed,
             "what the node reports for an ordinary registration (db/024: `unconfirmed` is the \
              identity-pending John-Doe state, opened only by a `basis`) — a mock that said \
              otherwise would put two trust states on screen for one kind of chart"
         );
         assert!(
-            candidate.candidates[0].age.is_none(),
+            candidate.people[0].members()[0].age.is_none(),
             "no date of birth means no age, never an invented one"
         );
     }
@@ -630,11 +614,7 @@ mod tests {
 
     /// A list with nothing on it — the "genuinely new patient" case, and all these tests need.
     fn nothing_displayed() -> cairn_gui_funnel::PromptList {
-        bound_for_prompt(&CandidateList {
-            candidates: vec![],
-            incomplete: false,
-            incomplete_reason: None,
-        })
+        bound_for_prompt(&CandidateList::empty())
     }
 
     /// An armed failure is returned instead of the fixture answer, ONCE.
@@ -830,7 +810,7 @@ mod tests {
         let mut store = TokenStore::new();
         let query = SearchQuery::new("Samantha Michaelowski", None, &[]);
         let displayed = data.search(&query, TODAY).await.unwrap();
-        let shown: Vec<Uuid> = displayed.candidates.iter().map(|c| c.patient_id).collect();
+        let shown: Vec<Uuid> = displayed.charts().map(|c| c.patient_id).collect();
         assert!(!shown.is_empty(), "the fixture must display somebody");
         let token = store.record(query, bound_for_prompt(&displayed)).unwrap();
         let id = data
