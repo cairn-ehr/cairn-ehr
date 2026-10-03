@@ -173,6 +173,32 @@ does not change: hiding the line would be the hazard if the two charts are one p
   and the sign-off gesture are unchanged (1 → 1 → 1). The withheld line's cost falls only on a doubted
   set, and it is lifted by one judgement: unlink (window) or confirm (CLI until #716).
 
+> [!NOTE]
+> **As built (2026-10-03, PR #717), where the build departed from the bullets above:**
+> - **The rule lives in `cairn-node`'s `medication/hazard.rs`** (`wrong_chart_reasons`, pure), not in
+>   `read.rs`. The two row fields come from **one reasons map** in `read.rs`, not from a constructor.
+>   Every production reader goes through `MedicationRow::is_wrong_chart_hazard()` (either signal is
+>   enough) or `withheld_because()` (a hazard with no recorded reason is worded as the outside case).
+> - **"Doubted" gained a third case (maintainer decision during the final review):** an ATTESTED
+>   unlink between two charts that are still in one set. It catches the A–C–X bridge: A–X is doubted,
+>   and a sparse chart C, linked to both, trips no veto. A clinician unlinks A–X and the record stays
+>   one through C. db/054 used to look only at `state = 'link'` rows, so it then found no doubt, and
+>   every X line became signable from A just after a human attested that A and X are different
+>   people. Pinned by `doubted_link_withholds.rs`'s bridge test.
+> - **"Either judgement lifts this hold" was dropped.** It was false in reachable cases: after an
+>   unlink a shared line reaches outside the set and stays withheld with the separation remedy;
+>   confirming one of two doubted links leaves the hold; and the bridge case above. The remedy now
+>   says the hold lifts once no link is in doubt, and to judge the links before separating threads.
+>   It names `--attester-key`, `--from` (an unlink where neither chart is held) and that a link
+>   needs both charts held. A row says "the node cannot yet vouch that it is this patient's" and
+>   "until the record's links are no longer in doubt".
+> - **The CLI prints the long remedy once, below the list** (`list_text::doubted_link_note`, decided
+>   by the status-aware `withheld_rows`), not under every row. The outside-set row lines stay
+>   byte-identical to before (pinned by a golden).
+> - **#718:** db/054's SECURITY DEFINER no longer has a reason since #701; it is kept, and the
+>   decision is filed. **#719:** the review residuals. #716 and #335 gained comments (the window
+>   cannot show which link is in doubt; the doubt state can change between display and sign-off).
+
 ### R2 — link and unlink from an open chart (#681) + the precedence floor
 
 - **Gesture**: header control **"Same person as…"** → the front door's search (only a chart some
