@@ -550,6 +550,92 @@ runbook section 9 (a human act).
 - The step-3 prompt signs every member id of every shown row, in row order (D6). A row still takes
   one of the five `PROMPT_CAP` places.
 
+#### R3 — designed 2026-10-03
+
+The maintainer decided two questions in the brainstorm:
+- **Each member line is its own open target.** The opened chart matters: in a doubted set only its own
+  lines can be signed (R1b), and a future new-content write goes to it (ADR-0076 decision 2). So the
+  clerk picks the folder, usually the line matching what they typed, and the window never picks one
+  for them. The combined set reads either way.
+- **The browse list collapses too, not only the prompt.** There is one result shape everywhere (CLI,
+  browse, prompt), so a person looks the same at step 1 and at step 3.
+
+**The result shape** (`cairn-patient-search`):
+- `CandidateList.candidates: Vec<Candidate>` becomes `people: Vec<PersonRow>`. A `PersonRow` holds its
+  member `Candidate`s and is never empty: it is built only by a constructor, and its fields are private.
+  Within a row, the members the search matched come first, in rank order. Linked members the search
+  did not match follow, oldest chart first (UUIDv7 order).
+- `CandidateList::displayed_charts()` is the ONE flattening: every member of every row, in row order.
+  `SearchAttestation::from_displayed` uses it, so the signed `displayed` list is the screen by
+  construction (D6). db/045 and the wire are unchanged.
+- `TrustState` gains `Unknown` (serialized `"unknown"`), only for a chart whose registration this node
+  does not hold.
+- A row shows each member's **age**, as today (`Candidate` has no DOB field). The chart header R1 built
+  shows each member's DOB once a chart is open.
+
+**The node** (`cairn-node`, `patient/search.rs` + a new `patient/search_person.rs`; `search.rs` is
+already 488 lines):
+- The matched charts are ranked exactly as today (the seven ADR-0075 keys, unchanged).
+- Each matched chart's link component is read in ONE query (`unnest($1)` × `cairn_person_charts`), not
+  in one call per chart.
+- A **pure** `group_by_person(ranked, components)` builds the rows. A row takes the position of its first
+  (best-ranked) member, and that is all "ranked by its best member" needs. A linked chart the search
+  did not match is a member of the row: it is part of who this person is, and it is literally on screen.
+- The display reads run over every member id, matched or not.
+- **A chart not held here** (no `patient_chart` row — `person::read_held`'s test) reads trust `unknown`
+  through R1's `person::trust_of`. If it has no name it reads "(registration not yet received here)".
+  It does **not** set the signed `incomplete` flag, because the SEARCH was not partial.
+  - This also fixes a latent defect for matched charts: the search reported `confirmed` for any chart
+    with no `chart_trust` row, held or not. R1 fixed that for the header; the search never got the fix.
+  - A HELD chart with no readable name keeps today's rule: "(name unavailable)" plus `incomplete`.
+  - "Not held" means exactly a chart whose registration has not synced here. Since #345 every
+    registration creates the `patient_chart` row, and db/005 step 8b makes a locally written chart
+    begin with its registration. `search.rs`'s comment "no `patient_chart` row is normal" predates
+    #345 and is corrected in this slice.
+- A failed component read fails the search loudly, as every read failure does. It never falls back to
+  per-chart rows, which would put one person in two prompt places with nothing said.
+
+**Bounding, signing and wording** (`cairn-gui-funnel`, `cairn-gui-tauri`'s `funnel/view.rs`):
+- `bound_for_prompt` takes the first `PROMPT_CAP` (five) ROWS whole, so a person is never split across
+  the cap. `withheld` counts people not shown, and is still never signed (ADR-0075).
+- `displayed` therefore names every member of the rows shown. `displayed_count`, and the legibility
+  twin's "N near-match(es) displayed", count charts (ADR-0076 decision 6).
+- The summaries count people, and name charts when the two differ: browse says "3 existing patients
+  found (4 charts)"; the prompt says "the 5 closest of M", with M in people. A summary over rows that
+  are all single charts stays **byte-identical to today**, pinned by a golden.
+
+**The window and the CLI:**
+- `BrowseView`/`PromptView` carry `people: Vec<PersonRowView>`. Each row is one `<li>` holding a nested
+  list of member lines, and every member line has its own open button, naming the member as today's
+  buttons do ("Open chart: Mary SMYTHE — 76 y — identity confirmed").
+- A linked row is labelled "One person — 2 linked charts", so a reader, and a screen reader, hears why
+  a name that was not typed appears.
+- `AppState::shown` records every member of every row on screen. Only a chart on screen can be opened,
+  as now, and opening any member opens the combined set (R1's read).
+- The CLI (`patient-search`, `patient-register`) prints a linked member indented under its row
+  ("↳ linked: …"). `patient-register` attests the flattened list it printed, as today.
+- The webview-fields guards are updated for the new fields.
+
+**The mock** has no link concept, so every mock row is a person of one, and `--mock` cannot show a
+linked row. A mock linked pair is filed as an issue rather than built as a second, fake link model; the
+live walk on a linked pair is already an owed human act.
+
+**Tests (TDD):**
+- Pure: `group_by_person` (a row is placed by its best member; unmatched members are appended oldest
+  first; the output is deterministic); the cap never splits a row; the flattening is the members in
+  row order; the golden summaries.
+- DB: a linked pair is one row; a linked chart the search did not match is shown and signed; a member
+  not held here reads `unknown` and does not set `incomplete`; a never-linked search returns exactly
+  what it returned before (golden).
+- Window: a register walk over a linked row signs both ids; a member the search did not match can be
+  opened, and a chart on no row cannot.
+
+**§1.2.** The paper counterpart is the card index, where clipped folders sit in one slot. At the desk:
+paper 1 (see the card) → forced 1 → target 1. Grouping removes reading effort (one slot per person); it
+adds no act. Measurement is the runbook's front-door section (section 8), a human act already owed.
+
+**Out of scope:** a demographic winner across members; R4/R5; links in the mock.
+
 ### R4 — the commit-time worker (#679)
 
 - **Targeted blocking**: `candidate_pairs_for(conn, patient)` runs the six `_GROUPS_SQL` passes (and

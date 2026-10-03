@@ -651,8 +651,8 @@ is easy"* rested on four missing things; ADR-0076 answers all four, R1 builds th
   · [#695](https://github.com/cairn-ehr/cairn-ehr/issues/695) · [#696](https://github.com/cairn-ehr/cairn-ehr/issues/696)
   · [#697](https://github.com/cairn-ehr/cairn-ehr/issues/697) (decided (b); built in R1b). Commented on
   [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2 (entries below, all merged), **R1b** (#697 (b) + #701, PR #717 — entry below), then
-  **R3** (the front door collapses by person), **R4** (per-node matcher worker, #679 — proposes, never links),
+- **Next:** R2a, R2b-1, R2b-2, **R1b** (#697 (b) + #701, PR #717) — entries below, all merged. Then
+  **R3** (the front door collapses by person — IN DESIGN 2026-10-03, branch `feat/r3-front-door-by-person`), **R4** (per-node matcher worker, #679 — proposes, never links),
   **R5** (banner + worklist, #680). Plan each from the design page's section.
 - **§1.2:** paper counterpart two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing
   off a combined list 1 → 1 → 1. `M ≤ N`. Budget: opening a linked chart ≤ the single-chart open, measured by the

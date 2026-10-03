@@ -3,11 +3,9 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R1b — A DOUBTED SET WITHHOLDS EVERY LINE NOT ON THE OPENED CHART (#697 (b), #701) — BUILT ON PR
-> [#717](https://github.com/cairn-ehr/cairn-ehr/pull/717) (2026-10-03): per-task reviews, an opus final review, one
-> fix wave and its residual round, a five-reviewer PR review and its fix round, every local gate. AWAITING THE
-> MAINTAINER'S MERGE.** R2b-2 (PR #711), R2b-1
-> (PR #707), R2a (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
+> **⇒ R3 — THE FRONT DOOR COLLAPSES BY PERSON — IN DESIGN (2026-10-03, branch `feat/r3-front-door-by-person`).**
+> **R1b (PR [#717](https://github.com/cairn-ehr/cairn-ehr/pull/717)) is MERGED**, as are R2b-2 (PR #711), R2b-1
+> (PR #707), R2a (PR #698) and R1 (PR #688). Repair path #679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R1b section + its as-built note),
 > ADR-0076, ADR-0077, spec **v0.79**; plan `docs/superpowers/plans/2026-10-03-repair-path-r1b-doubted-link-withholds.md`.
 > Built: `WrongChartReasons` / `WithheldLine` / `DOUBTED_LINK_INSTRUCTION` (`cairn-medication-view`);
@@ -459,7 +457,7 @@ through one — include it next.
 ---
 
 **Session date:** 2026-10-03 (**R1b — a doubted set withholds every line not on the opened chart**, #697 (b) + #701,
-PR **[#717](https://github.com/cairn-ehr/cairn-ehr/pull/717)**, awaiting merge) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
+PR **[#717](https://github.com/cairn-ehr/cairn-ehr/pull/717)**, merged) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`, generation 55; #697 decided (b)) and R1 (ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075,
 PR #678) · 09-23 funnel 2c (PR #674) · 09-22 funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier:
 ROADMAP. · **Spec:** **v0.79** (newest
