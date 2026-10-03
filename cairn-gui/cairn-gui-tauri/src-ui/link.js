@@ -101,6 +101,17 @@ function clearComparison() {
   setMessage(el("link-status"), "");
 }
 
+/** One member chart as a Compare button — every member of a linked row is its own target. */
+function compareItem(c) {
+  const li = document.createElement("li");
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = "Compare: " + c.name + " — " + c.age + " — identity " + c.trust;
+  b.addEventListener("click", () => compare(c.patient_id));
+  li.append(b);
+  return li;
+}
+
 /**
  * Search other charts for a possible match, as the clerk types (debounced below, like the front
  * door's search). `link_search` leaves this record's own charts out and words the summary over
@@ -123,15 +134,7 @@ async function runLinkSearch() {
     const view = await invoke("link_search", { form, charts: renderedCharts || [] });
     if (view.revision !== linkRevision) return; // a newer search is on its way
     list.replaceChildren(
-      ...view.candidates.map((c) => {
-        const li = document.createElement("li");
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = "Compare: " + c.name + " — " + c.age + " — identity " + c.trust;
-        b.addEventListener("click", () => compare(c.patient_id));
-        li.append(b);
-        return li;
-      }),
+      ...view.people.map((row) => personItem(row, compareItem)),
     );
     setMessage(el("link-search-status"), view.summary);
   } catch (failure) {

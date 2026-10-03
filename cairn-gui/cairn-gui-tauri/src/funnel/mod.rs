@@ -24,5 +24,6 @@
 //! session) are one layer down in `cairn-gui-funnel`; nothing here re-derives them.
 pub mod backend;
 pub mod commands;
+pub mod rows;
 pub mod view;
 pub mod window;

@@ -17,6 +17,7 @@
 //! every time, so a retry button would be a precise untruth — the clerk's way forward is to
 //! change what was typed. A node-state verdict (`NotProvisioned`) is pointless to retry until
 //! an operator has acted, and then succeeds.
+use crate::funnel::rows::people_phrase;
 use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
     MissingPart, PromptCounts, Restored, TokenError, TriggerState, MIN_NAME_TOKENS,
@@ -186,7 +187,7 @@ pub fn waiting_sentence(state: &TriggerState) -> Option<String> {
 /// new chart, so a search that did not finish must never say it (principle 4) — even when it
 /// showed nobody, which is exactly when the list, and anything nested in it, is hidden.
 ///
-/// `withheld` is how many further candidates matched but are not shown (ADR-0075, #671): said
+/// `withheld` is how many further PEOPLE matched but are not shown (ADR-0075, #671): said
 /// as "the N closest of M", a count and a way to narrow — never as "not complete". That word
 /// is reserved for `incomplete`, because it changes whether "no match" can be trusted, and
 /// being cut to five does not. The prompt is a nudge; being cut is its normal state.
@@ -223,13 +224,13 @@ pub fn prompt_summary(counts: &PromptCounts) -> String {
             "{} might be this person — the {n} closest of {} matches, \
              listed below{partial}; type more to narrow. Pressing Register now means none of \
              these.",
-            who(n, shown_charts),
+            people_phrase(n, shown_charts),
             counts.total()
         ),
         n => format!(
             "{} might be this person — listed below{partial}. Pressing \
              Register now means none of these.",
-            who(n, shown_charts)
+            people_phrase(n, shown_charts)
         ),
     }
 }
@@ -253,14 +254,6 @@ pub fn browse_summary(people: usize, charts: usize, incomplete: bool) -> String 
         (n, true) => {
             format!("{n} existing patient(s) found ({charts} charts) — the list is not complete.")
         }
-    }
-}
-
-/// "{n} existing patient(s)", naming the charts only when they outnumber the people.
-fn who(people: usize, charts: usize) -> String {
-    match charts == people {
-        true => format!("{people} existing patient(s)"),
-        false => format!("{people} existing patient(s) ({charts} charts)"),
     }
 }
 
