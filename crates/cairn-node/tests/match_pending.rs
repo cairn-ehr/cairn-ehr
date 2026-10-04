@@ -21,20 +21,33 @@ async fn fresh_db() -> Option<(Client, Client)> {
 }
 
 async fn pending(c: &Client, p: Uuid) -> bool {
-    c.query_one("SELECT cairn_chart_check_pending($1::text::uuid)", &[&p.to_string()])
-        .await
-        .unwrap()
-        .get::<_, bool>(0)
+    c.query_one(
+        "SELECT cairn_chart_check_pending($1::text::uuid)",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap()
+    .get::<_, bool>(0)
 }
 
 async fn notices(c: &Client, p: Uuid) -> i64 {
-    c.query_one("SELECT count(*) FROM match_pending WHERE patient_id = $1::text::uuid", &[&p.to_string()])
-        .await
-        .unwrap()
-        .get(0)
+    c.query_one(
+        "SELECT count(*) FROM match_pending WHERE patient_id = $1::text::uuid",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
 }
 
-async fn assert_name(c: &Client, sk: &cairn_event::SigningKey, kid: &str, p: Uuid, name: &str, wall: i64) {
+async fn assert_name(
+    c: &Client,
+    sk: &cairn_event::SigningKey,
+    kid: &str,
+    p: Uuid,
+    name: &str,
+    wall: i64,
+) {
     submit_signed(
         c,
         sk,
@@ -60,7 +73,10 @@ async fn a_registration_and_its_name_leave_notices() {
     };
     let (sk, kid) = setup(&c, &["patient_name", "match_pending"]).await;
     let p = chart_named(&c, &sk, &kid, 10, "Mary Smith").await;
-    assert!(notices(&c, p).await >= 2, "patient_chart insert + patient_name insert");
+    assert!(
+        notices(&c, p).await >= 2,
+        "patient_chart insert + patient_name insert"
+    );
 }
 
 #[tokio::test]
@@ -107,7 +123,13 @@ async fn every_input_projection_carries_the_hook_with_the_right_events_and_colum
     let got: Vec<(String, String, bool)> = rows
         .iter()
         // tgargs is NUL-terminated per argument; escape-encoding renders NUL as "\000".
-        .map(|r| (r.get(0), r.get::<_, String>(1).replace("\\000", ""), r.get(2)))
+        .map(|r| {
+            (
+                r.get(0),
+                r.get::<_, String>(1).replace("\\000", ""),
+                r.get(2),
+            )
+        })
         .collect();
     let want: Vec<(String, String, bool)> = expected
         .iter()
@@ -132,7 +154,11 @@ async fn a_null_id_queues_nothing_and_raises_nothing() {
     )
     .await
     .expect("a NULL id must not raise");
-    let n: i64 = c.query_one("SELECT count(*) FROM match_pending", &[]).await.unwrap().get(0);
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM match_pending", &[])
+        .await
+        .unwrap()
+        .get(0);
     assert_eq!(n, 0);
 }
 
@@ -148,7 +174,10 @@ async fn a_clinical_write_never_waits_on_a_worker_deleting_that_patients_notices
     let worker = db::connect_and_load_schema(&cs().unwrap()).await.unwrap();
     worker.batch_execute("BEGIN").await.unwrap();
     worker
-        .execute("DELETE FROM match_pending WHERE patient_id = $1::text::uuid", &[&p.to_string()])
+        .execute(
+            "DELETE FROM match_pending WHERE patient_id = $1::text::uuid",
+            &[&p.to_string()],
+        )
         .await
         .unwrap();
     // A wait would hit lock_timeout and fail loudly — never a sleep.
@@ -156,7 +185,11 @@ async fn a_clinical_write_never_waits_on_a_worker_deleting_that_patients_notices
     assert_name(&c, &sk, &kid, p, "Mary Smyth", 20).await;
     c.batch_execute("RESET lock_timeout").await.unwrap();
     worker.batch_execute("COMMIT").await.unwrap();
-    assert_eq!(notices(&c, p).await, 1, "the notice written mid-delete survives it");
+    assert_eq!(
+        notices(&c, p).await,
+        1,
+        "the notice written mid-delete survives it"
+    );
 }
 
 #[test]
@@ -178,7 +211,10 @@ async fn a_chart_is_pending_until_the_worker_has_run_and_while_it_has_notices() 
         return;
     };
     let p = Uuid::now_v7();
-    assert!(pending(&c, p).await, "no worker has ever run: nothing is checked");
+    assert!(
+        pending(&c, p).await,
+        "no worker has ever run: nothing is checked"
+    );
     c.execute(
         "INSERT INTO match_worker_state (matcher_version, last_drained_at) VALUES ('v', now())",
         &[],
@@ -201,12 +237,17 @@ async fn the_status_reports_waiting_charts_and_the_newest_age() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let r = c.query_one("SELECT * FROM cairn_duplicate_check_status()", &[]).await.unwrap();
+    let r = c
+        .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
+        .await
+        .unwrap();
     assert_eq!(r.get::<_, i64>("charts_waiting"), 0);
     assert_eq!(r.get::<_, Option<i64>>("newest_age_s"), None);
     assert!(!r.get::<_, bool>("worker_seen"));
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
-    c.batch_execute("INSERT INTO match_worker_state (matcher_version) VALUES ('v')").await.unwrap();
+    c.batch_execute("INSERT INTO match_worker_state (matcher_version) VALUES ('v')")
+        .await
+        .unwrap();
     c.execute(
         "INSERT INTO match_pending (patient_id, reason, queued_at) VALUES \
          ($1::text::uuid, 'change', now() - interval '10 minutes'), ($1::text::uuid, 'change', now() - interval '9 minutes'), \
@@ -215,10 +256,16 @@ async fn the_status_reports_waiting_charts_and_the_newest_age() {
     )
     .await
     .unwrap();
-    let r = c.query_one("SELECT * FROM cairn_duplicate_check_status()", &[]).await.unwrap();
+    let r = c
+        .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
+        .await
+        .unwrap();
     assert_eq!(r.get::<_, i64>("charts_waiting"), 2);
     let age = r.get::<_, Option<i64>>("newest_age_s").unwrap();
-    assert!((59..=70).contains(&age), "the NEWEST notice is a minute old, got {age}");
+    assert!(
+        (59..=70).contains(&age),
+        "the NEWEST notice is a minute old, got {age}"
+    );
     assert!(r.get::<_, bool>("config_recheck"));
     assert!(r.get::<_, bool>("worker_seen"));
     assert_eq!(r.get::<_, Option<String>>("last_drained_hhmm"), None);
@@ -232,19 +279,27 @@ async fn the_worker_role_can_do_exactly_its_job() {
     };
     let p = Uuid::now_v7();
     c.batch_execute("SET ROLE cairn_agent").await.unwrap();
-    c.execute("INSERT INTO match_pending (patient_id, reason) VALUES ($1::text::uuid, 'config')", &[&p.to_string()])
-        .await
-        .expect("cairn_agent queues a config re-check");
-    c.execute("DELETE FROM match_pending WHERE patient_id = $1::text::uuid", &[&p.to_string()])
-        .await
-        .expect("cairn_agent clears notices");
+    c.execute(
+        "INSERT INTO match_pending (patient_id, reason) VALUES ($1::text::uuid, 'config')",
+        &[&p.to_string()],
+    )
+    .await
+    .expect("cairn_agent queues a config re-check");
+    c.execute(
+        "DELETE FROM match_pending WHERE patient_id = $1::text::uuid",
+        &[&p.to_string()],
+    )
+    .await
+    .expect("cairn_agent clears notices");
     c.batch_execute(
         "INSERT INTO match_worker_state (matcher_version) VALUES ('v') \
          ON CONFLICT (singleton) DO UPDATE SET last_drained_at = clock_timestamp()",
     )
     .await
     .expect("cairn_agent stamps the worker state");
-    c.batch_execute("RESET ROLE; SET ROLE cairn_node").await.unwrap();
+    c.batch_execute("RESET ROLE; SET ROLE cairn_node")
+        .await
+        .unwrap();
     c.query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
         .await
         .expect("the node role reads the status");
