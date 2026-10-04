@@ -927,20 +927,26 @@ set for deciding to continue, and the per-chart figure had already failed the st
 **What the numbers say, and the finding.** A fivefold larger population made the per-chart check
 about nineteen times slower (453 ms to 8.8 s), while the sweep grew about 3.5 times. The per-chart
 cost is therefore superlinear, and the budget set in the plan (p95 at most 2 s at 10 000 charts) is
-missed by a factor of nearly five; the 5 s stop line is also exceeded. The likely cause is that
-`_TARGETED_GROUPS_SQL` wraps the full `_GROUPS_SQL` population-wide aggregation in a subquery and
-filters for the chart afterwards, so each chart pays for grouping the whole population, not for its
-own blocks. The fix is to anchor the blocking SQL on the chart so only its own blocks are built (a new
-issue; #637 is about patient search, not this). The drift canary
-shows the targeted pairs are *correct*; the defect is cost, not result.
+missed by a factor of nearly five; the 5 s stop line is also exceeded. A follow-up diagnostic (the
+same seeded population, rolled back) located the cost: at 10 000 records the blocking SQL alone takes
+~7.1–7.3 s per chart whatever the cap, while assessing the chart's pairs takes 0.1–0.7 s (~0.9 ms a
+pair). `_TARGETED_GROUPS_SQL` wraps the full `_GROUPS_SQL` population-wide aggregation in a subquery and
+filters for the chart afterwards, so each chart pays for grouping the whole population, not for its own
+blocks. The fix, filed as a follow-up issue (#637 is about patient search, not this), is to anchor the
+blocking on the chart's own keys or to materialise a key projection; the drift canary (targeted pairs ==
+the sweep's pairs for the chart) makes either change safe. The canary also shows the targeted pairs are
+*correct* today; the defect is cost, not result.
 
-**The constants.** Neither default was changed, because the figures do not justify a number:
-- `Settings.bulk_threshold` stays 500. The break-even falls from ~83 to ~15 charts as the population
-  grows, which is what a superlinear per-chart check looks like; fitting a threshold to it would
-  encode the defect. Once per-chart cost is made proportional to the chart's own blocks, the
-  break-even should be re-measured (and on the Pi, a filed follow-on).
+**The constants (ruling R11).**
+- `Settings.bulk_threshold` is set to **30** (it was 500, a guess). The break-even falls from ~83
+  charts at 2 000 records to ~15 at 10 000, because the per-chart check is superlinear. 30 sits between
+  them, so the worst wrong choice stays near 2× either way: at 2 000 records 31 charts are swept
+  (37.6 s) where checking each would take ~14 s (~2.7×); at 10 000, 30 charts are checked singly
+  (~265 s) where one sweep takes ~130 s (~2×). The old 500 would have cost ~30× at 10 000 (500 × 8.8 s
+  ≈ 73 min against ~2 min). Operators override it with `--bulk-threshold`; re-measure once the blocking
+  is anchored on the chart (and on the Pi, a filed follow-on).
 - `targeted.DEFAULT_TARGETED_CAP` stays 1000. The cap bounds how many pairs a block contributes, and
-  that is not where the time goes, so lowering it cannot bring p95 under budget.
+  the diagnostic shows that is not where the time goes, so lowering it cannot bring p95 under budget.
 
 Each constant carries a comment citing these figures.
 

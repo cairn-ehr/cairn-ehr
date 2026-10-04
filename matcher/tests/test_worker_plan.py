@@ -33,3 +33,13 @@ def test_a_throttle_is_due_at_once_then_at_most_once_per_interval():
     assert t.due(129.9) is False
     assert t.due(130.0) is True        # a full interval since the last due call
     assert t.due(131.0) is False       # the interval restarts from the last due call
+
+
+def test_the_default_bulk_threshold_is_set_from_the_measured_break_even():
+    # Ruling R11: break-even was ~83 charts at 2 000 records and ~15 at 10 000 (Task 7, M3 Max);
+    # 30 keeps the worst case within ~2x either way across that range.
+    from cairn_matcher.pipeline.worker import Settings
+
+    assert Settings().bulk_threshold == 30
+    assert choose_mode(30, Settings().bulk_threshold) is Mode.PER_CHART
+    assert choose_mode(31, Settings().bulk_threshold) is Mode.SWEEP

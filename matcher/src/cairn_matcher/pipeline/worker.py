@@ -35,13 +35,17 @@ class Settings:
 
     max_block_size: int = targeted.DEFAULT_TARGETED_CAP
     sweep_block_size: int = 100        # the sweep's own all-pairs cap, unchanged
-    # Charts waiting above which one sweep beats checking each. KEPT at 500 (a guess) after the
-    # Task 7 measurement (2026-10-04, Apple M3 Max 128 GB, PostgreSQL 18.1): break-even was ~83
-    # charts at 2 000 records (sweep 37.6 s / per-chart p50 453 ms) and ~15 at 10 000 (sweep
-    # 129.9 s / p50 8 829 ms). The break-even FALLS as the population grows because the per-chart
-    # check is superlinear; a sound value depends on fixing that first (per-chart p95 at 10 000
-    # exceeded the 5 s stop line), so no number was fitted to a defective curve.
-    bulk_threshold: int = 500
+    # Charts waiting above which one sweep beats checking each (ruling R11). Measured 2026-10-04
+    # (Apple M3 Max 128 GB, PostgreSQL 18.1): break-even ~83 charts at 2 000 records (sweep 37.6 s
+    # / per-chart p50 453 ms) and ~15 at 10 000 (sweep 129.9 s / p50 8 829 ms). It falls as the
+    # population grows because the per-chart check is superlinear (its blocking SQL groups the
+    # whole population for every chart; a follow-up issue anchors it on the chart). 30 sits
+    # between the two: the worst wrong choice costs ~2.7x at 2 000 (31 charts swept, 37.6 s,
+    # instead of ~14 s per chart) and ~2x at 10 000 (30 charts checked singly, ~265 s, instead
+    # of one 130 s sweep), where the old 500 cost ~30x there (500 x 8.8 s = 73 min vs ~2 min).
+    # Operators override with `cairn-matcher watch --bulk-threshold`; re-measure once the
+    # per-chart blocking is fixed.
+    bulk_threshold: int = 30
     batch: int = 50
     retry_after_s: float = 300.0
     poll_s: float = 60.0
