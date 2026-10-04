@@ -2367,6 +2367,16 @@ enum Cmd {
         rebuild: bool,
     },
 
+    /// Report the commit-time duplicate check (repair path R4): whether the matcher worker is
+    /// current, catching up, stalled, or has never run — and, with --patient, whether that chart
+    /// has been checked since its identity details last changed. The worker itself is
+    /// `cairn-matcher watch` (matcher/); this command only reads.
+    DuplicateCheck {
+        /// Also report this chart's own state.
+        #[arg(long)]
+        patient: Option<Uuid>,
+    },
+
     /// List events this node admitted UNINTERPRETED (ADR-0056 decision 1 / #265):
     /// stored verbatim and re-propagated, but holding NO power because this node
     /// has no code classifying their type. A row carrying a reason has since been
@@ -5523,6 +5533,18 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("shredded {event}; tombstone event {shred_event_id}");
+        }
+        Cmd::DuplicateCheck { patient } => {
+            use cairn_node::duplicate_check as dc;
+            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            let snap = dc::read_snapshot(&db).await?;
+            println!(
+                "{}",
+                dc::status_line(&dc::classify(&snap, dc::STALLED_AFTER_SECS))
+            );
+            if let Some(p) = patient {
+                println!("{}", dc::chart_line(dc::chart_check_pending(&db, p).await?));
+            }
         }
         Cmd::Reproject { prefix, rebuild } => {
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
