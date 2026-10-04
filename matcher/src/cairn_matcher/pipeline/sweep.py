@@ -97,13 +97,15 @@ def sweep(
     from cairn_matcher.pipeline import db
 
     pairs, skipped_raw = db.generate_candidate_pairs(conn, max_block_size=max_block_size)
+    if skip_pairs:
+        # R4 bulk mode: a pair already judged (one link component, or any patient_link row) is
+        # never scored again.
+        pairs = [p for p in pairs if p not in skip_pairs]
     # Pre-load the §5.5(a) known-aliases for the whole candidate-patient set in ONE query,
     # still inside the generate read snapshot. This replaces two per-pair alias SELECTs in
     # propose() (which would re-fetch a chart's aliases once per pair it appears in, and be
     # two empty SELECTs per pair in the common no-repudiation case) with a single scoped,
     # PK-indexed read; propose() then reads aliases from this map, not the DB.
-    if skip_pairs:
-        pairs = [p for p in pairs if p not in skip_pairs]
     candidate_patients = {pid for pair in pairs for pid in pair}
     aliases = db.load_aliases_for(conn, candidate_patients)
     # Pre-load the §5.4 trust states for the candidate set in the same ONE-query style;

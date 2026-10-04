@@ -50,10 +50,20 @@ def test_a_near_duplicate_becomes_a_proposal_and_the_notices_are_cleared(pg_conn
 
 
 def test_a_strong_pair_is_proposed_and_never_linked(pg_conn):
-    _near_duplicates(pg_conn)
+    # The design's test list: "an auto-band pair leaves patient_link empty". The pair must
+    # really reach the AUTO_CANDIDATE band, or the test proves nothing about the strongest case:
+    # the near-duplicates above only reach REVIEW (Smith/Smyth disagree, no sex on file), so
+    # these two agree on name, DOB, sex and identifier (runner.assess bands them auto_candidate).
+    for p in (A, B):
+        seed_patient(pg_conn, p, dob=("1950-01-07", 60, "day"), sex=("female", 60),
+                     names=[("Mary Smith", 60)], identifiers=[("mrn:a", "77", "77")])
+    events_before = _count(pg_conn, "SELECT count(*) FROM event_log")
     check_chart(pg_conn, B, Settings())
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 1
+    assert _count(pg_conn, "SELECT band FROM match_proposal") == "auto_candidate"
     assert _count(pg_conn, "SELECT count(*) FROM patient_link") == 0
+    # ... and it authored nothing: no event (a link is an event), so nothing can sync onward.
+    assert _count(pg_conn, "SELECT count(*) FROM event_log") == events_before
 
 
 def test_a_chart_id_spelled_differently_is_checked_in_full(pg_conn):
