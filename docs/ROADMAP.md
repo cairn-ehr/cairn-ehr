@@ -506,7 +506,7 @@ section R1b + its as-built note. db/054's `cairn_chart_set_has_doubted_link` bod
 
 ### 2026-10-03 — repair path R3: the front door collapses by person (ADR-0076 decision 6; PR #721)
 
-Built on PR [#721](https://github.com/cairn-ehr/cairn-ehr/pull/721), awaiting merge. Plan
+Built and merged on PR [#721](https://github.com/cairn-ehr/cairn-ehr/pull/721). Plan
 `docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`; design page section R3 + its as-built note
 (and the SDD ledger's rulings R1–R11). No SQL object, no wire change; `SCHEMA_GENERATION` stays **55**. Maintainer's
 decisions in the brainstorm: each member line is its own open target; browse collapses too, not only the prompt.

@@ -6,7 +6,7 @@
 > **⇒ R3 — THE FRONT DOOR COLLAPSES BY PERSON (ADR-0076 decision 6) — BUILT ON PR
 > [#721](https://github.com/cairn-ehr/cairn-ehr/pull/721) (2026-10-03): seven tasks with per-task reviews, an opus
 > final review, one fix wave (re-reviewed clean), and every local gate over the final code (the DB sweep: 2498 passed,
-> 0 failed, none skipped). AWAITING THE MAINTAINER'S MERGE.** R1b (PR #717), R2b-2 (PR #711), R2b-1 (PR #707), R2a
+> 0 failed, none skipped). MERGED 2026-10-03.** R1b (PR #717), R2b-2 (PR #711), R2b-1 (PR #707), R2a
 > (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R3 section + its as-built note),
 > ADR-0076, ADR-0077, spec **v0.79**; plan `docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`.
@@ -382,7 +382,7 @@ through one — include it next.
 ---
 
 **Session date:** 2026-10-03 (**R3 — the front door collapses by person**, ADR-0076 decision 6, PR
-**[#721](https://github.com/cairn-ehr/cairn-ehr/pull/721)**, awaiting merge; earlier the same day R1b, PR #717, merged) ·
+**[#721](https://github.com/cairn-ehr/cairn-ehr/pull/721)**, merged; earlier the same day R1b, PR #717, merged) ·
 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`, generation 55) and R1
 (ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · 09-22
 funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
