@@ -148,3 +148,35 @@ async fn a_stopped_worker_on_a_busy_node_reads_stalled() {
         CheckState::Stalled { waiting: 2, .. }
     ));
 }
+
+/// `duplicate-check` is meant for cron (the runbook suggests it), so it must NOT replay the schema:
+/// the replay re-runs every db/*.sql, including the every-connect `ALTER TABLE … IF NOT EXISTS`
+/// statements that take ACCESS EXCLUSIVE locks (#726) — once a minute, during a drain, that is a
+/// stall. It connects plainly instead, so on a node whose schema lacks db/056 it fails loudly.
+/// Proven here by removing the status function: a replaying command would silently recreate it
+/// and succeed. The next schema load (the restore at the end, or any later test) puts it back.
+#[tokio::test]
+async fn the_cli_reads_without_replaying_the_schema() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute("DROP FUNCTION cairn_duplicate_check_status()")
+        .await
+        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_cairn-node"))
+        .args(["--conn", &base, "duplicate-check"])
+        .output()
+        .unwrap();
+    // Restore before asserting, so a failure here cannot leave the database without it.
+    db::connect_and_load_schema(&base).await.unwrap();
+    assert!(
+        !out.status.success(),
+        "the command recreated db/056's status function, so it replayed the schema: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("duplicate-check status"), "{err}");
+}

@@ -2370,7 +2370,8 @@ enum Cmd {
     /// Report the commit-time duplicate check (repair path R4): whether the matcher worker is
     /// current, catching up, stalled, or has never run — and, with --patient, whether that chart
     /// has been checked since its identity details last changed. The worker itself is
-    /// `cairn-matcher watch` (matcher/); this command only reads.
+    /// `cairn-matcher watch` (matcher/); this command only reads. It does not load the schema, so
+    /// it fails loudly on a node without db/056.
     DuplicateCheck {
         /// Also report this chart's own state.
         #[arg(long)]
@@ -5536,7 +5537,11 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::DuplicateCheck { patient } => {
             use cairn_node::duplicate_check as dc;
-            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            // A plain connect, like `identity`: this command only reads, and the runbook runs it
+            // from cron. The schema replay would re-run every db/*.sql, including the
+            // every-connect `ALTER TABLE … IF NOT EXISTS` statements that take ACCESS EXCLUSIVE
+            // locks (#726) — once a minute, during a drain, a stall for every clinical write.
+            let db = cairn_node::db::connect(&cli.conn).await?;
             let snap = dc::read_snapshot(&db).await?;
             println!(
                 "{}",

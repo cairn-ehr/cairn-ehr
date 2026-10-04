@@ -73,7 +73,9 @@ cairn-node duplicate-check                      # node-wide status
 cairn-node duplicate-check --patient <uuid>     # also this one chart
 ```
 
-It only reads. The node-wide line is one of four states:
+It only reads. It does not load or upgrade the schema (that is the node's own start-up), so it is
+cheap to run from cron, and on a node whose schema predates db/056 it fails with an error rather than
+printing a status. The node-wide line is one of four states:
 
 | State | Line |
 |---|---|
