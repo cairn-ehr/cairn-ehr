@@ -111,6 +111,7 @@ nav:
       - Repository map: developers/repository-map.md
       - Codebase tour: developers/codebase-tour.md
       - Contributing workflow: developers/contributing-workflow.md
+      - Running the duplicate check: developers/running-the-duplicate-check.md
       - Glossary: developers/glossary.md
   - Architecture:
       - Vision & goals: spec/vision.md
