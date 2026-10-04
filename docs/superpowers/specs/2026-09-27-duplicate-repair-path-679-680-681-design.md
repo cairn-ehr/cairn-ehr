@@ -822,6 +822,11 @@ not survive contact with the code, and the maintainer decided three questions in
     oldest waiting notice or the worker's last completed work is within the threshold, R13/R17*): *"Duplicate check running — N charts
     waiting"*, plus *"(re-checking all charts after a matcher update)"* during a `config` re-check.
   - **Current** (nothing waiting): *"Duplicate check up to date — last ran HH:MM."*
+
+  *As built, this bullet is superseded: the node reads db/056's `cairn_duplicate_check_status()`
+  (`read_snapshot`), the quiet time is computed in the database (`quiet_age_s`), and the pure
+  `classify(snapshot, stalled_after_secs)` takes no `now`; two sentences and the last-ran time's
+  format changed too. See "R4 — as built" below.*
   
   The threshold is one named constant (5 min), soft policy.
 - `chart_check_pending(client, patient) -> bool` is the per-chart truth R5's banner will use. On a
@@ -867,7 +872,8 @@ monitoring exit code; the Pi measurement (filed).
 #### R4 — as built (2026-10-04)
 
 R4 was built to the design above, with six deviations that review forced. Each is recorded with its
-reason, because four of them correct sentences in the design itself.
+reason, because four of them correct sentences in the design itself. The last bullet records the final
+whole-branch review's corrections.
 
 - **R3 — delete the exact notices read, not `id <= N`.** The design's sentence "deletes only the
   notices it read: `WHERE patient_id = X AND id <= <highest id read for X>`" has the right intent and
@@ -933,6 +939,16 @@ reason, because four of them correct sentences in the design itself.
   notices stay), but the check stops making progress. Because only completed work stamps progress
   (R15) and quiet time runs from the oldest waiting notice (R17), the status line turns to "behind"
   once a change has waited five minutes with no completed work, however busy the node. Filed as an issue.
+
+- **Final review (2026-10-05) — what the node says is true in every reachable state.**
+  `cairn_chart_check_pending` reads "not yet run" for a chart this node does not hold (no
+  `patient_chart` row: a mistyped id, a linked member held elsewhere) and is a definer, since the
+  node role cannot read `patient_chart`. "Last ran" carries the date unless it was today. The
+  running line names a first run as well as a matcher update ("re-checking every chart: first run
+  or matcher update"), and the no-last-ran "behind" line says "it has not completed a check yet".
+  `cairn-node duplicate-check` connects without the schema replay, so running it from cron takes no
+  ACCESS EXCLUSIVE lock (#726). The worker re-reads the queue after every chart (`batch` 1), so a
+  fresh change is checked next, and it logs the oversized blocks a per-chart check skipped.
 
 **The measurement.** `matcher/src/cairn_matcher/eval/measure_check.py` seeds a generated population in
 one transaction (rolled back afterwards; the seeded tables are ANALYZEd inside it so the planner sees

@@ -26,6 +26,11 @@ The worker is a standalone process you run on the node (or on a host that can re
 is deliberately not started by `cairn-sync`, so the safety-critical daemon is never tied to the
 advisory tier.
 
+Run **exactly one worker per node**. A second one repeats the same checks, and two running different
+matcher versions re-queue every chart each time either of them restarts (each sees "the version
+changed"). A node that runs **no** worker keeps queuing: one notice per identity change, about five per
+chart after a rebuild or restore, and nothing ever clears them.
+
 ## The database role
 
 The worker connects as a role that holds `cairn_agent`. Grant it to the login role you use:
@@ -36,6 +41,12 @@ GRANT cairn_agent TO matcher_login;   -- the login role the worker connects as
 
 `cairn_agent` is the advisory-actor role (ADR-0030): db/056 grants it the queue and worker-state
 tables the worker writes, alongside the matcher's own proposal tables.
+
+If you give the login role a `statement_timeout`, make it longer than the worker's longest query.
+Finding one chart's candidates takes about 7 s at 10 000 charts on the development machine (more on a
+Raspberry Pi), and a sweep's candidate query does at least the same work. A timeout shorter than that
+fails every check: each chart is held and retried, nothing is ever cleared, and the status line turns
+to "behind".
 
 ## Running it: `cairn-matcher watch`
 
@@ -74,7 +85,8 @@ token, a date of birth, an identifier). The two modes cap it differently:
 
 A bigger block is skipped, never silently: the per-chart check logs one warning per chart naming each
 skipped block (its pass, value and size), and the sweep logs how many blocks it skipped. So after a
-first run, a restore, a rebuild or a matcher update (all swept), a chart whose look-alike block has
+first run, a restore, a rebuild or a matcher update (swept whenever more than `--bulk-threshold`
+charts wait), a chart whose look-alike block has
 101–1000 members is cleared with fewer comparisons than a per-chart check would have made. It still
 reads "up to date"; whether it should stay "not yet checked" is an open design question.
 
@@ -116,7 +128,8 @@ The time is the database's local time, and it carries the date (`last ran 2026-1
 that work was not today, so a worker that stopped days ago never reads as this morning.
 With `--patient` a second line says either
 `This chart: duplicate check not yet run since its identity details last changed.` or
-`This chart: duplicate check up to date.`
+`This chart: duplicate check up to date.` A chart this node does not hold (a mistyped id, or a linked
+chart held only on another node) always reads "not yet run": nothing here has checked it.
 
 ## What a restore or rebuild does
 
