@@ -48,8 +48,8 @@ async fn classify_seeded(
     classify(&read_snapshot(c).await.unwrap(), STALLED_AFTER_SECS)
 }
 
-/// Behind = a chart waits AND nothing has happened for longer than the threshold: no new notice
-/// (6 min ago) and no worker progress (7 min ago).
+/// Behind = a change has waited longer than the threshold (6 min) AND the worker completed no
+/// work in that time (last 7 min ago).
 #[tokio::test]
 async fn a_stale_newest_notice_reads_stalled() {
     let Some(base) = cs() else {
@@ -119,4 +119,32 @@ async fn the_cli_prints_the_status_and_the_charts_line() {
         text.contains("This chart: duplicate check not yet run"),
         "{text}"
     );
+}
+
+/// Ruling R17: quiet time runs from the OLDEST waiting notice. On a busy node a fresh identity
+/// change arrives every few minutes; judged by the newest notice, a fully stopped worker would
+/// read "running" forever. Here a change has waited 10 min, a fresh one arrived 10 s ago, and the
+/// worker last completed work 10 min ago: it is not checking anything — "behind".
+#[tokio::test]
+async fn a_stopped_worker_on_a_busy_node_reads_stalled() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute(
+        "TRUNCATE match_pending, match_worker_state; \
+         INSERT INTO match_worker_state (matcher_version, last_drained_at) \
+           VALUES ('v', now() - interval '10 minutes'); \
+         INSERT INTO match_pending (patient_id, reason, queued_at) VALUES \
+           (gen_random_uuid(), 'change', now() - interval '10 minutes'), \
+           (gen_random_uuid(), 'change', now() - interval '10 seconds');",
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        classify(&read_snapshot(&c).await.unwrap(), STALLED_AFTER_SECS),
+        CheckState::Stalled { waiting: 2, .. }
+    ));
 }

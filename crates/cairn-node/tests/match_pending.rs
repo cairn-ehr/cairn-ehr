@@ -232,9 +232,9 @@ async fn a_chart_is_pending_until_the_worker_has_run_and_while_it_has_notices() 
 }
 
 #[tokio::test]
-/// `quiet_age_s` is the seconds since the LATER of the newest waiting notice and the worker's last
-/// progress stamp (ruling R13). With no progress stamp it is the newest notice's age; a recent
-/// stamp lowers it; nothing waiting makes it NULL.
+/// `quiet_age_s` is the seconds since the oldest waiting notice or the worker's last completed
+/// work, whichever is later (rulings R13, R17). With no progress stamp it is the OLDEST notice's
+/// age; a recent stamp lowers it; nothing waiting makes it NULL.
 async fn the_status_reports_waiting_charts_and_the_quiet_age() {
     let Some((c, _g)) = fresh_db().await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
@@ -266,8 +266,8 @@ async fn the_status_reports_waiting_charts_and_the_quiet_age() {
     assert_eq!(r.get::<_, i64>("charts_waiting"), 2);
     let age = r.get::<_, Option<i64>>("quiet_age_s").unwrap();
     assert!(
-        (59..=70).contains(&age),
-        "no progress yet, so the quiet age is the NEWEST notice's (a minute), got {age}"
+        (599..=610).contains(&age),
+        "no progress yet, so the quiet age is the OLDEST notice's (10 minutes), got {age}"
     );
     assert!(r.get::<_, bool>("config_recheck"));
     assert!(r.get::<_, bool>("worker_seen"));

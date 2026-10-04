@@ -7,24 +7,28 @@
 //! - one chart: has it been checked since its identity evidence last changed?
 //!   ([`chart_check_pending`]).
 //!
-//! "Stalled" (the line reads "behind") means charts are waiting AND nothing has happened for longer
-//! than [`STALLED_AFTER_SECS`]: no new notice arrived and the worker stamped no progress. That
-//! "quiet time" is db/056's `quiet_age_s`. A restore or a `reproject --rebuild` queues every chart at
-//! once, so every notice soon looks old — but a healthy worker keeps stamping progress as it works
-//! through them, and the backlog reads as catching up, never as an alarm. (An earlier rule judged
-//! by the age of the newest notice alone and raised exactly that false alarm; ruling R13.) All
-//! wording lives here, in pure functions with a golden test; R5's window will reuse them.
+//! "Stalled" (the line reads "behind") means a change has been waiting AND the worker has completed
+//! no work for longer than [`STALLED_AFTER_SECS`]. That "quiet time" is db/056's `quiet_age_s`:
+//! seconds since the oldest waiting notice or the worker's last completed work, whichever is later.
+//! - A restore or a `reproject --rebuild` queues every chart at once, so every notice soon looks
+//!   old — but a healthy worker keeps stamping completed work as it goes, and the backlog reads as
+//!   catching up, never as an alarm (ruling R13: judging by notice age alone raised that alarm).
+//! - It runs from the OLDEST notice, not the newest (ruling R17): on a busy node a fresh identity
+//!   change arrives every few minutes, and judged by the newest notice a fully stopped worker would
+//!   read "running" forever.
+//!
+//! All wording lives here, in pure functions with a golden test; R5's window will reuse them.
 
 use anyhow::Context;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// How long the queue may be quiet — charts waiting, but no new notice and no worker progress —
-/// before the check counts as stalled. Soft policy. Only completed work stamps progress: a running
+/// How long the quiet time may run — since the oldest waiting notice or the worker's last completed
+/// work, whichever is later — before the check counts as stalled. Soft policy. A running
 /// worker stamps after every chart it checks (seconds apart) and about every 30 s while a sweep is
-/// scoring pairs. A sweep's blocking phase, and a single slow pair, stamp nothing. So five minutes
-/// of silence means the worker is stopped, crash-looping, or stuck in work that long — each worth
-/// the "behind" line.
+/// scoring pairs; nothing else counts. A sweep's blocking phase, and a single slow pair, stamp
+/// nothing. So a change left waiting through five minutes without completed work means the worker
+/// is stopped, crash-looping, or stuck in work that long — each worth the "behind" line.
 pub const STALLED_AFTER_SECS: i64 = 5 * 60;
 
 /// One read of db/056's `cairn_duplicate_check_status()`.
@@ -33,8 +37,9 @@ pub struct QueueSnapshot {
     /// How many distinct CHARTS have at least one waiting notice (a chart edited three times
     /// counts once).
     pub charts_waiting: i64,
-    /// Seconds since the later of the newest waiting notice and the worker's last progress stamp
-    /// (`last_drained_at`) — how long the queue has been quiet. None when nothing waits.
+    /// Seconds since the oldest waiting notice or the worker's last completed work
+    /// (`last_drained_at`), whichever is later — how long a change has gone unattended. None when
+    /// nothing waits.
     pub quiet_age_secs: Option<i64>,
     /// A 'config' re-check (every chart, after a matcher update or a first run) is in progress.
     pub config_recheck: bool,
@@ -51,14 +56,15 @@ pub enum CheckState {
     /// No worker has ever run on this node, so no chart can be called checked. `waiting` is the
     /// number of charts with a waiting notice.
     NeverRun { waiting: i64 },
-    /// Charts are waiting and the queue has been quiet (no new notice, no worker progress) for
-    /// longer than the threshold: the worker is stopped or stuck. `last_ran` is when it was last
-    /// active (HH:MM), None if it never made progress.
+    /// A change has waited longer than the threshold and the worker has completed no work in that
+    /// time: it is stopped or stuck. `last_ran` is when it was last active (HH:MM), None if it
+    /// never completed any work.
     Stalled {
         waiting: i64,
         last_ran: Option<String>,
     },
-    /// Charts are waiting and something happened recently: the worker is working through them.
+    /// Charts are waiting, and either the oldest change is recent or the worker completed work
+    /// recently: it is working through them.
     /// `config_recheck` is true while a whole-population re-check (a matcher update, or the
     /// first run) is among them.
     CatchingUp { waiting: i64, config_recheck: bool },

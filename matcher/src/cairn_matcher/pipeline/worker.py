@@ -135,15 +135,18 @@ def run_bulk(conn, settings: Settings, clock=time.monotonic) -> SweepResult:
     score keep their notices (`keep`), so they still read "not yet checked". The sweep keeps its
     own all-pairs cap: a block it skips is reported in the result, as it always has been.
 
-    Progress (rulings R13, R15): the node reads the check as "behind" when charts wait and the
-    worker has shown no progress for five minutes, and a sweep can run longer than that. So the
+    Progress (rulings R13, R15, R17): the node reads the check as "behind" when a change has
+    waited five minutes and the worker completed no work in that time (quiet time runs from the
+    oldest waiting notice or the last completed work, whichever is later), and a sweep can run
+    longer than that. So the
     worker stamps `last_drained_at` and commits when a pair has COMPLETED and PROGRESS_EVERY_S has
     passed since the last stamp (a Throttle on `clock`; the first completed pair always stamps).
     Progress is only ever stamped by completed work, never before it: a sweep whose blocking
     raises before any pair completes (the R8 crash-loop) must leave the stamp alone, or every
     retry would refresh it and the node would read "running" forever while nothing is checked.
-    The blocking phase itself stamps nothing; the backlog's freshly queued notices keep the quiet
-    time low meanwhile, and a blocking phase longer than five minutes honestly reads "behind".
+    The blocking phase itself stamps nothing; meanwhile quiet time runs from the backlog's oldest
+    notice or the last completed work, and a blocking phase that takes it past five minutes
+    honestly reads "behind".
     sweep() calls back only after propose() has ended its own transaction, so the stamp's commit
     never holds a lock across a pair's work, and never commits anything of the sweep's own.
     """

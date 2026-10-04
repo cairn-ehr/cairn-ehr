@@ -106,18 +106,21 @@ $$;
 
 -- The node-wide status (cairn-node `duplicate-check`; R5's front door later).
 --
--- quiet_age_s: seconds since ANYTHING last happened while charts wait — the later of the newest
--- waiting notice (a change arrived) and the worker's last progress stamp (last_drained_at, written
--- after each chart it checks and, throttled, during a sweep). NULL when nothing waits.
--- GREATEST ignores a NULL argument, so a worker that has never stamped progress falls back to the
--- newest notice's age. The node calls the check "behind" only when charts wait AND this quiet time
--- passes its threshold: no new change AND no progress means the worker is stopped or stuck.
+-- quiet_age_s: seconds since the OLDEST waiting notice or the worker's last completed work
+-- (last_drained_at: after each chart it checks and, throttled, while a sweep scores pairs),
+-- whichever is later. NULL when nothing waits. GREATEST ignores a NULL argument, so a worker that
+-- has never completed work falls back to the oldest notice's age. The node calls the check
+-- "behind" when this passes its threshold: a change has waited that long AND the worker has
+-- completed nothing in that time, so it is stopped or stuck.
 --
--- WHY NOT "THE NEWEST NOTICE IS OLD" (the earlier rule, ruling R13): a restore, a `reproject
--- --rebuild` or a matcher-version re-check queues every chart ALL AT ONCE, so every notice has
--- about the same queued_at. Five minutes later even the newest notice is old while a healthy worker
--- is still working through the backlog (~9 s a chart at 10 000 records: 500 charts is over an
--- hour), and the line would read "behind" the whole time — training staff to ignore it.
+-- WHY NOT NOTICE AGE ALONE (ruling R13): a restore, a `reproject --rebuild` or a matcher-version
+-- re-check queues every chart ALL AT ONCE. Five minutes later every notice is old while a healthy
+-- worker is still working through the backlog (~9 s a chart at 10 000 records: 500 charts is over
+-- an hour); its completed-work stamps are what keep that reading "running", not "behind" — a
+-- false alarm would train staff to ignore the line.
+-- WHY THE OLDEST NOTICE, NOT THE NEWEST (ruling R17): on a busy node an identity change arrives
+-- every few minutes. Measured from the newest notice, those fresh notices would hide a fully
+-- STOPPED worker — "running" forever while nothing is checked.
 -- VOLATILE (the default): it reads clock_timestamp().
 --
 -- The OUT columns changed (newest_age_s -> quiet_age_s), and CREATE OR REPLACE cannot change a
@@ -145,7 +148,7 @@ AS $$
     SELECT
         (SELECT count(DISTINCT patient_id) FROM match_pending),
         (SELECT floor(extract(epoch FROM clock_timestamp() - GREATEST(
-                    max(p.queued_at),
+                    min(p.queued_at),
                     (SELECT last_drained_at FROM match_worker_state))))::bigint
            FROM match_pending p
           HAVING count(*) > 0),

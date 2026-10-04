@@ -815,11 +815,11 @@ not survive contact with the code, and the maintainer decided three questions in
   notice, whether a `config` re-check is in progress, and `last_drained_at`. A pure
   `classify(status, now, threshold)` returns one of four states:
   - **NeverRun** (no worker-state row): *"Duplicate check has never run on this node."*
-  - **Stalled** (the newest waiting notice is older than the threshold — *as built: charts wait and
-    neither a new notice nor worker progress for longer than the threshold, R13*): *"Duplicate check is behind
+  - **Stalled** (the newest waiting notice is older than the threshold — *as built: the oldest waiting
+    notice and the worker's last completed work are both older than the threshold, R13/R17*): *"Duplicate check is behind
     — last ran HH:MM; N charts waiting."*
-  - **CatchingUp** (notices are waiting, the newest is fresh — *as built: charts wait and a new
-    notice or worker progress came within the threshold, R13*): *"Duplicate check running — N charts
+  - **CatchingUp** (notices are waiting, the newest is fresh — *as built: charts wait and either the
+    oldest waiting notice or the worker's last completed work is within the threshold, R13/R17*): *"Duplicate check running — N charts
     waiting"*, plus *"(re-checking all charts after a matcher update)"* during a `config` re-check.
   - **Current** (nothing waiting): *"Duplicate check up to date — last ran HH:MM."*
   
@@ -892,32 +892,40 @@ reason, because four of them correct sentences in the design itself.
   files small. Its reconnect backoff resets only after a *completed* drain: an error raised after
   connecting (a statement timeout, a deadlock) is deterministic and must keep backing off rather than
   retry, and re-sweep, every second.
-- **R13 — "behind" means nothing new and no progress, not "the newest notice is old".** The design
+- **R13 / R17 — "behind" means a change has waited and the worker completed nothing, not "the newest
+  notice is old".** The design
   argued that with a newest-first drain only a stuck worker lets the newest notice age. That is false
   when a backlog is queued ALL AT ONCE — a restore, a `reproject --rebuild`, a matcher-version
   re-check: every notice has about the same `queued_at`, so five minutes later even the newest is old
   while a healthy worker is mid-backlog (at ~9 s a chart, 500 charts is over an hour of false
-  "behind", which trains staff to ignore the line). The rule is now: **stalled iff charts wait AND
-  neither a new notice nor any worker progress has happened for more than the threshold.** db/056's
-  `cairn_duplicate_check_status()` returns `quiet_age_s` = seconds since `GREATEST(max(queued_at),
-  last_drained_at)` (NULL when nothing waits) in place of `newest_age_s`; a guarded `DROP` heals a
-  database that loaded the earlier shape. `last_drained_at` became the worker's progress stamp,
+  "behind", which trains staff to ignore the line). The rule is now: **stalled iff the quiet time —
+  seconds since the oldest waiting notice or the worker's last completed work, whichever is later —
+  exceeds the threshold.** db/056's `cairn_duplicate_check_status()` returns it as `quiet_age_s` =
+  seconds since `GREATEST(min(queued_at), last_drained_at)` (NULL when nothing waits) in place of
+  `newest_age_s`; a guarded `DROP` heals a database that loaded the earlier shape. The first fix
+  (R13) measured from the NEWEST notice — `GREATEST(max(queued_at), …)`, "nothing new and no
+  progress" — and review found it hid a fully stopped worker on a busy node: any identity change at
+  least every five minutes kept the newest notice fresh, so the line read "running" forever while
+  nothing was checked. Ruling R17 measures from the OLDEST notice: a stopped worker reads "behind"
+  five minutes after the first unchecked change, busy node or not; a healthy worker on an all-at-once
+  backlog stays "running" through its completed-work stamps; an idle worker with one fresh notice reads
+  "running"; a held poison chart with no other activity reads "behind" (honest: it is not being checked). `last_drained_at` became the worker's progress stamp,
   written **only by completed work** (ruling R15): after each chart (as before), and during a sweep
   about every 30 s while pairs are being scored — after a pair completes, at most once per 30 s
   (`sweep(on_progress=…)`, called after each pair's own transaction has ended; `worker_plan.Throttle`).
   Never before work: an earlier fix stamped once before each sweep, which let the R8 crash-loop
   (blocking raises, the worker retries) refresh the stamp on every retry and read "running" forever
-  while nothing was checked. A sweep's blocking phase and a single slow pair stamp nothing; a backlog's
-  freshly queued notices keep the quiet time low meanwhile, and a blocking phase longer than the
-  threshold honestly reads "behind". "Last ran HH:MM" therefore reads as "last active".
+  while nothing was checked. A sweep's blocking phase and a single slow pair stamp nothing; meanwhile
+  the quiet time runs from the backlog's oldest notice or the last completed work, and a blocking phase
+  that takes it past the threshold honestly reads "behind". "Last ran HH:MM" therefore reads as "last active".
 - **R8 — bulk mode has no poison isolation (known gap).** Per-chart mode isolates a chart that
   raises (it is held and retried later). A data-triggered error inside the sweep's blocking aborts the
   whole sweep; while the backlog stays over the threshold the worker retries and fails again — in
   process with the ≤ 60 s backoff for an `OperationalError` (a statement timeout, say), or by exiting
   and being restarted by its service manager for any other error. Nothing reads falsely "checked" (the
   notices stay), but the check stops making progress. Because only completed work stamps progress
-  (R15), the status line turns to "behind" once five minutes pass with no new notice and no completed
-  work. Filed as an issue.
+  (R15) and quiet time runs from the oldest waiting notice (R17), the status line turns to "behind"
+  once a change has waited five minutes with no completed work, however busy the node. Filed as an issue.
 
 **The measurement.** `matcher/src/cairn_matcher/eval/measure_check.py` seeds a generated population in
 one transaction (rolled back afterwards; the seeded tables are ANALYZEd inside it so the planner sees
