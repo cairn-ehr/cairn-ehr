@@ -102,8 +102,10 @@ async fn a_losing_reassertion_and_a_later_event_on_the_chart_queue_nothing() {
 ///   hook read NULL, and the null guard then queues NOTHING — no error, just no checks;
 /// - the whole trigger shape (`tgtype`): ROW, AFTER (never BEFORE — the hook `RETURN NULL`s, and
 ///   a BEFORE row trigger returning NULL silently DROPS the clinical row), INSERT always, UPDATE
-///   exactly where expected (never on patient_chart: db/002 updates it on every clinical event),
-///   and enabled (a disabled trigger also queues nothing).
+///   exactly where expected (never on patient_chart: db/002 UPDATEs that row for a registration,
+///   the legacy `patient.amended`, and every `note.added` — last_activity, note_count — none of
+///   which changes what the matcher reads there, the chart list), and enabled (a disabled trigger
+///   also queues nothing).
 #[tokio::test]
 async fn every_input_projection_carries_the_hook_with_the_right_events_and_column() {
     let Some((c, _g)) = fresh_db().await else {
@@ -435,26 +437,36 @@ async fn the_last_ran_time_carries_a_date_unless_it_was_today() {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
+    // A FIXED time of day (09:41, two days ago), and the expectation read back from the stored
+    // value: computing "now() - 2 days" twice would flake whenever a minute boundary fell between
+    // the two statements.
     c.batch_execute(
-        "INSERT INTO match_worker_state (matcher_version, last_drained_at) \
-         VALUES ('v', now() - interval '2 days')",
+        "INSERT INTO match_worker_state (matcher_version, last_drained_at) VALUES ('v', \
+           date_trunc('day', now()) - interval '2 days' + interval '9 hours 41 minutes')",
     )
     .await
     .unwrap();
     let old = last_ran_text(&c).await;
-    let want: String = c
+    let stored_day: String = c
         .query_one(
-            "SELECT to_char(now() - interval '2 days', 'YYYY-MM-DD HH24:MI')",
+            "SELECT to_char(last_drained_at, 'YYYY-MM-DD') FROM match_worker_state",
             &[],
         )
         .await
         .unwrap()
         .get(0);
-    assert_eq!(old, want, "two days ago renders with its date");
-    c.batch_execute("UPDATE match_worker_state SET last_drained_at = now()")
+    assert_eq!(
+        old,
+        format!("{stored_day} 09:41"),
+        "two days ago renders with its date"
+    );
+    // Stamp and read in ONE transaction: now() and current_date are both the transaction's start,
+    // so not even midnight can fall between them.
+    c.batch_execute("BEGIN; UPDATE match_worker_state SET last_drained_at = now()")
         .await
         .unwrap();
     let today = last_ran_text(&c).await;
+    c.batch_execute("COMMIT").await.unwrap();
     assert_eq!(today.len(), 5, "today renders as HH:MM alone, got {today}");
     assert_eq!(
         today.as_bytes()[2],

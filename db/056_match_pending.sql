@@ -81,9 +81,10 @@ BEGIN
 END $$;
 REVOKE EXECUTE ON FUNCTION cairn_match_enqueue() FROM PUBLIC;
 
--- The matcher's inputs. patient_chart is INSERT-ONLY: db/002 updates that row on EVERY clinical
--- event (last_activity, note_count), so an UPDATE hook there would queue a duplicate check on
--- every medication write. A new chart is the only patient_chart event the matcher cares about.
+-- The matcher's inputs. patient_chart is INSERT-ONLY: db/002 UPDATEs that row for a
+-- registration, the legacy patient.amended, and every note.added (last_activity, note_count), so
+-- an UPDATE hook there would queue a duplicate check on every note. The matcher reads only the
+-- chart list from patient_chart, so a new chart is the only patient_chart event it cares about.
 CREATE OR REPLACE TRIGGER match_enqueue AFTER INSERT ON patient_chart
     FOR EACH ROW EXECUTE FUNCTION cairn_match_enqueue('patient_id');
 CREATE OR REPLACE TRIGGER match_enqueue AFTER INSERT OR UPDATE ON patient_name

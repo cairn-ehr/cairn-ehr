@@ -737,8 +737,10 @@ not survive contact with the code, and the maintainer decided three questions in
   needs a non-committing split (below).
 - **"Oldest queue row older than a threshold" raises a false alarm for hours.** A restore, a
   `reproject --rebuild` or a new node's first pull queues every chart, and the oldest notice ages
-  while fresh registrations are being checked within seconds. "Behind" is therefore measured by the
-  NEWEST waiting notice. With a newest-first drain, a stale newest notice can only mean the worker is
+  while fresh registrations are being checked within seconds. *(As built: "within seconds" was not
+  true at the measured scale. A fresh change is checked next, ahead of older changes; one check takes
+  ~9 s at 10 000 charts on the development machine (#725), and a sweep already running finishes
+  first. See "R4 — as built".)* "Behind" is therefore measured by the NEWEST waiting notice. With a newest-first drain, a stale newest notice can only mean the worker is
   not running or is stuck. The precise claim a banner needs is per chart (below). *(Corrected in the
   build: a backlog queued all at once makes even the newest notice old — see R13 in "R4 — as built".)*
 - The `registration`/`assertion` reasons are dropped: nothing reads the difference, and telling them
@@ -796,8 +798,10 @@ not survive contact with the code, and the maintainer decided three questions in
   - If the stored `matcher_version` differs from the running one, queue every chart with reason
     `config` and store the new version, in one transaction.
   - Each round picks a mode from the backlog. **Per chart, newest change first**: a fresh
-    registration is checked within seconds whatever the backlog. **Above a threshold, one opted-in
-    sweep**, then a delete of every notice up to the watermark read before the sweep started.
+    registration is checked within seconds whatever the backlog. *(As built: "within seconds" was
+    not true at the measured scale. A fresh change is checked next, ahead of older changes; one
+    check takes ~9 s at 10 000 charts on the development machine (#725), and a sweep already
+    running finishes first. See "R4 — as built".)* **Above a threshold, one opted-in sweep**, then a delete of every notice up to the watermark read before the sweep started.
     Per-chart blocking scans the whole names table each time, so a full backlog checked chart by
     chart is ~N² work, where one sweep is a single pass.
   - A 60 s poll backs up `NOTIFY` (a notification can be missed across a reconnect), and a lost
