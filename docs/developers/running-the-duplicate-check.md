@@ -14,9 +14,11 @@ and writes the result as `match_proposal` rows.
 
 - It **never links** anyone. A proposal is a suggestion; only a human decision (R2's gesture) links
   charts. Identity is a claim, never a fact.
-- It **never blocks a clinical write.** The queue hook cannot raise; the worker is a separate process
-  that reads the identity projections and writes only the matcher's own tables (`match_proposal`,
-  `match_pending`, `match_worker_state`).
+- It **never makes a clinical write wait on it.** The queue hook cannot raise on its own and never
+  waits on the worker; it adds one small insert and a brief commit-time serialisation (PostgreSQL's
+  `NOTIFY` takes a short cluster-wide lock while the writing transaction commits). The worker is a
+  separate process that reads the identity projections and writes only the matcher's own tables
+  (`match_proposal`, `match_pending`, `match_worker_state`).
 - It **never claims "no duplicates" falsely.** A chart stays "not yet checked" for as long as one of its
   notices is still in the queue, and a worker that has never run is reported as such.
 
@@ -92,6 +94,8 @@ five minutes after the first change it failed to check. A healthy worker working
 backlog reads "running", however old the queued notices are, because it keeps finishing work; a shrinking `N charts waiting` between two runs of the command (and, after a sweep, the worker's
 `swept a backlog of …` log line) shows it working. "Last ran HH:MM" is the worker's last finished work,
 not its last sign of life: a worker that keeps failing and restarting is active, but its time stays put.
+The time is the database's local time, and it carries the date (`last ran 2026-10-03 09:41`) whenever
+that work was not today, so a worker that stopped days ago never reads as this morning.
 With `--patient` a second line says either
 `This chart: duplicate check not yet run since its identity details last changed.` or
 `This chart: duplicate check up to date.`

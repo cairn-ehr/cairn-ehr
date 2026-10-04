@@ -1,7 +1,8 @@
 //! Repair path R4 (#679, ADR-0076 decision 7): db/056's notice log. A change to any of the
 //! matcher's six input projections leaves an append-only NOTICE that the node's matcher worker
-//! drains; the hook that writes it can never fail or delay the clinical write (it is a plain
-//! insert of a fresh key — nothing to conflict with, nothing to wait on, no RAISE).
+//! drains. The hook that writes it cannot fail the clinical write on its own and never waits on
+//! the worker (it is a plain insert of a fresh key — nothing to conflict with, no RAISE); its
+//! NOTIFY adds only a brief commit-time serialisation.
 mod common;
 use cairn_event::demographics::{name_assertion_body, render_name_twin};
 use cairn_node::db;
@@ -95,13 +96,27 @@ async fn a_losing_reassertion_and_a_later_event_on_the_chart_queue_nothing() {
     assert_eq!(notices(&c, p).await, before);
 }
 
+/// The six hooks, read from the catalogue (the thing that runs), not from the SQL text. Two
+/// silent failures this pins:
+/// - the argument must name an existing `uuid` column of that table: a renamed column makes the
+///   hook read NULL, and the null guard then queues NOTHING — no error, just no checks;
+/// - the whole trigger shape (`tgtype`): ROW, AFTER (never BEFORE — the hook `RETURN NULL`s, and
+///   a BEFORE row trigger returning NULL silently DROPS the clinical row), INSERT always, UPDATE
+///   exactly where expected (never on patient_chart: db/002 updates it on every clinical event),
+///   and enabled (a disabled trigger also queues nothing).
 #[tokio::test]
 async fn every_input_projection_carries_the_hook_with_the_right_events_and_column() {
     let Some((c, _g)) = fresh_db().await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    // (table, id column, fires on UPDATE too?) — read from the catalogue, the thing that runs.
+    // pg_trigger.tgtype bits (PostgreSQL's TRIGGER_TYPE_*): ROW 1, BEFORE 2, INSERT 4, DELETE 8,
+    // UPDATE 16, TRUNCATE 32, INSTEAD 64. Equality pins every bit, so BEFORE/INSTEAD/DELETE/
+    // TRUNCATE must all be clear.
+    const ROW: i16 = 1;
+    const INSERT: i16 = 4;
+    const UPDATE: i16 = 16;
+    // (table, id column, fires on UPDATE too?)
     let expected = [
         ("chart_identity_state", "subject", true),
         ("name_repudiation", "subject", true),
@@ -110,30 +125,43 @@ async fn every_input_projection_carries_the_hook_with_the_right_events_and_colum
         ("patient_identifier", "patient_id", true),
         ("patient_name", "patient_id", true),
     ];
+    // tgargs is NUL-terminated per argument; escape-encoding renders NUL as "\000". The column
+    // type is looked up on the trigger's OWN table (tgrelid) by the argument's name; NULL when no
+    // live column carries that name.
     let rows = c
         .query(
-            "SELECT c.relname::text, encode(t.tgargs, 'escape'), (t.tgtype & 16) <> 0 \
+            "SELECT c.relname::text, a.arg, t.tgtype, \
+                    (SELECT ty.typname::text FROM pg_attribute att \
+                       JOIN pg_type ty ON ty.oid = att.atttypid \
+                      WHERE att.attrelid = t.tgrelid AND att.attname = a.arg \
+                        AND att.attnum > 0 AND NOT att.attisdropped), \
+                    t.tgenabled::text \
              FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid \
              JOIN pg_proc p ON p.oid = t.tgfoid \
+             CROSS JOIN LATERAL (SELECT replace(encode(t.tgargs, 'escape'), '\\000', '') AS arg) a \
              WHERE p.proname = 'cairn_match_enqueue' AND NOT t.tgisinternal ORDER BY 1",
             &[],
         )
         .await
         .unwrap();
-    let got: Vec<(String, String, bool)> = rows
+    type Shape = (String, String, i16, Option<String>, String);
+    let got: Vec<Shape> = rows
         .iter()
-        // tgargs is NUL-terminated per argument; escape-encoding renders NUL as "\000".
-        .map(|r| {
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4)))
+        .collect();
+    let want: Vec<Shape> = expected
+        .iter()
+        .map(|(t, col, upd)| {
+            let tgtype = ROW | INSERT | if *upd { UPDATE } else { 0 };
+            // 'O' = enabled in the default ("origin") replication role.
             (
-                r.get(0),
-                r.get::<_, String>(1).replace("\\000", ""),
-                r.get(2),
+                t.to_string(),
+                col.to_string(),
+                tgtype,
+                Some("uuid".to_string()),
+                "O".to_string(),
             )
         })
-        .collect();
-    let want: Vec<(String, String, bool)> = expected
-        .iter()
-        .map(|(t, col, upd)| (t.to_string(), col.to_string(), *upd))
         .collect();
     assert_eq!(got, want);
 }
@@ -210,7 +238,17 @@ async fn a_chart_is_pending_until_the_worker_has_run_and_while_it_has_notices() 
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
-    let p = Uuid::now_v7();
+    // `p` is a chart this node HOLDS: a patient_chart row, whose insert notice the "worker" has
+    // already cleared. `stranger` is an id this node has never seen (a mistyped id, or a linked
+    // member held only on another node).
+    let (p, stranger) = (Uuid::now_v7(), Uuid::now_v7());
+    c.execute(
+        "INSERT INTO patient_chart (patient_id) VALUES ($1::text::uuid)",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap();
+    c.batch_execute("TRUNCATE match_pending").await.unwrap();
     assert!(
         pending(&c, p).await,
         "no worker has ever run: nothing is checked"
@@ -222,6 +260,10 @@ async fn a_chart_is_pending_until_the_worker_has_run_and_while_it_has_notices() 
     .await
     .unwrap();
     assert!(!pending(&c, p).await, "worker ran, no notice");
+    assert!(
+        pending(&c, stranger).await,
+        "a chart this node does not hold was never checked here, whatever the worker did"
+    );
     c.execute(
         "INSERT INTO match_pending (patient_id, reason) VALUES ($1::text::uuid, 'change')",
         &[&p.to_string()],
@@ -229,6 +271,12 @@ async fn a_chart_is_pending_until_the_worker_has_run_and_while_it_has_notices() 
     .await
     .unwrap();
     assert!(pending(&c, p).await, "a notice is waiting");
+    c.execute(
+        "DELETE FROM patient_chart WHERE patient_id = $1::text::uuid",
+        &[&p.to_string()],
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -321,6 +369,17 @@ async fn the_worker_role_can_do_exactly_its_job() {
     c.query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
         .await
         .expect("the node role reads the status");
+    // The per-chart answer reads patient_chart, which the runtime role cannot SELECT; the
+    // function is a definer so the node (and R5's banner) can still ask it.
+    let p_pending: bool = c
+        .query_one(
+            "SELECT cairn_chart_check_pending($1::text::uuid)",
+            &[&p.to_string()],
+        )
+        .await
+        .expect("the node role reads one chart's state")
+        .get(0);
+    assert!(p_pending, "a chart this node does not hold reads pending");
     c.batch_execute("RESET ROLE").await.unwrap();
 }
 
@@ -352,4 +411,54 @@ async fn a_database_with_the_old_status_shape_is_healed_on_connect() {
         .await
         .unwrap();
     assert!(r.columns().iter().any(|col| col.name() == "quiet_age_s"));
+}
+
+/// The status function's `last_drained_hhmm` column, which the test below expects to be set.
+async fn last_ran_text(c: &Client) -> String {
+    c.query_one(
+        "SELECT last_drained_hhmm FROM cairn_duplicate_check_status()",
+        &[],
+    )
+    .await
+    .unwrap()
+    .get::<_, Option<String>>(0)
+    .expect("a worker-state row with last_drained_at set")
+}
+
+/// "Behind — last ran 09:41" is only honest when 09:41 was TODAY. A worker that stopped two days
+/// ago must read with its date, or the line suggests it ran this morning. The OUT column keeps its
+/// name (`last_drained_hhmm`) so db/056's CREATE OR REPLACE needs no DROP; its value is "HH:MM
+/// today, else YYYY-MM-DD HH:MM" (database-local date and time).
+#[tokio::test]
+async fn the_last_ran_time_carries_a_date_unless_it_was_today() {
+    let Some((c, _g)) = fresh_db().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    c.batch_execute(
+        "INSERT INTO match_worker_state (matcher_version, last_drained_at) \
+         VALUES ('v', now() - interval '2 days')",
+    )
+    .await
+    .unwrap();
+    let old = last_ran_text(&c).await;
+    let want: String = c
+        .query_one(
+            "SELECT to_char(now() - interval '2 days', 'YYYY-MM-DD HH24:MI')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(old, want, "two days ago renders with its date");
+    c.batch_execute("UPDATE match_worker_state SET last_drained_at = now()")
+        .await
+        .unwrap();
+    let today = last_ran_text(&c).await;
+    assert_eq!(today.len(), 5, "today renders as HH:MM alone, got {today}");
+    assert_eq!(
+        today.as_bytes()[2],
+        b':',
+        "today renders as HH:MM alone, got {today}"
+    );
 }

@@ -47,8 +47,11 @@ pub struct QueueSnapshot {
     /// A worker has run on this node at least once (its state row exists).
     pub worker_seen: bool,
     /// The worker's last completed work (a checked chart or a successfully scored sweep pair), or
-    /// an empty round, as the database's local HH:MM. None until the first. While a worker is
-    /// crash-looping or in a long blocking phase it is active but this stays earlier — on purpose.
+    /// an empty round, in the database's local time: "HH:MM" when that was today, else
+    /// "YYYY-MM-DD HH:MM" (so a worker that stopped days ago never reads as this morning). The
+    /// field keeps its historical name, as db/056's OUT column does. None until the first. While
+    /// a worker is crash-looping or in a long blocking phase it is active but this stays earlier
+    /// — on purpose.
     pub last_drained_hhmm: Option<String>,
 }
 
@@ -59,8 +62,8 @@ pub enum CheckState {
     /// number of charts with a waiting notice.
     NeverRun { waiting: i64 },
     /// A change has waited longer than the threshold and the worker has completed no work in that
-    /// time: it is stopped or stuck. `last_ran` is its last completed work (HH:MM), None if it
-    /// never completed any.
+    /// time: it is stopped or stuck. `last_ran` is its last completed work (HH:MM, with the date
+    /// when not today), None if it never completed any.
     Stalled {
         waiting: i64,
         last_ran: Option<String>,
@@ -71,7 +74,7 @@ pub enum CheckState {
     /// first run) is among them.
     CatchingUp { waiting: i64, config_recheck: bool },
     /// Nothing is waiting: every chart has been checked since its identity evidence last changed.
-    /// `last_ran` is the worker's last completed work (HH:MM).
+    /// `last_ran` is the worker's last completed work (HH:MM, with the date when not today).
     Current { last_ran: Option<String> },
 }
 
@@ -174,8 +177,9 @@ pub async fn read_snapshot(client: &Client) -> anyhow::Result<QueueSnapshot> {
 }
 
 /// Has `patient` been checked since its identity evidence last changed? (db/056's
-/// `cairn_chart_check_pending`: TRUE while a notice waits, and for every chart before the
-/// first worker run.)
+/// `cairn_chart_check_pending`: TRUE while a notice waits, for every chart before the first
+/// worker run, and for a chart this node does not hold — a mistyped id, or a linked member held
+/// only elsewhere — because nothing here ever checked it.)
 pub async fn chart_check_pending(client: &Client, patient: Uuid) -> anyhow::Result<bool> {
     Ok(client
         .query_one(

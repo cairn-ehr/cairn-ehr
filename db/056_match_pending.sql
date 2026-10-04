@@ -15,12 +15,16 @@
 --   * the worker deletes exactly the notice ids it READ (captured before it reads the
 --     projections, deleted by id, never by "id <=": a bigserial is assigned at INSERT, not
 --     commit, so a slow transaction's lower id can commit mid-check), so a change landing
---     while the chart is being checked survives and is checked again. Deleting "the patient's row" would lose it.
+--     while the chart is being checked survives and is checked again. Deleting "the
+--     patient's row" would lose it.
 --
--- WHY IT CAN NEVER FAIL A CLINICAL WRITE: structurally, like db/029's collision recorder — no
--- RAISE, no EXCEPTION block, a null guard, an insert that cannot conflict. It is deliberately
--- NOT wrapped in EXCEPTION WHEN OTHERS: a swallowed failure is a silently skipped check. What
--- can still raise (a full disk, a dropped table) would fail the clinical write anyway.
+-- WHY IT CANNOT FAIL A CLINICAL WRITE ON ITS OWN: structurally, like db/029's collision
+-- recorder — no RAISE, no EXCEPTION block, a null guard, an insert that cannot conflict. It is
+-- deliberately NOT wrapped in EXCEPTION WHEN OTHERS: a swallowed failure is a silently skipped
+-- check. What can still raise (a full disk, a dropped table) would fail the clinical write
+-- anyway. It is not free: it adds one small insert, and its NOTIFY adds a brief commit-time
+-- serialisation (PostgreSQL takes a cluster-wide lock on the notification queue while a
+-- notifying transaction commits). It never waits on the worker.
 -- Guarded by crates/cairn-node/tests/match_pending.rs::the_hook_has_no_raising_path.
 --
 -- WHICH WRITES QUEUE A CHECK: the projection upserts are conditional (DO UPDATE ... WHERE new >
@@ -47,10 +51,10 @@ CREATE INDEX IF NOT EXISTS match_pending_patient_idx ON match_pending (patient_i
 -- of a sweep that scored at least one pair (or had none to score), and after an empty round.
 -- Never at the start of a sweep, during its blocking phase, or for a pair that failed, so a sweep
 -- that fails every time (its blocking raises, or every pair raises) and is retried leaves it
--- untouched (ruling R15, review N3). It is both the status line's "last ran HH:MM" (the last
+-- untouched (ruling R15, review N3). It is both the status line's "last ran" time (the last
 -- completed work, which stays earlier while a worker is crash-looping — on purpose) and the
--- "no progress" half of the stalled rule (cairn_duplicate_check_status). Its ABSENCE means no worker has ever run on
--- this node — see cairn_chart_check_pending.
+-- "no progress" half of the stalled rule (cairn_duplicate_check_status). Its ABSENCE means no
+-- worker has ever run on this node — see cairn_chart_check_pending.
 CREATE TABLE IF NOT EXISTS match_worker_state (
     singleton       BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     matcher_version TEXT        NOT NULL,
@@ -94,16 +98,31 @@ CREATE OR REPLACE TRIGGER match_enqueue AFTER INSERT OR UPDATE ON name_repudiati
     FOR EACH ROW EXECUTE FUNCTION cairn_match_enqueue('subject');
 
 -- Has THIS chart been checked since its identity evidence last changed? FALSE only when the
--- worker has run at least once AND no notice for the chart is waiting. Before the first worker
--- run every chart is pending: charts created before db/056 have no notices, and saying
--- "checked" about them would be a false claim (principle 4). R5's banner reads this.
+-- worker has run at least once, THIS NODE HOLDS the chart, and no notice for it is waiting.
+-- TRUE ("not yet run") otherwise, because each other case would be a false "checked"
+-- (principle 4):
+--   * no worker has ever run: charts created before db/056 have no notices;
+--   * a chart this node has never seen (no patient_chart row): a mistyped id, or a linked member
+--     held only on another node (R3's "not held here"). It has no notices because nothing here
+--     ever queued one, not because anything checked it;
+--   * a notice is waiting.
+-- A chart's registration writes its patient_chart row (db/002/047). A chart whose registration
+-- has not reached this node yet (a peer's events may legitimately precede it) therefore reads
+-- pending even once its names were checked: the imprecise, safe direction — never a false
+-- "checked". R5's banner reads this.
+-- SECURITY DEFINER because the node's runtime role (cairn_node) cannot SELECT patient_chart, yet
+-- it is the role that asks (`cairn-node duplicate-check --patient`, R5's banner). The function
+-- answers one yes/no question and returns no row data; EXECUTE is revoked from PUBLIC below and
+-- granted only to the two roles that need it.
 CREATE OR REPLACE FUNCTION cairn_chart_check_pending(p_patient uuid)
 RETURNS boolean
 LANGUAGE sql STABLE
+SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
     SELECT EXISTS (SELECT 1 FROM match_pending WHERE patient_id = p_patient)
         OR NOT EXISTS (SELECT 1 FROM match_worker_state)
+        OR NOT EXISTS (SELECT 1 FROM patient_chart WHERE patient_id = p_patient)
 $$;
 
 -- The node-wide status (cairn-node `duplicate-check`; R5's front door later).
@@ -156,7 +175,14 @@ AS $$
           HAVING count(*) > 0),
         EXISTS (SELECT 1 FROM match_pending WHERE reason = 'config'),
         EXISTS (SELECT 1 FROM match_worker_state),
-        (SELECT to_char(last_drained_at, 'HH24:MI') FROM match_worker_state)
+        -- "HH:MM" when the last completed work was today, else "YYYY-MM-DD HH:MM" (database-
+        -- local date and time): "last ran 09:41" about a worker that stopped two days ago would
+        -- read as this morning. The OUT column keeps its historical name and type (text) so this
+        -- CREATE OR REPLACE needs no DROP.
+        (SELECT to_char(last_drained_at,
+                        CASE WHEN last_drained_at::date = current_date
+                             THEN 'HH24:MI' ELSE 'YYYY-MM-DD HH24:MI' END)
+           FROM match_worker_state)
 $$;
 
 -- The worker (cairn_agent) reads and clears notices, queues a 'config' re-check, and keeps its
@@ -165,5 +191,6 @@ GRANT SELECT, INSERT, DELETE ON match_pending TO cairn_agent;
 GRANT USAGE, SELECT ON SEQUENCE match_pending_id_seq TO cairn_agent;
 GRANT SELECT, INSERT, UPDATE ON match_worker_state TO cairn_agent;
 GRANT SELECT ON match_pending, match_worker_state TO cairn_node;
+REVOKE EXECUTE ON FUNCTION cairn_chart_check_pending(uuid) FROM PUBLIC;   -- a definer: see above
 GRANT EXECUTE ON FUNCTION cairn_chart_check_pending(uuid) TO cairn_agent, cairn_node;
 GRANT EXECUTE ON FUNCTION cairn_duplicate_check_status() TO cairn_agent, cairn_node;
