@@ -130,7 +130,7 @@ pub fn status_line(state: &CheckState) -> String {
             waiting,
             last_ran: None,
         } => format!(
-            "Duplicate check is behind — it has not finished a round yet; {} waiting.",
+            "Duplicate check is behind — it has not completed a check yet; {} waiting.",
             charts(*waiting)
         ),
         CheckState::CatchingUp {
@@ -140,7 +140,7 @@ pub fn status_line(state: &CheckState) -> String {
             "Duplicate check running — {} waiting{}.",
             charts(*waiting),
             if *config_recheck {
-                " (re-checking all charts after a matcher update)"
+                " (re-checking every chart: first run or matcher update)"
             } else {
                 ""
             }
@@ -257,7 +257,7 @@ mod tests {
                 waiting: 4,
                 last_ran: None
             }),
-            "Duplicate check is behind — it has not finished a round yet; 4 charts waiting."
+            "Duplicate check is behind — it has not completed a check yet; 4 charts waiting."
         );
         assert_eq!(
             status_line(&CheckState::CatchingUp {
@@ -268,7 +268,7 @@ mod tests {
         );
         assert_eq!(
             status_line(&CheckState::CatchingUp { waiting: 7, config_recheck: true }),
-            "Duplicate check running — 7 charts waiting (re-checking all charts after a matcher update)."
+            "Duplicate check running — 7 charts waiting (re-checking every chart: first run or matcher update)."
         );
         assert_eq!(
             status_line(&CheckState::Current {

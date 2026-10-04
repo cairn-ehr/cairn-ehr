@@ -80,8 +80,8 @@ printing a status. The node-wide line is one of four states:
 | State | Line |
 |---|---|
 | Never run | `Duplicate check has never run on this node.` — or, when notices are queued, `Duplicate check has never run on this node — 1 chart waiting.` / `… — N charts waiting.` |
-| Behind | `Duplicate check is behind — last ran HH:MM; N charts waiting.` (or `— it has not finished a round yet;` when there is no last-ran time) |
-| Running | `Duplicate check running — N charts waiting.` (with ` (re-checking all charts after a matcher update)` during a full re-check) |
+| Behind | `Duplicate check is behind — last ran HH:MM; N charts waiting.` (or `— it has not completed a check yet;` when there is no last-ran time) |
+| Running | `Duplicate check running — N charts waiting.` (with ` (re-checking every chart: first run or matcher update)` during a full re-check) |
 | Up to date | `Duplicate check up to date — last ran HH:MM.` (or `Duplicate check up to date.` when the worker has no last-ran time yet) |
 
 "Behind" means **a change has been waiting for more than five minutes and the worker has finished no
