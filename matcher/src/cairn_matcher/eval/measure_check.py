@@ -9,6 +9,11 @@ Everything is seeded and measured inside ONE transaction that is rolled back, so
 is left as found. The seed is ANALYZEd inside that transaction so the planner sees the real row
 counts (a freshly-seeded, never-analyzed table gets a misleadingly bad or good plan).
 
+Run it against a SCRATCH database: the timed sweep covers every chart in the projections, so any
+rows that were there before the seed are swept (and paired) too and inflate the sweep figure.
+The printed N is the number of records actually seeded (the generator builds entities in twos,
+so an odd --sizes value seeds one fewer), not the size asked for.
+
 Usage:
     CAIRN_TEST_PG="host=127.0.0.1 port=5532 user=$USER dbname=cairn_test" \
         uv run --extra pipeline python -m cairn_matcher.eval.measure_check \
@@ -67,7 +72,7 @@ def main(argv=None) -> int:
                 assess(conn, lo, hi)
             sweep_s = time.perf_counter() - t0
             q = statistics.quantiles(per, n=20)
-            print(f"N={n:>6}  per-chart p50={statistics.median(per) * 1000:7.0f} ms  "
+            print(f"N={len(ids):>6}  per-chart p50={statistics.median(per) * 1000:7.0f} ms  "
                   f"p95={q[18] * 1000:7.0f} ms  sweep={sweep_s:7.1f} s ({len(pairs)} pairs)  "
                   f"break-even~{sweep_s / statistics.median(per):6.0f} charts  "
                   f"(total {time.perf_counter() - t_start:.0f} s)", flush=True)
