@@ -3,41 +3,63 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R3 — THE FRONT DOOR COLLAPSES BY PERSON (ADR-0076 decision 6) — BUILT ON PR
-> [#721](https://github.com/cairn-ehr/cairn-ehr/pull/721) (2026-10-03): seven tasks with per-task reviews, an opus
-> final review, one fix wave (re-reviewed clean), and every local gate over the final code (the DB sweep: 2498 passed,
-> 0 failed, none skipped). MERGED 2026-10-03.** R1b (PR #717), R2b-2 (PR #711), R2b-1 (PR #707), R2a
-> (PR #698) and R1 (PR #688) are merged. Repair path #679 · #680 · #681; design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R3 section + its as-built note),
-> ADR-0076, ADR-0077, spec **v0.79**; plan `docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`.
-> Built: `PersonRow` / `group_by_person` / `CandidateList::displayed_charts()` / `TrustState::Unknown`
-> (`cairn-patient-search`); `patient/search_person.rs` and `patient/candidate_text.rs` (`cairn-node`); `funnel/rows.rs`
-> (`cairn-gui-tauri`). No SQL change; `SCHEMA_GENERATION` stays 55.
+> **⇒ R4 — THE COMMIT-TIME DUPLICATE CHECK (ADR-0076 decision 7, #679) — BUILT ON PR
+> [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) (2026-10-04/05): seven tasks, per-task reviews (four fix
+> loops), an opus final review, one fix wave re-reviewed clean, and the local gates over the final code. AWAITING THE
+> MAINTAINER'S MERGE.** R3 (PR #721), R1b (#717), R2b-2 (#711), R2b-1 (#707), R2a (#698) and R1 (#688) are merged.
+> Repair path #679 · #680 · #681.
+> Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` ("R4 — designed 2026-10-04"
+> + **its as-built note**: every deviation, the measurement), plan
+> `docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md`, runbook
+> `docs/developers/running-the-duplicate-check.md`. `db/056`, **`SCHEMA_GENERATION` 56**; spec stays **v0.79** (no ADR —
+> decision 7 already fixes "a node-local queue … can never fail a clinical write").
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R4** (per-node matcher worker, #679 — proposes, never links), then **R5** (banner + worklist, #680 — the
->    worklist must filter pairs with an attested `patient_link` row, #700). Plan each from the design page's section.
->    **#716** (the window cannot confirm a standing link, nor show WHICH link is in doubt) is the natural small slice
->    beside them, and **#723** (the front door calls a doubted set "One person") belongs with R5's doubt work. #699
->    stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** **#708** (`link_charts` should re-check both compared sets in its transaction) ·
->    **#709** (a link outcome can go unseen when it lands after the chart changed) · **#710** (R2b-1 residuals) ·
->    **#712** (R2b-2 residuals: `chart_set.rs` size, wiring tests) · **#713** (a retry after a committed Outranked
->    silently overrules a colleague) · **#714** (`CanonicalPair` / `JudgedFrom` newtypes) · **#715** (`link.js` drift
->    guard; R3 guarded only its search read) · **#716** · **#718** (db/054's SECURITY DEFINER has no reason since #701)
->    · **#719** (R1b residuals) · **#720** (`wrong_chart` as the only Rust source of truth) · **#722** (the `--mock`
->    window has no linked pair) · **#723** · **#699** (built, ADR-0077 — awaiting the close) · **#700** · **#702**
->    (pinned) · **#703** (the generation heal can be used up by `cairn-sync init`) · **#704** · **#705** · **#706** ·
->    **From R1:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts —
->    a decision) · #691 · #692 · #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
-> 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
->    **runbook §10's unlink** (≤ 15 s), and the **live Tauri-IPC + VoiceOver pass on a linked pair**: the #699 (a)
->    third-chart unlink, a **doubted** pair's withheld lines, and R3's person row (label announced, each member opens).
-> 4. **#620**, the only open item that can still change the wire (the COSE unprotected header is hashed into the
->    content address but lies outside the signature); brainstorm first. Then **#626**, **#652 + #655** together,
+> 1. **#725 — the per-chart check pays a whole-population blocking pass** (p95 **9.65 s at 10 000 charts** on an M3
+>    Max; budget ≤ 2 s; the blocking SQL is ~7 s of it, not the pairs). Fix BEFORE R5: R5 makes "not yet checked" a
+>    clinician-visible state. Anchor the blocking on the chart's keys or materialise a key projection; the drift canary
+>    (`test_targeted_blocking.py`) makes either safe. Re-measure with `python -m cairn_matcher.eval.measure_check`
+>    (scratch DB), on the Pi too (#728), then revisit `bulk_threshold` (30) and `DEFAULT_TARGETED_CAP` (1000).
+> 2. **R5** (banner + worklist, #680 — R4's comment there lists what the banner must read; the worklist filters pairs
+>    with a `patient_link` row, #700). **#716** and **#723** belong beside it. #699 stays open until the maintainer closes it.
+> 3. **Open repair-path issues:** R4's **#726** (every-connect DDL takes ACCESS EXCLUSIVE; reproduced — widened by
+>    db/056's trigger replays) · **#727** (bulk mode has no poison isolation) · **#729** (mode chosen once per round: a
+>    rebuild mid-drain is worked chart by chart) · **#730** (the 101–1000 skipped-block band — a decision) · **#731** (no
+>    "charts failing" signal) · **#732** (the matcher conftest leaves `patient_chart`). Earlier: **#708** · **#709** ·
+>    **#710** · **#712** · **#713** · **#714** · **#715** · **#716** · **#718** · **#719** · **#720** · **#722** ·
+>    **#723** · **#699** · **#700** · **#702** (pinned) · **#703** · **#704** · **#705** · **#706** · from R1: #689 ·
+>    #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
+> 4. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
+>    **runbook §10's unlink** (≤ 15 s), the **live Tauri-IPC + VoiceOver pass on a linked pair** (the #699 (a) third-chart
+>    unlink, a doubted pair's withheld lines, R3's person row), and R4's **running a supervised worker** on a real node
+>    per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` above the blocking time).
+> 5. **#620**, the only open item that can still change the wire (brainstorm first). Then **#626**, **#652 + #655**,
 >    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
+>
+> **⇒ R4'S DURABLE RULES (PR #724) — do not undo any of these** (pins in `tests/match_pending.rs`,
+> `tests/duplicate_check.rs`, `matcher/tests/test_{check_chart,worker_drain,watch_backoff,targeted_blocking,judged}.py`):
+> - **The hook never raises and never waits** (`the_hook_has_no_raising_path`, the `lock_timeout` test): a plain INSERT
+>   of a fresh bigserial, a null guard, no RAISE/EXCEPTION/ON CONFLICT. **Never "fix" it with `EXCEPTION WHEN OTHERS`** —
+>   a swallowed failure is a silently skipped check. `patient_chart`'s hook is **INSERT-only**; the catalogue test pins
+>   the whole `tgtype` and that each argument names a `uuid` column.
+> - **Delete exactly the notice ids READ, captured before the projection reads — never `id <= max`** (a bigserial is
+>   assigned at INSERT, not commit; `test_a_slow_transaction_with_a_lower_id_is_not_deleted_by_the_check`). Bulk mode
+>   captures the id set before the sweep.
+> - **No read transaction across slow work**: `check_chart` rolls back after its read-prep and after every assess (the
+>   NOWAIT probe test); writes commit in one short transaction. A no-op DDL replay WAITS behind any open reader (#726).
+> - **"Behind" = charts waiting AND no completed work AND the OLDEST notice older than 5 min** (`quiet_age_s`;
+>   `a_stopped_worker_on_a_busy_node_reads_stalled`, `a_backlog_queued_at_once_reads_running_while_the_worker_progresses`).
+>   **Progress is stamped ONLY by completed work** — a checked chart, a successfully scored sweep pair (≤ 1/30 s), a sweep
+>   with something scored or nothing to score, an empty round. Never before work, never for a failed pair: either masks
+>   a crash-loop as "running" (`test_a_sweep_whose_blocking_raises_stamps_no_progress`, `…every_pair_fails…`).
+> - **`cairn_chart_check_pending` is TRUE until a worker has run, while a notice waits, and for a chart not held here**
+>   (definer; never a false "checked"). **The worker never links** (it writes only via `persist`; the auto-band test
+>   pins `patient_link` and `event_log` unchanged) and **never proposes a judged pair, in either mode or in
+>   reconciliation**. **`me` is canonicalised once** (`str(uuid.UUID(...))`) — `.lower()` silently dropped pairs.
+> - **`cairn-node duplicate-check` uses `db::connect`, never the schema replay** (it is cron-able; the replay is #726).
+>   Status wording lives only in `duplicate_check.rs` (goldens); the runbook quotes it verbatim.
 >
 > **⇒ R3'S DURABLE RULES (ADR-0076 decision 6, PR #721) — do not undo any of these:**
 > - **Rows are built ONLY by `group_by_person`** (`cairn-patient-search/src/person.rs`: pure, shared so any picker
@@ -381,15 +403,14 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-03 (**R3 — the front door collapses by person**, ADR-0076 decision 6, PR
-**[#721](https://github.com/cairn-ehr/cairn-ehr/pull/721)**, merged; earlier the same day R1b, PR #717, merged) ·
-09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`, generation 55) and R1
-(ADR-0076, `db/054`, PR #688, #334 repaired) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · 09-22
-funnel 2a + 2b · 09-21 #636 slice 1 + #639 · 09-20 #621 (ADR-0074) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
+**Session date:** 2026-10-04/05 (**R4 — the commit-time duplicate check**, ADR-0076 decision 7, PR
+**[#724](https://github.com/cairn-ehr/cairn-ehr/pull/724)**, awaiting merge) · 10-03 R3 (PR #721) and R1b (PR #717) ·
+09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`) and R1 (ADR-0076, `db/054`,
+PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
 ADR-0077; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
-implementation wording only) · **`SCHEMA_GENERATION`:** **55** (`db/055`) · **Phase:** architecture complete; **first
+implementation wording only) · **`SCHEMA_GENERATION`:** **56** (`db/056`) · **Phase:** architecture complete; **first
 production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one row per
-person) onto a medication chart that reads linked charts as one.
+person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates.
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waits on a clinical-note surface) · §5.4 John-Doe (§5.12
@@ -398,7 +419,8 @@ PERSON since R3, PR #721) · `clinical.medication` 1–6b under born-sealed bodi
 (ADR-0053 — grading half-live until #245) · §5.9 stream through its read surface · med-list node tier (read + whole-list
 sign-off over a linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the
 compare-and-link panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) + a doubted set
-withholds every line not on the opened chart (R1b, PR #717) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
+withholds every line not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher
+watch`, `cairn-node duplicate-check`; R4, PR #724) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
 admit-uninterpreted floor · **the L3 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates;
 `cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine
 tested but **not wired**.
@@ -409,50 +431,41 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise.
 
-### 2026-10-03 — R3: the front door collapses by person (PR #721)
+### 2026-10-04/05 — R4: the commit-time duplicate check (PR #724)
 
-Brainstorm (two maintainer decisions: each member line is its own open target; browse collapses too, not only the
-prompt) → design addendum → plan (seven tasks) → subagent-driven, an opus final review, one fix wave re-reviewed clean.
-- **⇒ An interrupted subagent's uncommitted work is evidence, not debris.** Task 2's first implementer was interrupted
-  mid-migration; the second finished its edits instead of discarding them. Read `git status` before re-dispatching.
-- **⇒ A migration task with mechanical rules keeps a wide change reviewable.** Task 2 turned `candidates` into rows of
-  one across 19 files in both cargo trees with behaviour unchanged by construction, so each later task changed
-  behaviour in one place and its review could see it.
-- **⇒ A plan can silently drop what the design asked for.** The design's "a register over a linked row signs both
-  ids" had no task; the final review caught it, and the end-to-end DB test now reads `search.displayed` back. Diff the
-  design's test list against the plan's before building.
-- **⇒ A count claim needs the member it can be false for.** "N chart(s) of this record also matched" was false for a
-  linked member the search did not match (R10); a new grouping is the moment to re-read every sentence that counts.
-- **Mechanics:** pre-flight rulings in the SDD ledger (R1–R11) resolved plan conflicts before dispatch (a task that
-  could not compile as written; a test fixture that could not fail on the property it named). Filed #722, #723.
+Brainstorm (three maintainer decisions) → design addendum → plan (seven tasks) → subagent-driven; four task fix loops,
+an opus final review, one fix wave. **Most of the review effort went into one sentence: when may the node say "behind"?**
+- **⇒ A health signal must be walked through every way its input fills.** "Behind = the newest notice is old" failed for
+  an all-at-once backlog (a restore: everything old at once); "newest" then hid a stopped worker on a busy node. The rule
+  that survived: the OLDEST notice or the last COMPLETED work, whichever is later. **⇒ Progress is stamped only by
+  completed work** — a stamp before work, or for a failed pair, makes a crash-loop read "running" forever (both shipped
+  in fix rounds before a re-review caught them).
+- **⇒ A bigserial is assigned at INSERT, not at commit:** `DELETE … WHERE id <= max_read` deletes a notice a slower
+  transaction committed later. Capture the ids you read; delete exactly those.
+- **⇒ A no-op DDL replay waits:** `ALTER TABLE … IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS` and `CREATE OR REPLACE
+  TRIGGER` take their lock before checking (probed on PG 18). Any long reader — and every new routine worker is one —
+  turns a node connect into a write stall (#726). A read-only CLI should use `db::connect`, not the replay.
+- **⇒ Diagnose a slow measurement before ruling on it.** The plan's stop rule (> 5 s → file, don't tune) held; my
+  hypothesis (the cap) was wrong, the 30-second diagnostic showed the blocking SQL (#725).
+- **⇒ A callee's `rollback()` silently undoes a test's uncommitted `SET ROLE`** — a role test went false-green; assert
+  `current_user` inside the code under test. **⇒ An interrupted subagent's uncommitted edits are evidence** (again):
+  the resumed fixer found the inherited test right and the inherited SQL incomplete.
 
-### 2026-10-03 — R1b: a doubted set withholds every line not on the opened chart (PR #717)
+### 2026-09-27 → 10-03 — repair path R1–R3 (PRs #688, #698, #707, #711, #717, #721)
 
-- **⇒ A remedy sentence is a safety claim — walk it through every case it is shown in.** "Either judgement lifts this
-  hold" passed five task reviews; the final review found it false in three reachable cases, and in the A–C–X bridge
-  following it made another person's drugs signable. The fix wave's own wording was untrue in three more places.
-- **⇒ A predicate keyed on standing LINKS misses standing UNLINKS.** Ask what each identity verb leaves behind.
-- **⇒ Keep the old flag, add the reasons beside it, route every reader through one method** — a fail-safe way to split a
-  boolean into causes (`is_wrong_chart_hazard()` / `hazard_reasons()`). **⇒ Rename a helper whose name overclaims**,
-  and give the per-row question its own function (`withheld_reasons`): a status-blind helper behind a status-aware
-  claim is a principle-4 bug.
-- **⇒ A "the hold lifts" assertion must hold a line that can still be held**; mutation-check an SQL predicate by editing
-  db/*.sql and REBUILDING (it is `include_str!`). **⇒ Subagent reports miscount** — re-run the DB suites yourself.
-- Filed #716 comment, #335 comments, #718, #719 (+ update), #720.
-
-### 2026-09-27 → 09-30 — repair path R2a, R2b-1, R2b-2 (PRs #698, #707, #711)
-
-- **⇒ A plan can mandate a false claim, and a correction can overstate too** ("unlink again after `Outranked` changes
-  nothing" was false; db/020 clamps the clock merge at 24 h). **⇒ Fact-check an ADR sentence by sentence against the
-  SQL before merge** (ADR-0077: one false + seven imprecise sentences after two passing reviews).
-- **⇒ "Inside the transaction" is not "serialized"**: take the lock every writer holds (CARNLK) FIRST, then read; test by
-  parking the victim on the lock (`pg_stat_activity.wait_event = 'advisory'`). **⇒ A second caller of a shared core can
-  invert a lock order** (test on `wait_event_type = 'Lock'`, never a sleep). **⇒ Recorded is not took effect.**
-- **⇒ A migration that changes a projection's order must re-decide what the old order decided** (db/055; #703); **a stored
-  derived value is safe only if its input cannot change after it is stored.**
-- **⇒ A test that cannot see its own predicate proves nothing — mutate to check**; a DB-suite "ok" can be a self-skip; a
-  headless walk must assert visibility, not `textContent`; `/review-pr` after a clean final review still found 7
-  Important defects; a guard file's count pins travel with the code that moves. `chart_set.rs` is over 500 (#712).
+- **⇒ A remedy or count sentence is a safety claim — walk it through every case it is shown in** ("either judgement
+  lifts this hold" was false in three reachable cases and made another person's drugs signable; "N charts also
+  matched" was false for an unmatched member). **⇒ A plan can mandate a false claim, and can silently drop a design
+  test** — diff the design's test list against the plan's. **⇒ Fact-check an ADR sentence by sentence against the SQL.**
+- **⇒ A predicate keyed on standing LINKS misses standing UNLINKS.** **⇒ Keep an old flag, add the reasons beside it,
+  route every reader through one method**; rename a helper whose name overclaims.
+- **⇒ "Inside the transaction" is not "serialized"**: take the lock every writer holds (CARNLK) FIRST; test by parking
+  the victim on the lock (`pg_stat_activity`), never a sleep. **⇒ Recorded is not took effect.** **⇒ A migration that
+  changes a projection's order must re-decide what the old order decided** (db/055; #703).
+- **⇒ A test that cannot see its own predicate proves nothing — mutate to check** (SQL predicates: edit db/*.sql and
+  REBUILD); a DB-suite "ok" can be a self-skip; a headless walk asserts visibility, not `textContent`; subagent reports
+  miscount — re-run the DB suites yourself. A migration task with mechanical rules keeps a wide change reviewable.
+  Filed along the way: #712 · #716 · #718 · #719 · #720 · #722 · #723; #335 comments.
 
 ### 2026-08-20 → 09-26 — the restore, node-plane, door and search slices; funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678)
 

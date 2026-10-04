@@ -436,103 +436,68 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, **R1b** (#697 (b) + #701, PR #717) — entries below, all merged; **R3** (the front door
-  collapses by person, PR #721 — entry below, awaiting merge). Then **R4** (per-node matcher worker, #679 — proposes,
-  never links) and **R5** (banner + worklist, #680; #700, #723). Plan each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b, R3 and **R4** are built and merged or in review (entries below); **R5** (banner +
+  worklist, #680; #700, #723) follows — after #725 by recommendation. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
-### 2026-09-27 — repair path R2a: a human's link judgement outranks a machine's (PR #698)
+### 2026-09-27 → 10-03 — repair path R2a, R2b-1, R2b-2, R1b (PRs #698, #707, #711, #717)
 
-Merged 2026-09-28; plan `docs/superpowers/plans/2026-09-27-repair-path-r2a-link-precedence-floor.md`; ADR-0076
-decisions 4–5; `db/055`, `SCHEMA_GENERATION` 54 → **55** (#284).
-- **Built:** `patient_link.attested` (db/018) and `cairn_link_overlay_wins` — attested first, then HLC; db/055's
-  backfill, generation heal and own re-fold (#703); `chart_link` `link_charts`/`unlink_charts` with a human `Reviewer`,
-  reading back `LinkOutcome::effect` (`TookEffect`/`Outranked`/`StillJoined`) in its own transaction, one lock order
-  (proposal row, then CARNLK); `auto_apply` answers `AlreadyJudged`; CLI `link-charts` / `unlink-charts`. Tests:
-  `link_precedence.rs`, `chart_link.rs` (incl. a `pg_stat_activity` lock-order test), `auto_apply.rs`.
-- **Filed:** #699 (neither-held unlink; decided (a) in R2b-2) · #700 (auto-apply's judged-pair skip races; a skipped
-  proposal stays `pending` — R5's worklist must filter it) · #701 (db/054 should read `pl.attested`) · #702 (a floor
-  refusal reads as a bare `db error` — addressed) · #703 · #704 · #705 · #706.
-- **§1.2:** paper 3 → forced 3 → target 3 (2 from R5's banner); review-and-link ≤ 20 s owed by the runbook pass.
-
-### 2026-09-29 — repair path R2b-1: "Same person as…" (link) built (PR #707)
-
-Merged 2026-09-29; plan `docs/superpowers/plans/2026-09-29-repair-path-r2b1-same-person-as.md`; the design page's
-as-built note lists every deviation. No ADR, no SQL object.
-- **Built:** `cairn_node::patient::compare` (`chart_facts`; `cross_vetoes` over BOTH displayed sets); `chart_link`'s
-  pre-check refusals as marked verdicts (#702); `cairn-gui-tauri/src/link/{view,mod,search}.rs` and `src-ui/link.js`
-  (findings first, "This record"/"Other record", **Link — same person**). Link names BOTH compared sets; every panel
-  message goes through `setMessage`; a `/review-pr` round fixed 7 Important defects. Tests: `patient/compare.rs`,
-  `tests/chart_compare.rs`, `link/view_tests.rs`, `link/mod.rs`; the panel walked headless (no JS harness, #332; the
-  view tests split at 500 lines, #467 guard).
-- **Filed:** #708 (`link_charts` should re-check both compared sets in its transaction) · #709 (a link outcome can go
-  unseen when it lands after the chart changed) · #710 (review-round residuals).
-- **§1.2:** paper 3 (fetch, lay side by side, clip) → forced 3 (find → Compare → Link) → target 3 (2 from R5's banner);
-  review-and-link ≤ 20 s, runbook §9 — a human act.
-
-### 2026-09-30 — repair path R2b-2: "Not the same person…" (unlink) and #699 (a) built (PR #711)
-
-Merged 2026-09-30; plan `docs/superpowers/plans/2026-09-30-repair-path-r2b2-not-the-same-person.md`;
-**[ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md)** (spec **v0.79**)
-records #699 (a). No SQL object.
-- **Built:** `chart_link/admit.rs` (pure `FiledUnder::{Subject, RecordOf}`) and `judge.rs` ("still joined?" asked of
-  the SUBJECTS; a `RecordOf` re-check under CARNLK); CLI `unlink-charts --from`; `patient::edges::record_edges`; the
-  pane's per-LINK "How these charts are linked" list with `compare_linked` / `unlink_records`; `src-ui/unlink.js`;
-  runbook §10. Tests: `admit.rs`; `tests/unlink_from_record.rs`, `tests/record_edges.rs`, `tests/chart_link.rs`; a
-  deterministic CARNLK race test.
-- **Filed:** #713 (a retry after a committed Outranked can silently overrule a colleague) · #714 (`CanonicalPair` /
-  `JudgedFrom` newtypes) · #715 (`link.js` drift guard) · #712 (`chart_set.rs` over 500, wiring tests).
-- **§1.2:** paper 2 (unclip, annotate) → forced 1 → target 2; review-and-unlink ≤ 15 s, runbook §10 — a human act.
-
-### 2026-10-03 — repair path R1b: a doubted set withholds every line not on the opened chart (#697 (b), #701; PR #717)
-
-Merged 2026-10-03; plan `docs/superpowers/plans/2026-10-03-repair-path-r1b-doubted-link-withholds.md`; design page
-section R1b + its as-built note. db/054's `cairn_chart_set_has_doubted_link` body changed; generation stays **55**.
-- **Built:** `WrongChartReasons { outside_set, doubted_link }` beside the kept, fail-safe `cross_patient`;
-  `is_wrong_chart_hazard()` / `hazard_reasons()` (status-blind) / `withheld_reasons()`; `WithheldLine`;
-  `DOUBTED_LINK_INSTRUCTION` (`cairn-medication-view`). The pure rule `medication/hazard.rs::wrong_chart_reasons`:
-  in a doubted set every line not recorded ONLY on the opened chart is withheld. db/054 reads the stored
-  `pl.attested` (#701) and counts an ATTESTED unlink between two charts still in the set as a doubt (the A–C–X
-  bridge). Per-reason wording in the window and the CLI (`list_text`, one `doubted_link_note` below the list).
-- **Tests:** `hazard.rs`/`read.rs` units (mutation-checked); `tests/doubted_link_withholds.rs` (10 DB tests incl. the
-  mirror, #220's path, #701, the bridge with a line on the bridge chart, an un-attested unlink is no doubt); a golden
-  for the unchanged outside-set CLI strings.
-- **Filed:** #716 (the window cannot confirm a standing link, nor show which link is in doubt) · #718 (db/054's
-  SECURITY DEFINER no longer has a reason) · #719 (residuals) · #720 (`wrong_chart` the only Rust source of truth).
-  Commented #335 (the doubt state can change between display and sign-off).
-- **§1.2:** two clipped folders, one page in doubt. Reading 1 → 1 → 1; sign-off 1 → 1 → 1; lifting the hold 1 → 1 → 1
-  **per doubted link** (confirm CLI-only until #716); in the A–C–X bridge CONFIRMING A–C or C–X never lifts it.
+All merged; each plan is under `docs/superpowers/plans/` and each slice has an as-built note on the design page. Durable
+rules: HANDOVER's per-slice blocks.
+- **R2a — a human's link judgement outranks a machine's** (ADR-0076 decisions 4–5; `db/055`, generation **55**):
+  `patient_link.attested`, `cairn_link_overlay_wins` (attested first, then HLC), db/055's backfill + heal + re-fold
+  (#703); `chart_link` `link_charts`/`unlink_charts` with a human `Reviewer`, `LinkOutcome::effect` read back in its own
+  transaction, one lock order (proposal row, then CARNLK); CLI `link-charts`/`unlink-charts`. Filed #699 (decided (a),
+  built in R2b-2) · #700 · #701 (fixed in R1b) · #702 (addressed) · #703 · #704 · #705 · #706. §1.2 3 → 3 → 3.
+- **R2b-1 — "Same person as…"**: `patient::compare` (`cross_vetoes` over BOTH displayed sets), marked pre-check
+  refusals, the compare-and-link panel (`link/{view,mod,search}.rs`, `link.js`); every message through `setMessage`.
+  Filed #708 · #709 · #710. §1.2 3 → 3 → 3 (2 from R5's banner), ≤ 20 s owed (runbook §9).
+- **R2b-2 — "Not the same person…"** ([ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md),
+  spec **v0.79**): `chart_link/admit.rs` + `judge.rs` (the SUBJECTS asked "still joined?", a `RecordOf` re-check under
+  CARNLK), `unlink-charts --from`, `record_edges`, the per-LINK list and `unlink.js`, runbook §10. Filed #712 · #713 ·
+  #714 · #715. §1.2 2 → 1 → 2, ≤ 15 s owed.
+- **R1b — a doubted set withholds every line not on the opened chart** (#697 (b), #701): `WrongChartReasons` beside the
+  kept `cross_patient`; `is_wrong_chart_hazard()` / `hazard_reasons()` / `withheld_reasons()`; db/054 reads the stored
+  `pl.attested` and counts an attested unlink inside the set (the A–C–X bridge); per-reason wording, the CLI's one
+  `doubted_link_note`. Filed #716 · #718 · #719 · #720; commented #335. §1.2 1 → 1 → 1 per doubted link.
 
 ### 2026-10-03 — repair path R3: the front door collapses by person (ADR-0076 decision 6; PR #721)
 
-Built and merged on PR [#721](https://github.com/cairn-ehr/cairn-ehr/pull/721). Plan
-`docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`; design page section R3 + its as-built note
-(and the SDD ledger's rulings R1–R11). No SQL object, no wire change; `SCHEMA_GENERATION` stays **55**. Maintainer's
-decisions in the brainstorm: each member line is its own open target; browse collapses too, not only the prompt.
-- **Built:** `cairn-patient-search` — `PersonRow` (never empty; a JSON array of candidates), the pure
-  `group_by_person` (a row sits at its best-ranked member; unmatched members follow, oldest first; a missing component
-  is `MissingComponent`, never a row of one), `CandidateList.people`, `charts()` and `displayed_charts()` (the ONE
-  list `SearchAttestation::from_displayed` signs), `TrustState::Unknown`. `cairn-node` — `patient/search_person.rs`
-  (`read_components`, one `unnest` × `cairn_person_charts` statement that refuses a component without its own chart;
-  `display_name_for`; `trust_state_for`), and `patient/candidate_text.rs` (the CLI's lines out of `main.rs`; a linked
-  member prints as "↳ linked: …"). A chart not held here reads `Unknown` and "(registration not yet received here)"
-  and no longer sets the signed `incomplete` flag; a HELD nameless member still does. `cairn-gui-funnel` — the prompt
-  cap counts ROWS and never splits one (`PromptCounts::shown_charts`). `cairn-gui-tauri` — `funnel/rows.rs`
-  (`PersonRowView`, "One person — N linked charts", `people_phrase`, `charts_suffix`), an open button per member,
-  `AppState::shown` holds every member, the label announced via `aria-describedby`; the link panel's search collapses
-  too ("This record (N charts) also matched and is not listed"), and `link.js`'s search read is guarded (`found`).
-- **Tests:** `person.rs` units; `tests/search_by_person.rs` (8 DB tests: a linked pair is one row, the matched member
-  leads its row, best-member placement, an unmatched linked chart shown and signed, a member not held here, a
-  never-linked golden, a matched chart not held here, and the end-to-end registration that reads `search.displayed`
-  back); `prompt.rs`'s row-cap test; goldens for every single-chart sentence (`view.rs`, `candidate_text.rs`,
-  `link/search.rs`); `commands.rs`'s open tests; the webview-fields guards.
-- **Filed:** #722 (the `--mock` window has no linked pair, so a person row cannot be walked in `--mock`) · #723 (the
-  front door calls a doubted set "One person" — belongs with R5's doubt work).
-- **§1.2:** paper counterpart: the card index, where two folders found to be one patient are clipped into ONE slot.
-  Finding 1 → 1 → 1; opening 1 → 1 → 1; registering after the prompt 1 → 1 → 1. `M ≤ N`; no new act. One added query
-  per search (the component read); budget unchanged (find ≤ 5 s, register ≤ 20 s, runbook §8 — a human act). The load
-  falls: one person takes one of the prompt's five places instead of two.
+Merged. Plan `docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`; design page R3 + as-built note.
+No SQL object; generation stays 55. Maintainer's decisions: each member line is its own open target; browse collapses too.
+- **Built:** `PersonRow` / pure `group_by_person` / `CandidateList.displayed_charts()` (the ONE signed list) /
+  `TrustState::Unknown` (`cairn-patient-search`); `patient/search_person.rs` (one component read; a missing component
+  fails the search) and `patient/candidate_text.rs` (`cairn-node`); the prompt cap counts ROWS (`cairn-gui-funnel`);
+  `funnel/rows.rs`, an open button per member, `aria-describedby` labels (`cairn-gui-tauri`). A chart not held here
+  reads `Unknown` and no longer sets the signed `incomplete`. Tests: `person.rs`, `tests/search_by_person.rs` (8 DB
+  tests), single-chart goldens. Durable rules: HANDOVER.
+- **Filed:** #722 (`--mock` has no linked pair) · #723 (a doubted set called "One person" — with R5).
+- **§1.2:** the card index's clipped slot. Find, open, register 1 → 1 → 1 each; one added query per search.
+
+### 2026-10-04/05 — repair path R4: the commit-time duplicate check (ADR-0076 decision 7; PR #724)
+
+Built on PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) (Refs #679). Plan
+`docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md`; design page "R4 — designed 2026-10-04" + its
+**as-built note** (every deviation and the measurement); the SDD ledger's rulings R1–R21. `db/056_match_pending.sql`,
+`SCHEMA_GENERATION` 55 → **56** (cairn-sync's list lags, #284). No wire change. Maintainer's decisions: the node read +
+CLI now, the window's lines with R5; a standalone operator-run worker; an append-only notice log.
+- **Built:** db/056 — `match_pending` (append-only notices), a structurally non-raising definer hook on the six matcher
+  inputs (`patient_chart` INSERT-only), `match_worker_state`, `cairn_duplicate_check_status()` (quiet time = since the
+  later of the OLDEST waiting notice and the worker's last COMPLETED work) and `cairn_chart_check_pending(uuid)` (TRUE
+  until a worker has run, while a notice waits, and for a chart not held here). Matcher — `targeted.py` (the sweep's
+  own SQL filtered to one chart; the drift canary), `judged.py` (skip judged pairs, both modes), `assess`/`persist`,
+  `queue_db.py` (delete exactly the notice ids READ), `worker.py` (per chart newest-first, batch 1, rollback after
+  every read; one sweep above 30 waiting; success-only progress), `watch.py`, `cairn-matcher watch` (psycopg ≥ 3.2),
+  `eval/measure_check.py`. Node — `duplicate_check.rs` (`classify`, `status_line`, `chart_line`, two reads) and
+  `cairn-node duplicate-check [--patient]` (no schema replay). Runbook `docs/developers/running-the-duplicate-check.md`.
+- **Measured** (M3 Max, PG 18.1): per-chart p95 590 ms at 2 000 records, **9 651 ms at 10 000** (budget was ≤ 2 s) —
+  the blocking SQL (~7 s), not the pairs; one sweep 37.6 s / 129.9 s.
+- **Filed:** #725 (the per-chart blocking pass — fix before R5) · #726 (every-connect DDL takes ACCESS EXCLUSIVE) · #727
+  (bulk mode has no poison isolation) · #728 (measure on the Pi) · #729 (mode chosen once per round) · #730 (the
+  101–1000 skipped-block band) · #731 (no "charts failing" signal) · #732 (conftest leaves `patient_chart`). Commented #680.
+- **§1.2:** the clerk's possible-duplicate tray. At the desk 0 → 0 → 0; the operator's status line is not a clinical
+  gesture. Registration-to-proposal latency measured above (#725, #728).
 
 ## Above the foundation line (NOT in this roadmap)
 
