@@ -1,5 +1,6 @@
 """R4 Task 5: the drain — newest first, a poison chart held, a big backlog swept once."""
 
+import itertools
 import uuid
 
 from cairn_matcher.pipeline import queue_db, worker
@@ -186,12 +187,19 @@ def test_bulk_mode_never_reproposes_a_judged_pair_in_reconciliation(pg_conn, mon
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal WHERE status = 'pending'") == 1
 
 
-def test_a_bulk_drain_stamps_progress_before_and_during_the_sweep(pg_conn, monkeypatch):
-    # R4 ruling R13: the node reads "behind" only when nothing new arrived AND the worker made no
-    # progress for five minutes. A sweep can run for minutes, so run_bulk stamps progress (and
-    # COMMITS it, so the node can see it) once before the sweep and, throttled, as pairs complete.
+def _node_sees_progress() -> bool:
+    """What another session (the node's status read) sees: has a progress stamp been COMMITTED?"""
     import psycopg
 
+    with psycopg.connect(cairn_test_dsn()) as other:
+        return other.execute(
+            "SELECT last_drained_at IS NOT NULL FROM match_worker_state").fetchone()[0]
+
+
+def test_a_bulk_drain_stamps_progress_as_sweep_pairs_complete(pg_conn, monkeypatch):
+    # R4 rulings R13/R15: the node reads "behind" only when nothing new arrived AND the worker made
+    # no progress for five minutes. A sweep can run for minutes, so run_bulk stamps progress (and
+    # COMMITS it, so the node can see it), throttled, as pairs COMPLETE -- never before any work.
     from cairn_matcher.pipeline import sweep as sweep_mod
 
     _state(pg_conn)                                  # last_drained_at starts NULL
@@ -205,17 +213,37 @@ def test_a_bulk_drain_stamps_progress_before_and_during_the_sweep(pg_conn, monke
 
     def propose(conn, a, b, **kw):
         events.append("propose")
-        if len(seen_by_node) == 0:                   # what another session (the node) sees now
-            with psycopg.connect(cairn_test_dsn()) as other:
-                seen_by_node.append(other.execute(
-                    "SELECT last_drained_at IS NOT NULL FROM match_worker_state").fetchone()[0])
+        if len(seen_by_node) < 2:                    # before the 1st and the 2nd pair
+            seen_by_node.append(_node_sees_progress())
         return real_propose(conn, a, b, **kw)
 
     monkeypatch.setattr(queue_db, "stamp_drained", stamp)
     monkeypatch.setattr(sweep_mod, "propose", propose)
-    ticks = iter(range(0, 10_000, 31))               # every call 31 s later: every stamp is due
+    ticks = itertools.count(0, 31)                   # every call 31 s later: every stamp is due
     worker.run_bulk(pg_conn, Settings(), clock=lambda: float(next(ticks)))
-    assert events[0] == "stamp"                      # a sweep begins as progress ...
-    assert seen_by_node == [True]                    # ... committed, so the node sees it
+    assert events[:2] == ["propose", "stamp"]        # the first stamp follows the first pair ...
+    assert seen_by_node == [False, True]             # ... committed, so the node sees it
     first, last = events.index("propose"), len(events) - 1 - events[::-1].index("propose")
-    assert "stamp" in events[first:last + 1]          # ... and progress is stamped mid-sweep
+    assert events[first:last + 1].count("stamp") > 1  # ... and progress keeps being stamped
+
+
+def test_a_sweep_whose_blocking_raises_stamps_no_progress(pg_conn, monkeypatch):
+    # R4 ruling R15 (the R8 crash-loop): a data-triggered error in the sweep's blocking aborts the
+    # sweep before any pair completes. Every retry (watch's backoff, a supervisor restart) must
+    # leave the progress stamp untouched, so after five quiet minutes the node reads "behind"
+    # instead of "running" forever while nothing is checked.
+    import pytest
+
+    from cairn_matcher.pipeline import db
+
+    _state(pg_conn)                                  # last_drained_at starts NULL
+    _backlog(pg_conn, 600)
+
+    def broken(conn, **kw):
+        raise RuntimeError("bad data in the blocking SQL")
+
+    monkeypatch.setattr(db, "generate_candidate_pairs", broken)
+    with pytest.raises(RuntimeError):
+        worker.run_bulk(pg_conn, Settings(), clock=lambda: 0.0)
+    pg_conn.rollback()
+    assert _node_sees_progress() is False

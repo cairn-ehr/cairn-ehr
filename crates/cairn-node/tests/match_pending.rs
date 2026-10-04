@@ -323,3 +323,33 @@ async fn the_worker_role_can_do_exactly_its_job() {
         .expect("the node role reads the status");
     c.batch_execute("RESET ROLE").await.unwrap();
 }
+
+/// A database that loaded db/056's pre-merge shape (`newest_age_s`) is healed on the next connect:
+/// `CREATE OR REPLACE` cannot change a function's OUT columns, so the file's guarded DROP removes
+/// the old shape first. Without it every connect to such a database would fail.
+#[tokio::test]
+async fn a_database_with_the_old_status_shape_is_healed_on_connect() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute(
+        "DROP FUNCTION cairn_duplicate_check_status(); \
+         CREATE FUNCTION cairn_duplicate_check_status(OUT charts_waiting bigint, \
+           OUT newest_age_s bigint, OUT config_recheck boolean, OUT worker_seen boolean, \
+           OUT last_drained_hhmm text) LANGUAGE sql AS $$ SELECT 0::bigint, NULL::bigint, \
+           false, false, NULL::text $$;",
+    )
+    .await
+    .unwrap();
+    let healed = db::connect_and_load_schema(&base)
+        .await
+        .expect("loading the schema over the old shape must not fail");
+    let r = healed
+        .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
+        .await
+        .unwrap();
+    assert!(r.columns().iter().any(|col| col.name() == "quiet_age_s"));
+}

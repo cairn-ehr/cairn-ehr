@@ -42,11 +42,13 @@ CREATE TABLE IF NOT EXISTS match_pending (
 CREATE INDEX IF NOT EXISTS match_pending_patient_idx ON match_pending (patient_id, id);
 
 -- One row, written only by the worker: the matcher_version it last ran (a change re-queues every
--- chart) and last_drained_at, the worker's PROGRESS stamp — written after each chart it checks,
--- at the start of a sweep and (throttled) during one, and after an empty round. It is both the
--- status line's "last ran HH:MM" (last active) and the "no progress" half of the stalled rule
--- (cairn_duplicate_check_status). Its ABSENCE means no worker has ever run on this node — see
--- cairn_chart_check_pending.
+-- chart) and last_drained_at, the worker's PROGRESS stamp. Only completed work writes it: after
+-- each chart it checks, about every 30 s while a sweep is scoring pairs, at a sweep's end, and
+-- after an empty round. Never at the start of a sweep or during its blocking phase, so a sweep
+-- that fails before scoring a pair (and is retried, and fails again) leaves it untouched (ruling
+-- R15). It is both the status line's "last ran HH:MM" (last active) and the "no progress" half of
+-- the stalled rule (cairn_duplicate_check_status). Its ABSENCE means no worker has ever run on
+-- this node — see cairn_chart_check_pending.
 CREATE TABLE IF NOT EXISTS match_worker_state (
     singleton       BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     matcher_version TEXT        NOT NULL,
@@ -121,9 +123,13 @@ $$;
 -- The OUT columns changed (newest_age_s -> quiet_age_s), and CREATE OR REPLACE cannot change a
 -- function's return type. This heals a database that loaded this file's pre-merge shape; it is a
 -- no-op everywhere else (the old column name is the guard).
+-- to_regprocedure resolves the name exactly as the DROP below will (same search_path, no
+-- arguments) and is NULL when no such function exists, so the guard inspects the very function it
+-- would drop, never a same-named one in another schema.
 DO $$ BEGIN
-    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_duplicate_check_status'
-               AND 'newest_age_s' = ANY (proargnames)) THEN
+    IF EXISTS (SELECT 1 FROM pg_proc
+               WHERE oid = to_regprocedure('cairn_duplicate_check_status()')
+                 AND 'newest_age_s' = ANY (proargnames)) THEN
         DROP FUNCTION cairn_duplicate_check_status();
     END IF;
 END $$;

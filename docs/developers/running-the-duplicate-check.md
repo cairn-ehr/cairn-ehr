@@ -81,8 +81,11 @@ It only reads. The node-wide line is one of four states:
 | Up to date | `Duplicate check up to date — last ran HH:MM.` (or `Duplicate check up to date.` when the worker has no last-ran time yet) |
 
 "Behind" means charts are waiting **and nothing has happened for five minutes**: no new notice arrived
-and the worker recorded no progress. A running worker records progress after every chart it checks and
-at least every 30 seconds during a sweep, so five quiet minutes mean it is stopped or stuck. A healthy
+and the worker recorded no progress. Only finished work counts as progress: the worker records it after
+every chart it checks and about every 30 seconds while a sweep is scoring pairs. Starting a sweep does
+not count, and neither the sweep's first phase (finding the candidate pairs) nor a single slow pair
+records anything. So five quiet minutes mean the worker is stopped, keeps failing and restarting, or is
+stuck in one piece of work that long. A healthy
 worker working through a restore's backlog therefore reads "running", however old the queued notices
 are; a shrinking `N charts waiting` between two runs of the command (and, after a sweep, the worker's
 `swept a backlog of …` log line) shows it working. "Last ran HH:MM" is when the worker was last active.

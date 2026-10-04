@@ -20,9 +20,11 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 /// How long the queue may be quiet — charts waiting, but no new notice and no worker progress —
-/// before the check counts as stalled. Soft policy: a running worker stamps progress after every
-/// chart (seconds apart) and at least every 30 s during a sweep, so five minutes of silence means
-/// it is stopped or stuck.
+/// before the check counts as stalled. Soft policy. Only completed work stamps progress: a running
+/// worker stamps after every chart it checks (seconds apart) and about every 30 s while a sweep is
+/// scoring pairs. A sweep's blocking phase, and a single slow pair, stamp nothing. So five minutes
+/// of silence means the worker is stopped, crash-looping, or stuck in work that long — each worth
+/// the "behind" line.
 pub const STALLED_AFTER_SECS: i64 = 5 * 60;
 
 /// One read of db/056's `cairn_duplicate_check_status()`.

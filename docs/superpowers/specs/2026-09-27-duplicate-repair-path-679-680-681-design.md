@@ -818,7 +818,8 @@ not survive contact with the code, and the maintainer decided three questions in
   - **Stalled** (the newest waiting notice is older than the threshold — *as built: charts wait and
     neither a new notice nor worker progress for longer than the threshold, R13*): *"Duplicate check is behind
     — last ran HH:MM; N charts waiting."*
-  - **CatchingUp** (notices are waiting, the newest is fresh): *"Duplicate check running — N charts
+  - **CatchingUp** (notices are waiting, the newest is fresh — *as built: charts wait and a new
+    notice or worker progress came within the threshold, R13*): *"Duplicate check running — N charts
     waiting"*, plus *"(re-checking all charts after a matcher update)"* during a `config` re-check.
   - **Current** (nothing waiting): *"Duplicate check up to date — last ran HH:MM."*
   
@@ -900,14 +901,23 @@ reason, because four of them correct sentences in the design itself.
   neither a new notice nor any worker progress has happened for more than the threshold.** db/056's
   `cairn_duplicate_check_status()` returns `quiet_age_s` = seconds since `GREATEST(max(queued_at),
   last_drained_at)` (NULL when nothing waits) in place of `newest_age_s`; a guarded `DROP` heals a
-  database that loaded the earlier shape. `last_drained_at` became the worker's progress stamp: after
-  each chart (as before), once before a sweep, and during a sweep at most every 30 s
+  database that loaded the earlier shape. `last_drained_at` became the worker's progress stamp,
+  written **only by completed work** (ruling R15): after each chart (as before), and during a sweep
+  about every 30 s while pairs are being scored — after a pair completes, at most once per 30 s
   (`sweep(on_progress=…)`, called after each pair's own transaction has ended; `worker_plan.Throttle`).
-  "Last ran HH:MM" therefore reads as "last active".
+  Never before work: an earlier fix stamped once before each sweep, which let the R8 crash-loop
+  (blocking raises, the worker retries) refresh the stamp on every retry and read "running" forever
+  while nothing was checked. A sweep's blocking phase and a single slow pair stamp nothing; a backlog's
+  freshly queued notices keep the quiet time low meanwhile, and a blocking phase longer than the
+  threshold honestly reads "behind". "Last ran HH:MM" therefore reads as "last active".
 - **R8 — bulk mode has no poison isolation (known gap).** Per-chart mode isolates a chart that
   raises (it is held and retried later). A data-triggered error inside the sweep's blocking aborts the
-  whole sweep; while the backlog stays over the threshold the worker crash-loops. Nothing reads
-  falsely "checked" (the notices stay), but the check stops making progress. Filed as an issue.
+  whole sweep; while the backlog stays over the threshold the worker retries and fails again — in
+  process with the ≤ 60 s backoff for an `OperationalError` (a statement timeout, say), or by exiting
+  and being restarted by its service manager for any other error. Nothing reads falsely "checked" (the
+  notices stay), but the check stops making progress. Because only completed work stamps progress
+  (R15), the status line turns to "behind" once five minutes pass with no new notice and no completed
+  work. Filed as an issue.
 
 **The measurement.** `matcher/src/cairn_matcher/eval/measure_check.py` seeds a generated population in
 one transaction (rolled back afterwards; the seeded tables are ANALYZEd inside it so the planner sees

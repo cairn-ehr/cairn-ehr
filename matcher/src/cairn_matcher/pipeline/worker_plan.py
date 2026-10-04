@@ -52,9 +52,9 @@ class Throttle:
     The node reads the duplicate check as "behind" when charts wait and the worker has shown no
     progress for five minutes (db/056, ruling R13). A sweep proposes thousands of pairs; stamping
     after every one would be a write per pair, so the worker stamps only when the throttle is due.
-    The FIRST call is always due (a sweep begins as progress); after that, `due` is True once a
-    full interval has passed since the last True. `now` is injected (a monotonic clock in
-    production, a fake one in tests), so this stays pure.
+    The FIRST call is always due (the sweep's first completed pair stamps); after that, `due` is
+    True once a full interval has passed since the last True. `now` is injected (a monotonic
+    clock in production, a fake one in tests), so this stays pure.
     """
 
     interval_s: float
