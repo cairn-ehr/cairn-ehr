@@ -23,5 +23,6 @@ def test_watch_once_checks_every_chart_and_exits_zero(pg_conn):
         assert cur.fetchone()[0] is True
 
 
-def test_watch_once_exits_two_when_the_database_is_unreachable():
+def test_watch_once_exits_two_when_the_database_is_unreachable(caplog):
     assert main(["watch", "--once", "--dsn", "host=127.0.0.1 port=1 connect_timeout=2"]) == 2
+    assert "OperationalError" in caplog.text, caplog.text   # the error class is named

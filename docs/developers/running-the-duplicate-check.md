@@ -51,7 +51,7 @@ With no `--dsn` the standard libpq environment is used (`PGHOST`, `PGPORT`, `PGU
 | Flag | Default | Meaning |
 |---|---|---|
 | `--dsn` | empty (use `PG*`) | libpq connection string |
-| `--once` | off | drain the queue once and exit (0 = clean, 1 = a chart failed, 2 = database unreachable) |
+| `--once` | off | drain the queue once and exit: 0 = clean; 1 = a chart failed, or an uncaught non-database error (a traceback); 2 = a database error (unreachable, or e.g. a statement timeout — the log names its class) |
 | `--poll-seconds` | 60 | how long to wait for a notification before looking again (a backstop for a missed `NOTIFY`) |
 | `--bulk-threshold` | 30 | more than this many charts waiting: do one full sweep instead of per-chart checks (30 comes from the measured break-even; see below) |
 | `--max-block-size` | 1000 | the largest block of look-alike charts the per-chart check will pair up (bigger blocks are skipped and logged as a warning, never silently truncated) |

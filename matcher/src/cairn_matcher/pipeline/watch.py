@@ -22,8 +22,10 @@ def watch(dsn: str, settings: Settings, *, once: bool = False) -> int:
 
     LISTEN is issued BEFORE the first drain, so a notice committed between a drain and the wait
     still wakes us. A poll (settings.poll_s) backs NOTIFY up across a reconnect. With `once`,
-    drain a single time and return 0 (1 if any chart failed; 2 if the database is unreachable).
-    Otherwise a lost connection is retried with a backoff capped at 60 s.
+    drain a single time and return 0 (1 if any chart failed; 2 on a database OperationalError --
+    unreachable, or e.g. a statement timeout -- logged with its class name). Any other uncaught
+    error propagates (a traceback; the process exits 1). Otherwise a lost connection is retried
+    with a backoff capped at 60 s.
     """
     import psycopg
 
@@ -46,12 +48,20 @@ def watch(dsn: str, settings: Settings, *, once: bool = False) -> int:
                     backoff = 1.0
                     if once:
                         return 0 if report.failed == 0 else 1
-                    # Sleep until a notice arrives or the poll interval passes.
+                    # Sleep until a notice arrives or the poll interval passes ...
                     for _ in listen.notifies(timeout=settings.poll_s, stop_after=1):
+                        pass
+                    # ... then swallow, without waiting, every notification already received:
+                    # those that piled up during a long drain (one per committing write) are all
+                    # answered by the ONE drain that follows, not by one drain each.
+                    for _ in listen.notifies(timeout=0):
                         pass
         except psycopg.OperationalError as exc:
             if once:
-                log.error("cannot reach the database: %s", exc)
+                # Name the error class: OperationalError covers more than an unreachable server
+                # (QueryCanceled -- a statement timeout -- is one), and the operator needs to know
+                # which it was.
+                log.error("database error: %s: %s", type(exc).__name__, exc)
                 return 2
             log.warning("database connection lost (%s); retrying in %.0fs", exc, backoff)
             time.sleep(backoff)
