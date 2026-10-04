@@ -272,3 +272,44 @@ def test_a_sweep_in_which_every_pair_fails_stamps_no_progress(pg_conn, monkeypat
     assert result.generated > 0 and len(result.errors) == result.generated
     assert seen_by_node == [False, False, False]     # nothing stamped during the sweep ...
     assert _node_sees_progress() is False            # ... nor after it
+
+
+def test_a_change_arriving_mid_drain_is_checked_next_ahead_of_older_ones(pg_conn, monkeypatch):
+    # The DEFAULT settings: the drain re-queries after every chart, so a registration committed
+    # while one chart is being checked goes next, ahead of the older charts still waiting (a
+    # batch fetched up front would make it wait behind all of them, ~9 s each at 10 000 charts).
+    import psycopg
+
+    _state(pg_conn)
+    for p in (A, B, C):                       # C newest: checked first
+        seed_patient(pg_conn, p, names=[(f"Name {p[-2:]}", 20)])
+    fresh = str(uuid.UUID(int=24))
+    real, seen = worker.check_chart, []
+
+    def check(conn, patient, settings):
+        if not seen:                          # while the first chart is being checked ...
+            with psycopg.connect(cairn_test_dsn()) as other:
+                seed_patient(other, fresh, names=[("Fresh Arrival", 20)])
+        seen.append(patient)
+        return real(conn, patient, settings)
+
+    monkeypatch.setattr(worker, "check_chart", check)
+    _drain(pg_conn, Settings())
+    assert seen == [C, fresh, B, A]
+
+
+def test_a_skipped_oversized_block_is_logged_per_chart(pg_conn, caplog):
+    # The per-chart check never silently truncates: a block over max_block_size is reported in
+    # the ChartResult, and the drain logs it (pass, key, size) so an operator can see it.
+    import logging
+
+    _state(pg_conn)
+    for p in (A, B, C):                       # one name block of three charts
+        seed_patient(pg_conn, p, names=[("Mary Smith", 20)])
+    with caplog.at_level(logging.WARNING, logger="cairn_matcher.worker"):
+        _drain(pg_conn, Settings(max_block_size=2))
+    skipped = [r.getMessage() for r in caplog.records
+               if r.levelno == logging.WARNING and "skipped" in r.getMessage()]
+    assert len(skipped) == 3, skipped         # one line per chart
+    assert all("size 3" in m for m in skipped), skipped
+    assert any(A in m for m in skipped), skipped

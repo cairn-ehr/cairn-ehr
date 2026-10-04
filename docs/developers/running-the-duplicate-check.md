@@ -54,13 +54,29 @@ With no `--dsn` the standard libpq environment is used (`PGHOST`, `PGPORT`, `PGU
 | `--once` | off | drain the queue once and exit (0 = clean, 1 = a chart failed, 2 = database unreachable) |
 | `--poll-seconds` | 60 | how long to wait for a notification before looking again (a backstop for a missed `NOTIFY`) |
 | `--bulk-threshold` | 30 | more than this many charts waiting: do one full sweep instead of per-chart checks (30 comes from the measured break-even; see below) |
-| `--max-block-size` | 1000 | the largest block of look-alike charts the per-chart check will pair up (bigger blocks are reported as skipped, never silently truncated) |
+| `--max-block-size` | 1000 | the largest block of look-alike charts the per-chart check will pair up (bigger blocks are skipped and logged as a warning, never silently truncated) |
 | `--pace-ms` | 0 | pause between charts, to be gentle on a busy node |
 
-While running, the worker listens for the database's `NOTIFY`, drains **newest change first** (a fresh
-registration is checked within seconds even while an old backlog waits), then sleeps. If the connection
-drops it reconnects with a backoff that doubles up to 60 s. A chart whose check raises is held for five
-minutes and then retried; its notices stay, so it keeps reading as "not yet checked".
+While running, the worker listens for the database's `NOTIFY`, drains **newest change first**, then
+sleeps. It re-reads the queue after every chart, so a fresh registration is checked next, ahead of older
+changes; at 10 000 charts one check takes ~9 s on the development machine (#725), and a sweep already
+running finishes first. If the connection drops it reconnects with a backoff that doubles up to 60 s. A
+chart whose check raises is held for five minutes and then retried; its notices stay, so it keeps reading
+as "not yet checked".
+
+**Very large look-alike blocks.** A block is a group of charts that share one blocking value (a name
+token, a date of birth, an identifier). The two modes cap it differently:
+
+- a **per-chart check** pairs the chart with every member of a block of up to `--max-block-size`
+  (default 1000, `DEFAULT_TARGETED_CAP`) charts;
+- a **bulk sweep** pairs every member with every other, so it keeps only blocks of up to 100 charts
+  (`sweep_block_size`).
+
+A bigger block is skipped, never silently: the per-chart check logs one warning per chart naming each
+skipped block (its pass, value and size), and the sweep logs how many blocks it skipped. So after a
+first run, a restore, a rebuild or a matcher update (all swept), a chart whose look-alike block has
+101–1000 members is cleared with fewer comparisons than a per-chart check would have made. It still
+reads "up to date"; whether it should stay "not yet checked" is an open design question.
 
 At start the worker compares its matcher configuration with the one recorded in the database. If they
 differ (or it has never run), every chart is queued for a re-check, because a changed scorer may judge

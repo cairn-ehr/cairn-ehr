@@ -10,6 +10,8 @@ not here.
 Requires the optional `pipeline` extra (psycopg) at call time, except drop_judged (pure).
 """
 
+import uuid
+
 from cairn_matcher.pipeline.blocking import canonical_pair
 
 
@@ -46,6 +48,13 @@ def judged_pairs(conn) -> frozenset[tuple[str, str]]:
 
 
 def drop_judged(pairs, patient, partners) -> list[tuple[str, str]]:
-    """The pairs whose OTHER side is not in `partners` (pure)."""
-    me = str(patient).lower()
+    """The pairs whose OTHER side is not in `partners` (pure).
+
+    `pairs` and `partners` hold canonical ids (lowercase, hyphenated: canonical_pair's form).
+    `patient` may arrive spelled any way uuid.UUID accepts (braced, upper-case, unhyphenated), so
+    it is canonicalised first. Without that, `p[0] == me` never holds for a differently spelled
+    id, the chart's OWN side reads as "the other", and -- since a chart is always its own partner
+    -- every pair where it is the low side is dropped as judged.
+    """
+    me = str(uuid.UUID(str(patient)))
     return [p for p in pairs if (p[1] if p[0] == me else p[0]) not in partners]

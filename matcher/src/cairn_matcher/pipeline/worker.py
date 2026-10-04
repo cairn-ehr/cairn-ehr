@@ -12,6 +12,7 @@ Requires the optional `pipeline` extra (psycopg).
 
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
@@ -41,6 +42,8 @@ PROGRESS_EVERY_S = 30.0
 class Settings:
     """The worker's knobs; the R4 as-built note on the design page explains the defaults."""
 
+    # The per-chart check keeps blocks up to DEFAULT_TARGETED_CAP (1000) members; a bulk sweep
+    # keeps only up to sweep_block_size (100). Skipped blocks are logged, never silently dropped.
     max_block_size: int = targeted.DEFAULT_TARGETED_CAP
     sweep_block_size: int = 100        # the sweep's own all-pairs cap, unchanged
     # Charts waiting above which one sweep beats checking each (ruling R11). Measured 2026-10-04
@@ -54,7 +57,12 @@ class Settings:
     # Operators override with `cairn-matcher watch --bulk-threshold`; re-measure once the
     # per-chart blocking is fixed.
     bulk_threshold: int = 30
-    batch: int = 50
+    # Charts fetched per queue read. 1 = re-read the queue after EVERY chart, so a change that
+    # arrives while a chart is being checked is checked next, ahead of older waiting changes.
+    # A larger batch would make it wait behind the whole batch (~9 s a chart at 10 000 records,
+    # #725). The re-read is cheap (one indexed GROUP BY over the waiting notices) next to a
+    # check that takes seconds; a backlog big enough to make it costly is swept first.
+    batch: int = 1
     retry_after_s: float = 300.0
     poll_s: float = 60.0
     pace_ms: int = 0
@@ -88,7 +96,9 @@ def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
     """
     from cairn_matcher.pipeline import db
 
-    me = str(patient).lower()
+    # ONE canonical id (lowercase, hyphenated) used for every step below: the pair helpers compare
+    # ids as text, and a braced or unhyphenated id would make the chart miss its own side.
+    me = str(uuid.UUID(str(patient)))
     ids = queue_db.notice_ids(conn, me)
     pairs, skipped = targeted.candidate_pairs_for(
         conn, me, max_block_size=settings.max_block_size)
@@ -122,7 +132,7 @@ def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
     queue_db.clear_notices(conn, ids)
     queue_db.stamp_drained(conn)
     conn.commit()
-    return ChartResult(patient, proposed, retracted, skipped)
+    return ChartResult(me, proposed, retracted, skipped)
 
 
 @dataclass(frozen=True)
@@ -181,6 +191,16 @@ def run_bulk(conn, settings: Settings, clock=time.monotonic) -> SweepResult:
     return result
 
 
+def describe_skipped(blocks) -> str:
+    """One log-ready phrase for a chart's oversized blocks (pure): "<pass> <value> size <n>; ...".
+
+    Each block is (pass_name, blocking value, member count) as targeted.candidate_pairs_for
+    returns it. The value is a non-discriminating one by definition (hundreds of charts share
+    it), or, for the anchored age-window passes, the anchor chart's id.
+    """
+    return "; ".join(f"{pass_name} {value!r} size {size}" for pass_name, value, size in blocks)
+
+
 def drain(conn, settings: Settings, book: RetryBook, clock=time.monotonic,
           sleep=time.sleep) -> DrainReport:
     """Drain the queue until nothing is left but held charts.
@@ -206,9 +226,14 @@ def drain(conn, settings: Settings, book: RetryBook, clock=time.monotonic,
             break
         for patient in batch:
             try:
-                check_chart(conn, patient, settings)
+                result = check_chart(conn, patient, settings)
                 book.succeeded(patient)
                 checked += 1
+                if result.skipped_blocks:
+                    # Checked, but not against the members of these blocks: say so.
+                    log.warning("duplicate check for %s skipped %d block(s) over %d charts: %s",
+                                patient, len(result.skipped_blocks), settings.max_block_size,
+                                describe_skipped(result.skipped_blocks))
             except Exception as exc:  # noqa: BLE001 — one bad chart must not stop the drain
                 conn.rollback()
                 book.failed(patient, clock())

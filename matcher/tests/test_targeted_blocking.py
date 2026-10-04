@@ -26,6 +26,13 @@ def test_pairs_with_pairs_me_with_each_other_member_canonically():
     }
 
 
+def test_pairs_with_never_pairs_a_differently_spelled_chart_with_itself():
+    me = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    for spelled in ("{" + me + "}", me.upper(), uuid.UUID(me).hex):
+        assert pairs_with(spelled, [a, me]) == {(a, me)}, spelled
+
+
 def test_targeted_pairs_equal_the_sweeps_pairs_for_every_chart(pg_conn):
     # Range-heavy AND name-heavy, so all eight passes and both range shapes (the chart as anchor,
     # the chart as a member of someone else's window) are exercised.

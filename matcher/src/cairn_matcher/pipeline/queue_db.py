@@ -21,8 +21,10 @@ def charts_waiting(conn) -> int:
 def next_charts(conn, limit: int, exclude: list[str]) -> list[str]:
     """Up to `limit` waiting charts, NEWEST change first (patient uuid text).
 
-    Newest first so a fresh registration is checked within seconds even behind a restore's
-    backlog. `exclude` is the RetryBook's held charts, so a poison chart never starves the rest.
+    Newest first so a fresh registration is checked next, ahead of older changes (the worker
+    re-reads the queue after every chart, Settings.batch = 1). At 10 000 charts one check takes
+    ~9 s on the development machine (#725), and a sweep already running finishes first.
+    `exclude` is the RetryBook's held charts, so a poison chart never starves the rest.
     """
     with conn.cursor() as cur:
         cur.execute(

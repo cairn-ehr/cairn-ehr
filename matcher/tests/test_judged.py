@@ -31,6 +31,26 @@ def test_drop_judged_keeps_only_pairs_whose_other_side_is_unjudged():
     assert drop_judged(pairs, A, frozenset({B, C})) == [canonical_pair(A, D)]
 
 
+def test_drop_judged_reads_the_other_side_when_the_patient_is_the_high_side():
+    # D is the HIGH side of (A, D) and (C, D): the other side is the pair's low member.
+    pairs = [canonical_pair(A, D), canonical_pair(C, D)]
+    assert drop_judged(pairs, D, frozenset({A})) == [canonical_pair(C, D)]
+
+
+def _spellings(patient):
+    """The same uuid as a caller might hand it over: braced, upper-case, unhyphenated."""
+    return ["{" + patient + "}", patient.upper(), uuid.UUID(patient).hex]
+
+
+def test_drop_judged_reads_any_spelling_of_the_patient_as_the_same_chart():
+    # The partners always include the chart itself (judged_partners). If `me` were compared as
+    # spelled, `p[0] == me` would never hold, the chart's OWN side would be read as "the other",
+    # and every pair where it is the low side would be dropped as judged -- half the check gone.
+    pairs = [canonical_pair(A, B), canonical_pair(A, D)]
+    for spelled in _spellings(A):
+        assert drop_judged(pairs, spelled, frozenset({A, B})) == [canonical_pair(A, D)], spelled
+
+
 def test_partners_are_the_component_and_every_link_row_either_state(pg_conn):
     # A–B linked (one component A,B,C via B–C); A–D a standing human unlink.
     for p in (A, B, C):

@@ -56,6 +56,17 @@ def test_a_strong_pair_is_proposed_and_never_linked(pg_conn):
     assert _count(pg_conn, "SELECT count(*) FROM patient_link") == 0
 
 
+def test_a_chart_id_spelled_differently_is_checked_in_full(pg_conn):
+    # A is the LOW side of (A, B). Checked under a braced, upper-case id, the chart must still
+    # recognise its own side of the pair; read as "the other side", A would count as judged (a
+    # chart is always its own partner) and the pair would be dropped unchecked.
+    _near_duplicates(pg_conn)
+    result = check_chart(pg_conn, "{" + A.upper() + "}", Settings())
+    assert result.proposed == 1
+    assert result.patient == A
+    assert _count(pg_conn, "SELECT count(*) FROM match_pending WHERE patient_id = %s", A) == 0
+
+
 def test_a_change_landing_mid_check_survives_and_is_checked_again(pg_conn, monkeypatch):
     import psycopg
 

@@ -61,7 +61,12 @@ _TARGETED_RANGE_SQL = (
 
 
 def pairs_with(me: str, members) -> set[tuple[str, str]]:
-    """Canonical pairs of `me` with every OTHER member (pure). Self-pairs are skipped."""
+    """Canonical pairs of `me` with every OTHER member (pure). Self-pairs are skipped.
+
+    `me` is canonicalised here (any spelling uuid.UUID accepts): the self-pair test compares
+    canonical text, so a braced or upper-case `me` would otherwise pair the chart with itself.
+    """
+    me = str(uuid.UUID(str(me)))
     out: set[tuple[str, str]] = set()
     for m in members:
         if str(uuid.UUID(str(m))) != me:
