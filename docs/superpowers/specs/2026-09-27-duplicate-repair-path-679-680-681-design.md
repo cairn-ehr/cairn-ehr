@@ -739,7 +739,8 @@ not survive contact with the code, and the maintainer decided three questions in
   `reproject --rebuild` or a new node's first pull queues every chart, and the oldest notice ages
   while fresh registrations are being checked within seconds. "Behind" is therefore measured by the
   NEWEST waiting notice. With a newest-first drain, a stale newest notice can only mean the worker is
-  not running or is stuck. The precise claim a banner needs is per chart (below).
+  not running or is stuck. The precise claim a banner needs is per chart (below). *(Corrected in the
+  build: a backlog queued all at once makes even the newest notice old — see R13 in "R4 — as built".)*
 - The `registration`/`assertion` reasons are dropped: nothing reads the difference, and telling them
   apart would need a lookup inside the hook. `reason` is `change` or `config`, and labels the status;
   it does not order the drain.
@@ -814,7 +815,8 @@ not survive contact with the code, and the maintainer decided three questions in
   notice, whether a `config` re-check is in progress, and `last_drained_at`. A pure
   `classify(status, now, threshold)` returns one of four states:
   - **NeverRun** (no worker-state row): *"Duplicate check has never run on this node."*
-  - **Stalled** (the newest waiting notice is older than the threshold): *"Duplicate check is behind
+  - **Stalled** (the newest waiting notice is older than the threshold — *as built: charts wait and
+    neither a new notice nor worker progress for longer than the threshold, R13*): *"Duplicate check is behind
     — last ran HH:MM; N charts waiting."*
   - **CatchingUp** (notices are waiting, the newest is fresh): *"Duplicate check running — N charts
     waiting"*, plus *"(re-checking all charts after a matcher update)"* during a `config` re-check.
@@ -863,8 +865,8 @@ monitoring exit code; the Pi measurement (filed).
 
 #### R4 — as built (2026-10-04)
 
-R4 was built to the design above, with five deviations that review forced. Each is recorded with its
-reason, because three of them correct sentences in the design itself.
+R4 was built to the design above, with six deviations that review forced. Each is recorded with its
+reason, because four of them correct sentences in the design itself.
 
 - **R3 — delete the exact notices read, not `id <= N`.** The design's sentence "deletes only the
   notices it read: `WHERE patient_id = X AND id <= <highest id read for X>`" has the right intent and
@@ -889,6 +891,19 @@ reason, because three of them correct sentences in the design itself.
   files small. Its reconnect backoff resets only after a *completed* drain: an error raised after
   connecting (a statement timeout, a deadlock) is deterministic and must keep backing off rather than
   retry, and re-sweep, every second.
+- **R13 — "behind" means nothing new and no progress, not "the newest notice is old".** The design
+  argued that with a newest-first drain only a stuck worker lets the newest notice age. That is false
+  when a backlog is queued ALL AT ONCE — a restore, a `reproject --rebuild`, a matcher-version
+  re-check: every notice has about the same `queued_at`, so five minutes later even the newest is old
+  while a healthy worker is mid-backlog (at ~9 s a chart, 500 charts is over an hour of false
+  "behind", which trains staff to ignore the line). The rule is now: **stalled iff charts wait AND
+  neither a new notice nor any worker progress has happened for more than the threshold.** db/056's
+  `cairn_duplicate_check_status()` returns `quiet_age_s` = seconds since `GREATEST(max(queued_at),
+  last_drained_at)` (NULL when nothing waits) in place of `newest_age_s`; a guarded `DROP` heals a
+  database that loaded the earlier shape. `last_drained_at` became the worker's progress stamp: after
+  each chart (as before), once before a sweep, and during a sweep at most every 30 s
+  (`sweep(on_progress=…)`, called after each pair's own transaction has ended; `worker_plan.Throttle`).
+  "Last ran HH:MM" therefore reads as "last active".
 - **R8 — bulk mode has no poison isolation (known gap).** Per-chart mode isolates a chart that
   raises (it is held and retried later). A data-triggered error inside the sweep's blocking aborts the
   whole sweep; while the backlog stays over the threshold the worker crash-loops. Nothing reads

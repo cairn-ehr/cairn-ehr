@@ -43,3 +43,25 @@ class RetryBook:
 
     def held(self, now: float) -> list[str]:
         return sorted(p for p, until in self._until.items() if until > now)
+
+
+@dataclass
+class Throttle:
+    """Say yes at most once per `interval_s` — the worker's progress stamp during a sweep.
+
+    The node reads the duplicate check as "behind" when charts wait and the worker has shown no
+    progress for five minutes (db/056, ruling R13). A sweep proposes thousands of pairs; stamping
+    after every one would be a write per pair, so the worker stamps only when the throttle is due.
+    The FIRST call is always due (a sweep begins as progress); after that, `due` is True once a
+    full interval has passed since the last True. `now` is injected (a monotonic clock in
+    production, a fake one in tests), so this stays pure.
+    """
+
+    interval_s: float
+    _last: float | None = None
+
+    def due(self, now: float) -> bool:
+        if self._last is not None and now - self._last < self.interval_s:
+            return False
+        self._last = now
+        return True

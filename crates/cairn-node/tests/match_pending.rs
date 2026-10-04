@@ -232,7 +232,10 @@ async fn a_chart_is_pending_until_the_worker_has_run_and_while_it_has_notices() 
 }
 
 #[tokio::test]
-async fn the_status_reports_waiting_charts_and_the_newest_age() {
+/// `quiet_age_s` is the seconds since the LATER of the newest waiting notice and the worker's last
+/// progress stamp (ruling R13). With no progress stamp it is the newest notice's age; a recent
+/// stamp lowers it; nothing waiting makes it NULL.
+async fn the_status_reports_waiting_charts_and_the_quiet_age() {
     let Some((c, _g)) = fresh_db().await else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
@@ -242,7 +245,7 @@ async fn the_status_reports_waiting_charts_and_the_newest_age() {
         .await
         .unwrap();
     assert_eq!(r.get::<_, i64>("charts_waiting"), 0);
-    assert_eq!(r.get::<_, Option<i64>>("newest_age_s"), None);
+    assert_eq!(r.get::<_, Option<i64>>("quiet_age_s"), None);
     assert!(!r.get::<_, bool>("worker_seen"));
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     c.batch_execute("INSERT INTO match_worker_state (matcher_version) VALUES ('v')")
@@ -261,14 +264,29 @@ async fn the_status_reports_waiting_charts_and_the_newest_age() {
         .await
         .unwrap();
     assert_eq!(r.get::<_, i64>("charts_waiting"), 2);
-    let age = r.get::<_, Option<i64>>("newest_age_s").unwrap();
+    let age = r.get::<_, Option<i64>>("quiet_age_s").unwrap();
     assert!(
         (59..=70).contains(&age),
-        "the NEWEST notice is a minute old, got {age}"
+        "no progress yet, so the quiet age is the NEWEST notice's (a minute), got {age}"
     );
     assert!(r.get::<_, bool>("config_recheck"));
     assert!(r.get::<_, bool>("worker_seen"));
     assert_eq!(r.get::<_, Option<String>>("last_drained_hhmm"), None);
+    // The worker makes progress 10 s ago: the queue has been quiet for only that long.
+    c.batch_execute(
+        "UPDATE match_worker_state SET last_drained_at = now() - interval '10 seconds'",
+    )
+    .await
+    .unwrap();
+    let r = c
+        .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
+        .await
+        .unwrap();
+    let age = r.get::<_, Option<i64>>("quiet_age_s").unwrap();
+    assert!(
+        (9..=20).contains(&age),
+        "recent progress lowers the quiet age, got {age}"
+    );
 }
 
 #[tokio::test]

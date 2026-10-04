@@ -22,3 +22,14 @@ def test_success_clears_a_hold():
     book.failed("p", now=0.0)
     book.succeeded("p")
     assert book.held(1.0) == []
+
+
+def test_a_throttle_is_due_at_once_then_at_most_once_per_interval():
+    from cairn_matcher.pipeline.worker_plan import Throttle
+
+    t = Throttle(interval_s=30.0)
+    assert t.due(100.0) is True        # the first call is always due (a sweep's opening stamp)
+    assert t.due(100.0) is False
+    assert t.due(129.9) is False
+    assert t.due(130.0) is True        # a full interval since the last due call
+    assert t.due(131.0) is False       # the interval restarts from the last due call

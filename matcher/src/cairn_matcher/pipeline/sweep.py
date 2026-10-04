@@ -15,6 +15,7 @@ the batch.
 Requires the optional `pipeline` extra (psycopg) at CALL time, because it drives db/runner.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
@@ -67,6 +68,7 @@ def sweep(
     weights: Weights = DEFAULT_WEIGHTS,
     config: ComparatorConfig = DEFAULT_CONFIG,
     skip_pairs: frozenset[tuple[str, str]] | None = None,
+    on_progress: Callable[[], None] | None = None,
 ) -> SweepResult:
     """Score every blocking candidate pair and return a SweepResult summary.
 
@@ -77,6 +79,12 @@ def sweep(
     `skip_pairs` is opt-in (repair path R4's bulk mode): candidate pairs in this set -- already
     judged by the identity algebra -- are neither scored nor reconciled. None (the default)
     keeps the sweep's historical behaviour.
+
+    `on_progress` is opt-in too (R4, ruling R13): called after EACH pair's propose() -- main loop
+    and reconciliation, whether it succeeded or its error was recorded -- so a long sweep can
+    show it is alive. It runs after propose() has committed or rolled back its own transaction,
+    so a callback that writes and commits never holds a lock across a pair's work. None (the
+    default) changes nothing.
 
     `config` (the per-field comparator wiring) is threaded into EVERY propose() call —
     main loop and reconciliation alike — so each persisted proposal's matcher_version pins
@@ -114,6 +122,11 @@ def sweep(
     skipped_blocks = [SkippedBlock(*s) for s in skipped_raw]
     auto = review = below = 0
     errors: list[SweepError] = []
+
+    def progressed() -> None:
+        if on_progress is not None:
+            on_progress()
+
     for low, high in pairs:
         try:
             result = propose(
@@ -124,7 +137,9 @@ def sweep(
             # Clear the aborted transaction so the connection is usable for the next pair.
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
+            progressed()
             continue
+        progressed()
         if result is Band.AUTO_CANDIDATE:
             auto += 1
         elif result is Band.REVIEW:
@@ -159,7 +174,9 @@ def sweep(
         except Exception as exc:  # noqa: BLE001 — one bad pair must not abort reconciliation
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
+            progressed()
             continue
+        progressed()
         reconciled += 1
         # propose() returns None when the re-scored pair no longer bands (it took the band-None
         # retract path — the orphan withdrawn); a Band means it still warrants a proposal and was

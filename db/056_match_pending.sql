@@ -37,13 +37,16 @@ CREATE TABLE IF NOT EXISTS match_pending (
     reason     TEXT        NOT NULL CHECK (reason IN ('change', 'config')),
     queued_at  TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
--- The worker's two reads: "the newest notices, grouped by chart" and "this chart's notices up to
--- id N".
+-- The worker's two reads: "the newest notices, grouped by chart" and "the ids of this chart's
+-- notices" (it deletes exactly those ids afterwards).
 CREATE INDEX IF NOT EXISTS match_pending_patient_idx ON match_pending (patient_id, id);
 
 -- One row, written only by the worker: the matcher_version it last ran (a change re-queues every
--- chart) and when it last finished a drain (the status line's "last ran HH:MM"). Its ABSENCE
--- means no worker has ever run on this node — see cairn_chart_check_pending.
+-- chart) and last_drained_at, the worker's PROGRESS stamp — written after each chart it checks,
+-- at the start of a sweep and (throttled) during one, and after an empty round. It is both the
+-- status line's "last ran HH:MM" (last active) and the "no progress" half of the stalled rule
+-- (cairn_duplicate_check_status). Its ABSENCE means no worker has ever run on this node — see
+-- cairn_chart_check_pending.
 CREATE TABLE IF NOT EXISTS match_worker_state (
     singleton       BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     matcher_version TEXT        NOT NULL,
@@ -99,13 +102,34 @@ AS $$
         OR NOT EXISTS (SELECT 1 FROM match_worker_state)
 $$;
 
--- The node-wide status (cairn-node `duplicate-check`; R5's front door later). newest_age_s is the
--- age of the NEWEST waiting notice: with a newest-first drain, only a stopped or stuck worker
--- lets the newest notice grow old, so a restore backlog is never mistaken for a stall.
+-- The node-wide status (cairn-node `duplicate-check`; R5's front door later).
+--
+-- quiet_age_s: seconds since ANYTHING last happened while charts wait — the later of the newest
+-- waiting notice (a change arrived) and the worker's last progress stamp (last_drained_at, written
+-- after each chart it checks and, throttled, during a sweep). NULL when nothing waits.
+-- GREATEST ignores a NULL argument, so a worker that has never stamped progress falls back to the
+-- newest notice's age. The node calls the check "behind" only when charts wait AND this quiet time
+-- passes its threshold: no new change AND no progress means the worker is stopped or stuck.
+--
+-- WHY NOT "THE NEWEST NOTICE IS OLD" (the earlier rule, ruling R13): a restore, a `reproject
+-- --rebuild` or a matcher-version re-check queues every chart ALL AT ONCE, so every notice has
+-- about the same queued_at. Five minutes later even the newest notice is old while a healthy worker
+-- is still working through the backlog (~9 s a chart at 10 000 records: 500 charts is over an
+-- hour), and the line would read "behind" the whole time — training staff to ignore it.
 -- VOLATILE (the default): it reads clock_timestamp().
+--
+-- The OUT columns changed (newest_age_s -> quiet_age_s), and CREATE OR REPLACE cannot change a
+-- function's return type. This heals a database that loaded this file's pre-merge shape; it is a
+-- no-op everywhere else (the old column name is the guard).
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'cairn_duplicate_check_status'
+               AND 'newest_age_s' = ANY (proargnames)) THEN
+        DROP FUNCTION cairn_duplicate_check_status();
+    END IF;
+END $$;
 CREATE OR REPLACE FUNCTION cairn_duplicate_check_status(
     OUT charts_waiting    bigint,
-    OUT newest_age_s      bigint,
+    OUT quiet_age_s       bigint,
     OUT config_recheck    boolean,
     OUT worker_seen       boolean,
     OUT last_drained_hhmm text)
@@ -114,8 +138,11 @@ SET search_path = public, pg_temp
 AS $$
     SELECT
         (SELECT count(DISTINCT patient_id) FROM match_pending),
-        (SELECT floor(extract(epoch FROM clock_timestamp() - max(queued_at)))::bigint
-           FROM match_pending),
+        (SELECT floor(extract(epoch FROM clock_timestamp() - GREATEST(
+                    max(p.queued_at),
+                    (SELECT last_drained_at FROM match_worker_state))))::bigint
+           FROM match_pending p
+          HAVING count(*) > 0),
         EXISTS (SELECT 1 FROM match_pending WHERE reason = 'config'),
         EXISTS (SELECT 1 FROM match_worker_state),
         (SELECT to_char(last_drained_at, 'HH24:MI') FROM match_worker_state)

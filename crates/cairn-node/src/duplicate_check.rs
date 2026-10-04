@@ -7,66 +7,79 @@
 //! - one chart: has it been checked since its identity evidence last changed?
 //!   ([`chart_check_pending`]).
 //!
-//! "Stalled" is judged by the NEWEST waiting notice. The worker drains newest first, so only a
-//! stopped or stuck worker lets the newest notice age. A restore backlog — thousands of OLD notices
-//! being worked through while fresh registrations are checked within seconds — reads as catching
-//! up, never as an alarm. All wording lives here, in pure functions with a golden test; R5's window
-//! will reuse them.
+//! "Stalled" (the line reads "behind") means charts are waiting AND nothing has happened for longer
+//! than [`STALLED_AFTER_SECS`]: no new notice arrived and the worker stamped no progress. That
+//! "quiet time" is db/056's `quiet_age_s`. A restore or a `reproject --rebuild` queues every chart at
+//! once, so every notice soon looks old — but a healthy worker keeps stamping progress as it works
+//! through them, and the backlog reads as catching up, never as an alarm. (An earlier rule judged
+//! by the age of the newest notice alone and raised exactly that false alarm; ruling R13.) All
+//! wording lives here, in pure functions with a golden test; R5's window will reuse them.
 
 use anyhow::Context;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-/// How old the newest waiting notice may be before the check counts as stalled. Soft policy: a
-/// worker drains a fresh change in seconds, so five minutes is generous.
+/// How long the queue may be quiet — charts waiting, but no new notice and no worker progress —
+/// before the check counts as stalled. Soft policy: a running worker stamps progress after every
+/// chart (seconds apart) and at least every 30 s during a sweep, so five minutes of silence means
+/// it is stopped or stuck.
 pub const STALLED_AFTER_SECS: i64 = 5 * 60;
 
 /// One read of db/056's `cairn_duplicate_check_status()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueSnapshot {
+    /// How many distinct CHARTS have at least one waiting notice (a chart edited three times
+    /// counts once).
     pub charts_waiting: i64,
-    /// Age in seconds of the NEWEST waiting notice; None when nothing waits.
-    pub newest_age_secs: Option<i64>,
+    /// Seconds since the later of the newest waiting notice and the worker's last progress stamp
+    /// (`last_drained_at`) — how long the queue has been quiet. None when nothing waits.
+    pub quiet_age_secs: Option<i64>,
     /// A 'config' re-check (every chart, after a matcher update or a first run) is in progress.
     pub config_recheck: bool,
     /// A worker has run on this node at least once (its state row exists).
     pub worker_seen: bool,
-    /// When the worker last finished a drain, as the database's local HH:MM.
+    /// When the worker last made progress (finished a chart, a sweep step, or an empty round),
+    /// as the database's local HH:MM. None until it first does.
     pub last_drained_hhmm: Option<String>,
 }
 
 /// What the node may honestly say about its duplicate check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckState {
-    NeverRun {
-        waiting: i64,
-    },
+    /// No worker has ever run on this node, so no chart can be called checked. `waiting` is the
+    /// number of charts with a waiting notice.
+    NeverRun { waiting: i64 },
+    /// Charts are waiting and the queue has been quiet (no new notice, no worker progress) for
+    /// longer than the threshold: the worker is stopped or stuck. `last_ran` is when it was last
+    /// active (HH:MM), None if it never made progress.
     Stalled {
         waiting: i64,
         last_ran: Option<String>,
     },
-    CatchingUp {
-        waiting: i64,
-        config_recheck: bool,
-    },
-    Current {
-        last_ran: Option<String>,
-    },
+    /// Charts are waiting and something happened recently: the worker is working through them.
+    /// `config_recheck` is true while a whole-population re-check (a matcher update, or the
+    /// first run) is among them.
+    CatchingUp { waiting: i64, config_recheck: bool },
+    /// Nothing is waiting: every chart has been checked since its identity evidence last changed.
+    /// `last_ran` is when the worker was last active (HH:MM).
+    Current { last_ran: Option<String> },
 }
 
 /// Classify a snapshot (pure). A missing worker row wins over everything: until a worker has run
-/// once, charts that predate db/056 have never been checked, whatever the queue shows.
+/// once, charts that predate db/056 have never been checked, whatever the queue shows. Otherwise
+/// the quiet time decides: none (nothing waits) is Current, strictly more than
+/// `stalled_after_secs` is Stalled, anything else is CatchingUp.
 pub fn classify(s: &QueueSnapshot, stalled_after_secs: i64) -> CheckState {
     if !s.worker_seen {
         return CheckState::NeverRun {
             waiting: s.charts_waiting,
         };
     }
-    match s.newest_age_secs {
+    match s.quiet_age_secs {
         None => CheckState::Current {
             last_ran: s.last_drained_hhmm.clone(),
         },
-        Some(age) if age > stalled_after_secs => CheckState::Stalled {
+        Some(quiet) if quiet > stalled_after_secs => CheckState::Stalled {
             waiting: s.charts_waiting,
             last_ran: s.last_drained_hhmm.clone(),
         },
@@ -143,7 +156,7 @@ pub async fn read_snapshot(client: &Client) -> anyhow::Result<QueueSnapshot> {
         .context("reading the duplicate-check status")?;
     Ok(QueueSnapshot {
         charts_waiting: r.get("charts_waiting"),
-        newest_age_secs: r.get("newest_age_s"),
+        quiet_age_secs: r.get("quiet_age_s"),
         config_recheck: r.get("config_recheck"),
         worker_seen: r.get("worker_seen"),
         last_drained_hhmm: r.get("last_drained_hhmm"),
@@ -168,10 +181,10 @@ pub async fn chart_check_pending(client: &Client, patient: Uuid) -> anyhow::Resu
 mod tests {
     use super::*;
 
-    fn snap(waiting: i64, newest: Option<i64>, config: bool, seen: bool) -> QueueSnapshot {
+    fn snap(waiting: i64, quiet: Option<i64>, config: bool, seen: bool) -> QueueSnapshot {
         QueueSnapshot {
             charts_waiting: waiting,
-            newest_age_secs: newest,
+            quiet_age_secs: quiet,
             config_recheck: config,
             worker_seen: seen,
             last_drained_hhmm: seen.then(|| "09:41".to_string()),
@@ -197,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn behind_is_judged_by_the_newest_notice_strictly_past_the_threshold() {
+    fn behind_is_judged_by_quiet_time_strictly_past_the_threshold() {
         assert!(matches!(
             classify(&snap(5, Some(300), false, true), 300),
             CheckState::CatchingUp { .. }

@@ -184,3 +184,38 @@ def test_bulk_mode_never_reproposes_a_judged_pair_in_reconciliation(pg_conn, mon
     worker.run_bulk(pg_conn, Settings())
     assert called == []
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal WHERE status = 'pending'") == 1
+
+
+def test_a_bulk_drain_stamps_progress_before_and_during_the_sweep(pg_conn, monkeypatch):
+    # R4 ruling R13: the node reads "behind" only when nothing new arrived AND the worker made no
+    # progress for five minutes. A sweep can run for minutes, so run_bulk stamps progress (and
+    # COMMITS it, so the node can see it) once before the sweep and, throttled, as pairs complete.
+    import psycopg
+
+    from cairn_matcher.pipeline import sweep as sweep_mod
+
+    _state(pg_conn)                                  # last_drained_at starts NULL
+    _backlog(pg_conn, 500)
+    events, seen_by_node = [], []
+    real_stamp, real_propose = queue_db.stamp_drained, sweep_mod.propose
+
+    def stamp(conn):
+        events.append("stamp")
+        real_stamp(conn)
+
+    def propose(conn, a, b, **kw):
+        events.append("propose")
+        if len(seen_by_node) == 0:                   # what another session (the node) sees now
+            with psycopg.connect(cairn_test_dsn()) as other:
+                seen_by_node.append(other.execute(
+                    "SELECT last_drained_at IS NOT NULL FROM match_worker_state").fetchone()[0])
+        return real_propose(conn, a, b, **kw)
+
+    monkeypatch.setattr(queue_db, "stamp_drained", stamp)
+    monkeypatch.setattr(sweep_mod, "propose", propose)
+    ticks = iter(range(0, 10_000, 31))               # every call 31 s later: every stamp is due
+    worker.run_bulk(pg_conn, Settings(), clock=lambda: float(next(ticks)))
+    assert events[0] == "stamp"                      # a sweep begins as progress ...
+    assert seen_by_node == [True]                    # ... committed, so the node sees it
+    first, last = events.index("propose"), len(events) - 1 - events[::-1].index("propose")
+    assert "stamp" in events[first:last + 1]          # ... and progress is stamped mid-sweep
