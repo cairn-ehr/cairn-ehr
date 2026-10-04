@@ -119,14 +119,31 @@ def test_a_stale_pending_proposal_no_longer_blocked_is_reassessed(pg_conn):
     assert _count(pg_conn, "SELECT status FROM match_proposal") == "retracted"
 
 
-def test_the_worker_role_suffices(pg_conn):
+def test_the_worker_role_suffices(pg_conn, monkeypatch):
     _near_duplicates(pg_conn)
+    seen = {}
+
+    def as_worker(name, real):
+        """Wrap a phase so it records current_user, proving the role survived check_chart's
+        rollbacks (an UNCOMMITTED SET ROLE is rolled back and would silently revert)."""
+        def wrapper(conn, *args, **kw):
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_user")
+                seen[name] = cur.fetchone()[0]
+            return real(conn, *args, **kw)
+        return wrapper
+
+    monkeypatch.setattr(runner, "assess", as_worker("assess", runner.assess))
+    monkeypatch.setattr(runner, "persist", as_worker("persist", runner.persist))
+    monkeypatch.setattr(queue_db, "clear_notices", as_worker("clear", queue_db.clear_notices))
     with pg_conn.cursor() as cur:
         cur.execute("SET ROLE cairn_agent")
+    pg_conn.commit()          # a committed session SET survives the rollbacks inside check_chart
     check_chart(pg_conn, B, Settings())
     with pg_conn.cursor() as cur:
         cur.execute("RESET ROLE")
     pg_conn.commit()
+    assert seen == {"assess": "cairn_agent", "persist": "cairn_agent", "clear": "cairn_agent"}
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 1
 
 
@@ -177,7 +194,6 @@ def test_no_lock_is_held_across_an_assessment(pg_conn, monkeypatch):
     def assess_after_probing_for_locks(conn, a, b, **kw):
         with psycopg.connect(cairn_test_dsn(), autocommit=True) as other:
             other.execute("BEGIN")
-            other.execute("SET LOCAL lock_timeout = '0'")
             for table in ("patient_name", "patient_demographic", "patient_identifier",
                           "patient_chart"):
                 other.execute(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE NOWAIT")
