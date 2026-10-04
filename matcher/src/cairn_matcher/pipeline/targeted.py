@@ -35,8 +35,12 @@ from cairn_matcher.pipeline.blocking import (
 # drift this module exists to avoid.
 from cairn_matcher.pipeline.db import _GROUPS_SQL, _PLACEHOLDER_USES_PARAM, _RANGE_GROUPS_SQL
 
-# Set from the Task 7 measurement (per-chart latency on a generated population); see the design
-# page's R4 as-built note. A block above this is non-discriminating even when paired linearly.
+# A block above this is non-discriminating even when paired linearly. KEPT at 1000 after the
+# Task 7 measurement (2026-10-04, Apple M3 Max 128 GB, PostgreSQL 18.1, generated population via
+# eval/measure_check.py): per-chart p50/p95 was 453/590 ms at 2 000 records but 8 829/9 651 ms at
+# 10 000, so the cost is NOT in the pairing the cap bounds -- it is the blocking SQL scanning the
+# whole population per chart (a finding, see the design page's R4 as-built note). Lowering the cap
+# would not bring p95 near the 2 s budget, so it was not tuned around the problem.
 DEFAULT_TARGETED_CAP = 1000
 
 # The symmetric groups that contain the chart. The trailing %s is the chart id; the first two

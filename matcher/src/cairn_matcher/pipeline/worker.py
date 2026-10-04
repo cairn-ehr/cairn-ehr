@@ -26,10 +26,16 @@ log = logging.getLogger("cairn_matcher.worker")
 
 @dataclass(frozen=True)
 class Settings:
-    """The worker's knobs. Defaults are set from Task 7's measurement (design page note)."""
+    """The worker's knobs. See the design page's R4 as-built note for how the defaults were chosen."""
 
     max_block_size: int = targeted.DEFAULT_TARGETED_CAP
     sweep_block_size: int = 100        # the sweep's own all-pairs cap, unchanged
+    # Charts waiting above which one sweep beats checking each. KEPT at 500 (a guess) after the
+    # Task 7 measurement (2026-10-04, Apple M3 Max 128 GB, PostgreSQL 18.1): break-even was ~83
+    # charts at 2 000 records (sweep 37.6 s / per-chart p50 453 ms) and ~15 at 10 000 (sweep
+    # 129.9 s / p50 8 829 ms). The break-even FALLS as the population grows because the per-chart
+    # check is superlinear; a sound value depends on fixing that first (per-chart p95 at 10 000
+    # exceeded the 5 s stop line), so no number was fitted to a defective curve.
     bulk_threshold: int = 500
     batch: int = 50
     retry_after_s: float = 300.0
