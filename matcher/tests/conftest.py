@@ -81,6 +81,7 @@ _SCHEMA_FILES = sorted(
 _PROJECTION_TABLES = [
     "match_proposal", "patient_identifier", "patient_demographic", "patient_name",
     "name_repudiation", "chart_identity_state",
+    "match_pending", "match_worker_state", "patient_link", "person_member",
 ]
 
 
