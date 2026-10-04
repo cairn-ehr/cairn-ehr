@@ -80,11 +80,13 @@ def sweep(
     judged by the identity algebra -- are neither scored nor reconciled. None (the default)
     keeps the sweep's historical behaviour.
 
-    `on_progress` is opt-in too (R4, ruling R13): called after EACH pair's propose() -- main loop
-    and reconciliation, whether it succeeded or its error was recorded -- so a long sweep can
-    show it is alive. It runs after propose() has committed or rolled back its own transaction,
-    so a callback that writes and commits never holds a lock across a pair's work. None (the
-    default) changes nothing.
+    `on_progress` is opt-in too (R4, rulings R13/R15 and review N3): called after each pair whose
+    propose() SUCCEEDED -- main loop and reconciliation -- so a long sweep can show it is doing
+    real work. A pair whose propose() raised is recorded in `errors` and is NOT progress: if every
+    pair fails for a systematic reason (a missing grant, a schema mismatch), reporting progress
+    would hide a sweep that checks nothing. It runs after propose() has ended its own
+    transaction, so a callback that writes and commits never holds a lock across a pair's work.
+    None (the default) changes nothing.
 
     `config` (the per-field comparator wiring) is threaded into EVERY propose() call —
     main loop and reconciliation alike — so each persisted proposal's matcher_version pins
@@ -137,7 +139,6 @@ def sweep(
             # Clear the aborted transaction so the connection is usable for the next pair.
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
-            progressed()
             continue
         progressed()
         if result is Band.AUTO_CANDIDATE:
@@ -174,7 +175,6 @@ def sweep(
         except Exception as exc:  # noqa: BLE001 — one bad pair must not abort reconciliation
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
-            progressed()
             continue
         progressed()
         reconciled += 1

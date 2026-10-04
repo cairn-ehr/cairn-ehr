@@ -197,9 +197,10 @@ def _node_sees_progress() -> bool:
 
 
 def test_a_bulk_drain_stamps_progress_as_sweep_pairs_complete(pg_conn, monkeypatch):
-    # R4 rulings R13/R15: the node reads "behind" only when nothing new arrived AND the worker made
-    # no progress for five minutes. A sweep can run for minutes, so run_bulk stamps progress (and
-    # COMMITS it, so the node can see it), throttled, as pairs COMPLETE -- never before any work.
+    # R4 rulings R15/R17: the node reads "behind" when a change has waited five minutes AND the
+    # worker completed no work in that time. A sweep can run for minutes, so run_bulk stamps
+    # progress (and COMMITS it, so the node can see it), throttled, as pairs are SUCCESSFULLY
+    # scored -- never before any work.
     from cairn_matcher.pipeline import sweep as sweep_mod
 
     _state(pg_conn)                                  # last_drained_at starts NULL
@@ -247,3 +248,27 @@ def test_a_sweep_whose_blocking_raises_stamps_no_progress(pg_conn, monkeypatch):
         worker.run_bulk(pg_conn, Settings(), clock=lambda: 0.0)
     pg_conn.rollback()
     assert _node_sees_progress() is False
+
+
+def test_a_sweep_in_which_every_pair_fails_stamps_no_progress(pg_conn, monkeypatch):
+    # R4 review N3: a failed pair is not progress. If every propose() raises for a systematic
+    # reason (a missing grant after a schema change, a persist timeout), the sweep keeps the failed
+    # charts' notices, the next round sweeps again -- and a stamp per attempt would read "running"
+    # forever while nothing is checked. Neither during nor after such a sweep may the stamp move.
+    from cairn_matcher.pipeline import sweep as sweep_mod
+
+    _state(pg_conn)                                  # last_drained_at starts NULL
+    _backlog(pg_conn, 700)
+    seen_by_node = []
+
+    def failing(conn, a, b, **kw):
+        if len(seen_by_node) < 3:
+            seen_by_node.append(_node_sees_progress())
+        raise RuntimeError("permission denied for table match_proposal")
+
+    monkeypatch.setattr(sweep_mod, "propose", failing)
+    ticks = itertools.count(0, 31)                   # every stamp would be due
+    result = worker.run_bulk(pg_conn, Settings(), clock=lambda: float(next(ticks)))
+    assert result.generated > 0 and len(result.errors) == result.generated
+    assert seen_by_node == [False, False, False]     # nothing stamped during the sweep ...
+    assert _node_sees_progress() is False            # ... nor after it

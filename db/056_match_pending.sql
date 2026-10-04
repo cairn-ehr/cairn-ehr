@@ -43,11 +43,13 @@ CREATE INDEX IF NOT EXISTS match_pending_patient_idx ON match_pending (patient_i
 
 -- One row, written only by the worker: the matcher_version it last ran (a change re-queues every
 -- chart) and last_drained_at, the worker's PROGRESS stamp. Only completed work writes it: after
--- each chart it checks, about every 30 s while a sweep is scoring pairs, at a sweep's end, and
--- after an empty round. Never at the start of a sweep or during its blocking phase, so a sweep
--- that fails before scoring a pair (and is retried, and fails again) leaves it untouched (ruling
--- R15). It is both the status line's "last ran HH:MM" (last active) and the "no progress" half of
--- the stalled rule (cairn_duplicate_check_status). Its ABSENCE means no worker has ever run on
+-- each chart it checks, about every 30 s while a sweep is SUCCESSFULLY scoring pairs, at the end
+-- of a sweep that scored at least one pair (or had none to score), and after an empty round.
+-- Never at the start of a sweep, during its blocking phase, or for a pair that failed, so a sweep
+-- that fails every time (its blocking raises, or every pair raises) and is retried leaves it
+-- untouched (ruling R15, review N3). It is both the status line's "last ran HH:MM" (the last
+-- completed work, which stays earlier while a worker is crash-looping — on purpose) and the
+-- "no progress" half of the stalled rule (cairn_duplicate_check_status). Its ABSENCE means no worker has ever run on
 -- this node — see cairn_chart_check_pending.
 CREATE TABLE IF NOT EXISTS match_worker_state (
     singleton       BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (singleton),

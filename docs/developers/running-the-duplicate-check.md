@@ -83,13 +83,15 @@ It only reads. The node-wide line is one of four states:
 "Behind" means **a change has been waiting for more than five minutes and the worker has finished no
 work in those five minutes** — measured from the oldest waiting notice or the worker's last finished
 work, whichever is later. Only finished work counts: the worker records it after every chart it checks
-and about every 30 seconds while a sweep is scoring pairs. Starting a sweep does not count, and neither
-the sweep's first phase (finding the candidate pairs) nor a single slow pair records anything. So
-"behind" means the worker is stopped, keeps failing and restarting, or is stuck in one piece of work
-that long. New changes arriving do not reset it: on a busy node a stopped worker still reads "behind"
+and about every 30 seconds while a sweep is successfully scoring pairs. Starting a sweep does not count,
+and neither the sweep's first phase (finding the candidate pairs), a single slow pair, nor a pair that
+fails records anything. So "behind" means the worker is stopped, keeps failing and restarting, fails on
+every pair it tries (a missing grant, say — check its log), or is stuck in one piece of work that
+long. New changes arriving do not reset it: on a busy node a stopped worker still reads "behind"
 five minutes after the first change it failed to check. A healthy worker working through a restore's
 backlog reads "running", however old the queued notices are, because it keeps finishing work; a shrinking `N charts waiting` between two runs of the command (and, after a sweep, the worker's
-`swept a backlog of …` log line) shows it working. "Last ran HH:MM" is when the worker was last active.
+`swept a backlog of …` log line) shows it working. "Last ran HH:MM" is the worker's last finished work,
+not its last sign of life: a worker that keeps failing and restarting is active, but its time stays put.
 With `--patient` a second line says either
 `This chart: duplicate check not yet run since its identity details last changed.` or
 `This chart: duplicate check up to date.`

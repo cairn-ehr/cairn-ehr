@@ -43,3 +43,13 @@ def test_the_default_bulk_threshold_is_set_from_the_measured_break_even():
     assert Settings().bulk_threshold == 30
     assert choose_mode(30, Settings().bulk_threshold) is Mode.PER_CHART
     assert choose_mode(31, Settings().bulk_threshold) is Mode.SWEEP
+
+
+def test_a_sweep_counts_as_completed_work_unless_every_attempt_failed():
+    # R4 review N3: a sweep with nothing to score is completed work (the queue was handled); one
+    # in which every attempted pair raised is not, or a systematic failure would read "running".
+    from cairn_matcher.pipeline.worker_plan import sweep_completed_work
+
+    assert sweep_completed_work(scored=0, failed=0) is True
+    assert sweep_completed_work(scored=3, failed=2) is True
+    assert sweep_completed_work(scored=0, failed=5) is False

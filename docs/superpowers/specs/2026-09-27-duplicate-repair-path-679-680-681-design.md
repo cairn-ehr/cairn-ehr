@@ -911,13 +911,20 @@ reason, because four of them correct sentences in the design itself.
   backlog stays "running" through its completed-work stamps; an idle worker with one fresh notice reads
   "running"; a held poison chart with no other activity reads "behind" (honest: it is not being checked). `last_drained_at` became the worker's progress stamp,
   written **only by completed work** (ruling R15): after each chart (as before), and during a sweep
-  about every 30 s while pairs are being scored — after a pair completes, at most once per 30 s
-  (`sweep(on_progress=…)`, called after each pair's own transaction has ended; `worker_plan.Throttle`).
+  about every 30 s while pairs are being scored — after a pair is SUCCESSFULLY scored, at most once
+  per 30 s (`sweep(on_progress=…)`, called after that pair's propose() has committed;
+  `worker_plan.Throttle`), and at the sweep's end unless every attempted pair failed
+  (`worker_plan.sweep_completed_work`; a sweep with nothing to score is completed work). A failed pair
+  is not progress (review N3): if every propose() raises for a systematic reason (a missing grant, a
+  worker/schema mismatch), the sweep keeps the failed charts' notices, the next round sweeps again,
+  and a stamp per attempt would read "running" forever while nothing is checked.
   Never before work: an earlier fix stamped once before each sweep, which let the R8 crash-loop
   (blocking raises, the worker retries) refresh the stamp on every retry and read "running" forever
   while nothing was checked. A sweep's blocking phase and a single slow pair stamp nothing; meanwhile
   the quiet time runs from the backlog's oldest notice or the last completed work, and a blocking phase
-  that takes it past the threshold honestly reads "behind". "Last ran HH:MM" therefore reads as "last active".
+  that takes it past the threshold honestly reads "behind". "Last ran HH:MM" therefore means the last
+  completed work: during a crash-loop or a long blocking phase the worker is active but HH:MM is
+  earlier, and that is the point.
 - **R8 — bulk mode has no poison isolation (known gap).** Per-chart mode isolates a chart that
   raises (it is held and retried later). A data-triggered error inside the sweep's blocking aborts the
   whole sweep; while the backlog stays over the threshold the worker retries and fails again — in

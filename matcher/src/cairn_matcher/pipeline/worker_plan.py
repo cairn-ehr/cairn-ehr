@@ -49,10 +49,11 @@ class RetryBook:
 class Throttle:
     """Say yes at most once per `interval_s` — the worker's progress stamp during a sweep.
 
-    The node reads the duplicate check as "behind" when charts wait and the worker has shown no
-    progress for five minutes (db/056, ruling R13). A sweep proposes thousands of pairs; stamping
-    after every one would be a write per pair, so the worker stamps only when the throttle is due.
-    The FIRST call is always due (the sweep's first completed pair stamps); after that, `due` is
+    The node reads the duplicate check as "behind" once quiet time -- seconds since the oldest
+    waiting notice or the worker's last completed work, whichever is later -- passes five minutes
+    (db/056, rulings R13/R17). A sweep scores thousands of pairs; stamping after every successful
+    one would be a write per pair, so the worker stamps only when the throttle is due. The FIRST
+    call is always due (the sweep's first successfully scored pair stamps); after that, `due` is
     True once a full interval has passed since the last True. `now` is injected (a monotonic
     clock in production, a fake one in tests), so this stays pure.
     """
@@ -65,3 +66,16 @@ class Throttle:
             return False
         self._last = now
         return True
+
+
+def sweep_completed_work(scored: int, failed: int) -> bool:
+    """Did a sweep do work that may be stamped as progress (R4 review N3)?
+
+    `scored` counts the pairs whose propose() succeeded (main loop and reconciliation), `failed`
+    the pairs whose propose() raised. A sweep with nothing to score at all is completed work: the
+    queue was handled and its notices are cleared. A sweep in which every attempted pair failed
+    is NOT: it keeps the failed charts' notices and, under a systematic failure (a missing grant,
+    a schema mismatch), would sweep and fail again every round; stamping it would make the node
+    read "running" forever while nothing is checked. Any successful pair is progress.
+    """
+    return scored > 0 or failed == 0

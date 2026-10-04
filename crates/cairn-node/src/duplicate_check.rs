@@ -26,9 +26,10 @@ use uuid::Uuid;
 /// How long the quiet time may run — since the oldest waiting notice or the worker's last completed
 /// work, whichever is later — before the check counts as stalled. Soft policy. A running
 /// worker stamps after every chart it checks (seconds apart) and about every 30 s while a sweep is
-/// scoring pairs; nothing else counts. A sweep's blocking phase, and a single slow pair, stamp
-/// nothing. So a change left waiting through five minutes without completed work means the worker
-/// is stopped, crash-looping, or stuck in work that long — each worth the "behind" line.
+/// successfully scoring pairs; nothing else counts. A sweep's blocking phase, a single slow pair,
+/// and a pair that fails stamp nothing. So a change left waiting through five minutes without
+/// completed work means the worker is stopped, crash-looping, failing on every pair, or stuck in
+/// work that long — each worth the "behind" line.
 pub const STALLED_AFTER_SECS: i64 = 5 * 60;
 
 /// One read of db/056's `cairn_duplicate_check_status()`.
@@ -45,8 +46,9 @@ pub struct QueueSnapshot {
     pub config_recheck: bool,
     /// A worker has run on this node at least once (its state row exists).
     pub worker_seen: bool,
-    /// When the worker last made progress (finished a chart, a sweep step, or an empty round),
-    /// as the database's local HH:MM. None until it first does.
+    /// The worker's last completed work (a checked chart or a successfully scored sweep pair), or
+    /// an empty round, as the database's local HH:MM. None until the first. While a worker is
+    /// crash-looping or in a long blocking phase it is active but this stays earlier — on purpose.
     pub last_drained_hhmm: Option<String>,
 }
 
@@ -57,8 +59,8 @@ pub enum CheckState {
     /// number of charts with a waiting notice.
     NeverRun { waiting: i64 },
     /// A change has waited longer than the threshold and the worker has completed no work in that
-    /// time: it is stopped or stuck. `last_ran` is when it was last active (HH:MM), None if it
-    /// never completed any work.
+    /// time: it is stopped or stuck. `last_ran` is its last completed work (HH:MM), None if it
+    /// never completed any.
     Stalled {
         waiting: i64,
         last_ran: Option<String>,
@@ -69,7 +71,7 @@ pub enum CheckState {
     /// first run) is among them.
     CatchingUp { waiting: i64, config_recheck: bool },
     /// Nothing is waiting: every chart has been checked since its identity evidence last changed.
-    /// `last_ran` is when the worker was last active (HH:MM).
+    /// `last_ran` is the worker's last completed work (HH:MM).
     Current { last_ran: Option<String> },
 }
 

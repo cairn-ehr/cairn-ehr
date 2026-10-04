@@ -18,7 +18,13 @@ from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
 from cairn_matcher.pipeline import judged, queue_db, runner, targeted
 from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, Thresholds
 from cairn_matcher.pipeline.sweep import SweepResult, sweep
-from cairn_matcher.pipeline.worker_plan import Mode, RetryBook, Throttle, choose_mode
+from cairn_matcher.pipeline.worker_plan import (
+    Mode,
+    RetryBook,
+    Throttle,
+    choose_mode,
+    sweep_completed_work,
+)
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights
 
 log = logging.getLogger("cairn_matcher.worker")
@@ -26,7 +32,8 @@ log = logging.getLogger("cairn_matcher.worker")
 # How often a sweep stamps progress (at most). The node calls the check "behind" after five quiet
 # minutes (crates/cairn-node/src/duplicate_check.rs STALLED_AFTER_SECS); stamping about every 30 s
 # while pairs are being scored keeps a healthy sweep far inside that, at the cost of one tiny
-# UPDATE + commit per 30 s, not one per pair. Only a COMPLETED pair stamps (ruling R15).
+# UPDATE + commit per 30 s, not one per pair. Only a SUCCESSFULLY scored pair stamps (ruling R15,
+# review N3): a pair whose propose() raised is not progress.
 PROGRESS_EVERY_S = 30.0
 
 
@@ -135,20 +142,21 @@ def run_bulk(conn, settings: Settings, clock=time.monotonic) -> SweepResult:
     score keep their notices (`keep`), so they still read "not yet checked". The sweep keeps its
     own all-pairs cap: a block it skips is reported in the result, as it always has been.
 
-    Progress (rulings R13, R15, R17): the node reads the check as "behind" when a change has
-    waited five minutes and the worker completed no work in that time (quiet time runs from the
-    oldest waiting notice or the last completed work, whichever is later), and a sweep can run
-    longer than that. So the
-    worker stamps `last_drained_at` and commits when a pair has COMPLETED and PROGRESS_EVERY_S has
-    passed since the last stamp (a Throttle on `clock`; the first completed pair always stamps).
-    Progress is only ever stamped by completed work, never before it: a sweep whose blocking
-    raises before any pair completes (the R8 crash-loop) must leave the stamp alone, or every
-    retry would refresh it and the node would read "running" forever while nothing is checked.
-    The blocking phase itself stamps nothing; meanwhile quiet time runs from the backlog's oldest
-    notice or the last completed work, and a blocking phase that takes it past five minutes
-    honestly reads "behind".
-    sweep() calls back only after propose() has ended its own transaction, so the stamp's commit
-    never holds a lock across a pair's work, and never commits anything of the sweep's own.
+    Progress (rulings R13, R15, R17, review N3): the node reads the check as "behind" when a
+    change has waited five minutes and the worker completed no work in that time (quiet time runs
+    from the oldest waiting notice or the last completed work, whichever is later), and a sweep can
+    run longer than that. So the worker stamps `last_drained_at` and commits when a pair has been
+    SUCCESSFULLY scored and PROGRESS_EVERY_S has passed since the last stamp (a Throttle on
+    `clock`; the first successful pair always stamps), and once more at the end unless every
+    attempted pair failed (worker_plan.sweep_completed_work; a sweep with nothing to score is
+    completed work). Only completed work is progress -- never the start of a sweep, its blocking
+    phase, or a failed pair. Otherwise a sweep that fails every time (its blocking raises: the R8
+    crash-loop; or every propose() raises: a missing grant, a schema mismatch) would refresh the
+    stamp on each retry and the node would read "running" forever while nothing is checked. A
+    long blocking phase therefore honestly reads "behind" once quiet time passes five minutes.
+    sweep() calls back only after propose() has committed its own transaction, so the stamp's
+    commit never holds a lock across a pair's work, and never commits anything of the sweep's
+    own.
     """
     ids = queue_db.notice_ids(conn)
     skip = judged.judged_pairs(conn)
@@ -165,7 +173,10 @@ def run_bulk(conn, settings: Settings, clock=time.monotonic) -> SweepResult:
                    config=settings.config, skip_pairs=skip, on_progress=progress)
     keep = sorted({pid for e in result.errors for pid in e.pair})
     queue_db.clear_notices(conn, ids, keep)
-    queue_db.stamp_drained(conn)
+    scored = (result.auto_candidate + result.review + result.below_threshold
+              + result.reconciled)
+    if sweep_completed_work(scored, len(result.errors)):
+        queue_db.stamp_drained(conn)
     conn.commit()
     return result
 
