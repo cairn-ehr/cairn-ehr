@@ -10,12 +10,18 @@ matters: it NEVER links — a hit is a proposal a human resolves (R2's panel, R5
 Requires the optional `pipeline` extra (psycopg).
 """
 
+import logging
+import time
 from dataclasses import dataclass, field
 
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
 from cairn_matcher.pipeline import judged, queue_db, runner, targeted
 from cairn_matcher.pipeline.banding import DEFAULT_THRESHOLDS, Thresholds
+from cairn_matcher.pipeline.sweep import SweepResult, sweep
+from cairn_matcher.pipeline.worker_plan import Mode, RetryBook, choose_mode
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, Weights
+
+log = logging.getLogger("cairn_matcher.worker")
 
 
 @dataclass(frozen=True)
@@ -94,3 +100,75 @@ def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
     queue_db.stamp_drained(conn)
     conn.commit()
     return ChartResult(patient, proposed, retracted, skipped)
+
+
+@dataclass(frozen=True)
+class DrainReport:
+    checked: int      # charts whose per-chart check committed
+    failed: int       # charts whose check raised (held by the RetryBook, notices kept)
+    swept: bool       # True when a bulk sweep ran first
+
+
+def run_bulk(conn, settings: Settings) -> SweepResult:
+    """A backlog too big for per-chart checks: ONE sweep, then clear the notices read; COMMITS.
+
+    The notice ids are captured BEFORE the sweep (and before judged_pairs), and exactly those
+    ids are deleted afterwards. A notice committed while the sweep runs is not in the set, so it
+    survives and gets a per-chart check (never `id <= watermark`: a bigserial is assigned at
+    INSERT, not commit, so a lower id can commit late). Charts in a pair the sweep failed to
+    score keep their notices (`keep`), so they still read "not yet checked". The sweep keeps its
+    own all-pairs cap: a block it skips is reported in the result, as it always has been.
+    """
+    ids = queue_db.notice_ids(conn)
+    skip = judged.judged_pairs(conn)
+    conn.rollback()          # no read transaction (lock, xmin pin) held across the sweep
+    result = sweep(conn, max_block_size=settings.sweep_block_size,
+                   thresholds=settings.thresholds, weights=settings.weights,
+                   config=settings.config, skip_pairs=skip)
+    keep = sorted({pid for e in result.errors for pid in e.pair})
+    queue_db.clear_notices(conn, ids, keep)
+    queue_db.stamp_drained(conn)
+    conn.commit()
+    return result
+
+
+def drain(conn, settings: Settings, book: RetryBook, clock=time.monotonic,
+          sleep=time.sleep) -> DrainReport:
+    """Drain the queue until nothing is left but held charts.
+
+    One sweep first when the backlog is over the threshold; then per-chart checks, newest change
+    first, skipping charts the RetryBook holds. A chart whose check raises is rolled back, logged
+    and held; its notices stay. `clock`/`sleep` are injectable for tests. `check_chart` is looked
+    up as a module global on purpose, so tests can substitute it.
+    """
+    swept = False
+    waiting = queue_db.charts_waiting(conn)
+    conn.rollback()
+    if choose_mode(waiting, settings.bulk_threshold) is Mode.SWEEP:
+        result = run_bulk(conn, settings)
+        swept = True
+        log.info("swept a backlog of %d charts: %d pairs, %d errors, %d blocks skipped",
+                 waiting, result.generated, len(result.errors), len(result.skipped_blocks))
+    checked = failed = 0
+    while True:
+        batch = queue_db.next_charts(conn, settings.batch, book.held(clock()))
+        conn.rollback()
+        if not batch:
+            break
+        for patient in batch:
+            try:
+                check_chart(conn, patient, settings)
+                book.succeeded(patient)
+                checked += 1
+            except Exception as exc:  # noqa: BLE001 — one bad chart must not stop the drain
+                conn.rollback()
+                book.failed(patient, clock())
+                failed += 1
+                log.warning("duplicate check failed for %s (held %.0fs): %s: %s",
+                            patient, settings.retry_after_s, type(exc).__name__, exc)
+            if settings.pace_ms:
+                sleep(settings.pace_ms / 1000)
+    if waiting == 0:
+        queue_db.stamp_drained(conn)       # an empty round still says "last ran HH:MM"
+        conn.commit()
+    return DrainReport(checked, failed, swept)

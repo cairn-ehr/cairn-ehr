@@ -14,6 +14,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+cairn-matcher = "cairn_matcher.cli:main"
+
 [project.urls]
 Homepage = "https://cairn-ehr.org"
 Repository = "https://github.com/cairn-ehr/cairn-ehr"
