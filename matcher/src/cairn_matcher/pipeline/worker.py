@@ -26,7 +26,7 @@ log = logging.getLogger("cairn_matcher.worker")
 
 @dataclass(frozen=True)
 class Settings:
-    """The worker's knobs. See the design page's R4 as-built note for how the defaults were chosen."""
+    """The worker's knobs; the R4 as-built note on the design page explains the defaults."""
 
     max_block_size: int = targeted.DEFAULT_TARGETED_CAP
     sweep_block_size: int = 100        # the sweep's own all-pairs cap, unchanged
