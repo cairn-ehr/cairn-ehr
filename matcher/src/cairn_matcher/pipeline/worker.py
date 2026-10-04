@@ -42,33 +42,47 @@ class ChartResult:
     skipped_blocks: list = field(default_factory=list)
 
 
-def check_chart(conn, patient: str, upto_id: int, settings: Settings) -> ChartResult:
-    """Check one chart and clear its notices up to `upto_id`, in ONE transaction; COMMITS.
+def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
+    """Check one chart and clear exactly the notices it read; COMMITS.
 
-    Reads first (pairs, skip rule, stale pending proposals, the assessments), then writes every
-    outcome, deletes the notices it read, stamps the drain time and commits. Nothing is locked
-    until the writes, so a clinical write never waits on this. If anything raises, the caller
-    rolls back: no proposal lands and the notices stay, so the chart is checked again (a crash
-    loses nothing).
+    1. Capture the chart's notice ids FIRST (queue_db.notice_ids): a bigserial is assigned at
+       INSERT, not commit, so a slow transaction's lower-id notice can commit mid-check; deleting
+       `id <= max` would remove a change this check never saw. Only the captured ids are deleted.
+    2. Read (pairs, skip rule, stale pending proposals, aliases/trust), then assess each pair.
+       The read transaction is ENDED (rollback) after the prep and after every assess call, so
+       no ACCESS SHARE lock or xmin pin is held across the (slow) assessments: the node's loader
+       re-runs `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on every connect, which takes ACCESS
+       EXCLUSIVE and would otherwise queue behind this worker, and every clinical write behind it.
+    3. In one short final transaction: persist every outcome, delete the captured notices,
+       stamp the drain time, commit. If anything raises, the caller rolls back: no proposal
+       lands and the notices stay (a crash loses nothing).
     """
     from cairn_matcher.pipeline import db
 
+    me = str(patient).lower()
+    ids = queue_db.notice_ids(conn, me)
     pairs, skipped = targeted.candidate_pairs_for(
-        conn, patient, max_block_size=settings.max_block_size)
-    pairs = judged.drop_judged(pairs, patient, judged.judged_partners(conn, patient))
+        conn, me, max_block_size=settings.max_block_size)
+    partners = judged.judged_partners(conn, me)
+    pairs = judged.drop_judged(pairs, me, partners)
     # #210 per chart: a PENDING proposal involving this chart that blocking no longer produces
     # (a Doe identified since) is re-assessed, so a stale row is retracted rather than left.
+    # Judged/linked pairs are skipped here too, or a since-linked pair would be re-upserted.
     generated = set(pairs)
-    stale = [p for p in queue_db.pending_pairs_involving(conn, patient) if p not in generated]
-    everyone = {pid for pair in pairs + stale for pid in pair}
+    stale = judged.drop_judged(
+        [p for p in queue_db.pending_pairs_involving(conn, me) if p not in generated],
+        me, partners)
+    todo = pairs + stale
+    everyone = {pid for pair in todo for pid in pair}
     aliases = db.load_aliases_for(conn, everyone)
     trust = db.load_trust_for(conn, everyone)
-    verdicts = [
-        runner.assess(conn, low, high, thresholds=settings.thresholds,
-                      weights=settings.weights, config=settings.config,
-                      aliases=aliases, trust=trust)
-        for low, high in pairs + stale
-    ]
+    conn.rollback()
+    verdicts = []
+    for low, high in todo:
+        verdicts.append(runner.assess(conn, low, high, thresholds=settings.thresholds,
+                                      weights=settings.weights, config=settings.config,
+                                      aliases=aliases, trust=trust))
+        conn.rollback()
     proposed = retracted = 0
     for v in verdicts:
         wrote = runner.persist(conn, v)
@@ -76,7 +90,7 @@ def check_chart(conn, patient: str, upto_id: int, settings: Settings) -> ChartRe
             proposed += 1
         elif wrote:
             retracted += 1
-    queue_db.clear_chart(conn, patient, upto_id)
+    queue_db.clear_notices(conn, ids)
     queue_db.stamp_drained(conn)
     conn.commit()
     return ChartResult(patient, proposed, retracted, skipped)

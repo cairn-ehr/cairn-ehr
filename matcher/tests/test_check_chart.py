@@ -41,7 +41,7 @@ def test_a_near_duplicate_becomes_a_proposal_and_the_notices_are_cleared(pg_conn
         cur.execute("INSERT INTO match_worker_state (matcher_version) VALUES ('v')")
     pg_conn.commit()
     _near_duplicates(pg_conn)
-    result = check_chart(pg_conn, B, _upto(pg_conn, B), Settings())
+    result = check_chart(pg_conn, B, Settings())
     assert result.proposed == 1
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 1
     assert _count(pg_conn, "SELECT count(*) FROM match_pending WHERE patient_id = %s", B) == 0
@@ -51,7 +51,7 @@ def test_a_near_duplicate_becomes_a_proposal_and_the_notices_are_cleared(pg_conn
 
 def test_a_strong_pair_is_proposed_and_never_linked(pg_conn):
     _near_duplicates(pg_conn)
-    check_chart(pg_conn, B, _upto(pg_conn, B), Settings())
+    check_chart(pg_conn, B, Settings())
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 1
     assert _count(pg_conn, "SELECT count(*) FROM patient_link") == 0
 
@@ -72,21 +72,20 @@ def test_a_change_landing_mid_check_survives_and_is_checked_again(pg_conn, monke
         return real_assess(conn, a, b, **kw)
 
     monkeypatch.setattr(runner, "assess", assess_then_a_colleague_corrects_the_name)
-    check_chart(pg_conn, B, upto, Settings())
+    check_chart(pg_conn, B, Settings())
     ids = _count(pg_conn, "SELECT array_agg(id) FROM match_pending WHERE patient_id = %s", B)
     assert ids is not None and all(i > upto for i in ids)
 
 
 def test_a_crash_before_commit_loses_nothing(pg_conn, monkeypatch):
     _near_duplicates(pg_conn)
-    upto = _upto(pg_conn, B)
 
     def boom(*_a, **_k):
         raise RuntimeError("crash between scoring and the delete")
 
-    monkeypatch.setattr(queue_db, "clear_chart", boom)
+    monkeypatch.setattr(queue_db, "clear_notices", boom)
     with pytest.raises(RuntimeError):
-        check_chart(pg_conn, B, upto, Settings())
+        check_chart(pg_conn, B, Settings())
     pg_conn.rollback()
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 0
     assert _count(pg_conn, "SELECT count(*) FROM match_pending WHERE patient_id = %s", B) > 0
@@ -98,7 +97,7 @@ def test_a_linked_pair_is_never_proposed(pg_conn):
         cur.execute("INSERT INTO person_member (patient_id, person_id) VALUES (%s,%s),(%s,%s)",
                     (A, A, B, A))
     pg_conn.commit()
-    assert check_chart(pg_conn, B, _upto(pg_conn, B), Settings()).proposed == 0
+    assert check_chart(pg_conn, B, Settings()).proposed == 0
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 0
 
 
@@ -115,18 +114,93 @@ def test_a_stale_pending_proposal_no_longer_blocked_is_reassessed(pg_conn):
             "veto_findings, evidence, matcher_version) VALUES (%s,%s,1,'review','[]','[]','v')",
             (lo, hi))
     pg_conn.commit()
-    result = check_chart(pg_conn, A, _upto(pg_conn, A), Settings())
+    result = check_chart(pg_conn, A, Settings())
     assert result.retracted == 1
     assert _count(pg_conn, "SELECT status FROM match_proposal") == "retracted"
 
 
 def test_the_worker_role_suffices(pg_conn):
     _near_duplicates(pg_conn)
-    upto = _upto(pg_conn, B)
     with pg_conn.cursor() as cur:
         cur.execute("SET ROLE cairn_agent")
-    check_chart(pg_conn, B, upto, Settings())
+    check_chart(pg_conn, B, Settings())
     with pg_conn.cursor() as cur:
         cur.execute("RESET ROLE")
     pg_conn.commit()
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 1
+
+
+def test_a_slow_transaction_with_a_lower_id_is_not_deleted_by_the_check(pg_conn, monkeypatch):
+    """ids are assigned at INSERT, not commit: T1 holds id N (uncommitted), T2's N+1 commits,
+    the check reads only N+1; T1 commits mid-check. Its notice (id < the max read) must survive."""
+    import psycopg
+
+    from tests.conftest import cairn_test_dsn
+
+    _near_duplicates(pg_conn)
+    slow = psycopg.connect(cairn_test_dsn())
+    slow.execute("INSERT INTO match_pending (patient_id, reason) VALUES (%s,'change')", (B,))
+    # A later, committed notice gets a HIGHER id than the slow one.
+    with psycopg.connect(cairn_test_dsn()) as fast:
+        fast.execute("INSERT INTO match_pending (patient_id, reason) VALUES (%s,'change')", (B,))
+    real_assess = runner.assess
+    committed = []
+
+    def assess_then_slow_commits(conn, a, b, **kw):
+        if not committed:
+            slow.commit()
+            committed.append(True)
+        return real_assess(conn, a, b, **kw)
+
+    monkeypatch.setattr(runner, "assess", assess_then_slow_commits)
+    try:
+        check_chart(pg_conn, B, Settings())
+    finally:
+        slow.close()
+    assert committed
+    assert _count(pg_conn, "SELECT count(*) FROM match_pending WHERE patient_id = %s", B) == 1
+
+
+def test_no_lock_is_held_across_an_assessment(pg_conn, monkeypatch):
+    import psycopg
+
+    from tests.conftest import cairn_test_dsn
+
+    _near_duplicates(pg_conn)
+    # A third near-duplicate gives the chart TWO pairs, so the second assess starts after the
+    # first one's reads: any lock the first left behind is still there when the probe runs.
+    seed_patient(pg_conn, str(uuid.UUID(int=14)), dob=("1950-01-07", 60, "day"),
+                 names=[("Mary Smith", 60)], identifiers=[("mrn:a", "77", "77")])
+    real_assess = runner.assess
+    probed = []
+
+    def assess_after_probing_for_locks(conn, a, b, **kw):
+        with psycopg.connect(cairn_test_dsn(), autocommit=True) as other:
+            other.execute("BEGIN")
+            other.execute("SET LOCAL lock_timeout = '0'")
+            for table in ("patient_name", "patient_demographic", "patient_identifier",
+                          "patient_chart"):
+                other.execute(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE NOWAIT")
+            other.execute("ROLLBACK")
+        probed.append(True)
+        return real_assess(conn, a, b, **kw)
+
+    monkeypatch.setattr(runner, "assess", assess_after_probing_for_locks)
+    check_chart(pg_conn, B, Settings())
+    assert len(probed) == 2
+
+
+def test_a_since_linked_pending_proposal_is_not_refreshed(pg_conn):
+    _near_duplicates(pg_conn)
+    lo, hi = sorted([A, B])
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO match_proposal (patient_low, patient_high, score_total, band, "
+            "veto_findings, evidence, matcher_version) VALUES (%s,%s,1,'review','[]','[]','old')",
+            (lo, hi))
+        cur.execute("INSERT INTO person_member (patient_id, person_id) VALUES (%s,%s),(%s,%s)",
+                    (A, A, B, A))
+    pg_conn.commit()
+    result = check_chart(pg_conn, B, Settings())
+    assert result.proposed == 0 and result.retracted == 0
+    assert _count(pg_conn, "SELECT matcher_version FROM match_proposal") == "old"

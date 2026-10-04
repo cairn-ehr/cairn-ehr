@@ -12,9 +12,10 @@
 --     anything, so it never waits on the worker's open transaction and never raises a
 --     serialization error, whatever isolation level a future writer picks. A keyed upsert
 --     (ON CONFLICT) would make a clinical write wait behind the worker.
---   * the worker deletes only the notices it READ (id <= the highest id it saw for that
---     chart), so a change landing while the chart is being checked survives and is checked
---     again. Deleting "the patient's row" would lose it.
+--   * the worker deletes exactly the notice ids it READ (captured before it reads the
+--     projections, deleted by id, never by "id <=": a bigserial is assigned at INSERT, not
+--     commit, so a slow transaction's lower id can commit mid-check), so a change landing
+--     while the chart is being checked survives and is checked again. Deleting "the patient's row" would lose it.
 --
 -- WHY IT CAN NEVER FAIL A CLINICAL WRITE: structurally, like db/029's collision recorder — no
 -- RAISE, no EXCEPTION block, a null guard, an insert that cannot conflict. It is deliberately

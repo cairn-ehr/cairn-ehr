@@ -18,20 +18,20 @@ def charts_waiting(conn) -> int:
         return cur.fetchone()[0]
 
 
-def next_charts(conn, limit: int, exclude: list[str]) -> list[tuple[str, int]]:
-    """Up to `limit` waiting charts, NEWEST change first, as (patient, highest notice id).
+def next_charts(conn, limit: int, exclude: list[str]) -> list[str]:
+    """Up to `limit` waiting charts, NEWEST change first (patient uuid text).
 
     Newest first so a fresh registration is checked within seconds even behind a restore's
     backlog. `exclude` is the RetryBook's held charts, so a poison chart never starves the rest.
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT patient_id::text, max(id) FROM match_pending "
+            "SELECT patient_id::text FROM match_pending "
             "WHERE NOT (patient_id = ANY(%s::uuid[])) "
             "GROUP BY patient_id ORDER BY max(id) DESC LIMIT %s",
             (exclude, limit),
         )
-        return [(p, int(i)) for p, i in cur.fetchall()]
+        return [p for (p,) in cur.fetchall()]
 
 
 def pending_pairs_involving(conn, patient) -> list[tuple[str, str]]:
@@ -44,28 +44,31 @@ def pending_pairs_involving(conn, patient) -> list[tuple[str, str]]:
         return [(lo, hi) for lo, hi in cur.fetchall()]
 
 
-def clear_chart(conn, patient, upto_id: int) -> int:
-    """Delete the chart's notices up to the highest id the check READ — never by patient alone,
-    which would lose a change that landed mid-check."""
+def notice_ids(conn, patient=None) -> list[int]:
+    """The notice ids VISIBLE right now, for one chart or (patient=None) for all.
+
+    Capture these BEFORE reading the projections, then delete exactly them with
+    clear_notices. Never delete by `id <= highest`: a bigserial is assigned at INSERT, not
+    commit, so a slow transaction can hold a LOWER id and commit mid-check; an `id <=` delete
+    would remove that notice although the check never saw its change.
+    """
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM match_pending WHERE patient_id = %s::uuid AND id <= %s",
-                    (patient, upto_id))
-        return cur.rowcount
+        if patient is None:
+            cur.execute("SELECT id FROM match_pending ORDER BY id")
+        else:
+            cur.execute("SELECT id FROM match_pending WHERE patient_id = %s::uuid ORDER BY id",
+                        (patient,))
+        return [int(i) for (i,) in cur.fetchall()]
 
 
-def watermark(conn) -> int | None:
-    with conn.cursor() as cur:
-        cur.execute("SELECT max(id) FROM match_pending")
-        return cur.fetchone()[0]
-
-
-def clear_upto(conn, upto_id: int, keep: list[str]) -> int:
-    """After a bulk sweep: delete every notice up to the watermark EXCEPT the charts in `keep`
-    (charts in a pair the sweep failed to score — they stay "not yet checked")."""
+def clear_notices(conn, ids: list[int], keep=()) -> int:
+    """Delete exactly the notices in `ids`, except those of the charts in `keep` (charts in a
+    pair a sweep failed to score stay "not yet checked"). Does NOT commit."""
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM match_pending WHERE id <= %s AND NOT (patient_id = ANY(%s::uuid[]))",
-            (upto_id, keep),
+            "DELETE FROM match_pending WHERE id = ANY(%s::bigint[]) "
+            "AND NOT (patient_id = ANY(%s::uuid[]))",
+            (list(ids), list(keep)),
         )
         return cur.rowcount
 
