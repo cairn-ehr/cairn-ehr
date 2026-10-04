@@ -861,6 +861,74 @@ not survive contact with the code, and the maintainer decided three questions in
 **Out of R4:** the window's status lines and the banner's per-chart "not yet checked" (R5); a
 monitoring exit code; the Pi measurement (filed).
 
+#### R4 — as built (2026-10-04)
+
+R4 was built to the design above, with five deviations that review forced. Each is recorded with its
+reason, because three of them correct sentences in the design itself.
+
+- **R3 — delete the exact notices read, not `id <= N`.** The design's sentence "deletes only the
+  notices it read: `WHERE patient_id = X AND id <= <highest id read for X>`" has the right intent and
+  the wrong SQL. A `bigserial` id is assigned when the row is INSERTED, not when its transaction
+  commits, so a notice with a lower id can commit after the worker has read a higher one. `id <=`
+  would delete that late notice unread, and the chart would read "checked" when it was not. The
+  worker now captures the set of ids it read (`queue_db.notice_ids`, before the projection reads) and
+  deletes by that set (`queue_db.clear_notices(conn, ids, keep)`). Bulk mode captures the visible id
+  set before its sweep. As a result `check_chart(conn, patient, settings)` takes no watermark,
+  `next_charts` returns patients only, and `watermark`/`clear_upto`/`clear_chart` do not exist.
+- **R4 — no lock held across assessments.** The schema loader re-runs `ALTER TABLE … IF NOT EXISTS`
+  on every connect, which needs an ACCESS EXCLUSIVE lock. A worker holding even an ACCESS SHARE lock
+  on a projection through a long assessment would queue that statement, and every clinical write
+  behind it. `check_chart` therefore rolls back after its read preparation and after each assessment,
+  and commits its writes in one short transaction at the end.
+- **R5 — a stale pending proposal also passes the skip rule.** The skip rule drops pairs a human has
+  already judged. A stale `pending` proposal for a pair that was judged since is the same case, so it
+  is dropped as well: per chart in `check_chart`, and in bulk mode `sweep(skip_pairs=…)` removes
+  judged pairs from its reconciliation too (otherwise the sweep would re-open them).
+- **R7 — psycopg floor, and where `watch` lives.** The psycopg requirement is `>=3.2` (the
+  floor `watch` relies on, e.g. `notifies(timeout=…, stop_after=…)`). The outer loop is `pipeline/watch.py`, not `worker.py`, to keep
+  files small. Its reconnect backoff resets only after a *completed* drain: an error raised after
+  connecting (a statement timeout, a deadlock) is deterministic and must keep backing off rather than
+  retry, and re-sweep, every second.
+- **R8 — bulk mode has no poison isolation (known gap).** Per-chart mode isolates a chart that
+  raises (it is held and retried later). A data-triggered error inside the sweep's blocking aborts the
+  whole sweep; while the backlog stays over the threshold the worker crash-loops. Nothing reads
+  falsely "checked" (the notices stay), but the check stops making progress. Filed as an issue.
+
+**The measurement.** `matcher/src/cairn_matcher/eval/measure_check.py` seeds a generated population in
+one transaction (rolled back afterwards; the seeded tables are ANALYZEd inside it so the planner sees
+real row counts), then times, per sampled chart, `candidate_pairs_for` plus an `assess` of each of its
+pairs, and times one `generate_candidate_pairs` (cap 100) plus an `assess` of every pair. Machine:
+Apple M3 Max, 128 GB RAM, PostgreSQL 18.1 (Postgres.app) on the same host, 2026-10-04.
+
+| Records | Sample | Per-chart p50 | Per-chart p95 | One sweep | Sweep pairs | Break-even (sweep / p50) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 000 | 50 | 453 ms | 590 ms | 37.6 s | 61 813 | ~83 charts |
+| 10 000 | 30 | 8 829 ms | 9 651 ms | 129.9 s | 189 340 | ~15 charts |
+| 50 000 | not run | | | | | |
+
+50 000 was not run: the 10 000 run (seed, sample and sweep) took 400 s, over the three-minute bound
+set for deciding to continue, and the per-chart figure had already failed the stop line below.
+
+**What the numbers say, and the finding.** A fivefold larger population made the per-chart check
+about nineteen times slower (453 ms to 8.8 s), while the sweep grew about 3.5 times. The per-chart
+cost is therefore superlinear, and the budget set in the plan (p95 at most 2 s at 10 000 charts) is
+missed by a factor of nearly five; the 5 s stop line is also exceeded. The likely cause is that
+`_TARGETED_GROUPS_SQL` wraps the full `_GROUPS_SQL` population-wide aggregation in a subquery and
+filters for the chart afterwards, so each chart pays for grouping the whole population, not for its
+own blocks. The fix is to anchor the blocking SQL on the chart so only its own blocks are built (a new
+issue; #637 is about patient search, not this). The drift canary
+shows the targeted pairs are *correct*; the defect is cost, not result.
+
+**The constants.** Neither default was changed, because the figures do not justify a number:
+- `Settings.bulk_threshold` stays 500. The break-even falls from ~83 to ~15 charts as the population
+  grows, which is what a superlinear per-chart check looks like; fitting a threshold to it would
+  encode the defect. Once per-chart cost is made proportional to the chart's own blocks, the
+  break-even should be re-measured (and on the Pi, a filed follow-on).
+- `targeted.DEFAULT_TARGETED_CAP` stays 1000. The cap bounds how many pairs a block contributes, and
+  that is not where the time goes, so lowering it cannot bring p95 under budget.
+
+Each constant carries a comment citing these figures.
+
 ### R5 — the banner and the worklist (#680)
 
 - **Banner** (§5.2's): when any chart in the displayed set has an unresolved proposal, a banner sits
