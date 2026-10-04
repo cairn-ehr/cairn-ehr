@@ -104,6 +104,10 @@ def sweep(
     # passes no longer generate is never revisited by the loop below and would otherwise
     # linger forever.
     pending = db.pending_proposal_pairs(conn)
+    if skip_pairs:
+        # A judged pair with a stale pending proposal must not be re-scored by reconciliation
+        # either (R4 ruling R5: a judged pair is never proposed by either mode).
+        pending = [p for p in pending if p not in skip_pairs]
     # Close the read transaction the SELECTs opened before the per-pair write loop.
     conn.rollback()
 

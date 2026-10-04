@@ -38,9 +38,12 @@ def watch(dsn: str, settings: Settings, *, once: bool = False) -> int:
                 listen.execute("LISTEN cairn_match_pending")
                 if queue_db.ensure_version(work, version):
                     log.info("matcher %s: every chart queued for a re-check", version)
-                backoff = 1.0
                 while True:
                     report = drain(work, settings, book)
+                    # Reset the reconnect backoff only once a drain has really completed: an
+                    # error raised AFTER connecting (statement timeout, deadlock) is deterministic
+                    # and must keep backing off, not retry (and re-sweep) every second.
+                    backoff = 1.0
                     if once:
                         return 0 if report.failed == 0 else 1
                     # Sleep until a notice arrives or the poll interval passes.

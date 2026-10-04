@@ -19,7 +19,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "psycopg", extras = ["binary"], marker = "extra == 'pipeline'", specifier = ">=3.1" }]
+requires-dist = [{ name = "psycopg", extras = ["binary"], marker = "extra == 'pipeline'", specifier = ">=3.2" }]
 provides-extras = ["pipeline"]
 
 [package.metadata.requires-dev]

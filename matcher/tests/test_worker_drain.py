@@ -19,6 +19,14 @@ def _count(conn, sql, *args):
     return n
 
 
+def _queued(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT patient_id::text FROM match_pending WHERE reason = 'config'")
+        got = {p for (p,) in cur.fetchall()}
+    conn.rollback()
+    return got
+
+
 def _state(conn):
     with conn.cursor() as cur:
         cur.execute("INSERT INTO match_worker_state (matcher_version) VALUES ('v')")
@@ -144,8 +152,35 @@ def test_a_new_version_or_a_first_run_queues_every_chart(pg_conn):
     pg_conn.commit()
     v = matcher_version()
     assert queue_db.ensure_version(pg_conn, v) is True
-    # >= : a shared dev DB may hold a stray patient_chart row that is not truncated between tests.
-    queued = _count(pg_conn, "SELECT count(*) FROM match_pending WHERE reason = 'config'")
-    assert queued >= 2
+    # Containment, not equality: a shared dev DB may hold a stray patient_chart row.
+    queued = _queued(pg_conn)
+    assert {A, B} <= queued
     assert queue_db.ensure_version(pg_conn, v) is False
-    assert _count(pg_conn, "SELECT count(*) FROM match_pending") == queued
+    assert _queued(pg_conn) == queued
+
+
+def test_bulk_mode_never_reproposes_a_judged_pair_in_reconciliation(pg_conn, monkeypatch):
+    from cairn_matcher.pipeline import runner
+    from cairn_matcher.pipeline import sweep as sweep_mod
+
+    _state(pg_conn)
+    for p in (A, B):
+        seed_patient(pg_conn, p, dob=("1950-01-07", 60, "day"), names=[("Mary Smith", 60)])
+    runner.propose(pg_conn, A, B)             # a PENDING proposal for the pair
+    pg_conn.commit()
+    with pg_conn.cursor() as cur:             # ... then a human links them: now judged
+        cur.execute("INSERT INTO person_member (patient_id, person_id) VALUES (%s,%s),(%s,%s)",
+                    (A, A, B, A))
+    pg_conn.commit()
+    before = _count(pg_conn, "SELECT count(*) FROM match_proposal WHERE status = 'pending'")
+    assert before == 1
+    real, called = sweep_mod.propose, []
+
+    def spy(conn, a, b, **kw):
+        called.append((str(a), str(b)))
+        return real(conn, a, b, **kw)
+
+    monkeypatch.setattr("cairn_matcher.pipeline.sweep.propose", spy)
+    worker.run_bulk(pg_conn, Settings())
+    assert called == []
+    assert _count(pg_conn, "SELECT count(*) FROM match_proposal WHERE status = 'pending'") == 1
