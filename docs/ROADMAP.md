@@ -436,8 +436,8 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b and R3 are merged; **R4** (PR #724) and **#725** (PR #733, stacked on #724) await merge
-  (entries below); **R5** (banner + worklist, #680; #700, #723) follows. Plan each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b, R3, **R4** (PR #724) and **#725** (PR #733) are merged (entries below); **R5**
+  (banner + worklist, #680; #700, #716, #723) is next, on branch `feat/r5-banner-worklist`. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -477,7 +477,7 @@ No SQL object; generation stays 55. Maintainer's decisions: each member line is 
 
 ### 2026-10-04/05 — repair path R4: the commit-time duplicate check (ADR-0076 decision 7; PR #724)
 
-Built on PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) (Refs #679). Plan
+Merged 2026-10-05, PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) (Refs #679). Plan
 `docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md`; design page "R4 — designed 2026-10-04" + its
 **as-built note** (every deviation and the measurement); the SDD ledger's rulings R1–R21. `db/056_match_pending.sql`,
 `SCHEMA_GENERATION` 55 → **56** (cairn-sync's list lags, #284). No wire change. Maintainer's decisions: the node read +
@@ -499,7 +499,7 @@ CLI now, the window's lines with R5; a standalone operator-run worker; an append
 - **§1.2:** the clerk's possible-duplicate tray. At the desk 0 → 0 → 0; the operator's status line is not a clinical
   gesture. Registration-to-proposal latency measured above (#725, #728).
 
-### 2026-10-05 — #725: the per-chart duplicate check's range blocking (PR #733, stacked on #724)
+### 2026-10-05 — #725: the per-chart duplicate check's range blocking (PR #733, merged)
 
 Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; design page "#725 — as fixed". Also fixed PR #724's
 red `ruff + pytest` job: the blocking SQL moved to the pure `pipeline/blocking_sql.py` and

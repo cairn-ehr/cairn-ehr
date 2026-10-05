@@ -3,16 +3,12 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ TWO PRs AWAIT THE MAINTAINER'S MERGE, IN ORDER (2026-10-05):**
-> 1. **PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) — R4, the commit-time duplicate check** (#679). Its
->    `ruff + pytest` job was RED at session start (six R4 test modules could not import psycopg in CI's no-extra job);
->    fixed in `38d6c393`, **all checks green**.
-> 2. **PR [#733](https://github.com/cairn-ehr/cairn-ehr/pull/733) — #725, STACKED on #724** (base `feat/r4-commit-time-worker`; GitHub retargets it to `main` when #724
->    merges and its branch is deleted). Per-chart p95 **9.65 s → 1.4 s** at 10 000 charts (budget ≤ 2 s);
->    `bulk_threshold` 30 → 250. Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; the design page's
->    "#725 — as fixed" note. #725 is left OPEN for the maintainer (the Pi figure is #728).
+> **⇒ R4 (PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724), the commit-time duplicate check, #679) AND
+> #725 (PR [#733](https://github.com/cairn-ehr/cairn-ehr/pull/733), per-chart p95 9.65 s → 1.4 s at 10 000 charts;
+> `bulk_threshold` 250) ARE MERGED (2026-10-05).** #725 is left OPEN for the maintainer (the Pi figure is #728).
+> **R5 (banner + worklist, #680) is being designed on branch `feat/r5-banner-worklist`.**
 >
-> R3 (PR #721), R1b (#717), R2b-2 (#711), R2b-1 (#707), R2a (#698) and R1 (#688) are merged. Repair path #679 · #680 ·
+> R4 (PR #724), R3 (PR #721), R1b (#717), R2b-2 (#711), R2b-1 (#707), R2a (#698) and R1 (#688) are merged. Repair path #679 · #680 ·
 > #681. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; runbook
 > `docs/developers/running-the-duplicate-check.md`. `db/056`, **`SCHEMA_GENERATION` 56**; spec **v0.79**.
 >
