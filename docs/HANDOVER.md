@@ -3,40 +3,55 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R4 — THE COMMIT-TIME DUPLICATE CHECK (ADR-0076 decision 7, #679) — BUILT ON PR
-> [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) (2026-10-04/05): seven tasks, per-task reviews (four fix
-> loops), an opus final review, one fix wave re-reviewed clean, and the local gates over the final code. AWAITING THE
-> MAINTAINER'S MERGE.** R3 (PR #721), R1b (#717), R2b-2 (#711), R2b-1 (#707), R2a (#698) and R1 (#688) are merged.
-> Repair path #679 · #680 · #681.
-> Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` ("R4 — designed 2026-10-04"
-> + **its as-built note**: every deviation, the measurement), plan
-> `docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md`, runbook
-> `docs/developers/running-the-duplicate-check.md`. `db/056`, **`SCHEMA_GENERATION` 56**; spec stays **v0.79** (no ADR —
-> decision 7 already fixes "a node-local queue … can never fail a clinical write").
+> **⇒ TWO PRs AWAIT THE MAINTAINER'S MERGE, IN ORDER (2026-10-05):**
+> 1. **PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) — R4, the commit-time duplicate check** (#679). Its
+>    `ruff + pytest` job was RED at session start (six R4 test modules could not import psycopg in CI's no-extra job);
+>    fixed in `38d6c393`, **all checks green**.
+> 2. **PR [#733](https://github.com/cairn-ehr/cairn-ehr/pull/733) — #725, STACKED on #724** (base `feat/r4-commit-time-worker`; GitHub retargets it to `main` when #724
+>    merges and its branch is deleted). Per-chart p95 **9.65 s → 1.4 s** at 10 000 charts (budget ≤ 2 s);
+>    `bulk_threshold` 30 → 250. Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; the design page's
+>    "#725 — as fixed" note. #725 is left OPEN for the maintainer (the Pi figure is #728).
+>
+> R3 (PR #721), R1b (#717), R2b-2 (#711), R2b-1 (#707), R2a (#698) and R1 (#688) are merged. Repair path #679 · #680 ·
+> #681. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; runbook
+> `docs/developers/running-the-duplicate-check.md`. `db/056`, **`SCHEMA_GENERATION` 56**; spec **v0.79**.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#725 — the per-chart check pays a whole-population blocking pass** (p95 **9.65 s at 10 000 charts** on an M3
->    Max; budget ≤ 2 s; the blocking SQL is ~7 s of it, not the pairs). Fix BEFORE R5: R5 makes "not yet checked" a
->    clinician-visible state. Anchor the blocking on the chart's keys or materialise a key projection; the drift canary
->    (`test_targeted_blocking.py`) makes either safe. Re-measure with `python -m cairn_matcher.eval.measure_check`
->    (scratch DB), on the Pi too (#728), then revisit `bulk_threshold` (30) and `DEFAULT_TARGETED_CAP` (1000).
-> 2. **R5** (banner + worklist, #680 — R4's comment there lists what the banner must read; the worklist filters pairs
+> 1. **R5** (banner + worklist, #680 — R4's comment there lists what the banner must read; the worklist filters pairs
 >    with a `patient_link` row, #700). **#716** and **#723** belong beside it. #699 stays open until the maintainer closes it.
-> 3. **Open repair-path issues:** R4's **#726** (every-connect DDL takes ACCESS EXCLUSIVE; reproduced — widened by
->    db/056's trigger replays) · **#727** (bulk mode has no poison isolation) · **#729** (mode chosen once per round: a
->    rebuild mid-drain is worked chart by chart) · **#730** (the 101–1000 skipped-block band — a decision) · **#731** (no
->    "charts failing" signal) · **#732** (the matcher conftest leaves `patient_chart`). Earlier: **#708** · **#709** ·
->    **#710** · **#712** · **#713** · **#714** · **#715** · **#716** · **#718** · **#719** · **#720** · **#722** ·
->    **#723** · **#699** · **#700** · **#702** (pinned) · **#703** · **#704** · **#705** · **#706** · from R1: #689 ·
->    #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
-> 4. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
+>    **#728** (the Pi re-measure: `python -m cairn_matcher.eval.measure_check --sizes 2000 10000` on a vacuumed scratch
+>    DB) can run beside it; if the Pi misses 2 s, the levers are in the #725 plan's "Out of scope".
+> 2. **Open repair-path issues:** **#726** (every-connect DDL takes ACCESS EXCLUSIVE) · **#727** (bulk mode has no poison
+>    isolation) · **#729** (mode chosen once per round) · **#730** (the 101–1000 skipped-block band — a decision; since
+>    #725 the cap bounds real work) · **#731** (no "charts failing" signal) · **#732** (the matcher conftest leaves
+>    `patient_chart`) · **#734** (db/046's comment still points at `db.py`; fold in when db/046 is next edited). Earlier: **#708** · **#709** · **#710** · **#712** · **#713** · **#714** · **#715** · **#716** ·
+>    **#718** · **#719** · **#720** · **#722** · **#723** · **#699** · **#700** · **#702** (pinned) · **#703** · **#704** ·
+>    **#705** · **#706** · from R1: #689 · #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696; #333, #220 and
+>    #335 gained comments.
+> 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
 >    **runbook §10's unlink** (≤ 15 s), the **live Tauri-IPC + VoiceOver pass on a linked pair** (the #699 (a) third-chart
 >    unlink, a doubted pair's withheld lines, R3's person row), and R4's **running a supervised worker** on a real node
->    per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` above the blocking time).
-> 5. **#620**, the only open item that can still change the wire (brainstorm first). Then **#626**, **#652 + #655**,
+>    per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` ≥ 30 s, as the runbook
+>    says).
+> 4. **#620**, the only open item that can still change the wire (brainstorm first). Then **#626**, **#652 + #655**,
 >    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
+>
+> **⇒ #725'S DURABLE RULES — do not undo** (pins: `matcher/tests/test_blocking_sql_shape.py`,
+> `test_targeted_blocking.py`, `test_pure_modules_import_without_psycopg.py`):
+> - **No range arm joins a sex scan.** A chart's set of blocking sexes rides on its birth-window row (`sexed_window`,
+>   one join by `patient_id`); the `+sex` arm is a FILTER (`anchor_sexes && member_sexes`). A CTE scan has no
+>   statistics, so an equi-join of two sex scans on a ~2-valued column is a planner cross-product (14.7 M rows) —
+>   in the #725 prototype even two scans of per-patient ARRAYS were cross-joined first.
+> - **The anchored per-chart range statement is the sweep's plus `relevant_anchor` and `_ANCHOR_CLAUSE`, nothing
+>   else**; the clause restricts the ANCHOR, never the member (a kept window is computed in full — its size is the
+>   cap's verdict). Add a range arm to `_RANGE_ARMS` and both statements get it.
+> - **`pipeline/db.py` is the ONLY module that imports psycopg at import time** (plus `eval/measure_check`, a DB tool).
+>   Every local run uses `--extra pipeline`, so only the import guard catches a CI-only collection failure; blocking
+>   SQL text lives in the pure `pipeline/blocking_sql.py` (`db.py` imports the sweep statements from it). A
+>   psycopg-needing TEST imports it inside the test or `importorskip`s it; a guard collects the whole suite without
+>   psycopg. **The canary runs capped too** (10, 6): uncapped it cannot see targeted.py's outer filter. Reproduce CI's pure job with `CAIRN_ALLOW_DB_SKIP=1 uv run --isolated pytest`.
 >
 > **⇒ R4'S DURABLE RULES (PR #724) — do not undo any of these** (pins in `tests/match_pending.rs`,
 > `tests/duplicate_check.rs`, `matcher/tests/test_{check_chart,worker_drain,watch_backoff,targeted_blocking,judged}.py`):
@@ -403,8 +418,8 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-04/05 (**R4 — the commit-time duplicate check**, ADR-0076 decision 7, PR
-**[#724](https://github.com/cairn-ehr/cairn-ehr/pull/724)**, awaiting merge) · 10-03 R3 (PR #721) and R1b (PR #717) ·
+**Session date:** 2026-10-05 (**#725 — the per-chart check's range blocking**, PR #733 stacked on #724; PR #724's red CI
+fixed) · 10-04/05 R4 (ADR-0076 decision 7, PR **[#724](https://github.com/cairn-ehr/cairn-ehr/pull/724)**, awaiting merge) · 10-03 R3 (PR #721) and R1b (PR #717) ·
 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`) and R1 (ADR-0076, `db/054`,
 PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
 ADR-0077; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
@@ -420,7 +435,7 @@ PERSON since R3, PR #721) · `clinical.medication` 1–6b under born-sealed bodi
 sign-off over a linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the
 compare-and-link panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) + a doubted set
 withholds every line not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher
-watch`, `cairn-node duplicate-check`; R4, PR #724) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
+watch`, `cairn-node duplicate-check`; R4, PR #724; per-chart range blocking anchored, #725) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
 admit-uninterpreted floor · **the L3 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates;
 `cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine
 tested but **not wired**.
@@ -430,6 +445,20 @@ tested but **not wired**.
 ## Recent sessions — what to carry forward
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise.
+
+### 2026-10-05 — #725, and PR #724's red CI
+
+- **⇒ A CI job that installs a different dependency set from every local run cannot be gated locally — turn the
+  difference into a test.** R4 passed every local gate (`--extra pipeline`) and failed CI's no-extra job at COLLECTION;
+  `test_pure_modules_import_without_psycopg.py` imports the package in a child where `import psycopg` fails. **⇒ "All
+  local gates green" was reported while a PR check was red** — read `gh pr checks` before calling a PR ready.
+- **⇒ Diagnose before choosing between an issue's candidate fixes.** #725 named "the blocking SQL" and offered two
+  remedies; the cost was ONE arm's planner cross-product, and my own first fix (sex arrays) made the same mistake — an
+  `EXPLAIN ANALYZE` of the prototype showed it. Prototype against the old statement and assert identical rows per chart.
+- **⇒ Editing an `include_str!`'d `db/*.sql`, even a comment, relinks every cairn-node test binary** (hours under macOS
+  Gatekeeper); a stale-but-resolvable pointer there was left as is. **⇒ `git push` over HTTPS had no credentials in
+  this shell** while `gh` was authenticated: `git -c credential.helper= -c 'credential.helper=!gh auth git-credential'
+  push`, no config change.
 
 ### 2026-10-04/05 — R4: the commit-time duplicate check (PR #724)
 
@@ -451,37 +480,28 @@ an opus final review, one fix wave. **Most of the review effort went into one se
   `current_user` inside the code under test. **⇒ An interrupted subagent's uncommitted edits are evidence** (again):
   the resumed fixer found the inherited test right and the inherited SQL incomplete.
 
-### 2026-09-27 → 10-03 — repair path R1–R3 (PRs #688, #698, #707, #711, #717, #721)
+### 2026-08-20 → 10-03 — restore, node plane, doors, search, funnel UI 2a–2c, #671, repair path R1–R3
 
+Narrative: ROADMAP; durable rules: traps 7–18 and the per-slice blocks above; each plan carries its review ledger.
 - **⇒ A remedy or count sentence is a safety claim — walk it through every case it is shown in** ("either judgement
-  lifts this hold" was false in three reachable cases and made another person's drugs signable; "N charts also
-  matched" was false for an unmatched member). **⇒ A plan can mandate a false claim, and can silently drop a design
-  test** — diff the design's test list against the plan's. **⇒ Fact-check an ADR sentence by sentence against the SQL.**
-- **⇒ A predicate keyed on standing LINKS misses standing UNLINKS.** **⇒ Keep an old flag, add the reasons beside it,
-  route every reader through one method**; rename a helper whose name overclaims.
-- **⇒ "Inside the transaction" is not "serialized"**: take the lock every writer holds (CARNLK) FIRST; test by parking
-  the victim on the lock (`pg_stat_activity`), never a sleep. **⇒ Recorded is not took effect.** **⇒ A migration that
-  changes a projection's order must re-decide what the old order decided** (db/055; #703).
-- **⇒ A test that cannot see its own predicate proves nothing — mutate to check** (SQL predicates: edit db/*.sql and
-  REBUILD); a DB-suite "ok" can be a self-skip; a headless walk asserts visibility, not `textContent`; subagent reports
-  miscount — re-run the DB suites yourself. A migration task with mechanical rules keeps a wide change reviewable.
-  Filed along the way: #712 · #716 · #718 · #719 · #720 · #722 · #723; #335 comments.
-
-### 2026-08-20 → 09-26 — the restore, node-plane, door and search slices; funnel UI 2a → 2c and #671 (PRs #646, #653, #661, #674, #678)
-
-Narrative: ROADMAP; durable rules: traps 7–18 and the funnel's rules; each plan carries its review ledger.
-- **Ask what the desk will do before designing what it must attest** (#671); a design's quantitative assumption is a
-  claim. **When a slice makes a constant variable, audit every reader.** **A sweep without all three DB strings is not a
-  sweep**; grep every claim about the tree (#654); an atomicity probe that never reaches the server is decoration (#657);
-  a new DB suite in a non-root tree runs nowhere until wired (#656); a derived truncate list is only as good as its
-  predicate (#658).
-- **An issue's scenario and scope are CLAIMS** — read the code for what it MISSED. **A guard only ever green proved
-  nothing** (#586); **"untestable" is a claim — try a `SET ROLE` seam first.** **A mutation is the RED phase of a pin over
-  shipped behaviour.** **Copying a guard spreads its fail-open** (#608). **A door returning `Ok` is not the record coming
-  back.** **Content-addressing over unsigned bytes is not content-addressing** (#620).
-- **Mechanics:** a fixture can manufacture a SQLSTATE production never sees; a red gate can be a predecessor's (#583); a
-  new definer writes `SET search_path = public, pg_temp`; `nohup … &` and `cmd; echo exit=$?` lie — read the log's last
-  line; a new ADR needs its `mkdocs.yml` nav line; zsh needs `${=T}`. Still open: **#569**, **#598**, #624.
+  lifts this hold" was false in three reachable cases). A plan can mandate a false claim and silently drop a design test
+  — diff the two test lists; fact-check an ADR sentence by sentence against the SQL; ask what the desk will do before
+  designing what it must attest (#671); a design's quantitative assumption is a claim.
+- **⇒ "Inside the transaction" is not "serialized"** — take the lock every writer holds (CARNLK) first; test by parking
+  the victim on it (`pg_stat_activity`), never a sleep. Recorded is not took effect. A migration that changes a
+  projection's order must re-decide what the old order decided (db/055; #703). A predicate keyed on standing LINKS
+  misses standing UNLINKS; keep an old flag, add reasons beside it, route every reader through one method.
+- **⇒ A test that cannot see its own predicate proves nothing — mutate to check** (a mutation is the RED phase of a pin
+  over shipped behaviour; SQL predicates need a REBUILD). A guard only ever green proved nothing (#586); copying a guard
+  spreads its fail-open (#608); "untestable" is a claim — try a `SET ROLE` seam; a DB-suite "ok" can be a self-skip; a
+  headless walk asserts visibility; an issue's scenario and scope are CLAIMS; a door returning `Ok` is not the record
+  coming back; content-addressing over unsigned bytes is not content-addressing (#620).
+- **Mechanics:** a sweep without all three DB strings is not a sweep; grep every claim about the tree (#654); an
+  atomicity probe that never reaches the server is decoration (#657); a new DB suite in a non-root tree runs nowhere
+  until wired (#656); a derived truncate list is only its predicate (#658); a red gate can be a predecessor's (#583); a
+  new definer writes `SET search_path = public, pg_temp`; `nohup … &` and `cmd; echo exit=$?` lie; a new ADR needs its
+  `mkdocs.yml` nav line. Filed: #712 · #716 · #718 · #719 · #720 · #722 · #723; #335 comments. Still open: **#569**,
+  **#598**, #624.
 
 **⇒ OPEN ISSUES OLDER SESSIONS OPENED, INDEXED** (never drop an open number while condensing):
 

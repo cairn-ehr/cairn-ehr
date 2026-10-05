@@ -23,7 +23,8 @@ def next_charts(conn, limit: int, exclude: list[str]) -> list[str]:
 
     Newest first so a fresh registration is checked next, ahead of older changes (the worker
     re-reads the queue after every chart, Settings.batch = 1). At 10 000 charts one check takes
-    ~9 s on the development machine (#725), and a sweep already running finishes first.
+    ~0.8 s (p50; p95 1.4 s) on the development machine (#725), and a sweep already running
+    finishes first.
     `exclude` is the RetryBook's held charts, so a poison chart never starves the rest.
     """
     with conn.cursor() as cur:

@@ -18,8 +18,10 @@ class Mode(Enum):
 def choose_mode(charts_waiting: int, bulk_threshold: int) -> Mode:
     """Sweep when MORE than `bulk_threshold` charts wait.
 
-    Per-chart blocking scans the population once per chart, so N waiting charts cost ~N scans;
-    one sweep costs one. Above the threshold (set from Task 7's measurement) the sweep is cheaper.
+    Each per-chart check still pays a population-wide grouping (the symmetric statement; the
+    range statement is anchored since #725), so N waiting charts cost ~N of them; one sweep costs
+    one pass plus its pairs. Above the threshold (set from the measured break-even, see
+    Settings.bulk_threshold) the sweep is cheaper.
     """
     return Mode.SWEEP if charts_waiting > bulk_threshold else Mode.PER_CHART
 

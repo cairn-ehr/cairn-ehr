@@ -277,7 +277,8 @@ def test_a_sweep_in_which_every_pair_fails_stamps_no_progress(pg_conn, monkeypat
 def test_a_change_arriving_mid_drain_is_checked_next_ahead_of_older_ones(pg_conn, monkeypatch):
     # The DEFAULT settings: the drain re-queries after every chart, so a registration committed
     # while one chart is being checked goes next, ahead of the older charts still waiting (a
-    # batch fetched up front would make it wait behind all of them, ~9 s each at 10 000 charts).
+    # batch fetched up front would make it wait behind all of them, ~0.8 s each at 10 000 charts
+    # since #725).
     import psycopg
 
     _state(pg_conn)

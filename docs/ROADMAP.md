@@ -436,8 +436,8 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b, R3 and **R4** are built and merged or in review (entries below); **R5** (banner +
-  worklist, #680; #700, #723) follows — after #725 by recommendation. Plan each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b and R3 are merged; **R4** (PR #724) and **#725** (PR #733, stacked on #724) await merge
+  (entries below); **R5** (banner + worklist, #680; #700, #723) follows. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -492,12 +492,26 @@ CLI now, the window's lines with R5; a standalone operator-run worker; an append
   `eval/measure_check.py`. Node — `duplicate_check.rs` (`classify`, `status_line`, `chart_line`, two reads) and
   `cairn-node duplicate-check [--patient]` (no schema replay). Runbook `docs/developers/running-the-duplicate-check.md`.
 - **Measured** (M3 Max, PG 18.1): per-chart p95 590 ms at 2 000 records, **9 651 ms at 10 000** (budget was ≤ 2 s) —
-  the blocking SQL (~7 s), not the pairs; one sweep 37.6 s / 129.9 s.
+  the blocking SQL (~7 s), not the pairs; one sweep 37.6 s / 129.9 s. **Fixed by #725 (below): p95 1 398 ms.**
 - **Filed:** #725 (the per-chart blocking pass — fix before R5) · #726 (every-connect DDL takes ACCESS EXCLUSIVE) · #727
   (bulk mode has no poison isolation) · #728 (measure on the Pi) · #729 (mode chosen once per round) · #730 (the
   101–1000 skipped-block band) · #731 (no "charts failing" signal) · #732 (conftest leaves `patient_chart`). Commented #680.
 - **§1.2:** the clerk's possible-duplicate tray. At the desk 0 → 0 → 0; the operator's status line is not a clinical
   gesture. Registration-to-proposal latency measured above (#725, #728).
+
+### 2026-10-05 — #725: the per-chart duplicate check's range blocking (PR #733, stacked on #724)
+
+Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; design page "#725 — as fixed". Also fixed PR #724's
+red `ruff + pytest` job: the blocking SQL moved to the pure `pipeline/blocking_sql.py` and
+`test_pure_modules_import_without_psycopg.py` guards the CI-only failure mode.
+- **Found:** the cost was the RANGE statement (7.5–24 s; the symmetric one 90–180 ms) — its `dob-range+sex` arm's
+  `blocking_sex` self-join on `sex`, a 14.7 M-row planner cross-product. **Built:** the sexes ride on the window rows
+  (the arm is a filter); the per-chart range statement is anchored on the chart (`relevant_anchor`), the sweep's plus
+  one CTE and one clause. Pins: `test_blocking_sql_shape.py`, two `test_targeted_blocking.py` DB tests, the drift canary.
+- **Measured:** per-chart p50/p95 129/256 ms at 2 000, **761/1 398 ms at 10 000** (budget ≤ 2 s met); sweep pairs
+  unchanged; the sweep's blocking SQL 7.65 → 1.43 s. `bulk_threshold` 30 → 250 (break-evens ~330 / ~202). Pi:
+  #728. No SQL object; generation stays 56. Review wave: the drift canary also runs capped (10, 6). Filed #734.
+- **§1.2:** not clinical-surface (a latency fix; R5 owes the benchmark).
 
 ## Above the foundation line (NOT in this roadmap)
 

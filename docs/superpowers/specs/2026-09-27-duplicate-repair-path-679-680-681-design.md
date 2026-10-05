@@ -740,7 +740,7 @@ not survive contact with the code, and the maintainer decided three questions in
   while fresh registrations are being checked within seconds. *(As built: "within seconds" was not
   true at the measured scale. A fresh change is checked next, ahead of older changes; one check takes
   ~9 s at 10 000 charts on the development machine (#725), and a sweep already running finishes
-  first. See "R4 — as built".)* "Behind" is therefore measured by the NEWEST waiting notice. With a newest-first drain, a stale newest notice can only mean the worker is
+  first. See "R4 — as built". #725 brought it to p95 1.4 s: see "#725 — as fixed".)* "Behind" is therefore measured by the NEWEST waiting notice. With a newest-first drain, a stale newest notice can only mean the worker is
   not running or is stuck. The precise claim a banner needs is per chart (below). *(Corrected in the
   build: a backlog queued all at once makes even the newest notice old — see R13 in "R4 — as built".)*
 - The `registration`/`assertion` reasons are dropped: nothing reads the difference, and telling them
@@ -801,7 +801,8 @@ not survive contact with the code, and the maintainer decided three questions in
     registration is checked within seconds whatever the backlog. *(As built: "within seconds" was
     not true at the measured scale. A fresh change is checked next, ahead of older changes; one
     check takes ~9 s at 10 000 charts on the development machine (#725), and a sweep already
-    running finishes first. See "R4 — as built".)* **Above a threshold, one opted-in sweep**, then a delete of every notice up to the watermark read before the sweep started.
+    running finishes first. See "R4 — as built". #725 brought it to p95 1.4 s: see "#725 — as
+    fixed".)* **Above a threshold, one opted-in sweep**, then a delete of every notice up to the watermark read before the sweep started.
     Per-chart blocking scans the whole names table each time, so a full backlog checked chart by
     chart is ~N² work, where one sweep is a single pass.
   - A 60 s poll backs up `NOTIFY` (a notification can be missed across a reconnect), and a lost
@@ -994,6 +995,42 @@ the sweep's pairs for the chart) makes either change safe. The canary also shows
   the diagnostic shows that is not where the time goes, so lowering it cannot bring p95 under budget.
 
 Each constant carries a comment citing these figures.
+
+#### #725 — as fixed (2026-10-05)
+
+Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`. **The finding was narrower than "the blocking SQL":**
+at 10 000 records the symmetric statement took 90–180 ms per chart and the **range** statement 7.5–24 s (range
+anchors at the top). In its
+`dob-range+sex` arm the planner joined `blocking_sex` to itself on `sex` first (≈ two values: **14.7 million rows**
+against an estimate of ~116 000 — a CTE scan has no statistics). Two changes, both in
+`matcher/src/cairn_matcher/pipeline/blocking_sql.py`:
+- **The sexes ride on the window rows.** A patient's set of blocking sexes is attached to its birth window once, by
+  `patient_id`; the `+sex` arm is a filter (`anchor_sexes && member_sexes`). A first attempt with sex arrays but two
+  scans of them was cross-joined the same way in the prototype — pinned by `tests/test_blocking_sql_shape.py`. This
+  alone took the (unanchored) range statement to ~3 s.
+- **The per-chart range statement is anchored**: overlap rows are built only for the range anchors whose window
+  overlaps the chart's, each window IN FULL (the cap's verdict stays the sweep's); 75–656 ms in the prototype. It is
+  the sweep's statement plus one CTE and one clause (pinned); the drift canary — uncapped and at caps 10 and 6, which
+  is what protects the outer "groups containing the chart" filter (review finding) — and a full-size pin hold the
+  results.
+
+Re-measured with `measure_check` on the same machine (a vacuumed `cairn_test`; an IDE `cargo check` was also running).
+The sweep's pair counts are identical to R4's, but its wall time was 14–18 % slower at both sizes. **Not caused by
+this change:** timed interleaved on one seeded 10 000-record population (median of 3), the sweep's two blocking
+statements took **7.65 s with the old SQL and 1.43 s with the new**, so the difference lies in assessing the pairs —
+code this change does not touch — presumably machine load (an IDE `cargo check` was running). The break-evens inherit
+that variance, and they divide by the p50 where N checks cost N × the mean (a right-skewed distribution), so the true
+break-even is somewhat lower:
+
+| Records | Sample | Per-chart p50 | Per-chart p95 | One sweep | Sweep pairs | Break-even (sweep / p50) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 000 | 50 | 129 ms | 256 ms | 42.7 s | 61 813 | ~330 charts |
+| 10 000 | 50 | 761 ms | **1 398 ms** | 153.5 s | 189 340 | ~202 charts |
+
+The plan's budget (p95 ≤ 2 s at 10 000) is **met**; a fivefold population now costs ~6× per chart (it was ~19×).
+`Settings.bulk_threshold` moves **30 → 250** (near the geometric mean of the break-evens; worst wrong choice ~1.3×);
+`DEFAULT_TARGETED_CAP` stays 1000. Still owed: the Pi (#728). The symmetric statement still groups the whole population
+per chart, and the anchored range statement is O(relevant anchors × population) — the levers if the Pi needs them.
 
 ### R5 — the banner and the worklist (#680)
 
