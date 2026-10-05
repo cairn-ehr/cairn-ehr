@@ -5,18 +5,21 @@ Blocking decides which pairs of charts the scorer ever looks at (a pair never gr
 scored, so never proposed). Two callers share this ONE definition, on purpose:
 - the whole-population sweep, `pipeline.db.generate_candidate_pairs`, and
 - the commit-time per-chart check, `pipeline.targeted.candidate_pairs_for` (repair path R4),
-  which wraps these statements in a filter that keeps only the groups containing one chart.
+  which runs `_GROUPS_SQL` and the range statement in its ANCHORED form
+  (`_ANCHORED_RANGE_GROUPS_SQL`, the sweep's plus one CTE and one clause, #725) and keeps only the
+  groups containing one chart.
 A copy in either place would be blocking drift — a pass that groups in one and not the other.
 
 Why a module of its own: it is pure data (strings), so it needs no psycopg. It used to live in
 `pipeline/db.py`, the one psycopg-touching module, which made `targeted` — and through it the
 worker, `watch` and the `cairn-matcher` CLI — unimportable without the `pipeline` extra. That
 broke CI's pure suite (PR #724); `tests/test_pure_modules_import_without_psycopg.py` pins it.
-`db.py` re-exports these names, so existing imports from there keep working.
+`db.py` imports the two sweep statements from here.
 
 Binds (psycopg `%s` placeholders, in order):
 - `_GROUPS_SQL`: (PLACEHOLDER_USES_PARAM for name_tokens, VALUE_SENTINELS_PARAM for blocking_sex)
 - `_RANGE_GROUPS_SQL`: (VALUE_SENTINELS_PARAM,)
+- `_ANCHORED_RANGE_GROUPS_SQL`: (the chart's uuid for relevant_anchor, VALUE_SENTINELS_PARAM)
 
 The SQL comments below name `load_candidate` and the adapter: those are
 `pipeline.db.load_candidate` and `pipeline.adapter`.
@@ -42,12 +45,13 @@ The SQL comments below name `load_candidate` and the adapter: those are
 # exact-DOB pass never groups. This is advisory: a mis-extracted year only ever feeds the
 # Python scorer a few extra pairs (which it rejects), never an auto-link, so erring toward
 # more grouping is safe. Real-world extraction adequacy is to be revisited on richer data.
-# Shared blocking CTE fragments. Both statements (_GROUPS_SQL, _RANGE_GROUPS_SQL) need
-# overlapping CTEs, so each CTE body lives ONCE here and the statements compose from these
-# constants. This is not premature abstraction: blocking_sex is a load-bearing, sentinel-bound
-# normalization, and the module was bitten once by a hand-mirrored sex literal lagging the
-# adapter (see the comment inside _BLOCKING_SEX_CTE). Each constant is a CTE BODY only
-# ("name AS ( ... )"); the composing statement supplies the leading WITH and comma joins.
+# Shared blocking CTE fragments. The statements (_GROUPS_SQL, _RANGE_GROUPS_SQL and its anchored
+# form) need overlapping CTEs, so each CTE body lives ONCE here and the statements compose from
+# these constants. This is not premature abstraction: blocking_sex is a load-bearing,
+# sentinel-bound normalization, and this SQL (then in db.py) was bitten once by a hand-mirrored
+# sex literal lagging the adapter (see the comment inside _BLOCKING_SEX_CTE). Each constant is a
+# CTE BODY only ("name AS ( ... )"); the composing statement supplies the leading WITH and comma
+# joins.
 
 _NAME_TOKENS_CTE = """name_tokens AS (
     -- normalize(value, NFC) so a name recorded decomposed (NFD) on one feed and
@@ -191,11 +195,13 @@ GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
 # #725 — the sexes RIDE ON THE WINDOW ROWS; no arm joins a sex scan. The '+sex' arm used to join
 # blocking_sex to itself on `sex` (sa JOIN sm ON sm.sex = sa.sex). Sex has about two values, so
 # the planner -- which has no statistics for a CTE and estimated ~116 000 rows -- built that join
-# FIRST and got ~14.7 million rows at 10 000 charts: ~7 s of every per-chart duplicate check and
-# of every sweep. Two scans of per-patient sex ARRAYS were cross-joined first in the same way. So
-# a chart's set of sexes is attached to its birth window ONCE, by patient_id (sexed_window), the
-# overlap rows carry both sets, and the arm is a filter. "Some sex of the anchor equals some sex
-# of the member" is exactly "the two sets overlap" (&&). Pinned: tests/test_blocking_sql_shape.py.
+# FIRST and got ~14.7 million rows at 10 000 charts: most of the per-chart range statement's
+# 7.5-24 s, and of every sweep's. In the #725 prototype, two scans of per-patient sex ARRAYS were
+# cross-joined first in the same way. So a chart's set of sexes is attached to its birth window
+# ONCE, by patient_id (sexed_window), the overlap rows carry both sets, and the arm is a filter.
+# "Some sex of the anchor equals some sex of the member" is exactly "the two sets overlap" (&&).
+# Pinned: tests/test_blocking_sql_shape.py. This alone took the (unanchored) range statement to
+# ~3 s at 10 000; anchoring the per-chart form (below) takes that to 75-656 ms.
 
 _BIRTH_WINDOW_CTE = """birth_window AS (
     -- Evaluation-order-proof malformed-range guard: PostgreSQL does NOT guarantee
@@ -281,13 +287,15 @@ WITH {_BIRTH_WINDOW_CTE},
 
 # --- The per-chart statement (repair path R4's commit-time check, #725) ----------------------
 # Which range blocks can hold ONE chart? Its own, if it is a range anchor, and the block of every
-# range anchor whose window overlaps one of its windows. relevant_anchor is that set (the chart
-# itself included: a range window overlaps itself), and window_overlap is computed only for
-# those anchors -- about 110 of 10 000 charts in the measured population instead of all 752
-# range anchors x the population. Each kept anchor's window is still computed IN FULL (the
-# clause restricts `a`, never `m`): its size decides the cap, and the verdict must be the sweep's.
-# targeted.py still filters the result to the groups that contain the chart, because a relevant
-# anchor's SEX-filtered block need not.
+# range anchor whose window overlaps its window (patient_demographic holds one dob per chart, so
+# a chart has at most one). relevant_anchor is that set (the chart itself included: a range
+# window overlaps itself), and window_overlap's rows are built only for those anchors -- 111 of
+# the 752 range anchors for one sampled chart in the 10 000-record diagnostic, instead of all
+# 752 x the population. birth_window and sexed_window are still built for everyone. Each kept
+# anchor's window is still computed IN FULL (the clause restricts `a`, never `m`): its size
+# decides the cap, and the verdict must be the sweep's. targeted.py still filters the result to
+# the groups that contain the chart, because a relevant anchor's SEX-filtered block need not
+# (tests/test_targeted_blocking.py's capped canary runs pin that filter).
 _RELEVANT_ANCHOR_CTE = f"""relevant_anchor AS (
     SELECT DISTINCT a.patient_id
     FROM birth_window a

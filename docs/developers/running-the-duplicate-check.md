@@ -42,12 +42,14 @@ GRANT cairn_agent TO matcher_login;   -- the login role the worker connects as
 `cairn_agent` is the advisory-actor role (ADR-0030): db/056 grants it the queue and worker-state
 tables the worker writes, alongside the matcher's own proposal tables.
 
-If you give the login role a `statement_timeout`, make it longer than the worker's longest query.
-The longest is the sweep's birth-year-range candidate query: about 3 s at 10 000 charts on the
-development machine (more on a Raspberry Pi, #728); finding one chart's candidates takes well under a
-second there since #725. A timeout shorter than the sweep's query fails every sweep: the worker retries
-it, nothing is ever cleared (a sweep has no per-chart isolation, #727), and the status line turns to
-"behind".
+If you give the login role a `statement_timeout`, make it comfortably longer than the worker's longest
+query: **at least 30 s**, and more on a Raspberry Pi until it has been measured there (#728). The largest
+single query that has been timed is the sweep's birth-year-range candidate query, about 3 s at 10 000
+charts on the development machine, and it varied about twofold between runs; the sweep's other queries
+(the whole-population name grouping, the alias and trust reads) have not been timed on their own.
+Finding one chart's candidates took under a second there since #725. A timeout shorter than a sweep
+query fails every sweep: the worker retries it, nothing is ever cleared (a sweep has no per-chart
+isolation, #727), and the status line turns to "behind".
 
 ## Running it: `cairn-matcher watch`
 

@@ -91,8 +91,11 @@ zero runtime dependencies**, plus an optional DB-bearing `pipeline` extra.
 
 - `src/cairn_matcher/` — the pure core: `agreement.py`, `comparators.py`, `records.py`,
   `scoring.py` (the Fellegi–Sunter combiner), `orchestrator.py`.
-- `src/cairn_matcher/pipeline/` — the IO-bearing pipeline (needs `psycopg`): `adapter.py`,
-  `banding.py` (both pure), `db.py`, `runner.py`, `sweep.py`.
+- `src/cairn_matcher/pipeline/` — the IO-bearing pipeline: `adapter.py`, `banding.py`, `blocking.py`,
+  `blocking_sql.py` (the blocking SQL text) (all pure), `db.py` (the one module that imports `psycopg` at import
+  time), `runner.py`, `sweep.py`, and the R4 commit-time worker — `targeted.py`, `judged.py`, `queue_db.py`,
+  `worker.py`, `worker_plan.py`, `watch.py` (run as `cairn-matcher watch`; see
+  [running the duplicate check](running-the-duplicate-check.md)).
 - `tests/` — pure tests (`uv run pytest`) + DB-gated integration tests.
 - `README.md` — the matcher's own developer notes; `pyproject.toml` — the project + the `pipeline` extra.
 

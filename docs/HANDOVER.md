@@ -32,8 +32,8 @@
 > 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
 >    **runbook §10's unlink** (≤ 15 s), the **live Tauri-IPC + VoiceOver pass on a linked pair** (the #699 (a) third-chart
 >    unlink, a doubted pair's withheld lines, R3's person row), and R4's **running a supervised worker** on a real node
->    per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` above the sweep's ~3 s range
->    query).
+>    per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` ≥ 30 s, as the runbook
+>    says).
 > 4. **#620**, the only open item that can still change the wire (brainstorm first). Then **#626**, **#652 + #655**,
 >    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
@@ -43,14 +43,15 @@
 > - **No range arm joins a sex scan.** A chart's set of blocking sexes rides on its birth-window row (`sexed_window`,
 >   one join by `patient_id`); the `+sex` arm is a FILTER (`anchor_sexes && member_sexes`). A CTE scan has no
 >   statistics, so an equi-join of two sex scans on a ~2-valued column is a planner cross-product (14.7 M rows) —
->   even two scans of per-patient ARRAYS were cross-joined first.
+>   in the #725 prototype even two scans of per-patient ARRAYS were cross-joined first.
 > - **The anchored per-chart range statement is the sweep's plus `relevant_anchor` and `_ANCHOR_CLAUSE`, nothing
 >   else**; the clause restricts the ANCHOR, never the member (a kept window is computed in full — its size is the
 >   cap's verdict). Add a range arm to `_RANGE_ARMS` and both statements get it.
 > - **`pipeline/db.py` is the ONLY module that imports psycopg at import time** (plus `eval/measure_check`, a DB tool).
 >   Every local run uses `--extra pipeline`, so only the import guard catches a CI-only collection failure; blocking
->   SQL text lives in the pure `pipeline/blocking_sql.py` (`db.py` re-exports it). A psycopg-needing TEST imports it
->   inside the test or `importorskip`s it. Reproduce CI's pure job with `CAIRN_ALLOW_DB_SKIP=1 uv run --isolated pytest`.
+>   SQL text lives in the pure `pipeline/blocking_sql.py` (`db.py` imports the sweep statements from it). A
+>   psycopg-needing TEST imports it inside the test or `importorskip`s it; a guard collects the whole suite without
+>   psycopg. **The canary runs capped too** (10, 6): uncapped it cannot see targeted.py's outer filter. Reproduce CI's pure job with `CAIRN_ALLOW_DB_SKIP=1 uv run --isolated pytest`.
 >
 > **⇒ R4'S DURABLE RULES (PR #724) — do not undo any of these** (pins in `tests/match_pending.rs`,
 > `tests/duplicate_check.rs`, `matcher/tests/test_{check_chart,worker_drain,watch_backoff,targeted_blocking,judged}.py`):

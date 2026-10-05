@@ -65,5 +65,6 @@ tune. The Pi re-measurement is **#728** (hardware).
 
 - The symmetric statement still groups the whole population per chart (90–180 ms at 10 000; it grows with N). Anchoring
   it is the next lever if the Pi needs one.
-- The anchored range statement is still O(relevant anchors × population); with a generated 7.5 % range-DOB rate that is
-  ~110 anchors at 10 000. A year-indexed key projection (the issue's option 2, related to #637) is the lever beyond.
+- The anchored range statement is still O(relevant anchors × population): in the 10 000-record diagnostic one sampled
+  chart had 111 of the 752 range anchors relevant (the generator's range-DOB rate is ~7.5 %). A year-indexed key
+  projection (the issue's option 2, related to #637) is the lever beyond.

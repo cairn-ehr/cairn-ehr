@@ -1,6 +1,7 @@
 # matcher/src/cairn_matcher/pipeline/db.py
-"""The only Postgres-touching module in the matcher. Thin: it loads a patient's
-projection rows, calls the in-DB veto floor, and upserts a proposal. All scoring and
+"""The matcher's one module that imports psycopg at import time (the R4 worker's modules run
+SQL too, on a connection they are handed). Thin: it loads a patient's projection rows, calls the
+in-DB veto floor, and upserts a proposal. All scoring and
 banding logic lives in the pure modules; this module just moves data.
 
 Requires the optional `pipeline` extra (psycopg). The pure core never imports it.

@@ -504,7 +504,7 @@ CLI now, the window's lines with R5; a standalone operator-run worker; an append
 Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; design page "#725 — as fixed". Also fixed PR #724's
 red `ruff + pytest` job: the blocking SQL moved to the pure `pipeline/blocking_sql.py` and
 `test_pure_modules_import_without_psycopg.py` guards the CI-only failure mode.
-- **Found:** the cost was the RANGE statement (~7.5 s; the symmetric one 90–180 ms) — its `dob-range+sex` arm's
+- **Found:** the cost was the RANGE statement (7.5–24 s; the symmetric one 90–180 ms) — its `dob-range+sex` arm's
   `blocking_sex` self-join on `sex`, a 14.7 M-row planner cross-product. **Built:** the sexes ride on the window rows
   (the arm is a filter); the per-chart range statement is anchored on the chart (`relevant_anchor`), the sweep's plus
   one CTE and one clause. Pins: `test_blocking_sql_shape.py`, two `test_targeted_blocking.py` DB tests, the drift canary.

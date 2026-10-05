@@ -999,19 +999,26 @@ Each constant carries a comment citing these figures.
 #### #725 — as fixed (2026-10-05)
 
 Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`. **The finding was narrower than "the blocking SQL":**
-at 10 000 records the symmetric statement took 90–180 ms per chart and the **range** statement ~7.5 s. In its
+at 10 000 records the symmetric statement took 90–180 ms per chart and the **range** statement 7.5–24 s (range
+anchors at the top). In its
 `dob-range+sex` arm the planner joined `blocking_sex` to itself on `sex` first (≈ two values: **14.7 million rows**
 against an estimate of ~116 000 — a CTE scan has no statistics). Two changes, both in
 `matcher/src/cairn_matcher/pipeline/blocking_sql.py`:
 - **The sexes ride on the window rows.** A patient's set of blocking sexes is attached to its birth window once, by
   `patient_id`; the `+sex` arm is a filter (`anchor_sexes && member_sexes`). A first attempt with sex arrays but two
-  scans of them was cross-joined the same way — pinned by `tests/test_blocking_sql_shape.py`.
-- **The per-chart range statement is anchored**: windows are computed only for the range anchors whose window overlaps
-  the chart's, each IN FULL (the cap's verdict stays the sweep's). It is the sweep's statement plus one CTE and one
-  clause (pinned); the drift canary and a new full-size pin hold the results.
+  scans of them was cross-joined the same way in the prototype — pinned by `tests/test_blocking_sql_shape.py`. This
+  alone took the (unanchored) range statement to ~3 s.
+- **The per-chart range statement is anchored**: overlap rows are built only for the range anchors whose window
+  overlaps the chart's, each window IN FULL (the cap's verdict stays the sweep's); 75–656 ms in the prototype. It is
+  the sweep's statement plus one CTE and one clause (pinned); the drift canary — uncapped and at caps 10 and 6, which
+  is what protects the outer "groups containing the chart" filter (review finding) — and a full-size pin hold the
+  results.
 
-Re-measured with `measure_check` on the same machine (a vacuumed `cairn_test`; the sweep's pair counts are identical
-to R4's, its wall time differs by run-to-run noise — it is dominated by assessing the pairs):
+Re-measured with `measure_check` on the same machine (a vacuumed `cairn_test`; an IDE `cargo check` was also running).
+The sweep's pair counts are identical to R4's, but its wall time was 14–18 % SLOWER at both sizes although its only
+changed statement got faster — so the difference is in assessing the pairs, which this change does not touch. **Not
+investigated**; the break-evens inherit that uncertainty, and they divide by the p50 where N checks cost N × the mean
+(a right-skewed distribution), so the true break-even is somewhat lower:
 
 | Records | Sample | Per-chart p50 | Per-chart p95 | One sweep | Sweep pairs | Break-even (sweep / p50) |
 |---:|---:|---:|---:|---:|---:|---:|

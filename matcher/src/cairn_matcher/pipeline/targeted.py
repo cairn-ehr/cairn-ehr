@@ -14,11 +14,13 @@ business. So a block's pair count grows LINEARLY here, and the cap (DEFAULT_TARG
 far above the sweep's 100. An oversized block is still reported, never silently dropped.
 
 Cost (#725): the symmetric statement still groups the whole population (90-180 ms at 10 000
-charts on the development machine), as the sweep does once. The range statement is ANCHORED on
-the chart (blocking_sql._ANCHORED_RANGE_GROUPS_SQL): it builds windows only for the range anchors
-whose window overlaps the chart's -- it once built every anchor's window and cost ~7.5 s per
-chart. For a large backlog the worker runs ONE sweep instead (worker.run_bulk). A materialised
-key projection (#637's token table) is the lever beyond this.
+charts on the development machine), as the sweep does once. The range statement once cost 7.5-24
+s per chart, mostly a planner cross-product in its '+sex' arm; blocking_sql.py reshaped that arm
+for both statements (the unanchored statement then took ~3 s), and the per-chart form is ANCHORED
+(blocking_sql._ANCHORED_RANGE_GROUPS_SQL): overlap rows are built only for the range anchors
+whose window overlaps the chart's, which takes it to 75-656 ms. For a large backlog the worker
+runs ONE sweep instead (worker.run_bulk). A materialised key projection (#637's token table) is
+the lever beyond this.
 
 Imports without psycopg; its callers hand it an open connection.
 """
@@ -44,13 +46,15 @@ from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 # A block above this is non-discriminating even when paired linearly. KEPT at 1000 through two
 # measurements (Apple M3 Max 128 GB, PostgreSQL 18.1, generated population via
 # eval/measure_check.py). R4 (2026-10-04): per-chart p95 9 651 ms at 10 000 records, ~7 s of it the
-# range blocking statement whatever the cap -- lowering the cap could not have fixed it, so it was
-# not tuned around the problem. After #725 anchored that statement (2026-10-05): p50/p95 129/256 ms
-# at 2 000 records and 761/1 398 ms at 10 000, inside the plan's 2 s budget WITH the cap at 1000.
-# The cap now does bound real work -- a range-dob chart's estimated-age window can hold ~900
-# charts in that population, and pairing it is ~900 assessments (~0.9 ms each) -- but the budget
-# holds, so there is no measured reason to drop pairs the sweep (cap 100) would skip. Which band
-# of blocks between the two caps the per-chart check should pair is #730's decision.
+# blocking SQL whatever the cap (#725's diagnostic later placed it in the range statement) --
+# lowering the cap could not have fixed it, so it was not tuned around the problem. After #725
+# reshaped the range statement's '+sex' arm and anchored its per-chart form (2026-10-05): p50/p95
+# 129/256 ms at 2 000 records and 761/1 398 ms at 10 000, inside the plan's 2 s budget WITH the cap
+# at 1000. The cap now does bound real work -- a range-dob chart's estimated-age window holds ~900
+# charts on average in that population (some exceed the cap), and pairing it is ~900 assessments
+# (~0.9 ms each) -- but the budget holds, so there is no measured reason to drop pairs the sweep
+# (cap 100) would skip. Which band of blocks between the two caps the per-chart check should pair is
+# #730's decision.
 DEFAULT_TARGETED_CAP = 1000
 
 # The symmetric groups that contain the chart. The trailing %s is the chart id; the first two
