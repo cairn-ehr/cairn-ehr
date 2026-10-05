@@ -115,3 +115,41 @@ def test_sweep_tags_a_returning_known_alias_pair(pg_conn):
         band_value, evidence = cur.fetchone()
     assert band_value == "review"
     assert any(e.get("kind") == "known_alias" and e["alias_of"] == PA for e in evidence)
+
+
+def test_sweep_reports_progress_only_after_a_successful_pair_in_both_passes(pg_conn, monkeypatch):
+    # R4 rulings R13/R15/N3: the commit-time worker stamps "progress" during a long sweep, so the
+    # node does not read a healthy sweep as stalled. sweep() calls the opt-in `on_progress` after
+    # each pair whose propose() SUCCEEDED -- main loop and reconciliation -- i.e. after propose()
+    # has committed its own transaction. A pair whose propose() raised is NOT progress: if every
+    # pair fails for a systematic reason (a missing grant, a schema mismatch), stamping would read
+    # "running" forever while nothing is checked.
+    from cairn_matcher.pipeline import db
+    from cairn_matcher.pipeline import sweep as sweep_mod
+
+    for p in (PA, PB):
+        seed_patient(pg_conn, p, identifiers=[("mrn:a", "111", "111")])
+    for p in (PC, PD):
+        seed_patient(pg_conn, p, identifiers=[("mrn:b", "222", "222")])
+    orphan_ok = canonical_pair(PA, PC)       # pending pairs blocking no longer generates
+    orphan_bad = canonical_pair(PB, PD)
+    failing = {canonical_pair(PA, PB), orphan_bad}
+    events = []
+
+    def fake_propose(conn, a, b, **kw):
+        events.append(("propose", canonical_pair(a, b)))
+        if canonical_pair(a, b) in failing:
+            raise RuntimeError("boom")
+        return None
+
+    monkeypatch.setattr(sweep_mod, "propose", fake_propose)
+    monkeypatch.setattr(db, "pending_proposal_pairs", lambda conn: [orphan_ok, orphan_bad])
+    result = sweep_mod.sweep(pg_conn, on_progress=lambda: events.append(("progress",)))
+    assert result.generated == 2 and result.reconciled == 1 and len(result.errors) == 2
+    proposes = [e for e in events if e[0] == "propose"]
+    assert proposes[-2:] == [("propose", orphan_ok), ("propose", orphan_bad)]
+    # One progress report straight after each SUCCESSFUL propose, none after a failed one.
+    expected = []
+    for e in proposes:
+        expected += [e] if e[1] in failing else [e, ("progress",)]
+    assert events == expected

@@ -21,7 +21,7 @@ _PRECISION_PARTS = {"year": 1, "month": 2, "day": 3}
 # would fabricate EXACT agreement, and "unknown" vs "male" a DISAGREE penalty — both
 # from acknowledged ignorance. Treated as field ABSENCE for matching.
 #
-# PUBLIC because pipeline/db.py binds VALUE_SENTINELS_PARAM into its blocking_sex CTE
+# PUBLIC because pipeline/blocking_sql.py binds VALUE_SENTINELS_PARAM into its blocking_sex CTE
 # (`btrim(lower(value)) <> ALL(%s)`) — the same one-source-of-truth pattern as
 # placeholder_uses.PLACEHOLDER_USES_PARAM, so the SQL exclusion can never drift from
 # this set. Members must be lowercase ASCII: the SQL side normalizes with
@@ -43,14 +43,14 @@ def _normalize_token(token: str) -> str:
     different blocking tokens, so a true duplicate is never even generated. NFC + casefold
     is culture-NEUTRAL (not the anglo transliteration ADR-0014 forbids).
 
-    The SQL blocking tokenizer (pipeline/db.py `_NAME_TOKENS_CTE`) applies the SAME NFC fold
-    but `lower()`, NOT `casefold()` — Postgres has no casefold. The two AGREE on the ASCII and
+    The SQL blocking tokenizer (pipeline/blocking_sql.py `_NAME_TOKENS_CTE`) applies the SAME NFC
+    fold but `lower()`, NOT `casefold()` — Postgres has no casefold. The two AGREE on the ASCII and
     accented-Latin names this pool carries, but DIVERGE where casefold expands a code point
     that lower() leaves alone: "Weiß".casefold() == "weiss" (matches "WEISS") while
     "Weiß".lower() == "weiß"; ligatures ("ﬀ" -> "ff") behave the same way. So such a pair
     scores EXACT in this scorer yet never shares a blocking token, and the true pair is never
     generated (issue #211 gap 3). This is recall loss ONLY — never a false match — and it is
-    the *designed* limit of a deliberately-simple SQL tokenizer (db.py), whose declared
+    the *designed* limit of a deliberately-simple SQL tokenizer (blocking_sql.py), whose declared
     backstop is the §5.13 hub duplicate sweep. Do NOT "align" the two by folding this to
     lower(): that would drop the correct "Weiß"/"WEISS" EXACT match the scorer should make.
     """
@@ -75,7 +75,7 @@ def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
     if len(parts) < needed:
         return None  # value is coarser than the precision it claims
     # The year field must be a full 4-digit run, mirroring the SQL blocking discipline
-    # (db.py requires `[0-9]{4}`). A 2-digit legacy year ("80") would otherwise parse to
+    # (blocking_sql.py requires `[0-9]{4}`). A 2-digit legacy year ("80") would otherwise parse to
     # DateValue(year=80) and fabricate a DISAGREE clash against the same person's 1980
     # record — a wrong DateValue from a formatting artefact, which principle 4 forbids.
     if len(parts[0]) != 4 or not parts[0].isdigit():

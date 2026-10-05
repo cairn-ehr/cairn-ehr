@@ -125,7 +125,7 @@ def test_candidate_from_rows_wrong_type_raises():
 
 
 def test_value_sentinels_hold_the_lowercase_ascii_invariant():
-    # pipeline/db.py binds this set into SQL where btrim(lower(...)) is the normalizer,
+    # pipeline/blocking_sql.py binds this set into SQL where btrim(lower(...)) is the normalizer,
     # while the adapter compares with strip().casefold() -- the two only agree on
     # lowercase ASCII members, so a non-conforming addition would silently split the
     # SQL and Python views of "absent". Pin the documented invariant mechanically.

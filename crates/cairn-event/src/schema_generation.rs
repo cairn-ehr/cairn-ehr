@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/055_link_precedence_refold.sql` → 55).
+/// (`db/056_match_pending.sql` → 56).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 55;
+pub const SCHEMA_GENERATION: i32 = 56;
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.

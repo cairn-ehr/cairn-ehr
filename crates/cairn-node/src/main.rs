@@ -2367,6 +2367,17 @@ enum Cmd {
         rebuild: bool,
     },
 
+    /// Report the commit-time duplicate check (repair path R4): whether the matcher worker is
+    /// current, catching up, stalled, or has never run — and, with --patient, whether that chart
+    /// has been checked since its identity details last changed. The worker itself is
+    /// `cairn-matcher watch` (matcher/); this command only reads. It does not load the schema, so
+    /// it fails loudly on a node without db/056.
+    DuplicateCheck {
+        /// Also report this chart's own state.
+        #[arg(long)]
+        patient: Option<Uuid>,
+    },
+
     /// List events this node admitted UNINTERPRETED (ADR-0056 decision 1 / #265):
     /// stored verbatim and re-propagated, but holding NO power because this node
     /// has no code classifying their type. A row carrying a reason has since been
@@ -5523,6 +5534,22 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("shredded {event}; tombstone event {shred_event_id}");
+        }
+        Cmd::DuplicateCheck { patient } => {
+            use cairn_node::duplicate_check as dc;
+            // A plain connect, like `identity`: this command only reads, and the runbook runs it
+            // from cron. The schema replay would re-run every db/*.sql, including the
+            // every-connect `ALTER TABLE … IF NOT EXISTS` statements that take ACCESS EXCLUSIVE
+            // locks (#726) — once a minute, during a drain, a stall for every clinical write.
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let snap = dc::read_snapshot(&db).await?;
+            println!(
+                "{}",
+                dc::status_line(&dc::classify(&snap, dc::STALLED_AFTER_SECS))
+            );
+            if let Some(p) = patient {
+                println!("{}", dc::chart_line(dc::chart_check_pending(&db, p).await?));
+            }
         }
         Cmd::Reproject { prefix, rebuild } => {
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;

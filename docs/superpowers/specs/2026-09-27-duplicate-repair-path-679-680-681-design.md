@@ -709,6 +709,292 @@ adds no act. Measurement is the runbook's front-door section (section 8), a huma
   worklist say *"Duplicate check is behind — last ran HH:MM"* — a down worker is a visible fact,
   never a false "no duplicates" (principle 4).
 
+#### R4 — designed 2026-10-04
+
+The bullets above were written before anyone read the matcher's write path. Three things in them do
+not survive contact with the code, and the maintainer decided three questions in the brainstorm.
+
+**The maintainer's decisions:**
+- **R4 ships the node's status reads and a CLI line; the window's lines ship with R5.** Before R5,
+  nothing in the window shows a proposal, so there is no "no duplicates" claim on screen for a down
+  worker to falsify yet. The claim arrives with the banner, and its honesty line comes with it.
+- **The worker is a standalone, operator-run process** (`cairn-matcher watch`), with a runbook
+  section and example launchd/systemd units. It is not spawned by `cairn-sync`, which would tie the
+  safety-critical daemon to the advisory tier, and not by the window, which would mean no checks
+  while it is closed and one worker per window.
+- **The queue is an append-only log of change notices**, not one keyed row per patient.
+
+**What the bullets above get wrong, and the fix:**
+- **"Delete the queue row" loses an update.** A name corrected while its chart is being scored would
+  be deleted together with the request it replaced. The worker therefore deletes only the notices
+  it read: `WHERE patient_id = X AND id <= <highest id read for X>`. A notice that arrives
+  mid-check has a higher id and survives.
+- **A keyed upsert lets the clinical write wait on the worker.** `ON CONFLICT` on a row the worker's
+  transaction holds waits for that transaction, and under REPEATABLE READ it would raise. A plain
+  insert of a fresh `bigserial` key cannot conflict and cannot wait. That is why the queue is
+  append-only.
+- **`runner.propose()` commits each pair itself**, so "proposal and queue delete in ONE transaction"
+  needs a non-committing split (below).
+- **"Oldest queue row older than a threshold" raises a false alarm for hours.** A restore, a
+  `reproject --rebuild` or a new node's first pull queues every chart, and the oldest notice ages
+  while fresh registrations are being checked within seconds. *(As built: "within seconds" was not
+  true at the measured scale. A fresh change is checked next, ahead of older changes; one check takes
+  ~9 s at 10 000 charts on the development machine (#725), and a sweep already running finishes
+  first. See "R4 — as built".)* "Behind" is therefore measured by the NEWEST waiting notice. With a newest-first drain, a stale newest notice can only mean the worker is
+  not running or is stuck. The precise claim a banner needs is per chart (below). *(Corrected in the
+  build: a backlog queued all at once makes even the newest notice old — see R13 in "R4 — as built".)*
+- The `registration`/`assertion` reasons are dropped: nothing reads the difference, and telling them
+  apart would need a lookup inside the hook. `reason` is `change` or `config`, and labels the status;
+  it does not order the drain.
+
+**The database (`db/056`, `SCHEMA_GENERATION` 55 → 56):**
+- `match_pending(id bigserial PRIMARY KEY, patient_id uuid NOT NULL, reason text NOT NULL CHECK
+  (reason IN ('change','config')), queued_at timestamptz NOT NULL DEFAULT clock_timestamp())`,
+  indexed on `(patient_id, id)`.
+- **The hook** is one `SECURITY DEFINER` trigger function (`SET search_path = public, pg_temp`),
+  attached `AFTER INSERT OR UPDATE … FOR EACH ROW` to the matcher's inputs: `patient_name`,
+  `patient_demographic`, `patient_identifier`, `chart_identity_state` and `name_repudiation`. It is
+  also attached `AFTER INSERT` only to `patient_chart`, for a new chart: that table carries its own
+  name/dob/sex copy and db/002 updates it on EVERY clinical event (`last_activity`, `note_count`),
+  so an UPDATE hook would queue a check on every medication write. The id column's
+  name is a trigger argument (`subject` on the two identity tables). The body is `INSERT … SELECT …
+  WHERE <id> IS NOT NULL` and then `pg_notify('cairn_match_pending', '')`.
+- **"Never fails the write" is structural** (db/029's precedent): no `RAISE`, a null guard, and an
+  insert that cannot conflict. It is deliberately not wrapped in `EXCEPTION WHEN OTHERS`, because a
+  swallowed failure is a silently skipped check. What can still raise (a full disk, a dropped table)
+  would fail the clinical write anyway. This replaces the bullet's "fault injected into the queue
+  insert" test with a source guard and a lock test.
+- **Which writes queue a check.** The projection upserts are conditional (`DO UPDATE … WHERE (new) >
+  (old)`), so a row trigger fires only when an input actually changes. Normal use, app launch and
+  reconnect queue nothing. An upgrade heal queues only the charts whose winner changed. A
+  `reproject --rebuild`, a restore, a new node's first full pull and a matcher version change queue
+  every chart. `NOTIFY` collapses identical payloads within one transaction, so a rebuild wakes the
+  worker once.
+- `match_worker_state` is a single row holding `matcher_version` and `last_drained_at`.
+- Grants: `cairn_agent` gets `SELECT, INSERT, DELETE` on `match_pending` (INSERT for the config
+  re-queue) and `SELECT, INSERT, UPDATE` on `match_worker_state`. The worker needs no actor and no
+  key: a proposal is an advisory row, not an event.
+
+**The worker (`matcher/`):**
+- **One-chart blocking**: a new module `pipeline/targeted.py` (`db.py` is already 541 lines) with
+  `candidate_pairs_for(conn, patient, max_block_size)`. It composes the SAME CTE constants as the
+  sweep and keeps only the groups containing the patient. For the range passes, the patient may be
+  the anchor or a member. It pairs patient × member only. The cap is higher than the sweep's 100,
+  because pairs grow linearly here; its value is set from a measurement. Oversized blocks are
+  reported, never silently dropped.
+- **Skip rule**: `judged_partners(conn, patient)` returns every chart in the patient's component
+  (`cairn_person_charts`) plus every chart sharing any `patient_link` row with it, and a pure filter
+  drops those pairs. `sweep()` gains the same filter as an OPT-IN parameter, so its default behaviour
+  and existing tests are unchanged.
+- **`propose()` is split** into `assess()` (score, veto, band, no writes) and `persist()` (upsert or
+  retract, no commit). `propose()` becomes `assess + persist + commit`, unchanged for the sweep.
+- **One chart's check** (`worker.check_chart`). The read phase runs outside any long transaction:
+  the targeted pairs, then the skip filter, then `assess` on each pair. It also re-assesses every
+  PENDING proposal involving the chart that blocking no longer generates (the #210 reconciliation,
+  per chart). The write phase is one short transaction: persist every outcome, delete the chart's
+  notices up to the highest id read, stamp `last_drained_at`, commit. A crash re-checks the chart.
+- **The loop** (`cairn-matcher watch`; `--once` drains and exits, for tests and cron):
+  - `LISTEN cairn_match_pending`, and drain whatever is queued at start.
+  - If the stored `matcher_version` differs from the running one, queue every chart with reason
+    `config` and store the new version, in one transaction.
+  - Each round picks a mode from the backlog. **Per chart, newest change first**: a fresh
+    registration is checked within seconds whatever the backlog. *(As built: "within seconds" was
+    not true at the measured scale. A fresh change is checked next, ahead of older changes; one
+    check takes ~9 s at 10 000 charts on the development machine (#725), and a sweep already
+    running finishes first. See "R4 — as built".)* **Above a threshold, one opted-in sweep**, then a delete of every notice up to the watermark read before the sweep started.
+    Per-chart blocking scans the whole names table each time, so a full backlog checked chart by
+    chart is ~N² work, where one sweep is a single pass.
+  - A 60 s poll backs up `NOTIFY` (a notification can be missed across a reconnect), and a lost
+    connection reconnects with backoff.
+  - A chart whose check raises is rolled back, logged, and retried after a backoff held in memory.
+    Its notices stay, so its per-chart status keeps saying "not yet checked".
+  - Load: one connection, so at most one backend's worth of work at a time, plus an optional
+    `--pace-ms` between units. No stronger claim is made.
+  - **It never applies a link.** It only calls `persist()`, which writes `match_proposal`.
+- Entry point: `[project.scripts] cairn-matcher = "cairn_matcher.cli:main"`. It takes the standard
+  libpq environment or `--dsn`, and connects as the `cairn_agent` role.
+
+**The node (`crates/cairn-node/src/duplicate_check.rs`):**
+- `duplicate_check_status(client)` reads the number of charts waiting, the newest and oldest waiting
+  notice, whether a `config` re-check is in progress, and `last_drained_at`. A pure
+  `classify(status, now, threshold)` returns one of four states:
+  - **NeverRun** (no worker-state row): *"Duplicate check has never run on this node."*
+  - **Stalled** (the newest waiting notice is older than the threshold — *as built: the oldest waiting
+    notice and the worker's last completed work are both older than the threshold, R13/R17*): *"Duplicate check is behind
+    — last ran HH:MM; N charts waiting."*
+  - **CatchingUp** (notices are waiting, the newest is fresh — *as built: charts wait and either the
+    oldest waiting notice or the worker's last completed work is within the threshold, R13/R17*): *"Duplicate check running — N charts
+    waiting"*, plus *"(re-checking all charts after a matcher update)"* during a `config` re-check.
+  - **Current** (nothing waiting): *"Duplicate check up to date — last ran HH:MM."*
+
+  *As built, this bullet is superseded: the node reads db/056's `cairn_duplicate_check_status()`
+  (`read_snapshot`), the quiet time is computed in the database (`quiet_age_s`), and the pure
+  `classify(snapshot, stalled_after_secs)` takes no `now`; two sentences and the last-ran time's
+  format changed too. See "R4 — as built" below.*
+  
+  The threshold is one named constant (5 min), soft policy.
+- `chart_check_pending(client, patient) -> bool` is the per-chart truth R5's banner will use. On a
+  chart still waiting, it lets the banner say *"Duplicate check not yet run for this chart"*, never
+  a silent absence of a banner.
+- `cairn-node duplicate-check [--patient <id>]` prints the line. All the wording lives in one pure
+  function with a golden test. It exits 0: there is no monitoring contract yet.
+
+**Tests** (replacing the R4 line under *Testing* below):
+- **DB:**
+  - every input table queues a notice on insert and update (`patient_chart` on insert only);
+  - a re-assertion that does not win queues nothing;
+  - the null guard holds;
+  - a clinical write completes while an open worker transaction holds a `DELETE` on that patient's
+    notices (`pg_stat_activity`, never a sleep);
+  - a source guard: the hook contains no `RAISE`;
+  - the grants, the generation and the pinned-count guards.
+- **Python:**
+  - the drift canary: over a generated population, for every chart, the targeted pairs equal the
+    uncapped sweep's pairs that include it;
+  - the skip rule (linked, unlinked, any `patient_link` row);
+  - `propose()` behaves the same after the split (the existing suites stay green);
+  - registering a near-duplicate produces a proposal;
+  - a notice injected between the read and write phases survives;
+  - a crash between the phases re-checks the chart;
+  - a version change queues `config` notices;
+  - the newest-first order and the mode choice (pure tests);
+  - bulk mode's watermark;
+  - an auto-band pair after a worker run leaves `patient_link` empty.
+- **Rust:** `classify` in each state and at the threshold boundary; the wording golden; DB tests for
+  both reads.
+
+**§1.2:**
+- Paper counterpart: the records clerk's possible-duplicate tray, filled overnight.
+- Steps: at the desk, paper 0 → forced 0 → target 0 (the check is invisible).
+- Time and cognitive load: zero added at the desk. The operator's status line is not a clinical
+  gesture. R4 owes the registration-to-proposal latency on a generated population; the same
+  measurement on the Pi is a filed follow-on.
+
+**Out of R4:** the window's status lines and the banner's per-chart "not yet checked" (R5); a
+monitoring exit code; the Pi measurement (filed).
+
+#### R4 — as built (2026-10-04)
+
+R4 was built to the design above, with six deviations that review forced. Each is recorded with its
+reason, because four of them correct sentences in the design itself. The last bullet records the final
+whole-branch review's corrections.
+
+- **R3 — delete the exact notices read, not `id <= N`.** The design's sentence "deletes only the
+  notices it read: `WHERE patient_id = X AND id <= <highest id read for X>`" has the right intent and
+  the wrong SQL. A `bigserial` id is assigned when the row is INSERTED, not when its transaction
+  commits, so a notice with a lower id can commit after the worker has read a higher one. `id <=`
+  would delete that late notice unread, and the chart would read "checked" when it was not. The
+  worker now captures the set of ids it read (`queue_db.notice_ids`, before the projection reads) and
+  deletes by that set (`queue_db.clear_notices(conn, ids, keep)`). Bulk mode captures the visible id
+  set before its sweep. As a result `check_chart(conn, patient, settings)` takes no watermark,
+  `next_charts` returns patients only, and `watermark`/`clear_upto`/`clear_chart` do not exist.
+- **R4 — no lock held across assessments.** The schema loader re-runs `ALTER TABLE … IF NOT EXISTS`
+  on every connect, which needs an ACCESS EXCLUSIVE lock. A worker holding even an ACCESS SHARE lock
+  on a projection through a long assessment would queue that statement, and every clinical write
+  behind it. `check_chart` therefore rolls back after its read preparation and after each assessment,
+  and commits its writes in one short transaction at the end.
+- **R5 — a stale pending proposal also passes the skip rule.** The skip rule drops pairs a human has
+  already judged. A stale `pending` proposal for a pair that was judged since is the same case, so it
+  is dropped as well: per chart in `check_chart`, and in bulk mode `sweep(skip_pairs=…)` removes
+  judged pairs from its reconciliation too (otherwise the sweep would re-open them).
+- **R7 — psycopg floor, and where `watch` lives.** The psycopg requirement is `>=3.2` (the
+  floor `watch` relies on, e.g. `notifies(timeout=…, stop_after=…)`). The outer loop is `pipeline/watch.py`, not `worker.py`, to keep
+  files small. Its reconnect backoff resets only after a *completed* drain: an error raised after
+  connecting (a statement timeout, a deadlock) is deterministic and must keep backing off rather than
+  retry, and re-sweep, every second.
+- **R13 / R17 — "behind" means a change has waited and the worker completed nothing, not "the newest
+  notice is old".** The design
+  argued that with a newest-first drain only a stuck worker lets the newest notice age. That is false
+  when a backlog is queued ALL AT ONCE — a restore, a `reproject --rebuild`, a matcher-version
+  re-check: every notice has about the same `queued_at`, so five minutes later even the newest is old
+  while a healthy worker is mid-backlog (at ~9 s a chart, 500 charts is over an hour of false
+  "behind", which trains staff to ignore the line). The rule is now: **stalled iff the quiet time —
+  seconds since the oldest waiting notice or the worker's last completed work, whichever is later —
+  exceeds the threshold.** db/056's `cairn_duplicate_check_status()` returns it as `quiet_age_s` =
+  seconds since `GREATEST(min(queued_at), last_drained_at)` (NULL when nothing waits) in place of
+  `newest_age_s`; a guarded `DROP` heals a database that loaded the earlier shape. The first fix
+  (R13) measured from the NEWEST notice — `GREATEST(max(queued_at), …)`, "nothing new and no
+  progress" — and review found it hid a fully stopped worker on a busy node: any identity change at
+  least every five minutes kept the newest notice fresh, so the line read "running" forever while
+  nothing was checked. Ruling R17 measures from the OLDEST notice: a stopped worker reads "behind"
+  five minutes after the first unchecked change, busy node or not; a healthy worker on an all-at-once
+  backlog stays "running" through its completed-work stamps; an idle worker with one fresh notice reads
+  "running"; a held poison chart with no other activity reads "behind" (honest: it is not being checked). `last_drained_at` became the worker's progress stamp,
+  written **only by completed work** (ruling R15): after each chart (as before), and during a sweep
+  about every 30 s while pairs are being scored — after a pair is SUCCESSFULLY scored, at most once
+  per 30 s (`sweep(on_progress=…)`, called after that pair's propose() has committed;
+  `worker_plan.Throttle`), and at the sweep's end unless every attempted pair failed
+  (`worker_plan.sweep_completed_work`; a sweep with nothing to score is completed work). A failed pair
+  is not progress (review N3): if every propose() raises for a systematic reason (a missing grant, a
+  worker/schema mismatch), the sweep keeps the failed charts' notices, the next round sweeps again,
+  and a stamp per attempt would read "running" forever while nothing is checked.
+  Never before work: an earlier fix stamped once before each sweep, which let the R8 crash-loop
+  (blocking raises, the worker retries) refresh the stamp on every retry and read "running" forever
+  while nothing was checked. A sweep's blocking phase and a single slow pair stamp nothing; meanwhile
+  the quiet time runs from the backlog's oldest notice or the last completed work, and a blocking phase
+  that takes it past the threshold honestly reads "behind". "Last ran HH:MM" therefore means the last
+  completed work: during a crash-loop or a long blocking phase the worker is active but HH:MM is
+  earlier, and that is the point.
+- **R8 — bulk mode has no poison isolation (known gap).** Per-chart mode isolates a chart that
+  raises (it is held and retried later). A data-triggered error inside the sweep's blocking aborts the
+  whole sweep; while the backlog stays over the threshold the worker retries and fails again — in
+  process with the ≤ 60 s backoff for an `OperationalError` (a statement timeout, say), or by exiting
+  and being restarted by its service manager for any other error. Nothing reads falsely "checked" (the
+  notices stay), but the check stops making progress. Because only completed work stamps progress
+  (R15) and quiet time runs from the oldest waiting notice (R17), the status line turns to "behind"
+  once a change has waited five minutes with no completed work, however busy the node. Filed as an issue.
+
+- **Final review (2026-10-05) — what the node says is true in every reachable state.**
+  `cairn_chart_check_pending` reads "not yet run" for a chart this node does not hold (no
+  `patient_chart` row: a mistyped id, a linked member held elsewhere) and is a definer, since the
+  node role cannot read `patient_chart`. "Last ran" carries the date unless it was today. The
+  running line names a first run as well as a matcher update ("re-checking every chart: first run
+  or matcher update"), and the no-last-ran "behind" line says "it has not completed a check yet".
+  `cairn-node duplicate-check` connects without the schema replay, so running it from cron takes no
+  ACCESS EXCLUSIVE lock (#726). The worker re-reads the queue after every chart (`batch` 1), so a
+  fresh change is checked next, and it logs the oversized blocks a per-chart check skipped.
+
+**The measurement.** `matcher/src/cairn_matcher/eval/measure_check.py` seeds a generated population in
+one transaction (rolled back afterwards; the seeded tables are ANALYZEd inside it so the planner sees
+real row counts), then times, per sampled chart, `candidate_pairs_for` plus an `assess` of each of its
+pairs, and times one `generate_candidate_pairs` (cap 100) plus an `assess` of every pair. Machine:
+Apple M3 Max, 128 GB RAM, PostgreSQL 18.1 (Postgres.app) on the same host, 2026-10-04.
+
+| Records | Sample | Per-chart p50 | Per-chart p95 | One sweep | Sweep pairs | Break-even (sweep / p50) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 000 | 50 | 453 ms | 590 ms | 37.6 s | 61 813 | ~83 charts |
+| 10 000 | 30 | 8 829 ms | 9 651 ms | 129.9 s | 189 340 | ~15 charts |
+| 50 000 | not run | | | | | |
+
+50 000 was not run: the 10 000 run (seed, sample and sweep) took 400 s, over the three-minute bound
+set for deciding to continue, and the per-chart figure had already failed the stop line below.
+
+**What the numbers say, and the finding.** A fivefold larger population made the per-chart check
+about nineteen times slower (453 ms to 8.8 s), while the sweep grew about 3.5 times. The per-chart
+cost is therefore superlinear, and the budget set in the plan (p95 at most 2 s at 10 000 charts) is
+missed by a factor of nearly five; the 5 s stop line is also exceeded. A follow-up diagnostic (the
+same seeded population, rolled back) located the cost: at 10 000 records the blocking SQL alone takes
+~7.1–7.3 s per chart whatever the cap, while assessing the chart's pairs takes 0.1–0.7 s (~0.9 ms a
+pair). `_TARGETED_GROUPS_SQL` wraps the full `_GROUPS_SQL` population-wide aggregation in a subquery and
+filters for the chart afterwards, so each chart pays for grouping the whole population, not for its own
+blocks. The fix, filed as a follow-up issue (#637 is about patient search, not this), is to anchor the
+blocking on the chart's own keys or to materialise a key projection; the drift canary (targeted pairs ==
+the sweep's pairs for the chart) makes either change safe. The canary also shows the targeted pairs are
+*correct* today; the defect is cost, not result.
+
+**The constants (ruling R11).**
+- `Settings.bulk_threshold` is set to **30** (it was 500, a guess). The break-even falls from ~83
+  charts at 2 000 records to ~15 at 10 000, because the per-chart check is superlinear. 30 sits between
+  them, so the worst wrong choice stays near 2× either way: at 2 000 records 31 charts are swept
+  (37.6 s) where checking each would take ~14 s (~2.7×); at 10 000, 30 charts are checked singly
+  (~265 s) where one sweep takes ~130 s (~2×). The old 500 would have cost ~30× at 10 000 (500 × 8.8 s
+  ≈ 73 min against ~2 min). Operators override it with `--bulk-threshold`; re-measure once the blocking
+  is anchored on the chart (and on the Pi, a filed follow-on).
+- `targeted.DEFAULT_TARGETED_CAP` stays 1000. The cap bounds how many pairs a block contributes, and
+  the diagnostic shows that is not where the time goes, so lowering it cannot bring p95 under budget.
+
+Each constant carries a comment citing these figures.
+
 ### R5 — the banner and the worklist (#680)
 
 - **Banner** (§5.2's): when any chart in the displayed set has an unresolved proposal, a banner sits
@@ -747,7 +1033,7 @@ adds no act. Measurement is the runbook's front-door section (section 8), a huma
   replays idempotently (migration-replay guard).
 - **R3**: a person row signs all member ids; ranking uses the best member; opening any member opens
   the set.
-- **R4**: anchored == sweep (property test); the trigger never fails a write (fault injected into the
+- **R4** (superseded by *R4 — designed 2026-10-04*'s test list): anchored == sweep (property test); the trigger never fails a write (fault injected into the
   queue insert); register a near-duplicate → proposal; linked and unlinked pairs never proposed;
   changed `matcher_version` queues a re-check; crash mid-drain re-scores.
 - **R5**: the banner shows on both charts with the other chart's medications; the worklist hides a

@@ -357,6 +357,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "055_link_precedence_refold",
         include_str!("../../../db/055_link_precedence_refold.sql"),
     ),
+    // db/056 (repair path R4, #679, ADR-0076 decision 7): the commit-time duplicate check's
+    // append-only notice log, its never-failing hook on the matcher's six inputs, the worker's
+    // state row, and the two status reads. cairn-sync's list lags legitimately (#284).
+    (
+        "056_match_pending",
+        include_str!("../../../db/056_match_pending.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

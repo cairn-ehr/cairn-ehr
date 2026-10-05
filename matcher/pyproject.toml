@@ -14,6 +14,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+cairn-matcher = "cairn_matcher.cli:main"
+
 [project.urls]
 Homepage = "https://cairn-ehr.org"
 Repository = "https://github.com/cairn-ehr/cairn-ehr"
@@ -29,7 +32,7 @@ build-backend = "hatchling.build"
 packages = ["src/cairn_matcher"]
 
 [project.optional-dependencies]
-pipeline = ["psycopg[binary]>=3.1"]
+pipeline = ["psycopg[binary]>=3.2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

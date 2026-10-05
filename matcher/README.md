@@ -103,6 +103,19 @@ unrecoverable fraction (to model the hub-sweep floor), hard negatives / scorer-p
 curves, and an A/B pass-toggle in `generate_candidate_pairs` for one-command before/after
 comparisons across compound-key changes.
 
+## Running the duplicate check
+
+`cairn-matcher watch` is the commit-time worker: it drains the database's queue of identity changes and
+writes `match_proposal` rows. It never links. Run it as a role holding `cairn_agent`:
+
+```bash
+uv run --extra pipeline cairn-matcher watch    # PG* environment, or --dsn
+```
+
+The operator runbook (flags, `cairn-node duplicate-check`, launchd and systemd units) is
+`docs/developers/running-the-duplicate-check.md`. To re-measure the per-chart check against a sweep:
+`python -m cairn_matcher.eval.measure_check --sizes 2000 10000`.
+
 ## Develop
 
 ```bash

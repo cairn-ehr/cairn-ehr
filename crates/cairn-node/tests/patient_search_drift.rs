@@ -94,13 +94,13 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
 
     for (name, id) in &seeded {
         // The sweep's blocking keys for this stored name, extracted exactly as
-        // matcher/pipeline/db.py's _GROUPS_SQL does: whitespace split of the NFC-normalised,
-        // lower-cased value. Asked of the SERVER — via `lower`/`normalize` — rather than
-        // computed in Rust so that at least the NORMALISATION SEMANTICS cannot drift from
-        // the matcher's (both sides ask Postgres, not two independent implementations of
-        // Unicode case-folding/NFC). This does NOT cover the EXPRESSION itself: the
-        // `regexp_split_to_table(lower(normalize($1, NFC)), '\s+')` below is still a
-        // hand-copy of `_NAME_TOKENS_CTE`, same as db/046's own comment — see the note on
+        // matcher/pipeline/blocking_sql.py's _GROUPS_SQL does: whitespace split of the
+        // NFC-normalised, lower-cased value. Asked of the SERVER — via `lower`/`normalize` —
+        // rather than computed in Rust so that at least the NORMALISATION SEMANTICS cannot
+        // drift from the matcher's (both sides ask Postgres, not two independent
+        // implementations of Unicode case-folding/NFC). This does NOT cover the EXPRESSION
+        // itself: the `regexp_split_to_table(lower(normalize($1, NFC)), '\s+')` below is still
+        // a hand-copy of `_NAME_TOKENS_CTE`, same as db/046's own comment — see the note on
         // the assertion message below for what that leaves uncovered.
         let keys: Vec<String> = c
             .query(
@@ -128,10 +128,10 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
                  NOTE), as things stand today. This proves search has not been narrowed away \
                  from THIS test's key extraction — it does NOT prove the matcher was not \
                  WIDENED instead: the `keys` computed above are a hand-copy of \
-                 matcher/pipeline/db.py's `_NAME_TOKENS_CTE`, not read from it, so if a future \
-                 change widens what the matcher extracts, this file's copy does not move, every \
-                 assertion here keeps passing, and the DRIFT NOTE hazard fires silently. Do not \
-                 over-trust a green run of this test on that half of the hazard."
+                 matcher/pipeline/blocking_sql.py's `_NAME_TOKENS_CTE`, not read from it, so \
+                 if a future change widens what the matcher extracts, this file's copy does not \
+                 move, every assertion here keeps passing, and the DRIFT NOTE hazard fires \
+                 silently. Do not over-trust a green run of this test on that half of the hazard."
             );
         }
     }

@@ -15,6 +15,7 @@ the batch.
 Requires the optional `pipeline` extra (psycopg) at CALL time, because it drives db/runner.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig
@@ -66,12 +67,26 @@ def sweep(
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     weights: Weights = DEFAULT_WEIGHTS,
     config: ComparatorConfig = DEFAULT_CONFIG,
+    skip_pairs: frozenset[tuple[str, str]] | None = None,
+    on_progress: Callable[[], None] | None = None,
 ) -> SweepResult:
     """Score every blocking candidate pair and return a SweepResult summary.
 
     Generates candidates (closing the read snapshot before writing), then proposes on each
     surviving pair. A pair whose propose() raises is recorded in `errors` and skipped; the
     connection is rolled back so it stays usable for the next pair.
+
+    `skip_pairs` is opt-in (repair path R4's bulk mode): candidate pairs in this set -- already
+    judged by the identity algebra -- are neither scored nor reconciled. None (the default)
+    keeps the sweep's historical behaviour.
+
+    `on_progress` is opt-in too (R4, rulings R13/R15 and review N3): called after each pair whose
+    propose() SUCCEEDED -- main loop and reconciliation -- so a long sweep can show it is doing
+    real work. A pair whose propose() raised is recorded in `errors` and is NOT progress: if every
+    pair fails for a systematic reason (a missing grant, a schema mismatch), reporting progress
+    would hide a sweep that checks nothing. It runs after propose() has ended its own
+    transaction, so a callback that writes and commits never holds a lock across a pair's work.
+    None (the default) changes nothing.
 
     `config` (the per-field comparator wiring) is threaded into EVERY propose() call —
     main loop and reconciliation alike — so each persisted proposal's matcher_version pins
@@ -82,6 +97,10 @@ def sweep(
     from cairn_matcher.pipeline import db
 
     pairs, skipped_raw = db.generate_candidate_pairs(conn, max_block_size=max_block_size)
+    if skip_pairs:
+        # R4 bulk mode: a pair already judged (one link component, or any patient_link row) is
+        # never scored again.
+        pairs = [p for p in pairs if p not in skip_pairs]
     # Pre-load the §5.5(a) known-aliases for the whole candidate-patient set in ONE query,
     # still inside the generate read snapshot. This replaces two per-pair alias SELECTs in
     # propose() (which would re-fetch a chart's aliases once per pair it appears in, and be
@@ -97,12 +116,21 @@ def sweep(
     # passes no longer generate is never revisited by the loop below and would otherwise
     # linger forever.
     pending = db.pending_proposal_pairs(conn)
+    if skip_pairs:
+        # A judged pair with a stale pending proposal must not be re-scored by reconciliation
+        # either (R4 ruling R5: a judged pair is never proposed by either mode).
+        pending = [p for p in pending if p not in skip_pairs]
     # Close the read transaction the SELECTs opened before the per-pair write loop.
     conn.rollback()
 
     skipped_blocks = [SkippedBlock(*s) for s in skipped_raw]
     auto = review = below = 0
     errors: list[SweepError] = []
+
+    def progressed() -> None:
+        if on_progress is not None:
+            on_progress()
+
     for low, high in pairs:
         try:
             result = propose(
@@ -114,6 +142,7 @@ def sweep(
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
             continue
+        progressed()
         if result is Band.AUTO_CANDIDATE:
             auto += 1
         elif result is Band.REVIEW:
@@ -149,6 +178,7 @@ def sweep(
             conn.rollback()
             errors.append(SweepError((low, high), f"{type(exc).__name__}: {exc}"))
             continue
+        progressed()
         reconciled += 1
         # propose() returns None when the re-scored pair no longer bands (it took the band-None
         # retract path — the orphan withdrawn); a Band means it still warrants a proposal and was
