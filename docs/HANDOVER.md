@@ -7,7 +7,7 @@
 > 1. **PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) — R4, the commit-time duplicate check** (#679). Its
 >    `ruff + pytest` job was RED at session start (six R4 test modules could not import psycopg in CI's no-extra job);
 >    fixed in `38d6c393`, **all checks green**.
-> 2. **The #725 PR — STACKED on #724** (base `feat/r4-commit-time-worker`; GitHub retargets it to `main` when #724
+> 2. **PR [#733](https://github.com/cairn-ehr/cairn-ehr/pull/733) — #725, STACKED on #724** (base `feat/r4-commit-time-worker`; GitHub retargets it to `main` when #724
 >    merges and its branch is deleted). Per-chart p95 **9.65 s → 1.4 s** at 10 000 charts (budget ≤ 2 s);
 >    `bulk_threshold` 30 → 250. Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; the design page's
 >    "#725 — as fixed" note. #725 is left OPEN for the maintainer (the Pi figure is #728).
@@ -417,7 +417,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-05 (**#725 — the per-chart check's range blocking**, stacked PR; PR #724's red CI
+**Session date:** 2026-10-05 (**#725 — the per-chart check's range blocking**, PR #733 stacked on #724; PR #724's red CI
 fixed) · 10-04/05 R4 (ADR-0076 decision 7, PR **[#724](https://github.com/cairn-ehr/cairn-ehr/pull/724)**, awaiting merge) · 10-03 R3 (PR #721) and R1b (PR #717) ·
 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`) and R1 (ADR-0076, `db/054`,
 PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier: ROADMAP. · **Spec:** **v0.79** (newest

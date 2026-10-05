@@ -436,7 +436,7 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b and R3 are merged; **R4** (PR #724) and **#725** (its stacked PR) await merge
+- **Next:** R2a, R2b-1, R2b-2, R1b and R3 are merged; **R4** (PR #724) and **#725** (PR #733, stacked on #724) await merge
   (entries below); **R5** (banner + worklist, #680; #700, #723) follows. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
@@ -499,7 +499,7 @@ CLI now, the window's lines with R5; a standalone operator-run worker; an append
 - **§1.2:** the clerk's possible-duplicate tray. At the desk 0 → 0 → 0; the operator's status line is not a clinical
   gesture. Registration-to-proposal latency measured above (#725, #728).
 
-### 2026-10-05 — #725: the per-chart duplicate check's range blocking (stacked on PR #724)
+### 2026-10-05 — #725: the per-chart duplicate check's range blocking (PR #733, stacked on #724)
 
 Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; design page "#725 — as fixed". Also fixed PR #724's
 red `ruff + pytest` job: the blocking SQL moved to the pure `pipeline/blocking_sql.py` and
