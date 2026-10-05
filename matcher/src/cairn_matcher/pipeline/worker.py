@@ -46,22 +46,23 @@ class Settings:
     # keeps only up to sweep_block_size (100). Skipped blocks are logged, never silently dropped.
     max_block_size: int = targeted.DEFAULT_TARGETED_CAP
     sweep_block_size: int = 100        # the sweep's own all-pairs cap, unchanged
-    # Charts waiting above which one sweep beats checking each (ruling R11). Measured 2026-10-04
-    # (Apple M3 Max 128 GB, PostgreSQL 18.1): break-even ~83 charts at 2 000 records (sweep 37.6 s
-    # / per-chart p50 453 ms) and ~15 at 10 000 (sweep 129.9 s / p50 8 829 ms). It falls as the
-    # population grows because the per-chart check is superlinear (its blocking SQL groups the
-    # whole population for every chart; a follow-up issue anchors it on the chart). 30 sits
-    # between the two: the worst wrong choice costs ~2.7x at 2 000 (31 charts swept, 37.6 s,
-    # instead of ~14 s per chart) and ~2x at 10 000 (30 charts checked singly, ~265 s, instead
-    # of one 130 s sweep), where the old 500 cost ~30x there (500 x 8.8 s = 73 min vs ~2 min).
-    # Operators override with `cairn-matcher watch --bulk-threshold`; re-measure once the
-    # per-chart blocking is fixed.
-    bulk_threshold: int = 30
+    # Charts waiting above which one sweep beats checking each (ruling R11). Re-measured
+    # 2026-10-05 after #725 anchored the per-chart range blocking (Apple M3 Max 128 GB,
+    # PostgreSQL 18.1, eval/measure_check.py): break-even ~330 charts at 2 000 records (sweep
+    # 42.7 s / per-chart p50 129 ms) and ~202 at 10 000 (sweep 153.5 s / p50 761 ms). 250 sits near
+    # the geometric mean of the two, so the worst wrong choice stays near 1.3x either way: at
+    # 2 000 records 251 charts are swept (42.7 s) where checking each would take ~32 s; at 10 000,
+    # 250 charts are checked singly (~190 s) where one sweep takes ~154 s. Before #725 the
+    # break-even was ~15-83 and this was 30. The break-even still falls as the population grows
+    # (the per-chart check is near-linear in it, the sweep's pair count grows too); re-measure on
+    # the Pi (#728). Operators override with `cairn-matcher watch --bulk-threshold`.
+    bulk_threshold: int = 250
     # Charts fetched per queue read. 1 = re-read the queue after EVERY chart, so a change that
     # arrives while a chart is being checked is checked next, ahead of older waiting changes.
-    # A larger batch would make it wait behind the whole batch (~9 s a chart at 10 000 records,
-    # #725). The re-read is cheap (one indexed GROUP BY over the waiting notices) next to a
-    # check that takes seconds; a backlog big enough to make it costly is swept first.
+    # A larger batch would make it wait behind the whole batch (~0.8 s a chart at 10 000
+    # records on the development machine since #725; it was ~9 s). The re-read is cheap (one
+    # indexed GROUP BY over the waiting notices) next to a check that takes most of a second; a
+    # backlog big enough to make it costly is swept first.
     batch: int = 1
     retry_after_s: float = 300.0
     poll_s: float = 60.0

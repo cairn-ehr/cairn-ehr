@@ -62,3 +62,34 @@ def test_an_oversized_block_is_reported_never_silently_dropped(pg_conn):
     pairs, skipped = candidate_pairs_for(pg_conn, ids[0], max_block_size=4)
     assert pairs == []
     assert ("name", "commonname", 5) in skipped
+
+
+# --- #725: the per-chart range statement is ANCHORED on the chart ---------------------------
+# It computes windows only for the range anchors whose window overlaps the chart's. These pin
+# what that must not change.
+
+RANGE = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"     # a range-dob chart: the anchor
+POINTS = [f"{c * 8}-{c * 4}-{c * 4}-{c * 4}-{c * 12}" for c in "bcd"]
+
+
+def test_another_anchors_oversized_window_is_reported_at_its_full_size(pg_conn):
+    # The chart checked (POINTS[0]) is a MEMBER of RANGE's window. That window holds three
+    # charts, so with RANGE itself the block is 4 > cap 3: skipped, under RANGE's uuid, at size
+    # 4 -- exactly what the sweep reports. An anchored statement that computed the window only
+    # as far as the checked chart would see a block of 2 and pair it, silently below the cap.
+    # Distinct point dobs inside the window, so no symmetric pass (exact dob) groups them.
+    seed_patient(pg_conn, RANGE, dob=("1981/1991", 30, "year-range"))
+    for p, dob in zip(POINTS, ("1984-01-01", "1985-06-15", "1986-02-02"), strict=True):
+        seed_patient(pg_conn, p, dob=(dob, 20))
+    pairs, skipped = candidate_pairs_for(pg_conn, POINTS[0], max_block_size=3)
+    assert pairs == []
+    assert ("dob-range", RANGE, 4) in skipped, skipped
+
+
+def test_a_chart_with_no_birth_year_has_no_range_block(pg_conn):
+    # No dob: no window of its own, and inside nobody's. The anchored statement's
+    # relevant-anchor set is empty, and that must read "no range block", never an error.
+    seed_patient(pg_conn, RANGE, dob=("1981/1991", 30, "year-range"))
+    seed_patient(pg_conn, POINTS[0], names=[("Nodob Person", 20)])
+    pairs, skipped = candidate_pairs_for(pg_conn, POINTS[0], max_block_size=UNCAPPED)
+    assert pairs == [] and skipped == []

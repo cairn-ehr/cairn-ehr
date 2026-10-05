@@ -2,8 +2,9 @@
 """One chart's candidate pairs (repair path R4): the sweep's blocking, kept to ONE chart.
 
 The commit-time duplicate check (#679) asks "who might this ONE chart be a duplicate of?". It
-answers with the sweep's own blocking SQL (blocking_sql._GROUPS_SQL / _RANGE_GROUPS_SQL, composed
-from the same CTE constants) wrapped in a filter that keeps only the groups containing the chart.
+answers with the sweep's own blocking SQL (blocking_sql._GROUPS_SQL, and the range statement in
+its anchored form -- both composed from the same CTE constants as the sweep's) wrapped in a filter
+that keeps only the groups containing the chart.
 The SQL is SHARED, not copied, so a new blocking pass reaches this module the moment it reaches the
 sweep; tests/test_targeted_blocking.py's drift canary proves the filter over a generated
 population (targeted pairs == the sweep's pairs that include the chart).
@@ -12,10 +13,12 @@ Pairs are the chart x each other member only — never member x member, which is
 business. So a block's pair count grows LINEARLY here, and the cap (DEFAULT_TARGETED_CAP) can sit
 far above the sweep's 100. An oversized block is still reported, never silently dropped.
 
-Cost: each call still evaluates the blocking CTEs over the whole population (one scan of the
-names), as the sweep does once. That is fine for a fresh change; for a large backlog the worker
-runs ONE sweep instead (worker.run_bulk). A materialised token table (#637) would make this
-cheaper later.
+Cost (#725): the symmetric statement still groups the whole population (90-180 ms at 10 000
+charts on the development machine), as the sweep does once. The range statement is ANCHORED on
+the chart (blocking_sql._ANCHORED_RANGE_GROUPS_SQL): it builds windows only for the range anchors
+whose window overlaps the chart's -- it once built every anchor's window and cost ~7.5 s per
+chart. For a large backlog the worker runs ONE sweep instead (worker.run_bulk). A materialised
+key projection (#637's token table) is the lever beyond this.
 
 Imports without psycopg; its callers hand it an open connection.
 """
@@ -35,17 +38,19 @@ from cairn_matcher.pipeline.blocking import (
 # drift this module exists to avoid. From the PURE blocking_sql module, never from db.py: db.py
 # imports psycopg, and this module is imported by the worker, `watch` and the CLI
 # (tests/test_pure_modules_import_without_psycopg.py).
-from cairn_matcher.pipeline.blocking_sql import _GROUPS_SQL, _RANGE_GROUPS_SQL
+from cairn_matcher.pipeline.blocking_sql import _ANCHORED_RANGE_GROUPS_SQL, _GROUPS_SQL
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 
-# A block above this is non-discriminating even when paired linearly. KEPT at 1000 after the
-# Task 7 measurement (2026-10-04, Apple M3 Max 128 GB, PostgreSQL 18.1, generated population via
-# eval/measure_check.py): per-chart p50/p95 was 453/590 ms at 2 000 records but 8 829/9 651 ms at
-# 10 000, so the cost is NOT in the pairing the cap bounds -- it is the blocking SQL scanning the
-# whole population per chart (a finding, see the design page's R4 as-built note). A follow-up
-# diagnostic at 10 000 records confirmed it: the blocking SQL took ~7.1-7.3 s per chart whatever
-# the cap, assessing the chart's pairs 0.1-0.7 s. Lowering the cap would not bring p95 near the
-# 2 s budget, so it was not tuned around the problem.
+# A block above this is non-discriminating even when paired linearly. KEPT at 1000 through two
+# measurements (Apple M3 Max 128 GB, PostgreSQL 18.1, generated population via
+# eval/measure_check.py). R4 (2026-10-04): per-chart p95 9 651 ms at 10 000 records, ~7 s of it the
+# range blocking statement whatever the cap -- lowering the cap could not have fixed it, so it was
+# not tuned around the problem. After #725 anchored that statement (2026-10-05): p50/p95 129/256 ms
+# at 2 000 records and 761/1 398 ms at 10 000, inside the plan's 2 s budget WITH the cap at 1000.
+# The cap now does bound real work -- a range-dob chart's estimated-age window can hold ~900
+# charts in that population, and pairing it is ~900 assessments (~0.9 ms each) -- but the budget
+# holds, so there is no measured reason to drop pairs the sweep (cap 100) would skip. Which band
+# of blocks between the two caps the per-chart check should pair is #730's decision.
 DEFAULT_TARGETED_CAP = 1000
 
 # The symmetric groups that contain the chart. The trailing %s is the chart id; the first two
@@ -56,9 +61,11 @@ _TARGETED_GROUPS_SQL = (
 )
 
 # The anchored range groups the chart is in — as the anchor (its own estimated-age window) or
-# as a member of another chart's window. The first %s is _RANGE_GROUPS_SQL's sentinel bind.
+# as a member of another chart's window. The inner statement is the sweep's, anchored on the
+# chart (#725); its two binds come first, in its order (the chart id, then the value sentinels),
+# then the two of this filter.
 _TARGETED_RANGE_SQL = (
-    f"SELECT g.pass_name, g.anchor, g.members FROM ({_RANGE_GROUPS_SQL}) g "
+    f"SELECT g.pass_name, g.anchor, g.members FROM ({_ANCHORED_RANGE_GROUPS_SQL}) g "
     "WHERE g.anchor = %s::uuid OR %s::uuid = ANY(g.members)"
 )
 
@@ -98,7 +105,7 @@ def candidate_pairs_for(conn, patient, *, max_block_size=DEFAULT_TARGETED_CAP):
                 skipped.append((pass_name, key, len(members)))
             else:
                 pairs.update(pairs_with(me, members))
-        cur.execute(_TARGETED_RANGE_SQL, (VALUE_SENTINELS_PARAM, me, me))
+        cur.execute(_TARGETED_RANGE_SQL, (me, VALUE_SENTINELS_PARAM, me, me))
         for pass_name, anchor, members in cur.fetchall():
             require_registered(pass_name, ANCHORED_PASSES)
             size = len(members) + 1

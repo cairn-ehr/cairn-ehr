@@ -187,54 +187,128 @@ GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
 # exceeds the cap and is skipped+reported; intersecting with a shared sex value roughly
 # halves it, so it fires within cap in more settings. Additive-only: a sex mismatch
 # merely means the rescue does not fire -- the scorer never sees a suppression.
-_RANGE_GROUPS_SQL = f"""
-WITH birth_window AS (
+#
+# #725 — the sexes RIDE ON THE WINDOW ROWS; no arm joins a sex scan. The '+sex' arm used to join
+# blocking_sex to itself on `sex` (sa JOIN sm ON sm.sex = sa.sex). Sex has about two values, so
+# the planner -- which has no statistics for a CTE and estimated ~116 000 rows -- built that join
+# FIRST and got ~14.7 million rows at 10 000 charts: ~7 s of every per-chart duplicate check and
+# of every sweep. Two scans of per-patient sex ARRAYS were cross-joined first in the same way. So
+# a chart's set of sexes is attached to its birth window ONCE, by patient_id (sexed_window), the
+# overlap rows carry both sets, and the arm is a filter. "Some sex of the anchor equals some sex
+# of the member" is exactly "the two sets overlap" (&&). Pinned: tests/test_blocking_sql_shape.py.
+
+_BIRTH_WINDOW_CTE = """birth_window AS (
     -- Evaluation-order-proof malformed-range guard: PostgreSQL does NOT guarantee
     -- WHERE-subexpression evaluation order, so a `split_part(...)::int` cast could be
-    -- evaluated BEFORE the `value ~ '^[0-9]{{4}}/[0-9]{{4}}$'` regex guard that exists to
+    -- evaluated BEFORE the `value ~ '^[0-9]{4}/[0-9]{4}$'` regex guard that exists to
     -- filter it out -- and a non-numeric value ("about-forty") would then raise
     -- "invalid input syntax for type integer" and crash the whole sweep on exactly the
-    -- input this guard exists to degrade safely. `substring(value FROM '^([0-9]{{4}})/')`
+    -- input this guard exists to degrade safely. `substring(value FROM '^([0-9]{4})/')`
     -- returns NULL on non-match (never raises), so the cast of NULL is safe and the
     -- comparison against NULL is not-true (row filtered) regardless of evaluation order.
     -- The regex guard is kept too (cheap, and documents intent) but correctness must not
     -- -- and no longer does -- depend on it being evaluated first.
     SELECT patient_id,
-           substring(value FROM '^([0-9]{{4}})/')::int AS y_min,
-           substring(value FROM '/([0-9]{{4}})$')::int AS y_max,
+           substring(value FROM '^([0-9]{4})/')::int AS y_min,
+           substring(value FROM '/([0-9]{4})$')::int AS y_max,
            TRUE AS is_range
     FROM patient_demographic
     WHERE field = 'dob'
       AND facets ->> 'precision' = 'year-range'
-      AND value ~ '^[0-9]{{4}}/[0-9]{{4}}$'
-      AND substring(value FROM '^([0-9]{{4}})/')::int <= substring(value FROM '/([0-9]{{4}})$')::int
+      AND value ~ '^[0-9]{4}/[0-9]{4}$'
+      AND substring(value FROM '^([0-9]{4})/')::int <= substring(value FROM '/([0-9]{4})$')::int
     UNION ALL
     SELECT patient_id,
-           substring(value FROM '[0-9]{{4}}')::int,
-           substring(value FROM '[0-9]{{4}}')::int,
+           substring(value FROM '[0-9]{4}')::int,
+           substring(value FROM '[0-9]{4}')::int,
            FALSE
     FROM patient_demographic
     WHERE field = 'dob'
-      AND value ~ '[0-9]{{4}}'
+      AND value ~ '[0-9]{4}'
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
-),
-{_BLOCKING_SEX_CTE},
-window_overlap AS (
-    SELECT a.patient_id AS anchor, m.patient_id AS member
-    FROM birth_window a
-    JOIN birth_window m
+)"""
+
+# One row per patient: its SET of blocking sexes (blocking_sex has a row per patient AND sex --
+# a chart can carry two, e.g. a sex-at-birth and a different administrative-sex).
+_BLOCKING_SEXES_CTE = """blocking_sexes AS (
+    SELECT patient_id, array_agg(sex) AS sexes FROM blocking_sex GROUP BY patient_id
+)"""
+
+# Every birth window with its chart's sexes: ONE join, on patient_id. A chart with no blocking
+# sex keeps its window (LEFT JOIN) with NULL sexes: it still takes part in the plain 'dob-range'
+# pass, and never in the '+sex' arm (NULL && x is not true -- the old inner join's "no row").
+_SEXED_WINDOW_CTE = """sexed_window AS (
+    SELECT w.patient_id, w.y_min, w.y_max, w.is_range, s.sexes
+    FROM birth_window w LEFT JOIN blocking_sexes s USING (patient_id)
+)"""
+
+# Window `m` overlaps window `a` (both inclusive). Shared by the overlap join and the per-chart
+# statement's relevant_anchor, so the two can never disagree on what "overlaps" means.
+_OVERLAP_PREDICATE = """m.y_min <= a.y_max
+     AND a.y_min <= m.y_max"""
+
+# The overlap join, anchored on range charts. Deliberately left OPEN after `WHERE a.is_range`:
+# the per-chart statement appends _ANCHOR_CLAUSE there; the sweep closes it as it is.
+_WINDOW_OVERLAP_OPEN = f"""window_overlap AS (
+    SELECT a.patient_id AS anchor, m.patient_id AS member,
+           a.sexes AS anchor_sexes, m.sexes AS member_sexes
+    FROM sexed_window a
+    JOIN sexed_window m
       ON m.patient_id <> a.patient_id
-     AND m.y_min <= a.y_max
-     AND a.y_min <= m.y_max
-    WHERE a.is_range
-)
-SELECT 'dob-range' AS pass_name, anchor, array_agg(DISTINCT member) AS members
+     AND {_OVERLAP_PREDICATE}
+    WHERE a.is_range"""
+
+# The two arms. Rows are (pass_name, anchor, members); Python pairs anchor x member only.
+_RANGE_ARMS = """SELECT 'dob-range' AS pass_name, anchor, array_agg(DISTINCT member) AS members
 FROM window_overlap
 GROUP BY anchor
 UNION ALL
-SELECT 'dob-range+sex', o.anchor, array_agg(DISTINCT o.member)
-FROM window_overlap o
-JOIN blocking_sex sa ON sa.patient_id = o.anchor
-JOIN blocking_sex sm ON sm.patient_id = o.member AND sm.sex = sa.sex
-GROUP BY o.anchor
+SELECT 'dob-range+sex', anchor, array_agg(DISTINCT member)
+FROM window_overlap
+WHERE anchor_sexes && member_sexes
+GROUP BY anchor
 """
+
+# The sweep's statement: every range anchor's block. Bind: (VALUE_SENTINELS_PARAM,).
+_RANGE_GROUPS_SQL = f"""
+WITH {_BIRTH_WINDOW_CTE},
+{_BLOCKING_SEX_CTE},
+{_BLOCKING_SEXES_CTE},
+{_SEXED_WINDOW_CTE},
+{_WINDOW_OVERLAP_OPEN}
+)
+{_RANGE_ARMS}"""
+
+# --- The per-chart statement (repair path R4's commit-time check, #725) ----------------------
+# Which range blocks can hold ONE chart? Its own, if it is a range anchor, and the block of every
+# range anchor whose window overlaps one of its windows. relevant_anchor is that set (the chart
+# itself included: a range window overlaps itself), and window_overlap is computed only for
+# those anchors -- about 110 of 10 000 charts in the measured population instead of all 752
+# range anchors x the population. Each kept anchor's window is still computed IN FULL (the
+# clause restricts `a`, never `m`): its size decides the cap, and the verdict must be the sweep's.
+# targeted.py still filters the result to the groups that contain the chart, because a relevant
+# anchor's SEX-filtered block need not.
+_RELEVANT_ANCHOR_CTE = f"""relevant_anchor AS (
+    SELECT DISTINCT a.patient_id
+    FROM birth_window a
+    JOIN birth_window m
+      ON m.patient_id = %s::uuid
+     AND {_OVERLAP_PREDICATE}
+    WHERE a.is_range
+)"""
+
+_ANCHOR_CLAUSE = """
+      AND a.patient_id IN (SELECT patient_id FROM relevant_anchor)"""
+
+# The sweep's statement plus relevant_anchor and the clause -- nothing else
+# (test_the_anchored_statement_is_the_sweeps_plus_one_cte_and_one_clause).
+# Binds, in text order: (the chart's uuid for relevant_anchor, VALUE_SENTINELS_PARAM).
+_ANCHORED_RANGE_GROUPS_SQL = f"""
+WITH {_BIRTH_WINDOW_CTE},
+{_RELEVANT_ANCHOR_CTE},
+{_BLOCKING_SEX_CTE},
+{_BLOCKING_SEXES_CTE},
+{_SEXED_WINDOW_CTE},
+{_WINDOW_OVERLAP_OPEN}{_ANCHOR_CLAUSE}
+)
+{_RANGE_ARMS}"""

@@ -43,10 +43,11 @@ GRANT cairn_agent TO matcher_login;   -- the login role the worker connects as
 tables the worker writes, alongside the matcher's own proposal tables.
 
 If you give the login role a `statement_timeout`, make it longer than the worker's longest query.
-Finding one chart's candidates takes about 7 s at 10 000 charts on the development machine (more on a
-Raspberry Pi), and a sweep's candidate query does at least the same work. A timeout shorter than that
-fails every check: each chart is held and retried, nothing is ever cleared, and the status line turns
-to "behind".
+The longest is the sweep's birth-year-range candidate query: about 3 s at 10 000 charts on the
+development machine (more on a Raspberry Pi, #728); finding one chart's candidates takes well under a
+second there since #725. A timeout shorter than the sweep's query fails every sweep: the worker retries
+it, nothing is ever cleared (a sweep has no per-chart isolation, #727), and the status line turns to
+"behind".
 
 ## Running it: `cairn-matcher watch`
 
@@ -64,13 +65,13 @@ With no `--dsn` the standard libpq environment is used (`PGHOST`, `PGPORT`, `PGU
 | `--dsn` | empty (use `PG*`) | libpq connection string |
 | `--once` | off | drain the queue once and exit: 0 = clean; 1 = a chart failed, or an uncaught non-database error (a traceback); 2 = a database error (unreachable, or e.g. a statement timeout — the log names its class) |
 | `--poll-seconds` | 60 | how long to wait for a notification before looking again (a backstop for a missed `NOTIFY`) |
-| `--bulk-threshold` | 30 | more than this many charts waiting: do one full sweep instead of per-chart checks (30 comes from the measured break-even; see below) |
+| `--bulk-threshold` | 250 | more than this many charts waiting: do one full sweep instead of per-chart checks (250 comes from the measured break-even; see below) |
 | `--max-block-size` | 1000 | the largest block of look-alike charts the per-chart check will pair up (bigger blocks are skipped and logged as a warning, never silently truncated) |
 | `--pace-ms` | 0 | pause between charts, to be gentle on a busy node |
 
 While running, the worker listens for the database's `NOTIFY`, drains **newest change first**, then
 sleeps. It re-reads the queue after every chart, so a fresh registration is checked next, ahead of older
-changes; at 10 000 charts one check takes ~9 s on the development machine (#725), and a sweep already
+changes; at 10 000 charts one check takes ~0.8 s (p95 1.4 s) on the development machine, and a sweep already
 running finishes first. If the connection drops it reconnects with a backoff that doubles up to 60 s. A
 chart whose check raises is held for five minutes and then retried; its notices stay, so it keeps reading
 as "not yet checked".
@@ -137,9 +138,9 @@ chart held only on another node) always reads "not yet run": nothing here has ch
 queues a notice**. That is correct: the inputs changed. The worker sees a backlog above
 `--bulk-threshold`, runs **one full sweep**, clears the notices the sweep covered, and then works through
 anything left newest-first. One sweep is the cheaper way through a large backlog: measured on an Apple M3
-Max with 10 000 records, one sweep took about 2 minutes, while one per-chart check took about 9 seconds,
-so the sweep cost the same as about 15 charts checked singly (about 83 at 2 000 records). The default
-threshold of 30 sits between those break-evens. While the worker makes progress the status line reads
+Max with 10 000 records, one sweep took about 2.5 minutes, while one per-chart check took about 0.8
+seconds, so the sweep cost the same as about 200 charts checked singly (about 330 at 2 000 records). The
+default threshold of 250 sits between those break-evens. While the worker makes progress the status line reads
 "running"; it reads "up to date" once the queue is empty.
 
 ## Keeping it alive
