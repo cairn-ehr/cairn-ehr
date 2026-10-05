@@ -201,7 +201,8 @@ GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
 # ONCE, by patient_id (sexed_window), the overlap rows carry both sets, and the arm is a filter.
 # "Some sex of the anchor equals some sex of the member" is exactly "the two sets overlap" (&&).
 # Pinned: tests/test_blocking_sql_shape.py. This alone took the (unanchored) range statement to
-# ~3 s at 10 000; anchoring the per-chart form (below) takes that to 75-656 ms.
+# ~3 s at 10 000 in the prototype (the sweep's two statements together: 7.65 -> 1.43 s in a later
+# interleaved A/B on a vacuumed table); anchoring the per-chart form (below) takes it to 75-656 ms.
 
 _BIRTH_WINDOW_CTE = """birth_window AS (
     -- Evaluation-order-proof malformed-range guard: PostgreSQL does NOT guarantee

@@ -509,7 +509,8 @@ red `ruff + pytest` job: the blocking SQL moved to the pure `pipeline/blocking_s
   (the arm is a filter); the per-chart range statement is anchored on the chart (`relevant_anchor`), the sweep's plus
   one CTE and one clause. Pins: `test_blocking_sql_shape.py`, two `test_targeted_blocking.py` DB tests, the drift canary.
 - **Measured:** per-chart p50/p95 129/256 ms at 2 000, **761/1 398 ms at 10 000** (budget ≤ 2 s met); sweep pairs
-  unchanged. `bulk_threshold` 30 → 250 (break-evens ~330 / ~202). Pi: #728. No SQL object; generation stays 56.
+  unchanged; the sweep's blocking SQL 7.65 → 1.43 s. `bulk_threshold` 30 → 250 (break-evens ~330 / ~202). Pi:
+  #728. No SQL object; generation stays 56. Review wave: the drift canary also runs capped (10, 6). Filed #734.
 - **§1.2:** not clinical-surface (a latency fix; R5 owes the benchmark).
 
 ## Above the foundation line (NOT in this roadmap)

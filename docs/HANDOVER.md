@@ -25,7 +25,7 @@
 > 2. **Open repair-path issues:** **#726** (every-connect DDL takes ACCESS EXCLUSIVE) · **#727** (bulk mode has no poison
 >    isolation) · **#729** (mode chosen once per round) · **#730** (the 101–1000 skipped-block band — a decision; since
 >    #725 the cap bounds real work) · **#731** (no "charts failing" signal) · **#732** (the matcher conftest leaves
->    `patient_chart`). Earlier: **#708** · **#709** · **#710** · **#712** · **#713** · **#714** · **#715** · **#716** ·
+>    `patient_chart`) · **#734** (db/046's comment still points at `db.py`; fold in when db/046 is next edited). Earlier: **#708** · **#709** · **#710** · **#712** · **#713** · **#714** · **#715** · **#716** ·
 >    **#718** · **#719** · **#720** · **#722** · **#723** · **#699** · **#700** · **#702** (pinned) · **#703** · **#704** ·
 >    **#705** · **#706** · from R1: #689 · #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696; #333, #220 and
 >    #335 gained comments.

@@ -1015,10 +1015,12 @@ against an estimate of ~116 000 — a CTE scan has no statistics). Two changes, 
   results.
 
 Re-measured with `measure_check` on the same machine (a vacuumed `cairn_test`; an IDE `cargo check` was also running).
-The sweep's pair counts are identical to R4's, but its wall time was 14–18 % SLOWER at both sizes although its only
-changed statement got faster — so the difference is in assessing the pairs, which this change does not touch. **Not
-investigated**; the break-evens inherit that uncertainty, and they divide by the p50 where N checks cost N × the mean
-(a right-skewed distribution), so the true break-even is somewhat lower:
+The sweep's pair counts are identical to R4's, but its wall time was 14–18 % slower at both sizes. **Not caused by
+this change:** timed interleaved on one seeded 10 000-record population (median of 3), the sweep's two blocking
+statements took **7.65 s with the old SQL and 1.43 s with the new**, so the difference lies in assessing the pairs —
+code this change does not touch — presumably machine load (an IDE `cargo check` was running). The break-evens inherit
+that variance, and they divide by the p50 where N checks cost N × the mean (a right-skewed distribution), so the true
+break-even is somewhat lower:
 
 | Records | Sample | Per-chart p50 | Per-chart p95 | One sweep | Sweep pairs | Break-even (sweep / p50) |
 |---:|---:|---:|---:|---:|---:|---:|

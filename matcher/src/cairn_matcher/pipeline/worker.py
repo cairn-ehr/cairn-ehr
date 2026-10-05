@@ -59,7 +59,8 @@ class Settings:
     # the per-chart check grew ~6x for a 5x population, the sweep only ~3.6x (its cap keeps pair
     # growth sublinear). Two caveats: break-even divides by the p50, while N checks cost N x the
     # MEAN, and the distribution is right-skewed (p95 ~2x p50), so the true break-even is somewhat
-    # lower; and the sweep measured 14-18 % slower than R4's run for reasons not investigated.
+    # lower; and the sweep's wall time varies run to run (it measured 14-18 % slower than R4's run,
+    # in assessment -- its blocking SQL is ~5x faster since #725, 7.65 -> 1.43 s at 10 000).
     # Re-measure on the Pi (#728). Operators override with `cairn-matcher watch --bulk-threshold`.
     bulk_threshold: int = 250
     # Charts fetched per queue read. 1 = re-read the queue after EVERY chart, so a change that
