@@ -35,7 +35,7 @@ def name_tokens(record: Mapping) -> set[str]:
     blocks on — including the NFC fold that lets NFD/NFC variants of a name co-block, and
     the §5.4 exclusion of placeholder-use (callsign) names (`use_key <> ALL(...)`). The
     placeholder set is imported from the shared `cairn_matcher.placeholder_uses` (the single
-    source of truth), so this mirror can never drift from what `pipeline/db.py` excludes.
+    source of truth), so this mirror can never drift from what `pipeline/blocking_sql.py` excludes.
 
     Today's generator emits no `use`/`use_key` field, so this is a no-op for the current
     synthetic data — but it keeps the "recoverable by blocking" guarantee honest the moment a
@@ -69,13 +69,13 @@ def _identifier_keys(record: Mapping) -> set[tuple[str, str]]:
     }
 
 
-# Mirrors of _RANGE_GROUPS_SQL's birth_window guards (pipeline/db.py): a range value
+# Mirrors of _RANGE_GROUPS_SQL's birth_window guards (pipeline/blocking_sql.py): a range value
 # must be exactly '<yyyy>/<yyyy>' with min <= max; a point value contributes its FIRST
 # 4-digit run. Kept as module constants so the two branches below can't drift apart.
 #
 # No '^'/'$' anchors here: matched with .fullmatch() below instead. Python's re '$'
 # also matches immediately before a trailing '\n', but PostgreSQL's ARE '$' (as used
-# in db.py's `value ~ '^[0-9]{4}/[0-9]{4}$'`) matches only true end-of-string — so
+# in blocking_sql.py's `value ~ '^[0-9]{4}/[0-9]{4}$'`) matches only true end-of-string — so
 # anchoring with '$' and using .match() would let "1980/1990\n" through here while the
 # SQL excludes the row (an over-claim, the unsafe direction). .fullmatch() is the
 # faithful mirror of POSIX end-of-string.
@@ -133,7 +133,7 @@ def _birth_window(record: Mapping) -> tuple[int, int, bool] | None:
 def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
     """True iff records a and b would co-occur in >=1 blocking pass.
 
-    The symmetric keys (pipeline/db.py _GROUPS_SQL): shared non-unknown identifier,
+    The symmetric keys (pipeline/blocking_sql.py _GROUPS_SQL): shared non-unknown identifier,
     equal exact-DOB value (excluding year-range rows, mirroring the SQL's
     IS DISTINCT FROM 'year-range' — two identical range strings must NOT fake an
     exact key the SQL never groups), or a shared name token. The 'name+year' pass is

@@ -73,7 +73,7 @@ def seed_dataset(conn, ds: LabelledDataset) -> dict[str, str]:
                      json.dumps({"precision": rec.dob.get("precision")}),
                      rec.dob.get("provenance_rank", 0)),
                 )
-            # Both sex facets feed blocking_sex's UNION (db.py), so a range-DOB Doe
+            # Both sex facets feed blocking_sex's UNION (blocking_sql.py), so a range-DOB Doe
             # carrying only administrative-sex can still be rescued by the dob-range+sex
             # pass. One shared INSERT (blocking_sex reads value only, so no facets):
             # the two rows differ ONLY in the field literal, and keeping one SQL string

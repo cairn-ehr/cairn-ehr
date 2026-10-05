@@ -1,7 +1,7 @@
 """Pure tests for the range-aware half of the generator's blocking-key mirror.
 
 _birth_window / the shares_blocking_key range branch mirror _RANGE_GROUPS_SQL's
-birth_window CTE + anchored window_overlap join (pipeline/db.py). The danger
+birth_window CTE + anchored window_overlap join (pipeline/blocking_sql.py). The danger
 direction is OVER-claiming: a pair the mirror calls recoverable but the SQL never
 generates would make _repair stand down and silently break the volume set's
 recoverable-by-construction guarantee. These tests pin the safe semantics.
@@ -79,7 +79,7 @@ def test_range_disjoint_point_shares_nothing():
 
 
 def test_two_overlapping_ranges_share_a_key():
-    # Two John Does, two sites — the only key that pair can ever share (db.py comment).
+    # Two John Does, two sites — the only key that pair can ever share (blocking_sql.py comment).
     a = _rec(dob={"value": "1980/1990", "precision": "year-range"}, names=("Alex",))
     b = _rec(dob={"value": "1988/1995", "precision": "year-range"}, names=("Zed",))
     assert shares_blocking_key(a, b)

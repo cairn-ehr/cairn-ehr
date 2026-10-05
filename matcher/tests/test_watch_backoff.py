@@ -12,7 +12,7 @@ class _Stop(BaseException):
 
 
 def test_a_failure_after_connect_keeps_backing_off(monkeypatch):
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")   # absent in CI's pure job; runs in the floor job
 
     dsn = cairn_test_dsn()
     if not dsn:
@@ -66,7 +66,7 @@ def test_notifications_piled_up_during_a_drain_cost_one_more_drain_not_one_each(
     # A long drain (a sweep) lets many NOTIFYs pile up -- one per committing clinical write. ONE
     # further drain covers all of them; waking once per notification would re-drain the queue
     # again and again for nothing.
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")   # absent in CI's pure job; runs in the floor job
 
     listen = _FakeListen()
     left_at_drain = []
@@ -93,7 +93,7 @@ def test_once_names_the_database_error_rather_than_calling_it_unreachable(monkey
     # "cannot reach the database" would send the operator to the network instead of the query.
     import logging
 
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")   # absent in CI's pure job; runs in the floor job
 
     def drain(conn, settings, book):
         raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")

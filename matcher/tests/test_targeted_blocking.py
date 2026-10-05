@@ -3,6 +3,9 @@
 The drift canary is the load-bearing test: targeted.py composes the SAME CTE constants as the
 sweep and only filters its groups, so this proves the filter, for every chart of a generated
 population, with no cap on either side.
+
+`pipeline.db` (psycopg) is imported inside the one test that needs it, so CI's pure suite (no
+`pipeline` extra) still collects this module and runs the pure `pairs_with` tests.
 """
 
 import uuid
@@ -10,7 +13,6 @@ import uuid
 from cairn_matcher.eval.blocking_eval import record_uuid, seed_dataset
 from cairn_matcher.eval.dataset import load_dataset
 from cairn_matcher.eval.generator import GenSpec, generate_dataset
-from cairn_matcher.pipeline.db import generate_candidate_pairs
 from cairn_matcher.pipeline.targeted import candidate_pairs_for, pairs_with
 from tests.conftest import seed_patient
 
@@ -34,6 +36,8 @@ def test_pairs_with_never_pairs_a_differently_spelled_chart_with_itself():
 
 
 def test_targeted_pairs_equal_the_sweeps_pairs_for_every_chart(pg_conn):
+    from cairn_matcher.pipeline.db import generate_candidate_pairs
+
     # Range-heavy AND name-heavy, so all eight passes and both range shapes (the chart as anchor,
     # the chart as a member of someone else's window) are exercised.
     ds = load_dataset(generate_dataset(GenSpec(seed=7, n_entities=80, p_dob_estimate=0.4)))

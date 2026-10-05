@@ -2,9 +2,9 @@
 """One chart's candidate pairs (repair path R4): the sweep's blocking, kept to ONE chart.
 
 The commit-time duplicate check (#679) asks "who might this ONE chart be a duplicate of?". It
-answers with the sweep's own blocking SQL (db._GROUPS_SQL / db._RANGE_GROUPS_SQL, composed from
-the same CTE constants) wrapped in a filter that keeps only the groups containing the chart. The
-SQL is SHARED, not copied, so a new blocking pass reaches this module the moment it reaches the
+answers with the sweep's own blocking SQL (blocking_sql._GROUPS_SQL / _RANGE_GROUPS_SQL, composed
+from the same CTE constants) wrapped in a filter that keeps only the groups containing the chart.
+The SQL is SHARED, not copied, so a new blocking pass reaches this module the moment it reaches the
 sweep; tests/test_targeted_blocking.py's drift canary proves the filter over a generated
 population (targeted pairs == the sweep's pairs that include the chart).
 
@@ -17,7 +17,7 @@ names), as the sweep does once. That is fine for a fresh change; for a large bac
 runs ONE sweep instead (worker.run_bulk). A materialised token table (#637) would make this
 cheaper later.
 
-Requires the optional `pipeline` extra (psycopg) at call time.
+Imports without psycopg; its callers hand it an open connection.
 """
 
 import uuid
@@ -32,8 +32,11 @@ from cairn_matcher.pipeline.blocking import (
 
 # Shared with the sweep on purpose (see the module docstring). Private names, imported
 # deliberately: they are the one definition of blocking, and duplicating them here would be the
-# drift this module exists to avoid.
-from cairn_matcher.pipeline.db import _GROUPS_SQL, _PLACEHOLDER_USES_PARAM, _RANGE_GROUPS_SQL
+# drift this module exists to avoid. From the PURE blocking_sql module, never from db.py: db.py
+# imports psycopg, and this module is imported by the worker, `watch` and the CLI
+# (tests/test_pure_modules_import_without_psycopg.py).
+from cairn_matcher.pipeline.blocking_sql import _GROUPS_SQL, _RANGE_GROUPS_SQL
+from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 
 # A block above this is non-discriminating even when paired linearly. KEPT at 1000 after the
 # Task 7 measurement (2026-10-04, Apple M3 Max 128 GB, PostgreSQL 18.1, generated population via
@@ -88,7 +91,7 @@ def candidate_pairs_for(conn, patient, *, max_block_size=DEFAULT_TARGETED_CAP):
     pairs: set[tuple[str, str]] = set()
     skipped: list[tuple[str, str, int]] = []
     with conn.cursor() as cur:
-        cur.execute(_TARGETED_GROUPS_SQL, (_PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM, me))
+        cur.execute(_TARGETED_GROUPS_SQL, (PLACEHOLDER_USES_PARAM, VALUE_SENTINELS_PARAM, me))
         for pass_name, key, members in cur.fetchall():
             require_registered(pass_name, SYMMETRIC_PASSES)
             if len(members) > max_block_size:

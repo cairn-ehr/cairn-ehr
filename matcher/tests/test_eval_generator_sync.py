@@ -1,7 +1,8 @@
 """Drift canary: pin the generator's recoverability predicate to the real blocking SQL.
 
 `generator.shares_blocking_key` is a hand-maintained mirror of the base blocking passes in
-`pipeline/db.py`'s `_GROUPS_SQL` / `_RANGE_GROUPS_SQL` — the two are coupled only by a comment.
+`pipeline/blocking_sql.py`'s `_GROUPS_SQL` / `_RANGE_GROUPS_SQL` — the two are coupled only by a
+comment.
 The coupling is *asymmetric*: if a future edit WIDENS the SQL (adds a pass) the predicate merely
 over-repairs (still safe); but if an edit NARROWS or renames a base pass the predicate keeps
 claiming those pairs are recoverable, so `_repair` skips them and the DB silently drops true
@@ -9,24 +10,19 @@ matches — a break that only the DB-gated volume test would catch, and only whe
 configured.
 
 This test gives the FAST (no-DB) suite that missing signal: it asserts every base pass the
-predicate leans on is still present in the SQL text. It needs psycopg only to import the SQL
-constant (no connection), so it degrades cleanly to a skip where the extra is absent.
+predicate leans on is still present in the SQL text. The SQL lives in a pure module (no
+psycopg), so this runs in every suite, CI's no-extra pure job included.
 """
 
 import pytest
 
-# The SQL lives in the psycopg-touching module; import the constant only, no connection.
-pytest.importorskip(
-    "psycopg", reason="pipeline extra (psycopg) absent — cannot read the blocking SQL"
-)
-
-from cairn_matcher.pipeline.db import _GROUPS_SQL, _RANGE_GROUPS_SQL  # noqa: E402
+from cairn_matcher.pipeline.blocking_sql import _GROUPS_SQL, _RANGE_GROUPS_SQL
 
 
 def _ws(text: str) -> str:
     """Collapse ALL whitespace so the canary pins SQL *content*, not formatting.
 
-    A purely cosmetic reindent/re-wrap of db.py must not trip a tripwire whose failure
+    A purely cosmetic reindent/re-wrap of blocking_sql.py must not trip a tripwire whose failure
     message asserts a semantic narrowing — false alarms teach maintainers to update
     fragments reflexively, which is exactly how a real narrowing later slips through.
     """
