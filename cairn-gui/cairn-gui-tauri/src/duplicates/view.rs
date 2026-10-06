@@ -221,7 +221,7 @@ pub fn fixture_section() -> DuplicateSection {
 ///   retry advice: an outage — "not confirmed" — keeps the button, a verdict takes it).
 /// - SEVERAL pairs, all failed → ONE error naming every pair's failure — never just the first,
 ///   which could hide a later pair's "commit outcome unknown" behind a refusal (the #713
-///   hazard) — carrying the most retryable class among them ([`combined_retry`]).
+///   hazard) — carrying the most retryable class among them (`combined_retry`).
 /// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
 ///   a pair that was not confirmed may or may not still be open.
 pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportView, ErrorView> {
