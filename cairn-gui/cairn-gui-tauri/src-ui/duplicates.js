@@ -16,7 +16,10 @@ function renderDuplicates(section) {
   setMessage(el("duplicates-error"), section.error || "");
   el("duplicates-entries").replaceChildren(...section.entries.map(duplicateItem));
   setMessage(el("duplicates-more"), section.more || "");
-  el("duplicates-checks").replaceChildren(...section.check_lines.map((t) => cell("li", t)));
+  const checks = el("duplicates-checks");
+  checks.replaceChildren(...section.check_lines.map((t) => cell("li", t)));
+  // An empty LABELLED list is still announced ("Duplicate check for this record, 0 items").
+  checks.hidden = section.check_lines.length === 0;
   el("possible-duplicates").hidden =
     !section.error && section.entries.length === 0 && section.check_lines.length === 0 && !section.more;
 }
@@ -65,6 +68,4 @@ async function reviewDuplicate(otherId) {
   el("link-different").hidden = !(token === compareToken && compared !== null);
 }
 
-el("link-different").addEventListener("click", () =>
-  sendJudgement("record_different_people", el("link-different")),
-);
+el("link-different").addEventListener("click", () => sendJudgement("record_different_people"));

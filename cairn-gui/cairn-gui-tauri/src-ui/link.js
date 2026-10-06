@@ -280,22 +280,23 @@ function linkChanged(sent, report) {
 
 /** Send the Link judgement for whatever `compare` last rendered. */
 async function linkCompared() {
-  return sendJudgement("link_records", el("link-confirm"));
+  return sendJudgement("link_records");
 }
 
 /**
  * Send a judgement (`link_records` or R5a's `record_different_people`) over whatever `compare`
- * last rendered; `button` is the one pressed, disabled for the round trip and hidden on a verdict.
+ * last rendered. BOTH judgement buttons are disabled for the round trip and hidden on a verdict.
  */
-async function sendJudgement(command, button) {
+async function sendJudgement(command) {
   if (compared === null) return;
   // What this click signs over, captured before the round trip: nothing that changes while
   // the answer is in flight may change what was sent, or where its answer is reported.
   const sent = compared;
   const token = compareToken;
-  // Disabled for the whole round trip, not just relabelled: a double click before the first
-  // answer lands must never send a second judgement (ADR-0053 — a click IS a signature).
-  button.disabled = true;
+  // BOTH buttons disabled for the whole round trip: a double click, or the OTHER verdict over the
+  // same `compared`, must never send a second judgement (ADR-0053 — a click IS a signature).
+  const buttons = [el("link-confirm"), el("link-different")];
+  for (const b of buttons) b.disabled = true;
   try {
     const report = await invoke(command, {
       patientId: sent.patientId,
@@ -346,7 +347,7 @@ async function sendJudgement(command, button) {
       }
     }
   } finally {
-    button.disabled = false;
+    for (const b of buttons) b.disabled = false;
   }
 }
 
