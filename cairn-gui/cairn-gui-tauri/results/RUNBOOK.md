@@ -393,6 +393,7 @@ only** — fixture mode (`--mock`) has no proposals (no identity model, #722), s
 shows a banner and there is no mock variant to time.
 
 Setup: register two near-identical charts (the same name and date of birth, as section 10's `reg`),
+give B one active medication (section 2's seeding, on B — so the banner has a drug list to show),
 run the duplicate-check worker once so the pair becomes a proposal, then open chart A. `--once` drains
 the queue and exits (0 = clean; 1 = a chart failed or an uncaught non-database error; 2 = a database
 error — see `docs/developers/running-the-duplicate-check.md`); anything but 0 means the banner you are
@@ -409,8 +410,6 @@ cargo run --release -p cairn-gui-tauri -- \
     --patient "$A" --conn "$CONN" \
     --key "$NODE_KEY" --attester-key /tmp/dr-a.key
 ```
-
-Give B one active medication first (section 2's seeding, on B) so the banner has a drug list to show.
 
 **Measurement 1 — review and judge.** Start the stopwatch at the press of **Review** on the banner
 entry, not before — reading the banner is part of opening the chart, not of the gesture. Stop it when
@@ -449,9 +448,11 @@ not an adjustment. Five opens each, same session state (key locked or unlocked, 
 - [ ] Pressing **Review** shows both **Different people** and **Link — same person** (when the
       comparison is complete); a comparison that could not be read in full shows **neither**. After a
       refusal that cannot change on retry both are gone (compare again to get them back).
-- [ ] Every outcome — Recorded, Linked, a refusal, a pair a colleague already judged — is shown AND
-      announced in the panel's status line, never silent.
-- [ ] Closing the panel (Esc or "Close comparison") returns focus to the **Review** that opened it.
+- [ ] Every outcome is shown AND announced, never silent: **Recorded** and **Linked** on the chart's
+      outcome line (the panel closes and the chart, banner included, is re-read); a refusal or "already
+      been judged or resolved" in the panel's status line.
+- [ ] Closing the panel (Esc or "Close comparison") returns focus to the **Review** that opened it
+      (to "Same person as…" if the banner has been redrawn since).
 
 Record in the template's *Review a possible duplicate* section. **A figure outside the ≤ 20 s budget,
 or a banner open slower than the single-chart open, is a finding to file, never a budget to adjust.**

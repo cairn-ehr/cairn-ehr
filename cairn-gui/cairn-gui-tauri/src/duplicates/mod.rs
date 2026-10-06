@@ -1,8 +1,9 @@
 //! The possible-duplicate banner (repair path R5a, #680; design page "R5a — the banner,
 //! designed 2026-10-06"): the section `med_list` carries, Review's admission, and the
-//! "Different people" command. Every sentence is in `view.rs`; every DB rule is in
-//! `cairn_node::duplicate_review` (DB-tested there). This module only orders the reads and
-//! applies the chart-command rules.
+//! "Different people" command. The banner's and the judgement's sentences are in `view.rs`
+//! (golden-tested); only the commands' own read-failure and fixture-mode refusals are worded
+//! here. Every DB rule is in `cairn_node::duplicate_review` (DB-tested there). This module only
+//! orders the reads and applies the chart-command rules.
 //!
 //! LOCKING: `state.db` is a `tokio::sync::Mutex`, which is NOT re-entrant, and
 //! `read_chart_of` / `chart_set_of` take it themselves. So [`duplicate_section`] reads in two
@@ -14,9 +15,9 @@ use crate::chart_set::{check_displayed_set, member_line, MemberLine, CHANGED};
 use crate::commands::read_chart_of;
 use crate::funnel::view::{ErrorView, Retry};
 use crate::link::chart_set_of;
-use crate::link::unlink_view::unlink_error_view;
 use crate::link::view::{
-    key_locked_for, refused, LinkReportView, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED,
+    key_locked_for, refused, LinkReportView, ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED,
+    THIS_CHANGED,
 };
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
@@ -27,8 +28,9 @@ use cairn_node::duplicate_check::{
 use cairn_node::duplicate_review::{self, DifferentPeople};
 use uuid::Uuid;
 use view::{
-    check_lines, entry_view, fixture_section, section_view, ChartCheck, DuplicateSection,
-    PairResult, DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
+    check_lines, different_people_error_view, entry_view, fixture_section, medications_of,
+    section_view, ChartCheck, DuplicateSection, PairResult, DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN,
+    NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
 };
 
 /// The banner for the displayed record. Never fails: every failure is a worded line (an absent
@@ -44,22 +46,27 @@ pub async fn duplicate_section(
         return fixture_section();
     };
     // Phase 1, under ONE lock: the proposals, each shown entry's identities, the checks.
-    let (found, identities, checks, status) = {
+    // `found` is `(how many entries exist, each SHOWN entry WITH its identity read)` — the two
+    // travel together as one tuple, so no later step can pair one person's name with another
+    // person's medications by index.
+    let (found, checks, status) = {
         let db = db.lock().await;
-        let found = duplicate_review::possible_duplicates(&*db, charts)
-            .await
-            .map_err(|e| operator_chain(&e));
-        let mut identities = vec![];
-        if let Ok(entries) = &found {
-            for entry in entries.iter().take(MAX_SHOWN) {
-                identities.push(
-                    cairn_node::patient::person::chart_identities(&*db, &entry.other_record)
-                        .await
-                        .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
-                        .map_err(|e| operator_chain(&e)),
-                );
+        let found = match duplicate_review::possible_duplicates(&*db, charts).await {
+            Err(e) => Err(operator_chain(&e)),
+            Ok(entries) => {
+                let total = entries.len();
+                let mut shown = vec![];
+                for entry in entries.into_iter().take(MAX_SHOWN) {
+                    let ids =
+                        cairn_node::patient::person::chart_identities(&*db, &entry.other_record)
+                            .await
+                            .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
+                            .map_err(|e| operator_chain(&e));
+                    shown.push((entry, ids));
+                }
+                Ok((total, shown))
             }
-        }
+        };
         let mut checks = vec![];
         for chart in charts.members() {
             checks.push(ChartCheck {
@@ -73,20 +80,20 @@ pub async fn duplicate_section(
             .await
             .map(|s| classify(&s, STALLED_AFTER_SECS))
             .map_err(|e| operator_chain(&e));
-        (found, identities, checks, status)
+        (found, checks, status)
     };
     // The lock is released here: `read_chart_of` below takes it again.
     // Phase 2: each shown entry's medications through the SAME read opening that chart gives
-    // (§5.9 custody and sealing unchanged).
+    // (§5.9 custody and sealing unchanged) — drawn only if read over the set the identities name.
     let entries = match found {
         Err(e) => Err(e),
-        Ok(found) => {
-            let total = found.len();
+        Ok((total, found)) => {
             let mut shown = vec![];
-            for (entry, ids) in found.iter().take(MAX_SHOWN).zip(identities) {
-                let meds = read_chart_of(state, entry.review_chart)
-                    .await
-                    .map(|list| cairn_gui_tab_medications::view::build_view(&list));
+            for (entry, ids) in found {
+                let meds = medications_of(
+                    &entry.other_record,
+                    read_chart_of(state, entry.review_chart).await,
+                );
                 shown.push(entry_view(entry.review_chart, entry.vetoed, ids, meds));
             }
             Ok((shown, total))
@@ -99,12 +106,13 @@ pub async fn duplicate_section(
 /// showed (`AppState::shown`, unchanged), OR one an open proposal joins to `left`'s record at
 /// this moment — the banner showed it. `shown` is deliberately NOT widened (design "R5a"): a
 /// pair a colleague resolved a second ago is refused here, never silently compared. Returns the
-/// name the list showed ("" for a banner admission — only fixture mode reads it).
+/// name the list showed, or `None` for a banner admission (no list showed a name; only fixture
+/// mode reads it, and fixture mode has no proposals to admit by).
 pub(crate) async fn admit_other(
     state: &AppState,
     left: &ChartSet,
     other: Uuid,
-) -> Result<String, ErrorView> {
+) -> Result<Option<String>, ErrorView> {
     let shown = state
         .shown
         .lock()
@@ -112,7 +120,7 @@ pub(crate) async fn admit_other(
         .get(&other)
         .map(|c| c.display_name.clone());
     if let Some(name) = shown {
-        return Ok(name);
+        return Ok(Some(name));
     }
     let Some(db) = state.db.as_ref() else {
         return Err(refused(NOT_ON_SCREEN)); // fixture mode has no proposals
@@ -132,24 +140,27 @@ pub(crate) async fn admit_other(
     if pairs.is_empty() {
         Err(refused(NOT_SHOWN_OR_RESOLVED))
     } else {
-        Ok(String::new())
+        Ok(None)
     }
 }
 
 /// "Different people — not the same person" (R5a; offered only on a banner's comparison).
 ///
-/// The rules, IN THIS ORDER (mirroring `link::link_impl`): the chart on screen; this record's
-/// set is the one compared (`THIS_CHANGED`); the other chart id is well-formed (`NOT_ON_SCREEN`,
-/// a window fault); fixture mode; the other record's set is the one compared (`OTHER_CHANGED`);
-/// the key. Then the node judges every pair still open between the two records, read fresh —
-/// `NothingOpen` means a colleague got there first and nothing was signed.
+/// The rules, IN THIS ORDER (as `link::link_impl`'s): the chart on screen; this record's set is
+/// the one compared (`THIS_CHANGED`); the other chart id is well-formed (`NOT_ON_SCREEN`, a
+/// window fault); the other chart is not already in this record (`ALREADY_IN_RECORD` — never
+/// "already judged", which would claim a colleague's act); the other record's set is the one
+/// compared (`OTHER_CHANGED` — the rule that keeps the signature to the charts compared);
+/// fixture mode; the key. Then the node judges every pair still open between the two records,
+/// read fresh — `NothingOpen` means a colleague got there first and nothing was signed. Unlike
+/// Link there is no Review admission: that fresh open-pair read stands in for it.
 ///
-/// Pinned by the tests below: the first four (fixture mode is where they can be reached). The
-/// last two — `OTHER_CHANGED` and the locked key — and `admit_other`'s live proposal branch sit
-/// past fixture mode, and this crate has no DB-gated tests. They have NO automated or scripted
-/// coverage at the window layer (RUNBOOK §11 exercises neither refusal). The node functions they
-/// call are DB-tested in cairn-node's `duplicate_review` suite; a window-level live-DB harness
-/// is issue #738.
+/// Pinned by the tests below: every rule up to and including fixture mode (fixture mode is
+/// where they can be reached). The locked key and `admit_other`'s live proposal branch sit past
+/// fixture mode, and this crate has no DB-gated tests: they have NO automated or scripted
+/// coverage at the window layer (RUNBOOK §11 exercises neither). The node functions they call
+/// are DB-tested in cairn-node's `duplicate_review` suite; a window-level live-DB harness is
+/// issue #738.
 pub async fn different_people_impl(
     state: &AppState,
     patient_id: &str,
@@ -166,10 +177,8 @@ pub async fn different_people_impl(
         }
     })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
-    if state.is_mock() {
-        return Err(refused(
-            "fixture mode: this window is showing mock data and cannot write",
-        ));
+    if left.contains(&other) {
+        return Err(refused(ALREADY_IN_RECORD));
     }
     let right =
         check_displayed_set(&chart_set_of(state, other).await?, &other_charts).map_err(|e| {
@@ -179,6 +188,11 @@ pub async fn different_people_impl(
                 refused(e)
             }
         })?;
+    if state.is_mock() {
+        return Err(refused(
+            "fixture mode: this window is showing mock data and cannot write",
+        ));
+    }
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
@@ -219,7 +233,7 @@ pub async fn different_people_impl(
                     outcome: j
                         .outcome
                         .map(|o| o.effect)
-                        .map_err(|e| unlink_error_view(&e)),
+                        .map_err(|e| different_people_error_view(&e)),
                 })
                 .collect(),
         ),
@@ -274,7 +288,7 @@ mod tests {
         let name = admit_other(&state, &ChartSet::single(fixture()), other)
             .await
             .unwrap();
-        assert_eq!(name, "Other Person");
+        assert_eq!(name.as_deref(), Some("Other Person"));
     }
 
     /// Fixture mode has no proposals, so an unshown chart keeps today's refusal word for word.
@@ -343,16 +357,43 @@ mod tests {
     async fn fixture_mode_cannot_record_different_people() {
         let state = AppState::mock(Some(fixture()));
         let p = fixture().to_string();
+        let other = Uuid::from_u128(2).to_string();
+        let err = different_people_impl(&state, &p, vec![p.clone()], &other, vec![other.clone()])
+            .await
+            .unwrap_err();
+        assert!(err.text.contains("fixture mode"), "{}", err.text);
+    }
+
+    /// Test review gap 1: the other record changed between the comparison and the press. This is
+    /// the one rule that keeps the signature to the charts the clinician compared — so it comes
+    /// BEFORE fixture mode, as in `link_impl`, where a fixture-mode test can reach it.
+    #[tokio::test]
+    async fn different_people_refuses_when_the_other_record_changed() {
+        let state = AppState::mock(Some(fixture()));
+        let p = fixture().to_string();
+        let other = Uuid::from_u128(2);
         let err = different_people_impl(
             &state,
             &p,
             vec![p.clone()],
-            &Uuid::from_u128(2).to_string(),
-            vec![],
+            &other.to_string(),
+            vec![other.to_string(), Uuid::from_u128(4).to_string()],
         )
         .await
         .unwrap_err();
-        assert!(err.text.contains("fixture mode"), "{}", err.text);
+        assert_eq!(err.text, crate::link::view::OTHER_CHANGED);
+    }
+
+    /// Type review finding 3: a chart already in this record is "already in this record", as
+    /// Link says it — never "already judged or resolved", which claims a colleague's act.
+    #[tokio::test]
+    async fn different_people_refuses_a_chart_already_in_this_record() {
+        let state = AppState::mock(Some(fixture()));
+        let p = fixture().to_string();
+        let err = different_people_impl(&state, &p, vec![p.clone()], &p, vec![p.clone()])
+            .await
+            .unwrap_err();
+        assert_eq!(err.text, crate::link::view::ALREADY_IN_RECORD);
     }
 
     /// duplicates.js is untyped: a Rust field rename would not break the build, it would draw
@@ -368,7 +409,7 @@ mod tests {
         for (binding, available) in [
             (
                 "section",
-                keys(serde_json::to_value(DuplicateSection::default()).unwrap()),
+                keys(serde_json::to_value(DuplicateSection::checked_none_open()).unwrap()),
             ),
             ("entry", keys(serde_json::to_value(&entry).unwrap())),
         ] {

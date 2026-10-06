@@ -1,12 +1,14 @@
-// The possible-duplicate banner (repair path R5a, #680). Renders and decides nothing: every
-// sentence comes from Rust (`duplicates/view.rs`), every check from the backend
-// (`duplicates/mod.rs`). Classic script, loaded after main.js and BEFORE funnel.js (whose last
-// line starts `boot()`, whose first render calls `renderDuplicates`: an absent banner must never
-// be possible, so this is guaranteed by load order, not by a typeof guard). It shares the global
-// scope; link.js's `sendJudgement`, `compare`, `compared`, `compareToken` and `openLinkPanel` are
-// used only at call time, long after link.js has loaded.
+// The possible-duplicate banner (repair path R5a, #680). Words nothing and decides nothing but
+// whether "Different people" is visible: every sentence comes from Rust (`duplicates/view.rs`),
+// every check from the backend (`duplicates/mod.rs`). Classic script, loaded after main.js and
+// BEFORE funnel.js (whose last line starts `boot()`, whose first render calls `renderDuplicates`:
+// an absent banner must never be possible, so this is guaranteed by load order, not by a typeof
+// guard). It shares the global scope; link.js's `sendJudgement`, `compare`, `compared`,
+// `compareToken`, `openLinkPanel` and `linkOpener` are used only at call time, long after link.js
+// has loaded.
 //
-// Its one piece of state is which buttons are visible. Review reuses the "Same person as…"
+// It keeps no state of its own: it sets which buttons are visible, and tells link.js which Review
+// opened the panel (`linkOpener`, where Close returns focus). Review reuses the "Same person as…"
 // panel (link.js) pre-filled with the banner's chart; only a comparison opened HERE shows
 // "Different people" — `clearComparison` hides it again for any other comparison.
 "use strict";
@@ -41,14 +43,20 @@ function duplicateItem(entry) {
   for (const note of entry.notes) li.append(cell("p", note));
   li.append(cell("h4", entry.medications_heading));
   const meds = document.createElement("ul");
-  meds.append(...entry.medications.map((t) => cell("li", t)));
+  // The list's notes ("… withheld", "could not be read") come BEFORE its lines, as in the
+  // comparison panel: read top-down, a list must never look complete before its warning.
   meds.append(...entry.medication_notes.map((t) => cell("li", t)));
+  meds.append(...entry.medications.map((t) => cell("li", t)));
   li.append(meds);
   const review = document.createElement("button");
   review.type = "button";
   review.textContent = "Review";
+  review.dataset.reviewChart = entry.review_chart; // where Close returns focus (link.js)
   if (who.length > 0) review.setAttribute("aria-describedby", who[0].id);
-  review.addEventListener("click", () => reviewDuplicate(entry.review_chart));
+  // `compare` words its own failures; this catch is for anything else, so no failure is silent.
+  review.addEventListener("click", () =>
+    reviewDuplicate(entry.review_chart).catch((f) => setMessage(el("link-status"), failureText(f))),
+  );
   li.append(review);
   return li;
 }
@@ -60,6 +68,7 @@ function duplicateItem(entry) {
  */
 async function reviewDuplicate(otherId) {
   openLinkPanel();
+  linkOpener = otherId;
   // `compare` bumps `compareToken` synchronously, so reading it right after the call names THIS
   // comparison; a newer one (even of the same chart, from the search) changes it.
   const pending = compare(otherId);

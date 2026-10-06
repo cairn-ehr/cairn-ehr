@@ -7,8 +7,9 @@
 //! [`check_lines`] says when this record's check has not run, reusing R4's own sentences.
 use crate::chart_set::MemberLine;
 use crate::funnel::view::{ErrorView, Retry};
-use crate::link::view::{medication_lines, refused, LinkReportView};
+use crate::link::view::{judgement_error_from, medication_lines, refused, LinkReportView};
 use cairn_gui_tab_medications::view::MedListView;
+use cairn_medication_view::{ChartSet, PatientMedicationList};
 use cairn_node::chart_link::LinkEffect;
 use cairn_node::duplicate_check::{chart_line, status_line, CheckState};
 use serde::Serialize;
@@ -27,17 +28,22 @@ pub const OTHER_CHART_LABEL: &str = "On the other record — not part of this on
 /// (R2b-1's rule), read fresh; never worded here from stored JSON.
 pub const VETO_NOTE: &str =
     "Some recorded facts disagree between these charts — Review shows which.";
-/// "Different people" (or Review) after the pair was already judged or resolved.
+/// "Different people" after every pair between the two records was already judged or resolved
+/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead).
 pub const NOTHING_OPEN: &str = "this possible duplicate has already been judged or resolved — \
      nothing was done; reload the chart";
-/// Review of a chart no list showed and no open proposal joins to this record (any more).
+/// Review — or Link over a banner comparison — of a chart no list showed and no open proposal
+/// joins to this record (any more).
 pub const NOT_SHOWN_OR_RESOLVED: &str = "that chart is not in a list on screen, and is not an \
      open possible duplicate of this record — reload the chart, or search again";
 /// The button's label; `key_locked_for` names it (a locked key names the button pressed).
 pub const DIFFERENT_PEOPLE_BUTTON: &str = "Different people — not the same person";
 
 /// The banner, as `med_list` hands it to the webview inside `ChartPane`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+///
+/// Deliberately NO `Default`: the all-empty section is not a neutral placeholder, it is the
+/// claim "checked, none open" — so it is built only by name, [`DuplicateSection::checked_none_open`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DuplicateSection {
     pub entries: Vec<DuplicateEntryView>,
     /// "N more …" when entries beyond [`MAX_SHOWN`] exist.
@@ -46,6 +52,19 @@ pub struct DuplicateSection {
     pub error: Option<String>,
     /// This record's check lines (pending charts, the node's status when it explains them).
     pub check_lines: Vec<String>,
+}
+
+impl DuplicateSection {
+    /// The section that says nothing, which the webview hides: "this record was checked, and no
+    /// possible duplicate of it is open". Only ever returned when that is what was read.
+    pub fn checked_none_open() -> Self {
+        DuplicateSection {
+            entries: vec![],
+            more: None,
+            error: None,
+            check_lines: vec![],
+        }
+    }
 }
 
 /// One possible duplicate, ready to draw.
@@ -78,6 +97,9 @@ pub struct PairResult {
     pub outcome: Result<LinkEffect, ErrorView>,
 }
 
+/// One banner entry from what was read about the other record: its identity lines (one per
+/// chart), whether the veto floor finds a disagreement now, and its current medications. A
+/// failed read is a note, never a missing entry; an entry always names at least a chart id.
 pub fn entry_view(
     review_chart: Uuid,
     vetoed: bool,
@@ -88,12 +110,12 @@ pub fn entry_view(
     let identity_lines = match identities {
         Ok(lines) if !lines.is_empty() => lines.into_iter().map(|l| l.text).collect(),
         Ok(_) => {
-            notes.push("No name or date of birth is recorded for the other chart.".into());
+            notes.push("No name or date of birth is recorded for the other record.".into());
             vec![format!("chart {review_chart}")]
         }
         Err(e) => {
             notes.push(format!(
-                "The other chart's name and date of birth could not be read: {e}"
+                "The other record's name and date of birth could not be read: {e}"
             ));
             vec![format!("chart {review_chart}")]
         }
@@ -117,6 +139,24 @@ pub fn entry_view(
         medications,
         medication_notes,
     }
+}
+
+/// The other record's medications for its entry — but only when the list was read over the SAME
+/// chart set the entry's identity lines name. **Pure.**
+///
+/// The identity lines are read over `record` under the window's lock; the medications after it
+/// is released, through the read opening that chart gives, which re-derives the record. A link
+/// landing in between would draw one set's names over another set's drugs. That is worded as
+/// an unread list — the entry, and its Review, still stand.
+pub fn medications_of(
+    record: &ChartSet,
+    read: Result<PatientMedicationList, String>,
+) -> Result<MedListView, String> {
+    let list = read?;
+    if &list.charts != record {
+        return Err("the other record changed while the banner was read — reload the chart".into());
+    }
+    Ok(cairn_gui_tab_medications::view::build_view(&list))
 }
 
 /// `entries` is `(the shown entries, how many exist)` or the read's error.
@@ -210,8 +250,18 @@ pub fn check_lines(
 pub fn fixture_section() -> DuplicateSection {
     DuplicateSection {
         check_lines: vec![status_line(&CheckState::NeverRun { waiting: 0 })],
-        ..DuplicateSection::default()
+        ..DuplicateSection::checked_none_open()
     }
+}
+
+/// A failed "Different people" pair, classified exactly as a failed link or unlink is — but
+/// named for what was pressed. Never "The unlink was …": the two charts were never linked, and
+/// that wording would send the clinician looking for a link to undo.
+pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
+    judgement_error_from(
+        "\"different people\" judgement",
+        cairn_gui_live::error::data_error_from(e),
+    )
 }
 
 /// The outcome line for "Different people".
@@ -224,18 +274,23 @@ pub fn fixture_section() -> DuplicateSection {
 ///   hazard) — carrying the most retryable class among them (`combined_retry`).
 /// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
 ///   a pair that was not confirmed may or may not still be open.
+///
+/// The `reload` is `true` even when every recorded pair was `Outranked` (see
+/// [`LinkReportView::reload`]): whatever was recorded, the banner must be re-read.
 pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportView, ErrorView> {
+    match results.as_slice() {
+        // `record_different_people` says "nothing open" as `NothingOpen`, never as an empty
+        // list; this arm only keeps the function total, with the same honest sentence.
+        [] => return Err(refused(NOTHING_OPEN)),
+        [PairResult {
+            outcome: Err(e), ..
+        }] => return Err(e.clone()),
+        _ => {}
+    }
     if results.iter().all(|r| r.outcome.is_err()) {
-        return Err(match results.len() {
-            0 => refused(NOTHING_OPEN),
-            1 => results
-                .into_iter()
-                .find_map(|r| r.outcome.err())
-                .unwrap_or_else(|| refused(NOTHING_OPEN)),
-            _ => ErrorView {
-                text: report_sentence(&results),
-                retry: combined_retry(results.iter().filter_map(|r| r.outcome.as_ref().err())),
-            },
+        return Err(ErrorView {
+            text: report_sentence(&results),
+            retry: combined_retry(results.iter().filter_map(|r| r.outcome.as_ref().err())),
         });
     }
     Ok(LinkReportView {
@@ -271,10 +326,12 @@ fn combined_retry<'a>(errors: impl Iterator<Item = &'a ErrorView>) -> Retry {
         Retry::AfterOperator => 1,
         Retry::Now => 2,
     };
+    // Never empty (only called with two or more failures); were it ever, nothing was decided,
+    // so the fallback keeps the button rather than claim a verdict.
     errors
         .map(|e| e.retry)
         .max_by_key(|r| rank(*r))
-        .unwrap_or(Retry::Never)
+        .unwrap_or(Retry::Now)
 }
 
 /// `text` ending in a full stop, so pair sentences joined by a space read as sentences.

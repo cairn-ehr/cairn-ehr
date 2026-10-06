@@ -67,7 +67,8 @@ enum Act {
 }
 
 /// The four screen checks both commands share. Returns the opened chart, its displayed set,
-/// and the other chart (with the name the list showed, for fixture mode).
+/// and the other chart (with the name the list showed — `None` when an open proposal admitted
+/// it instead — for fixture mode).
 ///
 /// For Compare, `charts` is the medication list's displayed set, and a changed set keeps the
 /// list's own wording ("reload the chart"). For Link, `charts` is the set the COMPARISON was
@@ -81,7 +82,7 @@ async fn resolve_pair(
     patient_id: &str,
     charts: &[String],
     other_id: &str,
-) -> Result<(Uuid, ChartSet, Uuid, String), ErrorView> {
+) -> Result<(Uuid, ChartSet, Uuid, Option<String>), ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let left = check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(|e| {
         if act == Act::Link && e == CHANGED {
@@ -128,7 +129,12 @@ pub async fn compare_impl(
                     &header.unwrap_or_default(),
                     "confirmed",
                 )]),
-                right: Ok(vec![fixture_facts(other, &shown_name, "confirmed")]),
+                // Fixture mode admits only by a list (it has no proposals), so a name is there.
+                right: Ok(vec![fixture_facts(
+                    other,
+                    shown_name.as_deref().unwrap_or_default(),
+                    "confirmed",
+                )]),
                 findings: Ok(vec![]),
                 other_medications: meds,
             }

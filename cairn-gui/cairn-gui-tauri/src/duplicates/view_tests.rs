@@ -38,8 +38,17 @@ fn a_checked_chart_with_no_proposal_has_an_empty_section() {
     );
     assert_eq!(
         section_view(Ok((vec![], 0)), lines),
-        DuplicateSection::default()
+        DuplicateSection::checked_none_open()
     );
+}
+
+/// The empty section is a CLAIM ("checked, none open"), so it has a name and no `Default`: a
+/// placeholder `Default::default()` would have asserted "no duplicates" without saying so.
+#[test]
+fn checked_none_open_is_the_all_empty_section() {
+    let s = DuplicateSection::checked_none_open();
+    assert!(s.entries.is_empty() && s.more.is_none() && s.error.is_none());
+    assert!(s.check_lines.is_empty());
 }
 
 /// Review Focus 5: a failed proposal read is an error line, never an empty banner.
@@ -99,7 +108,7 @@ fn unread_parts_of_an_entry_are_worded_and_the_entry_is_kept() {
     assert!(e
         .notes
         .iter()
-        .any(|n| n == "The other chart's name and date of birth could not be read: timeout"));
+        .any(|n| n == "The other record's name and date of birth could not be read: timeout"));
     assert_eq!(e.medications, Vec::<String>::new());
     assert_eq!(
         e.medication_notes,
@@ -249,7 +258,7 @@ fn a_partly_failed_judgement_names_the_pair_not_confirmed() {
 /// it: no refusal marker and no SQLSTATE, so `data_error_from` reads an outage — "not
 /// confirmed", `Retry::Now`. The judgement may have been recorded.
 fn commit_unknown() -> ErrorView {
-    crate::link::unlink_view::unlink_error_view(&anyhow::anyhow!(
+    different_people_error_view(&anyhow::anyhow!(
         "commit outcome unknown for event {} — check whether it was recorded before retrying, \
          or the judgement may be recorded twice",
         id(77)
@@ -271,7 +280,8 @@ fn a_lone_commit_unknown_pair_is_its_own_error_unchanged() {
     assert_eq!(
         err.text,
         format!(
-            "The unlink was not confirmed: commit outcome unknown for event {} — check whether \
+            "The \"different people\" judgement was not confirmed: commit outcome unknown for \
+             event {} — check whether \
              it was recorded before retrying, or the judgement may be recorded twice",
             id(77)
         )
@@ -305,8 +315,9 @@ fn a_commit_unknown_pair_beside_a_recorded_one_is_not_confirmed_never_not_record
         format!(
             "Recorded: charts {} and {} are different people. This pair is closed on this node, \
              and on every node once the judgement syncs. Not confirmed for charts {} and {}: The \
-             unlink was not confirmed: commit outcome unknown for event {} — check whether it was \
-             recorded before retrying, or the judgement may be recorded twice.",
+             \"different people\" judgement was not confirmed: commit outcome unknown for event {} \
+             — check whether it was recorded before retrying, or the judgement may be recorded \
+             twice.",
             id(1),
             id(8),
             id(2),
@@ -325,7 +336,9 @@ fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verd
         PairResult {
             low: id(1),
             high: id(8),
-            outcome: Err(refused("The unlink was refused: held elsewhere")),
+            outcome: Err(refused(
+                "The \"different people\" judgement was refused: held elsewhere",
+            )),
         },
         PairResult {
             low: id(2),
@@ -338,10 +351,10 @@ fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verd
     assert_eq!(
         err.text,
         format!(
-            "Not confirmed for charts {} and {}: The unlink was refused: held elsewhere. Not \
-             confirmed for charts {} and {}: The unlink was not confirmed: commit outcome unknown \
-             for event {} — check whether it was recorded before retrying, or the judgement may \
-             be recorded twice.",
+            "Not confirmed for charts {} and {}: The \"different people\" judgement was refused: \
+             held elsewhere. Not confirmed for charts {} and {}: The \"different people\" \
+             judgement was not confirmed: commit outcome unknown for event {} — check whether it \
+             was recorded before retrying, or the judgement may be recorded twice.",
             id(1),
             id(8),
             id(2),
@@ -427,7 +440,42 @@ fn an_entry_with_no_identity_lines_says_so() {
     assert_eq!(e.identity_lines, vec![format!("chart {}", id(9))]);
     assert!(e
         .notes
-        .contains(&"No name or date of birth is recorded for the other chart.".to_string()));
+        .contains(&"No name or date of birth is recorded for the other record.".to_string()));
+}
+
+/// Type review: the entry's identity lines are read over `other_record` under the lock; its
+/// medications are read after it, through the chart-open read, which re-derives the record. A
+/// link landing in between would draw one set's names over another set's drugs — so a list read
+/// over a different set is worded as unread, never drawn.
+#[test]
+fn medications_read_over_a_different_record_are_not_drawn() {
+    let record = ChartSet::new([id(8), id(9)]).unwrap();
+    let mut list = cairn_medication_view::fixtures::sample_chart();
+    list.charts = ChartSet::single(id(8));
+    let err = medications_of(&record, Ok(list.clone())).unwrap_err();
+    assert_eq!(
+        err,
+        "the other record changed while the banner was read — reload the chart"
+    );
+    list.charts = record.clone();
+    assert!(medications_of(&record, Ok(list)).is_ok());
+    assert_eq!(
+        medications_of(&record, Err("sealed".into())).unwrap_err(),
+        "sealed"
+    );
+}
+
+/// Silent-failure review M1: "Different people" was pressed over two charts that were never
+/// linked, so its failure must never read "The unlink was …" — that would send the clinician
+/// looking for a link to undo.
+#[test]
+fn a_different_people_failure_is_never_worded_as_an_unlink() {
+    let e = different_people_error_view(&anyhow::anyhow!("connection reset"));
+    assert_eq!(
+        e.text,
+        "The \"different people\" judgement was not confirmed: connection reset"
+    );
+    assert_eq!(e.retry, Retry::Now);
 }
 
 #[test]

@@ -1,4 +1,6 @@
-//! Repair path R5a (#680): the banner's node read over db/057's `match_proposal_open`.
+//! Repair path R5a (#680): the banner's node read over db/057's `match_proposal_open`
+//! (`possible_duplicates`, `open_proposals_touching`, `open_pairs_between`, the fresh veto
+//! note) and the "Different people" judgement (`record_different_people`).
 //! DB-gated on $CAIRN_TEST_PG; serialized via `db::test_serial_guard`; keys minted at runtime.
 mod common;
 use cairn_medication_view::ChartSet;
@@ -376,4 +378,120 @@ async fn one_pairs_failure_is_carried_and_the_others_stand() {
     );
     assert_eq!(status_of(&c, a, x).await, "rejected");
     assert_eq!(status_of(&c, a, u).await, "pending", "nothing moved it");
+
+    // A second press (the button is kept for a "not confirmed" pair): only the pair still open
+    // is judged — a–x is closed and is never signed twice — and the refused pair is refused
+    // again before anything is signed.
+    let before = event_count(&c).await;
+    let again = record_different_people(
+        &mut c,
+        &ChartSet::single(a),
+        &ChartSet::new([x, u]).unwrap(),
+        &who,
+        "r5a-test",
+    )
+    .await
+    .unwrap();
+    let DifferentPeople::Judged(again) = again else {
+        panic!("a–u is still open")
+    };
+    assert_eq!(again.len(), 1, "only the pair still open");
+    assert_eq!((again[0].low, again[0].high), (a.min(u), a.max(u)));
+    assert!(again[0].outcome.is_err());
+    assert_eq!(
+        event_count(&c).await,
+        before,
+        "nothing signed on the re-press"
+    );
+}
+
+async fn event_count(c: &tokio_postgres::Client) -> i64 {
+    c.query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// Different people judges the pairs between the TWO records compared — never another record's
+/// proposal on the same banner. (A "simplification" to `open_proposals_touching(left)` would have
+/// the clinician sign against every other person listed.)
+#[tokio::test]
+async fn different_people_leaves_a_third_records_proposal_open() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, x, z) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, x).await;
+    submit_registration(&c, &sk, &kid, z, 2).await;
+    seed_proposal(&c, a, x, "pending").await;
+    seed_proposal(&c, a, z, "pending").await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = record_different_people(
+        &mut c,
+        &ChartSet::single(a),
+        &ChartSet::single(x),
+        &who,
+        "r5a-test",
+    )
+    .await
+    .unwrap();
+    let DifferentPeople::Judged(judged) = out else {
+        panic!("a–x was open")
+    };
+    assert_eq!(judged.len(), 1, "a–x only");
+    assert_eq!((judged[0].low, judged[0].high), (a.min(x), a.max(x)));
+    assert_eq!(status_of(&c, a, z).await, "pending", "a–z untouched");
+    let left = possible_duplicates(&c, &ChartSet::single(a)).await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].review_chart, z, "z's entry still stands");
+}
+
+/// Every other signing test has the displayed record on the LOW side (`now_v7` order). Here it
+/// is the HIGH side: `x` is minted first, so the pair is `(x, a)` while `a` is on screen.
+#[tokio::test]
+async fn different_people_judges_a_pair_with_the_displayed_record_on_the_high_side() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let x = Uuid::now_v7();
+    let a = Uuid::now_v7();
+    assert!(x < a, "the displayed chart is the pair's high side");
+    register_pair(&c, &sk, &kid, x, a).await;
+    seed_proposal(&c, a, x, "pending").await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = record_different_people(
+        &mut c,
+        &ChartSet::single(a),
+        &ChartSet::single(x),
+        &who,
+        "r5a-test",
+    )
+    .await
+    .unwrap();
+    let DifferentPeople::Judged(judged) = out else {
+        panic!("x–a was open")
+    };
+    assert_eq!(judged.len(), 1);
+    assert_eq!((judged[0].low, judged[0].high), (x, a));
+    assert_eq!(
+        judged[0].outcome.as_ref().expect("recorded").effect,
+        LinkEffect::TookEffect
+    );
+    assert_eq!(status_of(&c, a, x).await, "rejected");
 }

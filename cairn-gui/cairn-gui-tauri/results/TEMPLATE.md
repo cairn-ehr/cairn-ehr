@@ -132,6 +132,31 @@ prompt? **yes / no**
 | Every outcome (refusal, Outranked, StillJoined, link gone) shown AND announced | | |
 | Close returns focus to the opening link's button; after a successful unlink focus is on the heading | | |
 
+## Review a possible duplicate — the banner (R5a, runbook §11)
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Banner **Review** → read → Different people / Link → outcome line | live | | | | ≤ 20 s | |
+| Chart open WITH a banner, vs a single-chart open (no proposal) | live | | | | banner open ≤ single-chart open | |
+
+| Run | Verdict (Different people / Link) | Findings shown | Key already unlocked? |
+|---|---|---|---|
+| 1 | | | |
+| 2 | | | |
+| 3 | | | |
+| 4 | | | |
+| 5 | | | |
+
+| Banner accessibility check | Verdict | Notes |
+|---|---|---|
+| Banner announced as a region, never an alert; no re-announcement | | |
+| Focus does not jump on chart open | | |
+| Each Review announces whose record it opens | | |
+| Other record's medications announced under their own heading; a failed read is spoken | | |
+| Review shows both verdict buttons only for a complete comparison; a refusal that cannot change hides both | | |
+| Every outcome shown AND announced (Recorded/Linked on the chart line, refusals in the panel) | | |
+| Close returns focus to the Review that opened it | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

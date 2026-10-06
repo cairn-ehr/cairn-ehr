@@ -272,6 +272,7 @@ pub async fn linked_members(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::duplicates::view::DuplicateSection;
     use cairn_medication_view::ChartSet;
     use uuid::Uuid;
 
@@ -435,7 +436,7 @@ mod tests {
             &list,
             Err("connection reset".into()),
             Ok(vec![]),
-            Default::default(),
+            DuplicateSection::checked_none_open(),
         );
         assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
         assert!(pane.members.is_empty());
@@ -457,7 +458,7 @@ mod tests {
             &cairn_medication_view::fixtures::sample_chart(),
             Ok(vec![]),
             Ok(vec![]),
-            Default::default(),
+            DuplicateSection::checked_none_open(),
         );
         assert!(pane.members_error.is_none());
         assert_eq!(pane.list.charts.len(), 1);
@@ -467,7 +468,12 @@ mod tests {
     #[test]
     fn a_failed_link_read_keeps_the_list_and_says_so() {
         let list = cairn_medication_view::fixtures::sample_chart();
-        let pane = chart_pane(&list, Ok(vec![]), Err("x".into()), Default::default());
+        let pane = chart_pane(
+            &list,
+            Ok(vec![]),
+            Err("x".into()),
+            DuplicateSection::checked_none_open(),
+        );
         assert_eq!(pane.list.rows.len(), list.rows.len());
         assert!(pane.links.is_empty());
         let warning = pane.links_error.expect("the failure is reported");

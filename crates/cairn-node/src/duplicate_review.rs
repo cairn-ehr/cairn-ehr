@@ -2,7 +2,8 @@
 //! path R5a, #680; design page "R5a — the banner, designed 2026-10-06").
 //!
 //! R4's worker writes `match_proposal` rows (db/017). Which of them still need a human is ONE
-//! answer — db/057's view `match_proposal_open` — and everything here reads only that view:
+//! answer — db/057's view `match_proposal_open` — and every "is it open?" question here is
+//! answered by that view (the rest is reading records, the veto floor, and `unlink_charts`):
 //! - [`possible_duplicates`]: every open proposal between a displayed chart set and a chart
 //!   OUTSIDE it, grouped by the other side's RECORD, so the banner shows one entry per other
 //!   person however many of their charts were proposed;
@@ -48,9 +49,12 @@ pub struct PossibleDuplicate {
     /// The chart Review compares against: the other side of the NEWEST proposal.
     pub review_chart: Uuid,
     /// Every open pair this entry stands for, canonical `(low, high)`, sorted, no duplicates —
-    /// what "Different people" records an unlink on.
+    /// for grouping and inspection. "Different people" NEVER uses these: they are as stale as
+    /// the banner, so [`record_different_people`] re-reads the open pairs itself.
     pub pairs: Vec<(Uuid, Uuid)>,
+    /// Any of `pairs` is vetoed by the db/016 floor now ([`OpenProposal::vetoed`]).
     pub vetoed: bool,
+    /// The newest of `pairs`' `created_ms` — orders the banner's entries, newest first.
     pub newest_ms: i64,
 }
 
@@ -119,6 +123,13 @@ pub fn group_by_other_record(found: Vec<(OpenProposal, ChartSet)>) -> Vec<Possib
     entries
 }
 
+/// Whether `record` is a DIFFERENT record from the displayed `charts` — shares none of its
+/// charts. **Pure.** A record holding a displayed chart reads as one with it (db/057's own "not
+/// open"), which only a link landing between two of [`possible_duplicates`]' reads can produce.
+pub fn is_another_record(record: &ChartSet, charts: &ChartSet) -> bool {
+    !record.members().iter().any(|c| charts.contains(c))
+}
+
 fn ids(charts: &ChartSet) -> Vec<String> {
     charts.members().iter().map(Uuid::to_string).collect()
 }
@@ -159,7 +170,8 @@ pub async fn open_proposals_touching(
 }
 
 /// The banner's entries for `charts`: open proposals grouped by the other side's record.
-/// One `person_charts` read per distinct other chart.
+/// One `person_charts` read per distinct other chart; a record that has meanwhile come to hold
+/// a displayed chart is dropped ([`is_another_record`]) — the next read no longer lists it.
 pub async fn possible_duplicates(
     client: &(impl GenericClient + Sync),
     charts: &ChartSet,
@@ -176,7 +188,9 @@ pub async fn possible_duplicates(
                 r
             }
         };
-        found.push((p, record));
+        if is_another_record(&record, charts) {
+            found.push((p, record));
+        }
     }
     Ok(group_by_other_record(found))
 }
@@ -231,16 +245,23 @@ pub enum DifferentPeople {
 /// banner showed, which may be stale. The two chart SETS are the caller's: it must pass sets it
 /// has just read (the window re-reads both and refuses one that changed since the comparison),
 /// because a pair joining a chart outside them is not looked for. Each is
-/// `unlink_charts(low, high, None, …)`: both charts of a proposal are held here (the matcher
-/// scores only local charts), so the judgement files under a subject, and a pair whose
-/// in-record side is a linked member — not the chart on screen — is judged the same way
-/// (#699 (a)'s third-chart filing is for a link, not a proposal).
+/// `unlink_charts(low, high, None, …)`: a proposal's charts are normally both held here, so the
+/// judgement files under a subject, and a pair whose in-record side is a linked member — not
+/// the chart on screen — is judged the same way (#699 (a)'s third-chart filing is for unlinking
+/// a standing link, not a proposal). A proposal CAN name a chart not held here — the matcher
+/// scores any chart with identity projections, e.g. demographics synced ahead of the
+/// registration — and that pair is refused before anything is signed, carried in its
+/// [`PairJudgement`] (pinned by `one_pairs_failure_is_carried_and_the_others_stand`).
 ///
 /// Honest, not atomic: several pairs are several events. A failure on one is carried in its
 /// [`PairJudgement`] and the others still stand. A REFUSED pair (nothing signed) stays open
 /// and stays on the banner; but `unlink_charts`'s "commit outcome unknown for event …" error
 /// may have committed — that pair may already be judged and off the banner, and only a re-read
 /// says which. `Err` only when the open pairs could not be read — nothing was signed.
+///
+/// CONTRACT the window relies on: `Err` happens only BEFORE the first signature. The window words
+/// every `Err` "nothing was done", so a fallible step added after the loop starts must carry its
+/// failure in a [`PairJudgement`], never return it with `?`.
 pub async fn record_different_people(
     client: &mut Client,
     left: &ChartSet,
@@ -335,6 +356,18 @@ mod tests {
         ]);
         let order: Vec<Uuid> = got.iter().map(|e| e.review_chart).collect();
         assert_eq!(order, vec![id(9), id(7)]);
+    }
+
+    /// Type review: the proposal read and each other side's `person_charts` are separate
+    /// statements, so a link landing in between can put the displayed chart inside the "other"
+    /// record. That record reads as one with this one — the view's own meaning of "not open" —
+    /// so it is not another person's entry.
+    #[test]
+    fn a_record_holding_a_displayed_chart_is_not_another_record() {
+        let mine = set(&[1, 2]);
+        assert!(is_another_record(&set(&[8, 9]), &mine));
+        assert!(!is_another_record(&set(&[2, 9]), &mine));
+        assert!(!is_another_record(&set(&[1]), &mine));
     }
 
     #[test]

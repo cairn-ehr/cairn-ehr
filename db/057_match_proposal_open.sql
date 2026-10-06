@@ -23,9 +23,9 @@
 -- person_member, and this view drops the pair at read time — no status write anywhere. A local
 -- judgement also moves the row's status (chart_link.rs), which (1) catches first.
 --
--- An explicit column list, never mp.*: every db/*.sql replays on every connect, and
--- CREATE OR REPLACE VIEW may only APPEND columns — an expanded * would change shape the day
--- match_proposal gains one.
+-- An explicit column list, never mp.*: every db/*.sql replays on every connect, so an expanded
+-- * would silently widen this view the day match_proposal gains a column. Its shape changes
+-- only when this file says so, never as a side effect of a table ALTER.
 CREATE OR REPLACE VIEW match_proposal_open AS
 SELECT mp.patient_low, mp.patient_high, mp.score_total, mp.band, mp.veto_findings,
        mp.evidence, mp.matcher_version, mp.status, mp.created_at, mp.updated_at
@@ -45,5 +45,7 @@ SELECT mp.patient_low, mp.patient_high, mp.score_total, mp.band, mp.veto_finding
             AND pl.state = 'unlink'
             AND pl.attested);
 
--- cairn_agent may already read match_proposal (db/017); the view adds no reach beyond it.
+-- The view is not security_invoker, so it reads with its owner's rights. It adds no reach for
+-- cairn_agent beyond what db/017 and db/018 already grant it — SELECT on match_proposal,
+-- person_member and patient_link (pinned by tests/match_proposal_open.rs).
 GRANT SELECT ON match_proposal_open TO cairn_agent;

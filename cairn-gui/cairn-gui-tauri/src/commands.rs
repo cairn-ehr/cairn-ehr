@@ -517,7 +517,7 @@ pub(crate) mod tests {
             members_error: None,
             links: vec![that_link.clone()],
             links_error: None,
-            duplicates: Default::default(),
+            duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
         })
         .unwrap();
         let member_json = serde_json::to_value(&member).unwrap();

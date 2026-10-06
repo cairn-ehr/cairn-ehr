@@ -55,7 +55,8 @@ fn canon(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
 
 #[test]
 fn the_view_lists_exactly_chart_links_open_statuses() {
-    // Trap 16: pin the COMPOSED expression, not its pieces. If chart_link.rs gains or loses an
+    // A guard and the thing it guards must be asked about the same string (HANDOVER's trap
+    // list): pin the COMPOSED expression, not its pieces. If chart_link.rs gains or loses an
     // open status, the banner and the judgement writer would disagree on what "open" means.
     let sql = include_str!("../../../db/057_match_proposal_open.sql");
     let quoted: Vec<String> = OPEN_PROPOSAL_STATUSES
@@ -177,4 +178,102 @@ async fn the_view_survives_a_schema_replay() {
     drop(c);
     let c = db::connect_and_load_schema(&base).await.unwrap();
     assert_eq!(open_pairs(&c).await, vec![canon(a, b)]);
+}
+
+/// The view is per PAIR, on purpose: an attested unlink between two of the records' charts does
+/// not answer a DIFFERENT open pair between the same two records. Hiding the whole entry on the
+/// first would bury a proposal no human answered — the banner's "absent means checked" rule.
+#[tokio::test]
+async fn an_attested_unlink_closes_only_its_own_pair() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, m, x, y) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    register_pair(&c, &sk, &kid, a, m).await;
+    register_pair(&c, &sk, &kid, x, y).await;
+    submit_link_event(&c, &sk, &kid, a, m, 10, true).await; // one record: a + m
+    submit_link_event(&c, &sk, &kid, x, y, 11, true).await; // the other: x + y
+    seed_proposal(&c, a, x, "pending").await;
+    seed_proposal(&c, m, y, "pending").await;
+    let human = link_assertion_event(&kid_h, a, x, LinkVerb::Unlink, now_ms(), 0, "peer", true);
+    apply_remote_attested(&c, &sk_h, human, &sk_h, &kid_h)
+        .await
+        .expect("the peer's attested unlink of a–x lands");
+    assert_eq!(
+        open_pairs(&c).await,
+        vec![canon(m, y)],
+        "a–x is answered; m–y is not, and stays open"
+    );
+}
+
+/// Hiding a pair because its charts read as one record is evaluated at READ time, never latched:
+/// a–b hidden only through a third chart m comes back the moment m–b is unlinked. The db/057
+/// header's "convergence without syncing match_proposal", in the direction that matters for
+/// safety — a duplicate no human answered must never stay buried.
+#[tokio::test]
+async fn a_pair_hidden_through_a_third_chart_reappears_when_that_link_is_unlinked() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, b, m) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, b).await;
+    submit_registration(&c, &sk, &kid, m, 1).await;
+    seed_proposal(&c, a, b, "pending").await;
+    submit_link_event(&c, &sk, &kid, a, m, 10, true).await;
+    submit_link_event(&c, &sk, &kid, m, b, 11, true).await;
+    assert_eq!(open_pairs(&c).await, vec![], "a–m–b: one record");
+    let human = link_assertion_event(&kid_h, m, b, LinkVerb::Unlink, now_ms(), 0, "peer", true);
+    apply_remote_attested(&c, &sk_h, human, &sk_h, &kid_h)
+        .await
+        .expect("the attested unlink of m–b lands");
+    assert_eq!(
+        open_pairs(&c).await,
+        vec![canon(a, b)],
+        "a and b are two records again, and nobody judged a–b"
+    );
+}
+
+/// The view is not `security_invoker`: it reads `person_member` and `patient_link` with its
+/// owner's rights. That adds no reach for `cairn_agent` only while db/017 and db/018 grant it
+/// SELECT on every table the view reads — pinned here, so a later REVOKE on one of them cannot
+/// turn the view into a quiet way round it.
+#[tokio::test]
+async fn cairn_agent_already_reads_every_table_the_view_reads() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    for table in [
+        "match_proposal",
+        "person_member",
+        "patient_link",
+        "match_proposal_open",
+    ] {
+        let ok: bool = c
+            .query_one(
+                "SELECT has_table_privilege('cairn_agent', $1, 'SELECT')",
+                &[&table],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(ok, "cairn_agent must be able to SELECT {table}");
+    }
 }
