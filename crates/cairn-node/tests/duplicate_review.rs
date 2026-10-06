@@ -2,9 +2,11 @@
 //! DB-gated on $CAIRN_TEST_PG; serialized via `db::test_serial_guard`; keys minted at runtime.
 mod common;
 use cairn_medication_view::ChartSet;
-use cairn_node::chart_link::LinkVerb;
+use cairn_node::chart_link::{LinkEffect, LinkVerb, Reviewer};
 use cairn_node::db;
-use cairn_node::duplicate_review::{open_pairs_between, possible_duplicates};
+use cairn_node::duplicate_review::{
+    open_pairs_between, possible_duplicates, record_different_people, DifferentPeople,
+};
 use common::{
     apply_remote_attested, apply_remote_raw, cs, enroll_human, link_assertion_event, register_pair,
     seed_proposal, setup, submit_link_event, submit_registration,
@@ -125,6 +127,8 @@ async fn only_a_peers_attested_unlink_clears_the_entry() {
         .await
         .unwrap()
         .is_empty());
+    // The view alone cleared it: no local status write happened.
+    assert_eq!(status_of(&c, a, b).await, "pending");
 }
 
 #[tokio::test]
@@ -142,4 +146,146 @@ async fn a_chart_with_no_open_proposal_has_no_entry() {
         .await
         .unwrap()
         .is_empty());
+}
+
+async fn status_of(c: &tokio_postgres::Client, a: Uuid, b: Uuid) -> String {
+    let (lo, hi) = (a.min(b), a.max(b));
+    c.query_one(
+        "SELECT status FROM match_proposal WHERE patient_low = $1::text::uuid AND patient_high = $2::text::uuid",
+        &[&lo.to_string(), &hi.to_string()],
+    )
+    .await
+    .unwrap()
+    .get(0)
+}
+
+/// Review Focus 1 + 2: every open pair between the two records gets an ATTESTED unlink — the
+/// member's pair included, judged with `opened = None` — each proposal moves to `rejected`, and
+/// the banner empties.
+#[tokio::test]
+async fn different_people_records_an_attested_unlink_on_every_open_pair() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, m, x, y) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    register_pair(&c, &sk, &kid, a, m).await;
+    register_pair(&c, &sk, &kid, x, y).await;
+    submit_link_event(&c, &sk, &kid, a, m, 10, true).await;
+    submit_link_event(&c, &sk, &kid, x, y, 11, true).await;
+    seed_proposal(&c, a, x, "pending").await;
+    seed_proposal(&c, m, y, "pending").await;
+    let (mine, theirs) = (
+        ChartSet::new([a, m]).unwrap(),
+        ChartSet::new([x, y]).unwrap(),
+    );
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+
+    let out = record_different_people(&mut c, &mine, &theirs, &who, "r5a-test")
+        .await
+        .unwrap();
+    let DifferentPeople::Judged(judged) = out else {
+        panic!("two open pairs were judged")
+    };
+    assert_eq!(judged.len(), 2);
+    for j in &judged {
+        let effect = j.outcome.as_ref().expect("each unlink is recorded").effect;
+        assert_eq!(effect, LinkEffect::TookEffect);
+    }
+    for (p, q) in [(a, x), (m, y)] {
+        assert_eq!(status_of(&c, p, q).await, "rejected");
+        let attested: bool = c
+            .query_one(
+                "SELECT attested FROM patient_link WHERE low = $1::text::uuid AND high = $2::text::uuid AND state = 'unlink'",
+                &[&p.min(q).to_string(), &p.max(q).to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(attested, "a human's judgement, attested");
+    }
+    assert!(possible_duplicates(&c, &mine).await.unwrap().is_empty());
+}
+
+/// Review Focus 4: a colleague already resolved it — nothing is signed.
+#[tokio::test]
+async fn different_people_on_a_resolved_pair_records_nothing() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, b).await;
+    seed_proposal(&c, a, b, "pending").await;
+    let peer = link_assertion_event(&kid_h, a, b, LinkVerb::Unlink, now_ms(), 0, "peer", true);
+    apply_remote_attested(&c, &sk_h, peer, &sk_h, &kid_h)
+        .await
+        .unwrap();
+    let before: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = record_different_people(
+        &mut c,
+        &ChartSet::single(a),
+        &ChartSet::single(b),
+        &who,
+        "r5a-test",
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out, DifferentPeople::NothingOpen));
+    let after: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(before, after, "nothing signed");
+}
+
+/// `open_pairs_between` is symmetric in its arguments, and empty when no open proposal joins
+/// the two records.
+#[tokio::test]
+async fn open_pairs_between_is_symmetric_and_empty_when_unjoined() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (a, b, z) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, b).await;
+    submit_registration(&c, &sk, &kid, z, 2).await;
+    seed_proposal(&c, a, b, "pending").await;
+    let (sa, sb, sz) = (
+        ChartSet::single(a),
+        ChartSet::single(b),
+        ChartSet::single(z),
+    );
+    let want = vec![(a.min(b), a.max(b))];
+    assert_eq!(open_pairs_between(&c, &sa, &sb).await.unwrap(), want);
+    assert_eq!(open_pairs_between(&c, &sb, &sa).await.unwrap(), want);
+    assert!(open_pairs_between(&c, &sa, &sz).await.unwrap().is_empty());
 }

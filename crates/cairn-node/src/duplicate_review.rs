@@ -9,19 +9,16 @@
 //! - [`open_pairs_between`]: the open pairs joining two records — Review's admission (the window
 //!   does not widen `AppState::shown`; it asks this, at that moment) and what "Different people"
 //!   judges;
-//! - `record_different_people` (added by the next slice task): an attested unlink on each of those pairs.
+//! - [`record_different_people`]: an attested unlink on each of those pairs.
 //!
 //! Nothing here links, and nothing here writes a proposal status: `chart_link::unlink_charts`
 //! writes the event and moves the proposal, in its own transaction, as it does for R2b-2.
 
-#[allow(unused_imports)]
-// `unlink_charts`, `LinkOutcome`, `Reviewer` are used by the "Different people" judgement (Task 3).
 use crate::chart_link::{canonical_pair, unlink_charts, LinkOutcome, Reviewer};
 use crate::patient::person::person_charts;
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
 use std::collections::{BTreeMap, HashMap};
-#[allow(unused_imports)] // `Client` is used by Task 3.
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
@@ -68,6 +65,10 @@ pub fn orient(low: Uuid, high: Uuid, charts: &ChartSet) -> Option<(Uuid, Uuid)> 
 /// Each input carries the record its `other` chart belongs to (read by the caller). Two of my
 /// charts proposed against two charts of the same other person are ONE entry: the banner is
 /// about people, as the front door is since R3.
+///
+/// Input-order-independent: on a `created_ms` tie the SMALLER `other` chart is Review's chart,
+/// so the same proposals in any order give the same entry (the SQL read orders ties, but this
+/// function does not rely on it).
 pub fn group_by_other_record(found: Vec<(OpenProposal, ChartSet)>) -> Vec<PossibleDuplicate> {
     let mut groups: BTreeMap<Vec<Uuid>, PossibleDuplicate> = BTreeMap::new();
     for (p, record) in found {
@@ -79,6 +80,8 @@ pub fn group_by_other_record(found: Vec<(OpenProposal, ChartSet)>) -> Vec<Possib
                 g.vetoed |= p.vetoed;
                 if p.created_ms > g.newest_ms {
                     g.newest_ms = p.created_ms;
+                    g.review_chart = p.other;
+                } else if p.created_ms == g.newest_ms && p.other < g.review_chart {
                     g.review_chart = p.other;
                 }
             }
@@ -200,6 +203,53 @@ pub async fn open_pairs_between(
         .collect()
 }
 
+/// One pair's "Different people" judgement and what it did (or why it was not recorded).
+#[derive(Debug)]
+pub struct PairJudgement {
+    pub low: Uuid,
+    pub high: Uuid,
+    pub outcome: anyhow::Result<LinkOutcome>,
+}
+
+/// What "Different people" did.
+#[derive(Debug)]
+pub enum DifferentPeople {
+    /// No open proposal joins the two records any more (a colleague's judgement, here or by
+    /// sync, resolved it since the banner was drawn). Nothing was signed.
+    NothingOpen,
+    /// One attested unlink per open pair, each in its own transaction (`unlink_charts`).
+    Judged(Vec<PairJudgement>),
+}
+
+/// "Different people": an attested unlink on EVERY open pair between `left` (the displayed
+/// record) and `right` (the other record), read fresh here — never the pairs the banner showed,
+/// which may be stale. Each is `unlink_charts(low, high, None, …)`: both charts of a proposal
+/// are held here (the matcher scores only local charts), so the judgement files under a subject,
+/// and a pair whose in-record side is a linked member — not the chart on screen — is judged the
+/// same way (#699 (a)'s third-chart filing is for a link, not a proposal).
+///
+/// Honest, not atomic: several pairs are several events. A failure on one is carried in its
+/// [`PairJudgement`] and the others still stand; the failed pair stays open and stays on the
+/// banner. `Err` only when the open pairs could not be read — nothing was signed.
+pub async fn record_different_people(
+    client: &mut Client,
+    left: &ChartSet,
+    right: &ChartSet,
+    reviewer: &Reviewer<'_>,
+    node_origin: &str,
+) -> anyhow::Result<DifferentPeople> {
+    let pairs = open_pairs_between(&*client, left, right).await?;
+    if pairs.is_empty() {
+        return Ok(DifferentPeople::NothingOpen);
+    }
+    let mut judged = Vec::with_capacity(pairs.len());
+    for (low, high) in pairs {
+        let outcome = unlink_charts(client, low, high, None, reviewer, node_origin).await;
+        judged.push(PairJudgement { low, high, outcome });
+    }
+    Ok(DifferentPeople::Judged(judged))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +296,25 @@ mod tests {
         assert_eq!(e.pairs, vec![(id(1), id(8)), (id(2), id(9))]);
         assert!(e.vetoed, "any vetoed pair marks the entry");
         assert_eq!(e.newest_ms, 200);
+    }
+
+    /// Two proposals with the same `created_ms`: Review's chart must not depend on input order.
+    #[test]
+    fn a_created_time_tie_picks_the_same_review_chart_in_either_order() {
+        let other = set(&[8, 9]);
+        let (p1, p2) = (prop(1, 8, false, 100), prop(2, 9, false, 100));
+        let fwd = group_by_other_record(vec![
+            (p1.clone(), other.clone()),
+            (p2.clone(), other.clone()),
+        ]);
+        let rev = group_by_other_record(vec![(p2, other.clone()), (p1, other)]);
+        assert_eq!(
+            fwd[0].review_chart,
+            id(8),
+            "the smaller other chart wins the tie"
+        );
+        assert_eq!(fwd[0].review_chart, rev[0].review_chart);
+        assert_eq!(fwd, rev);
     }
 
     #[test]
