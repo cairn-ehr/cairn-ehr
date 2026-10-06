@@ -91,13 +91,8 @@ async fn resolve_pair(
         }
     })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
-    let shown_name = state
-        .shown
-        .lock()
-        .await
-        .get(&other)
-        .map(|c| c.display_name.clone())
-        .ok_or_else(|| refused(NOT_ON_SCREEN))?;
+    // A list on screen, or (R5a) an open proposal the banner showed.
+    let shown_name = crate::duplicates::admit_other(state, &left, other).await?;
     if left.contains(&other) {
         return Err(refused(ALREADY_IN_RECORD));
     }

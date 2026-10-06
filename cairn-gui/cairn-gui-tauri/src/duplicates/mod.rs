@@ -1,2 +1,323 @@
-//! The possible-duplicate banner (repair path R5a, #680). See `view.rs` for every sentence.
+//! The possible-duplicate banner (repair path R5a, #680; design page "R5a — the banner,
+//! designed 2026-10-06"): the section `med_list` carries, Review's admission, and the
+//! "Different people" command. Every sentence is in `view.rs`; every DB rule is in
+//! `cairn_node::duplicate_review` (DB-tested there). This module only orders the reads and
+//! applies the chart-command rules.
+//!
+//! LOCKING: `state.db` is a `tokio::sync::Mutex`, which is NOT re-entrant, and
+//! `read_chart_of` / `chart_set_of` take it themselves. So [`duplicate_section`] reads in two
+//! phases — everything else under one lock, then each entry's medications after releasing it —
+//! and nothing here calls either helper while holding the lock (that would deadlock the window).
 pub mod view;
+
+use crate::chart_set::{check_displayed_set, member_line, MemberLine, CHANGED};
+use crate::commands::read_chart_of;
+use crate::funnel::view::{ErrorView, Retry};
+use crate::link::chart_set_of;
+use crate::link::unlink_view::unlink_error_view;
+use crate::link::view::{
+    key_locked_for, refused, LinkReportView, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED,
+};
+use crate::state::{AppState, Now};
+use cairn_medication_view::ChartSet;
+use cairn_node::db_diagnosis::operator_chain;
+use cairn_node::duplicate_check::{
+    chart_check_pending, classify, read_snapshot, STALLED_AFTER_SECS,
+};
+use cairn_node::duplicate_review::{self, DifferentPeople};
+use uuid::Uuid;
+use view::{
+    check_lines, entry_view, fixture_section, section_view, ChartCheck, DuplicateSection,
+    PairResult, DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
+};
+
+/// The banner for the displayed record. Never fails: every failure is a worded line (an absent
+/// banner must mean "checked, none open"). `members` are the record's member lines, already
+/// read for the header — used only to name a pending member.
+pub async fn duplicate_section(
+    state: &AppState,
+    opened: Uuid,
+    charts: &ChartSet,
+    members: &[MemberLine],
+) -> DuplicateSection {
+    let Some(db) = state.db.as_ref() else {
+        return fixture_section();
+    };
+    // Phase 1, under ONE lock: the proposals, each shown entry's identities, the checks.
+    let (found, identities, checks, status) = {
+        let db = db.lock().await;
+        let found = duplicate_review::possible_duplicates(&*db, charts)
+            .await
+            .map_err(|e| operator_chain(&e));
+        let mut identities = vec![];
+        if let Ok(entries) = &found {
+            for entry in entries.iter().take(MAX_SHOWN) {
+                identities.push(
+                    cairn_node::patient::person::chart_identities(&*db, &entry.other_record)
+                        .await
+                        .map(|ids| ids.iter().map(member_line).collect::<Vec<_>>())
+                        .map_err(|e| operator_chain(&e)),
+                );
+            }
+        }
+        let mut checks = vec![];
+        for chart in charts.members() {
+            checks.push(ChartCheck {
+                chart: *chart,
+                pending: chart_check_pending(&db, *chart)
+                    .await
+                    .map_err(|e| operator_chain(&e)),
+            });
+        }
+        let status = read_snapshot(&db)
+            .await
+            .map(|s| classify(&s, STALLED_AFTER_SECS))
+            .map_err(|e| operator_chain(&e));
+        (found, identities, checks, status)
+    }; // lock released here: `read_chart_of` below takes it again.
+       // Phase 2: each shown entry's medications through the SAME read opening that chart gives
+       // (§5.9 custody and sealing unchanged).
+    let entries = match found {
+        Err(e) => Err(e),
+        Ok(found) => {
+            let total = found.len();
+            let mut shown = vec![];
+            for (entry, ids) in found.iter().take(MAX_SHOWN).zip(identities) {
+                let meds = read_chart_of(state, entry.review_chart)
+                    .await
+                    .map(|list| cairn_gui_tab_medications::view::build_view(&list));
+                shown.push(entry_view(entry.review_chart, entry.vetoed, ids, meds));
+            }
+            Ok((shown, total))
+        }
+    };
+    section_view(entries, check_lines(opened, &checks, members, status))
+}
+
+/// Review's admission for the compare panel (`link::resolve_pair`): a chart a list on screen
+/// showed (`AppState::shown`, unchanged), OR one an open proposal joins to `left`'s record at
+/// this moment — the banner showed it. `shown` is deliberately NOT widened (design "R5a"): a
+/// pair a colleague resolved a second ago is refused here, never silently compared. Returns the
+/// name the list showed ("" for a banner admission — only fixture mode reads it).
+pub(crate) async fn admit_other(
+    state: &AppState,
+    left: &ChartSet,
+    other: Uuid,
+) -> Result<String, ErrorView> {
+    let shown = state
+        .shown
+        .lock()
+        .await
+        .get(&other)
+        .map(|c| c.display_name.clone());
+    if let Some(name) = shown {
+        return Ok(name);
+    }
+    let Some(db) = state.db.as_ref() else {
+        return Err(refused(NOT_ON_SCREEN)); // fixture mode has no proposals
+    };
+    let right = chart_set_of(state, other).await?; // takes the lock itself — not held here
+    let db = db.lock().await;
+    let pairs = duplicate_review::open_pairs_between(&*db, left, &right)
+        .await
+        .map_err(|e| ErrorView {
+            text: format!(
+                "Could not read whether that chart is an open possible duplicate of this record \
+                 — nothing was done: {}",
+                operator_chain(&e)
+            ),
+            retry: Retry::Now,
+        })?;
+    if pairs.is_empty() {
+        Err(refused(NOT_SHOWN_OR_RESOLVED))
+    } else {
+        Ok(String::new())
+    }
+}
+
+/// "Different people — not the same person" (R5a; offered only on a banner's comparison).
+///
+/// The rules, IN THIS ORDER (each pinned by a test, mirroring `link::link_impl`): the chart on
+/// screen; this record's set is the one compared (`THIS_CHANGED`); fixture mode; the other
+/// record's set is the one compared (`OTHER_CHANGED`); the key. Then the node judges every pair
+/// still open between the two records, read fresh — `NothingOpen` means a colleague got there
+/// first and nothing was signed.
+pub async fn different_people_impl(
+    state: &AppState,
+    patient_id: &str,
+    charts: Vec<String>,
+    other_id: &str,
+    other_charts: Vec<String>,
+) -> Result<LinkReportView, ErrorView> {
+    let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
+    let left = check_displayed_set(&chart_set_of(state, patient).await?, &charts).map_err(|e| {
+        if e == CHANGED {
+            refused(THIS_CHANGED)
+        } else {
+            refused(e)
+        }
+    })?;
+    if state.is_mock() {
+        return Err(refused(
+            "fixture mode: this window is showing mock data and cannot write",
+        ));
+    }
+    let other: Uuid = other_id.parse().map_err(|_| refused(NOTHING_OPEN))?;
+    let right =
+        check_displayed_set(&chart_set_of(state, other).await?, &other_charts).map_err(|e| {
+            if e == CHANGED {
+                refused(OTHER_CHANGED)
+            } else {
+                refused(e)
+            }
+        })?;
+    let (human_sk, human_kid) = state
+        .live_key(Now::read())
+        .await
+        .ok_or_else(|| key_locked_for(DIFFERENT_PEOPLE_BUTTON))?;
+    let mut db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| refused("no database connection"))?
+        .lock()
+        .await;
+    let reviewer = cairn_node::chart_link::Reviewer {
+        human_sk: &human_sk,
+        human_kid: &human_kid,
+    };
+    let outcome = duplicate_review::record_different_people(
+        &mut db,
+        &left,
+        &right,
+        &reviewer,
+        &state.node_origin,
+    )
+    .await
+    .map_err(|e| ErrorView {
+        text: format!(
+            "Could not read whether this possible duplicate is still open — nothing was done: {}",
+            operator_chain(&e)
+        ),
+        retry: Retry::Now,
+    })?;
+    match outcome {
+        DifferentPeople::NothingOpen => Err(refused(NOTHING_OPEN)),
+        DifferentPeople::Judged(judged) => view::different_people_report(
+            judged
+                .into_iter()
+                .map(|j| PairResult {
+                    low: j.low,
+                    high: j.high,
+                    outcome: j
+                        .outcome
+                        .map(|o| o.effect)
+                        .map_err(|e| unlink_error_view(&e)),
+                })
+                .collect(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn record_different_people(
+    state: tauri::State<'_, AppState>,
+    patient_id: String,
+    charts: Vec<String>,
+    other_id: String,
+    other_charts: Vec<String>,
+) -> Result<LinkReportView, ErrorView> {
+    different_people_impl(&state, &patient_id, charts, &other_id, other_charts).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cairn_patient_search::{Candidate, TrustState};
+
+    fn fixture() -> Uuid {
+        cairn_gui_data::mock::fixtures::FIXTURE_UUID
+            .parse()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn fixture_mode_shows_no_entries_and_says_no_check_ran() {
+        let state = AppState::mock(Some(fixture()));
+        let s = duplicate_section(&state, fixture(), &ChartSet::single(fixture()), &[]).await;
+        assert_eq!(s, view::fixture_section());
+    }
+
+    #[tokio::test]
+    async fn a_shown_chart_is_admitted_by_its_list() {
+        let state = AppState::mock(Some(fixture()));
+        let other = Uuid::from_u128(2);
+        state.shown.lock().await.insert(
+            other,
+            Candidate {
+                patient_id: other,
+                display_name: "Other Person".into(),
+                age: None,
+                trust: TrustState::Confirmed,
+                last_activity: None,
+                locale: None,
+                photo_ref: None,
+            },
+        );
+        let name = admit_other(&state, &ChartSet::single(fixture()), other)
+            .await
+            .unwrap();
+        assert_eq!(name, "Other Person");
+    }
+
+    /// Fixture mode has no proposals, so an unshown chart keeps today's refusal word for word.
+    #[tokio::test]
+    async fn in_fixture_mode_an_unshown_chart_keeps_the_not_on_screen_refusal() {
+        let state = AppState::mock(Some(fixture()));
+        let err = admit_other(&state, &ChartSet::single(fixture()), Uuid::from_u128(2))
+            .await
+            .unwrap_err();
+        assert_eq!(err.text, crate::link::view::NOT_ON_SCREEN);
+    }
+
+    #[tokio::test]
+    async fn different_people_is_bound_to_the_chart_on_screen() {
+        let state = AppState::mock(Some(fixture()));
+        let err =
+            different_people_impl(&state, &Uuid::from_u128(9).to_string(), vec![], "x", vec![])
+                .await
+                .unwrap_err();
+        assert!(err.text.contains("not the chart"), "{}", err.text);
+    }
+
+    #[tokio::test]
+    async fn different_people_refuses_a_changed_set() {
+        let state = AppState::mock(Some(fixture()));
+        let p = fixture().to_string();
+        let err = different_people_impl(
+            &state,
+            &p,
+            vec![p.clone(), Uuid::from_u128(7).to_string()],
+            &Uuid::from_u128(2).to_string(),
+            vec![],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.text, crate::link::view::THIS_CHANGED);
+    }
+
+    #[tokio::test]
+    async fn fixture_mode_cannot_record_different_people() {
+        let state = AppState::mock(Some(fixture()));
+        let p = fixture().to_string();
+        let err = different_people_impl(
+            &state,
+            &p,
+            vec![p.clone()],
+            &Uuid::from_u128(2).to_string(),
+            vec![],
+        )
+        .await
+        .unwrap_err();
+        assert!(err.text.contains("fixture mode"), "{}", err.text);
+    }
+}
