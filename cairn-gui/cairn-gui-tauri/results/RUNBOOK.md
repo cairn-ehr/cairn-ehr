@@ -385,3 +385,72 @@ never "no conflicts"); whether the key was already unlocked. Repeat at least fiv
 
 Record in the template's *Unlink one link* section. **A figure outside the ≤ 15 s budget is a finding
 to file, never a budget to adjust.**
+
+## 11. Review a possible duplicate from the banner (R5a, [#680](https://github.com/cairn-ehr/cairn-ehr/issues/680))
+
+The repair path's third §1.2 figure, and the first that measures the **ambient** banner. **Live
+only** — fixture mode (`--mock`) has no proposals (no identity model, #722), so a `--mock` chart never
+shows a banner and there is no mock variant to time.
+
+Setup: register two near-identical charts (the same name and date of birth, as section 10's `reg`),
+run the duplicate-check worker once so the pair becomes a proposal, then open chart A. `--once` drains
+the queue and exits (0 = clean; 1 = a chart failed or an uncaught non-database error; 2 = a database
+error — see `docs/developers/running-the-duplicate-check.md`); anything but 0 means the banner you are
+about to time may be missing, so fix that first:
+
+```bash
+reg() { $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+    --confirm-new | sed -n 's/^registered patient //p'; }
+A=$(reg); B=$(reg)
+[ -n "$A" ] && [ -n "$B" ] || { echo "registration failed" >&2; exit 1; }
+uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
+cd cairn-gui
+cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" --conn "$CONN" \
+    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+```
+
+Give B one active medication first (section 2's seeding, on B) so the banner has a drug list to show.
+
+**Measurement 1 — review and judge.** Start the stopwatch at the press of **Review** on the banner
+entry, not before — reading the banner is part of opening the chart, not of the gesture. Stop it when
+the outcome line reads "Recorded: charts … are different people. …" (**Different people**) or
+"Linked — this record now combines N charts." (**Link — same person**). Time both verdicts, on fresh
+pairs.
+
+1. Press **Review** on the entry. The compare panel opens pre-filled with the other chart.
+2. Read the panel: findings (if any), then the two-column table and the other record's medications.
+3. Press **Different people** or **Link — same person**.
+
+Budget **banner-to-recorded-judgement ≤ 20 s** (§1.2 in the design page's R5a section), of which the
+side-by-side read is the load. Record, per run: the wall time from step 1 to the outcome line; which
+verdict; the number of findings shown (0 is legitimate); whether the key was already unlocked.
+Repeat at least five times with fresh pairs.
+
+**Measurement 2 — chart open.** Time opening chart A (stopwatch from launch or the open gesture, to
+the medication table and banner painted) **with** the banner present, against the same node opening a
+chart with **no** proposal (a single-chart open — e.g. a chart registered with nothing similar).
+Budget: banner open **≤ single-chart open**. The banner reads eagerly (the other record's lines
+included); a miss decides whether the other record's lines move to a second paint — it is a finding,
+not an adjustment. Five opens each, same session state (key locked or unlocked, the same for both).
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The banner is announced as a **region** with its label, **never as an alert** — no interruption
+      on chart open, no sound, and it does not re-announce when you move around the chart.
+- [ ] **Focus does not jump** on chart open: it lands where it did before (the chart's heading or the
+      front door), never on the banner or on **Review**.
+- [ ] Each **Review** button announces **whose record** it opens (its `aria-describedby` points at the
+      entry's first identity line), so two entries are told apart by name and date of birth, never a
+      bare "Review" repeated.
+- [ ] The other record's medications are announced under "on the other chart — not part of this
+      record", never read as lines of the open chart; a failed read is a spoken line, not silence.
+- [ ] Pressing **Review** shows both **Different people** and **Link — same person** (when the
+      comparison is complete); a comparison that could not be read in full shows **neither**. After a
+      refusal that cannot change on retry both are gone (compare again to get them back).
+- [ ] Every outcome — Recorded, Linked, a refusal, a pair a colleague already judged — is shown AND
+      announced in the panel's status line, never silent.
+- [ ] Closing the panel (Esc or "Close comparison") returns focus to the **Review** that opened it.
+
+Record in the template's *Review a possible duplicate* section. **A figure outside the ≤ 20 s budget,
+or a banner open slower than the single-chart open, is a finding to file, never a budget to adjust.**

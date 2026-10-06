@@ -1163,6 +1163,81 @@ people*) → target 2; opening a chart adds 0 acts. `M ≤ N`. Budget: banner to
 
 **Not in R5a:** the worklist (R5b); #716; #723; lazy loading unless the measurement demands it.
 
+#### R5a — as built (2026-10-06)
+
+Plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`, six tasks, each reviewed;
+the spec above was followed except where listed under *Deviations*.
+
+**What was built, per layer.**
+- **DB:** `db/057` — the view `match_proposal_open` (explicit column list, no seeded rows; an
+  **attested** unlink or one shared `person_id` closes a pair, an un-attested unlink does not).
+  `SCHEMA_GENERATION` 56 → 57; db/057 joins `cairn-node`'s loader list only (cairn-sync's lags, #284).
+  `OPEN_PROPOSAL_STATUSES` is now `pub`, tied to the view by a drift test; `seed_proposal` moved to
+  `tests/common`.
+- **Node:** `cairn_node::duplicate_review` — `possible_duplicates`, `open_pairs_between` and
+  `record_different_people` (an attested `unlink_charts` per open pair; `DifferentPeople`,
+  `PairJudgement{low, high, outcome}`), with `group_by_other_record` grouping by the other side's record,
+  newest first.
+- **Window (Rust):** the `duplicates/` module — `view.rs` (every sentence, with goldens), `mod.rs`
+  (`duplicate_section` with a two-phase lock, `admit_other`, `different_people_impl`, the
+  `record_different_people` command). `ChartPane::duplicates`; `med_list_impl` passes the section;
+  `link/mod.rs`'s `resolve_pair` calls `admit_other` (Review is admitted by an open proposal re-read at
+  that moment; `AppState::shown` is not widened).
+- **Window (JS):** `duplicates.js` renders and decides nothing but which buttons are visible; `index.html`
+  gains the banner `<section>` (above `#chart-warnings`, never `role="alert"`) and `#link-different`;
+  `link.js` gains `sendJudgement(command, button)` shared by Link and Different people.
+
+**Deviations from the plan, and why.**
+- **The node status line is never appended when the node is Current.** A linked member not held here
+  reads pending forever (db/056), so a Current node would pair "not yet run" with "Duplicate check up to
+  date." — a principle-4 contradiction. It still follows a member line for NeverRun/CatchingUp, and always
+  for Stalled. Cost: an unheld member's "not yet run" line stands unexplained (true; a candidate for R5b).
+- **"This pair is closed"**, not "This possible duplicate is closed", in the TookEffect sentence.
+- **An empty identity read gets a note** ("No name or date of birth is recorded for the other chart.").
+  Goldens also pin the StillJoined and Outranked sentences.
+- **Load order, not a guard.** `duplicates.js` loads right after `main.js`, before `funnel.js` (whose last
+  line starts boot). A `typeof` guard on render would let an absent banner mean "unknown".
+- **Both judgement buttons are hidden on a verdict** (`never`/`after_operator`), not only Link.
+- **Review's `aria-describedby`** points at the entry's first identity line (every heading is the same
+  sentence, so a heading label would not tell entries apart; R3's person-row pattern).
+- **Token-based Different-people visibility:** `reviewDuplicate` captures `compareToken` right after
+  calling `compare` and shows `#link-different` only if it is unchanged and the comparison is non-null,
+  closing a same-chart race.
+- **`created_ms` tie-break:** equal newest timestamps order by the smaller other-chart id, so the entry
+  order does not depend on input order.
+- **Growth caps exceeded:** `chart_set.rs` +10, `commands.rs` +9 (rustfmt expansion of the specified code;
+  both were already over 500) and `link.js` +11 (348 → 359) against the ≤ 6 note. `link/mod.rs` shrank
+  497 → 492.
+
+**"Different people" needs a whole comparison.** It is offered only when the comparison is complete
+(`can_link`), exactly as Link is: a comparison that could not be read in full shows neither.
+
+**Headless walk** (Playwright, stubbed `invoke`, visibility = computed display with no hidden ancestor;
+nothing committed). Round 1: (1) the banner is visible and precedes `#chart-warnings`; (2) the section has
+no role and no `role="alert"` descendant; (3) Review opens `#link-panel` with `#link-different` visible
+(hidden before); (4) a search-driven Compare shows `#link-confirm` and hides `#link-different`; (5) Review
+then Different people invokes `record_different_people`, shows "Recorded: not the same person.", closes the
+panel and re-reads the chart once — all PASS. The walk caught the boot-order fault above (an
+instantly-resolving stub rendered before `duplicates.js` loaded). Round 2, after the fixes, with an
+instant stub: the banner boots visible with no ReferenceError; Review's `aria-describedby` target reads
+"J Smith, 1950"; Review shows both buttons; a refused `record_different_people` (`retry: "never"`) hides
+both and reads "Refused.". Points 1–5 were not re-run in full after the fix round.
+
+**Owed by a human:** RUNBOOK §11 — the ≤ 20 s Review-to-judgement stopwatch, the banner-open ≤
+single-chart-open comparison, and the VoiceOver/keyboard pass, all live. A miss is a finding to file.
+
+**No automated coverage:** `cairn-gui-tauri` has no DB-gated tests, so the window's live branches —
+`duplicate_section`'s live phases, `admit_other`'s proposal branch, `different_people_impl` past the mock
+refusal (OTHER_CHANGED, the locked key) — are covered only by the node's DB tests of the functions they
+call and by the human live pass. (Same class as `link_impl`'s live branches.)
+
+**Deferred minors** (not defects of the banner itself): pair openness is read once before the loop, so a
+colleague's attested link landing in that millisecond window is overruled and reported TookEffect (the
+#708/#713 class); a malformed `other_id` in `different_people_impl` maps to "already judged" where
+`link_impl` says not-on-screen; `admit_other` now reads the DB for any unshown id.
+
+Final review: <pending>
+
 ## Error handling
 
 - Worker down or behind → the honest-lag line; writes are never affected (the trigger cannot raise).
