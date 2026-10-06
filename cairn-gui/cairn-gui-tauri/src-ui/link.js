@@ -340,7 +340,9 @@ async function sendJudgement(command, button) {
       // outage and a locked key (`"now"`) keep it: nothing about the comparison was wrong.
       if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
         compared = null;
-        button.hidden = true;
+        // Both judgement buttons: with `compared` gone, either would silently do nothing.
+        el("link-confirm").hidden = true;
+        el("link-different").hidden = true;
       }
     }
   } finally {

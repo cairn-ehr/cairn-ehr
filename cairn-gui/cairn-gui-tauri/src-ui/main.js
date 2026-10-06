@@ -219,8 +219,7 @@ function clearChart() {
   setMessage(el("linked-charts-error"), "");
   renderLinks([]);
   setMessage(el("record-links-error"), "");
-  // duplicates.js loads after this file; guarded like link.js's call into unlink.js.
-  if (typeof clearDuplicates === "function") clearDuplicates();
+  clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
