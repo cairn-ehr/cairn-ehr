@@ -6,7 +6,7 @@
 //! ever mean "checked, none open". So every failed read below becomes a worded line, and
 //! [`check_lines`] says when this record's check has not run, reusing R4's own sentences.
 use crate::chart_set::MemberLine;
-use crate::funnel::view::ErrorView;
+use crate::funnel::view::{ErrorView, Retry};
 use crate::link::view::{medication_lines, refused, LinkReportView};
 use cairn_gui_tab_medications::view::MedListView;
 use cairn_node::chart_link::LinkEffect;
@@ -18,10 +18,13 @@ use uuid::Uuid;
 /// are counted in `DuplicateSection::more`, never dropped silently.
 pub const MAX_SHOWN: usize = 3;
 pub const HEADING: &str = "Possible duplicate — not yet reviewed";
-/// Above the other chart's lines: they are someone else's until a human links the two.
-pub const OTHER_CHART_LABEL: &str = "On the other chart — not part of this record";
-/// A proposal with veto findings. Which facts — and whether "verified" applies — is the compare
-/// panel's to say (R2b-1's rule), read fresh; never worded here from stored JSON.
+/// Above the other record's lines — read over EVERY chart of that record, so "record", not
+/// "chart": they are someone else's until a human links the two. The compare panel's own
+/// heading, word for word (index.html `#link-other-meds-heading`).
+pub const OTHER_CHART_LABEL: &str = "On the other record — not part of this one until linked";
+/// A pair the db/016 veto floor finds a disagreement in, read NOW (`OpenProposal::vetoed` in
+/// cairn-node). Which facts — and whether "verified" applies — is the compare panel's to say
+/// (R2b-1's rule), read fresh; never worded here from stored JSON.
 pub const VETO_NOTE: &str =
     "Some recorded facts disagree between these charts — Review shows which.";
 /// "Different people" (or Review) after the pair was already judged or resolved.
@@ -211,27 +214,81 @@ pub fn fixture_section() -> DuplicateSection {
     }
 }
 
-/// The outcome line for "Different people". Nothing recorded → the first refusal itself (so
-/// the webview applies its retry advice: a locked key keeps the button, a verdict takes it).
-/// Anything recorded → one sentence per pair, and `reload` (the banner must re-read).
+/// The outcome line for "Different people".
+///
+/// - Nothing judged → [`NOTHING_OPEN`].
+/// - ONE pair, and it failed → that pair's own error, unchanged (so the webview applies its
+///   retry advice: an outage — "not confirmed" — keeps the button, a verdict takes it).
+/// - SEVERAL pairs, all failed → ONE error naming every pair's failure — never just the first,
+///   which could hide a later pair's "commit outcome unknown" behind a refusal (the #713
+///   hazard) — carrying the most retryable class among them ([`combined_retry`]).
+/// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
+///   a pair that was not confirmed may or may not still be open.
 pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportView, ErrorView> {
     if results.iter().all(|r| r.outcome.is_err()) {
-        return Err(results
-            .into_iter()
-            .find_map(|r| r.outcome.err())
-            .unwrap_or_else(|| refused(NOTHING_OPEN)));
+        return Err(match results.len() {
+            0 => refused(NOTHING_OPEN),
+            1 => results
+                .into_iter()
+                .find_map(|r| r.outcome.err())
+                .unwrap_or_else(|| refused(NOTHING_OPEN)),
+            _ => ErrorView {
+                text: report_sentence(&results),
+                retry: combined_retry(results.iter().filter_map(|r| r.outcome.as_ref().err())),
+            },
+        });
     }
-    let sentence = results
-        .iter()
-        .map(pair_sentence)
-        .collect::<Vec<_>>()
-        .join(" ");
     Ok(LinkReportView {
-        sentence,
+        sentence: report_sentence(&results),
         reload: true,
     })
 }
 
+/// Every pair's sentence, in order, as one line.
+fn report_sentence(results: &[PairResult]) -> String {
+    results
+        .iter()
+        .map(pair_sentence)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The retry advice for several failed pairs: the MOST retryable among them — `Now` over
+/// `AfterOperator` over `Never`. **Pure.**
+///
+/// Why the most retryable is the cautious choice here: a commit-unknown pair is worded "not
+/// confirmed" and gets `Now` (`judgement_error_from`: no refusal marker and no SQLSTATE, so
+/// `data_error_from` reads an outage) — its judgement may or may not have been recorded. A
+/// `Never` beside it would tell the webview the outcome was DECIDED and take the button away,
+/// claiming a verdict that does not exist. Keeping the button cannot re-sign blindly: "Different
+/// people" re-reads the open pairs fresh on every press, and `unlink_charts` moves a pair's
+/// proposal in the same transaction as its event — so a pair whose lost commit did land is no
+/// longer open, and is never signed twice; a refused pair is refused again, before anything is
+/// signed. The sentence names the event, so the clinician can also look before pressing.
+fn combined_retry<'a>(errors: impl Iterator<Item = &'a ErrorView>) -> Retry {
+    let rank = |r: Retry| match r {
+        Retry::Never => 0,
+        Retry::AfterOperator => 1,
+        Retry::Now => 2,
+    };
+    errors
+        .map(|e| e.retry)
+        .max_by_key(|r| rank(*r))
+        .unwrap_or(Retry::Never)
+}
+
+/// `text` ending in a full stop, so pair sentences joined by a space read as sentences.
+fn full_stop(text: &str) -> String {
+    if text.ends_with('.') {
+        text.to_string()
+    } else {
+        format!("{text}.")
+    }
+}
+
+/// One pair's sentence. A failed pair is "Not confirmed" — never "NOT recorded" and never "it
+/// stays on the banner": a commit-unknown error may have recorded it, and only the banner's
+/// re-read says whether the pair is still open.
 fn pair_sentence(r: &PairResult) -> String {
     let (low, high) = (r.low, r.high);
     match &r.outcome {
@@ -248,10 +305,10 @@ fn pair_sentence(r: &PairResult) -> String {
             "Recorded that charts {low} and {high} are different people, but a judgement already \
              standing for that pair outranks it; the charts stay as that judgement left them."
         ),
-        Err(e) => format!(
-            "NOT recorded for charts {low} and {high}: {} — it stays on the banner.",
+        Err(e) => full_stop(&format!(
+            "Not confirmed for charts {low} and {high}: {}",
             e.text
-        ),
+        )),
     }
 }
 

@@ -2,6 +2,7 @@
 //! an absent banner must only ever mean "checked, none open".
 use super::*;
 use crate::chart_set::MemberLine;
+use crate::funnel::view::{ErrorView, Retry};
 use cairn_node::chart_link::LinkEffect;
 use cairn_node::duplicate_check::CheckState;
 use uuid::Uuid;
@@ -74,7 +75,7 @@ fn an_entry_names_the_other_chart_and_its_current_medications() {
     );
     assert_eq!(
         e.medications_heading,
-        "On the other chart — not part of this record"
+        "On the other record — not part of this one until linked"
     );
     assert_eq!(
         e.medications.len(),
@@ -223,7 +224,7 @@ fn different_people_reports_each_pair_and_reloads() {
 }
 
 #[test]
-fn a_partly_failed_judgement_names_the_pair_left_open() {
+fn a_partly_failed_judgement_names_the_pair_not_confirmed() {
     let r = different_people_report(vec![
         PairResult {
             low: id(1),
@@ -237,11 +238,143 @@ fn a_partly_failed_judgement_names_the_pair_left_open() {
         },
     ])
     .unwrap();
-    assert!(r.sentence.contains(&format!(
-        "NOT recorded for charts {} and {}: held elsewhere — it stays on the banner.",
+    assert!(r.sentence.ends_with(&format!(
+        "Not confirmed for charts {} and {}: held elsewhere.",
         id(2),
         id(9)
     )));
+}
+
+/// What `unlink_charts` returns when the connection drops DURING the commit, as the window words
+/// it: no refusal marker and no SQLSTATE, so `data_error_from` reads an outage — "not
+/// confirmed", `Retry::Now`. The judgement may have been recorded.
+fn commit_unknown() -> ErrorView {
+    crate::link::unlink_view::unlink_error_view(&anyhow::anyhow!(
+        "commit outcome unknown for event {} — check whether it was recorded before retrying, \
+         or the judgement may be recorded twice",
+        id(77)
+    ))
+}
+
+/// Final review I2: a lone commit-unknown pair is its own ErrorView, unchanged — "not
+/// confirmed", and the button kept (`Now`), exactly as a lone Link or Unlink outage is.
+#[test]
+fn a_lone_commit_unknown_pair_is_its_own_error_unchanged() {
+    let err = different_people_report(vec![PairResult {
+        low: id(1),
+        high: id(9),
+        outcome: Err(commit_unknown()),
+    }])
+    .unwrap_err();
+    assert_eq!(err, commit_unknown());
+    assert_eq!(err.retry, Retry::Now);
+    assert_eq!(
+        err.text,
+        format!(
+            "The unlink was not confirmed: commit outcome unknown for event {} — check whether \
+             it was recorded before retrying, or the judgement may be recorded twice",
+            id(77)
+        )
+    );
+}
+
+/// Final review I2: a commit-unknown pair beside a recorded one is "Not confirmed" — never
+/// "NOT recorded", and never "it stays on the banner": it may have been recorded, and only the
+/// banner's re-read (`reload`) says which.
+#[test]
+fn a_commit_unknown_pair_beside_a_recorded_one_is_not_confirmed_never_not_recorded() {
+    let r = different_people_report(vec![
+        PairResult {
+            low: id(1),
+            high: id(8),
+            outcome: Ok(LinkEffect::TookEffect),
+        },
+        PairResult {
+            low: id(2),
+            high: id(9),
+            outcome: Err(commit_unknown()),
+        },
+    ])
+    .unwrap();
+    assert!(
+        r.reload,
+        "the banner must re-read to learn what the lost commit did"
+    );
+    assert_eq!(
+        r.sentence,
+        format!(
+            "Recorded: charts {} and {} are different people. This pair is closed on this node, \
+             and on every node once the judgement syncs. Not confirmed for charts {} and {}: The \
+             unlink was not confirmed: commit outcome unknown for event {} — check whether it was \
+             recorded before retrying, or the judgement may be recorded twice.",
+            id(1),
+            id(8),
+            id(2),
+            id(9),
+            id(77)
+        )
+    );
+}
+
+/// Final review I2 (the #713 hazard): when EVERY pair failed, a refused first pair must not
+/// hide a commit-unknown second one. One ErrorView names both, and carries the commit-unknown's
+/// `Now` — a `Never` would claim a decided outcome that may not exist.
+#[test]
+fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verdict() {
+    let err = different_people_report(vec![
+        PairResult {
+            low: id(1),
+            high: id(8),
+            outcome: Err(refused("The unlink was refused: held elsewhere")),
+        },
+        PairResult {
+            low: id(2),
+            high: id(9),
+            outcome: Err(commit_unknown()),
+        },
+    ])
+    .unwrap_err();
+    assert_eq!(err.retry, Retry::Now);
+    assert_eq!(
+        err.text,
+        format!(
+            "Not confirmed for charts {} and {}: The unlink was refused: held elsewhere. Not \
+             confirmed for charts {} and {}: The unlink was not confirmed: commit outcome unknown \
+             for event {} — check whether it was recorded before retrying, or the judgement may \
+             be recorded twice.",
+            id(1),
+            id(8),
+            id(2),
+            id(9),
+            id(77)
+        )
+    );
+}
+
+/// The combined retry is the most retryable class among the failed pairs, whatever their order.
+#[test]
+fn the_combined_retry_is_the_most_retryable_among_the_failed_pairs() {
+    let fail = |n: u128, retry: Retry| PairResult {
+        low: id(n),
+        high: id(n + 50),
+        outcome: Err(ErrorView {
+            text: "x".into(),
+            retry,
+        }),
+    };
+    let combined = |rs: Vec<PairResult>| different_people_report(rs).unwrap_err().retry;
+    assert_eq!(
+        combined(vec![fail(1, Retry::Now), fail(2, Retry::Never)]),
+        Retry::Now
+    );
+    assert_eq!(
+        combined(vec![fail(1, Retry::Never), fail(2, Retry::AfterOperator)]),
+        Retry::AfterOperator
+    );
+    assert_eq!(
+        combined(vec![fail(1, Retry::Never), fail(2, Retry::Never)]),
+        Retry::Never
+    );
 }
 
 #[test]

@@ -443,8 +443,9 @@ not an adjustment. Five opens each, same session state (key locked or unlocked, 
 - [ ] Each **Review** button announces **whose record** it opens (its `aria-describedby` points at the
       entry's first identity line), so two entries are told apart by name and date of birth, never a
       bare "Review" repeated.
-- [ ] The other record's medications are announced under "on the other chart — not part of this
-      record", never read as lines of the open chart; a failed read is a spoken line, not silence.
+- [ ] The other record's medications are announced under "On the other record — not part of this
+      one until linked", never read as lines of the open chart; a failed read is a spoken line, not
+      silence.
 - [ ] Pressing **Review** shows both **Different people** and **Link — same person** (when the
       comparison is complete); a comparison that could not be read in full shows **neither**. After a
       refusal that cannot change on retry both are gone (compare again to get them back).
