@@ -23,6 +23,7 @@
 
 mod chart_set;
 mod commands;
+mod duplicates;
 mod funnel;
 mod link;
 mod state;
