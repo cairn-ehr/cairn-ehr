@@ -84,7 +84,10 @@ pub fn entry_view(
     let mut notes = vec![];
     let identity_lines = match identities {
         Ok(lines) if !lines.is_empty() => lines.into_iter().map(|l| l.text).collect(),
-        Ok(_) => vec![format!("chart {review_chart}")],
+        Ok(_) => {
+            notes.push("No name or date of birth is recorded for the other chart.".into());
+            vec![format!("chart {review_chart}")]
+        }
         Err(e) => {
             notes.push(format!(
                 "The other chart's name and date of birth could not be read: {e}"
@@ -147,8 +150,11 @@ pub fn section_view(
 /// The record's check lines. A checked record on a node that is not stalled has none.
 ///
 /// R4's `chart_line` says "This chart: …" — ambiguous on a linked record — so only the OPENED
-/// chart uses it; every other member is named. The node's status line follows whenever a member
-/// line was shown (it says why "not yet run" is not moving) or the node is stalled; an
+/// chart uses it; every other member is named. The node's status line follows a member line
+/// (it says why "not yet run" is not moving) when the node is `NeverRun` or `CatchingUp`, and
+/// always when it is `Stalled`. It is NEVER added for `Current`: a linked member not held on this
+/// node reads pending forever (`cairn_chart_check_pending` is TRUE for a chart not held here), and
+/// "not yet run" followed by "up to date" would contradict itself on every healthy node. An
 /// unreadable status is always shown.
 pub fn check_lines(
     opened: Uuid,
@@ -184,7 +190,12 @@ pub fn check_lines(
     match status {
         Err(e) => lines.push(format!("Duplicate check status unknown: {e}")),
         Ok(state) => {
-            if !lines.is_empty() || matches!(state, CheckState::Stalled { .. }) {
+            let explains = match state {
+                CheckState::Stalled { .. } => true,
+                CheckState::Current { .. } => false,
+                _ => !lines.is_empty(),
+            };
+            if explains {
                 lines.push(status_line(&state));
             }
         }
@@ -225,7 +236,7 @@ fn pair_sentence(r: &PairResult) -> String {
     let (low, high) = (r.low, r.high);
     match &r.outcome {
         Ok(LinkEffect::TookEffect) => format!(
-            "Recorded: charts {low} and {high} are different people. This possible duplicate is \
+            "Recorded: charts {low} and {high} are different people. This pair is \
              closed on this node, and on every node once the judgement syncs."
         ),
         Ok(LinkEffect::StillJoined) => format!(

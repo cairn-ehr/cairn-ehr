@@ -214,7 +214,7 @@ fn different_people_reports_each_pair_and_reloads() {
     assert_eq!(
         r.sentence,
         format!(
-            "Recorded: charts {} and {} are different people. This possible duplicate is closed on \
+            "Recorded: charts {} and {} are different people. This pair is closed on \
              this node, and on every node once the judgement syncs.",
             id(1),
             id(9)
@@ -256,5 +256,74 @@ fn a_wholly_failed_judgement_is_the_refusal_itself() {
     assert_eq!(
         different_people_report(vec![]).unwrap_err().text,
         NOTHING_OPEN
+    );
+}
+
+#[test]
+fn a_pending_unheld_member_on_a_current_node_gets_no_contradicting_status() {
+    let checks = [
+        ChartCheck {
+            chart: id(1),
+            pending: Ok(false),
+        },
+        ChartCheck {
+            chart: id(2),
+            pending: Ok(true),
+        },
+    ];
+    let lines = check_lines(
+        id(1),
+        &checks,
+        &[member(2, "Ann LEE")],
+        Ok(CheckState::Current {
+            last_ran: Some("09:15".into()),
+        }),
+    );
+    assert_eq!(
+        lines,
+        vec![format!(
+            "Linked chart Ann LEE (chart {}): duplicate check not yet run since its identity details last changed.",
+            id(2)
+        )]
+    );
+}
+
+#[test]
+fn an_entry_with_no_identity_lines_says_so() {
+    let e = entry_view(id(9), false, Ok(vec![]), Err("x".into()));
+    assert_eq!(e.identity_lines, vec![format!("chart {}", id(9))]);
+    assert!(e
+        .notes
+        .contains(&"No name or date of birth is recorded for the other chart.".to_string()));
+}
+
+#[test]
+fn still_joined_and_outranked_sentences_are_pinned() {
+    let r = different_people_report(vec![
+        PairResult {
+            low: id(1),
+            high: id(8),
+            outcome: Ok(LinkEffect::StillJoined),
+        },
+        PairResult {
+            low: id(2),
+            high: id(9),
+            outcome: Ok(LinkEffect::Outranked),
+        },
+    ])
+    .unwrap();
+    assert_eq!(
+        r.sentence,
+        format!(
+            "Recorded that charts {} and {} are different people — but they read as one record \
+             through other links, so nothing was split. The links joining them are listed under \
+             \"How these charts are linked\". Recorded that charts {} and {} are different people, \
+             but a judgement already standing for that pair outranks it; the charts stay as that \
+             judgement left them.",
+            id(1),
+            id(8),
+            id(2),
+            id(9)
+        )
     );
 }
