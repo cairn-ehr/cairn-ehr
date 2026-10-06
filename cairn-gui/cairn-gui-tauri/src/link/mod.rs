@@ -8,7 +8,7 @@
 //!
 //! Every command here applies the chart-command rules IN THIS ORDER, and each test pins one:
 //! the chart on screen (`displayed_patient`), the displayed set (`check_displayed_set`), the
-//! other chart was shown by a list (`shown`), it is not already in the record, and — for the
+//! other chart is not already in the record, it was shown (a list, or R5a's banner), and — for the
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
 //!
@@ -91,11 +91,11 @@ async fn resolve_pair(
         }
     })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
+    if left.contains(&other) {
+        return Err(refused(ALREADY_IN_RECORD)); // before admission: no proposal read for it
+    }
     // A list on screen, or (R5a) an open proposal the banner showed.
     let shown_name = crate::duplicates::admit_other(state, &left, other).await?;
-    if left.contains(&other) {
-        return Err(refused(ALREADY_IN_RECORD));
-    }
     Ok((patient, left, other, shown_name))
 }
 

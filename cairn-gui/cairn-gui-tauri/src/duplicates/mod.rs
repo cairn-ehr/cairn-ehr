@@ -74,9 +74,10 @@ pub async fn duplicate_section(
             .map(|s| classify(&s, STALLED_AFTER_SECS))
             .map_err(|e| operator_chain(&e));
         (found, identities, checks, status)
-    }; // lock released here: `read_chart_of` below takes it again.
-       // Phase 2: each shown entry's medications through the SAME read opening that chart gives
-       // (§5.9 custody and sealing unchanged).
+    };
+    // The lock is released here: `read_chart_of` below takes it again.
+    // Phase 2: each shown entry's medications through the SAME read opening that chart gives
+    // (§5.9 custody and sealing unchanged).
     let entries = match found {
         Err(e) => Err(e),
         Ok(found) => {
@@ -137,11 +138,17 @@ pub(crate) async fn admit_other(
 
 /// "Different people — not the same person" (R5a; offered only on a banner's comparison).
 ///
-/// The rules, IN THIS ORDER (each pinned by a test, mirroring `link::link_impl`): the chart on
-/// screen; this record's set is the one compared (`THIS_CHANGED`); fixture mode; the other
-/// record's set is the one compared (`OTHER_CHANGED`); the key. Then the node judges every pair
-/// still open between the two records, read fresh — `NothingOpen` means a colleague got there
-/// first and nothing was signed.
+/// The rules, IN THIS ORDER (mirroring `link::link_impl`): the chart on screen; this record's
+/// set is the one compared (`THIS_CHANGED`); the other chart id is well-formed (`NOT_ON_SCREEN`,
+/// a window fault); fixture mode; the other record's set is the one compared (`OTHER_CHANGED`);
+/// the key. Then the node judges every pair still open between the two records, read fresh —
+/// `NothingOpen` means a colleague got there first and nothing was signed.
+///
+/// Pinned by the tests below: the first four (fixture mode is where they can be reached). The
+/// last two — `OTHER_CHANGED` and the locked key — and `admit_other`'s live proposal branch sit
+/// past fixture mode, and this crate has no DB-gated tests: they are covered by cairn-node's
+/// `duplicate_review` DB suite (what the node does with the pairs) and by RUNBOOK §11's live pass
+/// (the window's own refusals), not by a test here.
 pub async fn different_people_impl(
     state: &AppState,
     patient_id: &str,
@@ -157,12 +164,12 @@ pub async fn different_people_impl(
             refused(e)
         }
     })?;
+    let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
     if state.is_mock() {
         return Err(refused(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
-    let other: Uuid = other_id.parse().map_err(|_| refused(NOTHING_OPEN))?;
     let right =
         check_displayed_set(&chart_set_of(state, other).await?, &other_charts).map_err(|e| {
             if e == CHANGED {
@@ -274,6 +281,32 @@ mod tests {
     async fn in_fixture_mode_an_unshown_chart_keeps_the_not_on_screen_refusal() {
         let state = AppState::mock(Some(fixture()));
         let err = admit_other(&state, &ChartSet::single(fixture()), Uuid::from_u128(2))
+            .await
+            .unwrap_err();
+        assert_eq!(err.text, crate::link::view::NOT_ON_SCREEN);
+    }
+
+    /// Final review M5: a chart already in this record is refused BEFORE Review's admission is
+    /// asked — no list showed it here, so admitting first would refuse it as "not on screen"
+    /// (and, live, spend a proposal read on a chart that can never be compared).
+    #[tokio::test]
+    async fn an_in_record_chart_is_refused_before_any_admission() {
+        let state = AppState::mock(Some(fixture()));
+        let p = fixture().to_string();
+        let err = crate::link::compare_impl(&state, &p, vec![p.clone()], &p)
+            .await
+            .unwrap_err();
+        assert_eq!(err.text, crate::link::view::ALREADY_IN_RECORD);
+    }
+
+    /// Final review M4c: a malformed other chart id is a window fault ("not on screen", as
+    /// `link_impl` words it) — never "already judged", which would tell the clinician a colleague
+    /// resolved something nobody touched.
+    #[tokio::test]
+    async fn a_malformed_other_chart_is_not_on_screen() {
+        let state = AppState::mock(Some(fixture()));
+        let p = fixture().to_string();
+        let err = different_people_impl(&state, &p, vec![p.clone()], "not-a-uuid", vec![])
             .await
             .unwrap_err();
         assert_eq!(err.text, crate::link::view::NOT_ON_SCREEN);
