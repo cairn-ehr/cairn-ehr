@@ -1046,6 +1046,123 @@ per chart, and the anchored range statement is O(relevant anchors × population)
   pairs already resolved by identity events (same component, or any `patient_link` row). A
   colleague's link/unlink arriving by sync clears our entry.
 
+#### R5a — the banner, designed 2026-10-06
+
+R5 is built as two slices: **R5a, the banner** (this section), then **R5b, the worklist**. The
+banner comes first because it puts the hazard on the chart where it bites; the worklist's *Review*
+will open a chart whose banner already does the rest, so R5b is mostly a list. #716 (confirm a
+standing doubted link) and #723 (a doubted row's front-door wording) stay a later small slice.
+
+**The maintainer's decisions (brainstorm, 2026-10-06):**
+- **Slice order: R5a banner → R5b worklist.**
+- **The banner shows the other record's FULL active medication list, read-only, without any act.**
+  The safety value is ambient: a clinician mid-resuscitation will not click *Review*, and the
+  hazard R5 exists for is a drug on chart B the prescriber on chart A cannot see. The cost is
+  stated and accepted: on a false positive (two different people of similar name and birth date)
+  chart A's clinician sees a stranger's drug list. §5.9-sealed bodies stay exactly as sealed as on
+  their own chart; nothing else is withheld. A privacy reviewer asking "why is B's list on A's
+  screen?" should find this paragraph. (The alternatives were a count with the lines behind
+  *Review*, and the identity line alone; both trade ambient safety for disclosure.)
+- **"Different people" is offered only from a banner entry**; a comparison chosen through the
+  "Same person as…" search keeps today's Link-only panel.
+- **Review re-reads the proposal; `AppState::shown` is not widened.**
+- **The other record's medications are read eagerly** at chart open; the runbook measurement
+  decides whether a lazy second paint is ever needed.
+
+**What the R5 bullets above get wrong, and the fix:**
+- **"Minus … any `patient_link` row" lets an un-attested unlink hide a proposal.** Unlinks are not
+  veto-gated, and the ADR-0030 agent writer can author one, so any unreviewed writer could silently
+  clear a duplicate banner. This is the mirror of R1b's ruling that an un-attested unlink is not a
+  doubt (counting it would let any unreviewed writer freeze sign-off), and #700 already says
+  *attested*. A pair is resolved — and leaves the view — only when **(1)** both charts are in one
+  record (same `person_member.person_id`: any standing link, whose doubt R1b already governs), or
+  **(2)** `patient_link` holds an **attested unlink** for the pair.
+- **"Review" (R2's panel) cannot open on a banner's chart today**: `compare_records` refuses an
+  other chart not in `AppState::shown`. See *Review*, below.
+- **The window has no "Different people" for a never-linked pair.** The compare panel offers Link
+  only, and the unlink panel works only on a standing link. The node already supports it
+  (`chart_link::unlink_charts` on a never-linked pair records D4's judgement and moves the local
+  proposal to `rejected`); R5a adds the gesture.
+
+**Data — db/057, `SCHEMA_GENERATION` 56 → 57, no wire change.**
+- A view `match_proposal_open`: `match_proposal` rows whose `status` is open (`pending`, `accepted`,
+  `review` — the same set as `chart_link.rs`'s `OPEN_PROPOSAL_STATUSES`, tied by a drift test),
+  minus the two resolved cases above. Convergence without syncing `match_proposal`: a colleague's
+  attested judgement arriving by sync clears the entry at read time, with no status write.
+  The view is the ONE predicate banner and worklist share.
+
+**Node — a new module `cairn_node::duplicate_review`.**
+- `banner_for(client, &ChartSet)`: the open proposals with exactly one side in the displayed set,
+  **grouped by the other side's record** (`person_charts(other)`) — two of my members proposed
+  against charts of one other record are one entry, not two. Each entry carries the other record's
+  identity line(s), band, status and veto findings, the newest `created_at`, the proposal pairs it
+  stands for, and the other record's **active** medication lines through
+  `list_patient_medications(other)` (ceased lines dropped; the same read, so §5.9 applies
+  unchanged). Newest first.
+- The honesty lines reuse R4's API unchanged: `chart_check_pending` for every member chart (a
+  pending chart gets `chart_line(true)`), and `read_snapshot` → `classify`, so a `Stalled` or
+  `NeverRun` node says why "pending" is not moving.
+- **A failed read is never an empty banner.** An absent banner means only "checked, none open".
+
+**Window.**
+- `<section id="possible-duplicates">` between `#session` and `#chart-warnings`, directly above
+  the medication table (index.html: *DOM order is clinical*). `role="region"` with a label, **never
+  `role="alert"`**: it never takes focus, makes no sound, is never re-popped (§5.12), and stays on
+  every open of either chart until the pair is judged or resolved by sync.
+- An entry: *"Possible duplicate — not yet reviewed: Mary SMYTHE b. 1950-01-07 (chart …)"*, a
+  vetoed pair's finding (an identifier finding is never "verified" — R2b-1's rule), then the other
+  record's active lines under *"on the other chart — not part of this record"*. Those lines are
+  separate data, never part of `ChartPane::list`, so they cannot become a sign-off or cease target
+  by construction. At most **3** entries, then *"N more possible duplicates"*. The quiet
+  check-pending lines sit beneath, and show even when there are no entries.
+- `ChartPane` gains `duplicates`, `duplicates_error` and `check_lines`. Every sentence lives in a
+  pure Rust view module with goldens; a never-proposed chart reads byte-identically to today.
+- **Review** opens the compare panel pre-filled with the entry's other chart.
+  `compare_records` / `link_records` accept an other chart that is in `shown` **or** that the
+  backend, at that moment, re-reads an open proposal for between the displayed set and it. No new
+  `AppState`, nothing stale: a pair a peer resolved a second ago is refused with a reload sentence
+  (D3), never silently honoured.
+- **"Different people"** sits beside *Same person* when the panel was opened from a banner entry.
+  It records an **attested unlink on each proposal pair the entry stands for** (usually one)
+  through `unlink_charts`; each proposal moves to `rejected`, and the view drops the pair on every
+  node once the unlink syncs. Several pairs are several events: a partial failure names the pairs
+  recorded, and the rest stay on the banner — honest, not atomic, acceptable for a rare case. Both
+  buttons keep the existing rules: a locked key is not a verdict (`Retry::Now`), a human key or
+  nothing (ADR-0053), a changed set is refused.
+
+**Errors.** Proposal read fails → `duplicates_error` in the banner's place; the list still opens.
+The other record's medication read fails (a sealed or unopenable body) → that entry shows its
+identity line and *"Its medications could not be read here: …"*, never dropped. A pending-check or
+snapshot read fails → *"Duplicate check status unknown: …"*, never omitted.
+
+**`--mock`** returns no proposals and reads "not yet run"; a proposal fixture joins #722 (the mock
+has no identity model).
+
+**Cost.** Each chart open adds the proposal read, one `person_charts` and one medication read per
+shown entry (≤ 3), one pending check per member and the snapshot. Built eager; the runbook's
+linked-chart-open measurement (≤ the single-chart open) decides. The lever if it misses: load the
+other record's lines on a second paint, off the critical path.
+
+**Tests (TDD).**
+- **DB:** a pending proposal is open; a pair in one record is not; an **attested** unlink hides the
+  pair, an **un-attested** one does not; `rejected` / `applied` / `auto_applied` / `retracted` are
+  not open; the open-status drift guard; the migration-replay guard; the generation pin.
+- **Node:** the entry shows on **both** charts; two members against one other record make one
+  entry; the other record's ceased lines are excluded; a pending chart yields its line; a read
+  failure is an error, never an empty banner; a peer's attested unlink applied through the sync door
+  clears the entry.
+- **Window:** view goldens incl. byte-identical for a never-proposed chart; Review accepted only with
+  a live open proposal; "Different people" records an attested unlink, moves the proposal to
+  `rejected`, refuses a changed set and refuses without an unlocked human key; other-record lines
+  are never sign-off targets; the webview-fields guard covers the new JS.
+
+**§1.2 (R5a).** Paper counterpart: the clerk lays the two folders side by side and clips them, or
+marks them "different". Paper 3 acts → forced 2 (*Review*, then *Same person* or *Different
+people*) → target 2; opening a chart adds 0 acts. `M ≤ N`. Budget: banner to recorded judgement
+≤ 20 s; the chart open with a banner ≤ the single-chart open. Measured by the runbook (human act).
+
+**Not in R5a:** the worklist (R5b); #716; #723; lazy loading unless the measurement demands it.
+
 ## Error handling
 
 - Worker down or behind → the honest-lag line; writes are never affected (the trigger cannot raise).
