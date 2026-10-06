@@ -511,15 +511,24 @@ widened.
     - `duplicates/` holds every sentence in Rust: each failure becomes a line, and the check-pending lines reuse R4's
       wording;
     - `admit_other` handles Review's admission;
-    - `different_people_impl` and `duplicates.js` draw the banner;
+    - `duplicate_section` builds the banner and `duplicates.js` draws it; `different_people_impl` is the "Different
+      people" command;
     - `link.js`'s `sendJudgement` disables both judgement buttons while a judgement is in flight.
 - **Reviews:**
   - Tasks 4 and 6 each took one fix round: a Current node no longer contradicts an unheld member's line; load order
     puts `duplicates.js` before `funnel.js`; both buttons hide on a verdict; Review names its record.
   - The opus final review found I1–I4 (both buttons live in flight; "NOT recorded" over an outcome-unknown commit; a
     stale stored veto note; no carried-Err test). All four were fixed in one wave and re-reviewed.
+  - A five-reviewer PR review (2026-10-07) found no critical defect. Fixed on the PR: "Different people"'s refusal
+    order (`ALREADY_IN_RECORD`, then `OTHER_CHANGED` before fixture mode, as Link); its failure wording (#740's verb);
+    names and drugs carried as one tuple and read over one set; a reload closing a newer comparison; focus back to
+    Review; six new DB tests. Filed #741–#747 (below).
 - **Filed:** #736 (an `accepted` row's wording) · #737 (identical entry headings) · #738 (`cairn-gui-tauri` has no
-  DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure wording). Commented on #708 (CARNLK re-check) and #722 (no proposal fixture).
+  DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure wording; its verb fixed on the PR) · from the PR review: #741 (the
+  matcher counts an un-attested unlink as judged) · #742 (no banner while catching up) · #743 (`review` rows never
+  re-assessed) · #744 (an unrecognised status) · #745 (a missing or stale banner after a failure) · #746 (Different
+  people with an unreadable drug list) · #747 (the banner query and its index). Commented on #708 (CARNLK re-check) and
+  #722 (no proposal fixture).
 - **§1.2:** the clerk lays two folders side by side and clips or marks them. Paper 3 → forced 2 (Review, then Same
   person or Different people) → target 2; a chart open adds 0 acts. Budget ≤ 20 s, and the open with the banner ≤ the
   single-chart open. RUNBOOK §11, a human act owed.

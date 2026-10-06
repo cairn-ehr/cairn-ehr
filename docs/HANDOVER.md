@@ -5,10 +5,11 @@
 > [!NOTE]
 > **⇒ R5a — THE POSSIBLE-DUPLICATE BANNER (#680) — BUILT ON PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)
 > (2026-10-06): seven tasks subagent-driven, per-task reviews (two one-round fix loops), an opus final review, one fix
-> wave and its re-review. AWAITING THE MAINTAINER'S MERGE.** R4 (PR #724) and #725 (PR #733) merged 2026-10-05. Repair
+> wave and its re-review; then (2026-10-07) a five-reviewer PR review and its fix round — see the design page's "PR
+> review round". AWAITING THE MAINTAINER'S MERGE.** R4 (PR #724) and #725 (PR #733) merged 2026-10-05. Repair
 > path #679 · #680 · #681; design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R5a
-> designed + as-built sections); plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`; runbook
-> `docs/developers/running-the-duplicate-check.md`. `db/057`, **`SCHEMA_GENERATION` 57**; spec **v0.79** (no ADR — R5a
+> designed + as-built sections); plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`; R4's
+> worker runbook `docs/developers/running-the-duplicate-check.md` (R5a's human pass is `cairn-gui-tauri`'s RUNBOOK §11). `db/057`, **`SCHEMA_GENERATION` 57**; spec **v0.79** (no ADR — R5a
 > implements ADR-0076's decisions).
 >
 > **⇒ NEXT, in order:**
@@ -20,7 +21,14 @@
 >    reviewed") is a decision for it. **#728** (the Pi re-measure) can run beside it. #699 stays open until the
 >    maintainer closes it.
 > 2. **Open repair-path issues:** from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no
->    DB-gated tests for its live branches) · **#739** (an unheld member's "not yet run" line) · **#740** ("Different people" failures worded as an unlink) · #708 gained R5a's
+>    DB-gated tests for its live branches) · **#739** (an unheld member's "not yet run" line) · **#740** ("Different
+>    people" failure wording — the verb fixed on PR #735; the stutter, the commit-unknown sentence and the reload remain)
+>    · from the PR #735 review: **#741** (the matcher's skip rule counts an un-attested unlink as judged — a decision,
+>    amends ADR-0076 decision 4; fix BEFORE R5b relies on the view) · **#742** (no banner while catching up — a
+>    principle-4 decision) · **#743** (`review` rows never re-assessed; a soft-vetoed joined pair flagged nowhere — R5b
+>    inherits it) · **#744** (an unrecognised status hides a proposal) · **#745** (a missing or stale banner after a
+>    failure) · **#746** (Different people with an unreadable drug list — a decision) · **#747** (the banner query's
+>    index) · #708 gained R5a's
 >    CARNLK re-check comment, #722 the missing proposal fixture · **#726** (every-connect DDL takes ACCESS EXCLUSIVE) · **#727** (bulk mode has no poison
 >    isolation) · **#729** (mode chosen once per round) · **#730** (the 101–1000 skipped-block band — a decision; since
 >    #725 the cap bounds real work) · **#731** (no "charts failing" signal) · **#732** (the matcher conftest leaves
