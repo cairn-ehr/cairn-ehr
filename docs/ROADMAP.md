@@ -436,8 +436,8 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b, R3, **R4** (PR #724) and **#725** (PR #733) are merged (entries below); **R5**
-  (banner + worklist, #680; #700, #716, #723) is next, on branch `feat/r5-banner-worklist`. Plan each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724) and #725 (PR #733) are merged; **R5a** (the banner) is built on PR
+  #735 (entry below); **R5b** (the worklist, #680; #716, #723, #736 beside it) is next. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -475,43 +475,54 @@ No SQL object; generation stays 55. Maintainer's decisions: each member line is 
 - **Filed:** #722 (`--mock` has no linked pair) · #723 (a doubted set called "One person" — with R5).
 - **§1.2:** the card index's clipped slot. Find, open, register 1 → 1 → 1 each; one added query per search.
 
-### 2026-10-04/05 — repair path R4: the commit-time duplicate check (ADR-0076 decision 7; PR #724)
+### 2026-10-04/05 — repair path R4: the commit-time duplicate check (PR #724) and #725 (PR #733) — merged 2026-10-05
 
-Merged 2026-10-05, PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) (Refs #679). Plan
-`docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md`; design page "R4 — designed 2026-10-04" + its
-**as-built note** (every deviation and the measurement); the SDD ledger's rulings R1–R21. `db/056_match_pending.sql`,
-`SCHEMA_GENERATION` 55 → **56** (cairn-sync's list lags, #284). No wire change. Maintainer's decisions: the node read +
-CLI now, the window's lines with R5; a standalone operator-run worker; an append-only notice log.
-- **Built:** db/056 — `match_pending` (append-only notices), a structurally non-raising definer hook on the six matcher
-  inputs (`patient_chart` INSERT-only), `match_worker_state`, `cairn_duplicate_check_status()` (quiet time = since the
-  later of the OLDEST waiting notice and the worker's last COMPLETED work) and `cairn_chart_check_pending(uuid)` (TRUE
-  until a worker has run, while a notice waits, and for a chart not held here). Matcher — `targeted.py` (the sweep's
-  own SQL filtered to one chart; the drift canary), `judged.py` (skip judged pairs, both modes), `assess`/`persist`,
-  `queue_db.py` (delete exactly the notice ids READ), `worker.py` (per chart newest-first, batch 1, rollback after
-  every read; one sweep above 30 waiting; success-only progress), `watch.py`, `cairn-matcher watch` (psycopg ≥ 3.2),
-  `eval/measure_check.py`. Node — `duplicate_check.rs` (`classify`, `status_line`, `chart_line`, two reads) and
-  `cairn-node duplicate-check [--patient]` (no schema replay). Runbook `docs/developers/running-the-duplicate-check.md`.
-- **Measured** (M3 Max, PG 18.1): per-chart p95 590 ms at 2 000 records, **9 651 ms at 10 000** (budget was ≤ 2 s) —
-  the blocking SQL (~7 s), not the pairs; one sweep 37.6 s / 129.9 s. **Fixed by #725 (below): p95 1 398 ms.**
-- **Filed:** #725 (the per-chart blocking pass — fix before R5) · #726 (every-connect DDL takes ACCESS EXCLUSIVE) · #727
-  (bulk mode has no poison isolation) · #728 (measure on the Pi) · #729 (mode chosen once per round) · #730 (the
-  101–1000 skipped-block band) · #731 (no "charts failing" signal) · #732 (conftest leaves `patient_chart`). Commented #680.
-- **§1.2:** the clerk's possible-duplicate tray. At the desk 0 → 0 → 0; the operator's status line is not a clinical
-  gesture. Registration-to-proposal latency measured above (#725, #728).
+Plans `docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md` and `…/2026-10-05-725-range-blocking-cost.md`;
+design page "R4 — designed / as built" and "#725 — as fixed". `db/056_match_pending.sql`, `SCHEMA_GENERATION` 56.
+Maintainer's decisions: the node read + CLI now, the window's lines with R5; a standalone operator-run worker; an
+append-only notice log.
+- **Built (R4):** db/056 (append-only notices, a structurally non-raising hook on the six matcher inputs,
+  `match_worker_state`, `cairn_duplicate_check_status()`, `cairn_chart_check_pending(uuid)`); the matcher worker
+  (`targeted.py`, `judged.py`, `assess`/`persist`, `queue_db.py`, `worker.py`, `cairn-matcher watch`,
+  `eval/measure_check.py`); `cairn-node duplicate-check` + `duplicate_check.rs`; runbook
+  `docs/developers/running-the-duplicate-check.md`.
+- **#725:** the cost was the range statement's `dob-range+sex` self-join (a 14.7 M-row planner cross-product); the
+  sexes now ride on the window rows and the per-chart statement is anchored. Per-chart p95 **9 651 → 1 398 ms at 10 000
+  charts** (budget ≤ 2 s met); `bulk_threshold` 30 → 250; blocking SQL in the pure `pipeline/blocking_sql.py`.
+- **Filed:** #725 (left open; the Pi figure is #728) · #726 · #727 · #728 · #729 · #730 · #731 · #732 · #734.
+- **§1.2:** the clerk's possible-duplicate tray; at the desk 0 → 0 → 0.
 
-### 2026-10-05 — #725: the per-chart duplicate check's range blocking (PR #733, merged)
+### 2026-10-06 — repair path R5a: the possible-duplicate banner (PR #735)
 
-Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; design page "#725 — as fixed". Also fixed PR #724's
-red `ruff + pytest` job: the blocking SQL moved to the pure `pipeline/blocking_sql.py` and
-`test_pure_modules_import_without_psycopg.py` guards the CI-only failure mode.
-- **Found:** the cost was the RANGE statement (7.5–24 s; the symmetric one 90–180 ms) — its `dob-range+sex` arm's
-  `blocking_sex` self-join on `sex`, a 14.7 M-row planner cross-product. **Built:** the sexes ride on the window rows
-  (the arm is a filter); the per-chart range statement is anchored on the chart (`relevant_anchor`), the sweep's plus
-  one CTE and one clause. Pins: `test_blocking_sql_shape.py`, two `test_targeted_blocking.py` DB tests, the drift canary.
-- **Measured:** per-chart p50/p95 129/256 ms at 2 000, **761/1 398 ms at 10 000** (budget ≤ 2 s met); sweep pairs
-  unchanged; the sweep's blocking SQL 7.65 → 1.43 s. `bulk_threshold` 30 → 250 (break-evens ~330 / ~202). Pi:
-  #728. No SQL object; generation stays 56. Review wave: the drift canary also runs capped (10, 6). Filed #734.
-- **§1.2:** not clinical-surface (a latency fix; R5 owes the benchmark).
+Built on PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735) (Refs #680). Design page "R5a — the banner, designed
+2026-10-06" + its as-built note; plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`.
+`db/057_match_proposal_open.sql`, `SCHEMA_GENERATION` 56 → **57**. No wire change, no ADR (ADR-0076's decisions).
+Maintainer's decisions: R5 → R5a banner then R5b worklist; the other record's FULL active list shows read-only (the
+privacy trade-off recorded in the design); "Different people" only from a banner entry; Review re-reads, `shown` not
+widened.
+- **Built:**
+  - db/057 `match_proposal_open`: open proposals minus pairs in one record or with an ATTESTED unlink. This corrects
+    the R5 bullets' "any `patient_link` row".
+  - `cairn_node::duplicate_review`:
+    - grouped by the other record, with a fresh veto via `cairn_match_veto`;
+    - `open_pairs_between`;
+    - `record_different_people`: one attested unlink per still-open pair, with failures carried.
+  - The window:
+    - `duplicates/` holds every sentence in Rust: each failure becomes a line, and the check-pending lines reuse R4's
+      wording;
+    - `admit_other` handles Review's admission;
+    - `different_people_impl` and `duplicates.js` draw the banner;
+    - `link.js`'s `sendJudgement` disables both judgement buttons while a judgement is in flight.
+- **Reviews:**
+  - Tasks 4 and 6 each took one fix round: a Current node no longer contradicts an unheld member's line; load order
+    puts `duplicates.js` before `funnel.js`; both buttons hide on a verdict; Review names its record.
+  - The opus final review found I1–I4 (both buttons live in flight; "NOT recorded" over an outcome-unknown commit; a
+    stale stored veto note; no carried-Err test). All four were fixed in one wave and re-reviewed.
+- **Filed:** #736 (an `accepted` row's wording) · #737 (identical entry headings) · #738 (`cairn-gui-tauri` has no
+  DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure wording). Commented on #708 (CARNLK re-check) and #722 (no proposal fixture).
+- **§1.2:** the clerk lays two folders side by side and clips or marks them. Paper 3 → forced 2 (Review, then Same
+  person or Different people) → target 2; a chart open adds 0 acts. Budget ≤ 20 s, and the open with the banner ≤ the
+  single-chart open. RUNBOOK §11, a human act owed.
 
 ## Above the foundation line (NOT in this roadmap)
 
