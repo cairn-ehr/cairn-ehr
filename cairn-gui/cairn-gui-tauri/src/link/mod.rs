@@ -8,7 +8,7 @@
 //!
 //! Every command here applies the chart-command rules IN THIS ORDER, and each test pins one:
 //! the chart on screen (`displayed_patient`), the displayed set (`check_displayed_set`), the
-//! other chart was shown by a list (`shown`), it is not already in the record, and — for the
+//! other chart is not already in the record, it was shown (a list, or R5a's banner), and — for the
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
 //!
@@ -67,7 +67,8 @@ enum Act {
 }
 
 /// The four screen checks both commands share. Returns the opened chart, its displayed set,
-/// and the other chart (with the name the list showed, for fixture mode).
+/// and the other chart (with the name the list showed — `None` when an open proposal admitted
+/// it instead — for fixture mode).
 ///
 /// For Compare, `charts` is the medication list's displayed set, and a changed set keeps the
 /// list's own wording ("reload the chart"). For Link, `charts` is the set the COMPARISON was
@@ -81,7 +82,7 @@ async fn resolve_pair(
     patient_id: &str,
     charts: &[String],
     other_id: &str,
-) -> Result<(Uuid, ChartSet, Uuid, String), ErrorView> {
+) -> Result<(Uuid, ChartSet, Uuid, Option<String>), ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let left = check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(|e| {
         if act == Act::Link && e == CHANGED {
@@ -91,16 +92,11 @@ async fn resolve_pair(
         }
     })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
-    let shown_name = state
-        .shown
-        .lock()
-        .await
-        .get(&other)
-        .map(|c| c.display_name.clone())
-        .ok_or_else(|| refused(NOT_ON_SCREEN))?;
     if left.contains(&other) {
-        return Err(refused(ALREADY_IN_RECORD));
+        return Err(refused(ALREADY_IN_RECORD)); // before admission: no proposal read for it
     }
+    // A list on screen, or (R5a) an open proposal the banner showed.
+    let shown_name = crate::duplicates::admit_other(state, &left, other).await?;
     Ok((patient, left, other, shown_name))
 }
 
@@ -133,7 +129,12 @@ pub async fn compare_impl(
                     &header.unwrap_or_default(),
                     "confirmed",
                 )]),
-                right: Ok(vec![fixture_facts(other, &shown_name, "confirmed")]),
+                // Fixture mode admits only by a list (it has no proposals), so a name is there.
+                right: Ok(vec![fixture_facts(
+                    other,
+                    shown_name.as_deref().unwrap_or_default(),
+                    "confirmed",
+                )]),
                 findings: Ok(vec![]),
                 other_medications: meds,
             }

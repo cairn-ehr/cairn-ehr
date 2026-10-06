@@ -203,6 +203,8 @@ pub struct ChartPane {
     pub links: Vec<crate::link::record_links::RecordLinkView>,
     /// Set when those links could not be read; the list and the member lines still show.
     pub links_error: Option<String>,
+    /// The possible-duplicate banner (R5a); empty and hidden when checked and none open.
+    pub duplicates: crate::duplicates::view::DuplicateSection,
 }
 
 /// Assemble the pane from one chart read and the outcome of reading its member names.
@@ -215,6 +217,7 @@ pub fn chart_pane(
     list: &PatientMedicationList,
     members: Result<Vec<MemberLine>, String>,
     edges: Result<Vec<cairn_node::patient::edges::RecordEdge>, String>,
+    duplicates: crate::duplicates::view::DuplicateSection,
 ) -> ChartPane {
     let (members, members_error) = match members {
         Ok(members) => (members, None),
@@ -236,6 +239,7 @@ pub fn chart_pane(
         members_error,
         links,
         links_error,
+        duplicates,
     }
 }
 
@@ -268,6 +272,7 @@ pub async fn linked_members(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::duplicates::view::DuplicateSection;
     use cairn_medication_view::ChartSet;
     use uuid::Uuid;
 
@@ -427,7 +432,12 @@ mod tests {
     fn a_failed_identity_read_keeps_the_list_and_says_so() {
         let mut list = cairn_medication_view::fixtures::sample_chart();
         list.charts = set(&[1, 0xB]);
-        let pane = chart_pane(&list, Err("connection reset".into()), Ok(vec![]));
+        let pane = chart_pane(
+            &list,
+            Err("connection reset".into()),
+            Ok(vec![]),
+            DuplicateSection::checked_none_open(),
+        );
         assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
         assert!(pane.members.is_empty());
         let warning = pane
@@ -448,6 +458,7 @@ mod tests {
             &cairn_medication_view::fixtures::sample_chart(),
             Ok(vec![]),
             Ok(vec![]),
+            DuplicateSection::checked_none_open(),
         );
         assert!(pane.members_error.is_none());
         assert_eq!(pane.list.charts.len(), 1);
@@ -457,7 +468,12 @@ mod tests {
     #[test]
     fn a_failed_link_read_keeps_the_list_and_says_so() {
         let list = cairn_medication_view::fixtures::sample_chart();
-        let pane = chart_pane(&list, Ok(vec![]), Err("x".into()));
+        let pane = chart_pane(
+            &list,
+            Ok(vec![]),
+            Err("x".into()),
+            DuplicateSection::checked_none_open(),
+        );
         assert_eq!(pane.list.rows.len(), list.rows.len());
         assert!(pane.links.is_empty());
         let warning = pane.links_error.expect("the failure is reported");

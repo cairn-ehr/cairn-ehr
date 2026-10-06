@@ -90,10 +90,14 @@ pub struct ComparisonParts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LinkReportView {
     pub sentence: String,
-    /// Re-read the chart. `false` means the judgement did NOT change the record — only
-    /// [`LinkEffect::Outranked`] — and the webview relies on exactly that: `link.js` and
-    /// `unlink.js` keep the panel open and show the sentence there once, instead of closing it and
-    /// re-reading. A new `false` case must be worded for that panel.
+    /// Re-read the chart. For Link and Unlink, `false` means the judgement did NOT change the
+    /// record — only [`LinkEffect::Outranked`] — and the webview relies on exactly that: `link.js`
+    /// and `unlink.js` keep the panel open and show the sentence there once, instead of closing it
+    /// and re-reading. A new `false` case must be worded for that panel.
+    ///
+    /// "Different people" (R5a, `duplicates::view::different_people_report`) is the second
+    /// producer: it is `true` whenever ANY pair was recorded — even an all-`Outranked` one —
+    /// because the banner must be re-read whatever the record did.
     pub reload: bool,
 }
 

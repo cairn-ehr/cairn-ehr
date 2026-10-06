@@ -3,26 +3,33 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ TWO PRs AWAIT THE MAINTAINER'S MERGE, IN ORDER (2026-10-05):**
-> 1. **PR [#724](https://github.com/cairn-ehr/cairn-ehr/pull/724) — R4, the commit-time duplicate check** (#679). Its
->    `ruff + pytest` job was RED at session start (six R4 test modules could not import psycopg in CI's no-extra job);
->    fixed in `38d6c393`, **all checks green**.
-> 2. **PR [#733](https://github.com/cairn-ehr/cairn-ehr/pull/733) — #725, STACKED on #724** (base `feat/r4-commit-time-worker`; GitHub retargets it to `main` when #724
->    merges and its branch is deleted). Per-chart p95 **9.65 s → 1.4 s** at 10 000 charts (budget ≤ 2 s);
->    `bulk_threshold` 30 → 250. Plan `docs/superpowers/plans/2026-10-05-725-range-blocking-cost.md`; the design page's
->    "#725 — as fixed" note. #725 is left OPEN for the maintainer (the Pi figure is #728).
->
-> R3 (PR #721), R1b (#717), R2b-2 (#711), R2b-1 (#707), R2a (#698) and R1 (#688) are merged. Repair path #679 · #680 ·
-> #681. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; runbook
-> `docs/developers/running-the-duplicate-check.md`. `db/056`, **`SCHEMA_GENERATION` 56**; spec **v0.79**.
+> **⇒ R5a — THE POSSIBLE-DUPLICATE BANNER (#680) — BUILT ON PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)
+> (2026-10-06): seven tasks subagent-driven, per-task reviews (two one-round fix loops), an opus final review, one fix
+> wave and its re-review; then (2026-10-07) a five-reviewer PR review and its fix round — see the design page's "PR
+> review round". AWAITING THE MAINTAINER'S MERGE.** R4 (PR #724) and #725 (PR #733) merged 2026-10-05. Repair
+> path #679 · #680 · #681; design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R5a
+> designed + as-built sections); plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`; R4's
+> worker runbook `docs/developers/running-the-duplicate-check.md` (R5a's human pass is `cairn-gui-tauri`'s RUNBOOK §11). `db/057`, **`SCHEMA_GENERATION` 57**; spec **v0.79** (no ADR — R5a
+> implements ADR-0076's decisions).
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R5** (banner + worklist, #680 — R4's comment there lists what the banner must read; the worklist filters pairs
->    with a `patient_link` row, #700). **#716** and **#723** belong beside it. #699 stays open until the maintainer closes it.
->    **#728** (the Pi re-measure: `python -m cairn_matcher.eval.measure_check --sizes 2000 10000` on a vacuumed scratch
->    DB) can run beside it; if the Pi misses 2 s, the levers are in the #725 plan's "Out of scope".
-> 2. **Open repair-path issues:** **#726** (every-connect DDL takes ACCESS EXCLUSIVE) · **#727** (bulk mode has no poison
+> 1. **R5b — the worklist** "Possible duplicates (N)" at the front door (#680), newest first; its Review opens a chart
+>    whose R5a banner does the rest. It reads db/057's `match_proposal_open` (the attested-unlink filter #700 asked for is
+>    built there). Plan it from the design page's R5 section. **#716** (confirm a doubted standing link) and **#723** (a
+>    doubted row reads "One person") are the small slice beside it; **#736** (an `accepted` row reads "not yet
+>    reviewed") is a decision for it. **#728** (the Pi re-measure) can run beside it. #699 stays open until the
+>    maintainer closes it.
+> 2. **Open repair-path issues:** from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no
+>    DB-gated tests for its live branches) · **#739** (an unheld member's "not yet run" line) · **#740** ("Different
+>    people" failure wording — the verb fixed on PR #735; the stutter, the commit-unknown sentence and the reload remain)
+>    · from the PR #735 review: **#741** (the matcher's skip rule counts an un-attested unlink as judged — a decision,
+>    amends ADR-0076 decision 4; fix BEFORE R5b relies on the view) · **#742** (no banner while catching up — a
+>    principle-4 decision) · **#743** (`review` rows never re-assessed; a soft-vetoed joined pair flagged nowhere — R5b
+>    inherits it) · **#744** (an unrecognised status hides a proposal) · **#745** (a missing or stale banner after a
+>    failure) · **#746** (Different people with an unreadable drug list — a decision) · **#747** (the banner query's
+>    index) · #708 gained R5a's
+>    CARNLK re-check comment, #722 the missing proposal fixture · **#726** (every-connect DDL takes ACCESS EXCLUSIVE) · **#727** (bulk mode has no poison
 >    isolation) · **#729** (mode chosen once per round) · **#730** (the 101–1000 skipped-block band — a decision; since
 >    #725 the cap bounds real work) · **#731** (no "charts failing" signal) · **#732** (the matcher conftest leaves
 >    `patient_chart`) · **#734** (db/046's comment still points at `db.py`; fold in when db/046 is next edited). Earlier: **#708** · **#709** · **#710** · **#712** · **#713** · **#714** · **#715** · **#716** ·
@@ -31,12 +38,32 @@
 >    #335 gained comments.
 > 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
 >    **runbook §10's unlink** (≤ 15 s), the **live Tauri-IPC + VoiceOver pass on a linked pair** (the #699 (a) third-chart
->    unlink, a doubted pair's withheld lines, R3's person row), and R4's **running a supervised worker** on a real node
+>    unlink, a doubted pair's withheld lines, R3's person row), **RUNBOOK §11** (R5a: Review → judgement ≤ 20 s; a chart
+>    open with the banner ≤ the single-chart open; the banner's VoiceOver checks), and R4's **running a supervised worker** on a real node
 >    per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` ≥ 30 s, as the runbook
 >    says).
 > 4. **#620**, the only open item that can still change the wire (brainstorm first). Then **#626**, **#652 + #655**,
 >    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
+>
+> **⇒ R5a'S DURABLE RULES (PR #735) — do not undo any of these** (pins: `tests/match_proposal_open.rs`,
+> `tests/duplicate_review.rs`, `cairn-gui-tauri/src/duplicates/{view_tests.rs,mod.rs}`):
+> - **`match_proposal_open` (db/057) is the ONE "still needs a human" predicate** — banner now, worklist next. A pair
+>   leaves it only when both charts read as one record or an **ATTESTED** unlink stands; **never count an un-attested
+>   unlink** (any unreviewed writer could clear a banner). Its statuses are pinned to `OPEN_PROPOSAL_STATUSES`.
+> - **An absent banner means only "checked, none open"**: every failed read is a worded line (`duplicates/view.rs`).
+>   A Current node never appends "up to date" after a member's "not yet run" line (an unheld member is pending forever).
+> - **`AppState::shown` is NOT widened**: Review's other chart is admitted by `duplicates::admit_other` re-reading the
+>   view at that moment (after `ALREADY_IN_RECORD`). **`duplicate_section` reads in two phases** — never hold
+>   `state.db` (a non-re-entrant tokio Mutex) across `read_chart_of` / `chart_set_of`.
+> - **"Different people" = an attested unlink on every pair STILL open between the two records, read fresh**; a pair's
+>   failure is carried, never `?` (pinned); a failed pair reads "Not confirmed", never "not recorded" (a commit may be
+>   outcome-unknown); all-failed → one ErrorView naming every pair. **The veto note is computed fresh**
+>   (`cairn_match_veto`), never from the stored propose-time `veto_findings`.
+> - **Webview:** `duplicates.js` loads after `main.js` and BEFORE `funnel.js` (whose last line boots) — never a `typeof`
+>   guard on `render`; BOTH judgement buttons are disabled in flight and hidden on a verdict (one human must never
+>   sign Link and Different people ms apart); "Different people" shows only on the banner's own comparison token; the
+>   banner is never `role="alert"` and never takes focus.
 >
 > **⇒ #725'S DURABLE RULES — do not undo** (pins: `matcher/tests/test_blocking_sql_shape.py`,
 > `test_targeted_blocking.py`, `test_pure_modules_import_without_psycopg.py`):
@@ -76,35 +103,20 @@
 > - **`cairn-node duplicate-check` uses `db::connect`, never the schema replay** (it is cron-able; the replay is #726).
 >   Status wording lives only in `duplicate_check.rs` (goldens); the runbook quotes it verbatim.
 >
-> **⇒ R3'S DURABLE RULES (ADR-0076 decision 6, PR #721) — do not undo any of these:**
-> - **Rows are built ONLY by `group_by_person`** (`cairn-patient-search/src/person.rs`: pure, shared so any picker
->   agrees with the node on what a row is; `search.rs` its only production caller). A row sits at its best-ranked
->   member; matched members first in rank order, then unmatched members oldest first; every chart exactly once; the
->   seven ADR-0075 keys still rank CHARTS. Pinned by `person.rs`'s tests and `tests/search_by_person.rs`.
-> - **The signed list is ONLY `CandidateList::displayed_charts()`** — every member of every row shown, in row order;
->   whatever signs or prints candidates follows it. Pinned by `attestation.rs::a_linked_row_signs_every_member_in_row_order`,
->   the end-to-end `search_by_person.rs::a_registration_signs_every_member_of_a_linked_row` and
->   `candidate_text.rs::the_printed_chart_order_is_the_attested_order`.
-> - **The cap counts ROWS and never splits one** (`withheld` counts people, never signed; `shown_charts` is what is
->   signed). Pinned by `prompt.rs::the_cap_counts_people_and_never_splits_a_linked_row`.
-> - **A chart not held here reads `Unknown` and never sets `incomplete`** (a deliberate change to a SIGNED flag);
->   **a HELD chart with no readable name does, matched or not** (`search_person.rs::display_name_for`). Pinned by
->   `search_person.rs`'s `a_chart_not_held_here_reads_unknown_never_confirmed` and
->   `a_held_chart_with_no_name_ever_is_still_unreadable`, and `search_by_person.rs`'s
->   `a_matched_chart_not_held_here_with_no_name_is_not_a_partial_search`.
-> - **A missing component fails the search — never a row of one** (one person in two prompt places is the
->   duplicate-creating failure): `MissingComponent`, and `read_components` refuses a component lacking its own chart.
->   Pinned by `person.rs::a_chart_with_no_component_read_is_an_error_never_a_silent_row_of_one` and
->   `search_person.rs::a_component_that_omits_its_own_chart_is_refused`.
-> - **Every member of every row shown can be opened, and nothing else** (`AppState::shown` via `remember_shown`, from
->   `CandidateList::charts()`); the window never picks the chart for the clerk. Pinned by `commands.rs`'s
->   `a_member_the_search_did_not_match_can_be_opened` and `an_id_on_no_row_is_still_refused`.
-> - **Over single-chart rows every sentence is byte-identical to before R3** — goldens
->   `view.rs::single_chart_summaries_are_byte_identical_to_before_r3`,
->   `candidate_text.rs::golden_two_never_linked_rows_print_exactly_as_before_r3`,
->   `link/search.rs::only_this_records_own_chart_matched`. People-vs-charts wording lives in `funnel/rows.rs`.
-> - **The linked-row label reaches a screen reader through `aria-describedby`** on every member button (`funnel.js`
->   `personItem`; Tab never lands on the label). **No test pins it** (#332); the live VoiceOver pass checks it.
+> **⇒ R3'S DURABLE RULES (ADR-0076 decision 6, PR #721) — do not undo any of these** (pins: `person.rs`'s tests,
+> `tests/search_by_person.rs`, `attestation.rs`, `candidate_text.rs`, `prompt.rs`, `search_person.rs`, `commands.rs`,
+> the byte-identical goldens in `view.rs` / `candidate_text.rs` / `link/search.rs` — each test named after its rule):
+> - **Rows are built ONLY by `group_by_person`** (pure, shared): a row sits at its best-ranked member; matched members
+>   first in rank order, then unmatched oldest first; every chart exactly once; the seven ADR-0075 keys rank CHARTS.
+> - **The signed list is ONLY `CandidateList::displayed_charts()`** (every member of every row shown, row order);
+>   whatever signs or prints candidates follows it. **The cap counts ROWS and never splits one** (`withheld` counts
+>   people; `shown_charts` is signed).
+> - **A chart not held here reads `Unknown` and never sets `incomplete`** (a deliberate change to a SIGNED flag); **a
+>   HELD chart with no readable name does.** **A missing component fails the search — never a row of one.**
+> - **Every member of every row shown can be opened, and nothing else** (`AppState::shown`); the window never picks the
+>   chart for the clerk. **Over single-chart rows every sentence is byte-identical to before R3**; people-vs-charts
+>   wording lives in `funnel/rows.rs`. **The linked-row label reaches a screen reader via `aria-describedby`** on every
+>   member button — no test pins it (#332); the live VoiceOver pass checks it.
 >
 > **⇒ R1b'S DURABLE RULES (#697 (b), #701, PR #717) — do not undo any of these:**
 > - **A doubted set withholds every line not recorded ONLY on the opened chart** (`medication::hazard::wrong_chart_reasons`,
@@ -418,14 +430,14 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-05 (**#725 — the per-chart check's range blocking**, PR #733 stacked on #724; PR #724's red CI
-fixed) · 10-04/05 R4 (ADR-0076 decision 7, PR **[#724](https://github.com/cairn-ehr/cairn-ehr/pull/724)**, awaiting merge) · 10-03 R3 (PR #721) and R1b (PR #717) ·
+**Session date:** 2026-10-06 (**R5a — the possible-duplicate banner**, PR **[#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)**, awaiting
+merge) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) · 10-03 R3 (PR #721) and R1b (PR #717) ·
 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`) and R1 (ADR-0076, `db/054`,
 PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
 ADR-0077; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
-implementation wording only) · **`SCHEMA_GENERATION`:** **56** (`db/056`) · **Phase:** architecture complete; **first
+implementation wording only) · **`SCHEMA_GENERATION`:** **57** (`db/057`) · **Phase:** architecture complete; **first
 production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one row per
-person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates.
+person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates, and a banner on the chart shows each one for a human to judge.
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waits on a clinical-note surface) · §5.4 John-Doe (§5.12
@@ -435,7 +447,7 @@ PERSON since R3, PR #721) · `clinical.medication` 1–6b under born-sealed bodi
 sign-off over a linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the
 compare-and-link panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) + a doubted set
 withholds every line not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher
-watch`, `cairn-node duplicate-check`; R4, PR #724; per-chart range blocking anchored, #725) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
+watch`, `cairn-node duplicate-check`; R4, PR #724; per-chart range blocking anchored, #725) · the possible-duplicate banner + "Different people" (`db/057`; R5a, PR #735) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056
 admit-uninterpreted floor · **the L3 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates;
 `cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine
 tested but **not wired**.
@@ -446,39 +458,36 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise.
 
-### 2026-10-05 — #725, and PR #724's red CI
+### 2026-10-06 — R5a: the possible-duplicate banner (PR #735)
 
-- **⇒ A CI job that installs a different dependency set from every local run cannot be gated locally — turn the
-  difference into a test.** R4 passed every local gate (`--extra pipeline`) and failed CI's no-extra job at COLLECTION;
-  `test_pure_modules_import_without_psycopg.py` imports the package in a child where `import psycopg` fails. **⇒ "All
-  local gates green" was reported while a PR check was red** — read `gh pr checks` before calling a PR ready.
-- **⇒ Diagnose before choosing between an issue's candidate fixes.** #725 named "the blocking SQL" and offered two
-  remedies; the cost was ONE arm's planner cross-product, and my own first fix (sex arrays) made the same mistake — an
-  `EXPLAIN ANALYZE` of the prototype showed it. Prototype against the old statement and assert identical rows per chart.
-- **⇒ Editing an `include_str!`'d `db/*.sql`, even a comment, relinks every cairn-node test binary** (hours under macOS
-  Gatekeeper); a stale-but-resolvable pointer there was left as is. **⇒ `git push` over HTTPS had no credentials in
-  this shell** while `gh` was authenticated: `git -c credential.helper= -c 'credential.helper=!gh auth git-credential'
-  push`, no config change.
+Brainstorm (maintainer: R5 splits into R5a banner → R5b worklist; the other record's FULL active list shows read-only;
+"Different people" only from a banner entry; Review re-reads, `shown` not widened) → design addendum → plan → SDD.
+- **⇒ Read the design's own filter rule against the issue that asked for it.** The R5 bullets said "minus any
+  `patient_link` row"; #700 said *attested*. Counting an un-attested unlink would let any unreviewed writer clear a
+  banner — the mirror of R1b's doubt ruling. Caught in brainstorm, pinned by a sync-door test.
+- **⇒ A second button over one shared state doubles every guard.** Link and "Different people" share `compared`: a
+  refusal must hide both, and BOTH must be disabled in flight, or one human signs two contradictory judgements ms apart
+  (final review I1 — no per-task review saw it, because each task held one button).
+- **⇒ "Not recorded" is a claim; an outcome-unknown commit makes it false.** Word a failed signature "not confirmed",
+  and never let an all-failed report show only the first error (#713's hazard).
+- **⇒ A stored, propose-time fact goes stale in exactly the case it exists for** (the veto note; auto_apply re-vetoes
+  without rewriting `veto_findings`) — compute it fresh with the floor's own predicate.
+- **⇒ Script load order is a correctness property**: `funnel.js` boots as it loads, so anything `render` calls must load
+  first. A `typeof` guard would have made an absent banner mean "unknown".
+- **Mechanics:** a subagent's commit trailer names the model that wrote it; filed #736–#740.
 
-### 2026-10-04/05 — R4: the commit-time duplicate check (PR #724)
+### 2026-10-04/05 — R4 (PR #724) and #725 (PR #733)
 
-Brainstorm (three maintainer decisions) → design addendum → plan (seven tasks) → subagent-driven; four task fix loops,
-an opus final review, one fix wave. **Most of the review effort went into one sentence: when may the node say "behind"?**
-- **⇒ A health signal must be walked through every way its input fills.** "Behind = the newest notice is old" failed for
-  an all-at-once backlog (a restore: everything old at once); "newest" then hid a stopped worker on a busy node. The rule
-  that survived: the OLDEST notice or the last COMPLETED work, whichever is later. **⇒ Progress is stamped only by
-  completed work** — a stamp before work, or for a failed pair, makes a crash-loop read "running" forever (both shipped
-  in fix rounds before a re-review caught them).
-- **⇒ A bigserial is assigned at INSERT, not at commit:** `DELETE … WHERE id <= max_read` deletes a notice a slower
-  transaction committed later. Capture the ids you read; delete exactly those.
-- **⇒ A no-op DDL replay waits:** `ALTER TABLE … IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS` and `CREATE OR REPLACE
-  TRIGGER` take their lock before checking (probed on PG 18). Any long reader — and every new routine worker is one —
-  turns a node connect into a write stall (#726). A read-only CLI should use `db::connect`, not the replay.
-- **⇒ Diagnose a slow measurement before ruling on it.** The plan's stop rule (> 5 s → file, don't tune) held; my
-  hypothesis (the cap) was wrong, the 30-second diagnostic showed the blocking SQL (#725).
-- **⇒ A callee's `rollback()` silently undoes a test's uncommitted `SET ROLE`** — a role test went false-green; assert
-  `current_user` inside the code under test. **⇒ An interrupted subagent's uncommitted edits are evidence** (again):
-  the resumed fixer found the inherited test right and the inherited SQL incomplete.
+- **⇒ A health signal must be walked through every way its input fills**: "behind" = the OLDEST notice or the last
+  COMPLETED work, whichever is later; progress is stamped only by completed work (a stamp before work, or for a failed
+  pair, makes a crash-loop read "running"). **⇒ A bigserial is assigned at INSERT, not commit** — delete exactly the ids
+  read. **⇒ A no-op DDL replay waits** on any long reader (#726); a read-only CLI uses `db::connect`.
+- **⇒ A CI job with a different dependency set cannot be gated locally — turn the difference into a test**
+  (`test_pure_modules_import_without_psycopg.py`); read `gh pr checks` before calling a PR ready. **⇒ Diagnose before
+  choosing an issue's candidate fix** (#725 was one arm's planner cross-product; `EXPLAIN ANALYZE` the prototype).
+- **Mechanics:** a callee's `rollback()` undoes a test's `SET ROLE` (assert `current_user` in the code under test); an
+  interrupted subagent's uncommitted edits are evidence; editing an `include_str!`'d `db/*.sql` relinks every
+  cairn-node test binary; HTTPS push: `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push`.
 
 ### 2026-08-20 → 10-03 — restore, node plane, doors, search, funnel UI 2a–2c, #671, repair path R1–R3
 

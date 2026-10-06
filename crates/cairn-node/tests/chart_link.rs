@@ -13,7 +13,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 mod common;
-use common::{apply_remote_raw, link_assertion_event, register_pair, vetoed_pair};
+use common::{apply_remote_raw, link_assertion_event, register_pair, seed_proposal, vetoed_pair};
 
 fn cs() -> Option<String> {
     std::env::var("CAIRN_TEST_PG").ok()
@@ -66,26 +66,6 @@ async fn standing(c: &Client, a: Uuid, b: Uuid) -> Option<(String, bool)> {
     .await
     .unwrap()
     .map(|r| (r.get(0), r.get(1)))
-}
-
-/// Seed a proposal row as its writers leave it: an `applied`/`auto_applied` row carries
-/// the event that applied it (db/019: `applied_event_id IS NOT NULL` ⇔ applied), every
-/// other status carries none. A fixture that broke that invariant could not catch a
-/// regression that breaks it.
-async fn seed_proposal(c: &Client, a: Uuid, b: Uuid, status: &str) {
-    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-    let applied: Option<String> =
-        matches!(status, "applied" | "auto_applied").then(|| Uuid::now_v7().to_string());
-    c.execute(
-        "INSERT INTO match_proposal \
-           (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version, \
-            status, applied_event_id) \
-         VALUES ($1::text::uuid, $2::text::uuid, 0.91, 'review', '[]'::jsonb, '[]'::jsonb, 'cfg@test', \
-                 $3, $4::text::uuid)",
-        &[&lo.to_string(), &hi.to_string(), &status.to_string(), &applied],
-    )
-    .await
-    .unwrap();
 }
 
 /// db/019's invariant over EVERY proposal row: `applied_event_id` is set exactly when the

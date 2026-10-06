@@ -38,6 +38,9 @@ let compared = null; // { patientId, charts, otherId, otherCharts }
  * the first lock poll lands, and `renderComparison` needs an answer either way.
  */
 let keyUnlocked = false;
+// The banner chart whose **Review** opened the panel (duplicates.js sets it right after
+// `openLinkPanel`), or null when "Same person as…" did — where Close returns focus.
+let linkOpener = null;
 
 /**
  * Open the panel: clear whatever an earlier visit left behind, then focus its heading — the
@@ -49,6 +52,7 @@ function openLinkPanel() {
   if (typeof closeUnlinkPanel === "function" && !el("unlink-panel").hidden) closeUnlinkPanel(false);
   forgetInFlight();
   compared = null;
+  linkOpener = null;
   // A fresh visit, not a resumed one: a name typed before an earlier close, or that search's
   // summary line, must not sit next to an empty candidate list and read as still current.
   el("link-name").value = "";
@@ -65,10 +69,10 @@ function openLinkPanel() {
  *
  * `returnFocus` exists because this is called from two different situations that want
  * opposite focus behaviour (controller ruling). When a clinician acts ON the panel itself —
- * the "Close comparison" button, Escape — focus belongs back on `#same-person`, the control
- * that opened it. But this is ALSO called from funnel.js whenever the chart underneath the
- * panel is about to change (`enterChart`, `closeChart`), so a panel from the old chart can
- * never stay open over the new one's header; in that case funnel.js is about to move focus
+ * the "Close comparison" button, Escape — focus belongs back on the control that opened it:
+ * the banner's **Review** (`linkOpener`) or `#same-person`. But this is ALSO called from
+ * funnel.js whenever the chart underneath the panel is about to change (`enterChart`,
+ * `closeChart`), so a panel from the old chart can never stay open over the new one's header; in that case funnel.js is about to move focus
  * itself (to the new patient heading, or to the front door), and `#same-person` may not even
  * exist yet there — so this function must NOT touch focus, and callers pass `false`.
  */
@@ -77,7 +81,15 @@ function closeLinkPanel(returnFocus) {
   forgetInFlight();
   compared = null;
   clearComparison();
-  if (returnFocus) el("same-person").focus();
+  const opener = linkOpener;
+  linkOpener = null;
+  if (returnFocus) {
+    // The banner's Review that opened the panel, if it is still drawn (a re-read after a
+    // judgement redraws the banner); otherwise "Same person as…".
+    const reviews = [...el("duplicates-entries").querySelectorAll("button")];
+    const own = opener && reviews.find((b) => b.dataset.reviewChart === opener);
+    (own || el("same-person")).focus();
+  }
 }
 
 /**
@@ -92,7 +104,7 @@ function forgetInFlight() {
 
 /** Empty every part of the panel that a fresh search or a fresh comparison must replace. */
 function clearComparison() {
-  for (const id of ["link-findings", "link-table", "link-other-meds-section", "link-confirm", "link-problems"]) {
+  for (const id of ["link-findings", "link-table", "link-other-meds-section", "link-confirm", "link-different", "link-problems"]) {
     el(id).hidden = true;
   }
   el("link-findings").replaceChildren();
@@ -234,6 +246,11 @@ function updateLinkLock(unlocked) {
   el("unlink-confirm").textContent = keyUnlocked
     ? "Unlink — not the same person"
     : "Unlink — not the same person (unlock your signing key first)";
+  // "Different people" (R5a) obeys the same ambient lock rule; its button is in the link panel's
+  // markup (index.html), so it exists whenever this runs.
+  el("link-different").textContent = keyUnlocked
+    ? "Different people — not the same person"
+    : "Different people — not the same person (unlock your signing key first)";
 }
 
 /**
@@ -276,17 +293,25 @@ function linkChanged(sent, report) {
 
 /** Send the Link judgement for whatever `compare` last rendered. */
 async function linkCompared() {
+  return sendJudgement("link_records");
+}
+
+/**
+ * Send a judgement (`link_records` or R5a's `record_different_people`) over whatever `compare`
+ * last rendered. BOTH judgement buttons are disabled for the round trip and hidden on a verdict.
+ */
+async function sendJudgement(command) {
   if (compared === null) return;
   // What this click signs over, captured before the round trip: nothing that changes while
   // the answer is in flight may change what was sent, or where its answer is reported.
   const sent = compared;
   const token = compareToken;
-  const button = el("link-confirm");
-  // Disabled for the whole round trip, not just relabelled: a double click before the first
-  // answer lands must never send a second judgement (ADR-0053 — a click IS a signature).
-  button.disabled = true;
+  // BOTH buttons disabled for the whole round trip: a double click, or the OTHER verdict over the
+  // same `compared`, must never send a second judgement (ADR-0053 — a click IS a signature).
+  const buttons = [el("link-confirm"), el("link-different")];
+  for (const b of buttons) b.disabled = true;
   try {
-    const report = await invoke("link_records", {
+    const report = await invoke(command, {
       patientId: sent.patientId,
       charts: sent.charts,
       otherId: sent.otherId,
@@ -298,17 +323,21 @@ async function linkCompared() {
       sayAnywhere(text);
       if (linkChanged(sent, report)) await refresh(text);
     } else if (report.reload) {
-      // Took effect (or StillJoined): the record just changed under this chart, so the outcome
-      // belongs on the chart itself (`#outcome`, via `say`) — the panel that reported it is
-      // about to close, same chart, same `#same-person` button — and the list is re-read.
+      // Link's TookEffect / StillJoined: the record just changed under this chart. "Different
+      // people" ALWAYS lands here once anything was recorded (`LinkReportView::reload`), since
+      // the banner must re-read either way. The outcome belongs on the chart itself (`#outcome`,
+      // via `say`), and the list is re-read. The panel closes only if it still shows the
+      // comparison that was judged: when a newer one replaced it (`"chart"` — e.g. a second
+      // Review pressed while this answer was in flight), that one is the clinician's, and stays.
       say(report.sentence);
-      if (!el("link-panel").hidden) closeLinkPanel(true);
+      if (place === "panel") closeLinkPanel(true);
       await refresh(report.sentence);
     } else if (place === "chart") {
       say(report.sentence);
     } else {
-      // Outranked: the panel stays open, so its own `#link-status` says this ONCE — not also
-      // through `say()`, which would read as two different outcomes rather than one.
+      // Link's Outranked (never "Different people", which reloads): the panel stays open, so its
+      // own `#link-status` says this ONCE — not also through `say()`, which would read as two
+      // different outcomes rather than one.
       setMessage(el("link-status"), report.sentence);
     }
   } catch (failure) {
@@ -324,16 +353,18 @@ async function linkCompared() {
       // again: take the button away rather than invite a second identical click (final review
       // M3). For "not held here yet" that is also right on its own terms — the comparison was
       // read over a chart whose facts are "unknown", so once sync delivers it the clinician
-      // should compare AGAIN, not link over the old panel. The comparison and the sentence stay
+      // should compare AGAIN, not judge over the old panel. The comparison and the sentence stay
       // on screen — what was refused is still legible. A bare IPC failure (no `retry`), an
       // outage and a locked key (`"now"`) keep it: nothing about the comparison was wrong.
       if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
         compared = null;
-        button.hidden = true;
+        // Both judgement buttons: with `compared` gone, either would silently do nothing.
+        el("link-confirm").hidden = true;
+        el("link-different").hidden = true;
       }
     }
   } finally {
-    button.disabled = false;
+    for (const b of buttons) b.disabled = false;
   }
 }
 

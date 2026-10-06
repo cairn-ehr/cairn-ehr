@@ -54,7 +54,15 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
     let members = linked_members(state, &list.charts).await;
     // Likewise the links: an unread list is worded in the pane, never a failed open.
     let edges = crate::link::record_links::read_record_edges(state, &list.charts).await;
-    Ok(chart_pane(&list, members, edges))
+    // The possible-duplicate banner (R5a); every failure inside it is a worded line.
+    let dups = crate::duplicates::duplicate_section(
+        state,
+        patient,
+        &list.charts,
+        members.as_deref().unwrap_or(&[]),
+    )
+    .await;
+    Ok(chart_pane(&list, members, edges, dups))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -509,6 +517,7 @@ pub(crate) mod tests {
             members_error: None,
             links: vec![that_link.clone()],
             links_error: None,
+            duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
         })
         .unwrap();
         let member_json = serde_json::to_value(&member).unwrap();

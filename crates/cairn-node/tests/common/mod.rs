@@ -1142,3 +1142,23 @@ pub const REPO_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog','information_sche
 pub const NOT_EXTENSION_OWNED: &str = "NOT EXISTS (SELECT 1 FROM pg_depend d
                         WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass
                           AND d.deptype = 'e')";
+
+/// Seed a proposal row as its writers leave it: an `applied`/`auto_applied` row carries
+/// the event that applied it (db/019: `applied_event_id IS NOT NULL` ⇔ applied), every
+/// other status carries none. A fixture that broke that invariant could not catch a
+/// regression that breaks it.
+pub async fn seed_proposal(c: &Client, a: Uuid, b: Uuid, status: &str) {
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    let applied: Option<String> =
+        matches!(status, "applied" | "auto_applied").then(|| Uuid::now_v7().to_string());
+    c.execute(
+        "INSERT INTO match_proposal \
+           (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version, \
+            status, applied_event_id) \
+         VALUES ($1::text::uuid, $2::text::uuid, 0.91, 'review', '[]'::jsonb, '[]'::jsonb, 'cfg@test', \
+                 $3, $4::text::uuid)",
+        &[&lo.to_string(), &hi.to_string(), &status.to_string(), &applied],
+    )
+    .await
+    .unwrap();
+}

@@ -187,6 +187,7 @@ function render(pane, patient) {
   setMessage(el("linked-charts-error"), pane.members_error);
   renderLinks(pane.links);
   setMessage(el("record-links-error"), pane.links_error);
+  renderDuplicates(pane.duplicates);
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -218,6 +219,7 @@ function clearChart() {
   setMessage(el("linked-charts-error"), "");
   renderLinks([]);
   setMessage(el("record-links-error"), "");
+  clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");

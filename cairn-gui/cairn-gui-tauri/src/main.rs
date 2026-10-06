@@ -23,6 +23,7 @@
 
 mod chart_set;
 mod commands;
+mod duplicates;
 mod funnel;
 mod link;
 mod state;
@@ -102,6 +103,7 @@ fn main() -> anyhow::Result<()> {
             link::unlink::compare_linked,
             link::unlink::unlink_records,
             link::search::link_search,
+            duplicates::record_different_people,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))
