@@ -28,8 +28,12 @@ use uuid::Uuid;
 pub struct OpenProposal {
     pub here: Uuid,
     pub other: Uuid,
-    /// The matcher recorded veto findings for the pair (shown as a note; Review shows WHICH,
-    /// read fresh by the compare panel — never worded here from the stored JSON).
+    /// The db/016 veto floor finds a disagreement between the two charts NOW
+    /// (`cairn_match_veto`, read in the same query — the predicate `auto_apply.rs` re-checks).
+    /// Never the proposal's stored `veto_findings`: those are propose-time, so a pair that
+    /// became vetoed after it was proposed (which `auto_apply.rs` moves to `review`, leaving the
+    /// findings untouched) would show no note, and a corrected fact would leave a false one.
+    /// Shown as a note only; Review shows WHICH facts, read fresh by the compare panel.
     pub vetoed: bool,
     /// When the proposal was written, epoch milliseconds — ordering only.
     pub created_ms: i64,
@@ -119,7 +123,8 @@ fn ids(charts: &ChartSet) -> Vec<String> {
     charts.members().iter().map(Uuid::to_string).collect()
 }
 
-/// Every open proposal with exactly one side in `charts`, newest first.
+/// Every open proposal with exactly one side in `charts`, newest first. `vetoed` is the db/016
+/// floor evaluated in this same query (see [`OpenProposal::vetoed`]).
 pub async fn open_proposals_touching(
     client: &(impl GenericClient + Sync),
     charts: &ChartSet,
@@ -127,7 +132,7 @@ pub async fn open_proposals_touching(
     let rows = client
         .query(
             "SELECT patient_low::text AS low, patient_high::text AS high, \
-                    veto_findings <> '[]'::jsonb AS vetoed, \
+                    EXISTS (SELECT 1 FROM cairn_match_veto(patient_low, patient_high)) AS vetoed, \
                     (extract(epoch FROM created_at) * 1000)::bigint AS created_ms \
                FROM match_proposal_open \
               WHERE (patient_low = ANY($1::text[]::uuid[])) \
@@ -222,15 +227,20 @@ pub enum DifferentPeople {
 }
 
 /// "Different people": an attested unlink on EVERY open pair between `left` (the displayed
-/// record) and `right` (the other record), read fresh here — never the pairs the banner showed,
-/// which may be stale. Each is `unlink_charts(low, high, None, …)`: both charts of a proposal
-/// are held here (the matcher scores only local charts), so the judgement files under a subject,
-/// and a pair whose in-record side is a linked member — not the chart on screen — is judged the
-/// same way (#699 (a)'s third-chart filing is for a link, not a proposal).
+/// record) and `right` (the other record). The PAIRS are read fresh here — never the pairs the
+/// banner showed, which may be stale. The two chart SETS are the caller's: it must pass sets it
+/// has just read (the window re-reads both and refuses one that changed since the comparison),
+/// because a pair joining a chart outside them is not looked for. Each is
+/// `unlink_charts(low, high, None, …)`: both charts of a proposal are held here (the matcher
+/// scores only local charts), so the judgement files under a subject, and a pair whose
+/// in-record side is a linked member — not the chart on screen — is judged the same way
+/// (#699 (a)'s third-chart filing is for a link, not a proposal).
 ///
 /// Honest, not atomic: several pairs are several events. A failure on one is carried in its
-/// [`PairJudgement`] and the others still stand; the failed pair stays open and stays on the
-/// banner. `Err` only when the open pairs could not be read — nothing was signed.
+/// [`PairJudgement`] and the others still stand. A REFUSED pair (nothing signed) stays open
+/// and stays on the banner; but `unlink_charts`'s "commit outcome unknown for event …" error
+/// may have committed — that pair may already be judged and off the banner, and only a re-read
+/// says which. `Err` only when the open pairs could not be read — nothing was signed.
 pub async fn record_different_people(
     client: &mut Client,
     left: &ChartSet,

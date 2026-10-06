@@ -5,11 +5,12 @@ use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::{LinkEffect, LinkVerb, Reviewer};
 use cairn_node::db;
 use cairn_node::duplicate_review::{
-    open_pairs_between, possible_duplicates, record_different_people, DifferentPeople,
+    open_pairs_between, open_proposals_touching, possible_duplicates, record_different_people,
+    DifferentPeople,
 };
 use common::{
     apply_remote_attested, apply_remote_raw, cs, enroll_human, link_assertion_event, register_pair,
-    seed_proposal, setup, submit_link_event, submit_registration,
+    seed_proposal, setup, submit_link_event, submit_registration, vetoed_pair,
 };
 use uuid::Uuid;
 
@@ -288,4 +289,91 @@ async fn open_pairs_between_is_symmetric_and_empty_when_unjoined() {
     assert_eq!(open_pairs_between(&c, &sa, &sb).await.unwrap(), want);
     assert_eq!(open_pairs_between(&c, &sb, &sa).await.unwrap(), want);
     assert!(open_pairs_between(&c, &sa, &sz).await.unwrap().is_empty());
+}
+
+/// Final review I3: the banner's veto note is the db/016 floor read NOW, never the proposal's
+/// stored, propose-time `veto_findings`. `seed_proposal` stores `'[]'` — exactly the row a pair
+/// that became vetoed AFTER the matcher proposed it carries (`auto_apply.rs` moves such a pair to
+/// `review` and leaves the findings untouched). Read from the stored JSON, that pair would show
+/// no note at all.
+#[tokio::test]
+async fn the_veto_note_is_the_floor_read_now_not_the_stored_findings() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (v1, v2) = vetoed_pair(&c, &sk, &kid).await;
+    seed_proposal(&c, v1, v2, "review").await; // stored findings: '[]'
+    let (p1, p2) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, p1, p2).await;
+    seed_proposal(&c, p1, p2, "pending").await;
+
+    let vetoed = open_proposals_touching(&c, &ChartSet::single(v1))
+        .await
+        .unwrap();
+    assert_eq!(vetoed.len(), 1);
+    assert!(vetoed[0].vetoed, "the DOBs clash now, whatever was stored");
+    let plain = open_proposals_touching(&c, &ChartSet::single(p1))
+        .await
+        .unwrap();
+    assert_eq!(plain.len(), 1);
+    assert!(!plain[0].vetoed, "no recorded fact disagrees");
+}
+
+/// Final review I4: one pair's failure is CARRIED in its `PairJudgement` and the other pairs
+/// still stand — `different_people_impl` words any `Err` from `record_different_people` as
+/// "nothing was done", so a `?` in the loop would make that sentence false. The failing pair is
+/// real, not mocked: `u` is never registered here, so its unlink is refused by admission (a
+/// chart this node does not hold, sharing no record with `a`) before anything is signed.
+#[tokio::test]
+async fn one_pairs_failure_is_carried_and_the_others_stand() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, x, u) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, x).await;
+    seed_proposal(&c, a, x, "pending").await;
+    seed_proposal(&c, a, u, "pending").await; // u: not held on this node
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+
+    let out = record_different_people(
+        &mut c,
+        &ChartSet::single(a),
+        &ChartSet::new([x, u]).unwrap(),
+        &who,
+        "r5a-test",
+    )
+    .await
+    .expect("the open pairs were read, so this is Ok whatever each pair did");
+    let DifferentPeople::Judged(judged) = out else {
+        panic!("two open pairs were judged")
+    };
+    assert_eq!(judged.len(), 2);
+    let failed: Vec<_> = judged.iter().filter(|j| j.outcome.is_err()).collect();
+    assert_eq!(failed.len(), 1, "exactly one pair failed");
+    assert_eq!(
+        (failed[0].low, failed[0].high),
+        (a.min(u), a.max(u)),
+        "the pair over the unheld chart"
+    );
+    let ok: Vec<_> = judged.iter().filter(|j| j.outcome.is_ok()).collect();
+    assert_eq!(ok.len(), 1);
+    assert_eq!((ok[0].low, ok[0].high), (a.min(x), a.max(x)));
+    assert_eq!(
+        ok[0].outcome.as_ref().unwrap().effect,
+        LinkEffect::TookEffect
+    );
+    assert_eq!(status_of(&c, a, x).await, "rejected");
+    assert_eq!(status_of(&c, a, u).await, "pending", "nothing moved it");
 }
