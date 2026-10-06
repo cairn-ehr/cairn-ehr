@@ -364,6 +364,12 @@ const SCHEMA: &[(&str, &str)] = &[
         "056_match_pending",
         include_str!("../../../db/056_match_pending.sql"),
     ),
+    // db/057 (repair path R5a, #680): `match_proposal_open`, the one "still needs a human"
+    // predicate the banner (and R5b's worklist) read. cairn-sync's list lags legitimately (#284).
+    (
+        "057_match_proposal_open",
+        include_str!("../../../db/057_match_proposal_open.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.

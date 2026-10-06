@@ -230,6 +230,8 @@ fn derivation_finds_the_expected_helpers() {
             // `vetoed_pair` (R2a; `link_precedence.rs`, `chart_link.rs`): a registered pair
             // with clashing verified DOBs (a hard veto by construction), promoted from the
             // local copy `link_precedence.rs` had.
+            // `seed_proposal` (R5a): `chart_link.rs`'s fixture, promoted when
+            // `match_proposal_open.rs` and `duplicate_review.rs` needed the identical shape.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
@@ -242,6 +244,7 @@ fn derivation_finds_the_expected_helpers() {
             "async fn medication_setup(",
             "async fn person_chart_trust(",
             "async fn register_pair(",
+            "async fn seed_proposal(",
             "async fn submit_attested(",
             "async fn submit_link_event(",
             "async fn submit_medication_with_raw_safety(",

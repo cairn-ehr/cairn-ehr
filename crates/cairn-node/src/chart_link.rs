@@ -226,7 +226,11 @@ pub async fn standing_link(
 /// invariant ties to them, `rejected` is already decided, `retracted` was withdrawn by the
 /// matcher. What stands is `patient_link`'s business, not the proposal row's; the row only
 /// records how an open proposal was first answered.
-const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
+///
+/// The `match_proposal.status` values a human judgement may still move — "open". db/057's view
+/// `match_proposal_open` lists exactly these (`tests/match_proposal_open.rs` pins the composed
+/// SQL), so the banner and this writer always agree on what "open" means.
+pub const OPEN_PROPOSAL_STATUSES: [&str; 3] = ["pending", "accepted", "review"];
 
 /// The one fact a third-chart filing ([`FiledUnder::RecordOf`]) rests on — `opened`'s record
 /// holds both subjects — checked where it cannot go stale before the commit.
