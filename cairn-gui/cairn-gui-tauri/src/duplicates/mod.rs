@@ -146,9 +146,10 @@ pub(crate) async fn admit_other(
 ///
 /// Pinned by the tests below: the first four (fixture mode is where they can be reached). The
 /// last two — `OTHER_CHANGED` and the locked key — and `admit_other`'s live proposal branch sit
-/// past fixture mode, and this crate has no DB-gated tests: they are covered by cairn-node's
-/// `duplicate_review` DB suite (what the node does with the pairs) and by RUNBOOK §11's live pass
-/// (the window's own refusals), not by a test here.
+/// past fixture mode, and this crate has no DB-gated tests. They have NO automated or scripted
+/// coverage at the window layer (RUNBOOK §11 exercises neither refusal). The node functions they
+/// call are DB-tested in cairn-node's `duplicate_review` suite; a window-level live-DB harness
+/// is issue #738.
 pub async fn different_people_impl(
     state: &AppState,
     patient_id: &str,

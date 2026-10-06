@@ -1185,7 +1185,7 @@ the spec above was followed except where listed under *Deviations*.
   that moment; `AppState::shown` is not widened).
 - **Window (JS):** `duplicates.js` renders and decides nothing but which buttons are visible; `index.html`
   gains the banner `<section>` (above `#chart-warnings`, never `role="alert"`) and `#link-different`;
-  `link.js` gains `sendJudgement(command, button)` shared by Link and Different people.
+  `link.js` gains `sendJudgement(command)` shared by Link and Different people.
 
 **Deviations from the plan, and why.**
 - **The node status line is never appended when the node is Current.** A linked member not held here
@@ -1197,7 +1197,8 @@ the spec above was followed except where listed under *Deviations*.
   Goldens also pin the StillJoined and Outranked sentences.
 - **Load order, not a guard.** `duplicates.js` loads right after `main.js`, before `funnel.js` (whose last
   line starts boot). A `typeof` guard on render would let an absent banner mean "unknown".
-- **Both judgement buttons are hidden on a verdict** (`never`/`after_operator`), not only Link.
+- **Both judgement buttons are hidden on a verdict** (`never`/`after_operator`), not only Link, and
+  (final review I1, below) both are disabled while a judgement is in flight.
 - **Review's `aria-describedby`** points at the entry's first identity line (every heading is the same
   sentence, so a heading label would not tell entries apart; R3's person-row pattern).
 - **Token-based Different-people visibility:** `reviewDuplicate` captures `compareToken` right after
@@ -1206,8 +1207,26 @@ the spec above was followed except where listed under *Deviations*.
 - **`created_ms` tie-break:** equal newest timestamps order by the smaller other-chart id, so the entry
   order does not depend on input order.
 - **Growth caps exceeded:** `chart_set.rs` +10, `commands.rs` +9 (rustfmt expansion of the specified code;
-  both were already over 500) and `link.js` +11 (348 → 359) against the ≤ 6 note. `link/mod.rs` shrank
+  both were already over 500) and `link.js` +14 (348 → 362, `wc -l`) against the ≤ 6 note. `link/mod.rs` shrank
   497 → 492.
+
+**Deviations from the design, from the final review (commits 529c6eda..da72bc95).**
+- **I1:** `sendJudgement` disables BOTH judgement buttons (`link-confirm`, `link-different`) for the
+  round trip, so neither a double click nor the other verdict over the same comparison can send a
+  second signature (ADR-0053).
+- **I2:** a failed pair is worded "Not confirmed for charts … and …: …", never "not recorded … stays on
+  the banner", because a commit may be outcome-unknown. An all-failed report is ONE `ErrorView` naming
+  every pair, carrying the most retryable class (Now > AfterOperator > Never): a retry re-reads the open
+  pairs, and an unlink's event and proposal move commit together.
+- **I3:** the banner's veto note is computed fresh with `cairn_match_veto` in the same query, not from
+  the stored propose-time `veto_findings` (which auto_apply leaves stale when a pair becomes vetoed
+  later).
+- **I4:** a DB regression test that one pair's failure is carried in its `PairJudgement` while the others
+  stand.
+- **M2:** the other record's medications are labelled "On the other record — not part of this one until
+  linked" (the compare panel's wording), not the designed "on the other chart — not part of this record".
+- **M3a:** an empty check list is hidden. **M4c:** a malformed other id reads `NOT_ON_SCREEN`.
+  **M5:** `ALREADY_IN_RECORD` is checked before `admit_other`, so an in-record chart costs no DB read.
 
 **"Different people" needs a whole comparison.** It is offered only when the comparison is complete
 (`can_link`), exactly as Link is: a comparison that could not be read in full shows neither.
@@ -1223,20 +1242,23 @@ instant stub: the banner boots visible with no ReferenceError; Review's `aria-de
 "J Smith, 1950"; Review shows both buttons; a refused `record_different_people` (`retry: "never"`) hides
 both and reads "Refused.". Points 1–5 were not re-run in full after the fix round.
 
-**Owed by a human:** RUNBOOK §11 — the ≤ 20 s Review-to-judgement stopwatch, the banner-open ≤
+**Owed by a human:** RUNBOOK §11 (its live pass exercises neither `OTHER_CHANGED` nor the locked-key
+refusal) — the ≤ 20 s Review-to-judgement stopwatch, the banner-open ≤
 single-chart-open comparison, and the VoiceOver/keyboard pass, all live. A miss is a finding to file.
 
 **No automated coverage:** `cairn-gui-tauri` has no DB-gated tests, so the window's live branches —
 `duplicate_section`'s live phases, `admit_other`'s proposal branch, `different_people_impl` past the mock
-refusal (OTHER_CHANGED, the locked key) — are covered only by the node's DB tests of the functions they
-call and by the human live pass. (Same class as `link_impl`'s live branches.)
+refusal (OTHER_CHANGED, the locked key) — have no automated window-level test (the node's DB tests cover the functions they
+call; `duplicate_section`'s live phases are seen only in the human live pass); the window-level refusals have no scripted coverage, and a live-DB harness is #738. (Same class as
+`link_impl`'s live branches.)
 
 **Deferred minors** (not defects of the banner itself): pair openness is read once before the loop, so a
 colleague's attested link landing in that millisecond window is overruled and reported TookEffect (the
-#708/#713 class); a malformed `other_id` in `different_people_impl` maps to "already judged" where
-`link_impl` says not-on-screen; `admit_other` now reads the DB for any unshown id.
+#708/#713 class).
 
-Final review: <pending>
+Final review: the opus whole-branch review found I1–I4 (+ minors), all fixed in one wave (commits
+529c6eda..da72bc95) and confirmed by a scoped opus re-review; follow-ons filed #736 #737 #738 #739 #740;
+#708 and #722 commented.
 
 ## Error handling
 
