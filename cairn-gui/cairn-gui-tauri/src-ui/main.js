@@ -187,6 +187,7 @@ function render(pane, patient) {
   setMessage(el("linked-charts-error"), pane.members_error);
   renderLinks(pane.links);
   setMessage(el("record-links-error"), pane.links_error);
+  renderDuplicates(pane.duplicates);
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -218,6 +219,8 @@ function clearChart() {
   setMessage(el("linked-charts-error"), "");
   renderLinks([]);
   setMessage(el("record-links-error"), "");
+  // duplicates.js loads after this file; guarded like link.js's call into unlink.js.
+  if (typeof clearDuplicates === "function") clearDuplicates();
   el("med-rows").replaceChildren();
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");

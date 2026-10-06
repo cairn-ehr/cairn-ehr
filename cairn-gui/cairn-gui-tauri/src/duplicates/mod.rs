@@ -320,4 +320,35 @@ mod tests {
         .unwrap_err();
         assert!(err.text.contains("fixture mode"), "{}", err.text);
     }
+
+    /// duplicates.js is untyped: a Rust field rename would not break the build, it would draw
+    /// an empty banner. Every field it reads must be one the backend sends.
+    #[test]
+    fn duplicates_js_reads_no_field_the_backend_does_not_send() {
+        use crate::commands::tests::fields_read_in;
+        let js = include_str!("../../src-ui/duplicates.js");
+        let entry = view::entry_view(Uuid::from_u128(9), true, Ok(vec![]), Err("x".into()));
+        let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        for (binding, available) in [
+            (
+                "section",
+                keys(serde_json::to_value(DuplicateSection::default()).unwrap()),
+            ),
+            ("entry", keys(serde_json::to_value(&entry).unwrap())),
+        ] {
+            let read = fields_read_in(js, binding);
+            assert!(
+                !read.is_empty(),
+                "duplicates.js no longer reads `{binding}` — rename it here"
+            );
+            for field in read {
+                assert!(
+                    available.contains(&field),
+                    "duplicates.js reads `{binding}.{field}`, not sent"
+                );
+            }
+        }
+    }
 }

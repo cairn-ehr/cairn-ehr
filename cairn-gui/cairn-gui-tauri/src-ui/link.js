@@ -92,7 +92,7 @@ function forgetInFlight() {
 
 /** Empty every part of the panel that a fresh search or a fresh comparison must replace. */
 function clearComparison() {
-  for (const id of ["link-findings", "link-table", "link-other-meds-section", "link-confirm", "link-problems"]) {
+  for (const id of ["link-findings", "link-table", "link-other-meds-section", "link-confirm", "link-different", "link-problems"]) {
     el(id).hidden = true;
   }
   el("link-findings").replaceChildren();
@@ -234,6 +234,10 @@ function updateLinkLock(unlocked) {
   el("unlink-confirm").textContent = keyUnlocked
     ? "Unlink — not the same person"
     : "Unlink — not the same person (unlock your signing key first)";
+  // "Different people" (R5a) obeys the same ambient lock rule; duplicates.js loads after this.
+  el("link-different").textContent = keyUnlocked
+    ? "Different people — not the same person"
+    : "Different people — not the same person (unlock your signing key first)";
 }
 
 /**
@@ -276,17 +280,24 @@ function linkChanged(sent, report) {
 
 /** Send the Link judgement for whatever `compare` last rendered. */
 async function linkCompared() {
+  return sendJudgement("link_records", el("link-confirm"));
+}
+
+/**
+ * Send a judgement (`link_records` or R5a's `record_different_people`) over whatever `compare`
+ * last rendered; `button` is the one pressed, disabled for the round trip and hidden on a verdict.
+ */
+async function sendJudgement(command, button) {
   if (compared === null) return;
   // What this click signs over, captured before the round trip: nothing that changes while
   // the answer is in flight may change what was sent, or where its answer is reported.
   const sent = compared;
   const token = compareToken;
-  const button = el("link-confirm");
   // Disabled for the whole round trip, not just relabelled: a double click before the first
   // answer lands must never send a second judgement (ADR-0053 — a click IS a signature).
   button.disabled = true;
   try {
-    const report = await invoke("link_records", {
+    const report = await invoke(command, {
       patientId: sent.patientId,
       charts: sent.charts,
       otherId: sent.otherId,

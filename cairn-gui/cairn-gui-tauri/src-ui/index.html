@@ -124,6 +124,8 @@
             <ul id="link-other-meds"></ul>
           </section>
           <button id="link-confirm" type="button" hidden>Link — same person</button>
+          <!-- Offered only on a comparison opened from the banner's Review (R5a). -->
+          <button id="link-different" type="button" hidden>Different people — not the same person</button>
           <p id="link-status" role="status" aria-live="polite"></p>
           <button id="link-close" type="button">Close comparison</button>
         </section>
@@ -154,6 +156,20 @@
             <input id="passphrase" type="password" autocomplete="current-password" />
             <button id="unlock" type="submit">Unlock</button>
           </form>
+        </section>
+
+        <!-- The possible-duplicate banner (R5a, #680). AMBIENT, never a modal and never
+             role="alert": it takes no focus, makes no sound and is never re-popped (§5.12). It sits
+             ABOVE the list it qualifies (DOM order is clinical). Hidden only when this record is
+             checked and nothing is open — an absent banner never means "unknown". The other
+             chart's lines are someone else's until a human links the two: they are drawn here,
+             never in #med-table, and can never be signed or ceased. -->
+        <section id="possible-duplicates" aria-labelledby="duplicates-heading" hidden>
+          <h2 id="duplicates-heading">Possible duplicate records</h2>
+          <p id="duplicates-error" hidden></p>
+          <ul id="duplicates-entries"></ul>
+          <p id="duplicates-more" hidden></p>
+          <ul id="duplicates-checks" aria-label="Duplicate check for this record"></ul>
         </section>
 
         <!-- The two ADR-0060 reports. Empty and hidden when there is nothing to say: a
@@ -193,5 +209,6 @@
     <script src="funnel.js"></script>
     <script src="link.js"></script>
     <script src="unlink.js"></script>
+    <script src="duplicates.js"></script>
   </body>
 </html>
