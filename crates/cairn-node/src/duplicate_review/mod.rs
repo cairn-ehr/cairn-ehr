@@ -48,6 +48,11 @@ pub struct OpenProposal {
     pub vetoed: bool,
     /// When the proposal was written, epoch milliseconds — ordering only.
     pub created_ms: i64,
+    /// A human already said "same person" through C2 (status `accepted`);
+    /// `apply_accepted_proposal` has not yet run (#736). "Different people" must not overrule it.
+    pub accepted: bool,
+    /// Another writer's un-attested unlink stands for the pair ([`DISPUTED_SQL`], ADR-0078).
+    pub disputed: bool,
 }
 
 /// One banner entry: every open proposal between the displayed set and ONE other record.
@@ -66,6 +71,10 @@ pub struct PossibleDuplicate {
     pub vetoed: bool,
     /// The newest of `pairs`' `created_ms` — orders the banner's entries, newest first.
     pub newest_ms: i64,
+    /// Any of `pairs` is already accepted as the same person ([`OpenProposal::accepted`]).
+    pub accepted: bool,
+    /// Any of `pairs` is disputed by another writer's unlink ([`OpenProposal::disputed`]).
+    pub disputed: bool,
 }
 
 /// `(here, other)` for a pair crossing `charts`'s boundary, or `None` when both or neither
@@ -96,6 +105,8 @@ pub fn group_by_other_record(found: Vec<(OpenProposal, ChartSet)>) -> Vec<Possib
             Some(g) => {
                 g.pairs.push(pair);
                 g.vetoed |= p.vetoed;
+                g.accepted |= p.accepted;
+                g.disputed |= p.disputed;
                 if p.created_ms > g.newest_ms {
                     g.newest_ms = p.created_ms;
                     g.review_chart = p.other;
@@ -112,6 +123,8 @@ pub fn group_by_other_record(found: Vec<(OpenProposal, ChartSet)>) -> Vec<Possib
                         pairs: vec![pair],
                         vetoed: p.vetoed,
                         newest_ms: p.created_ms,
+                        accepted: p.accepted,
+                        disputed: p.disputed,
                     },
                 );
             }
@@ -150,17 +163,20 @@ pub async fn open_proposals_touching(
     client: &(impl GenericClient + Sync),
     charts: &ChartSet,
 ) -> anyhow::Result<Vec<OpenProposal>> {
+    // `DISPUTED_SQL` is inlined, never re-spelled: one spelling of "disputed" for banner and worklist.
+    let sql = format!(
+        "SELECT patient_low::text AS low, patient_high::text AS high, \
+                EXISTS (SELECT 1 FROM cairn_match_veto(patient_low, patient_high)) AS vetoed, \
+                (extract(epoch FROM created_at) * 1000)::bigint AS created_ms, \
+                status = 'accepted' AS accepted, \
+                {DISPUTED_SQL} AS disputed \
+           FROM match_proposal_open \
+          WHERE (patient_low = ANY($1::text[]::uuid[])) \
+             <> (patient_high = ANY($1::text[]::uuid[])) \
+          ORDER BY created_at DESC, patient_low, patient_high"
+    );
     let rows = client
-        .query(
-            "SELECT patient_low::text AS low, patient_high::text AS high, \
-                    EXISTS (SELECT 1 FROM cairn_match_veto(patient_low, patient_high)) AS vetoed, \
-                    (extract(epoch FROM created_at) * 1000)::bigint AS created_ms \
-               FROM match_proposal_open \
-              WHERE (patient_low = ANY($1::text[]::uuid[])) \
-                 <> (patient_high = ANY($1::text[]::uuid[])) \
-              ORDER BY created_at DESC, patient_low, patient_high",
-            &[&ids(charts)],
-        )
+        .query(&sql, &[&ids(charts)])
         .await
         .context("reading the open duplicate proposals for this record")?;
     rows.iter()
@@ -174,6 +190,8 @@ pub async fn open_proposals_touching(
                 other,
                 vetoed: r.get("vetoed"),
                 created_ms: r.get("created_ms"),
+                accepted: r.get("accepted"),
+                disputed: r.get("disputed"),
             })
         })
         .collect()
@@ -232,6 +250,34 @@ pub async fn open_pairs_between(
         .collect()
 }
 
+/// The open pairs between two records that a human has already ACCEPTED as the same person
+/// (status `accepted`, #736). "Different people" must never overrule one.
+pub async fn accepted_pairs_between(
+    client: &(impl GenericClient + Sync),
+    left: &ChartSet,
+    right: &ChartSet,
+) -> anyhow::Result<Vec<(Uuid, Uuid)>> {
+    let rows = client
+        .query(
+            "SELECT patient_low::text, patient_high::text FROM match_proposal_open \
+              WHERE status = 'accepted' AND \
+                ((patient_low = ANY($1::text[]::uuid[]) AND patient_high = ANY($2::text[]::uuid[])) \
+              OR (patient_low = ANY($2::text[]::uuid[]) AND patient_high = ANY($1::text[]::uuid[]))) \
+              ORDER BY 1, 2",
+            &[&ids(left), &ids(right)],
+        )
+        .await
+        .context("reading whether a human already accepted these as the same person")?;
+    rows.iter()
+        .map(|r| {
+            Ok((
+                r.get::<_, String>(0).parse()?,
+                r.get::<_, String>(1).parse()?,
+            ))
+        })
+        .collect()
+}
+
 /// One pair's "Different people" judgement and what it did (or why it was not recorded).
 #[derive(Debug)]
 pub struct PairJudgement {
@@ -246,6 +292,9 @@ pub enum DifferentPeople {
     /// No open proposal joins the two records any more (a colleague's judgement, here or by
     /// sync, resolved it since the banner was drawn). Nothing was signed.
     NothingOpen,
+    /// A human has already accepted (some of) these pairs as the SAME person (#736); that
+    /// judgement awaits linking and is not overruled from here. Nothing was signed.
+    AcceptedAsSame,
     /// One attested unlink per open pair, each in its own transaction (`unlink_charts`).
     Judged(Vec<PairJudgement>),
 }
@@ -283,6 +332,13 @@ pub async fn record_different_people(
     if pairs.is_empty() {
         return Ok(DifferentPeople::NothingOpen);
     }
+    // Before the first signature, so the "Err only before signing" contract holds.
+    if !accepted_pairs_between(&*client, left, right)
+        .await?
+        .is_empty()
+    {
+        return Ok(DifferentPeople::AcceptedAsSame);
+    }
     let mut judged = Vec::with_capacity(pairs.len());
     for (low, high) in pairs {
         let outcome = unlink_charts(client, low, high, None, reviewer, node_origin).await;
@@ -307,6 +363,8 @@ mod tests {
             other: id(other),
             vetoed,
             created_ms,
+            accepted: false,
+            disputed: false,
         }
     }
 
