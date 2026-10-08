@@ -73,7 +73,16 @@ fn an_entry_names_the_other_chart_and_its_current_medications() {
         .count();
     assert!(active > 0 && active < source.rows.len());
     let meds = cairn_gui_tab_medications::view::build_view(&source);
-    let e = entry_view(id(9), false, Ok(vec![member(9, "Mary SMYTHE")]), Ok(meds));
+    let e = entry_view(
+        id(9),
+        EntryFlags {
+            vetoed: false,
+            accepted: false,
+            disputed: false,
+        },
+        Ok(vec![member(9, "Mary SMYTHE")]),
+        Ok(meds),
+    );
     assert_eq!(e.heading, "Possible duplicate — not yet reviewed");
     assert_eq!(
         e.identity_lines,
@@ -97,13 +106,31 @@ fn an_entry_names_the_other_chart_and_its_current_medications() {
 
 #[test]
 fn a_vetoed_entry_says_facts_disagree_and_points_at_review() {
-    let e = entry_view(id(9), true, Ok(vec![member(9, "X")]), Err("x".into()));
+    let e = entry_view(
+        id(9),
+        EntryFlags {
+            vetoed: true,
+            accepted: false,
+            disputed: false,
+        },
+        Ok(vec![member(9, "X")]),
+        Err("x".into()),
+    );
     assert!(e.notes.contains(&VETO_NOTE.to_string()));
 }
 
 #[test]
 fn unread_parts_of_an_entry_are_worded_and_the_entry_is_kept() {
-    let e = entry_view(id(9), false, Err("timeout".into()), Err("sealed".into()));
+    let e = entry_view(
+        id(9),
+        EntryFlags {
+            vetoed: false,
+            accepted: false,
+            disputed: false,
+        },
+        Err("timeout".into()),
+        Err("sealed".into()),
+    );
     assert_eq!(e.identity_lines, vec![format!("chart {}", id(9))]);
     assert!(e
         .notes
@@ -118,13 +145,31 @@ fn unread_parts_of_an_entry_are_worded_and_the_entry_is_kept() {
 
 #[test]
 fn entries_beyond_the_cap_are_counted_never_dropped_silently() {
-    let e = entry_view(id(9), false, Ok(vec![]), Err("x".into()));
+    let e = entry_view(
+        id(9),
+        EntryFlags {
+            vetoed: false,
+            accepted: false,
+            disputed: false,
+        },
+        Ok(vec![]),
+        Err("x".into()),
+    );
     let s = section_view(Ok((vec![e.clone(), e.clone(), e], 5)), vec![]);
     assert_eq!(
         s.more.as_deref(),
         Some("2 more possible duplicates of this record are not shown here.")
     );
-    let e = entry_view(id(9), false, Ok(vec![]), Err("x".into()));
+    let e = entry_view(
+        id(9),
+        EntryFlags {
+            vetoed: false,
+            accepted: false,
+            disputed: false,
+        },
+        Ok(vec![]),
+        Err("x".into()),
+    );
     let s = section_view(Ok((vec![e], 2)), vec![]);
     assert_eq!(
         s.more.as_deref(),
@@ -436,7 +481,16 @@ fn a_pending_unheld_member_on_a_current_node_gets_no_contradicting_status() {
 
 #[test]
 fn an_entry_with_no_identity_lines_says_so() {
-    let e = entry_view(id(9), false, Ok(vec![]), Err("x".into()));
+    let e = entry_view(
+        id(9),
+        EntryFlags {
+            vetoed: false,
+            accepted: false,
+            disputed: false,
+        },
+        Ok(vec![]),
+        Err("x".into()),
+    );
     assert_eq!(e.identity_lines, vec![format!("chart {}", id(9))]);
     assert!(e
         .notes
@@ -507,4 +561,35 @@ fn still_joined_and_outranked_sentences_are_pinned() {
             id(9)
         )
     );
+}
+
+/// #736: a pair a human already accepted as the same person is not "not yet reviewed", and
+/// must not offer "Different people" (it would silently overrule that human).
+#[test]
+fn an_accepted_entry_is_worded_by_its_status_and_offers_no_different_people() {
+    let flags = EntryFlags {
+        vetoed: false,
+        accepted: true,
+        disputed: false,
+    };
+    let v = entry_view(Uuid::from_u128(9), flags, Ok(vec![]), Err("x".into()));
+    assert_eq!(v.heading, "Accepted as the same person — not yet linked");
+    assert!(!v.offers_different_people);
+}
+
+/// ADR-0078: another writer's un-attested unlink is shown, never hidden; both judgements stay.
+#[test]
+fn a_disputed_entry_says_so_and_still_offers_both_judgements() {
+    let flags = EntryFlags {
+        vetoed: false,
+        accepted: false,
+        disputed: true,
+    };
+    let v = entry_view(Uuid::from_u128(9), flags, Ok(vec![]), Err("x".into()));
+    assert_eq!(v.heading, "Possible duplicate — not yet reviewed");
+    assert!(v.notes.contains(
+        &"Recorded as not the same person, without a clinician's confirmation on record here."
+            .to_string()
+    ));
+    assert!(v.offers_different_people);
 }
