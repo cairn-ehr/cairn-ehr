@@ -634,8 +634,9 @@ async fn a_vetoed_pair_a_human_already_judged_is_not_sent_back_to_review() {
 /// applied. The step-2 read cannot see everything that outranks the link: an assertion
 /// committed after it (a peer's judgement racing it — #700), or a standing assertion with a
 /// later HLC than the one this run was handed. Deterministic stand-in for the race: a
-/// peer's UN-attested unlink at a later HLC (so step 2, which looks only for attested
-/// rows, lets the pair through). Submitting would change nothing in `patient_link`; marking
+/// peer's UN-attested LINK at a later HLC (so neither step 2, which looks only for attested
+/// rows, nor step 2b, which looks only for an un-attested UNLINK — ADR-0078, #741 — sends
+/// the pair away before the submit). Submitting would change nothing in `patient_link`; marking
 /// the proposal `auto_applied` with the LOSING event's id would be a precise untruth.
 #[tokio::test]
 async fn a_matcher_link_that_loses_the_overlay_is_rolled_back_not_marked_applied() {
@@ -649,19 +650,11 @@ async fn a_matcher_link_that_loses_the_overlay_is_rolled_back_not_marked_applied
     common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
     seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
 
-    let later_unlink = common::link_assertion_event(
-        &seed_kid,
-        low,
-        high,
-        LinkVerb::Unlink,
-        500,
-        0,
-        "peer",
-        false,
-    );
+    let later_unlink =
+        common::link_assertion_event(&seed_kid, low, high, LinkVerb::Link, 500, 0, "peer", false);
     common::apply_remote_raw(&c, &seed_sk, later_unlink)
         .await
-        .expect("the peer's un-attested unlink lands");
+        .expect("the peer's un-attested link lands");
     let events_before: i64 = c
         .query_one("SELECT count(*) FROM event_log", &[])
         .await
@@ -819,4 +812,108 @@ async fn recall_over_the_matcher_epoch_selects_its_autolinks_precisely() {
         .unwrap()
         .get(0);
     assert_eq!(miss, 0, "recall is precise to the epoch");
+}
+
+/// ADR-0078 decision 2 (#741): another writer's UN-attested "different people" stands for the
+/// pair. A matcher link would overrule it by HLC — one machine overruling another — so the pair
+/// goes to a human (`review`) and nothing is written.
+#[tokio::test]
+async fn a_pair_another_writer_unlinked_unconfirmed_goes_to_review_and_nothing_is_written() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
+    seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
+    // The agent signer (`recorded`, no responsibility) unlinks — through the remote door, as a
+    // peer's agent would.
+    let unlink =
+        common::link_assertion_event(&seed_kid, low, high, LinkVerb::Unlink, 50, 0, "peer", false);
+    common::apply_remote_raw(&c, &seed_sk, unlink)
+        .await
+        .expect("an agent's unlink lands");
+    let events_before: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
+    let out = apply_auto_candidate(
+        &mut c,
+        low,
+        high,
+        &sk,
+        &kid,
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(out, AutoOutcome::DisputedToReview),
+        "must go to a human"
+    );
+    let events_after: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(events_after, events_before, "no matcher link was written");
+    let status: String = c
+        .query_one(
+            "SELECT status FROM match_proposal \
+             WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+            &[&low.to_string(), &high.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(status, "review");
+    let (state, attested): (String, bool) = {
+        let r = c
+            .query_one(
+                "SELECT state, attested FROM patient_link \
+                 WHERE low=$1::text::uuid AND high=$2::text::uuid",
+                &[&low.to_string(), &high.to_string()],
+            )
+            .await
+            .unwrap();
+        (r.get(0), r.get(1))
+    };
+    assert_eq!(
+        (state.as_str(), attested),
+        ("unlink", false),
+        "the agent's unlink still stands"
+    );
+
+    // The batch driver counts it in its own bucket.
+    c.execute(
+        "UPDATE match_proposal SET status='pending' \
+         WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+        &[&low.to_string(), &high.to_string()],
+    )
+    .await
+    .unwrap();
+    let s: AutoSummary = apply_auto_candidates(&mut c, dir.path(), None, "testnode")
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            s.applied,
+            s.disputed_to_review,
+            s.human_judged,
+            s.skipped,
+            s.errored
+        ),
+        (0, 1, 0, 0, 0)
+    );
 }
