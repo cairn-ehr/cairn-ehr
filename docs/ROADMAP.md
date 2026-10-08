@@ -436,8 +436,8 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724) and #725 (PR #733) are merged; **R5a** (the banner) is built on PR
-  #735 (entry below); **R5b** (the worklist, #680; #716, #723, #736 beside it) is next. Plan each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733) and **R5a** (the banner, PR #735, merged
+  2026-10-06; entry below) are merged; **R5b** (the worklist, #680; #741 first; #716, #723, #736 beside it) is next. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -494,7 +494,7 @@ append-only notice log.
 
 ### 2026-10-06 — repair path R5a: the possible-duplicate banner (PR #735)
 
-Built on PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735) (Refs #680). Design page "R5a — the banner, designed
+Merged 2026-10-06 as PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735) (Refs #680). Design page "R5a — the banner, designed
 2026-10-06" + its as-built note; plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`.
 `db/057_match_proposal_open.sql`, `SCHEMA_GENERATION` 56 → **57**. No wire change, no ADR (ADR-0076's decisions).
 Maintainer's decisions: R5 → R5a banner then R5b worklist; the other record's FULL active list shows read-only (the

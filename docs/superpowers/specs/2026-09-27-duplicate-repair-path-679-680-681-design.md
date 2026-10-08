@@ -1296,6 +1296,139 @@ unrecognised status hides a proposal), #745 (the banner missing or stale after a
 "reload" refusal), #746 ("Different people" impossible when the other record's drugs fail to read),
 #747 (the banner query cannot use an index).
 
+#### R5b — the worklist, designed 2026-10-08
+
+The second half of R5: the records clerk's tray. The banner (R5a) already does the judging; R5b is
+the list that gets a human to the right chart without knowing which one to open, plus the matcher
+fix (#741) that lets every un-judged pair reach both surfaces at all.
+
+**The maintainer's decisions (brainstorm, 2026-10-07/08):**
+- **#741 is R5b's first task**, not a separate PR and not deferred.
+- **#736: an `accepted` row is worded by its status**, kept in the view (a not-yet-applied "same
+  person" is unfinished work), and offers no *Different people* (which would silently overrule the
+  earlier human).
+- **#743 part 1 is in** (the matcher re-assesses `review` rows). Out, and staying filed: D5's "a
+  matcher link lost to a human judgement" entries (the R5 bullets' second data source; no act to
+  take), #716, #723, #742, #743 part 2, #744–#747.
+- **Review opens the NEWER record** (the one holding the most recently registered chart, usually the
+  just-created duplicate); its banner then shows the older, more informative record.
+- **The tray is a collapsed disclosure with its count visible**, below the registration form.
+
+**Task 1 — the matcher's skip rule agrees with db/057 (#741).**
+- **A pair is *judged* — never proposed — only when** its two charts are in one record (same
+  `person_member.person_id`) **or** `patient_link` holds an **attested** row for it. This is db/057's
+  rule exactly. `judged_partners` and `judged_pairs` (`matcher/.../pipeline/judged.py`) gain
+  `AND attested` on the link-row arm. A pair whose only row is an **un-attested unlink** is now
+  proposed like any other — it is exactly the pair no human has judged.
+- **Auto-apply never links over a disputed pair.** `auto_apply.rs`'s step 2 today skips only an
+  attested row. It gains a second arm: a standing **un-attested unlink** for the pair moves the
+  proposal to `review` (as a veto does) and authors nothing; a new `AutoOutcome::DisputedToReview`
+  is counted in the summary. Without it a matcher link would overrule an agent's unlink by HLC — one
+  machine overruling another where only a human may decide.
+- **The dispute is shown, not hidden** (principle 4). The banner and the worklist add, for a pair with
+  a standing un-attested unlink: *"Recorded as not the same person, without a clinician's
+  confirmation on record here."* (R2b-2's phrase for an un-attested act.)
+- **A new ADR-0078 supersedes ADR-0076 decision 4's skip wording only** — "a pair with ANY
+  `patient_link` row has been judged" becomes "a pair in one record, or with an ATTESTED
+  `patient_link` row". (ADRs are immutable; this is not an edit to ADR-0076.)
+- **Pins:** a DB-gated drift test seeding all five cases — one record; attested link; attested
+  unlink; un-attested unlink; no row — asserting `judged_pairs` and `judged_partners` are exactly the
+  complement of db/057's openness for a `pending` proposal on each pair; an auto-apply test that an
+  un-attested unlink goes to `review` with `patient_link` and `event_log` unchanged.
+
+**Task 2 — `review` rows are re-assessed (#743 part 1).** `queue_db.pending_pairs_involving`,
+`db.pending_proposal_pairs` and `db.retract_pending_proposal` widen from `status = 'pending'` to
+`status IN ('pending', 'review')`, so a `review` row the matcher no longer proposes (a corrected
+demographic, an identified Doe) is retracted instead of asking a human to judge a withdrawn pair.
+`upsert_proposal`'s docstring stops calling the C2b veto kick "a human's decision" — it is a machine
+verdict, still preserved on re-upsert. Pins: a `review` row is retracted, by both the per-chart path
+and the sweep.
+
+**Data — no schema change, `SCHEMA_GENERATION` stays 57.** Everything reads db/057's
+`match_proposal_open`.
+
+**Node — the worklist reads (`cairn_node::duplicate_review`, split into a directory module if it
+passes 500 lines).** Two reads, split by cost so the front door never waits on the list:
+- **`worklist_count(client)`** — ONE statement, no per-chart reads. It counts **record pairs**, not
+  proposal rows: each side's record key is `COALESCE(person_member.person_id, chart)` (a never-linked
+  chart is a record of one; the same `person_member` notion db/057 uses for "same record", so count
+  and view cannot disagree), and a row whose two keys are equal is dropped (`is_another_record`'s
+  case). Read on every front-door show.
+- **`worklist(client, limit)`** — on the tray's first expand. The same grouping, newest proposal
+  first; per shown entry: both records (`person_charts`, cached per chart as the banner does);
+  **`newer` / `older`** by the greatest UUIDv7 timestamp among each record's charts in the entry's
+  pairs (a tie goes to the smaller id — input-order independent); **`open_chart`**, the newer record's
+  chart from the newest proposal — what Review opens; **`vetoed`** fresh via `cairn_match_veto`
+  (never the stored findings, R5a's I3); **`disputed`** (Task 1); **`accepted`** (#736); **`band`**,
+  the strongest of the pairs; `pairs`; `newest_ms`. Returns `{ entries, total }`, `total` from the same
+  statement as the count.
+- The grouping and ordering are **pure** (`group_by_record_pair`, `newer_record`) with unit tests,
+  beside R5a's `group_by_other_record`.
+- **Honesty lines** reuse R4's `read_snapshot` → `classify` unchanged. **An empty list means "checked,
+  none open" only on a Current node**; every failed read is a worded line (R5a's rule).
+- **`candidates_by_id(client, ids, today)`** is extracted from `search_patients`'s `candidate_for`
+  closure (the same name/age/trust/last-activity/locale/photo reads) and `search_patients` calls it.
+  The search's existing goldens and R3's byte-identical tests stay green UNCHANGED — that is the pin
+  that the refactor moved code and changed nothing. The worklist uses it so each side of an entry is a
+  real `Candidate`.
+
+**Window — a new `src/worklist/` module and `src-ui/worklist.js`.**
+- **Markup:** a native `<details id="duplicate-tray">` inside `#front-door`, **below the registration
+  form** (the find and register forms come first in DOM order), closed by default. `<summary>`:
+  **"Possible duplicates (N)"**. Hidden entirely when N = 0 on a Current node; shown with R4's status
+  line when N = 0 on any other state ("Possible duplicates (0) — duplicate check not yet run") — an
+  empty tray never claims "none" when that is not known. Never `role="alert"`, never takes focus.
+- **Commands:** `duplicate_tray_count` (front-door show, and after `close_chart`) → the count plus a
+  status line; `duplicate_worklist` (first expand) → entries. An entry is **two person rows**, newer
+  record first, labelled *"Registered more recently"* and *"Already on file"*, each rendered by R3's
+  row text (`funnel/rows.rs`); a band word; a fresh veto note (an identifier finding is never
+  "verified" — R2b-1); the dispute note; for an accepted pair *"Accepted as the same person — not yet
+  linked"*; and **Review**. Every member chart of every shown row enters `AppState::shown` through
+  `remember_shown`, so the funnel's "only a chart some list on screen showed can be opened" rule holds
+  unchanged — the worklist IS a list on screen.
+- **Review** calls the existing `open_chart(open_chart)`. R5a's banner shows the older record with its
+  medications and *Same person* / *Different people*; no new judgement path. Closing the chart returns
+  to the front door, the count is re-read, and a judged entry is gone. **The tray stays open across
+  returns once expanded** (per-session state, not persisted).
+- **Banner, #736 and the dispute note:** R5a's `OpenProposal` / `PossibleDuplicate` gain `accepted`
+  and `disputed`, read in `open_proposals_touching`'s same statement. An accepted pair's banner entry
+  is worded *"Accepted as the same person — not yet linked"* and shows no *Different people*; a
+  disputed one carries the dispute note.
+- **Wording and cap:** every sentence lives in a pure `worklist/view.rs` with goldens. At most **20**
+  entries, then *"N more possible duplicates, older than these"*; judged pairs leave the view, so the
+  list drains from the top and needs no paging.
+- **`--mock`:** one fixture entry, so the tray can be walked headless; the mock still has no link
+  concept (#722).
+- **File sizes:** all new code in new modules; `funnel/commands.rs` (957 lines) gains only the
+  re-count after `close_chart`.
+
+**Errors.** A failed count → the summary reads *"Possible duplicates — could not be checked: …"*; the
+front door still works. A failed list → an error line inside the tray. One entry's person read fails →
+that entry shows its chart ids and *"could not be read here"*, never dropped. Review on a pair resolved
+since the list was drawn → the chart opens (a read is harmless) with no banner; the tray re-reads on
+return.
+
+**Tests (TDD).**
+- **Matcher:** the drift test (five cases); an un-attested-unlink pair is proposed; a `review` row is
+  retracted when no longer proposed, by both the per-chart path and the sweep.
+- **Node (DB):** auto-apply kicks a disputed pair to `review` and authors nothing; the count counts
+  record pairs (two members against one record = 1) and equals `worklist(..).total`; a pair in one
+  record is never counted; a peer's attested unlink through the sync door clears the entry; `newer`
+  follows UUIDv7 time; `disputed`, `accepted` and `vetoed` each from their own fixture;
+  `candidates_by_id` equals what the search returns for the same ids.
+- **Pure:** `group_by_record_pair`, `newer_record` (input-order independence, ties).
+- **Window:** view goldens incl. hidden-on-Current-zero and shown-on-NeverRun-zero; the banner's
+  accepted wording and absent *Different people*; Review admitted only through `shown`; the
+  webview-fields guard extended to `worklist.js`; a headless walk asserting VISIBILITY (computed
+  display, no hidden ancestor), never text alone.
+
+**§1.2 (R5b).** Paper counterpart: the records clerk's possible-duplicate tray. Steps: paper 4 (take
+a pair from the tray, fetch both folders, lay them side by side, clip or mark) → forced 4 (expand the
+tray, Review, read the banner, *Same person* / *Different people*) → target 3 (the tray stays open
+across returns once expanded). `M ≤ N`. Time + cognitive load: tray to recorded judgement ≤ 25 s per
+entry; the front door's find ≤ 5 s is unaffected (the count is one statement). Measured by a new
+RUNBOOK §12 (human act).
+
 ## Error handling
 
 - Worker down or behind → the honest-lag line; writes are never affected (the trigger cannot raise).

@@ -3,10 +3,10 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R5a — THE POSSIBLE-DUPLICATE BANNER (#680) — BUILT ON PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)
-> (2026-10-06): seven tasks subagent-driven, per-task reviews (two one-round fix loops), an opus final review, one fix
-> wave and its re-review; then (2026-10-07) a five-reviewer PR review and its fix round — see the design page's "PR
-> review round". AWAITING THE MAINTAINER'S MERGE.** R4 (PR #724) and #725 (PR #733) merged 2026-10-05. Repair
+> **⇒ R5a — THE POSSIBLE-DUPLICATE BANNER (#680) — MERGED as PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)
+> (2026-10-06)**; R4 (PR #724) and #725 (PR #733) merged 2026-10-05. **R5b (the worklist) is DESIGNED** (design page "R5b — the
+> worklist, designed 2026-10-08"; approved section by section, written spec awaiting the maintainer's review) on draft-PR
+> branch `feat/r5b-duplicate-worklist`: task 1 #741 (ADR-0078), task 2 #743 part 1, #736 worded by status. Repair
 > path #679 · #680 · #681; design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (R5a
 > designed + as-built sections); plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`; R4's
 > worker runbook `docs/developers/running-the-duplicate-check.md` (R5a's human pass is `cairn-gui-tauri`'s RUNBOOK §11). `db/057`, **`SCHEMA_GENERATION` 57**; spec **v0.79** (no ADR — R5a
@@ -14,11 +14,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **R5b — the worklist** "Possible duplicates (N)" at the front door (#680), newest first; its Review opens a chart
->    whose R5a banner does the rest. It reads db/057's `match_proposal_open` (the attested-unlink filter #700 asked for is
->    built there). Plan it from the design page's R5 section. **#716** (confirm a doubted standing link) and **#723** (a
->    doubted row reads "One person") are the small slice beside it; **#736** (an `accepted` row reads "not yet
->    reviewed") is a decision for it. **#728** (the Pi re-measure) can run beside it. #699 stays open until the
+> 1. **R5b — the worklist** "Possible duplicates (N)" at the front door (#680), newest first; its Review opens the NEWER
+>    record, whose R5a banner does the rest. **Designed** (see above); next: the maintainer reviews the written spec, then
+>    `writing-plans` → SDD. **#716** (confirm a doubted standing link) and **#723** (a doubted row reads "One person")
+>    stay the small slice beside it; **#736** is decided (worded by status, built in R5b). **#728** (the Pi re-measure) can run beside it. #699 stays open until the
 >    maintainer closes it.
 > 2. **Open repair-path issues:** from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no
 >    DB-gated tests for its live branches) · **#739** (an unheld member's "not yet run" line) · **#740** ("Different
@@ -430,8 +429,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-06 (**R5a — the possible-duplicate banner**, PR **[#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)**, awaiting
-merge) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) · 10-03 R3 (PR #721) and R1b (PR #717) ·
+**Session date:** 2026-10-07 (R5b brainstorm) · 10-06 (**R5a — the possible-duplicate banner**, PR **[#735](https://github.com/cairn-ehr/cairn-ehr/pull/735)**, merged) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) · 10-03 R3 (PR #721) and R1b (PR #717) ·
 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698, `db/055`) and R1 (ADR-0076, `db/054`,
 PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier: ROADMAP. · **Spec:** **v0.79** (newest
 ADR-0077; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's
