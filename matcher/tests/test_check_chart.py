@@ -122,6 +122,22 @@ def test_a_linked_pair_is_never_proposed(pg_conn):
     assert _count(pg_conn, "SELECT count(*) FROM match_proposal") == 0
 
 
+def test_a_pair_only_an_unattested_unlink_stands_on_is_proposed(pg_conn):
+    # #741: an agent's unconfirmed "different people" is not a human judgement. The pair must
+    # still reach a human (banner + worklist), with the dispute shown there.
+    import hashlib
+    _near_duplicates(pg_conn)
+    lo, hi = sorted([A, B])
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO patient_link (low, high, state, hlc_wall, hlc_counter, origin, "
+            "provenance, content_address, attested) "
+            "VALUES (%s,%s,'unlink',1,0,'seed','test:agent',%s,false)",
+            (lo, hi, b"\x12\x20" + hashlib.sha256(f"{lo}{hi}".encode()).digest()))
+    pg_conn.commit()
+    assert check_chart(pg_conn, B, Settings()).proposed == 1
+
+
 def test_a_stale_pending_proposal_no_longer_blocked_is_reassessed(pg_conn):
     # A pending proposal for (A, C) where C now shares nothing with A: the per-chart #210
     # reconciliation re-assesses it, and below the floor it is retracted.

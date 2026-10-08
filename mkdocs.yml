@@ -205,6 +205,7 @@ nav:
       - ADR-0075 · The step-3 prompt is a nudge, not a completeness claim: spec/decisions/0075-the-step-3-prompt-is-a-nudge-not-a-completeness-claim.md
       - ADR-0076 · Duplicate repair — a linked chart reads as one: spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md
       - ADR-0077 · An unlink may be filed under the record it was judged from: spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md
+      - ADR-0078 · A pair is judged only by a human: spec/decisions/0078-a-pair-is-judged-only-by-a-human.md
   - Spikes (build-prep):
       - spikes/README.md
       - Spike 0001 · Walking skeleton, WAN-sync & Pi cost: spikes/0001-walking-skeleton-wan-sync-and-pi-cost.md
