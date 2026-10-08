@@ -633,11 +633,11 @@ async fn a_vetoed_pair_a_human_already_judged_is_not_sent_back_to_review() {
 /// A matcher link that LOSES the overlay once submitted is rolled back, not recorded as
 /// applied. The step-2 read cannot see everything that outranks the link: an assertion
 /// committed after it (a peer's judgement racing it — #700), or a standing assertion with a
-/// later HLC than the one this run was handed. Deterministic stand-in for the race: a
-/// peer's UN-attested LINK at a later HLC (so neither step 2, which looks only for attested
-/// rows, nor step 2b, which looks only for an un-attested UNLINK — ADR-0078, #741 — sends
-/// the pair away before the submit). Submitting would change nothing in `patient_link`; marking
-/// the proposal `auto_applied` with the LOSING event's id would be a precise untruth.
+/// later HLC than the one this run was handed. Deterministic stand-in for the race: a peer's
+/// UN-attested LINK at a later HLC (so neither step 2, which looks only for attested rows, nor
+/// step 2b, which looks only for an un-attested UNLINK — ADR-0078, #741 — sends the pair away
+/// before the submit). Submitting would change nothing in `patient_link`; marking the proposal
+/// `auto_applied` with the LOSING event's id would be a precise untruth.
 #[tokio::test]
 async fn a_matcher_link_that_loses_the_overlay_is_rolled_back_not_marked_applied() {
     let Some(base) = cs() else { return };
@@ -650,9 +650,9 @@ async fn a_matcher_link_that_loses_the_overlay_is_rolled_back_not_marked_applied
     common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
     seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
 
-    let later_unlink =
+    let outranking_link =
         common::link_assertion_event(&seed_kid, low, high, LinkVerb::Link, 500, 0, "peer", false);
-    common::apply_remote_raw(&c, &seed_sk, later_unlink)
+    common::apply_remote_raw(&c, &seed_sk, outranking_link)
         .await
         .expect("the peer's un-attested link lands");
     let events_before: i64 = c

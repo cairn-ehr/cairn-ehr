@@ -10,6 +10,7 @@
 //! proposal (`apply_auto_candidate`) and the batch driver (`apply_auto_candidates`).
 
 use crate::db_diagnosis::{operator_chain, LocalDbFault};
+use crate::duplicate_review::DISPUTED_SQL;
 use crate::matcher_actor::resolve_matcher_actor;
 use cairn_event::identity::{link_assertion_body, render_link_twin, LinkAssertion};
 use cairn_event::{event_address, sign, EventBody, Hlc, SigningKey};
@@ -95,15 +96,15 @@ pub enum AutoOutcome {
 }
 
 /// Apply ONE proposal: read it `FOR UPDATE`, require band='auto_candidate' AND
-/// status='pending', skip a pair a human has already judged (an attested `patient_link`
-/// row, which any matcher link loses to), send a pair another writer unlinked without a
-/// clinician's confirmation to `review` (ADR-0078), RE-CHECK the db/016 veto (any severity) — a veto
-/// that appeared since propose kicks the pair to human `review` instead of auto-linking —
-/// else build + sign an un-attested link with the matcher's key, submit it through the
-/// 1-arg `submit_event` door, CONFIRM it is now the pair's standing winner (rolling back if
-/// it was outranked), and mark the proposal 'auto_applied'. All in ONE transaction: any
-/// rejection rolls back, so no event is written and the proposal stays 'pending' to retry
-/// (atomicity = idempotency).
+/// status='pending', skip a pair a human has already judged (an attested `patient_link` row,
+/// which any matcher link loses to), send a pair another writer unlinked without a clinician's
+/// confirmation to `review` (ADR-0078), RE-CHECK the db/016 veto (any severity) — a veto that
+/// appeared since propose kicks the pair to human `review` instead of auto-linking — else
+/// build and sign an un-attested link with the matcher's key, submit it through the 1-arg
+/// `submit_event` door, CONFIRM it is now the pair's standing winner (rolling back if it was
+/// outranked), and mark the proposal 'auto_applied'. All in ONE transaction: any rejection
+/// rolls back, so no event is written and the proposal stays 'pending' to retry (atomicity =
+/// idempotency).
 ///
 /// The pair may be passed in either order; it is canonicalized to `(least, greatest)` to
 /// match match_proposal's `CHECK (patient_low < patient_high)`.
@@ -184,11 +185,15 @@ pub async fn apply_auto_candidate(
     //     decision 2). Step 2 returned for any ATTESTED row, so a row left here is un-attested.
     //     Linking over it would decide between two machine assertions by HLC; a human decides
     //     instead. Same move as a veto: to `review`, no event.
+    //     `DISPUTED_SQL` is evaluated over the row locked in step 1 — the ONE spelling of
+    //     "disputed" the banner and worklist show, so what auto-apply refuses to link over is
+    //     exactly what a clinician is shown as a dispute (M6).
     let disputed: bool = tx
         .query_one(
-            "SELECT EXISTS(SELECT 1 FROM patient_link \
-              WHERE low=$1::text::uuid AND high=$2::text::uuid \
-                AND state='unlink' AND NOT attested)",
+            &format!(
+                "SELECT {DISPUTED_SQL} FROM match_proposal \
+                  WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid"
+            ),
             &[&low_s, &high_s],
         )
         .await
