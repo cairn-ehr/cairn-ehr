@@ -79,6 +79,12 @@ function trayItem(entry) {
     const review = document.createElement("button");
     review.type = "button";
     review.textContent = "Review";
+    // Marked like the funnel's candidate rows, so funnel.js's `setCandidatesEnabled` disables
+    // it while a registration saves: opening a chart then is refused by the backend, and a click
+    // that silently did nothing would leave the clerk guessing (funnel.js's `registering`, read
+    // at creation like `candidateItem` does).
+    review.dataset.candidate = "true";
+    review.disabled = registering;
     // A screen reader says "Review, <the newer record's first chart>".
     if (newer.firstId) review.setAttribute("aria-describedby", newer.firstId);
     review.addEventListener("click", async () => {
