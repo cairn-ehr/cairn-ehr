@@ -1,4 +1,5 @@
-"""R4 Task 3, refined by #741: a pair in one record, or with an ATTESTED patient_link row, is never proposed."""
+"""R4 Task 3, refined by #741: a pair is never proposed when it is in one record or has an
+ATTESTED patient_link row."""
 
 import hashlib
 import uuid
@@ -90,17 +91,23 @@ def test_judged_pairs_cover_members_and_attested_unlinks_only(pg_conn):
 def test_judged_is_exactly_what_db057_does_not_hold_open(pg_conn):
     """#741's drift guard: the matcher's skip rule and db/057's openness are ONE rule.
 
-    Five pairs, one per case. A `pending` proposal on each. A pair is judged (never proposed)
+    Six pairs, one per case. A `pending` proposal on each. A pair is judged (never proposed)
     exactly when db/057 does NOT hold its proposal open — no case may be judged by one and open
     by the other, or a pair is silently never shown (#741) or proposed forever.
+
+    The sixth case — an UN-attested link whose two charts read as one record — is judged even
+    though no human attested anything: the pair is ONE record already, so there is nothing left
+    to propose. That is exactly what ADR-0078's first title ("judged only by a human") got wrong;
+    whether the machine's link is doubted is R1b's question, not this rule's.
     """
-    p = [str(uuid.UUID(int=i)) for i in range(21, 31)]
+    p = [str(uuid.UUID(int=i)) for i in range(21, 33)]
     cases = {
         "one record": (p[0], p[1]),
         "attested link": (p[2], p[3]),
         "attested unlink": (p[4], p[5]),
         "un-attested unlink": (p[6], p[7]),
         "no row": (p[8], p[9]),
+        "un-attested link, one record": (p[10], p[11]),
     }
     _member(pg_conn, p[0], p[0])
     _member(pg_conn, p[1], p[0])
@@ -109,6 +116,9 @@ def test_judged_is_exactly_what_db057_does_not_hold_open(pg_conn):
     _link(pg_conn, p[2], p[3], "link", attested=True)
     _link(pg_conn, p[4], p[5], "unlink", attested=True)
     _link(pg_conn, p[6], p[7], "unlink", attested=False)
+    _member(pg_conn, p[10], p[10])
+    _member(pg_conn, p[11], p[10])
+    _link(pg_conn, p[10], p[11], "link", attested=False)
     for x, y in cases.values():
         _propose(pg_conn, x, y)
     with pg_conn.cursor() as cur:

@@ -111,7 +111,8 @@ def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
         conn, me, max_block_size=settings.max_block_size)
     partners = judged.judged_partners(conn, me)
     pairs = judged.drop_judged(pairs, me, partners)
-    # #210 per chart: a PENDING proposal involving this chart that blocking no longer produces
+    # #210 per chart: a proposal still awaiting a human (AWAITING_HUMAN: 'pending' or auto_apply's
+    # 'review' kick) involving this chart that blocking no longer produces
     # (a Doe identified since) is re-assessed, so a stale row is retracted rather than left.
     # Judged/linked pairs are skipped here too, or a since-linked pair would be re-upserted.
     generated = set(pairs)

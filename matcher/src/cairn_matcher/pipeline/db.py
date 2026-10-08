@@ -286,14 +286,15 @@ def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
 
 
 def retract_pending_proposal(conn, low, high) -> int:
-    """Withdraw a still-PENDING advisory proposal (status -> 'retracted'); return rows hit.
+    """Withdraw a proposal no human has decided (AWAITING_HUMAN -> 'retracted'); return rows hit.
 
     Called when a pair the matcher previously surfaced now bands below the review floor —
     most sharply the §5.4 forcing rule, which persisted a REVIEW row while a chart was
     'unconfirmed' (a transient state) that must not linger once the Doe is identified
     (issue #135). Append-only-friendly: a status move, never a DELETE (db/017 grants none),
-    so the advisory row's history is preserved and a hub worklist (which filters on
-    status='pending') stops grouping a resolved chart under a nonexistent Doe.
+    so the advisory row's history is preserved and the worklist and banner (which read db/057's
+    match_proposal_open, where 'retracted' is not an open status) stop showing a resolved chart
+    against a nonexistent Doe.
 
     Only rows in AWAITING_HUMAN transition (pending, or auto_apply's
     'review' kick — #743 part 1) — a human's disposition or a matcher auto-application is
