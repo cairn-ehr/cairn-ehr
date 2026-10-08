@@ -97,8 +97,9 @@ def test_judged_is_exactly_what_db057_does_not_hold_open(pg_conn):
 
     The sixth case — an UN-attested link whose two charts read as one record — is judged even
     though no human attested anything: the pair is ONE record already, so there is nothing left
-    to propose. That is exactly what ADR-0078's first title ("judged only by a human") got wrong;
-    whether the machine's link is doubted is R1b's question, not this rule's.
+    to propose. So "judged" does NOT mean "a human judged it" — only an UNLINK needs a human's
+    attestation to settle a pair (ADR-0078); whether the machine's link is doubted is R1b's
+    question, not this rule's.
     """
     p = [str(uuid.UUID(int=i)) for i in range(21, 33)]
     cases = {
