@@ -23,6 +23,16 @@ use std::collections::{BTreeMap, HashMap};
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
+pub mod worklist;
+
+/// "Another writer recorded these two as different people, without a clinician's confirmation"
+/// (ADR-0078): an UN-attested unlink stands for the open proposal's pair. The ONE spelling — the
+/// banner (`open_proposals_touching`) and the worklist both select it — written over
+/// `match_proposal_open`'s own column names, so it reads the row the query is on.
+pub const DISPUTED_SQL: &str = "EXISTS (SELECT 1 FROM patient_link pl \
+     WHERE pl.low = patient_low AND pl.high = patient_high \
+       AND pl.state = 'unlink' AND NOT pl.attested)";
+
 /// One open proposal that crosses a record's boundary: `here` is inside the displayed set,
 /// `other` outside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
