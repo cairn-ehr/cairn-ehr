@@ -436,8 +436,9 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733) and **R5a** (the banner, PR #735, merged
-  2026-10-06; entry below) are merged; **R5b** (the worklist, #680; #741 first; #716, #723, #736 beside it) is next. Plan each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733) and **R5a** (PR #735) are merged; **R5b** (the
+  worklist, #680) is BUILT on draft PR #749 (entry below). Then the small slice #716 + #723, #742, #743 part 2. Plan
+  each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -494,44 +495,50 @@ append-only notice log.
 
 ### 2026-10-06 — repair path R5a: the possible-duplicate banner (PR #735)
 
-Merged 2026-10-06 as PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735) (Refs #680). Design page "R5a — the banner, designed
-2026-10-06" + its as-built note; plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`.
+Merged 2026-10-06 as PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735) (Refs #680). Design page "R5a — the
+banner, designed 2026-10-06" + its as-built note; plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`.
 `db/057_match_proposal_open.sql`, `SCHEMA_GENERATION` 56 → **57**. No wire change, no ADR (ADR-0076's decisions).
 Maintainer's decisions: R5 → R5a banner then R5b worklist; the other record's FULL active list shows read-only (the
 privacy trade-off recorded in the design); "Different people" only from a banner entry; Review re-reads, `shown` not
 widened.
-- **Built:**
-  - db/057 `match_proposal_open`: open proposals minus pairs in one record or with an ATTESTED unlink. This corrects
-    the R5 bullets' "any `patient_link` row".
-  - `cairn_node::duplicate_review`:
-    - grouped by the other record, with a fresh veto via `cairn_match_veto`;
-    - `open_pairs_between`;
-    - `record_different_people`: one attested unlink per still-open pair, with failures carried.
-  - The window:
-    - `duplicates/` holds every sentence in Rust: each failure becomes a line, and the check-pending lines reuse R4's
-      wording;
-    - `admit_other` handles Review's admission;
-    - `duplicate_section` builds the banner and `duplicates.js` draws it; `different_people_impl` is the "Different
-      people" command;
-    - `link.js`'s `sendJudgement` disables both judgement buttons while a judgement is in flight.
-- **Reviews:**
-  - Tasks 4 and 6 each took one fix round: a Current node no longer contradicts an unheld member's line; load order
-    puts `duplicates.js` before `funnel.js`; both buttons hide on a verdict; Review names its record.
-  - The opus final review found I1–I4 (both buttons live in flight; "NOT recorded" over an outcome-unknown commit; a
-    stale stored veto note; no carried-Err test). All four were fixed in one wave and re-reviewed.
-  - A five-reviewer PR review (2026-10-07) found no critical defect. Fixed on the PR: "Different people"'s refusal
-    order (`ALREADY_IN_RECORD`, then `OTHER_CHANGED` before fixture mode, as Link); its failure wording (#740's verb);
-    names and drugs carried as one tuple and read over one set; a reload closing a newer comparison; focus back to
-    Review; six new DB tests. Filed #741–#747 (below).
-- **Filed:** #736 (an `accepted` row's wording) · #737 (identical entry headings) · #738 (`cairn-gui-tauri` has no
-  DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure wording; its verb fixed on the PR) · from the PR review: #741 (the
-  matcher counts an un-attested unlink as judged) · #742 (no banner while catching up) · #743 (`review` rows never
-  re-assessed) · #744 (an unrecognised status) · #745 (a missing or stale banner after a failure) · #746 (Different
-  people with an unreadable drug list) · #747 (the banner query and its index). Commented on #708 (CARNLK re-check) and
-  #722 (no proposal fixture).
+- **Built:** db/057 `match_proposal_open` (open proposals minus pairs in one record or with an ATTESTED unlink —
+  correcting the R5 bullets' "any `patient_link` row"); `cairn_node::duplicate_review` (grouped by the other record, a
+  fresh veto via `cairn_match_veto`, `open_pairs_between`, `record_different_people` — one attested unlink per
+  still-open pair, failures carried); the window's `duplicates/` (every sentence in Rust; `admit_other`;
+  `duplicate_section` + `duplicates.js`; `different_people_impl`; `sendJudgement` disables both buttons in flight).
+- **Reviews:** Tasks 4 and 6 took one fix round each. The opus final review's I1–I4 (both buttons live in flight; "NOT
+  recorded" over an outcome-unknown commit; a stale stored veto note; no carried-Err test) were fixed in one wave. A
+  five-reviewer PR review (2026-10-07) found no critical defect; fixed on the PR: the refusal order, the failure
+  wording (#740's verb), names and drugs carried as one tuple, a reload closing a newer comparison, focus back to
+  Review, six new DB tests.
+- **Filed:** #736 (an `accepted` row's wording; built in R5b) · #737 (identical entry headings) · #738
+  (`cairn-gui-tauri` has no DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure
+  wording) · from the PR review: #741 (the matcher counts an un-attested unlink as judged; fixed in R5b) · #742 (no
+  banner while catching up) · #743 (`review` rows never re-assessed; part 1 built in R5b) · #744 (an unrecognised
+  status) · #745 (a missing or stale banner after a failure) · #746 (Different people with an unreadable drug list) ·
+  #747 (the banner query and its index). Commented on #708 (CARNLK re-check) and #722 (no proposal fixture).
 - **§1.2:** the clerk lays two folders side by side and clips or marks them. Paper 3 → forced 2 (Review, then Same
   person or Different people) → target 2; a chart open adds 0 acts. Budget ≤ 20 s, and the open with the banner ≤ the
   single-chart open. RUNBOOK §11, a human act owed.
+
+### 2026-10-08/09 — repair path R5b: the possible-duplicate worklist (draft PR #749)
+
+BUILT on draft PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749) (Refs #680 #741 #743 #736), awaiting gates,
+review and merge. Design page "R5b — the worklist" (designed + as built); plan
+`docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`;
+[ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), spec **v0.80**; no schema
+change (generation 57).
+- **Built:** the matcher skips exactly what db/057 holds closed (#741, a six-case drift test) and re-assesses `review`
+  rows (#743 part 1); auto-apply sends a disputed pair to `review`, writing nothing; `DISPUTED_SQL`, the one spelling;
+  `candidate_read.rs`; `duplicate_review/worklist.rs`; the banner's `accepted`/`disputed` (#736); the front door's
+  "Possible duplicates (N)" tray (`worklist/`, `worklist.js`), whose Review opens the NEWER record. The opus final
+  review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
+  door wait).
+- **Filed:** #750 · #751 · #752 · #753; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
+  part 2 · #744–#747.
+- **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built 5 with the tray closed, 4 open (the plan's 4 → 3
+  omitted the banner's own Review). Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
+  act owed.
 
 ## Above the foundation line (NOT in this roadmap)
 
