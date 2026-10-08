@@ -66,7 +66,8 @@ async fn review_opens_the_newer_record() {
     seed_proposal(&c, old, new, "pending").await;
     let w = worklist(&c, 20).await.unwrap();
     assert_eq!(w.items[0].entry.open_chart, new);
-    assert!(w.items[0].newer.contains(&new) && w.items[0].older.contains(&old));
+    let (newer, older) = (&w.items[0].newer, &w.items[0].older);
+    assert!(newer.as_ref().unwrap().contains(&new) && older.as_ref().unwrap().contains(&old));
 }
 
 /// A peer's ATTESTED unlink, arriving by sync, clears the entry — at read time, no status write.
@@ -106,7 +107,9 @@ async fn only_an_attested_unlink_clears_the_entry_and_an_unattested_one_is_a_dis
     assert_eq!(worklist(&c, 20).await.unwrap().total, 0);
 }
 
-/// `accepted` and `vetoed` each come from their own fixture; a pair in one record is never counted.
+/// `accepted` and `vetoed` each come from their own fixture, and neither entry is `disputed` (no
+/// un-attested unlink stands for either) — the flags statement reads each pair's own flags, never
+/// a neighbour's; a pair in one record is never counted.
 #[tokio::test]
 async fn flags_and_the_one_record_case() {
     let Some(base) = cs() else {
@@ -136,9 +139,11 @@ async fn flags_and_the_one_record_case() {
     };
     assert!(of(v1).entry.vetoed && !of(v1).entry.accepted);
     assert!(of(p).entry.accepted && !of(p).entry.vetoed);
+    assert!(!of(v1).entry.disputed && !of(p).entry.disputed);
 }
 
-/// `limit` bounds the entries READ IN FULL, never `total`.
+/// `limit` bounds the entries READ IN FULL, never `total` — and the entries read are the NEWEST:
+/// the oldest proposal is the one left out.
 #[tokio::test]
 async fn the_limit_bounds_the_items_not_the_total() {
     let Some(base) = cs() else {
@@ -148,12 +153,22 @@ async fn the_limit_bounds_the_items_not_the_total() {
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
     let (sk, kid) = setup(&c, &TABLES).await;
+    let mut seeded = vec![];
     for _ in 0..3 {
         let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
         register_pair(&c, &sk, &kid, a, b).await;
         seed_proposal(&c, a, b, "pending").await;
+        seeded.push(if a < b { (a, b) } else { (b, a) });
+        // A later created_at MILLISECOND for the next proposal: the tray orders by created_ms.
+        std::thread::sleep(std::time::Duration::from_millis(3));
     }
     let w = worklist(&c, 2).await.unwrap();
     assert_eq!((w.items.len(), w.total), (2, 3));
+    let shown: Vec<(Uuid, Uuid)> = w.items.iter().map(|i| i.entry.pairs[0]).collect();
+    assert_eq!(
+        shown,
+        vec![seeded[2], seeded[1]],
+        "newest first; the oldest is omitted"
+    );
     assert_eq!(worklist_count(&c).await.unwrap(), 3);
 }

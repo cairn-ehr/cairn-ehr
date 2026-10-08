@@ -14,6 +14,8 @@ pub const MAX_SHOWN: usize = 20;
 pub const NEWER_LABEL: &str = "Registered more recently";
 pub const OLDER_LABEL: &str = "Already on file";
 pub const STRONG_NOTE: &str = "The matcher rates this a strong match.";
+/// Why a side has no row although its record was read: no chart of it could be shown.
+pub const NO_CHARTS: &str = "no charts were found for it.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TrayCountView {
@@ -84,9 +86,18 @@ pub fn more_line(shown: usize, total: usize) -> Option<String> {
     }
 }
 
+/// One side of an entry. **Pure.** A side with no row is worded, never left blank: the clerk
+/// must not read an empty side as "nothing on file".
 fn side(read: Result<Option<PersonRowView>, String>) -> SideView {
     match read {
-        Ok(row) => SideView { row, error: None },
+        Ok(Some(row)) => SideView {
+            row: Some(row),
+            error: None,
+        },
+        Ok(None) => SideView {
+            row: None,
+            error: Some(format!("This record could not be read here: {NO_CHARTS}")),
+        },
         Err(e) => SideView {
             row: None,
             error: Some(format!("This record could not be read here: {e}")),

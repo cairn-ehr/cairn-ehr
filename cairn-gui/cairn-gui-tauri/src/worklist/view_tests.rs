@@ -123,3 +123,14 @@ fn a_failed_list_is_an_error_line() {
     );
     assert!(v.entries.is_empty());
 }
+
+/// T8: a side read with NO chart is a worded line, never a silent blank.
+#[test]
+fn a_side_with_no_chart_is_worded_never_blank() {
+    let v = entry_view(Default::default(), "review", Ok(None), Ok(None), None);
+    assert_eq!(v.older.row, None);
+    assert_eq!(
+        v.older.error.as_deref(),
+        Some("This record could not be read here: no charts were found for it.")
+    );
+}
