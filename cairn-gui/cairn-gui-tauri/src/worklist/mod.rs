@@ -172,4 +172,46 @@ mod tests {
             .await
             .is_ok());
     }
+
+    /// worklist.js is untyped: a Rust field rename would draw an empty tray, not break the build.
+    #[test]
+    fn worklist_js_reads_no_field_the_backend_does_not_send() {
+        use crate::commands::tests::fields_read_in;
+        let js = include_str!("../../src-ui/worklist.js");
+        let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
+            v.as_object().unwrap().keys().cloned().collect()
+        };
+        let (newer, older) = fixture_pair();
+        let row = crate::funnel::rows::person_row_view(&PersonRow::new(newer.clone()).unwrap());
+        let entry = view::entry_view(
+            EntryFlags::default(),
+            "review",
+            Ok(Some(row.clone())),
+            Ok(PersonRow::new(older).map(|r| person_row_view(&r))),
+            None,
+        );
+        let counted = tray_count_view(Ok(1), Ok(CheckState::NeverRun { waiting: 0 }));
+        let list = worklist_view(Ok((vec![entry.clone()], 1)));
+        let member = crate::funnel::view::candidate_view(&newer[0]);
+        for (binding, available) in [
+            ("counted", keys(serde_json::to_value(&counted).unwrap())),
+            ("list", keys(serde_json::to_value(&list).unwrap())),
+            ("entry", keys(serde_json::to_value(&entry).unwrap())),
+            ("side", keys(serde_json::to_value(&entry.newer).unwrap())),
+            ("row", keys(serde_json::to_value(&row).unwrap())),
+            ("member", keys(serde_json::to_value(&member).unwrap())),
+        ] {
+            let read = fields_read_in(js, binding);
+            assert!(
+                !read.is_empty(),
+                "worklist.js no longer reads `{binding}` — rename it here"
+            );
+            for field in read {
+                assert!(
+                    available.contains(&field),
+                    "worklist.js reads `{binding}.{field}`, not sent"
+                );
+            }
+        }
+    }
 }
