@@ -534,10 +534,9 @@ change (generation 57).
   "Possible duplicates (N)" tray (`worklist/`, `worklist.js`), whose Review opens the NEWER record. The opus final
   review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
   door wait).
-- **Filed:** #750 · #751 · #752 · #753; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
+- **Filed:** #750 · #751 · #752 · #753 · #754; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
   part 2 · #744–#747.
-- **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built 5 with the tray closed, 4 open (the plan's 4 → 3
-  omitted the banner's own Review). Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
+- **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
   act owed.
 
 ## Above the foundation line (NOT in this roadmap)

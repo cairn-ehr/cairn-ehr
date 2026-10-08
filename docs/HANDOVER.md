@@ -499,8 +499,8 @@ tray with its count) → design → plan (ten tasks) → SDD → opus final revi
   what is SHOWN, never by the backlog.
 - **⇒ A test whose two orientations coincide pins neither.** Every worklist test had the newer chart on the HIGH side,
   so a mutation that always opened `high` passed (I3). Seed the asymmetric case and mutate to prove it.
-- **⇒ Count the steps against the as-built window, not the plan.** The plan's forced 4 omitted the banner's own
-  Review: as built it is 5 with the tray closed, 4 open, against paper's 4 (RUNBOOK §12 records the real count).
+- **⇒ Count the steps against the as-built window, not the plan.** The plan's 4 omitted the banner's own
+  Review: as built (UI) it is 5 with the tray closed, 4 open, against paper's 4. The architecture forces only the chart and judgement (M ≤ N); the tray's unintended extra Review press is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754). RUNBOOK §12 records the real count.
 - Filed #750–#753; commented #738 #332 #728.
 
 ### 2026-10-04 → 10-07 — R4 (PR #724), #725 (PR #733), R5a (PR #735)

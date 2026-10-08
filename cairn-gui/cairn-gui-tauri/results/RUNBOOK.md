@@ -505,9 +505,9 @@ first entry with the tray closed (5 acts) and the rest with it already open (4 a
 Budget **≤ 25 s per entry**. Record per run: the time, which verdict, and whether the tray was open.
 
 > [!NOTE]
-> The plan's step count (forced 4, target 3) leaves out step 3, the banner's own Review. As built,
-> the forced count is **5** with the tray closed and **4** with it open, against paper's 4. Record the
-> real count; whether the tray's Review should open the compare panel directly is a finding to file.
+> The plan's step count (4 → 3) leaves out step 3, the banner's own Review. As built (UI),
+> the count is **5** with the tray closed and **4** with it open, against paper's 4. Record the
+> real count; whether the tray's Review should open the compare panel directly is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754).
 
 **Measurement 2 — find, with the tray present and with it OPEN.** Re-run section 8's step 1 (`mich`,
 budget **≤ 5 s**; needs section 8's seed on this node) three ways, five runs each: no open

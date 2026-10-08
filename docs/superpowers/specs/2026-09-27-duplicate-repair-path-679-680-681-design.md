@@ -1492,9 +1492,10 @@ Plan `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`, 
 - **An existing auto_apply race test changed its stand-in**, from a later un-attested unlink (which step 2b now
   pre-empts) to an outranking un-attested link. The step-5 rollback is still proven.
 - **The §1.2 step count above under-counts.** It omits the banner's own **Review** press, which opens the compare
-  panel. As built, the forced count is **5** with the tray closed and **4** with it open, against paper's 4.
-  RUNBOOK §12 records the real count; a tray Review that opened the compare panel directly would bring
-  the open-tray count to 3.
+  panel. As built (UI), the count is **5** with the tray closed and **4** with it open, against paper's 4.
+  The architecture forces only the chart open and the judgement (M ≤ N); bundling the banner's Review into
+  the tray's Review is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754) (it would give 4 / 3).
+  RUNBOOK §12 records the real count.
 
 **Headless walk** (Playwright, stubbed `invoke`; visibility = computed display, no hidden ancestor, and
 `checkVisibility`; nothing committed). All PASS:
