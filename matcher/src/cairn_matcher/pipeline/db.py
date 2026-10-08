@@ -22,6 +22,7 @@ from cairn_matcher.pipeline.blocking import (
     resolve_enabled_passes,
 )
 from cairn_matcher.pipeline.blocking_sql import _GROUPS_SQL, _RANGE_GROUPS_SQL
+from cairn_matcher.pipeline.queue_db import AWAITING_HUMAN
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -256,8 +257,9 @@ def generate_candidate_pairs(
 def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
     """Write (or refresh) the advisory proposal for a canonical-ordered pair.
 
-    Latest-wins on (patient_low, patient_high), but a human's decision (accepted / rejected
-    / applied / auto_applied / the C2b veto-driven 'review') is PRESERVED — a re-run
+    Latest-wins on (patient_low, patient_high), but a human's decision (accepted /
+    rejected / applied), the matcher's auto_applied, and auto_apply's 'review' kick (a machine
+    verdict — a re-run must not send the pair back to the auto band) are PRESERVED — a re-run
     refreshes the score/band/evidence, never a verdict. The ONE matcher-owned exception is
     'retracted' -> 'pending': a row the matcher itself withdrew (band dropped below review,
     see retract_pending_proposal) but now proposes again must re-surface on the worklist, so
@@ -293,21 +295,22 @@ def retract_pending_proposal(conn, low, high) -> int:
     so the advisory row's history is preserved and a hub worklist (which filters on
     status='pending') stops grouping a resolved chart under a nonexistent Doe.
 
-    Only 'pending' rows transition — a human's disposition or a matcher auto-application is
+    Only rows in AWAITING_HUMAN transition (pending, or auto_apply's
+    'review' kick — #743 part 1) — a human's disposition or a matcher auto-application is
     left untouched. A no-op (0 rows) for the common case: a sub-threshold pair that never
     had a proposal. Does NOT commit; the caller owns the transaction boundary.
     """
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE match_proposal SET status='retracted', updated_at=clock_timestamp() "
-            "WHERE patient_low=%s AND patient_high=%s AND status='pending'",
-            (low, high),
+            "WHERE patient_low=%s AND patient_high=%s AND status = ANY(%s)",
+            (low, high, list(AWAITING_HUMAN)),
         )
         return cur.rowcount
 
 
 def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
-    """Every advisory proposal still awaiting a human decision (status='pending').
+    """Every advisory proposal still awaiting a human decision (status in AWAITING_HUMAN).
 
     Returns canonical (patient_low, patient_high) lowercase-uuid TEXT tuples — the same shape
     generate_candidate_pairs and canonical_pair produce, so a caller can compare the two sets
@@ -315,7 +318,7 @@ def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
     current blocking passes no longer generate — a pair that has dropped out of the blocking
     universe, e.g. a John Doe whose year-range DOB anchor was replaced by a point date on
     identification — so a stale REVIEW row is not left grouping a resolved chart under a
-    nonexistent Doe. Only 'pending' rows are returned: a human disposition or a matcher
+    nonexistent Doe. Only AWAITING_HUMAN rows are returned: a human disposition or a matcher
     auto-application is never a reconciliation candidate.
 
     Read-only — opens a read transaction the CALLER must close (the sweep already closes its
@@ -324,6 +327,7 @@ def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT patient_low::text, patient_high::text FROM match_proposal "
-            "WHERE status='pending'"
+            "WHERE status = ANY(%s)",
+            (list(AWAITING_HUMAN),),
         )
         return [(low, high) for low, high in cur.fetchall()]

@@ -156,6 +156,26 @@ def test_a_stale_pending_proposal_no_longer_blocked_is_reassessed(pg_conn):
     assert _count(pg_conn, "SELECT status FROM match_proposal") == "retracted"
 
 
+def test_a_stale_review_row_no_longer_blocked_is_retracted(pg_conn):
+    # #743 part 1: auto_apply moved this pair to status 'review' (a veto appeared), then the
+    # facts changed and the matcher no longer proposes it. It must be withdrawn, not left asking
+    # a human to judge a pair the matcher has dropped.
+    c = str(uuid.UUID(int=13))
+    seed_patient(pg_conn, A, names=[("Mary Smith", 20)])
+    seed_patient(pg_conn, c, names=[("Zed Quux", 20)])
+    lo, hi = sorted([A, c])
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO match_proposal (patient_low, patient_high, score_total, band, "
+            "veto_findings, evidence, matcher_version, status) "
+            "VALUES (%s,%s,1,'auto_candidate','[]','[]','v','review')",
+            (lo, hi))
+    pg_conn.commit()
+    result = check_chart(pg_conn, A, Settings())
+    assert result.retracted == 1
+    assert _count(pg_conn, "SELECT status FROM match_proposal") == "retracted"
+
+
 def test_the_worker_role_suffices(pg_conn, monkeypatch):
     _near_duplicates(pg_conn)
     seen = {}
