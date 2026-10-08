@@ -11,6 +11,7 @@
 //! linked together as one person, the queried chart included — and is the one place every
 //! combined read (medication list now, allergies and the duplicate banner later) goes to
 //! agree on that set.
+pub mod candidate_read;
 pub mod candidate_text;
 pub mod compare;
 pub mod edges;
