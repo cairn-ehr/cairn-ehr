@@ -13,7 +13,12 @@
 //! and only then pays for the shown entries: ONE statement for their veto and dispute flags
 //! ([`with_pair_flags`] folds them in) and the two records of each. The flags are deliberately
 //! NOT in the row query: `cairn_match_veto` per OPEN row would make every front-door return wait
-//! on the whole backlog, on the connection the funnel's search shares (I5).
+//! on the whole backlog, on the connection the funnel's search shares.
+//!
+//! The two stages have two types, so the flags cannot be forgotten: the grouping makes a
+//! [`RecordPairEntry`] (no flags at all), and [`with_pair_flags`] is the only way to turn one into
+//! the [`WorklistEntry`] the tray shows. An entry whose flags were never read would otherwise look
+//! exactly like one read and found clean — and the veto and dispute notes would silently vanish.
 use super::{is_another_record, DISPUTED_SQL};
 use crate::patient::person::person_charts;
 use anyhow::Context;
@@ -34,12 +39,29 @@ pub struct ProposalRow {
     pub low_record: Uuid,
     pub high_record: Uuid,
     pub band: String,
-    pub status: String,
+    /// A human accepted the pair as the same person: `status = 'accepted'`, read in SQL as the
+    /// banner reads it (`open_proposals_touching`), so "accepted" is spelled the same way in both.
+    pub accepted: bool,
     /// When the proposal was written, epoch milliseconds — ordering only.
     pub created_ms: i64,
 }
 
-/// One tray entry: every open proposal between ONE pair of records.
+/// One pair of records as the grouping finds it, BEFORE its veto and dispute flags are read.
+/// Deliberately has no flag fields: [`with_pair_flags`] turns it into a [`WorklistEntry`].
+/// Field meanings are [`WorklistEntry`]'s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordPairEntry {
+    pub newer_record: Uuid,
+    pub older_record: Uuid,
+    pub open_chart: Uuid,
+    pub older_chart: Uuid,
+    pub pairs: Vec<(Uuid, Uuid)>,
+    pub band: String,
+    pub accepted: bool,
+    pub newest_ms: i64,
+}
+
+/// One tray entry: every open proposal between ONE pair of records, with its flags read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorklistEntry {
     /// The record holding the most recently registered chart; Review opens it.
@@ -53,10 +75,9 @@ pub struct WorklistEntry {
     pub pairs: Vec<(Uuid, Uuid)>,
     /// The strongest band over the pairs (`auto_candidate` over `review`).
     pub band: String,
-    /// Any pair is vetoed by the db/016 floor NOW. `false` until [`with_pair_flags`] fills it.
+    /// Any pair is vetoed by the db/016 floor NOW.
     pub vetoed: bool,
-    /// An un-attested unlink stands for any pair (`DISPUTED_SQL`, ADR-0078). `false` until
-    /// [`with_pair_flags`] fills it.
+    /// An un-attested unlink stands for any pair (`DISPUTED_SQL`, ADR-0078).
     pub disputed: bool,
     /// A human already accepted any pair as the same person (status `accepted`, #736).
     pub accepted: bool,
@@ -104,11 +125,11 @@ fn band_rank(band: &str) -> u8 {
 ///   the entry's pairs name; a tie goes to the SMALLER chart id.
 /// - **`open_chart`**: the newer record's side of the entry's NEWEST proposal (what Review opens);
 ///   `older_chart` its other side. A `created_ms` tie picks the smaller `(low, high)`.
-/// - `band` the strongest; `accepted` if ANY pair is. `vetoed` / `disputed` are left `false`:
+/// - `band` the strongest; `accepted` if ANY pair is. There are no veto / dispute flags yet:
 ///   they are read later, for the shown entries only, and folded in by [`with_pair_flags`].
 /// - Ordering: `newest_ms` descending, then `(newer_record, older_record)` ascending — so the same
 ///   rows in any order give the same entries.
-pub fn group_by_record_pair(rows: &[ProposalRow]) -> Vec<WorklistEntry> {
+pub fn group_by_record_pair(rows: &[ProposalRow]) -> Vec<RecordPairEntry> {
     let mut groups: BTreeMap<(Uuid, Uuid), Vec<&ProposalRow>> = BTreeMap::new();
     for r in rows.iter().filter(|r| r.low_record != r.high_record) {
         let key = (
@@ -117,7 +138,7 @@ pub fn group_by_record_pair(rows: &[ProposalRow]) -> Vec<WorklistEntry> {
         );
         groups.entry(key).or_default().push(r);
     }
-    let mut entries: Vec<WorklistEntry> = groups.into_values().map(entry_of).collect();
+    let mut entries: Vec<RecordPairEntry> = groups.into_values().map(entry_of).collect();
     entries.sort_by(|a, b| {
         b.newest_ms
             .cmp(&a.newest_ms)
@@ -127,7 +148,7 @@ pub fn group_by_record_pair(rows: &[ProposalRow]) -> Vec<WorklistEntry> {
 }
 
 /// One entry from its (non-empty) group of rows. **Pure.**
-fn entry_of(group: Vec<&ProposalRow>) -> WorklistEntry {
+fn entry_of(group: Vec<&ProposalRow>) -> RecordPairEntry {
     // Every chart the pairs name, with its record.
     let charts = group
         .iter()
@@ -147,7 +168,7 @@ fn entry_of(group: Vec<&ProposalRow>) -> WorklistEntry {
     let mut pairs: Vec<(Uuid, Uuid)> = group.iter().map(|r| (r.low, r.high)).collect();
     pairs.sort();
     pairs.dedup();
-    WorklistEntry {
+    RecordPairEntry {
         newer_record,
         older_record,
         open_chart,
@@ -158,15 +179,13 @@ fn entry_of(group: Vec<&ProposalRow>) -> WorklistEntry {
             .max_by_key(|r| band_rank(&r.band))
             .map(|r| r.band.clone())
             .unwrap_or_default(),
-        vetoed: false,
-        disputed: false,
-        accepted: group.iter().any(|r| r.status == "accepted"),
+        accepted: group.iter().any(|r| r.accepted),
         newest_ms: newest.created_ms,
     }
 }
 
 /// The veto and dispute flags of each canonical pair, as [`read_pair_flags`] reads them.
-pub type PairFlags = HashMap<(Uuid, Uuid), PairFlag>;
+pub type FlagsByPair = HashMap<(Uuid, Uuid), PairFlag>;
 
 /// One pair's two flags.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -177,16 +196,32 @@ pub struct PairFlag {
     pub disputed: bool,
 }
 
-/// `entry` with `vetoed` / `disputed` set if ANY of its pairs is. **Pure.** A pair missing from
-/// `flags` counts as neither — the flags read covers every shown pair, so that is only a pair
-/// whose proposal closed between the two reads, and an absent flag adds no false note.
-pub fn with_pair_flags(mut entry: WorklistEntry, flags: &PairFlags) -> WorklistEntry {
+/// The tray entry for `entry`: `vetoed` / `disputed` set if ANY of its pairs is. **Pure.**
+///
+/// [`read_pair_flags`] returns a row for every pair it is given — it reads the pairs straight
+/// from its input and does not re-check that their proposals are still open — so in
+/// [`worklist`] no pair is ever missing here. A pair missing from `flags` can only come from a
+/// caller passing pairs that were never read; it counts as neither, adding no false note.
+pub fn with_pair_flags(entry: RecordPairEntry, flags: &FlagsByPair) -> WorklistEntry {
+    let mut vetoed = false;
+    let mut disputed = false;
     for pair in &entry.pairs {
         let f = flags.get(pair).copied().unwrap_or_default();
-        entry.vetoed |= f.vetoed;
-        entry.disputed |= f.disputed;
+        vetoed |= f.vetoed;
+        disputed |= f.disputed;
     }
-    entry
+    WorklistEntry {
+        newer_record: entry.newer_record,
+        older_record: entry.older_record,
+        open_chart: entry.open_chart,
+        older_chart: entry.older_chart,
+        pairs: entry.pairs,
+        band: entry.band,
+        vetoed,
+        disputed,
+        accepted: entry.accepted,
+        newest_ms: entry.newest_ms,
+    }
 }
 
 /// The open proposals with both sides' record keys — the ONE spelling of a record key, shared
@@ -225,9 +260,9 @@ pub async fn worklist_count(client: &(impl GenericClient + Sync)) -> anyhow::Res
 pub async fn read_pair_flags(
     client: &(impl GenericClient + Sync),
     pairs: &[(Uuid, Uuid)],
-) -> anyhow::Result<PairFlags> {
+) -> anyhow::Result<FlagsByPair> {
     if pairs.is_empty() {
-        return Ok(PairFlags::new());
+        return Ok(FlagsByPair::new());
     }
     let lows: Vec<String> = pairs.iter().map(|p| p.0.to_string()).collect();
     let highs: Vec<String> = pairs.iter().map(|p| p.1.to_string()).collect();
@@ -256,6 +291,29 @@ pub async fn read_pair_flags(
         .collect()
 }
 
+/// The tray item for `entry` once both records are read, or `None` to leave it out. **Pure.**
+///
+/// Left out ONLY when both records were read and they share a chart: a link landed between the
+/// list read and these reads, so the two now read as one record (the race [`worklist`] documents).
+/// A side that could not be read is never grounds to hide the entry — the possible duplicate is
+/// still shown, with that side's error in its place.
+pub fn item_of(
+    entry: WorklistEntry,
+    newer: Result<ChartSet, String>,
+    older: Result<ChartSet, String>,
+) -> Option<WorklistItem> {
+    if let (Ok(n), Ok(o)) = (&newer, &older) {
+        if !is_another_record(o, n) {
+            return None;
+        }
+    }
+    Some(WorklistItem {
+        entry,
+        newer,
+        older,
+    })
+}
+
 /// One side's record, read through `chart`; a failure is worded with the chart and returned as
 /// that side's own error rather than failing the list.
 async fn record_of(client: &(impl GenericClient + Sync), chart: Uuid) -> Result<ChartSet, String> {
@@ -282,7 +340,7 @@ pub async fn worklist(
     let sql = format!(
         "SELECT patient_low::text AS low, patient_high::text AS high, \
                 ({LOW_RECORD})::text AS low_record, ({HIGH_RECORD})::text AS high_record, \
-                band, status, \
+                band, status = 'accepted' AS accepted, \
                 (extract(epoch FROM created_at) * 1000)::bigint AS created_ms \
          {RECORDS_FROM} \
          ORDER BY created_at DESC, patient_low, patient_high"
@@ -303,14 +361,14 @@ pub async fn worklist(
                 low_record: parse(r, "low_record")?,
                 high_record: parse(r, "high_record")?,
                 band: r.get("band"),
-                status: r.get("status"),
+                accepted: r.get("accepted"),
                 created_ms: r.get("created_ms"),
             })
         })
         .collect::<anyhow::Result<_>>()?;
     let entries = group_by_record_pair(&rows);
     let total = entries.len();
-    let shown: Vec<WorklistEntry> = entries.into_iter().take(limit).collect();
+    let shown: Vec<RecordPairEntry> = entries.into_iter().take(limit).collect();
     let shown_pairs: Vec<(Uuid, Uuid)> = shown.iter().flat_map(|e| e.pairs.clone()).collect();
     let flags = read_pair_flags(client, &shown_pairs).await?;
     let mut items = Vec::new();
@@ -318,18 +376,7 @@ pub async fn worklist(
         let entry = with_pair_flags(entry, &flags);
         let newer = record_of(client, entry.open_chart).await;
         let older = record_of(client, entry.older_chart).await;
-        // Dropped only when BOTH were read and found to share a chart (the documented race);
-        // an unreadable side is never grounds to hide the entry.
-        if let (Ok(n), Ok(o)) = (&newer, &older) {
-            if !is_another_record(o, n) {
-                continue;
-            }
-        }
-        items.push(WorklistItem {
-            entry,
-            newer,
-            older,
-        });
+        items.extend(item_of(entry, newer, older));
     }
     Ok(Worklist { items, total })
 }
@@ -349,7 +396,7 @@ mod tests {
             low_record: if low < high { lr } else { hr },
             high_record: if low < high { hr } else { lr },
             band: "review".into(),
-            status: "pending".into(),
+            accepted: false,
             created_ms,
         }
     }
@@ -415,11 +462,10 @@ mod tests {
         let mut r1 = row(a1, b, a1, b, 1);
         r1.band = "auto_candidate".into();
         let mut r2 = row(a2, b, a1, b, 2);
-        r2.status = "accepted".into();
+        r2.accepted = true;
         let got = &group_by_record_pair(&[r1, r2])[0];
         assert_eq!(got.band, "auto_candidate");
         assert!(got.accepted);
-        assert!(!got.vetoed && !got.disputed, "flags are read later");
     }
 
     /// ANY pair's flag marks the entry — one pair vetoed, the OTHER disputed, both show; a pair
@@ -428,7 +474,7 @@ mod tests {
     fn pair_flags_are_ored_into_the_entry() {
         let (a1, a2, b) = (at(10, 1), at(11, 2), at(50, 3));
         let entry = group_by_record_pair(&[row(a1, b, a1, b, 1), row(a2, b, a1, b, 2)]).remove(0);
-        let mut flags = PairFlags::new();
+        let mut flags = FlagsByPair::new();
         let vetoed = PairFlag {
             vetoed: true,
             disputed: false,
@@ -441,8 +487,64 @@ mod tests {
         flags.insert((a2, b), disputed);
         let got = with_pair_flags(entry.clone(), &flags);
         assert!(got.vetoed && got.disputed);
-        let none = with_pair_flags(entry, &PairFlags::new());
+        let none = with_pair_flags(entry, &FlagsByPair::new());
         assert!(!none.vetoed && !none.disputed);
+    }
+
+    fn flagged(entry: RecordPairEntry) -> WorklistEntry {
+        with_pair_flags(entry, &FlagsByPair::new())
+    }
+
+    /// An unreadable side never hides a possible duplicate — on EITHER side, or both; only two
+    /// readable records sharing a chart (a link landed between the reads) leave it out.
+    #[test]
+    fn only_two_readable_records_sharing_a_chart_leave_an_entry_out() {
+        let (x, y) = (at(10, 1), at(11, 2));
+        let entry = flagged(group_by_record_pair(&[row(x, y, x, y, 5)]).remove(0));
+        let failed = || Err::<ChartSet, String>("reading the record of chart …".into());
+        let (sx, sy) = (ChartSet::single(x), ChartSet::single(y));
+        assert!(item_of(entry.clone(), failed(), Ok(sx.clone())).is_some());
+        assert!(item_of(entry.clone(), Ok(sy.clone()), failed()).is_some());
+        assert!(item_of(entry.clone(), failed(), failed()).is_some());
+        assert!(
+            item_of(entry.clone(), Ok(sy), Ok(sx)).is_some(),
+            "two records: kept"
+        );
+        let one = ChartSet::new([x, y]).unwrap();
+        assert!(
+            item_of(entry, Ok(one.clone()), Ok(one)).is_none(),
+            "now one record: left out"
+        );
+    }
+
+    /// Two proposals of one entry written in the SAME millisecond: the smaller `(low, high)` is
+    /// "the newest", whichever row comes first.
+    #[test]
+    fn a_created_ms_tie_inside_an_entry_picks_the_smaller_pair() {
+        let (a1, a2, b) = (at(10, 1), at(11, 2), at(50, 3));
+        let rows = vec![row(a2, b, a1, b, 7), row(a1, b, a1, b, 7)];
+        let got = &group_by_record_pair(&rows)[0];
+        assert_eq!(got.open_chart, b, "b is the newer record's chart");
+        assert_eq!(
+            got.older_chart, a1,
+            "the newest proposal is the smaller pair, (a1, b)"
+        );
+        let mut rev = rows.clone();
+        rev.reverse();
+        assert_eq!(&group_by_record_pair(&rev)[0], got);
+    }
+
+    /// Two entries with the same `newest_ms` order by `(newer_record, older_record)`, whatever
+    /// order the rows arrive in.
+    #[test]
+    fn entries_tied_on_newest_ms_order_by_their_records() {
+        let (p, q, r, s) = (at(1, 1), at(2, 2), at(3, 3), at(4, 4));
+        let rows = vec![row(r, s, r, s, 10), row(p, q, p, q, 10)];
+        let got = group_by_record_pair(&rows);
+        assert_eq!((got[0].newer_record, got[1].newer_record), (q, s));
+        let mut rev = rows.clone();
+        rev.reverse();
+        assert_eq!(group_by_record_pair(&rev), got);
     }
 
     #[test]

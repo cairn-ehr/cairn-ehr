@@ -1,8 +1,9 @@
-// The front door's possible-duplicate tray (repair path R5b, #680). Words nothing and decides
-// nothing: every sentence comes from Rust (`worklist/view.rs`), every rule from the backend. Classic
+// The front door's possible-duplicate tray (repair path R5b, #680). Decides nothing, and words
+// nothing but the one failure Rust cannot see — the list failing to DRAW (`loadTray`): every other
+// sentence comes from Rust (`worklist/view.rs`), every rule from the backend. Classic
 // script, loaded after duplicates.js and BEFORE funnel.js, whose `boot()` calls `refreshTray`
-// (load order, never a typeof guard — R5a's rule). It uses funnel.js's `openChart` and
-// `failureText` only at call time.
+// (load order, never a typeof guard — R5a's rule). It uses funnel.js's `openChart`,
+// `failureText` and `registering` only at call time.
 //
 // The tray is a native <details>: closed by default, its <summary> the count. It stays open across
 // visits to a chart (the element is never rebuilt), and an open tray re-reads its list on every
@@ -25,7 +26,12 @@ async function refreshTray() {
   if (!tray.hidden && tray.open) await loadTray();
 }
 
-/** Read and draw the list. */
+/**
+ * Read and draw the list. The new entries are built BEFORE anything on screen changes, and a
+ * failure to build them clears the list and says so: otherwise the previous list — entries since
+ * resolved, still carrying Review — would stay up under a blank error line, and the failure would
+ * reach only the console (both callers discard this promise).
+ */
 async function loadTray() {
   let list;
   try {
@@ -33,8 +39,15 @@ async function loadTray() {
   } catch (failure) {
     list = { entries: [], more: null, error: failureText(failure) };
   }
+  let items;
+  try {
+    items = list.entries.map(trayItem);
+  } catch (failure) {
+    items = [];
+    list = { entries: [], more: null, error: "The possible duplicates could not be shown: " + String(failure) };
+  }
   setMessage(el("duplicate-tray-error"), list.error || "");
-  el("duplicate-tray-list").replaceChildren(...list.entries.map(trayItem));
+  el("duplicate-tray-list").replaceChildren(...items);
   setMessage(el("duplicate-tray-more"), list.more || "");
 }
 
@@ -80,7 +93,7 @@ function trayItem(entry) {
     review.type = "button";
     review.textContent = "Review";
     // Marked like the funnel's candidate rows, so funnel.js's `setCandidatesEnabled` disables
-    // it while a registration saves: opening a chart then is refused by the backend, and a click
+    // it while a registration saves: funnel.js's `openChart` ignores a click then, and a button
     // that silently did nothing would leave the clerk guessing (funnel.js's `registering`, read
     // at creation like `candidateItem` does).
     review.dataset.candidate = "true";

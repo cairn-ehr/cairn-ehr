@@ -5,8 +5,10 @@ use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::{LinkVerb, Reviewer};
 use cairn_node::db;
 use cairn_node::duplicate_review::{possible_duplicates, record_different_people, DifferentPeople};
+use cairn_node::patient::person::person_charts;
 use common::{
     apply_remote_raw, cs, enroll_human, link_assertion_event, register_pair, seed_proposal, setup,
+    submit_link_event,
 };
 use uuid::Uuid;
 
@@ -44,7 +46,7 @@ async fn the_banner_carries_accepted_and_disputed() {
     assert!(to(d).disputed && !to(d).accepted);
 }
 
-/// Review Focus 3: even if the webview sent it, "Different people" never overrules an accepted
+/// Even if the webview sent it, "Different people" never overrules an accepted
 /// "same person" — nothing is signed.
 #[tokio::test]
 async fn different_people_refuses_an_accepted_pair_and_signs_nothing() {
@@ -84,4 +86,49 @@ async fn different_people_refuses_an_accepted_pair_and_signs_nothing() {
         .unwrap()
         .get(0);
     assert_eq!(after, before);
+}
+
+/// ONE accepted pair among several between the same two records is enough to refuse: record
+/// {a, m} against {x}, with (a, x) accepted and (m, x) still pending. Signing an unlink for the
+/// pending pair alone would split a record a clinician already said is the same person as x.
+#[tokio::test]
+async fn different_people_refuses_when_any_pair_between_the_records_is_accepted() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let (sk_h, kid_h) = enroll_human(&c).await;
+    let (a, m, x) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, m).await;
+    register_pair(&c, &sk, &kid, x, Uuid::now_v7()).await;
+    submit_link_event(&c, &sk, &kid, a, m, 10, true).await; // one record: a + m
+    seed_proposal(&c, a, x, "accepted").await;
+    seed_proposal(&c, m, x, "pending").await;
+    let left = person_charts(&c, a).await.unwrap();
+    assert!(left.contains(&m), "a and m read as one record");
+    let before: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let reviewer = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = record_different_people(&mut c, &left, &ChartSet::single(x), &reviewer, "testnode")
+        .await
+        .unwrap();
+    assert!(matches!(out, DifferentPeople::AcceptedAsSame));
+    let after: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after, before,
+        "nothing is signed, not even for the pending pair"
+    );
 }

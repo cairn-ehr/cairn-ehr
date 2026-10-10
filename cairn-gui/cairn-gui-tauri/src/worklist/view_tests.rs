@@ -98,6 +98,24 @@ fn an_accepted_entry_uses_the_banners_heading() {
     assert_eq!(v.heading, crate::duplicates::view::ACCEPTED_HEADING);
 }
 
+/// Accepted AND disputed is a real state — a clinician said "same person" here while another
+/// writer's un-attested "different people" still stands (principle 4: shown, never resolved by
+/// the window). The entry carries both: the accepted heading, and the dispute note.
+#[test]
+fn an_accepted_and_disputed_entry_shows_both() {
+    let flags = crate::duplicates::view::EntryFlags {
+        accepted: true,
+        disputed: true,
+        ..Default::default()
+    };
+    let v = entry_view(flags, "review", Ok(None), Ok(None), None);
+    assert_eq!(v.heading, crate::duplicates::view::ACCEPTED_HEADING);
+    assert_eq!(
+        v.notes,
+        vec![crate::duplicates::view::DISPUTED_NOTE.to_string()]
+    );
+}
+
 #[test]
 fn an_unreadable_side_is_worded_and_never_dropped() {
     let v = entry_view(
@@ -124,7 +142,7 @@ fn a_failed_list_is_an_error_line() {
     assert!(v.entries.is_empty());
 }
 
-/// T8: a side read with NO chart is a worded line, never a silent blank.
+/// A side read with NO chart is a worded line, never a silent blank.
 #[test]
 fn a_side_with_no_chart_is_worded_never_blank() {
     let v = entry_view(Default::default(), "review", Ok(None), Ok(None), None);

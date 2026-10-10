@@ -917,3 +917,69 @@ async fn a_pair_another_writer_unlinked_unconfirmed_goes_to_review_and_nothing_i
         (0, 1, 0, 0, 0)
     );
 }
+
+/// A pair both DISPUTED (an un-attested unlink stands) and VETOED: step 2b runs before the veto
+/// re-check, so it is the dispute that sends the pair to `review` and the batch counts it there.
+/// Either route ends with a human and no event; pinning which one keeps the summary's buckets
+/// honest and makes a reordering of the two steps a deliberate change, not a silent one.
+#[tokio::test]
+async fn a_pair_both_disputed_and_vetoed_goes_to_review_as_disputed() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
+    assert_identifier_clash(&c, &seed_sk, &seed_kid, low, high).await;
+    seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
+    let unlink =
+        common::link_assertion_event(&seed_kid, low, high, LinkVerb::Unlink, 50, 0, "peer", false);
+    common::apply_remote_raw(&c, &seed_sk, unlink)
+        .await
+        .expect("an agent's unlink lands");
+    let events_before: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+
+    let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+        .await
+        .unwrap();
+    let out = apply_auto_candidate(
+        &mut c,
+        low,
+        high,
+        &sk,
+        &kid,
+        Hlc {
+            wall: 100,
+            counter: 0,
+            node_origin: "testnode".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(out, AutoOutcome::DisputedToReview),
+        "the dispute answers before the veto re-check"
+    );
+    let events_after: i64 = c
+        .query_one("SELECT count(*) FROM event_log", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(events_after, events_before, "no matcher link was written");
+    let status: String = c
+        .query_one(
+            "SELECT status FROM match_proposal \
+             WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+            &[&low.to_string(), &high.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(status, "review");
+}

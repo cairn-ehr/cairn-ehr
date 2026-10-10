@@ -25,7 +25,7 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Review Focus 2: two of one record's charts against one other record are ONE entry, counted
+/// Two of one record's charts against one other record are ONE entry, counted
 /// once — and the count statement agrees with the list.
 #[tokio::test]
 async fn two_members_against_one_record_count_once() {
@@ -46,6 +46,36 @@ async fn two_members_against_one_record_count_once() {
     let w = worklist(&c, 20).await.unwrap();
     assert_eq!(w.total, 1);
     assert_eq!(w.items.len(), 1);
+    assert_eq!(w.items[0].entry.pairs.len(), 2);
+}
+
+/// The count dedups a pair of records whichever side of each proposal they sit on. A = {a1, a3}
+/// and X = {x2} with a1 < x2 < a3, so (a1, x2) has A low and (x2, a3) has A high: without the
+/// count's LEAST/GREATEST the two orientations would count as two entries over one.
+#[tokio::test]
+async fn the_count_dedups_a_record_pair_seen_in_both_orientations() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &TABLES).await;
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(3));
+    let a1 = Uuid::now_v7();
+    pause();
+    let x2 = Uuid::now_v7();
+    pause();
+    let a3 = Uuid::now_v7();
+    assert!(a1 < x2 && x2 < a3, "UUIDv7 ids sort by their minting time");
+    register_pair(&c, &sk, &kid, a1, a3).await;
+    register_pair(&c, &sk, &kid, x2, Uuid::now_v7()).await;
+    submit_link_event(&c, &sk, &kid, a1, a3, 10, true).await; // one record: a1 + a3
+    seed_proposal(&c, a1, x2, "pending").await;
+    seed_proposal(&c, x2, a3, "pending").await;
+    assert_eq!(worklist_count(&c).await.unwrap(), 1);
+    let w = worklist(&c, 20).await.unwrap();
+    assert_eq!((w.total, w.items.len()), (1, 1));
     assert_eq!(w.items[0].entry.pairs.len(), 2);
 }
 
