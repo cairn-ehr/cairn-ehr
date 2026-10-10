@@ -30,7 +30,7 @@ fn a_pair_is_oriented_by_which_side_the_record_holds() {
     assert_eq!(orient(id(8), id(9), &record), None);
 }
 
-/// Review Focus 2: two of my charts proposed against two charts of ONE other record are one
+/// Two of my charts proposed against two charts of ONE other record are one
 /// entry, standing for both pairs; Review compares against the NEWEST proposal's chart.
 #[test]
 fn proposals_against_one_other_record_are_one_entry() {
@@ -94,7 +94,7 @@ fn nothing_found_is_no_entries() {
     assert!(group_by_other_record(vec![]).is_empty());
 }
 
-/// T6: an entry's `accepted` and `disputed` are ANY of its pairs' — the first proposal accepted,
+/// An entry's `accepted` and `disputed` are ANY of its pairs' — the first proposal accepted,
 /// the second disputed, and the entry carries both. An `=` in place of `|=` keeps only the last
 /// proposal's flags and fails this.
 #[test]

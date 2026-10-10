@@ -95,7 +95,7 @@ pub struct DuplicateEntryView {
     pub heading: String,
     /// One line per chart of the other record (`member_line`'s text).
     pub identity_lines: Vec<String>,
-    /// Unread identity, veto note.
+    /// Unread identity, veto note, dispute note (an un-attested unlink stands, ADR-0078).
     pub notes: Vec<String>,
     /// `false` for an accepted pair: "Different people" would silently overrule an earlier
     /// human (#736). The backend refuses it anyway (`AcceptedAsSame`); this only hides the button.
@@ -121,8 +121,10 @@ pub struct PairResult {
 }
 
 /// One banner entry from what was read about the other record: its identity lines (one per
-/// chart), whether the veto floor finds a disagreement now, and its current medications. A
-/// failed read is a note, never a missing entry; an entry always names at least a chart id.
+/// chart), its `flags` — the veto floor finds a disagreement now (a note), an un-attested unlink
+/// stands (the dispute note), a human already accepted the pair (the accepted heading, and no
+/// "Different people") — and its current medications. A failed read is a note, never a missing
+/// entry; an entry always names at least a chart id.
 pub fn entry_view(
     review_chart: Uuid,
     flags: EntryFlags,

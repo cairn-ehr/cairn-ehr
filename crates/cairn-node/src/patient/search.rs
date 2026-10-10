@@ -1,10 +1,15 @@
-//! §5.8 search-before-create: the ONE mapping from this node's projections into the shared
-//! `Candidate` model a clerk sees before a new chart may be created. The CLI reads through
+//! §5.8 search-before-create: the search that maps this node's projections into the shared
+//! `Candidate` model a clerk sees before a new chart may be created. Its DISPLAY half — the
+//! per-chart reads and the rendering of one candidate — lives in `candidate_read.rs`, which the
+//! possible-duplicate worklist calls too (`candidates_by_id`), so one person reads the same in
+//! both; this file keeps the matching and the ADR-0075 ranking. The CLI reads through
 //! this function today; the future picker window and the native API (ADR-0023) are expected
 //! to wrap it rather than re-derive the joins — same discipline as `medication/read.rs` for
 //! the drug chart.
 //!
-//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN. A candidate's display fields come from seven
+//! WHY SEVERAL SMALL QUERIES AND NOT ONE JOIN (the display reads themselves now live in
+//! `candidate_read.rs`; the reasoning is kept here, where the search assembles them with its own
+//! ranking reads). A candidate's display fields come from seven
 //! genuinely different projections (the display-winner name, the raw retained name set used
 //! only to disambiguate a repudiated-away name from a never-asserted one, dob, trust, chart
 //! activity, address, photo evidence), several of which are retained SETS rather than single

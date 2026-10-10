@@ -23,7 +23,9 @@
 > 2. **Open repair-path issues:** from R5b **#750** ("Registered more recently" trusts a UUIDv7 time) · **#751**
 >    (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a stale list after return,
 >    a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link by HLC is shown nowhere —
->    ADR-0078 vs R1b) · from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no DB-gated
+>    ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check, so ADR-0078's path waits for an unrelated
+>    change or a sweep) · **#756** (worklist/banner type tidy-up: a `Band` enum, one `EntryFlags`) · **#757** (the
+>    banner fails whole on one unreadable record; one failed flags read fails the whole tray) · from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no DB-gated
 >    tests for its live branches; R5b's tray added two) · **#739** (an unheld member's "not yet run" line) · **#740**
 >    ("Different people" failure wording — the stutter, the commit-unknown sentence and the reload remain) · **#744**
 >    (an unrecognised status hides a proposal) · **#745** (a missing or stale banner after a failure) · **#746**
@@ -49,7 +51,8 @@
 > **⇒ R5b'S DURABLE RULES (PR #749) — do not undo any of these** (pins: `matcher/tests/test_judged.py`,
 > `test_proposal_retraction.py`, `tests/{auto_apply,duplicate_worklist,duplicate_review_flags}.rs`,
 > `duplicate_review/{worklist.rs,tests.rs}`, `cairn-gui-tauri/src/worklist/`):
-> - **The matcher's skip rule IS db/057's** (`judged.py`; the six-case drift test against the view): one record, or
+> - **The matcher's skip rule IS db/057's**, save the clamp-and-flag case ADR-0078 decision 1 records (`judged.py`;
+>   the six-case drift test against the view): one record, or
 >   an ATTESTED `patient_link` row. "Judged" is not "a human judged it" — an un-attested link that makes one record is
 >   judged; only an UNLINK needs attestation to settle a pair (ADR-0078). `AWAITING_HUMAN` is exactly `pending` +
 >   `review`: the matcher never retracts a human's verdict.
@@ -59,8 +62,8 @@
 > - **The count and the list share one grouping** (`RECORDS_FROM`, `LOW_RECORD`/`HIGH_RECORD` over db/057's view), so
 >   they cannot disagree. **The count never evaluates the veto or the dispute**, and **flags are read only for the
 >   shown entries' pairs** (`read_pair_flags`, one statement): an open tray re-reads on every return, over the
->   connection the search shares (final review I5).
-> - **`candidate_read` is the one candidate read** (`candidates_by_id`, shared with the search): the window makes ONE
+>   connection the search shares.
+> - **`candidate_read` is the one display read** (`read_display_facts`, shared by the search and `candidates_by_id`): the window makes ONE
 >   batched call per list read, never one per entry or side.
 > - **The tray re-reads its list on every return, because `close_chart` clears `shown`**; the list read admits the
 >   charts again. Drop the re-read and a still-shown entry's Review is refused.
@@ -501,7 +504,12 @@ tray with its count) → design → plan (ten tasks) → SDD → opus final revi
   so a mutation that always opened `high` passed (I3). Seed the asymmetric case and mutate to prove it.
 - **⇒ Count the steps against the as-built window, not the plan.** The plan's 4 omitted the banner's own
   Review: as built (UI) it is 5 with the tray closed, 4 open, against paper's 4. The architecture forces only the chart and judgement (M ≤ N); the tray's unintended extra Review press is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754). RUNBOOK §12 records the real count.
-- Filed #750–#753; commented #738 #332 #728.
+- Filed #750–#753; commented #738 #332 #728. The PR's own five-agent review then found one Critical: a matcher
+  auto-link an agent's un-attested unlink overruled stayed `auto_applied` — not open in db/057 — so the pair reached
+  no human. Fixed in `upsert_proposal` (reopened as `pending`, `applied_event_id` cleared); filed #755–#757.
+- **⇒ Widening "who may be proposed" must check every CLOSED status, not just the skip rule.** #741 stopped counting
+  an un-attested unlink as judged, but a row the matcher itself had closed (`auto_applied`) never re-opened; the
+  ADR's Consequence ("reaches a human") was false for it until the review.
 
 ### 2026-10-04 → 10-07 — R4 (PR #724), #725 (PR #733), R5a (PR #735)
 

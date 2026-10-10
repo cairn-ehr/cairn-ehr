@@ -1337,7 +1337,8 @@ fix (#741) that lets every un-judged pair reach both surfaces at all.
   un-attested unlink goes to `review` with `patient_link` and `event_log` unchanged.
 
 **Task 2 — `review` rows are re-assessed (#743 part 1).** `queue_db.pending_pairs_involving`,
-`db.pending_proposal_pairs` and `db.retract_pending_proposal` widen from `status = 'pending'` to
+`db.pending_proposal_pairs` and `db.retract_pending_proposal` (renamed `awaiting_*` in PR #749's
+review, since they now cover `review` too) widen from `status = 'pending'` to
 `status IN ('pending', 'review')`, so a `review` row the matcher no longer proposes (a corrected
 demographic, an identified Doe) is retracted instead of asking a human to judge a withdrawn pair.
 `upsert_proposal`'s docstring stops calling the C2b veto kick "a human's decision" — it is a machine
@@ -1447,7 +1448,7 @@ Plan `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`, 
   - `auto_apply` step 2b: a standing un-attested unlink moves the proposal to `review`
     (`AutoOutcome::DisputedToReview`). It writes no event and no `patient_link` row, and it reads "disputed" through
     `DISPUTED_SQL` over the locked proposal row.
-  - `patient/candidate_read.rs`: `candidates_by_id` is extracted from the search (`search.rs` 477 → 243 lines; its
+  - `patient/candidate_read.rs`: `candidates_by_id` is extracted from the search (`search.rs` 477 → 204 lines; its
     goldens unchanged).
   - `duplicate_review/` is now a directory module:
     - `mod.rs` holds `DISPUTED_SQL` (the one spelling); `accepted`/`disputed` on the banner's rows; and

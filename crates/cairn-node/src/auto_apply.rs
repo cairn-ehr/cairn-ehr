@@ -187,7 +187,7 @@ pub async fn apply_auto_candidate(
     //     instead. Same move as a veto: to `review`, no event.
     //     `DISPUTED_SQL` is evaluated over the row locked in step 1 — the ONE spelling of
     //     "disputed" the banner and worklist show, so what auto-apply refuses to link over is
-    //     exactly what a clinician is shown as a dispute (M6).
+    //     exactly what a clinician is shown as a dispute.
     let disputed: bool = tx
         .query_one(
             &format!(

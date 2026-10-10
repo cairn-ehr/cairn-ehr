@@ -100,7 +100,8 @@ impl DisplayFacts {
 }
 
 /// One candidate per id, in `ids`' order - what the search would show for each. A chart this
-/// node has never heard of is still returned (named as unknown), never dropped.
+/// node has never heard of is still returned, never dropped: named "(registration not yet
+/// received here)", its trust unknown.
 pub async fn candidates_by_id<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],

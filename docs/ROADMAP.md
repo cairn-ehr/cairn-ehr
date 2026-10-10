@@ -528,13 +528,14 @@ review and merge. Design page "R5b — the worklist" (designed + as built); plan
 `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`;
 [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), spec **v0.80**; no schema
 change (generation 57).
-- **Built:** the matcher skips exactly what db/057 holds closed (#741, a six-case drift test) and re-assesses `review`
+- **Built:** the matcher skips what db/057 holds closed, save ADR-0078's clamp-and-flag exception (#741, a six-case drift test) and re-assesses `review`
   rows (#743 part 1); auto-apply sends a disputed pair to `review`, writing nothing; `DISPUTED_SQL`, the one spelling;
   `candidate_read.rs`; `duplicate_review/worklist.rs`; the banner's `accepted`/`disputed` (#736); the front door's
   "Possible duplicates (N)" tray (`worklist/`, `worklist.js`), whose Review opens the NEWER record. The opus final
   review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
-  door wait).
-- **Filed:** #750 · #751 · #752 · #753 · #754; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
+  door wait). The PR review's one Critical — an `auto_applied` pair an agent's un-attested unlink overruled reached no
+  human — is fixed in `upsert_proposal` (reopened as `pending`).
+- **Filed:** #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
   part 2 · #744–#747.
 - **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
   act owed.

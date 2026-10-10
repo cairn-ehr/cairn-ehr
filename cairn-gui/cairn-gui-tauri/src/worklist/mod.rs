@@ -1,15 +1,18 @@
 //! The front door's possible-duplicate tray (repair path R5b, #680): its two commands. Every
 //! sentence is in `view.rs`; every DB rule in `cairn_node::duplicate_review::worklist` (DB-tested
-//! there). This module orders the reads, builds each side's person row through the SAME candidate
-//! read the search uses (`candidate_read::candidates_by_id`), and admits every shown chart to
+//! there). This module orders the reads, builds each side's person row through
+//! `candidate_read::candidates_by_id` — the same display read (`read_display_facts`) and the same
+//! rendering (`DisplayFacts::candidate`) the search uses — and admits every shown chart to
 //! `AppState::shown` — the worklist IS a list on screen, so the funnel's "only a chart a list
 //! showed can be opened" rule holds unchanged. Review is the existing `open_chart`.
 //!
 //! LOCKING: one hold of `state.db` per command; nothing here calls `read_chart_of` /
 //! `chart_set_of` (which take the lock themselves). `state.db` is the connection the funnel's
 //! search shares, and the list is re-read on every return to the front door while the tray is
-//! open, so its statement count is bounded: the node's few reads plus ONE candidate read for
-//! every chart of every shown entry (`charts_of`), split per side afterwards
+//! open, so its statement count is bounded by the number of SHOWN entries, never the backlog:
+//! the node's list read and flags read (one statement each), two record reads per shown entry
+//! (at most `2 × MAX_SHOWN`), then ONE candidate read (`read_display_facts`, a fixed handful of
+//! statements) for every chart of every shown entry (`charts_of`), split per side afterwards
 //! (`entry_of_item`, pure) — never a read per side.
 pub mod view;
 
@@ -215,7 +218,7 @@ mod tests {
         assert!(v.status_line.is_some());
     }
 
-    /// Review Focus 5: the list re-admits its charts every time it is read — `close_chart`
+    /// The list re-admits its charts every time it is read — `close_chart`
     /// cleared `shown`, and the tray's Review must still open the newer record.
     #[tokio::test]
     async fn reading_the_list_admits_review_s_chart_again_after_close() {
@@ -260,7 +263,7 @@ mod tests {
         }
     }
 
-    /// M8: a record the node could not read is that side's worded error — never a failed list,
+    /// A record the node could not read is that side's worded error — never a failed list,
     /// never a blank side — and Review is withheld, because that chart was never admitted.
     #[test]
     fn an_unreadable_newer_record_is_worded_and_review_is_withheld() {
@@ -282,7 +285,7 @@ mod tests {
         );
     }
 
-    /// I5: ONE candidate read serves every side — each side takes its own record's charts from
+    /// ONE candidate read serves every side — each side takes its own record's charts from
     /// it, and Review opens the newer record's chart.
     #[test]
     fn one_candidate_read_is_split_per_side() {

@@ -1,5 +1,6 @@
-//! R5b Task 4: the worklist builds the SAME candidate the search does, through the read the
-//! search now calls. DB-gated on $CAIRN_TEST_PG; serialized via `db::test_serial_guard`.
+//! R5b Task 4: the worklist builds the SAME candidate the search does — `candidates_by_id` and
+//! the search share one display read (`read_display_facts`) and one rendering
+//! (`DisplayFacts::candidate`). DB-gated on $CAIRN_TEST_PG; serialized via `db::test_serial_guard`.
 mod common;
 use cairn_node::db;
 use cairn_node::patient::candidate_read::candidates_by_id;

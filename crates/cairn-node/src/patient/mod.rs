@@ -1,8 +1,10 @@
 //! §5.3/§5.8 patient registration and the search that precedes it.
 //!
-//! `search` is the ONE mapping from this node's projections to the shared candidate model —
-//! the CLI reads through it, and the future picker window and native API (ADR-0023) are
-//! expected to wrap this same function rather than re-derive the joins. `register` is the
+//! `search` maps this node's projections to the shared candidate model — the CLI reads through
+//! it, and the future picker window and native API (ADR-0023) are expected to wrap this same
+//! function rather than re-derive the joins. `candidate_read` is its display half, shared with
+//! the possible-duplicate worklist (`candidates_by_id`), so a chart renders the same in both.
+//! `register` is the
 //! act `search` feeds: a chart is never registered without first offering the clerk the
 //! candidates already on file (that ordering is why `search` landed first) — see
 //! `register::register_patient` for the STANDARD create act, and `crate::john_doe` for the

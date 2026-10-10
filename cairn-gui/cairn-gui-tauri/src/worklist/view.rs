@@ -105,7 +105,9 @@ fn side(read: Result<Option<PersonRowView>, String>) -> SideView {
     }
 }
 
-/// One entry. **Pure.** `open_chart` is `Some` only when the newer side was read.
+/// One entry. **Pure.** `open_chart` is passed through as given: the CALLER must pass `Some` only
+/// for a chart the newer side's read returned and `AppState::shown` admitted (`worklist/mod.rs`'s
+/// `entry_of_item` enforces it), since Review opens exactly that chart.
 pub fn entry_view(
     flags: EntryFlags,
     band: &str,

@@ -22,7 +22,7 @@ fn member(n: u128, name: &str) -> MemberLine {
     }
 }
 
-/// Review Focus 5 (golden): a never-proposed, checked chart gets NOTHING — the webview hides
+/// A never-proposed, checked chart gets NOTHING — the webview hides
 /// the section, so the chart reads exactly as before R5a.
 #[test]
 fn a_checked_chart_with_no_proposal_has_an_empty_section() {
@@ -51,7 +51,7 @@ fn checked_none_open_is_the_all_empty_section() {
     assert!(s.check_lines.is_empty());
 }
 
-/// Review Focus 5: a failed proposal read is an error line, never an empty banner.
+/// A failed proposal read is an error line, never an empty banner.
 #[test]
 fn a_failed_proposal_read_is_worded_never_empty() {
     let s = section_view(Err("connection reset".into()), vec![]);

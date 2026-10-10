@@ -26,9 +26,13 @@ use uuid::Uuid;
 pub mod worklist;
 
 /// "Another writer recorded these two as different people, without a clinician's confirmation"
-/// (ADR-0078): an UN-attested unlink stands for the open proposal's pair. The ONE spelling — the
-/// banner (`open_proposals_touching`) and the worklist both select it — written over
-/// `match_proposal_open`'s own column names, so it reads the row the query is on.
+/// (ADR-0078): an UN-attested unlink stands for the pair. The ONE spelling, used by three
+/// readers: the banner (`open_proposals_touching`), the worklist (`read_pair_flags`), and
+/// `auto_apply.rs` step 2b, which refuses to link over exactly what the other two show as a
+/// dispute. It names unqualified `patient_low` / `patient_high`, so it reads the row of any
+/// relation exposing those columns: `match_proposal_open`, `match_proposal`, or an aliased
+/// `unnest`. (The matcher's `pipeline/db.py` spells the same test once more in Python, for
+/// reopening an overruled auto-application — see `_AUTO_LINK_OVERRULED` there.)
 pub const DISPUTED_SQL: &str = "EXISTS (SELECT 1 FROM patient_link pl \
      WHERE pl.low = patient_low AND pl.high = patient_high \
        AND pl.state = 'unlink' AND NOT pl.attested)";
