@@ -117,7 +117,7 @@ def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
     # Judged/linked pairs are skipped here too, or a since-linked pair would be re-upserted.
     generated = set(pairs)
     stale = judged.drop_judged(
-        [p for p in queue_db.pending_pairs_involving(conn, me) if p not in generated],
+        [p for p in queue_db.awaiting_pairs_involving(conn, me) if p not in generated],
         me, partners)
     todo = pairs + stale
     everyone = {pid for pair in todo for pid in pair}

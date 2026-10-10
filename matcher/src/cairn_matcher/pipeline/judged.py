@@ -4,8 +4,10 @@
 The commit-time check's skip rule (ADR-0076 decision 7, as ADR-0078 refines decision 4): a pair
 already in ONE record (same person_member.person_id) is the same person already; a pair with an
 ATTESTED patient_link row — a human's link or "not the same person" unlink — has been judged.
-That is db/057's `match_proposal_open` rule exactly, pinned by
-tests/test_judged.py::test_judged_is_exactly_what_db057_does_not_hold_open.
+That is db/057's `match_proposal_open` rule, pinned by
+tests/test_judged.py::test_judged_is_exactly_what_db057_does_not_hold_open — with ONE recorded
+exception (ADR-0078 decision 1): where db/018's clamp-and-flag leaves person_member stale on an
+oversized component, the matcher skips a pair db/057 still holds open (so it is still shown).
 
 An UN-attested unlink is NOT a judgement (#741): unlinks are not veto-gated and the ADR-0030
 agent writer can author one, so skipping on it would let any unreviewed writer keep a pair off

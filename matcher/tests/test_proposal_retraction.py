@@ -286,7 +286,7 @@ def test_a_review_row_is_retracted_once_the_doe_is_identified(pg_conn):
 def test_awaiting_human_is_exactly_the_statuses_no_human_has_decided():
     """Pure (#743 part 1): the matcher may revise — and retract — only a row no human decided.
 
-    AWAITING_HUMAN gates retract_pending_proposal, the sweep's reconciliation and the worker's
+    AWAITING_HUMAN gates retract_awaiting_proposal, the sweep's reconciliation and the worker's
     per-chart re-assessment. If a human's verdict ('accepted'/'rejected'/'applied') or the
     matcher's own auto-application crept into it, a later sweep could flip a clinician's answer
     to 'retracted' — silently undoing a human judgement. Pinning the exact tuple catches that

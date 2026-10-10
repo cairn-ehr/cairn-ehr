@@ -35,15 +35,23 @@ stayed invisible to the prescriber.
    the agent's unlink by HLC, which is one machine overruling another where only a human may decide.
    An un-attested unlink that commits after auto-apply's check, or arrives later by sync, can still
    lose to an earlier-applied matcher link by HLC order; the pair then reads as one record, and
-   R1b's doubted-link rule — not this ADR — governs what the clinician sees.
+   R1b's doubted-link rule — not this ADR — governs what the clinician sees. Under that rule an
+   un-attested unlink is not a doubt, so today the clinician sees nothing (#753).
+   In the opposite order — the un-attested unlink WINS over a matcher link already applied — the
+   two charts are separate records again and no human has judged them. The matcher's re-check
+   reopens that `auto_applied` proposal as `pending` (and clears its `applied_event_id`), so the
+   pair is shown with the dispute and auto-apply does not link it again.
 3. **The dispute is shown, not hidden.** The banner and the worklist say the pair is "recorded as not
    the same person, without a clinician's confirmation on record here" (principle 4).
 
 ## Consequences
 
 - Every pair the matcher scores at or above the review floor and that no human has judged — and
-  that does not already read as one record — reaches a human; a pair joined by an UN-attested link
-  is R1b's doubt to show, not this rule's.
+  that does not already read as one record — reaches the banner and the worklist, unless auto-apply
+  links an `auto_candidate` pair first; a pair joined by an UN-attested link is R1b's doubt to
+  show, not this rule's. It does so at the pair's next duplicate check: a link or unlink does not
+  itself queue a re-check today (#755), so a pair an agent unlinked waits for a change to one
+  chart's identity evidence, or the next sweep.
 - An agent's unlink now produces work for a human instead of suppressing it. That is the cost, and it
   is accepted.
 - No wire change, no schema change, no new event type.

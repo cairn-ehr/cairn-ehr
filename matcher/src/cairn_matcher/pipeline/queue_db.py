@@ -43,7 +43,7 @@ def next_charts(conn, limit: int, exclude: list[str]) -> list[str]:
         return [p for (p,) in cur.fetchall()]
 
 
-def pending_pairs_involving(conn, patient) -> list[tuple[str, str]]:
+def awaiting_pairs_involving(conn, patient) -> list[tuple[str, str]]:
     """Proposals involving `patient` that the matcher may still revise (AWAITING_HUMAN)."""
     with conn.cursor() as cur:
         cur.execute(

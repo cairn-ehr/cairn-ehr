@@ -138,6 +138,62 @@ def test_a_pair_only_an_unattested_unlink_stands_on_is_proposed(pg_conn):
     assert check_chart(pg_conn, B, Settings()).proposed == 1
 
 
+def _seed_auto_applied(conn, lo, hi):
+    """A proposal auto_apply.rs already linked: status 'auto_applied' with the link event's id
+    (db/019: applied_event_id is set exactly on applied/auto_applied rows)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO match_proposal (patient_low, patient_high, score_total, band, "
+            "veto_findings, evidence, matcher_version, status, applied_event_id) "
+            "VALUES (%s,%s,9,'auto_candidate','[]','[]','v','auto_applied',%s)",
+            (lo, hi, str(uuid.uuid4())))
+    conn.commit()
+
+
+def _seed_standing_link(conn, lo, hi, state):
+    """The pair's standing patient_link row, written by an UN-attested writer (the matcher or an
+    ADR-0030 agent)."""
+    import hashlib
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO patient_link (low, high, state, hlc_wall, hlc_counter, origin, "
+            "provenance, content_address, attested) "
+            "VALUES (%s,%s,%s,1,0,'seed','test:machine',%s,false)",
+            (lo, hi, state, b"\x12\x20" + hashlib.sha256(f"{lo}{hi}".encode()).digest()))
+    conn.commit()
+
+
+def test_an_auto_applied_pair_an_agent_unlinked_reopens_for_a_human(pg_conn):
+    # The matcher auto-linked A–B; an agent's later un-attested unlink won the overlay, so the
+    # two are separate records again and no human has judged them. A row left 'auto_applied'
+    # is not open (db/057), so neither the banner nor the worklist would ever show the pair —
+    # #741's hazard through the auto_applied door. The re-check must reopen it as 'pending'
+    # (clearing applied_event_id, db/019), where the dispute is shown.
+    _near_duplicates(pg_conn)
+    lo, hi = sorted([A, B])
+    _seed_auto_applied(pg_conn, lo, hi)
+    _seed_standing_link(pg_conn, lo, hi, "unlink")
+    assert check_chart(pg_conn, B, Settings()).proposed == 1
+    assert _count(pg_conn, "SELECT status FROM match_proposal") == "pending"
+    assert _count(pg_conn, "SELECT count(*) FROM match_proposal "
+                           "WHERE applied_event_id IS NOT NULL") == 0
+    assert _count(pg_conn, "SELECT count(*) FROM match_proposal_open") == 1
+
+
+def test_an_auto_applied_pair_whose_link_still_stands_stays_auto_applied(pg_conn):
+    # The matcher's own un-attested link is still the standing row: nothing disputes it, so the
+    # re-check refreshes the score and leaves the verdict alone. (person_member is not seeded,
+    # so the pair is not "judged" and does reach upsert_proposal — the case under test.)
+    _near_duplicates(pg_conn)
+    lo, hi = sorted([A, B])
+    _seed_auto_applied(pg_conn, lo, hi)
+    _seed_standing_link(pg_conn, lo, hi, "link")
+    check_chart(pg_conn, B, Settings())
+    assert _count(pg_conn, "SELECT status FROM match_proposal") == "auto_applied"
+    assert _count(pg_conn, "SELECT count(*) FROM match_proposal "
+                           "WHERE applied_event_id IS NOT NULL") == 1
+
+
 def test_a_stale_pending_proposal_no_longer_blocked_is_reassessed(pg_conn):
     # A pending proposal for (A, C) where C now shares nothing with A: the per-chart #210
     # reconciliation re-assesses it, and below the floor it is retracted.
@@ -174,6 +230,24 @@ def test_a_stale_review_row_no_longer_blocked_is_retracted(pg_conn):
     result = check_chart(pg_conn, A, Settings())
     assert result.retracted == 1
     assert _count(pg_conn, "SELECT status FROM match_proposal") == "retracted"
+
+
+def test_a_review_row_still_above_the_floor_stays_review(pg_conn):
+    # #743 part 1 lets the matcher re-assess 'review' rows. One it still proposes must keep
+    # auto_apply's kick: moving it back to 'pending' would let the next auto-apply run try the
+    # pair again, so a veto's "a human decides this" would not be durable.
+    _near_duplicates(pg_conn)
+    lo, hi = sorted([A, B])
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO match_proposal (patient_low, patient_high, score_total, band, "
+            "veto_findings, evidence, matcher_version, status) "
+            "VALUES (%s,%s,1,'auto_candidate','[]','[]','v','review')",
+            (lo, hi))
+    pg_conn.commit()
+    result = check_chart(pg_conn, B, Settings())
+    assert result.proposed == 1 and result.retracted == 0
+    assert _count(pg_conn, "SELECT status FROM match_proposal") == "review"
 
 
 def test_the_worker_role_suffices(pg_conn, monkeypatch):

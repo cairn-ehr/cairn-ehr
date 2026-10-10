@@ -254,16 +254,38 @@ def generate_candidate_pairs(
     return sorted(pairs), skipped_blocks
 
 
+# The existing row is an auto-application whose link another writer's UN-attested unlink has
+# overruled. The same "disputed" test as cairn-node's DISPUTED_SQL (duplicate_review/mod.rs) — the
+# standing patient_link row is an unlink nobody attested — written over the ON CONFLICT target.
+_AUTO_LINK_OVERRULED = (
+    "(match_proposal.status='auto_applied' AND EXISTS (SELECT 1 FROM patient_link pl "
+    "WHERE pl.low=match_proposal.patient_low AND pl.high=match_proposal.patient_high "
+    "AND pl.state='unlink' AND NOT pl.attested))"
+)
+
+
 def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
     """Write (or refresh) the advisory proposal for a canonical-ordered pair.
 
     Latest-wins on (patient_low, patient_high), but a human's decision (accepted /
     rejected / applied), the matcher's auto_applied, and auto_apply's 'review' kick (a machine
     verdict — a re-run must not send the pair back to the auto band) are PRESERVED — a re-run
-    refreshes the score/band/evidence, never a verdict. The ONE matcher-owned exception is
-    'retracted' -> 'pending': a row the matcher itself withdrew (band dropped below review,
-    see retract_pending_proposal) but now proposes again must re-surface on the worklist, so
-    a genuinely resurrected match is never left hidden. Every other status is left untouched.
+    refreshes the score/band/evidence, never a verdict. There are TWO matcher-owned exceptions,
+    both moving a row the matcher itself closed back to 'pending' so a live match is never left
+    hidden:
+
+    * 'retracted' -> 'pending': a row the matcher withdrew (band dropped below review, see
+      retract_awaiting_proposal) but now proposes again must re-surface on the worklist.
+    * 'auto_applied' -> 'pending' when another writer's UN-attested unlink now stands for the
+      pair (ADR-0078). The matcher's own link lost the overlay, so the two charts are separate
+      records again and no human has judged them; db/057 does not hold 'auto_applied' open, so
+      without this the pair would reach neither the banner nor the worklist. Reopened, it is
+      shown with the dispute, and auto_apply.rs sends it to 'review' rather than linking again.
+      applied_event_id is cleared with it, keeping db/019's invariant (set exactly on
+      applied/auto_applied); the matcher's signed link event itself stays in event_log.
+
+    Every other status is left untouched. Both CASEs read the row as it was before this UPDATE
+    (Postgres evaluates every SET expression against the old row), so they agree.
 
     Does NOT commit. The caller owns the transaction boundary.
     """
@@ -277,15 +299,18 @@ def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
             "score_total=EXCLUDED.score_total, band=EXCLUDED.band, "
             "veto_findings=EXCLUDED.veto_findings, evidence=EXCLUDED.evidence, "
             "matcher_version=EXCLUDED.matcher_version, updated_at=clock_timestamp(), "
-            "status=CASE WHEN match_proposal.status='retracted' THEN 'pending' "
-            "ELSE match_proposal.status END",
+            f"status=CASE WHEN match_proposal.status='retracted' THEN 'pending' "
+            f"WHEN {_AUTO_LINK_OVERRULED} THEN 'pending' "
+            "ELSE match_proposal.status END, "
+            f"applied_event_id=CASE WHEN {_AUTO_LINK_OVERRULED} THEN NULL "
+            "ELSE match_proposal.applied_event_id END",
             (low, high, payload.score_total, payload.band.value,
              json.dumps(list(payload.veto_findings)), json.dumps(list(payload.evidence)),
              payload.matcher_version),
         )
 
 
-def retract_pending_proposal(conn, low, high) -> int:
+def retract_awaiting_proposal(conn, low, high) -> int:
     """Withdraw a proposal no human has decided (AWAITING_HUMAN -> 'retracted'); return rows hit.
 
     Called when a pair the matcher previously surfaced now bands below the review floor —
@@ -310,7 +335,7 @@ def retract_pending_proposal(conn, low, high) -> int:
         return cur.rowcount
 
 
-def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
+def awaiting_proposal_pairs(conn) -> list[tuple[str, str]]:
     """Every advisory proposal still awaiting a human decision (status in AWAITING_HUMAN).
 
     Returns canonical (patient_low, patient_high) lowercase-uuid TEXT tuples — the same shape
