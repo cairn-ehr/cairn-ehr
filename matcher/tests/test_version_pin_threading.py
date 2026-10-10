@@ -51,7 +51,7 @@ def _install_db_stub(monkeypatch) -> dict:
     stub.match_veto = lambda conn, a, b: []
     stub.load_aliases = lambda conn, pid: frozenset()
     stub.load_trust_for = lambda conn, ids: {}
-    stub.retract_pending_proposal = lambda conn, low, high: False
+    stub.retract_awaiting_proposal = lambda conn, low, high: False
     stub.upsert_proposal = lambda conn, low, high, payload: captured.update(payload=payload)
 
     # Cover both lazy-import resolutions of `from cairn_matcher.pipeline import db`:
@@ -110,7 +110,7 @@ def test_sweep_threads_its_config_into_both_propose_paths(monkeypatch):
         lambda conn, max_block_size: ([(A, B)], [])
     )
     db_stub.load_aliases_for = lambda conn, ids: {}
-    db_stub.pending_proposal_pairs = lambda conn: [(A, C)]  # an orphan for reconciliation
+    db_stub.awaiting_proposal_pairs = lambda conn: [(A, C)]  # an orphan for reconciliation
 
     calls: list[dict] = []
 

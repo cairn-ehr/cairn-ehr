@@ -1337,7 +1337,8 @@ fix (#741) that lets every un-judged pair reach both surfaces at all.
   un-attested unlink goes to `review` with `patient_link` and `event_log` unchanged.
 
 **Task 2 — `review` rows are re-assessed (#743 part 1).** `queue_db.pending_pairs_involving`,
-`db.pending_proposal_pairs` and `db.retract_pending_proposal` widen from `status = 'pending'` to
+`db.pending_proposal_pairs` and `db.retract_pending_proposal` (renamed `awaiting_*` in PR #749's
+review, since they now cover `review` too) widen from `status = 'pending'` to
 `status IN ('pending', 'review')`, so a `review` row the matcher no longer proposes (a corrected
 demographic, an identified Doe) is retracted instead of asking a human to judge a withdrawn pair.
 `upsert_proposal`'s docstring stops calling the C2b veto kick "a human's decision" — it is a machine
@@ -1428,6 +1429,109 @@ tray, Review, read the banner, *Same person* / *Different people*) → target 3 
 across returns once expanded). `M ≤ N`. Time + cognitive load: tray to recorded judgement ≤ 25 s per
 entry; the front door's find ≤ 5 s is unaffected (the count is one statement). Measured by a new
 RUNBOOK §12 (human act).
+
+#### R5b — as built (2026-10-09)
+
+Plan `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`, ten tasks, each reviewed; draft PR
+[#749](https://github.com/cairn-ehr/cairn-ehr/pull/749). [ADR-0078](../../spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md)
+(spec **v0.80**). No schema change: `SCHEMA_GENERATION` stays **57**.
+
+**What was built, per layer.**
+- **Matcher (#741, #743 part 1):**
+  - `judged.py` skips a pair only when it reads as one record or has an **attested** `patient_link` row (db/057's
+    rule). A drift test holds **six** cases against db/057. The sixth is an un-attested LINK whose charts read as
+    one record: it is judged, so "judged" never means "a human judged it".
+  - `AWAITING_HUMAN = ("pending", "review")`, in the pure `queue_db.py`, is what the retraction and the pending-pair
+    reads use. A `review` row the matcher no longer proposes is retracted, by both the per-chart path and the sweep.
+    A pure test pins that no human verdict is in the tuple.
+- **Node:**
+  - `auto_apply` step 2b: a standing un-attested unlink moves the proposal to `review`
+    (`AutoOutcome::DisputedToReview`). It writes no event and no `patient_link` row, and it reads "disputed" through
+    `DISPUTED_SQL` over the locked proposal row.
+  - `patient/candidate_read.rs`: `candidates_by_id` is extracted from the search (`search.rs` 477 → 204 lines; its
+    goldens unchanged).
+  - `duplicate_review/` is now a directory module:
+    - `mod.rs` holds `DISPUTED_SQL` (the one spelling); `accepted`/`disputed` on the banner's rows; and
+      `DifferentPeople::AcceptedAsSame`, refused before any signature.
+    - `worklist.rs`: `worklist_count` is one statement over record pairs. `worklist` reads the rows without flags,
+      groups them (`group_by_record_pair`, pure), takes `limit`, then reads `vetoed` and `disputed` in ONE statement
+      for the shown pairs only (`read_pair_flags`, folded by `with_pair_flags`). Each side is a
+      `Result<ChartSet, String>`.
+    - `tests.rs` holds the module's unit tests.
+- **Window (Rust):**
+  - `duplicates/` gains `EntryFlags`, the accepted heading, the dispute note and `offers_different_people` (#736).
+  - `worklist/{view.rs, mod.rs}`: every tray sentence, with goldens. `tray_count_impl` and `worklist_impl` back the
+    commands `duplicate_tray_count` and `duplicate_worklist`. `worklist_impl` makes ONE `candidates_by_id` call for
+    every chart of every shown entry, then builds each entry purely (`entry_of_item`) and admits its charts to
+    `AppState::shown`.
+  - `--mock` counts one fixture entry, whose Review opens the fixture chart.
+- **Window (JS):** `worklist.js`; a `<details id="duplicate-tray">` after `#register-form`; `funnel.js` +2 lines
+  (`refreshTray` on the front door's show and on every return).
+
+**Deviations from the design, and why.**
+- **The status line sits OUTSIDE the collapsed `<details>`**, just before it (Task 9 ruling). Inside, a collapsed
+  tray hid the reason and "(0)" read as "checked, none" (principle 4).
+- **Review's refusal is made visible by its click handler.** `openChart` writes the refusal text but knows nothing of
+  `hidden`, and the error line starts hidden. So the handler clears the line, awaits, and unhides it only if words
+  were left.
+- **The tray's Review buttons carry `data-candidate`**, so funnel.js's `setCandidatesEnabled` disables them while a
+  registration saves (final review M10). A click there would otherwise be refused silently.
+- **`duplicate_review/tests.rs` is split out**: the `mod.rs` < 450-line budget had no room for the OR test.
+- **The final review's I5 restructure.** As designed, the list read the veto and the dispute for EVERY open row, and
+  the window made about 18 statements per shown entry. That ran on every return to the front door while the tray was
+  open, over the connection the search shares, so "the front door never waits on the list" was false. Now the flags
+  are read only for the shown pairs, and the candidates in one batched read. RUNBOOK §12 times the find with the
+  tray OPEN.
+- **One unreadable record fails one side, never the list** (M8). The side is worded "This record could not be
+  read here: reading the record of chart …", and Review is withheld when the newer side failed. A failed batched
+  candidate read words EVERY side, because one call now serves them all. A side with no charts is worded, never blank.
+- **ADR-0078 was retitled before merge**: "A machine's unlink does not settle a possible duplicate", with the file
+  renamed. The first title ("a pair is judged only by a human") was false, by the sixth drift case above. Its
+  Context, Decisions 1–2 and Consequence were corrected and re-fact-checked sentence by sentence.
+- **Ruling 1 reversed.** `auto_apply` reads "disputed" through `DISPUTED_SQL` (the column names match), not an
+  inline second spelling.
+- **An existing auto_apply race test changed its stand-in**, from a later un-attested unlink (which step 2b now
+  pre-empts) to an outranking un-attested link. The step-5 rollback is still proven.
+- **The §1.2 step count above under-counts.** It omits the banner's own **Review** press, which opens the compare
+  panel. As built (UI), the count is **5** with the tray closed and **4** with it open, against paper's 4.
+  The architecture forces only the chart open and the judgement (M ≤ N); bundling the banner's Review into
+  the tray's Review is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754) (it would give 4 / 3).
+  RUNBOOK §12 records the real count.
+
+**Headless walk** (Playwright, stubbed `invoke`; visibility = computed display, no hidden ancestor, and
+`checkVisibility`; nothing committed). All PASS:
+1. The tray is visible, after `#register-form`.
+2. It is closed by default, its list not visible.
+3. Expanding shows the entry, "Registered more recently" before "Already on file", with Review described by the newer
+   side's first line.
+4. Review invokes `open_chart`, and `#chart-view` is visible.
+5. **Find another patient** returns to the front door with the tray still open, `duplicate_worklist` re-invoked and
+   the list visible.
+6. A null summary hides the tray.
+7. There is no `role="alert"`, and focus never moves into the tray.
+
+Also walked: "(0)" plus a status line on a collapsed tray shows the status; a Review refusal is visible in
+`#duplicate-tray-error`. **Not walked:** R5a's banner hiding `#link-different` for an accepted pair (#332 commented),
+and the M10 disable during a save (no JS rig, by policy).
+
+**Reviews.** Every task had its own review; Task 9 took one fix round. The opus whole-branch review found C1 (a ruff
+E501, CI red) and I2–I5: ADR-0078's false title and Consequence; Review's orientation unpinned (every test had the
+newer chart HIGH); `disputed == false` unasserted; and I5 above. It also ruled several minors fix-before-merge. One
+wave fixed all of them (five commits, each pin confirmed by mutation), and a scoped opus re-review found no new
+Critical or Important.
+
+**Owed by a human:** RUNBOOK §12: the ≤ 25 s tray-to-judgement stopwatch (tray closed, then open); the find ≤ 5 s
+with the tray hidden, closed and OPEN; the `--mock` keyboard walk; and the VoiceOver/keyboard checks. A miss is a
+finding to file.
+
+**No automated coverage:** the window's live tray path (`tray_count_impl`, `worklist_impl`) and a failed
+`person_charts` inside `worklist()` (#738 commented, with the likely `SET ROLE` seam).
+
+**Follow-ons filed:** #750 ("Registered more recently" trusts a UUIDv7 time an id may not carry) · #751 (open and
+accepted pairs read in two statements, a TOCTOU) · #752 (unordered concurrent tray reads, a stale list after return, a
+context-free candidate-read error) · #753 (an un-attested unlink that loses to a matcher link by HLC is shown nowhere;
+ADR-0078 decision 2 vs R1b). Commented: #738, #332, #728 (the Pi re-measure also times the find with the tray open).
+Still open from the design's out-list: #716, #723, #742, #743 part 2, #744–#747.
 
 ## Error handling
 

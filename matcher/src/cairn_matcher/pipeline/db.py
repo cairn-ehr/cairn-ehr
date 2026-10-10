@@ -22,6 +22,7 @@ from cairn_matcher.pipeline.blocking import (
     resolve_enabled_passes,
 )
 from cairn_matcher.pipeline.blocking_sql import _GROUPS_SQL, _RANGE_GROUPS_SQL
+from cairn_matcher.pipeline.queue_db import AWAITING_HUMAN
 from cairn_matcher.placeholder_uses import PLACEHOLDER_USES_PARAM
 from cairn_matcher.records import CandidateRecord
 
@@ -253,15 +254,38 @@ def generate_candidate_pairs(
     return sorted(pairs), skipped_blocks
 
 
+# The existing row is an auto-application whose link another writer's UN-attested unlink has
+# overruled. The same "disputed" test as cairn-node's DISPUTED_SQL (duplicate_review/mod.rs) — the
+# standing patient_link row is an unlink nobody attested — written over the ON CONFLICT target.
+_AUTO_LINK_OVERRULED = (
+    "(match_proposal.status='auto_applied' AND EXISTS (SELECT 1 FROM patient_link pl "
+    "WHERE pl.low=match_proposal.patient_low AND pl.high=match_proposal.patient_high "
+    "AND pl.state='unlink' AND NOT pl.attested))"
+)
+
+
 def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
     """Write (or refresh) the advisory proposal for a canonical-ordered pair.
 
-    Latest-wins on (patient_low, patient_high), but a human's decision (accepted / rejected
-    / applied / auto_applied / the C2b veto-driven 'review') is PRESERVED — a re-run
-    refreshes the score/band/evidence, never a verdict. The ONE matcher-owned exception is
-    'retracted' -> 'pending': a row the matcher itself withdrew (band dropped below review,
-    see retract_pending_proposal) but now proposes again must re-surface on the worklist, so
-    a genuinely resurrected match is never left hidden. Every other status is left untouched.
+    Latest-wins on (patient_low, patient_high), but a human's decision (accepted /
+    rejected / applied), the matcher's auto_applied, and auto_apply's 'review' kick (a machine
+    verdict — a re-run must not send the pair back to the auto band) are PRESERVED — a re-run
+    refreshes the score/band/evidence, never a verdict. There are TWO matcher-owned exceptions,
+    both moving a row the matcher itself closed back to 'pending' so a live match is never left
+    hidden:
+
+    * 'retracted' -> 'pending': a row the matcher withdrew (band dropped below review, see
+      retract_awaiting_proposal) but now proposes again must re-surface on the worklist.
+    * 'auto_applied' -> 'pending' when another writer's UN-attested unlink now stands for the
+      pair (ADR-0078). The matcher's own link lost the overlay, so the two charts are separate
+      records again and no human has judged them; db/057 does not hold 'auto_applied' open, so
+      without this the pair would reach neither the banner nor the worklist. Reopened, it is
+      shown with the dispute, and auto_apply.rs sends it to 'review' rather than linking again.
+      applied_event_id is cleared with it, keeping db/019's invariant (set exactly on
+      applied/auto_applied); the matcher's signed link event itself stays in event_log.
+
+    Every other status is left untouched. Both CASEs read the row as it was before this UPDATE
+    (Postgres evaluates every SET expression against the old row), so they agree.
 
     Does NOT commit. The caller owns the transaction boundary.
     """
@@ -275,39 +299,44 @@ def upsert_proposal(conn, low, high, payload: ProposalPayload) -> None:
             "score_total=EXCLUDED.score_total, band=EXCLUDED.band, "
             "veto_findings=EXCLUDED.veto_findings, evidence=EXCLUDED.evidence, "
             "matcher_version=EXCLUDED.matcher_version, updated_at=clock_timestamp(), "
-            "status=CASE WHEN match_proposal.status='retracted' THEN 'pending' "
-            "ELSE match_proposal.status END",
+            f"status=CASE WHEN match_proposal.status='retracted' THEN 'pending' "
+            f"WHEN {_AUTO_LINK_OVERRULED} THEN 'pending' "
+            "ELSE match_proposal.status END, "
+            f"applied_event_id=CASE WHEN {_AUTO_LINK_OVERRULED} THEN NULL "
+            "ELSE match_proposal.applied_event_id END",
             (low, high, payload.score_total, payload.band.value,
              json.dumps(list(payload.veto_findings)), json.dumps(list(payload.evidence)),
              payload.matcher_version),
         )
 
 
-def retract_pending_proposal(conn, low, high) -> int:
-    """Withdraw a still-PENDING advisory proposal (status -> 'retracted'); return rows hit.
+def retract_awaiting_proposal(conn, low, high) -> int:
+    """Withdraw a proposal no human has decided (AWAITING_HUMAN -> 'retracted'); return rows hit.
 
     Called when a pair the matcher previously surfaced now bands below the review floor —
     most sharply the §5.4 forcing rule, which persisted a REVIEW row while a chart was
     'unconfirmed' (a transient state) that must not linger once the Doe is identified
     (issue #135). Append-only-friendly: a status move, never a DELETE (db/017 grants none),
-    so the advisory row's history is preserved and a hub worklist (which filters on
-    status='pending') stops grouping a resolved chart under a nonexistent Doe.
+    so the advisory row's history is preserved and the worklist and banner (which read db/057's
+    match_proposal_open, where 'retracted' is not an open status) stop showing a resolved chart
+    against a nonexistent Doe.
 
-    Only 'pending' rows transition — a human's disposition or a matcher auto-application is
+    Only rows in AWAITING_HUMAN transition (pending, or auto_apply's
+    'review' kick — #743 part 1) — a human's disposition or a matcher auto-application is
     left untouched. A no-op (0 rows) for the common case: a sub-threshold pair that never
     had a proposal. Does NOT commit; the caller owns the transaction boundary.
     """
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE match_proposal SET status='retracted', updated_at=clock_timestamp() "
-            "WHERE patient_low=%s AND patient_high=%s AND status='pending'",
-            (low, high),
+            "WHERE patient_low=%s AND patient_high=%s AND status = ANY(%s)",
+            (low, high, list(AWAITING_HUMAN)),
         )
         return cur.rowcount
 
 
-def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
-    """Every advisory proposal still awaiting a human decision (status='pending').
+def awaiting_proposal_pairs(conn) -> list[tuple[str, str]]:
+    """Every advisory proposal still awaiting a human decision (status in AWAITING_HUMAN).
 
     Returns canonical (patient_low, patient_high) lowercase-uuid TEXT tuples — the same shape
     generate_candidate_pairs and canonical_pair produce, so a caller can compare the two sets
@@ -315,7 +344,7 @@ def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
     current blocking passes no longer generate — a pair that has dropped out of the blocking
     universe, e.g. a John Doe whose year-range DOB anchor was replaced by a point date on
     identification — so a stale REVIEW row is not left grouping a resolved chart under a
-    nonexistent Doe. Only 'pending' rows are returned: a human disposition or a matcher
+    nonexistent Doe. Only AWAITING_HUMAN rows are returned: a human disposition or a matcher
     auto-application is never a reconciliation candidate.
 
     Read-only — opens a read transaction the CALLER must close (the sweep already closes its
@@ -324,6 +353,7 @@ def pending_proposal_pairs(conn) -> list[tuple[str, str]]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT patient_low::text, patient_high::text FROM match_proposal "
-            "WHERE status='pending'"
+            "WHERE status = ANY(%s)",
+            (list(AWAITING_HUMAN),),
         )
         return [(low, high) for low, high in cur.fetchall()]

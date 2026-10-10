@@ -55,7 +55,7 @@ function duplicateItem(entry) {
   if (who.length > 0) review.setAttribute("aria-describedby", who[0].id);
   // `compare` words its own failures; this catch is for anything else, so no failure is silent.
   review.addEventListener("click", () =>
-    reviewDuplicate(entry.review_chart).catch((f) => setMessage(el("link-status"), failureText(f))),
+    reviewDuplicate(entry).catch((f) => setMessage(el("link-status"), failureText(f))),
   );
   li.append(review);
   return li;
@@ -63,10 +63,12 @@ function duplicateItem(entry) {
 
 /**
  * Open the comparison on the banner's chart. The backend admits it only while an open proposal
- * still joins it to this record (`duplicates::admit_other`). "Different people" is shown only
- * when THIS comparison (by token) is the one now on the panel (a newer click, or a close, wins).
+ * still joins it to this record (`duplicates::admit_other`). "Different people" is shown
+ * only when the entry offers it (not on an accepted pair, #736) and THIS comparison (by token)
+ * is the one now on the panel (a newer click, or a close, wins).
  */
-async function reviewDuplicate(otherId) {
+async function reviewDuplicate(entry) {
+  const otherId = entry.review_chart;
   openLinkPanel();
   linkOpener = otherId;
   // `compare` bumps `compareToken` synchronously, so reading it right after the call names THIS
@@ -74,7 +76,7 @@ async function reviewDuplicate(otherId) {
   const pending = compare(otherId);
   const token = compareToken;
   await pending;
-  el("link-different").hidden = !(token === compareToken && compared !== null);
+  el("link-different").hidden = !(entry.offers_different_people && token === compareToken && compared !== null);
 }
 
 el("link-different").addEventListener("click", () => sendJudgement("record_different_people"));

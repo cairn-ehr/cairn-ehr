@@ -5,6 +5,12 @@ None of these commit unless the docstring says so: check_chart and run_bulk own 
 so a chart's proposals and the delete of its notices land together or not at all.
 """
 
+# The statuses the MATCHER may still revise: no human has decided them. 'pending' is the
+# matcher's own proposal; 'review' is auto_apply.rs's machine kick (a veto appeared, or another
+# writer's un-attested unlink stands — ADR-0078). A human's 'accepted'/'rejected'/'applied' and
+# the matcher's 'auto_applied' are never revised here (#743 part 1).
+AWAITING_HUMAN = ("pending", "review")
+
 _ALL_CHARTS_SQL = (
     "SELECT patient_id FROM patient_chart UNION SELECT patient_id FROM patient_name "
     "UNION SELECT patient_id FROM patient_demographic "
@@ -37,12 +43,13 @@ def next_charts(conn, limit: int, exclude: list[str]) -> list[str]:
         return [p for (p,) in cur.fetchall()]
 
 
-def pending_pairs_involving(conn, patient) -> list[tuple[str, str]]:
+def awaiting_pairs_involving(conn, patient) -> list[tuple[str, str]]:
+    """Proposals involving `patient` that the matcher may still revise (AWAITING_HUMAN)."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT patient_low::text, patient_high::text FROM match_proposal "
-            "WHERE status = 'pending' AND (patient_low = %s::uuid OR patient_high = %s::uuid)",
-            (patient, patient),
+            "WHERE status = ANY(%s) AND (patient_low = %s::uuid OR patient_high = %s::uuid)",
+            (list(AWAITING_HUMAN), patient, patient),
         )
         return [(lo, hi) for lo, hi in cur.fetchall()]
 

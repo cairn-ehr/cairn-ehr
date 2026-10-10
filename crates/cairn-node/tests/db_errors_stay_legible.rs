@@ -135,15 +135,16 @@ const GUARDED: &[&str] = &[
 /// deliberately swallows. An earlier draft said "every postgres call in that file propagates",
 /// which the unlock contradicts — and the unlock is precisely the swallowed one, so the claim
 /// omitted the case it most needed to name (PR #486 review). See #488 for the swallow itself.
-/// (ADR-0076 decision 5 / R2a added the step-2b read of `patient_link` for standing attested
-/// judgements.)
+/// (ADR-0076 decision 5 / R2a added the step-2 read of `patient_link` for standing attested
+/// judgements. ADR-0078 decision 2 / R5b added step 2b: reading whether another writer's
+/// un-attested unlink stands, the UPDATE to status 'review', and its commit — three wrapped calls.)
 ///
 /// The count is the same crude, effective instrument as [`SYNC_LOCAL_DB_FAULT_SITES`] next
 /// door, and it is needed for the same reason: reverting a wrapper to a bare `?` compiles,
 /// leaves the interpolation scan green (no `{e}` appears) and leaves the two
 /// operator-line tests green (they build their own error and never assert that a
 /// production site produces one).
-const AUTO_APPLY_LOCAL_DB_FAULT_SITES: usize = 11;
+const AUTO_APPLY_LOCAL_DB_FAULT_SITES: usize = 14;
 
 /// The shape counted for `auto_apply.rs` — narrower than `sync.rs`'s, deliberately.
 ///

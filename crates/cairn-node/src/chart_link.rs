@@ -221,11 +221,13 @@ pub async fn standing_link(
     }))
 }
 
-/// The proposal statuses a human judgement resolves. Every other status is CLOSED and is
-/// left exactly as it is: `applied`/`auto_applied` carry an `applied_event_id` that db/019's
-/// invariant ties to them, `rejected` is already decided, `retracted` was withdrawn by the
-/// matcher. What stands is `patient_link`'s business, not the proposal row's; the row only
-/// records how an open proposal was first answered.
+/// The proposal statuses a human judgement resolves. Every other status is CLOSED and a
+/// judgement leaves it exactly as it is: `applied`/`auto_applied` carry an `applied_event_id`
+/// that db/019's invariant ties to them, `rejected` is already decided, `retracted` was withdrawn
+/// by the matcher. What stands is `patient_link`'s business, not the proposal row's; the row only
+/// records how an open proposal was first answered. (The matcher alone may reopen two of them as
+/// `pending` — its own `retracted`, and an `auto_applied` whose link an un-attested unlink has
+/// overruled, ADR-0078 — see `upsert_proposal` in the matcher's `pipeline/db.py`.)
 ///
 /// db/057's view `match_proposal_open` lists exactly these, so the banner and
 /// `assert_link_in_tx`'s status move agree on what "open" means (`tests/match_proposal_open.rs`

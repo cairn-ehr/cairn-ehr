@@ -98,8 +98,9 @@ def sweep(
 
     pairs, skipped_raw = db.generate_candidate_pairs(conn, max_block_size=max_block_size)
     if skip_pairs:
-        # R4 bulk mode: a pair already judged (one link component, or any patient_link row) is
-        # never scored again.
+        # R4 bulk mode: a pair already judged (one record, or an ATTESTED patient_link row --
+        # judged.judged_pairs, ADR-0078) is never scored again. An un-attested unlink is not a
+        # judgement, so its pair is still scored and proposed.
         pairs = [p for p in pairs if p not in skip_pairs]
     # Pre-load the §5.5(a) known-aliases for the whole candidate-patient set in ONE query,
     # still inside the generate read snapshot. This replaces two per-pair alias SELECTs in
@@ -111,15 +112,16 @@ def sweep(
     # Pre-load the §5.4 trust states for the candidate set in the same ONE-query style;
     # propose() then reads trust from this map, not the DB (see the aliases preload above).
     trust = db.load_trust_for(conn, candidate_patients)
-    # Snapshot the currently-PENDING proposal pairs (issue #210) in the same read transaction,
-    # for the reconciliation pass after the main loop. A pending row whose pair the blocking
+    # Snapshot the proposal pairs still awaiting a human (AWAITING_HUMAN: pending or review;
+    # issue #210) in the same read transaction, for the reconciliation pass after the main
+    # loop. Such a row whose pair the blocking
     # passes no longer generate is never revisited by the loop below and would otherwise
     # linger forever.
-    pending = db.pending_proposal_pairs(conn)
+    awaiting = db.awaiting_proposal_pairs(conn)
     if skip_pairs:
         # A judged pair with a stale pending proposal must not be re-scored by reconciliation
         # either (R4 ruling R5: a judged pair is never proposed by either mode).
-        pending = [p for p in pending if p not in skip_pairs]
+        awaiting = [p for p in awaiting if p not in skip_pairs]
     # Close the read transaction the SELECTs opened before the per-pair write loop.
     conn.rollback()
 
@@ -164,7 +166,7 @@ def sweep(
     generated = set(pairs)
     reconciled = 0
     reconciled_retracted = 0
-    for low, high in pending:
+    for low, high in awaiting:
         if (low, high) in generated:
             # The main loop above owns every generated pair (it re-scored it, or recorded its
             # propose() error and will retry next sweep) — reconciliation is only for orphans

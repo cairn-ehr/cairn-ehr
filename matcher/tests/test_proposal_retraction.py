@@ -238,3 +238,62 @@ def test_sweep_reconciles_a_pending_pair_that_left_the_blocking_universe(pg_conn
         "a pending row whose pair left the blocking universe must be reconciled, not left "
         "grouping a resolved chart under a nonexistent Doe"
     )
+
+
+def test_sweep_reconciles_a_review_row_that_left_the_blocking_universe(pg_conn):
+    """#743 part 1: the #210 reconciliation covers a row auto-apply moved to 'review' too."""
+    from cairn_matcher.pipeline import db
+    from cairn_matcher.pipeline.runner import canonical_pair
+    from cairn_matcher.pipeline.sweep import sweep
+
+    doe, prior = _seed_forced_review_pair(pg_conn)
+    seed_identity_pending(pg_conn, doe)
+    assert sweep(pg_conn).errors == []
+    low, high = canonical_pair(doe, prior)
+    with pg_conn.cursor() as cur:  # what auto_apply.rs's veto kick leaves behind
+        cur.execute("UPDATE match_proposal SET status='review' "
+                    "WHERE patient_low=%s AND patient_high=%s", (low, high))
+    pg_conn.commit()
+
+    _fully_identify(pg_conn, doe)
+    generated, _ = db.generate_candidate_pairs(pg_conn)
+    pg_conn.rollback()
+    assert (low, high) not in set(generated), "setup: the pair must have left blocking"
+
+    result = sweep(pg_conn)
+    assert result.errors == []
+    assert result.reconciled_retracted == 1
+    assert _proposal_status(pg_conn, low, high) == "retracted"
+
+
+def test_a_review_row_is_retracted_once_the_doe_is_identified(pg_conn):
+    """#743 part 1, the main-loop path: propose() withdraws a 'review' row that bands None."""
+    from cairn_matcher.pipeline.runner import canonical_pair, propose
+
+    doe, prior = _seed_forced_review_pair(pg_conn)
+    seed_identity_pending(pg_conn, doe)
+    propose(pg_conn, doe, prior)
+    low, high = canonical_pair(doe, prior)
+    with pg_conn.cursor() as cur:
+        cur.execute("UPDATE match_proposal SET status='review' "
+                    "WHERE patient_low=%s AND patient_high=%s", (low, high))
+    pg_conn.commit()
+    _identify(pg_conn, doe)
+    assert propose(pg_conn, doe, prior) is None
+    assert _proposal_status(pg_conn, low, high) == "retracted"
+
+
+def test_awaiting_human_is_exactly_the_statuses_no_human_has_decided():
+    """Pure (#743 part 1): the matcher may revise — and retract — only a row no human decided.
+
+    AWAITING_HUMAN gates retract_awaiting_proposal, the sweep's reconciliation and the worker's
+    per-chart re-assessment. If a human's verdict ('accepted'/'rejected'/'applied') or the
+    matcher's own auto-application crept into it, a later sweep could flip a clinician's answer
+    to 'retracted' — silently undoing a human judgement. Pinning the exact tuple catches that
+    mutation here, without a database.
+    """
+    from cairn_matcher.pipeline.queue_db import AWAITING_HUMAN
+
+    assert AWAITING_HUMAN == ("pending", "review")
+    for decided in ("accepted", "rejected", "applied", "auto_applied", "retracted"):
+        assert decided not in AWAITING_HUMAN, decided

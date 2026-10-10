@@ -157,6 +157,35 @@ prompt? **yes / no**
 | Every outcome shown AND announced (Recorded/Linked on the chart line, refusals in the panel) | | |
 | Close returns focus to the Review that opened it | | |
 
+## Clear the possible-duplicate tray (R5b, runbook §12)
+
+Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_\_
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Tray CLOSED → expand → Review → banner Review → read → verdict → outcome line (5 acts) | live | | | | ≤ 25 s | |
+| Tray already OPEN → Review → banner Review → read → verdict → outcome line (4 acts) | live | | | | ≤ 25 s | |
+| Find (`mich`), no open proposals (tray hidden) | live | | | | ≤ 5 s | |
+| Find, tray present and closed | live | | | | ≤ 5 s | |
+| Find, tray OPEN, right after "Find another patient" | live | | | | ≤ 5 s, not slower than hidden | |
+| Expand → Review → fixture chart open | `--mock` | | | | — (reported apart) | |
+
+| Run | Tray open before? | Verdict (Different people / Link) | Entry gone and count one lower on return? |
+|---|---|---|---|
+| 1 | no | | |
+| 2 | yes | | |
+| 3 | yes | | |
+| 4 | yes | | |
+| 5 | yes | | |
+
+| Tray accessibility check | Verdict | Notes |
+|---|---|---|
+| Summary announced with its count | | |
+| Expands and collapses by keyboard alone | | |
+| Each Review announces the newer record's first identity line | | |
+| Nothing in the tray takes focus or is announced as an alert | | |
+| On a non-Current node the status line is read before the tray | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**
