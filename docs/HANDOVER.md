@@ -16,6 +16,13 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
 >    order, after the final edit), the PR review, merge. #741 may close with it — ask the maintainer before writing a
 >    closing keyword. R5b built #741, #743 part 1 and #736 (worded by status).
+>    **Then PR [#758](https://github.com/cairn-ehr/cairn-ehr/pull/758) — the DOB near miss (ADR-0079, spec v0.81),
+>    BUILT on `feat/dob-near-miss`, which merged #749's branch in (no force-push) — so merge #749 FIRST.** Matcher only:
+>    `NEAR` (one digit / adjacent swap / day↔month / years ±1, full dates only), weight 0.0, never auto-linked,
+>    `dob_near_miss` evidence, `name+monthday` blocking; matcher 0.2.0 re-queues every chart once. Measured: missed true
+>    duplicates 351 → 276 of 2 000, false auto-links unchanged. Follow-ups #759 (word it on banner/tray + §1.2 walk),
+>    #760 (ABS re-measure). Trap: a new blocking key can generate a pair an older test asserts absent — fix the
+>    fixture date, never the assertion.
 > 1. **The small slice: #716** (confirm a doubted standing link) **+ #723** (a doubted row reads "One person"). Then
 >    **#742** (no banner while catching up — a principle-4 decision) and **#743 part 2** (a soft-vetoed joined pair
 >    flagged nowhere). **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays

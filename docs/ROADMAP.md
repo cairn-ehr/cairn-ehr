@@ -535,6 +535,10 @@ change (generation 57).
   review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
   door wait). The PR review's one Critical — an `auto_applied` pair an agent's un-attested unlink overruled reached no
   human — is fixed in `upsert_proposal` (reopened as `pending`).
+- **Then (PR #758, on top of #749): the DOB near miss —
+  [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), spec v0.81.** A DOB one keying
+  error away grades `NEAR` (0.0, never auto-linked, `dob_near_miss` evidence) and `name+monthday` blocks year typos;
+  missed true duplicates 351 → 276 of 2 000 on the synthetic set, false auto-links unchanged. Follow-ups #759 · #760.
 - **Filed:** #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
   part 2 · #744–#747.
 - **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
