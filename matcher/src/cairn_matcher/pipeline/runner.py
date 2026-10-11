@@ -20,6 +20,7 @@ from cairn_matcher.pipeline.banding import (
     Thresholds,
     band,
     build_payload,
+    dob_near_miss_evidence,
 )
 
 # canonical_pair moved to the pure blocking module (one definition of pair identity for
@@ -146,9 +147,14 @@ def assess(
         ({"kind": "identity_pending", "unconfirmed": unconfirmed_ids},)
         if unconfirmed_ids else ()
     )
+    # A DOB one keying error off scores NEAR (0.0) and never auto-links; the evidence names the
+    # error so the reviewer can see it ("day and month swapped").
+    near_miss_evidence = dob_near_miss_evidence(
+        rec_a.dob.value if rec_a.dob else None, rec_b.dob.value if rec_b.dob else None,
+    )
     payload = build_payload(
         match_score, vetoes, band_value, weights, alias_evidence, trust_evidence,
-        thresholds=thresholds, config=config,
+        thresholds=thresholds, config=config, near_miss_evidence=near_miss_evidence,
     )
     return Assessment(low, high, band_value, payload)
 

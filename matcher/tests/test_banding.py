@@ -12,17 +12,20 @@ from dataclasses import replace
 import pytest
 
 from cairn_matcher.agreement import AgreementLevel, Context
-from cairn_matcher.comparators import compare_exact
+from cairn_matcher.comparators import DAY_MONTH_SWAP, compare_exact
 from cairn_matcher.orchestrator import DEFAULT_CONFIG
 from cairn_matcher.pipeline.banding import (
     Band,
     ProposalPayload,
     Thresholds,
     VetoFinding,
+    _corroborated_positive,
     band,
     build_payload,
+    dob_near_miss_evidence,
     matcher_version,
 )
+from cairn_matcher.records import DateValue
 from cairn_matcher.scoring import (
     DEFAULT_WEIGHTS,
     FieldEvidence,
@@ -397,3 +400,57 @@ def test_build_payload_appends_trust_evidence_after_alias_evidence():
     marker = {"kind": "identity_pending", "unconfirmed": ["11111111-1111-1111-1111-111111111111"]}
     payload = build_payload(score, (), Band.REVIEW, trust_evidence=(marker,))
     assert payload.evidence[-1] == marker
+
+
+# --- DOB near miss (spec 2026-10-11): never auto-linked; the proposal names the keying error ---
+
+def _near_score(total: float) -> MatchScore:
+    return MatchScore(total=total, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 0.0),
+        FieldEvidence("identifier", AgreementLevel.EXACT, 60, total - 5.0),
+    ))
+
+
+def test_a_near_miss_dob_never_auto_links_even_with_a_shared_identifier():
+    # name 5 + dob NEAR 0 + identifier 8 = 13 >= auto (8), no veto: still REVIEW.
+    assert band(_near_score(13.0), ()) is Band.REVIEW
+
+
+def test_a_near_miss_pair_above_review_is_review():
+    s = MatchScore(total=6.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 0.0),
+        FieldEvidence("sex", AgreementLevel.EXACT, 60, 1.0),
+    ))
+    assert band(s, ()) is Band.REVIEW
+
+
+def test_near_is_neither_corroboration_nor_a_clash():
+    # §5.4 unconfirmed-chart gate: >= 2 positive fields (>= PARTIAL) and NO DISAGREE.
+    # NEAR counts as neither — so name + sex + NEAR still corroborates, name + NEAR does not.
+    two_pos = MatchScore(total=6.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("sex", AgreementLevel.EXACT, 60, 1.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 0.0),
+    ))
+    one_pos = MatchScore(total=5.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 0.0),
+    ))
+    assert _corroborated_positive(two_pos) is True
+    assert _corroborated_positive(one_pos) is False
+
+
+def test_near_miss_evidence_names_the_pattern():
+    a, b = DateValue(1950, 1, 7), DateValue(1950, 7, 1)
+    assert dob_near_miss_evidence(a, b) == ({"kind": "dob_near_miss", "pattern": DAY_MONTH_SWAP},)
+    assert dob_near_miss_evidence(a, a) == ()
+    assert dob_near_miss_evidence(a, None) == ()
+    assert dob_near_miss_evidence(a, DateValue(1975, 11, 30)) == ()
+
+
+def test_build_payload_appends_the_near_miss_evidence_last():
+    entry = {"kind": "dob_near_miss", "pattern": DAY_MONTH_SWAP}
+    p = build_payload(_score(6.0), (), Band.REVIEW, near_miss_evidence=(entry,))
+    assert p.evidence[-1] == entry

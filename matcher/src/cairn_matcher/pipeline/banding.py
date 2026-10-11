@@ -21,7 +21,9 @@ from enum import Enum
 
 from cairn_matcher import __version__
 from cairn_matcher.agreement import AgreementLevel
+from cairn_matcher.comparators import keying_error_between
 from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, callable_identity
+from cairn_matcher.records import DateValue
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, Weights
 
 
@@ -114,6 +116,21 @@ def _corroborated_positive(score: MatchScore) -> bool:
     return positives >= 2 and not disagrees
 
 
+def _has_near_miss(score: MatchScore) -> bool:
+    """Any field graded NEAR (a DOB one keying error off): never auto-linked — a human must
+    decide which DOB is right, and that is also when the wrong one gets corrected."""
+    return any(e.level is AgreementLevel.NEAR for e in score.fields)
+
+
+def dob_near_miss_evidence(a: DateValue | None, b: DateValue | None) -> tuple[dict, ...]:
+    """The proposal's `dob_near_miss` entry when the two DOBs are one keying error apart, so
+    the reviewer is told WHICH error ("day and month swapped"). **Pure.** Empty otherwise."""
+    if a is None or b is None:
+        return ()
+    pattern = keying_error_between(a, b)
+    return ({"kind": "dob_near_miss", "pattern": pattern},) if pattern else ()
+
+
 def band(
     score: MatchScore,
     vetoes: Sequence[VetoFinding],
@@ -125,8 +142,9 @@ def band(
     """Classify a scored pair into AUTO_CANDIDATE / REVIEW / None (no proposal).
 
     ANY veto finding (hard_veto or degrade_hold) forbids AUTO_CANDIDATE and caps the band
-    at REVIEW — never an auto-link, never an auto-reject. A pair below the review
-    threshold normally yields None (no positive signal to act on).
+    at REVIEW — never an auto-link, never an auto-reject. A field graded NEAR (a DOB one
+    keying error off, spec 2026-10-11) forbids AUTO_CANDIDATE exactly as a veto does. A pair
+    below the review threshold normally yields None (no positive signal to act on).
 
     Exception (ADR-0014 §6, never auto-reject): a veto coexisting with a SHARED STRONG
     IDENTIFIER is forced to REVIEW even below threshold. Otherwise the veto's own subject
@@ -175,7 +193,7 @@ def band(
         if unconfirmed and _corroborated_positive(score):
             return Band.REVIEW
         return None
-    if score.total >= thresholds.auto and not vetoes:
+    if score.total >= thresholds.auto and not vetoes and not _has_near_miss(score):
         return Band.AUTO_CANDIDATE
     return Band.REVIEW
 
@@ -274,6 +292,7 @@ def build_payload(
     trust_evidence: Sequence[dict] = (),
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     config: ComparatorConfig = DEFAULT_CONFIG,
+    near_miss_evidence: Sequence[dict] = (),
 ) -> ProposalPayload:
     """Shape a self-explaining proposal payload: the band, the score, and WHY (evidence
     breakdown + veto findings), plus the matcher version that produced it.
@@ -289,6 +308,9 @@ def build_payload(
     `trust_evidence` (the `identity_pending` marker and other trust/identity attestations,
     if any) is appended after the alias entries so a hub worklist can group an unconfirmed
     chart's candidate list — pure surfacing, never suppression.
+
+    `near_miss_evidence` (the `dob_near_miss` entry, if any — `dob_near_miss_evidence`) is
+    appended last so the reviewer sees which keying error the matcher suspects.
     """
     evidence = tuple(
         {
@@ -298,7 +320,7 @@ def build_payload(
             "weight_contribution": e.weight_contribution,
         }
         for e in score.fields
-    ) + tuple(alias_evidence) + tuple(trust_evidence)
+    ) + tuple(alias_evidence) + tuple(trust_evidence) + tuple(near_miss_evidence)
     findings = tuple(
         {"veto_kind": v.veto_kind, "severity": v.severity, "subject": v.subject, "detail": v.detail}
         for v in vetoes
