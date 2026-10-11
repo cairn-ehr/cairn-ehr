@@ -177,7 +177,13 @@ def _is_full_point(d: DateValue) -> bool:
 
 
 def _keyed_digits(d: DateValue) -> str:
-    """The date as the eight digits a clerk types, YYYYMMDD."""
+    """The date's eight digits in ISO order, YYYYMMDD — NOT the order a clerk types.
+
+    A simplification of the default comparator profile: "adjacent digits swapped" is read in
+    this order, so a swap across a field boundary in ISO order (the last year digit with the
+    first month digit) counts, while one across the DD/MM boundary of a day-first entry
+    (10/11 -> 11/01) does not. A locale pack that knows the entry order may grade differently
+    (ADR-0014, ADR-0079 decision 7)."""
     return f"{d.year:04d}{d.month:02d}{d.day:02d}"
 
 
@@ -187,7 +193,8 @@ def keying_error_between(a: DateValue, b: DateValue) -> str | None:
     Only for two full-precision point dates that differ. Checked in this order, first match
     wins, so each pair gets exactly one name:
       1. exactly one of the eight digits differs              -> ONE_DIGIT
-      2. exactly two ADJACENT digits differ and are swapped   -> ADJACENT_SWAP
+      2. exactly two ADJACENT digits (in YYYYMMDD order — see
+         _keyed_digits) differ and are swapped                -> ADJACENT_SWAP
       3. same year, day and month swapped                     -> DAY_MONTH_SWAP
       4. same day and month, years one apart (1959 vs 1960,
          which changes two digits, so rule 1 misses it)       -> YEARS_ONE_APART

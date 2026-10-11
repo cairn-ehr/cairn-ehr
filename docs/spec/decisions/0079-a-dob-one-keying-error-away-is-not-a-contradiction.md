@@ -30,11 +30,14 @@ surname or first name with an exact DOB already scores 5 and reaches review; the
    inserting it renumbers nothing stored.
 2. **`compare_dob` grades `NEAR`** when two **full-precision point dates** (year, month and day on both
    sides) differ by exactly one keying error, named — first match wins — as "one digit differs", "adjacent
-   digits swapped", "day and month swapped" (same year), or "years one apart" (same day and month). Every
+   digits swapped" (read in `YYYYMMDD` order, so a swap across the year/month boundary counts and one across a
+   day-first entry's day/month boundary does not), "day and month swapped" (same year), or "years one apart"
+   (same day and month). Every
    other difference is still `DISAGREE`; year-only and year-month precisions and §5.4 year ranges are
    unchanged.
-3. **`NEAR` weighs 0.0** — honest uncertainty (principle 4): the digits fit one person and a typo as well
-   as two people. A weights table without the key prices it at 0.0 too.
+3. **The default weights price `NEAR` at 0.0** — honest uncertainty (principle 4): the digits fit one
+   person and a typo as well as two people. A weights table without the key prices it at 0.0 too; a learned
+   table may price it otherwise, which decision 4's cap makes safe.
 4. **`NEAR` forbids `AUTO_CANDIDATE`**, as a veto does: a human decides which DOB is right, which is also
    when the wrong one gets corrected. For the §5.4 unconfirmed-chart gate it is neither corroboration nor
    a clash.
@@ -63,9 +66,9 @@ surname or first name with an exact DOB already scores 5 and reaches review; the
   by the maintainer for its noise (~0.08 false proposals per registration at 100 000 charts); revisit
   with real adjudication data if missed duplicates of that shape appear.
 - The false-proposal estimate was taken on a name population that produces few namesakes; it is owed a
-  re-measure on the ABS-modelled population with diagnoses.
-- The worklist and banner record the pattern but do not yet word it; that sentence, and its timed walk,
-  are a follow-up.
+  re-measure on the ABS-modelled population with diagnoses (#760).
+- The proposal records the pattern; the worklist and banner do not yet show it. That sentence, and its
+  timed walk, are a follow-up (#759).
 - No wire change, no schema change, no new event type: this is the advisory matcher only.
 
 ## Rejected
