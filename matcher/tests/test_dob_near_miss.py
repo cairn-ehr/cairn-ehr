@@ -11,7 +11,8 @@ from cairn_matcher.comparators import (
     compare_dob,
     keying_error_between,
 )
-from cairn_matcher.records import DateValue
+from cairn_matcher.records import DateValue, FieldComparison
+from cairn_matcher.scoring import DEFAULT_WEIGHTS, FieldWeights, Weights, score
 
 CTX = Context()
 D = DateValue
@@ -64,3 +65,24 @@ def test_years_two_apart_with_one_digit_changed_is_one_digit():
 def test_near_needs_a_full_date_on_both_sides(a, b, expected):
     assert keying_error_between(a, b) is None
     assert compare_dob(a, b, CTX) is expected
+
+
+def test_near_is_priced_at_zero_explicitly():
+    assert DEFAULT_WEIGHTS.per_field["dob"].weights[AgreementLevel.NEAR] == 0.0
+
+
+def test_a_learned_table_without_near_still_prices_it_at_zero():
+    # An older persisted (B3-learned) table has no NEAR key; score() prices a level missing
+    # WITHIN a field's entry at 0.0 — exactly the shipped behaviour, never a crash.
+    legacy = Weights(per_field={"dob": FieldWeights({
+        AgreementLevel.EXACT: 6.0, AgreementLevel.PARTIAL: 1.5, AgreementLevel.DISAGREE: -4.0,
+    })})
+    s = score([FieldComparison("dob", AgreementLevel.NEAR, 80)], legacy)
+    assert s.total == 0.0
+
+
+def test_the_package_version_moved_with_the_comparator():
+    # matcher_version = package version + a digest of weights/thresholds/config. Comparator
+    # CODE is not in the digest, so a behaviour change must move the version (spec: Rollout).
+    import cairn_matcher
+    assert cairn_matcher.__version__ == "0.2.0"

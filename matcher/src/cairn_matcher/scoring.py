@@ -98,6 +98,8 @@ DEFAULT_WEIGHTS = Weights(per_field={
     "dob": FieldWeights({
         AgreementLevel.EXACT: 6.0,
         AgreementLevel.PARTIAL: 1.5,
+        # One keying error (spec 2026-10-11): honest uncertainty — neither for nor against.
+        AgreementLevel.NEAR: 0.0,
         AgreementLevel.DISAGREE: -4.0,
     }),
     "sex": FieldWeights({
