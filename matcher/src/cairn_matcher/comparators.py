@@ -162,6 +162,52 @@ def compare_edit_distance(a: str | None, b: str | None, ctx: Context) -> Agreeme
 # DOB parts compared, coarsest to finest. Precision = the prefix of these present.
 _DOB_PARTS = ("year", "month", "day")
 
+# The keying errors a DOB near miss recognises (spec 2026-10-11, ADR-0079). The strings are
+# persisted in proposal evidence ({"kind": "dob_near_miss", "pattern": …}) and shown to a
+# human, so they are plain words and never change once shipped.
+ONE_DIGIT = "one digit differs"
+ADJACENT_SWAP = "adjacent digits swapped"
+DAY_MONTH_SWAP = "day and month swapped"
+YEARS_ONE_APART = "years one apart"
+
+
+def _is_full_point(d: DateValue) -> bool:
+    """A point date carrying year, month AND day — the only shape a keying error is read on."""
+    return not d.is_range and None not in (d.year, d.month, d.day)
+
+
+def _keyed_digits(d: DateValue) -> str:
+    """The date as the eight digits a clerk types, YYYYMMDD."""
+    return f"{d.year:04d}{d.month:02d}{d.day:02d}"
+
+
+def keying_error_between(a: DateValue, b: DateValue) -> str | None:
+    """Name the ONE keying error that turns `a` into `b`, or None. **Pure, symmetric.**
+
+    Only for two full-precision point dates that differ. Checked in this order, first match
+    wins, so each pair gets exactly one name:
+      1. exactly one of the eight digits differs              -> ONE_DIGIT
+      2. exactly two ADJACENT digits differ and are swapped   -> ADJACENT_SWAP
+      3. same year, day and month swapped                     -> DAY_MONTH_SWAP
+      4. same day and month, years one apart (1959 vs 1960,
+         which changes two digits, so rule 1 misses it)       -> YEARS_ONE_APART
+    Anything else is not one keying error — a real disagreement, or two people.
+    """
+    if not (_is_full_point(a) and _is_full_point(b)) or a == b:
+        return None
+    da, db = _keyed_digits(a), _keyed_digits(b)
+    diff = [i for i in range(8) if da[i] != db[i]]
+    if len(diff) == 1:
+        return ONE_DIGIT
+    if (len(diff) == 2 and diff[1] == diff[0] + 1
+            and da[diff[0]] == db[diff[1]] and da[diff[1]] == db[diff[0]]):
+        return ADJACENT_SWAP
+    if a.year == b.year and a.month == b.day and a.day == b.month:
+        return DAY_MONTH_SWAP
+    if a.month == b.month and a.day == b.day and abs(a.year - b.year) == 1:
+        return YEARS_ONE_APART
+    return None
+
 
 def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> AgreementLevel:
     """Precision-aware, range-aware DOB agreement that PARSES NO DATE STRINGS.
@@ -171,7 +217,8 @@ def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> Agree
       * every shared part equal AND same precision depth -> EXACT
       * every shared part equal BUT different depth (year-only vs full) -> PARTIAL
         (a consistent coarsening; principle 4 — imprecision is partial agreement)
-      * any shared part differs -> DISAGREE
+      * any shared part differs -> DISAGREE, unless both are full dates one keying error
+        apart -> NEAR (keying_error_between; weight 0.0, never auto-linked — spec 2026-10-11)
       * a side absent, or no part in common -> INSUFFICIENT_DATA (never a penalty)
 
     Range-aware (either side is a §5.4 clinician-observed birth-year RANGE): delegates
@@ -196,7 +243,9 @@ def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> Agree
         return AgreementLevel.INSUFFICIENT_DATA
 
     if any(getattr(a, p) != getattr(b, p) for p in shared):
-        return AgreementLevel.DISAGREE
+        # One keying error between two full dates is NEAR (weight 0.0, never auto-linked):
+        # it fits one person and a typo as well as two people — principle 4's honest middle.
+        return AgreementLevel.NEAR if keying_error_between(a, b) else AgreementLevel.DISAGREE
 
     # All shared parts agree. Same precision depth on both sides -> EXACT, else PARTIAL.
     depth_a = sum(1 for p in _DOB_PARTS if getattr(a, p) is not None)

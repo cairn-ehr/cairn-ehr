@@ -18,15 +18,21 @@ from typing import Any
 
 
 class AgreementLevel(IntEnum):
-    """Graded agreement between two field values. Ordinal: higher == stronger."""
+    """Graded agreement between two field values. Ordinal: higher == stronger.
+
+    Persisted BY NAME only (evidence, the config fingerprint) — never by number — so a level
+    may be inserted in order; tests/test_agreement.py pins that.
+    """
 
     INSUFFICIENT_DATA = 0  # a side is absent/unknown -> ZERO evidence (not a penalty, §3.7)
     DISAGREE = 1           # both present, no agreement at any level
-    PARTIAL = 2            # precision-coarsened / weak (e.g. year-only DOB vs full)
-    EDIT_DISTANCE = 3      # agree within an edit-distance band
-    PHONETIC = 4           # reserved for locale packs — not emitted by this core
-    NICKNAME = 5           # reserved for locale packs — not emitted by this core
-    EXACT = 6              # exact agreement
+    NEAR = 2               # both present and differing by ONE keying error (DOB only) —
+                           # consistent with one person and a typo AND with two people (§3.7)
+    PARTIAL = 3            # precision-coarsened / weak (e.g. year-only DOB vs full)
+    EDIT_DISTANCE = 4      # agree within an edit-distance band
+    PHONETIC = 5           # reserved for locale packs — not emitted by this core
+    NICKNAME = 6           # reserved for locale packs — not emitted by this core
+    EXACT = 7              # exact agreement
 
 
 @dataclass(frozen=True)
