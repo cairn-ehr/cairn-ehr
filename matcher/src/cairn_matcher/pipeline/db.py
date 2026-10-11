@@ -165,7 +165,7 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
         return [VetoFinding(*row) for row in cur.fetchall()]
 
 
-# The blocking SQL (the eight passes' statements, _GROUPS_SQL / _RANGE_GROUPS_SQL) lives in the
+# The blocking SQL (the nine passes' statements, _GROUPS_SQL / _RANGE_GROUPS_SQL) lives in the
 # pure `pipeline.blocking_sql` module, shared with the per-chart check (`pipeline.targeted`).
 
 

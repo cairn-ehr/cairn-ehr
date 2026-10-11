@@ -16,15 +16,30 @@ def test_levels_are_ordinal_strongest_is_exact():
 
 def test_levels_persist_by_name_never_by_number():
     # Inserting NEAR renumbered every level above it. That is safe ONLY because nothing
-    # persists the integer: evidence and the config fingerprint store `.name`. If this test
-    # ever needs a number, the renumbering broke stored data.
-    import inspect
+    # persists the integer. Checked on what is actually written, not on source text: an
+    # IntEnum handed to json.dumps would serialise as a NUMBER, which a grep cannot see.
+    import json
 
     from cairn_matcher.eval import model_io
-    from cairn_matcher.pipeline import banding
-    for module in (banding, model_io):
-        src = inspect.getsource(module)
-        assert "level.value" not in src and "int(level" not in src, module.__name__
+    from cairn_matcher.orchestrator import DEFAULT_CONFIG
+    from cairn_matcher.pipeline.banding import (
+        DEFAULT_THRESHOLDS,
+        Band,
+        _config_fingerprint,
+        build_payload,
+    )
+    from cairn_matcher.scoring import DEFAULT_WEIGHTS, FieldEvidence, MatchScore
+
+    s = MatchScore(total=2.0, fields=(FieldEvidence("dob", AgreementLevel.NEAR, 60, 2.0),))
+    evidence = build_payload(s, (), Band.REVIEW).evidence
+    assert json.loads(json.dumps(evidence))[0]["level"] == "NEAR"
+
+    fingerprint = _config_fingerprint(DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, DEFAULT_CONFIG)
+    assert '"NEAR"' in fingerprint
+
+    table = json.loads(json.dumps(model_io._weights_to_json(DEFAULT_WEIGHTS)))
+    assert "NEAR" in table["dob"]
+    assert model_io._weights_from_json(table) == DEFAULT_WEIGHTS
 
 
 def test_context_has_default_edit_distance_threshold():

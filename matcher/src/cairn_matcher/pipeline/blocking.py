@@ -25,7 +25,8 @@ import uuid
 # The A/B toggle validates against this registry. name+monthday (spec 2026-10-11) rescues a
 # YEAR keying error on a common name, which every year-keyed pass misses.
 #
-# The two compound passes are ADDITIVE rescues (like name+year): dob+first-initial groups
+# The compound passes are ADDITIVE rescues (like name+year). name+monthday is described
+# above; dob+first-initial groups
 # charts sharing a birth-year AND a name-token first-initial (a first-initial RELAXATION of
 # the name requirement -- it rescues true matches that share no full name token); name+sex
 # groups charts sharing a name-token AND a normalized sex value (a per-sex split that rescues

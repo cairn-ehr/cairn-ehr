@@ -172,8 +172,19 @@ YEARS_ONE_APART = "years one apart"
 
 
 def _is_full_point(d: DateValue) -> bool:
-    """A point date carrying year, month AND day — the only shape a keying error is read on."""
-    return not d.is_range and None not in (d.year, d.month, d.day)
+    """A point date that can exist, carrying year, month AND day — the only shape a keying
+    error is read on.
+
+    The range checks matter because compare_dob is public: parse_dob never builds a month 31
+    or a year -1, but a caller could, and an impossible date must never be named a typo of a
+    real one. The year must fit four digits so _keyed_digits yields exactly eight (a year of
+    -1 would render "-001" and false-match a digit; 10000 would misalign every field).
+    """
+    if d.is_range or None in (d.year, d.month, d.day):
+        return False
+    if not all(type(p) is int for p in (d.year, d.month, d.day)):
+        return False
+    return 0 <= d.year <= 9999 and 1 <= d.month <= 12 and 1 <= d.day <= 31
 
 
 def _keyed_digits(d: DateValue) -> str:
@@ -190,14 +201,16 @@ def _keyed_digits(d: DateValue) -> str:
 def keying_error_between(a: DateValue, b: DateValue) -> str | None:
     """Name the ONE keying error that turns `a` into `b`, or None. **Pure, symmetric.**
 
-    Only for two full-precision point dates that differ. Checked in this order, first match
-    wins, so each pair gets exactly one name:
+    Only for two full-precision point dates that can exist and differ (_is_full_point).
+    Checked in this order, first match wins, so each pair gets exactly one name:
       1. exactly one of the eight digits differs              -> ONE_DIGIT
       2. exactly two ADJACENT digits (in YYYYMMDD order — see
          _keyed_digits) differ and are swapped                -> ADJACENT_SWAP
       3. same year, day and month swapped                     -> DAY_MONTH_SWAP
-      4. same day and month, years one apart (1959 vs 1960,
-         which changes two digits, so rule 1 misses it)       -> YEARS_ONE_APART
+      4. same day and month, years one apart across a carry
+         (1959 vs 1960, 1999 vs 2000 — more than one digit
+         changes, so rule 1 misses it; 1950 vs 1951 is
+         already named ONE_DIGIT by rule 1)                   -> YEARS_ONE_APART
     Anything else is not one keying error — a real disagreement, or two people.
     """
     if not (_is_full_point(a) and _is_full_point(b)) or a == b:
@@ -225,7 +238,7 @@ def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> Agree
       * every shared part equal BUT different depth (year-only vs full) -> PARTIAL
         (a consistent coarsening; principle 4 — imprecision is partial agreement)
       * any shared part differs -> DISAGREE, unless both are full dates one keying error
-        apart -> NEAR (keying_error_between; weight 0.0, never auto-linked — spec 2026-10-11)
+        apart -> NEAR (keying_error_between; +2 by default, never auto-linked — ADR-0079)
       * a side absent, or no part in common -> INSUFFICIENT_DATA (never a penalty)
 
     Range-aware (either side is a §5.4 clinician-observed birth-year RANGE): delegates
@@ -250,8 +263,9 @@ def compare_dob(a: DateValue | None, b: DateValue | None, ctx: Context) -> Agree
         return AgreementLevel.INSUFFICIENT_DATA
 
     if any(getattr(a, p) != getattr(b, p) for p in shared):
-        # One keying error between two full dates is NEAR (weight 0.0, never auto-linked):
-        # it fits one person and a typo as well as two people — principle 4's honest middle.
+        # One keying error between two full dates is NEAR (weak evidence, +2 by default, never
+        # auto-linked): it fits one person and a typo, and less often two people — principle
+        # 4's honest middle.
         return AgreementLevel.NEAR if keying_error_between(a, b) else AgreementLevel.DISAGREE
 
     # All shared parts agree. Same precision depth on both sides -> EXACT, else PARTIAL.

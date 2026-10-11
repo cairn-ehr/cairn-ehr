@@ -20,8 +20,10 @@ from typing import Any
 class AgreementLevel(IntEnum):
     """Graded agreement between two field values. Ordinal: higher == stronger.
 
-    Persisted BY NAME only (evidence, the config fingerprint) — never by number — so a level
-    may be inserted in order; tests/test_agreement.py pins that.
+    Persisted BY NAME only (proposal evidence, the config fingerprint, eval/model_io) — never
+    by number — so a level may be inserted in order. tests/test_agreement.py checks the
+    persisted forms behaviourally (evidence and fingerprint carry names; a model round-trips
+    "NEAR").
     """
 
     INSUFFICIENT_DATA = 0  # a side is absent/unknown -> ZERO evidence (not a penalty, §3.7)

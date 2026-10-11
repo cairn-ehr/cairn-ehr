@@ -147,9 +147,11 @@ def assess(
         ({"kind": "identity_pending", "unconfirmed": unconfirmed_ids},)
         if unconfirmed_ids else ()
     )
-    # A DOB one keying error off scores NEAR (0.0) and never auto-links; the evidence names the
-    # error so the reviewer can see it ("day and month swapped").
+    # A DOB scored NEAR (one keying error off) never auto-links; the evidence names the error
+    # so the reviewer can see it ("day and month swapped"). It reads the SCORED level, so it
+    # can never contradict the dob row a locale comparator produced.
     near_miss_evidence = dob_near_miss_evidence(
+        match_score,
         rec_a.dob.value if rec_a.dob else None, rec_b.dob.value if rec_b.dob else None,
     )
     payload = build_payload(

@@ -4,7 +4,8 @@ This module owns the conservative auto-link threshold B1 deliberately did NOT (B
 a raw score; the decision to act lives here, on the advisory side). It is pure: no DB.
 
 Banding rule (priority order), honouring db/016's "never auto-link, never auto-reject":
-  * total >= auto AND no veto findings (any severity)        -> AUTO_CANDIDATE
+  * total >= auto AND no veto findings (any severity)
+    AND the DOB is not in doubt (graded NEAR or DISAGREE)     -> AUTO_CANDIDATE
   * total >= review (incl. a high score capped by any veto)  -> REVIEW
   * total <  review                                          -> None  (persist nothing)
 
@@ -116,19 +117,42 @@ def _corroborated_positive(score: MatchScore) -> bool:
     return positives >= 2 and not disagrees
 
 
-def _has_near_miss(score: MatchScore) -> bool:
-    """Any field graded NEAR (a DOB one keying error off): never auto-linked — a human must
-    decide which DOB is right, and that is also when the wrong one gets corrected."""
-    return any(e.level is AgreementLevel.NEAR for e in score.fields)
+# The DOB levels that put the birth date itself in doubt: one keying error off (NEAR) or
+# different outright (DISAGREE). Either way someone must decide which DOB is right before two
+# charts are linked, and that human step is also when the wrong one gets corrected.
+_DOB_IN_DOUBT = frozenset({AgreementLevel.NEAR, AgreementLevel.DISAGREE})
 
 
-def dob_near_miss_evidence(a: DateValue | None, b: DateValue | None) -> tuple[dict, ...]:
-    """The proposal's `dob_near_miss` entry when the two DOBs are one keying error apart, so
-    the reviewer is told WHICH error ("day and month swapped"). **Pure.** Empty otherwise."""
-    if a is None or b is None:
+def _scored_dob_level(score: MatchScore) -> AgreementLevel | None:
+    """The level the configured comparator gave the DOB, or None if no dob field was scored."""
+    return next((e.level for e in score.fields if e.field == "dob"), None)
+
+
+def _dob_in_doubt(score: MatchScore) -> bool:
+    """True when the DOB was graded NEAR or DISAGREE: never auto-linked (ADR-0079 decision 4).
+
+    DISAGREE needs this as much as NEAR. db/016's veto fires only when BOTH DOBs are
+    verified, so without it an unverified DOB that disagrees outright could still auto-link
+    on a shared identifier and an agreeing name — while one a single keystroke off could not.
+    """
+    return _scored_dob_level(score) in _DOB_IN_DOUBT
+
+
+def dob_near_miss_evidence(
+    score: MatchScore, a: DateValue | None, b: DateValue | None,
+) -> tuple[dict, ...]:
+    """The proposal's `dob_near_miss` entry, so the reviewer is told WHICH keying error the
+    matcher suspects ("day and month swapped"). **Pure.**
+
+    Emitted only when the DOB was actually SCORED NEAR — the evidence follows the configured
+    comparator, never a second reading of the dates, so a proposal cannot say "near miss"
+    beside a dob scored DISAGREE. `pattern` is the default profile's name for the error, or
+    None when a locale comparator graded NEAR on an error that profile does not name.
+    """
+    if _scored_dob_level(score) is not AgreementLevel.NEAR:
         return ()
-    pattern = keying_error_between(a, b)
-    return ({"kind": "dob_near_miss", "pattern": pattern},) if pattern else ()
+    pattern = keying_error_between(a, b) if a is not None and b is not None else None
+    return ({"kind": "dob_near_miss", "pattern": pattern},)
 
 
 def band(
@@ -142,9 +166,10 @@ def band(
     """Classify a scored pair into AUTO_CANDIDATE / REVIEW / None (no proposal).
 
     ANY veto finding (hard_veto or degrade_hold) forbids AUTO_CANDIDATE and caps the band
-    at REVIEW — never an auto-link, never an auto-reject. A field graded NEAR (a DOB one
-    keying error off, spec 2026-10-11) forbids AUTO_CANDIDATE exactly as a veto does. A pair
-    below the review threshold normally yields None (no positive signal to act on).
+    at REVIEW — never an auto-link, never an auto-reject. A DOB in doubt — graded NEAR (one
+    keying error off) or DISAGREE — also forbids AUTO_CANDIDATE (ADR-0079 decision 4); unlike
+    a veto it does not trigger the below-threshold rescue. A pair below the review threshold
+    normally yields None (no positive signal to act on).
 
     Exception (ADR-0014 §6, never auto-reject): a veto coexisting with a SHARED STRONG
     IDENTIFIER is forced to REVIEW even below threshold. Otherwise the veto's own subject
@@ -181,9 +206,10 @@ def band(
     values (db/016 fires on disjoint same-system identifiers — e.g. off a Doe's
     belongings) while the identifier comparator is positive-only, so a vetoed-yet-
     corroborated Doe pair is reachable and must surface, veto findings attached, not be
-    silently suppressed. A verified birth-fact clash still routes through the normal path
-    via the no-DISAGREE gate. `'under-review'` is a dispute state and deliberately does
-    NOT trigger this.
+    silently suppressed. A verified birth-fact clash graded DISAGREE still routes through the
+    normal path via the no-DISAGREE gate; a DOB clash one keying error off grades NEAR, which
+    is neither corroboration nor a clash, so it does not (ADR-0079 decision 4).
+    `'under-review'` is a dispute state and deliberately does NOT trigger this.
     """
     if has_known_alias:
         return Band.REVIEW
@@ -193,7 +219,7 @@ def band(
         if unconfirmed and _corroborated_positive(score):
             return Band.REVIEW
         return None
-    if score.total >= thresholds.auto and not vetoes and not _has_near_miss(score):
+    if score.total >= thresholds.auto and not vetoes and not _dob_in_doubt(score):
         return Band.AUTO_CANDIDATE
     return Band.REVIEW
 
