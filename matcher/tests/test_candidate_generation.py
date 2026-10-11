@@ -2,7 +2,7 @@
 """Integration tests for db.generate_candidate_pairs (blocking).
 
 Seed patient_* projection rows directly, then assert which canonical pairs the four
-blocking passes (identifier / exact-DOB / name-token / name-token+birth-year) generate.
+blocking passes generate.
 Gated on CAIRN_TEST_PG.
 """
 
@@ -115,7 +115,8 @@ def test_name_year_rescues_pair_from_oversized_name_block(pg_conn):
     # 'name+year' compound pass can rescue their pair.
     seed_patient(pg_conn, PA, dob=("1980-01-01", 20), names=[("Smith", 20)])
     seed_patient(pg_conn, PB, dob=("1980-06-06", 20), names=[("Smith", 20)])
-    seed_patient(pg_conn, PC, dob=("1991-01-01", 20), names=[("Smith", 20)])
+    # not 01-01: name+monthday would pair a shared day-month (that pass has its own tests)
+    seed_patient(pg_conn, PC, dob=("1991-02-02", 20), names=[("Smith", 20)])
     pairs, skipped = _gen(pg_conn, max_block_size=2)
     # The oversized single-token block is still reported as skipped...
     assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
@@ -276,3 +277,27 @@ def test_name_sex_ignores_unknown_sentinel_sex(pg_conn):
     seed_patient(pg_conn, PC, admin_sex=("male", 20), names=[("Sasha", 20)])
     pairs, _skipped = _gen(pg_conn, max_block_size=2)
     assert canonical_pair(PA, PB) not in pairs
+
+
+def test_name_monthday_rescues_a_year_typo_on_a_common_name(pg_conn):
+    # Three Smiths -> the 'name' block (size 3) is over cap 2 and dropped. PA and PB are one
+    # person with a YEAR typo (1950 vs 1951): no shared year (name+year misses), no shared
+    # date (dob misses). Only name+monthday (smith|01-07) groups them.
+    seed_patient(pg_conn, PA, dob=("1950-01-07", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PB, dob=("1951-01-07", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PC, dob=("1972-09-30", 20), names=[("Smith", 20)])
+    pairs, skipped = _gen(pg_conn, max_block_size=2)
+    assert any(pn == "name" and sz == 3 for pn, _key, sz in skipped)
+    assert canonical_pair(PA, PB) in pairs
+    assert canonical_pair(PA, PC) not in pairs
+
+
+def test_name_monthday_reads_only_full_iso_dates(pg_conn):
+    # A month-precision value, or a non-ISO one, must not join the pass — no false key from a
+    # value the pass cannot read (precision is seed_patient's 3rd dob slot).
+    seed_patient(pg_conn, PA, dob=("1950-01", 20, "month"), names=[("Smith", 20)])
+    seed_patient(pg_conn, PB, dob=("07/01/1951", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PC, dob=("1950-01-07", 20), names=[("Smith", 20)])
+    _pairs_found, skipped = _gen(pg_conn, max_block_size=1)
+    keys = [key for pn, key, _sz in skipped if pn == "name+monthday"]
+    assert keys == [], "no name+monthday block may form from these three values"

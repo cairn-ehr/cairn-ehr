@@ -18,10 +18,12 @@ Two pair-generation shapes exist in blocking:
 
 import uuid
 
-# Every blocking pass generate_candidate_pairs runs, in execution order. Six are the
+# Every blocking pass generate_candidate_pairs runs, in execution order. Seven are the
 # symmetric group passes (_GROUPS_SQL): identifier / exact-dob / name-token /
-# name-token+birth-year / birth-year+first-initial / name-token+sex. The last two are the
-# anchored range passes (_RANGE_GROUPS_SQL). The A/B toggle validates against this registry.
+# name-token+birth-year / birth-year+first-initial / name-token+sex /
+# name-token+birth-month-day. The last two are the anchored range passes (_RANGE_GROUPS_SQL).
+# The A/B toggle validates against this registry. name+monthday (spec 2026-10-11) rescues a
+# YEAR keying error on a common name, which every year-keyed pass misses.
 #
 # The two compound passes are ADDITIVE rescues (like name+year): dob+first-initial groups
 # charts sharing a birth-year AND a name-token first-initial (a first-initial RELAXATION of
@@ -31,7 +33,7 @@ import uuid
 # name rescue that fires for the §5.4 John-Doe population, whose DOB is a range or absent).
 ALL_PASSES = (
     "identifier", "dob", "name", "name+year",
-    "dob+first-initial", "name+sex", "dob-range", "dob-range+sex",
+    "dob+first-initial", "name+sex", "name+monthday", "dob-range", "dob-range+sex",
 )
 
 _ALL_PASSES_SET = frozenset(ALL_PASSES)

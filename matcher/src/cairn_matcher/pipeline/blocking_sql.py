@@ -85,6 +85,18 @@ _BIRTH_YEAR_CTE = """birth_year AS (
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 )"""
 
+_BIRTH_MONTHDAY_CTE = """birth_monthday AS (
+    -- name+monthday's key: the MM-DD of a DAY-precision ISO point DOB, and nothing else.
+    -- A year keying error (1950 vs 1951) keeps the day and month, so this groups the pair the
+    -- year-keyed passes cannot (spec 2026-10-11). Anchored regex + the precision facet, so a
+    -- month-precision, non-ISO or range value never forms a key — a withheld rescue, never a
+    -- false group (the birth_year discipline).
+    SELECT patient_id, substring(value FROM '^[0-9]{4}-([0-9]{2}-[0-9]{2})$') AS monthday
+    FROM patient_demographic
+    WHERE field = 'dob' AND (facets ->> 'precision') = 'day'
+      AND value ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+)"""
+
 _BLOCKING_SEX_CTE = """blocking_sex AS (
     -- Exclude the uncertainty sentinels (principle 4: no-data-is-never-agreement). The set
     -- is BOUND from adapter.VALUE_SENTINELS_PARAM -- the same set the Python scoring side
@@ -115,6 +127,7 @@ _BLOCKING_SEX_CTE = """blocking_sex AS (
 _GROUPS_SQL = f"""
 WITH {_NAME_TOKENS_CTE},
 {_BIRTH_YEAR_CTE},
+{_BIRTH_MONTHDAY_CTE},
 {_BLOCKING_SEX_CTE}
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
@@ -165,6 +178,14 @@ UNION ALL
 SELECT 'name+sex', nt.token || '|' || bs.sex, array_agg(DISTINCT nt.patient_id)
 FROM name_tokens nt JOIN blocking_sex bs USING (patient_id)
 GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
+UNION ALL
+-- name+monthday: name token + the DOB's day and month. An ADDITIVE rescue for a year keying
+-- error on a common name: the bare 'name' block for "smith" exceeds the cap at scale, and
+-- name+year / dob / dob+first-initial all need the same year. Blocks are ~token frequency
+-- / 365, so the cap rarely bites. Symmetric (sharing the key is itself the signal).
+SELECT 'name+monthday', nt.token || '|' || md.monthday, array_agg(DISTINCT nt.patient_id)
+FROM name_tokens nt JOIN birth_monthday md USING (patient_id)
+GROUP BY nt.token, md.monthday HAVING count(DISTINCT nt.patient_id) >= 2
 """
 
 # The two ANCHORED birth-year-range passes (§5.4 slice: design 2026-07-04). Separate
