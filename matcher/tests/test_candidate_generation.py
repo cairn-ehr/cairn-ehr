@@ -8,6 +8,8 @@ Gated on CAIRN_TEST_PG.
 
 import uuid
 
+import pytest
+
 from cairn_matcher.pipeline.runner import canonical_pair
 from tests.conftest import seed_patient
 
@@ -301,3 +303,47 @@ def test_name_monthday_reads_only_full_iso_dates(pg_conn):
     _pairs_found, skipped = _gen(pg_conn, max_block_size=1)
     keys = [key for pn, key, _sz in skipped if pn == "name+monthday"]
     assert keys == [], "no name+monthday block may form from these three values"
+
+
+def _monthday_keys(conn, a_dob, b_dob):
+    # Two Smiths; cap 1 so any block of two is reported as skipped, WITH its key.
+    seed_patient(conn, PA, dob=a_dob, names=[("Smith", 20)])
+    seed_patient(conn, PB, dob=b_dob, names=[("Smith", 20)])
+    _pairs, skipped = _gen(conn, max_block_size=1)
+    return [key for pn, key, _sz in skipped if pn == "name+monthday"]
+
+
+@pytest.mark.parametrize("a_dob, b_dob", [
+    # Each pins ONE guard: with that guard weakened, this pair forms a false key.
+    (("1950-01-07", 20, "year"), ("1951-01-07", 20, "year")),  # the precision facet
+    (("07/01/1951", 20), ("12/03/1960", 20)),                  # the format regex (NULL key)
+    (("1950-01-07T00:00", 20), ("1951-01-07", 20)),            # the end anchor
+    (("1950-01-07-x", 20), ("1951-01-07", 20)),                # trailing junk
+    (("١٩٥٠-٠١-٠٧", 20), ("1951-01-07", 20)),                  # non-ASCII digits
+    (("1950-00-00", 20), ("1975-00-00", 20)),                  # legacy "day and month unknown"
+    (("1950-13-07", 20), ("1951-13-07", 20)),                  # month out of range
+    (("1950-01-32", 20), ("1951-01-32", 20)),                  # day out of range
+])
+def test_name_monthday_forms_no_key_from_a_value_the_scorer_cannot_read(pg_conn, a_dob, b_dob):
+    assert _monthday_keys(pg_conn, a_dob, b_dob) == []
+
+
+@pytest.mark.parametrize("a_dob", [
+    ("1950-01-07 ", 20),    # trailing space: the projection stores values untrimmed
+    ("1950-1-7", 20),       # unpadded: parse_dob reads it as 7 Jan 1950
+])
+def test_name_monthday_keys_every_day_date_the_scorer_reads(pg_conn, a_dob):
+    # The blocking grammar must equal parse_dob's at day precision, or a year typo the scorer
+    # would grade NEAR is never generated — a silent false split.
+    assert _monthday_keys(pg_conn, a_dob, ("1951-01-07", 20)) == ["smith|01-07"]
+
+
+def test_name_monthday_is_the_pass_that_rescues_the_year_typo(pg_conn):
+    # Ablation control for the rescue test above: switch the pass off and the pair is gone.
+    from cairn_matcher.pipeline.blocking import ALL_PASSES
+    seed_patient(pg_conn, PA, dob=("1950-01-07", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PB, dob=("1951-01-07", 20), names=[("Smith", 20)])
+    seed_patient(pg_conn, PC, dob=("1972-09-30", 20), names=[("Smith", 20)])
+    without = set(ALL_PASSES) - {"name+monthday"}
+    pairs, _skipped = _gen(pg_conn, max_block_size=2, enabled_passes=without)
+    assert canonical_pair(PA, PB) not in pairs

@@ -67,3 +67,19 @@ def test_two_digit_year_degrades_to_none():
 def test_non_four_digit_year_degrades_to_none():
     assert parse_dob("198-07-15", "day") is None
     assert parse_dob("19800-07-15", "day") is None
+
+
+def test_a_day_date_must_be_ascii_digits_and_nothing_after():
+    # The name+monthday blocking key reads exactly this grammar; the two must agree, or a pair
+    # the scorer can grade is never generated (or a junk value forms a key).
+    assert parse_dob(" 1980-07-15 ", "day") == DateValue(year=1980, month=7, day=15)
+    assert parse_dob("1980-7-5", "day") == DateValue(year=1980, month=7, day=5)
+    assert parse_dob("1980-07-15-x", "day") is None
+    assert parse_dob("1980-07-15T00:00", "day") is None
+    assert parse_dob("١٩٨٠-٠٧-١٥", "day") is None
+    assert parse_dob("1980-07- 15", "day") is None
+    assert parse_dob("1980-007-15", "day") is None
+    # Digits in the right shape but no real month or day: no DateValue, and no blocking key.
+    assert parse_dob("1980-00-00", "day") is None
+    assert parse_dob("1980-13-07", "day") is None
+    assert parse_dob("1980-01-32", "day") is None
