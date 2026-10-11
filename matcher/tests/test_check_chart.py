@@ -351,3 +351,33 @@ def test_a_since_linked_pending_proposal_is_not_refreshed(pg_conn):
     result = check_chart(pg_conn, B, Settings())
     assert result.proposed == 0 and result.retracted == 0
     assert _count(pg_conn, "SELECT matcher_version FROM match_proposal") == "old"
+
+
+def test_a_day_month_swap_keeps_the_pair_in_front_of_a_human(pg_conn):
+    # The spec's Context: Mary Smith, 7 Jan 1950, two charts, no shared identifier. The pair
+    # is an auto candidate; then one DOB is overwritten with the day/month swap (1 Jul 1950).
+    # Before NEAR it re-scored 5 - 4 + 1 = 2 and was RETRACTED, unseen. Now it must stay open,
+    # at review, and say which keying error the matcher suspects.
+    import json
+    m1, m2 = (str(uuid.UUID(int=i)) for i in (21, 22))
+    with pg_conn.cursor() as cur:
+        cur.execute("INSERT INTO match_worker_state (matcher_version) VALUES ('v')")
+    pg_conn.commit()
+    for m in (m1, m2):
+        seed_patient(pg_conn, m, dob=("1950-01-07", 60), sex=("female", 60),
+                     names=[("Mary Smith", 60)])
+    check_chart(pg_conn, m2, Settings())
+    assert _count(pg_conn, "SELECT band FROM match_proposal") == "auto_candidate"
+
+    with pg_conn.cursor() as cur:
+        cur.execute("UPDATE patient_demographic SET value = '1950-07-01' "
+                    "WHERE patient_id = %s AND field = 'dob'", (m2,))
+    pg_conn.commit()
+    check_chart(pg_conn, m2, Settings())
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT band, status, evidence FROM match_proposal")
+        band_, status, evidence = cur.fetchone()
+    assert (band_, status) == ("review", "pending"), "kept open for a human, not retracted"
+    evidence = evidence if isinstance(evidence, list) else json.loads(evidence)
+    assert {"kind": "dob_near_miss", "pattern": "day and month swapped"} in evidence
