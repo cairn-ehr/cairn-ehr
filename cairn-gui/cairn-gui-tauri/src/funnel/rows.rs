@@ -20,7 +20,7 @@ use cairn_patient_search::PersonRow;
 use serde::Serialize;
 
 /// One person, as the list shows them.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PersonRowView {
     /// `Some` only for a LINKED row; a single chart is rendered exactly as it always was.
     pub label: Option<String>,

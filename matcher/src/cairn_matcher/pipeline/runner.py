@@ -163,7 +163,7 @@ def persist(conn, assessment: Assessment) -> bool:
     from cairn_matcher.pipeline import db
 
     if assessment.band is None:
-        return bool(db.retract_pending_proposal(conn, assessment.low, assessment.high))
+        return bool(db.retract_awaiting_proposal(conn, assessment.low, assessment.high))
     db.upsert_proposal(conn, assessment.low, assessment.high, assessment.payload)
     return True
 

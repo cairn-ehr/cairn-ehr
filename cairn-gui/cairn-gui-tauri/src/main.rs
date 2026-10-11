@@ -27,6 +27,7 @@ mod duplicates;
 mod funnel;
 mod link;
 mod state;
+mod worklist;
 
 use clap::Parser;
 use state::AppState;
@@ -104,6 +105,8 @@ fn main() -> anyhow::Result<()> {
             link::unlink::unlink_records,
             link::search::link_search,
             duplicates::record_different_people,
+            worklist::duplicate_tray_count,
+            worklist::duplicate_worklist,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("the window could not start: {e}"))

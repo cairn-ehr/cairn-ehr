@@ -418,6 +418,7 @@ async function closeChart() {
   el("front-door").hidden = false;
   resetFrontDoor();
   el("browse-name").focus();
+  void refreshTray();
 }
 
 // ---- Start -------------------------------------------------------------------------------
@@ -445,6 +446,7 @@ async function boot() {
   } else {
     el("front-door").hidden = false;
     el("browse-name").focus();
+    void refreshTray();
   }
 }
 
