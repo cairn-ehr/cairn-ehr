@@ -655,9 +655,11 @@ async fn connect_promotes_and_reprojects_a_deferred_event() {
     // longer classifies: the deletions would then be no-ops and the test would pass without
     // simulating anything.
     //
-    // Both rows are restored by the next connect's migration replay (db/005's
-    // event_type_class and cairn_projection_apply seeds), so this is self-healing even if the
-    // test dies partway.
+    // Both rows are restored by the next REPLAY of the migrations (db/005's event_type_class
+    // and cairn_projection_apply seeds). Since #726 a connect replays only when the schema
+    // changed, so the reconnect below models the upgrade that brings the code with
+    // `force_schema_replay`. Still self-healing if the test dies partway: the next test's
+    // `test_serial_guard` clears the stamp, so its connect replays in full.
     c.execute(
         "DELETE FROM cairn_projection_apply WHERE event_type = 'patient.amended'",
         &[],
@@ -696,8 +698,11 @@ async fn connect_promotes_and_reprojects_a_deferred_event() {
         .get(0);
     assert_eq!(projected, 0, "a deferred event must project nothing");
 
-    // A fresh connect replays every migration (restoring the class row) and must then
-    // re-adjudicate and reproject.
+    // The upgrade arrives: the node now has the code for the type, i.e. a schema whose hash
+    // differs from the stamp. `force_schema_replay` is that difference (#726); the reconnect
+    // then replays every migration (restoring the class row) and must re-adjudicate and
+    // reproject.
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
     let c2 = db::connect_and_load_schema(&base).await.unwrap();
 
