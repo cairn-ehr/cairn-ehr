@@ -39,10 +39,10 @@
 //! crate both loaders already depend on.
 
 /// The numeric prefix of the newest migration in `db/`
-/// (`db/057_match_proposal_open.sql` → 57).
+/// (`db/058_schema_replay_stamp.sql` → 58).
 ///
 /// Bump this in the same commit that adds a `db/*.sql` file; the guard test enforces it.
-pub const SCHEMA_GENERATION: i32 = 57;
+pub const SCHEMA_GENERATION: i32 = 58;
 
 /// Advisory-lock key (ASCII `"CARNLOAD"`) serializing a loader's whole
 /// check→replay→stamp sequence against every other loader on the same database.
@@ -76,6 +76,43 @@ pub fn newest_migration_prefix<'a>(names: impl IntoIterator<Item = &'a str>) -> 
     names.into_iter().filter_map(migration_prefix).max()
 }
 
+/// A fingerprint of EXACTLY the migration texts a loader replays, in replay order (#726).
+///
+/// # Why it exists
+///
+/// `cairn-node` used to replay every `db/*.sql` on every connect. Each replay is idempotent,
+/// but idempotent is not lock-free: `CREATE OR REPLACE VIEW`, `DROP TRIGGER IF EXISTS` +
+/// `CREATE TRIGGER`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`
+/// all take strong table locks even when they change nothing (measured: ACCESS EXCLUSIVE on
+/// `event_log` and 20 other tables, plus 34 views). Each such lock waits behind any open
+/// reader, and every clinical write then queues behind the waiting lock. So the loader records
+/// this hash after a successful replay and skips the replay on a later connect whose hash
+/// matches: nothing changed, so there is nothing to lock.
+///
+/// # Why a content hash and not the generation number
+///
+/// [`SCHEMA_GENERATION`] changes only when a NEW file lands. An in-place edit of an existing
+/// function body (a floor fix to `db/005`, say) leaves it alone, so a generation-gated replay
+/// would never deliver that fix to an existing database. A hash of the bytes sees every edit.
+///
+/// # The encoding
+///
+/// Each entry contributes its name and its body, each preceded by its length as a u64
+/// little-endian, so no two different lists can produce the same byte stream by moving a
+/// boundary (`("ab","c")` vs `("a","bc")`). Order is part of the input: the loader replays in
+/// list order, so a reordered list is a different schema. Pure: no I/O, no clock.
+pub fn schema_content_hash<'a>(entries: impl IntoIterator<Item = (&'a str, &'a str)>) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for (name, body) in entries {
+        for part in [name, body] {
+            h.update((part.len() as u64).to_le_bytes());
+            h.update(part.as_bytes());
+        }
+    }
+    h.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +129,64 @@ mod tests {
         assert_eq!(migration_prefix("README"), None);
         assert_eq!(migration_prefix("notes_about_007"), None);
         assert_eq!(migration_prefix(""), None);
+    }
+
+    // ----- schema_content_hash (#726) -----
+
+    #[test]
+    fn schema_content_hash_is_deterministic() {
+        let list = [
+            ("001_a", "CREATE TABLE a();"),
+            ("002_b", "CREATE TABLE b();"),
+        ];
+        assert_eq!(schema_content_hash(list), schema_content_hash(list));
+    }
+
+    #[test]
+    fn schema_content_hash_changes_on_any_byte_of_any_body() {
+        // The whole point (#726): an IN-PLACE edit of an existing function body changes no
+        // generation number, so the hash is the only thing that can see it.
+        let before = [("005_submit", "CREATE FUNCTION f() ... RAISE;")];
+        let after = [("005_submit", "CREATE FUNCTION f() ... RAISE; ")];
+        assert_ne!(schema_content_hash(before), schema_content_hash(after));
+    }
+
+    #[test]
+    fn schema_content_hash_changes_on_rename_reorder_and_addition() {
+        let base = [("001_a", "x"), ("002_b", "y")];
+        let renamed = [("001_a", "x"), ("002_c", "y")];
+        let reordered = [("002_b", "y"), ("001_a", "x")];
+        let added = [("001_a", "x"), ("002_b", "y"), ("003_c", "")];
+        let h = schema_content_hash(base);
+        assert_ne!(
+            h,
+            schema_content_hash(renamed),
+            "a rename is a different schema"
+        );
+        assert_ne!(
+            h,
+            schema_content_hash(reordered),
+            "replay order is part of the schema"
+        );
+        assert_ne!(
+            h,
+            schema_content_hash(added),
+            "even an empty new file counts"
+        );
+    }
+
+    #[test]
+    fn schema_content_hash_cannot_be_fooled_by_moving_a_boundary() {
+        // Length-prefixing makes the encoding unambiguous: without it, ("ab","c") and
+        // ("a","bc") would hash the same concatenated bytes.
+        assert_ne!(
+            schema_content_hash([("001_x", "ab"), ("002_y", "c")]),
+            schema_content_hash([("001_x", "a"), ("002_y", "bc")])
+        );
+        assert_ne!(
+            schema_content_hash([("001_xa", "b")]),
+            schema_content_hash([("001_x", "ab")])
+        );
     }
 
     #[test]

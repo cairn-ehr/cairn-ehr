@@ -370,6 +370,13 @@ const SCHEMA: &[(&str, &str)] = &[
         "057_match_proposal_open",
         include_str!("../../../db/057_match_proposal_open.sql"),
     ),
+    // db/058 (#726): node_schema.schema_hash, the stamp that lets an unchanged schema skip
+    // the replay — and with it every DDL lock a connect used to take. Node-only; cairn-sync
+    // never reads the column, so its list lags legitimately (#284).
+    (
+        "058_schema_replay_stamp",
+        include_str!("../../../db/058_schema_replay_stamp.sql"),
+    ),
 ];
 
 /// Name a database connection for a log line, without ever echoing the connection string.
@@ -562,6 +569,83 @@ pub fn embedded_schema_version() -> i32 {
     cairn_event::schema_generation::SCHEMA_GENERATION
 }
 
+/// The `loader_build` this loader stamps into `node_schema`. Every binary that links this
+/// crate's loader (cairn-node, the reference window, …) stamps the same string, because
+/// `env!` is evaluated here, in cairn-node — and they all replay the same embedded list.
+/// cairn-sync stamps its own name, which is how a gated connect tells its subset stamp apart.
+const LOADER_BUILD: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
+
+/// The sha2-256 of exactly the migration texts this binary replays, in order (#726). See
+/// `cairn_event::schema_generation::schema_content_hash` for the encoding and for why it is
+/// a content hash rather than the generation number.
+pub fn embedded_schema_hash() -> [u8; 32] {
+    cairn_event::schema_generation::schema_content_hash(SCHEMA.iter().copied())
+}
+
+/// What the last successful loader recorded in `node_schema` (db/038, db/058).
+///
+/// `schema_hash` is `None` both for a row stamped before db/058 and for one whose hash was
+/// cleared — the two mean the same thing to the gate: "do not trust it, replay".
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchemaStamp {
+    pub version: i32,
+    pub loader_build: String,
+    pub schema_hash: Option<Vec<u8>>,
+}
+
+/// May this connect skip the file replay? (#726) **Pure.**
+///
+/// Only when the database says that THIS loader, at THIS generation, last replayed EXACTLY
+/// these files. Each condition closes a distinct hole:
+///   * `version` — the generation guard's own number; a heal is owed on a change (ADR-0057);
+///   * `loader_build` — cairn-sync's `init` stamps its own name after replaying only its
+///     subset, and its ON CONFLICT update leaves our hash column untouched; without this
+///     check that stale hash would vouch for files cairn-sync never replayed;
+///   * `schema_hash` — any byte of any migration differing, including an in-place edit of a
+///     function body that bumps no generation.
+///
+/// No stamp (fresh database, a hand-loaded rig) or a NULL hash means replay. Every doubt
+/// resolves toward replaying: a needless replay costs locks for a moment, a wrongly skipped
+/// one would leave a stale safety floor in place.
+pub fn replay_can_be_skipped(
+    stamp: Option<&SchemaStamp>,
+    embedded_version: i32,
+    loader_build: &str,
+    embedded_hash: &[u8],
+) -> bool {
+    match stamp {
+        Some(s) => {
+            s.version == embedded_version
+                && s.loader_build == loader_build
+                && s.schema_hash.as_deref() == Some(embedded_hash)
+        }
+        None => false,
+    }
+}
+
+/// Test-support (and an operator's lever): make the NEXT `connect_and_load_schema` on this
+/// database replay every migration, by clearing the recorded hash (#726). A no-op on a
+/// database without `node_schema` or without the db/058 column, which replay anyway.
+///
+/// `test_serial_guard` calls it, so every DB-gated test still starts from a full replay as it
+/// always did — a test can never inherit a schema a previous test sabotaged. A test that
+/// changes the schema and then reconnects within ITSELF, expecting the replay to repair it,
+/// calls this first, exactly as a real upgrade arrives with a different hash.
+pub async fn force_schema_replay(client: &Client) -> anyhow::Result<()> {
+    client
+        .batch_execute(
+            "DO $$ BEGIN
+               IF EXISTS (SELECT 1 FROM pg_attribute
+                           WHERE attrelid = to_regclass('public.node_schema')
+                             AND attname = 'schema_hash' AND NOT attisdropped) THEN
+                 EXECUTE 'UPDATE node_schema SET schema_hash = NULL';
+               END IF;
+             END $$;",
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("clearing the schema replay stamp: {}", legible_db_error(&e)))
+}
+
 /// Replay ONE migration body, naming it and the server's reason if it fails.
 ///
 /// Pulled out of [`connect_and_load_schema`]'s replay loop and made public for one
@@ -579,7 +663,14 @@ pub async fn load_migration(client: &Client, name: &str, sql: &str) -> anyhow::R
         .map_err(|e| anyhow::anyhow!("loading {name}: {}", legible_db_error(&e)))
 }
 
-/// Connect and replay every embedded migration — guarded against DOWNGRADE (#188).
+/// Connect and replay every embedded migration — guarded against DOWNGRADE (#188), and
+/// SKIPPED when nothing changed (#726).
+///
+/// The replay runs only when the `node_schema` stamp does not say that this loader already
+/// replayed exactly these files at this generation ([`replay_can_be_skipped`]). An idempotent
+/// replay still takes strong DDL locks, so an unconditional one let any connect stall
+/// clinical writes behind an ordinary long reader. Re-adjudication of deferred events runs
+/// on every connect regardless (it is driven by data, not by the schema).
 ///
 /// The replay is idempotent for a database at or below this binary's generation. But
 /// `CREATE OR REPLACE` cuts both ways: replayed by an OLDER binary against a NEWER
@@ -625,9 +716,19 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
         .get(0);
     // query_opt: an absent ROW (never stamped — hand-loaded rig) is a legitimate
     // "generation unknown", but a real query error must still fail loudly.
-    let recorded: Option<i32> = if table_exists {
+    //
+    // The hash is read through `to_jsonb(n)`, not by column name: on a database stamped
+    // before db/058 the `schema_hash` column does not exist yet, and naming it would fail at
+    // plan time — on exactly the databases that must replay to gain it. A missing key reads
+    // NULL, which the gate treats as "replay". jsonb renders bytea as `\x<hex>`.
+    let stamp: Option<SchemaStamp> = if table_exists {
         client
-            .query_opt("SELECT version FROM node_schema", &[])
+            .query_opt(
+                "SELECT version, loader_build, \
+                        decode(substr(to_jsonb(n) ->> 'schema_hash', 3), 'hex') \
+                   FROM node_schema n",
+                &[],
+            )
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
@@ -635,10 +736,15 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
                     legible_db_error(&e)
                 )
             })?
-            .map(|row| row.get(0))
+            .map(|row| SchemaStamp {
+                version: row.get(0),
+                loader_build: row.get(1),
+                schema_hash: row.get(2),
+            })
     } else {
         None
     };
+    let recorded: Option<i32> = stamp.as_ref().map(|s| s.version);
     if let Some(recorded) = recorded {
         if recorded > embedded {
             anyhow::bail!(
@@ -650,8 +756,20 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
             );
         }
     }
-    for (name, sql) in SCHEMA.iter() {
-        load_migration(&client, name, sql).await?;
+    // #726: replay only when something changed. A no-op replay is NOT lock-free — it took
+    // ACCESS EXCLUSIVE on event_log, the identity tables and 34 views — and each such lock
+    // waits behind any open reader while every later clinical write queues behind it. When
+    // the stamp says this loader already replayed exactly these files at this generation,
+    // the whole loop is skipped and the connect takes no DDL lock at all.
+    //
+    // A REAL change (an upgrade, an in-place fix, another loader's stamp) still replays in
+    // full, under the same load lock and downgrade guard as before.
+    let schema_hash = embedded_schema_hash();
+    let replay = !replay_can_be_skipped(stamp.as_ref(), embedded, LOADER_BUILD, &schema_hash);
+    if replay {
+        for (name, sql) in SCHEMA.iter() {
+            load_migration(&client, name, sql).await?;
+        }
     }
     // ADR-0056 decision 4 (#266): RE-ADJUDICATE FIRST, REPROJECT SECOND.
     //
@@ -730,21 +848,25 @@ pub async fn connect_and_load_schema(conn: &str) -> anyhow::Result<Client> {
     // Stamp only AFTER the full replay (and any heal above) succeeded: a
     // half-applied load must not claim the new generation. loaded_at defaults to
     // now() on insert; refresh it on conflict so the record always says who
-    // touched the schema last, and when.
-    client
-        .execute(
-            "INSERT INTO node_schema (version, loader_build) VALUES ($1, $2)
-             ON CONFLICT (id) DO UPDATE
-               SET version = EXCLUDED.version,
-                   loaded_at = now(),
-                   loader_build = EXCLUDED.loader_build",
-            &[
-                &embedded,
-                &concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")),
-            ],
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e)))?;
+    // touched the schema last, and when. The hash (#726) goes in with it, so the stamp
+    // vouches for exactly what was replayed — and a skipped replay writes nothing, since
+    // nothing was touched (and a no-op connect stays write-free).
+    if replay {
+        client
+            .execute(
+                "INSERT INTO node_schema (version, loader_build, schema_hash) VALUES ($1, $2, $3)
+                 ON CONFLICT (id) DO UPDATE
+                   SET version = EXCLUDED.version,
+                       loaded_at = now(),
+                       loader_build = EXCLUDED.loader_build,
+                       schema_hash = EXCLUDED.schema_hash",
+                &[&embedded, &LOADER_BUILD, &schema_hash.as_slice()],
+            )
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("recording schema generation: {}", legible_db_error(&e))
+            })?;
+    }
     client
         .execute(
             "SELECT pg_advisory_unlock($1)",
@@ -819,12 +941,82 @@ pub async fn test_serial_guard(conn: &str) -> anyhow::Result<Client> {
                 legible_db_error(&e)
             )
         })?;
+    // #726: every DB test still begins from a FULL replay, as it did when every connect
+    // replayed. Tests share these databases, and some deliberately sabotage a schema object
+    // (drop a column, a trigger, a registry row) to simulate an older database; without this
+    // the next test's connect would skip the replay and inherit the damage. Taken under the
+    // lock, so no other test can be mid-connect while the stamp is cleared.
+    force_schema_replay(&client).await?;
     Ok(client)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ----- replay_can_be_skipped (#726) -----
+
+    fn stamp(version: i32, loader: &str, hash: Option<&[u8]>) -> SchemaStamp {
+        SchemaStamp {
+            version,
+            loader_build: loader.into(),
+            schema_hash: hash.map(<[u8]>::to_vec),
+        }
+    }
+
+    #[test]
+    fn skips_only_when_generation_loader_and_hash_all_match() {
+        let h = embedded_schema_hash();
+        let ok = stamp(58, LOADER_BUILD, Some(&h));
+        assert!(replay_can_be_skipped(Some(&ok), 58, LOADER_BUILD, &h));
+    }
+
+    #[test]
+    fn every_doubt_resolves_toward_replaying() {
+        let h = embedded_schema_hash();
+        let other = [0u8; 32];
+        // No stamp: a fresh database, or a rig loaded by hand.
+        assert!(!replay_can_be_skipped(None, 58, LOADER_BUILD, &h));
+        // A NULL hash: stamped before db/058, or cleared by force_schema_replay.
+        assert!(!replay_can_be_skipped(
+            Some(&stamp(58, LOADER_BUILD, None)),
+            58,
+            LOADER_BUILD,
+            &h
+        ));
+        // Different files — including an in-place edit that bumped no generation.
+        assert!(!replay_can_be_skipped(
+            Some(&stamp(58, LOADER_BUILD, Some(&other))),
+            58,
+            LOADER_BUILD,
+            &h
+        ));
+        // Another loader's stamp (cairn-sync's subset), even with our hash left in the row.
+        assert!(!replay_can_be_skipped(
+            Some(&stamp(58, "cairn-sync 0.0.0", Some(&h))),
+            58,
+            LOADER_BUILD,
+            &h
+        ));
+        // A generation change: the heal is owed, so the replay must run with it.
+        assert!(!replay_can_be_skipped(
+            Some(&stamp(57, LOADER_BUILD, Some(&h))),
+            58,
+            LOADER_BUILD,
+            &h
+        ));
+    }
+
+    #[test]
+    fn the_embedded_hash_covers_the_full_list() {
+        // Pins that the hash is taken over SCHEMA itself, so adding a migration to the list
+        // (or editing one) is what changes it. Two different lists, two different hashes.
+        let all = embedded_schema_hash();
+        let all_but_last = cairn_event::schema_generation::schema_content_hash(
+            SCHEMA[..SCHEMA.len() - 1].iter().copied(),
+        );
+        assert_ne!(all, all_but_last);
+    }
 
     /// The FULL loader list must actually carry the repo's newest migration. The
     /// generation this binary stamps is the shared SCHEMA_GENERATION constant, so if
