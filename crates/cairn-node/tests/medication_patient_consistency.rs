@@ -820,6 +820,104 @@ async fn separation_of_cross_patient_group_still_accepted() {
     );
 }
 
+/// The repair must also pass when a clinician VOUCHES for it (`--attest-as`). An attested
+/// separation writes one human attestation per subject thread, and since #689 the strict
+/// door refuses a vouch filed under a chart other than the thread's own. Here the two
+/// threads live on DIFFERENT charts (that is what makes the group cross-patient), so filing
+/// both vouches under the chart the separation was run from would refuse the second one and
+/// roll the whole repair back. Each vouch goes on its own thread's chart, as sign-off does.
+#[tokio::test]
+async fn attested_separation_of_cross_patient_group_still_accepted() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let (sk_h, kid_h) = common::enroll_human(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
+    let m1 = Uuid::now_v7();
+    let m2 = Uuid::now_v7();
+    reconcile_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: None,
+        },
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m1, patient_a)
+        .await
+        .unwrap();
+    reassert_at_door(&c, &sk, &kid, "apply_remote_event", m2, patient_b)
+        .await
+        .unwrap();
+
+    let attest = cairn_node::medication::AttestParams {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+        basis: Some("chart review"),
+        note: None,
+    };
+    separate_medications(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        m1,
+        m2,
+        &ReconcileInput {
+            provenance: "clinician-judgment",
+            reason: Some("wrong chart — undoing"),
+        },
+        None,
+        Some(&attest),
+    )
+    .await
+    .expect("an ATTESTED separation (the repair) must pass on a cross-patient group too");
+
+    // Each vouch is filed on the chart its thread lives on.
+    for (thread, chart) in [(m1, patient_a), (m2, patient_b)] {
+        let filed: String = c
+            .query_one(
+                "SELECT patient_id::text FROM medication_attestation \
+                 WHERE medication_id = $1::text::uuid",
+                &[&thread.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            filed,
+            chart.to_string(),
+            "thread {thread}'s vouch is on its own chart"
+        );
+    }
+    let n: i64 = c
+        .query_one("SELECT count(*) FROM medication_group_cross_patient", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        n, 0,
+        "after separation the cross-patient flag view is clear"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // #273 — the dose-CORRECTION verb must carry the same #192 guard as the other
 // verbs. db/035's redefinition of medication_dose_correction_apply (file replay

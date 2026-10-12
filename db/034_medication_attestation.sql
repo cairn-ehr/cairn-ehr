@@ -111,6 +111,8 @@ BEGIN
     -- like this one or db/041's coding sub-tier can tell the doors apart; deferred
     -- re-adjudication (db/043) raises it too. submit_event pins it off (#602), so a client
     -- cannot switch this refusal off by raising the marker itself.
+    -- KNOWN GAP (#768): unlike db/031's guard (a conflict flag) and db/033's (a cross-patient
+    -- view), the admitted misfiling is not yet surfaced anywhere on the sync-door path.
     --
     -- A thread not known here passes (principle 4: the attestation may arrive before the
     -- thread — see orphan_attestation_renders_nothing_until_thread_arrives). A plain RAISE

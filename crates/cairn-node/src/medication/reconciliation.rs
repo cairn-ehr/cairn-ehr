@@ -260,12 +260,49 @@ async fn submit_reconcile_like(
                 &[&signed_bytes, &dek.as_bytes().as_slice()],
             )
             .await?;
-            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_a, hlc_a).await?;
-            crate::medication::attest_thread_in_tx(&tx, params, patient, subject_b, hlc_b).await?;
+            // Each vouch is filed on the chart ITS thread lives on, not on `patient` (#689).
+            // The two usually coincide, but a separation exists to repair a group whose
+            // threads sit on DIFFERENT charts; filing both under `patient` would make the
+            // strict door refuse the second vouch and roll the whole repair back. Read
+            // inside the transaction, after the verb, so it sees the same state the door
+            // will judge. Same rule as the medication-list sign-off (signoff.rs).
+            let chart_a = thread_chart_in_tx(&tx, subject_a, patient).await?;
+            let chart_b = thread_chart_in_tx(&tx, subject_b, patient).await?;
+            crate::medication::attest_thread_in_tx(&tx, params, chart_a, subject_a, hlc_a).await?;
+            crate::medication::attest_thread_in_tx(&tx, params, chart_b, subject_b, hlc_b).await?;
             tx.commit().await?;
         }
     }
     Ok(())
+}
+
+/// The chart medication thread `thread` lives on here (db/031's
+/// `cairn_medication_thread_patient`), or `fallback` when this node does not know the thread
+/// yet. An unknown thread is allowed to be vouched for (offline-first: the attestation may
+/// arrive before the thread), and the floor lets it through, so the caller's chart is as
+/// good an answer as any — there is nothing to contradict it.
+async fn thread_chart_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    thread: Uuid,
+    fallback: Uuid,
+) -> anyhow::Result<Uuid> {
+    let known: Option<String> = tx
+        .query_one(
+            "SELECT cairn_medication_thread_patient($1::text::uuid)::text",
+            &[&thread.to_string()],
+        )
+        .await
+        .map_err(|e| {
+            crate::db_diagnosis::LocalDbFault::new(
+                "reading which chart a medication thread lives on",
+                e,
+            )
+        })?
+        .get(0);
+    match known {
+        Some(s) => Ok(s.parse()?),
+        None => Ok(fallback),
+    }
 }
 
 #[cfg(test)]

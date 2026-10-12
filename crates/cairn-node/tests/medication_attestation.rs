@@ -1349,7 +1349,8 @@ async fn local_attestation_filed_under_another_chart_is_refused() {
 /// fork the event set and freeze this node's pull at it (ADR-0056). Which chart a thread
 /// lives on is node-local knowledge — it depends on what has synced so far — so this check
 /// belongs to the strict door alone, as db/031's #192 guard and db/033's cross-patient
-/// guard do. The remote door admits it.
+/// guard do. The remote door admits it. Unlike those two, nothing yet FLAGS the admitted
+/// misfiling (they write a conflict flag / feed a cross-patient view) — that is #768.
 #[tokio::test]
 async fn remote_attestation_filed_under_another_chart_is_admitted_not_refused() {
     let Some(base) = cs() else {

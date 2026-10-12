@@ -84,8 +84,8 @@ async fn door_body(c: &Client, door: &str) -> String {
 ///
 /// Not a tidiness rule: cairn-sync replays a subset of the migrations that includes db/001 and
 /// not db/007, so a helper declared beside its node-plane callers would let cairn-sync's schema
-/// load cleanly and then fail on the first clinical call site that reached for it (#198). The
-/// clinical door has the same raw casts today (#626), so that call site is a matter of when.
+/// load cleanly and then fail on the first clinical call site that reached for it (#198). Since
+/// #626 the clinical sync door (db/020) and the shred floor check (db/037) ARE such call sites.
 #[test]
 fn the_shared_helpers_are_declared_only_in_db001() {
     for helper in ["cairn_uuid_or_raise", "cairn_hlc_nonneg_or_raise"] {
@@ -166,6 +166,37 @@ async fn no_node_door_casts_to_uuid_bare() {
              cursor below the event, forever, with nothing penned and no ack remedy (#621). \
              Route it through cairn_uuid_or_raise, which gates on pg_input_is_valid and so \
              accepts exactly what the cast would."
+        );
+    }
+}
+
+/// #626 — the same rule on the CLINICAL sync door, and on the one floor check it runs that reads
+/// a uuid out of a peer's payload (the shred target). These are not in `DOORS` because the other
+/// two node-plane helpers (hlc, role) do not apply to them; only the bare-cast rule does. A bare
+/// `::uuid` there raises 22P02, and cairn-sync's puller freezes that peer's whole clinical stream
+/// on any non-P0001 failure of a verifiable event — the cast fails identically every cycle, so
+/// the freeze is permanent. `a_malformed_uuid_field_is_a_p0001_refusal_never_a_cast_error`
+/// (tests/apply_remote_event.rs) pins today's three fields by behaviour; this pins the next one.
+#[tokio::test]
+async fn the_clinical_sync_door_casts_no_uuid_bare() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    for func in ["apply_remote_event", "cairn_check_erasure_shred"] {
+        let body = door_body(&c, func).await;
+        // Anti-vacuity: the body really is the one that validates through the helper.
+        assert!(
+            body.contains("cairn_uuid_or_raise("),
+            "{func} no longer calls cairn_uuid_or_raise — was a uuid field reverted to a raw cast?"
+        );
+        assert!(
+            !body.contains("::uuid"),
+            "{func} contains a bare ::uuid cast. On a peer's bytes that raises 22P02, which \
+             freezes that peer's clinical pull permanently (#626). Route it through \
+             cairn_uuid_or_raise (db/001)."
         );
     }
 }

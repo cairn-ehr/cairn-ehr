@@ -375,16 +375,12 @@ BEGIN
     -- before db/041, so there is nothing upstream of step 8 to regress either.
     --
     -- The one other WRITER is worth naming too: `cairn_reproject` (db/039) raises this
-    -- same marker for its whole heal/rebuild run and never clears it — before this
-    -- change that only ever relaxed projection guards during a heal. Now it also
-    -- relaxes this door's validation tier for anything that runs inside the SAME
-    -- transaction as a reproject call (e.g. `BEGIN; SELECT cairn_reproject(...);
-    -- SELECT submit_event(<event with an unregistered coding system>); COMMIT;` would
-    -- be admitted). `cairn_reproject` is owner-only (REVOKE ... FROM PUBLIC in db/039),
-    -- so this is not a runtime-role bypass — an operator with EXECUTE on it already has
-    -- the standing to load arbitrary schema — but it is a real widening of what that
-    -- marker now means, so a future reader extending either function should know the
-    -- two are now coupled.
+    -- same marker for its whole heal/rebuild run and never clears it. That once also
+    -- relaxed submit_event for anything later in the SAME transaction (`BEGIN; SELECT
+    -- cairn_reproject(...); SELECT submit_event(<unregistered coding>); COMMIT;` was
+    -- admitted), and — the wider hole — any client could raise the marker itself. Since
+    -- #602 submit_event pins the marker off with a function-level SET, so neither reaches
+    -- the strict door: the marker relaxes only the code that raised it.
     --
     -- Cleared once all three PHASES that read the 'on' window have run: step 8's per-type
     -- check_fns (immediately below), this INSERT's AFTER-ROW projection triggers, AND (since
@@ -392,8 +388,8 @@ BEGIN
     -- not functions — the reader functions themselves are named above.) The clear now sits
     -- AFTER that call, not immediately after the INSERT as it once did, so everything from
     -- there on — the event_deferred marker, the attachment learner, shred execution, the HLC
-    -- merge — runs with the marker OFF. A later submit_event in the same transaction (outside
-    -- a reproject) therefore still sees its veto, unchanged.
+    -- merge — runs with the marker OFF. (A later submit_event in the same transaction sees its
+    -- veto regardless: it pins the marker off itself, #602.)
     PERFORM set_config('cairn.remote_apply', 'on', true);
 
     -- 8. Plaintext twin + per-type structural floor, via the SAME cairn_event_twin hook
