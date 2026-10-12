@@ -21,10 +21,13 @@ ON CONFLICT (event_type) DO NOTHING;
 --    locally — set-union sync may deliver the attestation before the thread). The
 --    twin requirement is enforced by the db/005 dispatcher via twin_required_msg
 --    (step 3), NOT here. Mirrors cairn_check_medication_reconciliation.
+--    One check is NOT purely structural: the wrong-chart refusal at the end (#689),
+--    which reads where the thread lives and so runs at the strict local door only.
 CREATE OR REPLACE FUNCTION cairn_check_medication_attestation(p_type text, b jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     p jsonb := b -> 'payload';
+    v_thread_chart uuid;  -- #689: the chart the attested thread lives on, if known here
 BEGIN
     IF p IS NULL THEN
         RAISE EXCEPTION 'medication attestation: missing payload';
@@ -92,6 +95,35 @@ BEGIN
        OR (p ->> 'reviewed_count')::numeric < 0
        OR (p ->> 'reviewed_count')::numeric <> floor((p ->> 'reviewed_count')::numeric) THEN
         RAISE EXCEPTION 'medication attestation: reviewed_count must be a non-negative integer';
+    END IF;
+    -- #689: a vouch must be filed under the chart its thread lives on. Without this, an
+    -- attestation of chart A's thread naming chart B was admitted, and the projection
+    -- (medication_attestation_apply) stores the ENVELOPE's chart — a signed,
+    -- responsibility-bearing vouch recorded against the wrong patient. ADR-0076's combined
+    -- read puts a linked chart's threads on another chart's screen, so a client is one wrong
+    -- argument away from it; the floor, not the client, is the boundary (principle 12).
+    -- The dose-correction door has had the same guard since #273 (db/031's #192 guard).
+    --
+    -- STRICT DOOR ONLY. Where a thread lives is node-local knowledge (it depends on what has
+    -- synced), so on the sync door this would make a verifiable peer event refusable on one
+    -- node and not another — forking the event set and freezing the pull (ADR-0056). db/020
+    -- raises cairn.remote_apply BEFORE it runs this check (its step 8), exactly so a check
+    -- like this one or db/041's coding sub-tier can tell the doors apart; deferred
+    -- re-adjudication (db/043) raises it too. submit_event pins it off (#602), so a client
+    -- cannot switch this refusal off by raising the marker itself.
+    --
+    -- A thread not known here passes (principle 4: the attestation may arrive before the
+    -- thread — see orphan_attestation_renders_nothing_until_thread_arrives). A plain RAISE
+    -- is SQLSTATE P0001, the deliberate-refusal code callers classify as "fix the request"
+    -- (ADR-0074).
+    IF current_setting('cairn.remote_apply', true) IS DISTINCT FROM 'on' THEN
+        v_thread_chart := cairn_medication_thread_patient((p ->> 'medication_id')::uuid);
+        IF v_thread_chart IS NOT NULL
+           AND v_thread_chart <> (b ->> 'patient_id')::uuid THEN
+            RAISE EXCEPTION
+                'medication attestation: thread % lives on chart %, but this attestation is filed under chart % — a vouch must be recorded on the chart of the thread it vouches for (issue #689)',
+                p ->> 'medication_id', v_thread_chart, b ->> 'patient_id';
+        END IF;
     END IF;
 END;
 $$;
