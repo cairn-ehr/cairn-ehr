@@ -238,8 +238,8 @@ pub fn pull_failure_class(e: &anyhow::Error) -> PullFailureClass {
 ///
 /// So the cheaper mistake is the one that keeps the link moving, and the unknown code takes it.
 /// The list and its reasoning are deliberately the same as `cairn-sync`'s `apply_failure_is_local`
-/// one plane over, whose `do_requeue` already routes on it; `sqlstate_classes_agree.rs` fails if
-/// the two drift, and merging them into one home is #626.
+/// one plane over, whose `do_pull` (since #626) and `do_requeue` route on it;
+/// `sqlstate_classes_agree.rs` fails if the two drift, and merging them into one home is #769.
 ///
 /// `XX000` (internal_error) is NOT local, on purpose: a pgrx function panicking on adversarial
 /// bytes raises it, and that is precisely the case that must not be able to wedge a link. Its two

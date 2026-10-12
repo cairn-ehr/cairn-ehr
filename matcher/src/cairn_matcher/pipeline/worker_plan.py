@@ -15,27 +15,47 @@ class Mode(Enum):
     SWEEP = "sweep"           # a backlog too big for per-chart checks: one full sweep instead
 
 
-def choose_mode(charts_waiting: int, bulk_threshold: int) -> Mode:
-    """Sweep when MORE than `bulk_threshold` charts wait.
+def choose_mode(charts_waiting: int, bulk_threshold: int, sweep_held: bool = False) -> Mode:
+    """Sweep when MORE than `bulk_threshold` charts wait -- unless the sweep is held.
 
     Each per-chart check still pays a population-wide grouping (the symmetric statement; the
     range statement is anchored since #725), so N waiting charts cost ~N of them; one sweep costs
     one pass plus its pairs. Above the threshold (set from the measured break-even, see
     Settings.bulk_threshold) the sweep is cheaper.
+
+    `sweep_held` (RetryBook.sweep_held, #727): a recent sweep raised in its blocking phase. That
+    error is data-triggered and recurs on every attempt, so while the hold lasts the backlog is
+    checked chart by chart -- slower, but per-chart mode isolates a poison chart and a sweep
+    cannot. Without this the worker re-ran the same failing sweep every round and no chart was
+    ever checked.
     """
+    if sweep_held:
+        return Mode.PER_CHART
     return Mode.SWEEP if charts_waiting > bulk_threshold else Mode.PER_CHART
 
 
 @dataclass
 class RetryBook:
-    """Charts whose check raised, held back for `backoff_s` so the worker never spins on one.
+    """Work that raised, held back for `backoff_s` so the worker never spins on it.
+
+    Two kinds of work are held: a CHART whose check raised (a poison chart), and the bulk SWEEP
+    when its blocking phase raised (#727) -- which would otherwise be re-run, and fail the same
+    way, on every round while the backlog stays over the threshold.
 
     In memory on purpose: a restarted worker retries at once. A held chart keeps its notices, so
-    the node keeps reading it as "not yet checked" — the hold is never a silent skip.
+    the node keeps reading it as "not yet checked" — the hold is never a silent skip. A held sweep
+    skips nothing either: its charts are checked one by one instead.
     """
 
     backoff_s: float
     _until: dict[str, float] = field(default_factory=dict)
+    _sweep_until: float | None = None
+
+    def sweep_failed(self, now: float) -> None:
+        self._sweep_until = now + self.backoff_s
+
+    def sweep_held(self, now: float) -> bool:
+        return self._sweep_until is not None and self._sweep_until > now
 
     def failed(self, patient: str, now: float) -> None:
         self._until[patient] = now + self.backoff_s

@@ -12,6 +12,12 @@
 > §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
 > **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
 >
+> **⇒ ALSO OPEN (2026-10-12, cloud tech-debt session): draft PR [#770](https://github.com/cairn-ehr/cairn-ehr/pull/770)**
+> (branch `claude/cool-archimedes-cmk20o`): #626's cairn-sync half (a deterministic no-verdict apply failure is PENNED,
+> not frozen — also settles #534, left open for the maintainer), #727 (a failed bulk sweep falls back to per-chart, the
+> sweep held in the `RetryBook`), #536 (`custody_unopenable` metric + per-page line; `RewrapFailure` names the failing
+> re-wrap step). Follow-up filed: #769 (one home for the SQLSTATE classifier). Review + merge it.
+>
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
 >    order, after the final edit), the PR review, merge. #741 may close with it — ask the maintainer before writing a

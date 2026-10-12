@@ -745,13 +745,16 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// Whose fault was a failed apply — **this node's machine, or the bytes**? **Pure.**
 ///
 /// [`refusal_is_deliberate`] answers a different question (*was this a verdict about the
-/// event*), and the `false` half of its answer is not one thing. Two callers need it split,
-/// and they need it for opposite reasons (PR #493 review):
+/// event*), and the `false` half of its answer is not one thing. Two callers need it split
+/// (PR #493 review; #626):
 ///
-/// * `do_pull`'s freeze arm must add the `local_fault` class when the apply failed on THIS
-///   node's own database. Without it a lock storm reaches `bet_a.py` as `integrity` alone —
-///   *the peer answered and its DATA is the problem* — which is issue #489 part 1's own
-///   sentence, one match arm above the pen write it was filed against;
+/// * `do_pull` must decide between FREEZE and PEN for a verifiable event the door failed on
+///   without a verdict (#626). A local failure freezes — the remedy is on this node and the
+///   link resumes intact once it is applied — and is tagged `local_fault`, so a lock storm
+///   does not reach `bet_a.py` as `integrity` alone (*the peer answered and its DATA is the
+///   problem*, issue #489 part 1). Anything else is penned: before #626 it froze too, and a
+///   deterministic raise on the bytes (a cast, a CHECK) froze that peer's clinical stream
+///   PERMANENTLY, with nothing penned and no `ack` remedy;
 /// * `do_requeue` must INTERRUPT for a local fault (the operator has something to fix, and
 ///   every row behind it would meet the same fault anyway) but ANNOTATE-AND-CONTINUE for a
 ///   byte-attributable one. Halting there wedges the whole recovery command behind one row
@@ -767,7 +770,9 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// an unrecognised code annotates and the sweep keeps going. The asymmetry is deliberate
 /// and is the opposite of `cairn-node`'s `pull_failure_class`: a wrong `true` HALTS a run
 /// that had work left to do, while a wrong `false` writes one legible, SQLSTATE-carrying
-/// line onto one row. The cheaper mistake is the one that keeps moving.
+/// line onto one row (requeue) or pens one valid event — loud, durably held, re-offered
+/// every sweep and released the moment it applies (pull). The cheaper mistake is the one
+/// that keeps moving.
 ///
 /// `XX000` (internal_error) is deliberately NOT claimed as local: a pgrx function panicking on
 /// adversarial bytes raises it, and that is precisely the case that must not be able to
@@ -820,7 +825,8 @@ fn apply_failure_is_local(sqlstate: Option<&str>) -> bool {
 /// holding something a peer offered it, so every one of them is loud:
 ///
 /// * `unverifiable` — bytes penned that cannot verify (existing behaviour);
-/// * `refused`      — verifiable bytes the floor deliberately refused (#267);
+/// * `refused`      — verifiable bytes the floor deliberately refused (#267), or failed
+///   on deterministically without a verdict (#626) — both penned;
 /// * `frozen`       — the cursor halted, so events behind it are not being read (#270);
 /// * `pen_failed`   — a refusal we could not even record durably.
 ///
@@ -1059,10 +1065,10 @@ fn loud_pull_message(
     let freeze = match (frozen_at, pen_refused.is_some()) {
         (Some(at), false) => format!(
             " The seq cursor is FROZEN at {at}: events after that slot are NOT being read \
-             from this peer and the backlog grows every cycle. This is a transient-fault \
-             hold (a deliberate floor refusal is penned instead), so it clears by itself \
-             once the underlying fault does — if it does not, the stderr line above names \
-             the failure."
+             from this peer and the backlog grows every cycle. This is a hold on a fault \
+             in THIS node (a floor refusal, or a failure on the event's own bytes, is \
+             penned instead), so it clears by itself once that fault does — if it does \
+             not, the stderr line above names the failure."
         ),
         (Some(at), true) => format!(
             " The seq cursor is FROZEN at {at}: events after that slot are NOT being read \
@@ -1328,6 +1334,29 @@ fn record_pull_failure(line: &mut serde_json::Value, e: &(dyn Error + 'static)) 
     if !metrics.is_null() {
         line["pull"] = metrics;
     }
+}
+
+/// The ONE operator line for a page whose sidecar DEKs this node could not open (issue #536).
+///
+/// Pure, so its wording is unit-tested. It replaces a line per EVENT: under the systematic
+/// cause — this node's unwrap secret is not the one the DEKs were wrapped to, which a backup
+/// medium makes possible by passing DEKs through wrapped to the CAPTURING node (slice 2d) —
+/// that was one line per sealed event in the log and no other signal at all, beside an exit 0.
+/// The count also reaches the pull's JSON as `custody_unopenable`. Every input is this node's
+/// own (its `--peer-name` and seqs it counted), so nothing here needs escaping.
+fn custody_unopenable_message(
+    peer_name: &str,
+    count: usize,
+    first_seq: i64,
+    last_seq: i64,
+) -> String {
+    format!(
+        "pull {peer_name}: {count} sidecar DEK(s) in seq {first_seq}..={last_seq} failed to open \
+         with this node's unwrap secret — those events were admitted WITHOUT custody, so their \
+         sealed bodies are unreadable here (counted in `custody_unopenable`). If this is every \
+         sealed event, this node's unwrap secret is not the one the DEKs were wrapped to — e.g. \
+         a restore that did not adopt the exported unwrap secret (ADR-0066)."
+    )
 }
 
 /// The operator line for a peer that withheld custody for a batch (issue #231).
@@ -2890,6 +2919,14 @@ enum RefusalClass {
     Unverifiable,
     /// The bytes verify; this node's floor deliberately refused them.
     DoorRefused,
+    /// The bytes verify, and the door failed on them WITHOUT reaching a verdict — a
+    /// non-`P0001` SQLSTATE that is not this node's own trouble (`apply_failure_is_local`
+    /// answers `false`): a cast or CHECK on a peer-supplied field, an `XX000` out of a pgrx
+    /// function fed adversarial bytes. It recurs identically on every retry, so freezing on
+    /// it would wedge the peer's whole clinical stream for ever (issue #626). Tallied with
+    /// `DoorRefused` — the operator's action is the same (change this node, or ack) — but
+    /// worded differently, because nothing DECIDED against these bytes.
+    NoVerdict,
 }
 
 /// Persist an unverifiable pulled event into `sync_quarantine` (db/021, issue
@@ -3472,6 +3509,12 @@ fn do_pull(
         // the pull having to fail. Revisit if a real deployment finds the line alone
         // too quiet to notice.
         "custody_withheld": cycle.custody_withheld,
+        // Slots whose sidecar DEK this node could NOT open (#536): admitted WITHOUT custody,
+        // so their sealed bodies are unreadable here. Not `custody_withheld` — the peer made
+        // no decision — and, on the same terms, not loud: the events all arrived. A monitor
+        // should alert on it, because the systematic case (a restore that did not adopt the
+        // exported unwrap secret, ADR-0066) makes it equal to every sealed event pulled.
+        "custody_unopenable": cycle.custody_unopenable,
         // Attachment references admitted-but-unlearnable this cycle (issue #465), for
         // the same reason and on the same terms as `custody_withheld` above: a real
         // degradation this node must know about, which must not fail the cycle. Counts
@@ -3857,6 +3900,10 @@ fn apply_page(
     // Verifiable events the floor refused and we penned IN THIS PAGE (issue #267). The
     // cycle's total is `CycleTally::refused_verifiable`, summed by `fold`.
     let mut refused_verifiable = 0usize;
+    // Slots whose sidecar DEK this node's unwrap secret could not open (#536), and the seq
+    // range they span — for the ONE summary line printed after the loop.
+    let mut custody_unopenable = 0usize;
+    let mut unopenable_seqs: Option<(i64, i64)> = None;
     // Content addresses of every event the door ADMITTED IN THIS PAGE — new or re-offered.
     // `fold` concatenates them across the cycle, and the OTHER key the attachment-reference
     // ledger is read back on — the flag high-water mark from before any of this cycle's
@@ -3959,10 +4006,14 @@ fn apply_page(
                     {
                         Some(d) => Some(d),
                         None => {
-                            eprintln!(
-                                "pull {peer_name}: sidecar DEK for seq {seq} failed to open — \
-                                 admitting the event WITHOUT custody"
-                            );
+                            // Counted, and reported ONCE per page below (#536) — not one
+                            // line per event, which under a wrong unwrap secret is one line
+                            // per sealed event in the whole log and nothing else.
+                            custody_unopenable += 1;
+                            unopenable_seqs = Some(match unopenable_seqs {
+                                Some((lo, hi)) => (lo.min(seq), hi.max(seq)),
+                                None => (seq, seq),
+                            });
                             None
                         }
                     },
@@ -4098,10 +4149,47 @@ fn apply_page(
                                 format!("refused by this node's floor: {e}"),
                                 RefusalClass::DoorRefused,
                             )),
-                            // Verifiable, but the failure was NOT a door verdict:
-                            // transient infrastructure trouble, where the same
-                            // bytes may well apply next cycle. Freeze and retry —
-                            // penning would record a refusal that never happened.
+                            // Verifiable, no verdict, and NOT this node's own trouble
+                            // (issue #626): a door that fails on these BYTES — a cast
+                            // or CHECK on a peer-supplied field, an `XX000` from a pgrx
+                            // function — fails identically on every retry. Freezing here
+                            // was permanent: the peer's whole clinical stream stopped
+                            // behind one event, nothing was penned, and there was no
+                            // `ack` remedy. So it is penned exactly like a refusal —
+                            // verbatim, slot pinned, cycle loud — and the cursor moves on.
+                            //
+                            // WHY AN UNKNOWN CODE LANDS HERE rather than in the freeze
+                            // below: `apply_failure_is_local` claims the local classes
+                            // explicitly and answers `false` for the rest, and the two
+                            // mistakes are not equally expensive. A wrong pen holds a
+                            // valid event loud and durable, re-offered every sweep and
+                            // released the moment it applies; a wrong freeze is the
+                            // permanent wedge. The node plane draws the same line with
+                            // the same list (`deterministic_apply_failure`, #621;
+                            // `sqlstate_classes_agree.rs` keeps the two in step).
+                            //
+                            // It also keeps CONTENT converging (issue #534): a freeze
+                            // ends the paging loop (`page_decision`), so a persistent
+                            // non-verdict failure used to stop this node receiving
+                            // anything above roughly one page from this peer.
+                            Ok(_) if !apply_failure_is_local(e.sqlstate.as_deref()) => Some((
+                                (signed_bytes, att, akey),
+                                format!(
+                                    "the door did not reach a verdict, and will fail on \
+                                     these bytes identically every time: {}",
+                                    // The database's vocabulary, SQLSTATE included: this
+                                    // is not a door verdict, so `{e}` (the door's
+                                    // vocabulary) would drop the whole diagnosis.
+                                    e.operator_text()
+                                ),
+                                RefusalClass::NoVerdict,
+                            )),
+                            // Verifiable, no verdict, and the failure IS this node's own
+                            // trouble (`apply_failure_is_local`): a lock storm, a dropped
+                            // connection, a full disk, a revoked grant. Freeze and retry —
+                            // penning would record a refusal that never happened, and the
+                            // remedy is local and available (fix the node, and the link
+                            // resumes with every event intact).
                             Ok(_) => {
                                 frozen = true;
                                 // PR #493 review. `frozen` alone made this cycle
@@ -4117,6 +4205,10 @@ fn apply_page(
                                 // `postgres::Error`; here the SQLSTATE is already in hand
                                 // and says strictly more, because the non-`P0001` space is
                                 // not all local — see `apply_failure_is_local`.
+                                // Since #626 only a LOCAL failure reaches this arm (the
+                                // guard above pens the rest), so this is now always true;
+                                // it is still asked, not assumed, so the two can never
+                                // disagree if the guard above is ever reordered.
                                 local_apply_fault |= apply_failure_is_local(e.sqlstate.as_deref());
                                 eprintln!(
                                     "pull {peer_name}: HALTING seq cursor at {max_seq} — a valid \
@@ -4171,6 +4263,12 @@ fn apply_page(
                             refused_verifiable += 1;
                             "floor-refused (but verifiable) event"
                         }
+                        // Same tally as a refusal (see `RefusalClass::NoVerdict`), its
+                        // own words: the floor decided nothing about these bytes.
+                        RefusalClass::NoVerdict => {
+                            refused_verifiable += 1;
+                            "verifiable event the door failed on without a verdict"
+                        }
                     };
                     if pin.is_none() {
                         pin = Some(seq);
@@ -4205,6 +4303,13 @@ fn apply_page(
         }
     }
 
+    if let Some((lo, hi)) = unopenable_seqs {
+        eprintln!(
+            "{}",
+            custody_unopenable_message(peer_name, custody_unopenable, lo, hi)
+        );
+    }
+
     pull_page::PageTally {
         shipped: resp.events.len(),
         applied,
@@ -4219,6 +4324,7 @@ fn apply_page(
         pen_refused,
         pin,
         custody_withheld: resp.custody_withheld.is_some(),
+        custody_unopenable,
         applied_addresses,
     }
 }
@@ -5831,29 +5937,73 @@ fn rewrap_custody_for_peer(
             let hexed = slot.as_deref()?;
             // A PRESENT local DEK that fails to re-wrap, though, is an operator-visible
             // degradation — the event still syncs but its custody silently vanishes, blanking
-            // the sealed projection on every puller. The usual cause is a serve `--key` whose
-            // derived unwrap secret does not match the registered node_unwrap_key (a misconfig,
-            // or an un-re-wrapped key rotation). Log it rather than fail silently — mirrors the
-            // pull-side "sidecar DEK failed to open — admitting WITHOUT custody" line.
-            let rewrap = || -> Option<String> {
-                let local = hex::decode(hexed).ok()?;
-                let dek = cairn_event::seal::unwrap_dek(&local, own_secret).ok()?;
-                let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub).ok()?;
-                Some(hex::encode(rewrapped))
-            };
-            if let Some(s) = rewrap() {
-                Some(s)
-            } else {
-                eprintln!(
-                    "cairn-sync serve: DEK re-wrap failed for custody slot {i} — serving this \
-                     event WITHOUT custody. Check the serve --key matches the node's registered \
-                     unwrap key (a mismatched key or un-re-wrapped rotation blanks sealed \
-                     projections on every puller)."
-                );
-                None
+            // the sealed projection on every puller. Log it rather than fail silently, naming
+            // WHICH step failed (#536): the three have different owners, and a single message
+            // used to send the operator to the serve `--key` for a corrupt row in this node's
+            // own `event_dek` table.
+            match rewrap_one_dek(hexed, own_secret, requester_pub) {
+                Ok(s) => Some(s),
+                Err(cause) => {
+                    eprintln!(
+                        "cairn-sync serve: DEK re-wrap failed for custody slot {i} — serving \
+                         this event WITHOUT custody: {}",
+                        cause.operator_text()
+                    );
+                    None
+                }
             }
         })
         .collect()
+}
+
+/// Which step of re-wrapping ONE stored DEK for a peer failed (#536). Each has a different
+/// owner, so each gets its own operator sentence.
+#[derive(Debug, PartialEq, Eq)]
+enum RewrapFailure {
+    /// This node's own `event_dek.dek_wrapped` is not valid hex: a corrupt row HERE.
+    StoredNotHex,
+    /// This node's unwrap secret cannot open its own stored DEK: the serve `--key` /
+    /// `--unwrap-key` does not match the registered node unwrap key (a misconfiguration, or a
+    /// rotation whose DEKs were never re-wrapped).
+    OwnSecretCannotOpen,
+    /// Wrapping for the requester's key failed: the requester's unwrap cert carries a key
+    /// that cannot be wrapped to.
+    RequesterKeyUnusable,
+}
+
+impl RewrapFailure {
+    fn operator_text(&self) -> &'static str {
+        match self {
+            RewrapFailure::StoredNotHex => {
+                "this node's stored dek_wrapped is not valid hex — a corrupt event_dek row on \
+                 THIS node"
+            }
+            RewrapFailure::OwnSecretCannotOpen => {
+                "this node's unwrap secret cannot open its own stored DEK — check the serve \
+                 --key/--unwrap-key matches the node's registered unwrap key (a mismatched key \
+                 or an un-re-wrapped rotation blanks sealed projections on every puller)"
+            }
+            RewrapFailure::RequesterKeyUnusable => {
+                "the DEK could not be wrapped to the requester's unwrap key — the requester's \
+                 unwrap cert is the thing to check"
+            }
+        }
+    }
+}
+
+/// Re-wrap ONE stored DEK (hex, wrapped to this node) for the requester. **Pure**, so each
+/// failure step is unit-tested with no socket and no database.
+fn rewrap_one_dek(
+    stored_hex: &str,
+    own_secret: &Secret32,
+    requester_pub: &PublicKey32,
+) -> Result<String, RewrapFailure> {
+    let local = hex::decode(stored_hex).map_err(|_| RewrapFailure::StoredNotHex)?;
+    let dek = cairn_event::seal::unwrap_dek(&local, own_secret)
+        .map_err(|_| RewrapFailure::OwnSecretCannotOpen)?;
+    let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub)
+        .map_err(|_| RewrapFailure::RequesterKeyUnusable)?;
+    Ok(hex::encode(rewrapped))
 }
 
 /// `custody` (ADR-0052): this node's signing key and unwrap secret, resolved once at
@@ -8206,6 +8356,41 @@ mod tests {
         );
     }
 
+    /// #536 secondary: each failing step of a re-wrap is told apart, because each has a
+    /// different owner — a corrupt row here, this node's own key, or the requester's cert.
+    #[test]
+    fn rewrap_failures_name_the_step_that_failed() {
+        let own_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(derived_bytes(0x81)));
+        let peer_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+            &Secret32::from_bytes(derived_bytes(0x82)),
+        ));
+        assert_eq!(
+            rewrap_one_dek("not hex", &own_secret, &peer_pub),
+            Err(RewrapFailure::StoredNotHex)
+        );
+        // Wrapped to a DIFFERENT node's key: this node's secret cannot open it.
+        let other_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+            &Secret32::from_bytes(derived_bytes(0x83)),
+        ));
+        let foreign =
+            cairn_event::seal::wrap_dek_for(&Secret32::from_bytes(derived_bytes(0x84)), &other_pub)
+                .unwrap();
+        assert_eq!(
+            rewrap_one_dek(&hex::encode(foreign), &own_secret, &peer_pub),
+            Err(RewrapFailure::OwnSecretCannotOpen)
+        );
+        assert!(RewrapFailure::StoredNotHex
+            .operator_text()
+            .contains("THIS node"));
+        assert!(!RewrapFailure::StoredNotHex
+            .operator_text()
+            .contains("--key"));
+        assert!(RewrapFailure::OwnSecretCannotOpen
+            .operator_text()
+            .contains("--key"));
+    }
+
     #[test]
     fn rewrap_custody_leaves_a_none_slot_none() {
         // (b) A None local slot (unsealed event / no custody here / shredded) stays
@@ -8954,6 +9139,146 @@ mod quarantine_tests {
         assert_eq!(t.requests().len(), 1, "the loop must stop at the freeze");
     }
 
+    /// A validly-signed note whose plaintext twin carries a `U+0000`. The bytes VERIFY, but
+    /// `jsonb` cannot represent a NUL, so `cairn_body` raises `22P05` at the top of
+    /// `apply_remote_event`, before any guard (issue #628) — every time, on every node of
+    /// this build. That makes it the one GENUINE deterministic non-`P0001` failure the door
+    /// still has, so the #626 tests below provoke the arm with a real event rather than an
+    /// overridden door: an override would fail EVERY event in the page, and what these
+    /// tests must show is that the events AROUND the poison one keep landing.
+    fn nul_note(sk: &SigningKey, kid: &str, wall: i64) -> Vec<u8> {
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: uuid::Uuid::now_v7().to_string(),
+            event_type: "note.added".into(),
+            schema_version: "note/1".into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: "peer-src".into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: serde_json::json!({"text": "replicated note"}),
+            attachments: vec![],
+            plaintext_twin: Some("Progress note: a stray \u{0} byte".into()),
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        let signed = sign(&body, sk).unwrap().signed_bytes;
+        assert!(
+            verify_self_described(&signed).is_ok(),
+            "the fixture is only meaningful if the bytes VERIFY — an unverifiable event takes \
+             a different arm entirely"
+        );
+        signed
+    }
+
+    /// Issue #626, the pull half. A verifiable event the door fails on WITHOUT a verdict, for
+    /// a reason that is not this node's own trouble, recurs identically every cycle — so the
+    /// old freeze was permanent: the peer's whole clinical stream stopped behind it, nothing
+    /// was penned, and there was no `ack` remedy. It must be PENNED instead, like a refusal:
+    /// held verbatim, slot pinned on the re-offer floor, the cycle loud, and the cursor free
+    /// to move past it.
+    ///
+    /// Issue #534 rides on the same assertions: before #626 that freeze also ended the paging
+    /// loop, so nothing above the first page arrived from this peer again. Here the poison
+    /// event is on page 1 and the test requires page 2 to be requested AND applied.
+    #[test]
+    fn a_deterministic_no_verdict_failure_is_penned_and_paging_continues() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let poison = nul_note(&sk, &kid, WALL_2026);
+        let after = peer_note(&sk, &kid, WALL_2026 + 1);
+        let page_two = peer_note(&sk, &kid, WALL_2026 + 2);
+        let t = FakeTransport::new(vec![
+            page_json(&[&poison, &after], &[1, 2], false),
+            page_json(&[&page_two], &[3], true),
+        ]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 2, None)
+            .expect_err("a penned event keeps the cycle loud (#270)");
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
+        let m = ie.metrics.clone();
+
+        assert_eq!(
+            t.requests().len(),
+            2,
+            "a pen is not a freeze: paging must continue past it (#534)"
+        );
+        assert_eq!(
+            m["watermark_frozen"], false,
+            "a failure on the event's own bytes recurs every cycle — freezing on it is the \
+             permanent wedge #626 was filed about"
+        );
+        assert_eq!(
+            m["applied_new"], 2,
+            "the events around the poison one — on its own page and the next — still land"
+        );
+        assert_eq!(m["refused_verifiable"], 1, "penned, and counted as such");
+        assert_eq!(m["skipped_unverifiable"], 0, "the bytes verify");
+
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(
+            rows.len(),
+            1,
+            "exactly the poison event is penned: {rows:?}"
+        );
+        assert!(
+            rows[0].reason.contains("did not reach a verdict") && rows[0].reason.contains("22P05"),
+            "the pen row must say no verdict was reached AND carry the SQLSTATE that is the \
+             whole diagnosis, got: {}",
+            rows[0].reason
+        );
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            3,
+            "the cursor advances over the penned slot to the end of what was offered"
+        );
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            Some(1),
+            "the penned slot is held on the re-offer floor, so the event is offered again"
+        );
+    }
+
+    /// The other side of #626's line: a LOCAL failure still freezes, and still ends the page
+    /// loop — the remedy is on this node, and every later event would meet the same fault.
+    /// `freezing_event`'s override raises `40001`; this pins that the new pen arm did not
+    /// swallow it (it must not be penned: no verdict, and nothing wrong with the bytes).
+    #[test]
+    fn a_local_failure_still_freezes_and_pens_nothing() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let t = FakeTransport::new(vec![page_json(
+            &[&freezing_event(&mut c, &sk, &kid)],
+            &[1],
+            true,
+        )]);
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 2, None)
+            .expect_err("a frozen cycle fails loudly (#270)");
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
+        assert_eq!(ie.metrics["watermark_frozen"], true);
+        assert_eq!(ie.metrics["refused_verifiable"], 0);
+        assert!(
+            quarantine_rows(&mut c).is_empty(),
+            "a lock storm on this node is not the event's fault"
+        );
+    }
+
     /// A full sweep's page 2 continues from the last seq RECEIVED, not from the checkpoint.
     ///
     /// THE SUBTLE ONE. `max_seq` starts at the COMMITTED cursor, so paging from it would make
@@ -9429,6 +9754,90 @@ mod quarantine_tests {
     /// and every sealed body from page 2 onward of a multi-page catch-up is admitted with no
     /// DEK: an unrenderable chart and no crypto-shred custody, with zero operator signal.
     /// That is exactly the blindness #231 was filed to end, on the axis paging added.
+    /// Issue #536. A sidecar DEK this node cannot open degrades its slot to "no custody" —
+    /// the event is still admitted, which is right (ADR-0052: withhold the key, never the
+    /// bytes) — but it used to be counted NOWHERE: one stderr line per event, no tally, no
+    /// metric, `custody_withheld` false (that field means the peer DECIDED to withhold), and a
+    /// clean exit. Under a backup medium (slice 2d) a restore that adopted the wrong unwrap
+    /// secret fails EVERY sealed slot this way and reported a healthy pull over a node whose
+    /// sealed charts are all blank.
+    ///
+    /// Two slots fail to open here — one wrapped to a DIFFERENT node's key (the wrong-secret
+    /// case), one that is not even hex — and the third carries none at all, which is the
+    /// normal unsealed case and must not be counted. The pull stays Ok: like
+    /// `custody_withheld`, this degradation must not fail the cycle.
+    #[test]
+    fn an_unopenable_sidecar_dek_is_counted_and_published() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..3)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+        let custody = unwrap_key::NodeCustody {
+            signing_key: sk.clone(),
+            unwrap_secret: Secret32::from_bytes(std::array::from_fn(|i| {
+                (i as u8).wrapping_mul(7).wrapping_add(1)
+            })),
+        };
+        // Wrapped for SOME OTHER node's key, so this node's secret cannot open it.
+        let elsewhere =
+            cairn_event::seal::unwrap_public(&Secret32::from_bytes(std::array::from_fn(|i| {
+                (i as u8).wrapping_mul(13).wrapping_add(5)
+            })));
+        let foreign = cairn_event::seal::wrap_dek_for(
+            &Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_add(9))),
+            &elsewhere,
+        )
+        .unwrap();
+        let page = serde_json::to_vec(&EventsResponse {
+            events: ev.iter().map(hex::encode).collect(),
+            attestations: vec![None; 3],
+            attester_keys: vec![None; 3],
+            seqs: vec![1, 2, 3],
+            signing_context: Some(CTX_EVENT.as_str().to_string()),
+            wrapped_deks: vec![Some(hex::encode(foreign)), Some("not hex".into()), None],
+            custody_withheld: None,
+            complete: true,
+        })
+        .unwrap();
+        let t = FakeTransport::new(vec![page]);
+
+        let m = do_pull(&mut c, &t, "peer-a", false, 10, Some(&custody))
+            .expect("an unopenable DEK degrades custody; it must not fail the cycle");
+        assert_eq!(m["applied_new"], 3, "every event is still admitted");
+        assert_eq!(
+            m["custody_unopenable"], 2,
+            "both unopenable slots are counted, and the slot with no DEK is not: {m}"
+        );
+        assert_eq!(
+            m["custody_withheld"], false,
+            "the peer withheld nothing — that field must keep meaning a peer DECISION"
+        );
+    }
+
+    /// The one summary line a page with unopenable DEKs prints (#536), instead of one line per
+    /// event. Pure. It must name the count and the seq range, say plainly that the sealed
+    /// bodies are unreadable HERE, and point at the cause that makes it systematic.
+    #[test]
+    fn the_unopenable_custody_line_names_the_count_the_range_and_the_likely_cause() {
+        let m = custody_unopenable_message("peer-a", 7, 12, 40);
+        assert!(m.starts_with("pull peer-a: "), "{m}");
+        assert!(
+            m.contains("7 sidecar DEK(s)") && m.contains("seq 12..=40"),
+            "{m}"
+        );
+        assert!(
+            m.contains("WITHOUT custody") && m.contains("unreadable"),
+            "{m}"
+        );
+        assert!(m.contains("unwrap secret"), "{m}");
+        assert!(!m.contains('\n'), "one line: {m}");
+    }
+
     #[test]
     fn the_unwrap_cert_travels_on_every_page_of_a_cycle() {
         let Some(base) = cs() else {

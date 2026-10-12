@@ -250,6 +250,61 @@ def test_a_sweep_whose_blocking_raises_stamps_no_progress(pg_conn, monkeypatch):
     assert _node_sees_progress() is False
 
 
+def test_a_sweep_whose_blocking_raises_falls_back_to_per_chart_checks(pg_conn, monkeypatch,
+                                                                       caplog):
+    # #727 (the R8 crash-loop): a data-triggered error in the sweep's blocking used to raise out
+    # of drain, so `watch` reconnected (or the supervisor restarted it), the backlog was still
+    # over the threshold, and the same sweep failed the same way for ever -- per-chart mode,
+    # which isolates a poison chart, was never reached and no chart was ever checked. Now the
+    # failed sweep is rolled back and logged, the sweep is held, and the round drains chart by
+    # chart: every waiting chart is checked in THIS round.
+    import logging
+
+    from cairn_matcher.pipeline import db
+
+    _state(pg_conn)
+    ids = _backlog(pg_conn, 800)
+
+    def broken(conn, **kw):
+        raise RuntimeError("bad data in the blocking SQL")
+
+    monkeypatch.setattr(db, "generate_candidate_pairs", broken)
+    book = RetryBook(backoff_s=300.0)
+    with caplog.at_level(logging.WARNING, logger="cairn_matcher.worker"):
+        report = drain(pg_conn, Settings(bulk_threshold=3), book, clock=lambda: 0.0,
+                       sleep=lambda s: None)
+    failed = [r for r in caplog.records if "bulk sweep" in r.getMessage()]
+    assert len(failed) == 1 and failed[0].exc_info, "the failure is logged WITH its traceback"
+    assert "bad data in the blocking SQL" in failed[0].getMessage()
+    assert report.sweep_failed and not report.swept
+    assert (report.checked, report.failed) == (len(ids), 0)
+    assert _count(pg_conn, "SELECT count(*) FROM match_pending") == 0
+    assert book.sweep_held(0.0)                     # the next round goes per-chart too ...
+    assert not book.sweep_held(301.0)               # ... until the backoff passes
+
+
+def test_a_held_sweep_is_not_retried_while_the_hold_lasts(pg_conn, monkeypatch):
+    # The hold is what stops each round paying the failing sweep again (a statement timeout costs
+    # the whole timeout each time) before it drains per-chart.
+    from cairn_matcher.pipeline import db
+
+    _state(pg_conn)
+    _backlog(pg_conn, 900)
+    calls = []
+
+    def broken(conn, **kw):
+        calls.append(1)
+        raise RuntimeError("bad data in the blocking SQL")
+
+    monkeypatch.setattr(db, "generate_candidate_pairs", broken)
+    book = RetryBook(backoff_s=300.0)
+    book.sweep_failed(now=0.0)
+    report = drain(pg_conn, Settings(bulk_threshold=3), book, clock=lambda: 10.0,
+                   sleep=lambda s: None)
+    assert calls == [] and not report.swept and not report.sweep_failed
+    assert _count(pg_conn, "SELECT count(*) FROM match_pending") == 0
+
+
 def test_a_sweep_in_which_every_pair_fails_stamps_no_progress(pg_conn, monkeypatch):
     # R4 review N3: a failed pair is not progress. If every propose() raises for a systematic
     # reason (a missing grant after a schema change, a persist timeout), the sweep keeps the failed

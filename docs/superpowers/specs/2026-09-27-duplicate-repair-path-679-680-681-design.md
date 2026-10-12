@@ -944,6 +944,10 @@ whole-branch review's corrections.
   notices stay), but the check stops making progress. Because only completed work stamps progress
   (R15) and quiet time runs from the oldest waiting notice (R17), the status line turns to "behind"
   once a change has waited five minutes with no completed work, however busy the node. Filed as an issue.
+  **Fixed in #727:** `drain` catches a sweep that raises, rolls it back, logs it with its traceback and
+  holds the sweep in the `RetryBook` for `retry_after_s`; that round and the held ones drain per-chart,
+  where a poison chart is isolated. A rollback that itself raises (the connection is gone) still
+  propagates to `watch`'s reconnect, without holding the sweep.
 
 - **Final review (2026-10-05) — what the node says is true in every reachable state.**
   `cairn_chart_check_pending` reads "not yet run" for a chart this node does not hold (no
