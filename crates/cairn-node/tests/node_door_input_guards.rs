@@ -267,8 +267,8 @@ async fn the_role_check_reads_the_one_vocabulary() {
 
 /// The role CHECK is `NOT VALID`, and that word is a startup guarantee.
 ///
-/// `connect_and_load_schema` replays every migration on every connect, so a VALIDATING
-/// `ADD CONSTRAINT` re-scans `node_event` each time. The inline CHECK it replaced never
+/// `connect_and_load_schema` replays every migration on every schema change (ADR-0080; once,
+/// every connect), so a VALIDATING `ADD CONSTRAINT` re-scans `node_event` each time. The inline CHECK it replaced never
 /// re-validated anything after `CREATE TABLE`, so validating here would give the table a property
 /// it never had: one stored row outside today's vocabulary — exactly what a downgrade after a
 /// vocabulary widening leaves behind — makes the statement raise, db/007 abort, and **the node

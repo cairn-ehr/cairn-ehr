@@ -836,9 +836,10 @@ const DB049: &str = include_str!("../../../db/049_safety_projection.sql");
 /// reduce to: the statement raises.
 ///
 /// The residue is SELF-HEALING even if a test is killed between the break and the
-/// restore. `connect_and_load_schema` replays every `db/*.sql` on every connect, and
-/// db/049's own `CREATE OR REPLACE` puts the real function back — so the next DB-gated
-/// test in any suite repairs the database on its way in. The explicit restore below is
+/// restore. Every DB-gated test's `test_serial_guard` clears the schema stamp, so that
+/// test's `connect_and_load_schema` replays every `db/*.sql` (ADR-0080), and db/049's own
+/// `CREATE OR REPLACE` puts the real function back — so the next DB-gated test in any suite
+/// repairs the database on its way in. The explicit restore below is
 /// for the psql-driven SQL mirror (`db/tests/049_…`), which does not replay the schema.
 async fn break_advisory_lookup(c: &tokio_postgres::Client, ddl: &str) {
     c.batch_execute(ddl)

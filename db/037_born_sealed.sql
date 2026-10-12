@@ -232,7 +232,10 @@ $$;
 
 -- Rebuild the shred log from the append-only record on every load (idempotent):
 -- this is "restore replays the shred log before projecting" for the wiped-and-
--- reloaded case.
+-- reloaded case. "Every load" means every schema REPLAY — since ADR-0080 a fresh database
+-- or a schema change, not every connect. Nothing in the product wipes this table (restore
+-- writes it through db/020's shred step; reprojection does not truncate it), so a log wiped
+-- by hand on an unchanged schema is rebuilt by `db::force_schema_replay` + a connect.
 INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)
 SELECT (body ->> 'target_event_id')::uuid, event_id, COALESCE(body ->> 'basis', '(unrecorded)')
 FROM event_log WHERE event_type = 'erasure.shred.asserted'
