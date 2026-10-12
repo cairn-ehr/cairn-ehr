@@ -501,6 +501,21 @@ plain JS, no npm); pane/routing/freshness state machine tested but **not wired**
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
 
+### 2026-10-12 — tech-debt pass (cloud session): #602, #763, #689, #626 (db half)
+
+One branch, one commit per issue. **Strict door:** `submit_event` pins `cairn.remote_apply` off with a function-level
+`SET` (#602 — the bypass was proven end-to-end first); a medication attestation filed under a chart other than its
+thread's is refused there (#689). **Auto-apply** never links while `match_pending` holds a re-check for either chart
+(#763). **Sync door:** db/020's raw `::uuid` casts and db/037's shred-target cast go through `cairn_uuid_or_raise`, so a
+malformed peer id is penned, not a permanent pull freeze (#626; `do_pull`'s generic non-P0001 arm is still open there).
+- **⇒ #726 IS A DESIGN DECISION, NOT A PATCH.** Measured: a NO-OP every-connect replay takes 97 strong locks, ACCESS
+  EXCLUSIVE on 21 tables **including `event_log`** and the core identity tables, plus 34 views. Catalogue guards (the
+  issue's option 1) cannot cover `CREATE OR REPLACE VIEW`. The evidence and a proposed content-hash-gated replay are on
+  the issue (comment of 2026-10-12). Needs a maintainer call, probably an ADR.
+- **⇒ A cloud container can run the FULL DB gate.** PGDG apt is blocked, but conda-forge is not: micromamba →
+  `postgresql=18` → `cargo pgrx init --pg18 <conda pg_config>`; the conda headers need an `xlocale.h` shim
+  (`#include <locale.h>`) passed via both `CFLAGS` and `BINDGEN_EXTRA_CLANG_ARGS`.
+
 ### 2026-10-08/09 — R5b: the possible-duplicate worklist (draft PR #749)
 
 Brainstorm (maintainer: #741 first; #736 worded by status; #743 part 1 in; Review opens the NEWER record; a collapsed
