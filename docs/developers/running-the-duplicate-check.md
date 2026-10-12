@@ -48,8 +48,11 @@ single query that has been timed is the sweep's birth-year-range candidate query
 charts on the development machine, and it varied about twofold between runs; the sweep's other queries
 (the whole-population name grouping, the alias and trust reads) have not been timed on their own.
 Finding one chart's candidates took under a second there since #725. A timeout shorter than a sweep
-query fails every sweep: the worker retries it, nothing is ever cleared (a sweep has no per-chart
-isolation, #727), and the status line turns to "behind".
+query fails every sweep. Since #727 the worker survives that: it logs the failed sweep with its
+traceback (`bulk sweep of N waiting charts failed …`), holds the sweep for the retry backoff (5 minutes
+by default), and checks the backlog chart by chart meanwhile. That is slower than a sweep but makes
+progress, and a chart that fails on its own is held without stopping the rest. A recurring
+`bulk sweep … failed` line in the log means the timeout (or the data in the traceback) needs attention.
 
 ## Running it: `cairn-matcher watch`
 

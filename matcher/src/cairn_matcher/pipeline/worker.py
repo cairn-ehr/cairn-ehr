@@ -147,7 +147,8 @@ def check_chart(conn, patient: str, settings: Settings) -> ChartResult:
 class DrainReport:
     checked: int      # charts whose per-chart check committed
     failed: int       # charts whose check raised (held by the RetryBook, notices kept)
-    swept: bool       # True when a bulk sweep ran first
+    swept: bool       # True when a bulk sweep ran first and completed
+    sweep_failed: bool = False  # True when a bulk sweep raised; the round went per-chart (#727)
 
 
 def run_bulk(conn, settings: Settings, clock=time.monotonic) -> SweepResult:
@@ -217,15 +218,35 @@ def drain(conn, settings: Settings, book: RetryBook, clock=time.monotonic,
     first, skipping charts the RetryBook holds. A chart whose check raises is rolled back, logged
     and held; its notices stay. `clock`/`sleep` are injectable for tests. `check_chart` is looked
     up as a module global on purpose, so tests can substitute it.
+
+    A SWEEP that raises is isolated the same way (#727). Per-pair errors are already contained
+    inside the sweep; what escapes it is a failure of the blocking phase itself (the
+    whole-population candidate SQL, the judged-pairs read), which is data-triggered and recurs on
+    every attempt. Letting it propagate crash-looped the worker: `watch` reconnected (or the
+    supervisor restarted it), the backlog was still over the threshold, and the same sweep failed
+    the same way for ever while no chart was checked. So it is rolled back, logged WITH its
+    traceback (the operator needs to know which statement and why), and the sweep is held for the
+    backoff -- this round and the next ones drain chart by chart, where a poison chart is held on
+    its own. If the rollback itself raises, the connection is gone: that propagates to `watch`'s
+    reconnect WITHOUT holding the sweep, because a lost connection says nothing about the data.
     """
-    swept = False
+    swept = sweep_failed = False
     waiting = queue_db.charts_waiting(conn)
     conn.rollback()
-    if choose_mode(waiting, settings.bulk_threshold) is Mode.SWEEP:
-        result = run_bulk(conn, settings, clock)
-        swept = True
-        log.info("swept a backlog of %d charts: %d pairs, %d errors, %d blocks skipped",
-                 waiting, result.generated, len(result.errors), len(result.skipped_blocks))
+    if choose_mode(waiting, settings.bulk_threshold, book.sweep_held(clock())) is Mode.SWEEP:
+        try:
+            result = run_bulk(conn, settings, clock)
+        except Exception as exc:  # noqa: BLE001 — a failed sweep must not stop the drain
+            conn.rollback()
+            book.sweep_failed(clock())
+            sweep_failed = True
+            log.warning("bulk sweep of %d waiting charts failed (sweep held %.0fs; checking chart "
+                        "by chart instead): %s: %s", waiting, settings.retry_after_s,
+                        type(exc).__name__, exc, exc_info=True)
+        else:
+            swept = True
+            log.info("swept a backlog of %d charts: %d pairs, %d errors, %d blocks skipped",
+                     waiting, result.generated, len(result.errors), len(result.skipped_blocks))
     checked = failed = 0
     while True:
         batch = queue_db.next_charts(conn, settings.batch, book.held(clock()))
@@ -253,4 +274,4 @@ def drain(conn, settings: Settings, book: RetryBook, clock=time.monotonic,
     if waiting == 0:
         queue_db.stamp_drained(conn)       # an empty round still says "last ran HH:MM"
         conn.commit()
-    return DrainReport(checked, failed, swept)
+    return DrainReport(checked, failed, swept, sweep_failed)

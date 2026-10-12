@@ -53,3 +53,20 @@ def test_a_sweep_counts_as_completed_work_unless_every_attempt_failed():
     assert sweep_completed_work(scored=0, failed=0) is True
     assert sweep_completed_work(scored=3, failed=2) is True
     assert sweep_completed_work(scored=0, failed=5) is False
+
+
+def test_a_failed_sweep_is_held_for_the_backoff_then_released():
+    # #727: a sweep whose blocking phase raises would raise identically on every round while the
+    # backlog stays over the threshold. The book holds the SWEEP the way it holds a poison chart,
+    # so the rounds in between drain chart by chart -- where RetryBook isolates any poison.
+    book = RetryBook(backoff_s=300.0)
+    assert book.sweep_held(0.0) is False
+    book.sweep_failed(now=1000.0)
+    assert book.sweep_held(1000.0) is True
+    assert book.sweep_held(1299.9) is True
+    assert book.sweep_held(1300.1) is False
+
+
+def test_a_held_sweep_makes_even_a_big_backlog_per_chart():
+    assert choose_mode(501, 500, sweep_held=True) is Mode.PER_CHART
+    assert choose_mode(501, 500, sweep_held=False) is Mode.SWEEP
