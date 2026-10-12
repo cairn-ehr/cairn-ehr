@@ -977,6 +977,23 @@ DROP FUNCTION IF EXISTS submit_event(bytea, bytea, bytea);
 -- EXECUTE here could shadow that name and take the owner-privileged write into their own temp
 -- table while this door still returned an event id. See the house-rule note on
 -- cairn_node_hlc_merge (db/001, #426) for the mechanism and the demonstration.
+--
+-- `SET cairn.remote_apply = ''` — THIS IS THE STRICT DOOR, and nothing a caller does may make
+-- it lenient (#602). `cairn.remote_apply` = 'on' is the marker that switches the projection
+-- guards (db/018, 023, 031, 033, 041) from REFUSE to CLAMP-AND-FLAG; only the lenient doors
+-- (db/020 apply_remote_event, the owner-only reprojection paths) are meant to raise it. But it
+-- is an unregistered placeholder setting, and PostgreSQL lets ANY role set one — so before
+-- #602 a client holding nothing but cairn_agent could `SET cairn.remote_apply = 'on'` and have
+-- this door admit, as a mere flag, a medication thread re-homed onto another patient. That
+-- broke principle 12 (the floor holds even against a client talking raw SQL).
+-- A function-level SET clause is the unbypassable form: PostgreSQL applies it on entry, so
+-- every guard this call reaches reads the marker OFF whatever the caller set, and restores the
+-- caller's own value on exit, so the clause changes nothing outside this one call. (An
+-- explicit `PERFORM set_config(...)` in the body would instead leave the marker cleared in
+-- the caller's transaction after we return.) Nothing in this body raises the marker: the
+-- late-custody call below must run strict too (tests/late_custody_reaches_the_chart.rs).
+-- Pinned by tests/medication_patient_consistency.rs::
+-- runtime_role_cannot_relax_the_strict_door_by_raising_the_remote_apply_marker.
 CREATE OR REPLACE FUNCTION submit_event(
     p_signed       BYTEA,
     p_attestation  BYTEA DEFAULT NULL,
@@ -986,6 +1003,7 @@ CREATE OR REPLACE FUNCTION submit_event(
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
+SET cairn.remote_apply = ''
 AS $$
 DECLARE
     b              JSONB;

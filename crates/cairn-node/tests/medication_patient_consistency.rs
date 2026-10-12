@@ -235,6 +235,115 @@ async fn local_reassert_under_different_patient_refused() {
     );
 }
 
+/// Issue #602 — the strict door cannot be relaxed from the outside.
+///
+/// `cairn.remote_apply` is the marker that flips the projection guards (db/018, 023, 031,
+/// 033, 041) from REFUSE to CLAMP-AND-FLAG. It is meant to be raised only by the lenient
+/// doors (db/020 `apply_remote_event`, the owner-only reprojection paths). But it is an
+/// unregistered "placeholder" GUC, and PostgreSQL lets ANY role set one — so before #602 a
+/// client holding nothing but `cairn_agent` could `SET cairn.remote_apply = 'on'` and have
+/// `submit_event` admit a wrong-patient re-assert as a mere flag. That breaks principle 12:
+/// the floor must hold even against a client talking raw SQL.
+///
+/// The test plays exactly that client: switch to the runtime role, raise the marker, and
+/// replay the scenario `local_reassert_under_different_patient_refused` proves is refused.
+/// It must still be refused, and the thread must still be patient A's.
+#[tokio::test]
+async fn runtime_role_cannot_relax_the_strict_door_by_raising_the_remote_apply_marker() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient_a = Uuid::now_v7();
+    let patient_b = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient_a, 0).await;
+    common::submit_registration(&c, &sk, &kid, patient_b, 0).await;
+    let med = assert_medication(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient_a,
+        &sample_assert("metoprolol"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Author the wrong-patient re-assert while still the owner: ticking the node HLC is not a
+    // runtime-role privilege, and is not what this test is about. Only the DOOR CALL below is.
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let body = build_assert_body(
+        Uuid::now_v7(),
+        med,
+        patient_b,
+        &sample_assert("metoprolol"),
+        &kid,
+        hlc,
+        None,
+    );
+
+    // Become the hostile client: only the runtime role's privileges, marker raised. A
+    // session-level SET is the widest form (it outlives any one transaction), so a door that
+    // survives this survives the transaction-local `set_config(..., true)` form too.
+    c.batch_execute("SET ROLE cairn_agent; SET cairn.remote_apply = 'on'")
+        .await
+        .unwrap();
+    // Anti-vacuity: prove the marker really IS raised from the client's side. If a future
+    // change made it unsettable here, the refusal below would pass for the wrong reason.
+    let seen: String = c
+        .query_one("SELECT current_setting('cairn.remote_apply', true)", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        seen, "on",
+        "precondition: the client role raised the marker"
+    );
+
+    let r = seal_and_submit(&c, &sk, body).await;
+
+    // Restore the session before asserting, so a failure below cannot leak the role or the
+    // marker into a later test on a pooled connection.
+    c.batch_execute("RESET cairn.remote_apply; RESET ROLE")
+        .await
+        .unwrap();
+
+    assert!(
+        r.is_err(),
+        "a client-raised cairn.remote_apply must NOT turn the strict door's refusal into a flag"
+    );
+    let m = db_msg(&r.unwrap_err());
+    assert!(
+        m.contains("patient"),
+        "the refusal must still be the patient-consistency contract, got: {m}"
+    );
+    let p: String = c
+        .query_one(
+            "SELECT patient_id::text FROM medication_statement WHERE medication_id = $1::text::uuid",
+            &[&med.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        p,
+        patient_a.to_string(),
+        "the standing thread must be unchanged"
+    );
+    // And the lenient arm's side effect must be absent: no conflict flag was written.
+    let flags: i64 = c
+        .query_one("SELECT count(*) FROM medication_patient_conflict_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(flags, 0, "the strict door must refuse, not clamp-and-flag");
+}
+
 #[tokio::test]
 async fn local_cessation_under_different_patient_refused() {
     let Some(base) = cs() else {
