@@ -45,15 +45,19 @@ pub fn page_decision(complete: bool, page_len: usize, frozen: bool) -> PageDecis
     // landed on that same cycle. Stopping means pages 2..N are never REQUESTED, so what is
     // given up is CONTENT CONVERGENCE, not just round trips.
     //
-    // For a transient freeze that is a fair trade: next cycle re-fetches from the same
-    // cursor and gets everything. For a PERSISTENTLY failing event — a non-`P0001` apply
-    // failure that recurs, a constraint the door does not classify as a deliberate refusal —
-    // this node stops receiving anything above roughly one page, indefinitely, where before
-    // it kept converging on content while only the bookmark stalled. The cycle is loud every
-    // time, so it is not silent; but the loud line says "cursor halted", not "you are no
-    // longer receiving clinical content from this peer". Whether the freeze should instead
-    // end the cycle only when it is a LOCAL fault is a design question, tracked separately —
-    // do not re-derive this trade-off from the paragraph above, which is only about cursors.
+    // WHAT A FREEZE CAN STILL BE, and why stopping is now the right trade for all of it
+    // (issue #534, settled by #626). Before #626 any non-`P0001` apply failure froze — so a
+    // PERSISTENTLY failing event (a cast or CHECK on a peer-supplied field) stopped this node
+    // receiving anything above roughly one page from that peer, indefinitely. Since #626 the
+    // clinical puller PENS every verifiable event whose failure is not this node's own trouble
+    // (`apply_failure_is_local` answers `false`), exactly like a floor refusal: the slot is
+    // pinned on the re-offer floor, the cursor moves on, and paging continues. What still
+    // freezes is (a) a LOCAL fault — a lock storm, a dropped connection, a full disk, a
+    // revoked grant — whose remedy is on this node and where every later event would meet the
+    // same fault, so hammering the peer for more pages buys nothing; and (b) a pen that
+    // refused the write (quota, or the same local fault), where continuing would only pile up
+    // more events that cannot be held. Both are exactly the case #534's option 2 asked to
+    // reserve the stop for. The cycle is loud either way (#270).
     if frozen {
         return PageDecision::Done;
     }

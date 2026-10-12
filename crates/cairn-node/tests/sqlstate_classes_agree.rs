@@ -1,13 +1,14 @@
 //! #621 — two planes, one list of SQLSTATE classes.
 //!
 //! `cairn-node`'s `deterministic_apply_failure` (the node puller) and `cairn-sync`'s
-//! `apply_failure_is_local` (the clinical requeue) answer the same question in opposite polarity:
+//! `apply_failure_is_local` (the clinical pull and requeue) answer the same question in opposite polarity:
 //! *is this failure this node's own trouble, or the event's?* They must claim the same classes,
 //! because the answer is a property of PostgreSQL, not of a plane.
 //!
 //! They are two functions today for one boring reason — `cairn-sync`'s lives inside its binary
-//! crate's `main.rs`, where `cairn-node` cannot import it. Merging them into one home is part of
-//! #626, which brings the clinical PULL arm onto the same classifier. Until then this guard is
+//! crate's `main.rs`, where `cairn-node` cannot import it, and no crate both depend on is a fitting
+//! home. #626 brought the clinical PULL arm onto the same classifier, which makes the two lists
+//! matter more, not less; merging them is #769. Until then this guard is
 //! what stops the copy drifting: a class added to one list and not the other means the two planes
 //! disagree about whether a deadlock is a peer's fault.
 //!
@@ -98,7 +99,7 @@ fn the_node_and_clinical_planes_claim_the_same_local_sqlstates() {
         "the two planes disagree about which SQLSTATE classes are THIS NODE's own trouble. \
          Whichever list was edited, the other plane now treats the same failure differently: on \
          the node plane a wrong answer freezes a peer's cursor forever (#621), on the clinical \
-         plane it halts a requeue run at the same row every time (#480). Change both, or merge \
-         them (#626)."
+         plane it pens or freezes a peer's event differently and halts a requeue run at the same \
+         row every time (#626, #480). Change both, or merge them (#769)."
     );
 }

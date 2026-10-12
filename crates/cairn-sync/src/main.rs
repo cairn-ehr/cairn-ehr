@@ -745,13 +745,16 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// Whose fault was a failed apply — **this node's machine, or the bytes**? **Pure.**
 ///
 /// [`refusal_is_deliberate`] answers a different question (*was this a verdict about the
-/// event*), and the `false` half of its answer is not one thing. Two callers need it split,
-/// and they need it for opposite reasons (PR #493 review):
+/// event*), and the `false` half of its answer is not one thing. Two callers need it split
+/// (PR #493 review; #626):
 ///
-/// * `do_pull`'s freeze arm must add the `local_fault` class when the apply failed on THIS
-///   node's own database. Without it a lock storm reaches `bet_a.py` as `integrity` alone —
-///   *the peer answered and its DATA is the problem* — which is issue #489 part 1's own
-///   sentence, one match arm above the pen write it was filed against;
+/// * `do_pull` must decide between FREEZE and PEN for a verifiable event the door failed on
+///   without a verdict (#626). A local failure freezes — the remedy is on this node and the
+///   link resumes intact once it is applied — and is tagged `local_fault`, so a lock storm
+///   does not reach `bet_a.py` as `integrity` alone (*the peer answered and its DATA is the
+///   problem*, issue #489 part 1). Anything else is penned: before #626 it froze too, and a
+///   deterministic raise on the bytes (a cast, a CHECK) froze that peer's clinical stream
+///   PERMANENTLY, with nothing penned and no `ack` remedy;
 /// * `do_requeue` must INTERRUPT for a local fault (the operator has something to fix, and
 ///   every row behind it would meet the same fault anyway) but ANNOTATE-AND-CONTINUE for a
 ///   byte-attributable one. Halting there wedges the whole recovery command behind one row
@@ -767,7 +770,9 @@ fn refusal_is_deliberate(sqlstate: Option<&str>) -> bool {
 /// an unrecognised code annotates and the sweep keeps going. The asymmetry is deliberate
 /// and is the opposite of `cairn-node`'s `pull_failure_class`: a wrong `true` HALTS a run
 /// that had work left to do, while a wrong `false` writes one legible, SQLSTATE-carrying
-/// line onto one row. The cheaper mistake is the one that keeps moving.
+/// line onto one row (requeue) or pens one valid event — loud, durably held, re-offered
+/// every sweep and released the moment it applies (pull). The cheaper mistake is the one
+/// that keeps moving.
 ///
 /// `XX000` (internal_error) is deliberately NOT claimed as local: a pgrx function panicking on
 /// adversarial bytes raises it, and that is precisely the case that must not be able to
@@ -820,7 +825,8 @@ fn apply_failure_is_local(sqlstate: Option<&str>) -> bool {
 /// holding something a peer offered it, so every one of them is loud:
 ///
 /// * `unverifiable` — bytes penned that cannot verify (existing behaviour);
-/// * `refused`      — verifiable bytes the floor deliberately refused (#267);
+/// * `refused`      — verifiable bytes the floor deliberately refused (#267), or failed
+///   on deterministically without a verdict (#626) — both penned;
 /// * `frozen`       — the cursor halted, so events behind it are not being read (#270);
 /// * `pen_failed`   — a refusal we could not even record durably.
 ///
@@ -1059,10 +1065,10 @@ fn loud_pull_message(
     let freeze = match (frozen_at, pen_refused.is_some()) {
         (Some(at), false) => format!(
             " The seq cursor is FROZEN at {at}: events after that slot are NOT being read \
-             from this peer and the backlog grows every cycle. This is a transient-fault \
-             hold (a deliberate floor refusal is penned instead), so it clears by itself \
-             once the underlying fault does — if it does not, the stderr line above names \
-             the failure."
+             from this peer and the backlog grows every cycle. This is a hold on a fault \
+             in THIS node (a floor refusal, or a failure on the event's own bytes, is \
+             penned instead), so it clears by itself once that fault does — if it does \
+             not, the stderr line above names the failure."
         ),
         (Some(at), true) => format!(
             " The seq cursor is FROZEN at {at}: events after that slot are NOT being read \
@@ -2890,6 +2896,14 @@ enum RefusalClass {
     Unverifiable,
     /// The bytes verify; this node's floor deliberately refused them.
     DoorRefused,
+    /// The bytes verify, and the door failed on them WITHOUT reaching a verdict — a
+    /// non-`P0001` SQLSTATE that is not this node's own trouble (`apply_failure_is_local`
+    /// answers `false`): a cast or CHECK on a peer-supplied field, an `XX000` out of a pgrx
+    /// function fed adversarial bytes. It recurs identically on every retry, so freezing on
+    /// it would wedge the peer's whole clinical stream for ever (issue #626). Tallied with
+    /// `DoorRefused` — the operator's action is the same (change this node, or ack) — but
+    /// worded differently, because nothing DECIDED against these bytes.
+    NoVerdict,
 }
 
 /// Persist an unverifiable pulled event into `sync_quarantine` (db/021, issue
@@ -4098,10 +4112,47 @@ fn apply_page(
                                 format!("refused by this node's floor: {e}"),
                                 RefusalClass::DoorRefused,
                             )),
-                            // Verifiable, but the failure was NOT a door verdict:
-                            // transient infrastructure trouble, where the same
-                            // bytes may well apply next cycle. Freeze and retry —
-                            // penning would record a refusal that never happened.
+                            // Verifiable, no verdict, and NOT this node's own trouble
+                            // (issue #626): a door that fails on these BYTES — a cast
+                            // or CHECK on a peer-supplied field, an `XX000` from a pgrx
+                            // function — fails identically on every retry. Freezing here
+                            // was permanent: the peer's whole clinical stream stopped
+                            // behind one event, nothing was penned, and there was no
+                            // `ack` remedy. So it is penned exactly like a refusal —
+                            // verbatim, slot pinned, cycle loud — and the cursor moves on.
+                            //
+                            // WHY AN UNKNOWN CODE LANDS HERE rather than in the freeze
+                            // below: `apply_failure_is_local` claims the local classes
+                            // explicitly and answers `false` for the rest, and the two
+                            // mistakes are not equally expensive. A wrong pen holds a
+                            // valid event loud and durable, re-offered every sweep and
+                            // released the moment it applies; a wrong freeze is the
+                            // permanent wedge. The node plane draws the same line with
+                            // the same list (`deterministic_apply_failure`, #621;
+                            // `sqlstate_classes_agree.rs` keeps the two in step).
+                            //
+                            // It also keeps CONTENT converging (issue #534): a freeze
+                            // ends the paging loop (`page_decision`), so a persistent
+                            // non-verdict failure used to stop this node receiving
+                            // anything above roughly one page from this peer.
+                            Ok(_) if !apply_failure_is_local(e.sqlstate.as_deref()) => Some((
+                                (signed_bytes, att, akey),
+                                format!(
+                                    "the door did not reach a verdict, and will fail on \
+                                     these bytes identically every time: {}",
+                                    // The database's vocabulary, SQLSTATE included: this
+                                    // is not a door verdict, so `{e}` (the door's
+                                    // vocabulary) would drop the whole diagnosis.
+                                    e.operator_text()
+                                ),
+                                RefusalClass::NoVerdict,
+                            )),
+                            // Verifiable, no verdict, and the failure IS this node's own
+                            // trouble (`apply_failure_is_local`): a lock storm, a dropped
+                            // connection, a full disk, a revoked grant. Freeze and retry —
+                            // penning would record a refusal that never happened, and the
+                            // remedy is local and available (fix the node, and the link
+                            // resumes with every event intact).
                             Ok(_) => {
                                 frozen = true;
                                 // PR #493 review. `frozen` alone made this cycle
@@ -4117,6 +4168,10 @@ fn apply_page(
                                 // `postgres::Error`; here the SQLSTATE is already in hand
                                 // and says strictly more, because the non-`P0001` space is
                                 // not all local — see `apply_failure_is_local`.
+                                // Since #626 only a LOCAL failure reaches this arm (the
+                                // guard above pens the rest), so this is now always true;
+                                // it is still asked, not assumed, so the two can never
+                                // disagree if the guard above is ever reordered.
                                 local_apply_fault |= apply_failure_is_local(e.sqlstate.as_deref());
                                 eprintln!(
                                     "pull {peer_name}: HALTING seq cursor at {max_seq} — a valid \
@@ -4170,6 +4225,12 @@ fn apply_page(
                         RefusalClass::DoorRefused => {
                             refused_verifiable += 1;
                             "floor-refused (but verifiable) event"
+                        }
+                        // Same tally as a refusal (see `RefusalClass::NoVerdict`), its
+                        // own words: the floor decided nothing about these bytes.
+                        RefusalClass::NoVerdict => {
+                            refused_verifiable += 1;
+                            "verifiable event the door failed on without a verdict"
                         }
                     };
                     if pin.is_none() {
@@ -8952,6 +9013,146 @@ mod quarantine_tests {
             "the freeze is an integrity condition: {boxed}"
         );
         assert_eq!(t.requests().len(), 1, "the loop must stop at the freeze");
+    }
+
+    /// A validly-signed note whose plaintext twin carries a `U+0000`. The bytes VERIFY, but
+    /// `jsonb` cannot represent a NUL, so `cairn_body` raises `22P05` at the top of
+    /// `apply_remote_event`, before any guard (issue #628) — every time, on every node of
+    /// this build. That makes it the one GENUINE deterministic non-`P0001` failure the door
+    /// still has, so the #626 tests below provoke the arm with a real event rather than an
+    /// overridden door: an override would fail EVERY event in the page, and what these
+    /// tests must show is that the events AROUND the poison one keep landing.
+    fn nul_note(sk: &SigningKey, kid: &str, wall: i64) -> Vec<u8> {
+        let body = EventBody {
+            event_id: uuid::Uuid::now_v7().to_string(),
+            patient_id: uuid::Uuid::now_v7().to_string(),
+            event_type: "note.added".into(),
+            schema_version: "note/1".into(),
+            hlc: Hlc {
+                wall,
+                counter: 0,
+                node_origin: "peer-src".into(),
+            },
+            t_effective: None,
+            signer_key_id: kid.into(),
+            contributors: serde_json::json!([{"actor_id": kid, "role": "recorded"}]),
+            payload: serde_json::json!({"text": "replicated note"}),
+            attachments: vec![],
+            plaintext_twin: Some("Progress note: a stray \u{0} byte".into()),
+            clock_grade: ClockGrade::SelfAsserted,
+            safety: None,
+        };
+        let signed = sign(&body, sk).unwrap().signed_bytes;
+        assert!(
+            verify_self_described(&signed).is_ok(),
+            "the fixture is only meaningful if the bytes VERIFY — an unverifiable event takes \
+             a different arm entirely"
+        );
+        signed
+    }
+
+    /// Issue #626, the pull half. A verifiable event the door fails on WITHOUT a verdict, for
+    /// a reason that is not this node's own trouble, recurs identically every cycle — so the
+    /// old freeze was permanent: the peer's whole clinical stream stopped behind it, nothing
+    /// was penned, and there was no `ack` remedy. It must be PENNED instead, like a refusal:
+    /// held verbatim, slot pinned on the re-offer floor, the cycle loud, and the cursor free
+    /// to move past it.
+    ///
+    /// Issue #534 rides on the same assertions: before #626 that freeze also ended the paging
+    /// loop, so nothing above the first page arrived from this peer again. Here the poison
+    /// event is on page 1 and the test requires page 2 to be requested AND applied.
+    #[test]
+    fn a_deterministic_no_verdict_failure_is_penned_and_paging_continues() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let poison = nul_note(&sk, &kid, WALL_2026);
+        let after = peer_note(&sk, &kid, WALL_2026 + 1);
+        let page_two = peer_note(&sk, &kid, WALL_2026 + 2);
+        let t = FakeTransport::new(vec![
+            page_json(&[&poison, &after], &[1, 2], false),
+            page_json(&[&page_two], &[3], true),
+        ]);
+
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 2, None)
+            .expect_err("a penned event keeps the cycle loud (#270)");
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
+        let m = ie.metrics.clone();
+
+        assert_eq!(
+            t.requests().len(),
+            2,
+            "a pen is not a freeze: paging must continue past it (#534)"
+        );
+        assert_eq!(
+            m["watermark_frozen"], false,
+            "a failure on the event's own bytes recurs every cycle — freezing on it is the \
+             permanent wedge #626 was filed about"
+        );
+        assert_eq!(
+            m["applied_new"], 2,
+            "the events around the poison one — on its own page and the next — still land"
+        );
+        assert_eq!(m["refused_verifiable"], 1, "penned, and counted as such");
+        assert_eq!(m["skipped_unverifiable"], 0, "the bytes verify");
+
+        let rows = quarantine_rows(&mut c);
+        assert_eq!(
+            rows.len(),
+            1,
+            "exactly the poison event is penned: {rows:?}"
+        );
+        assert!(
+            rows[0].reason.contains("did not reach a verdict") && rows[0].reason.contains("22P05"),
+            "the pen row must say no verdict was reached AND carry the SQLSTATE that is the \
+             whole diagnosis, got: {}",
+            rows[0].reason
+        );
+        assert_eq!(
+            cursor(&mut c, "peer-a"),
+            3,
+            "the cursor advances over the penned slot to the end of what was offered"
+        );
+        assert_eq!(
+            floor(&mut c, "peer-a"),
+            Some(1),
+            "the penned slot is held on the re-offer floor, so the event is offered again"
+        );
+    }
+
+    /// The other side of #626's line: a LOCAL failure still freezes, and still ends the page
+    /// loop — the remedy is on this node, and every later event would meet the same fault.
+    /// `freezing_event`'s override raises `40001`; this pins that the new pen arm did not
+    /// swallow it (it must not be penned: no verdict, and nothing wrong with the bytes).
+    #[test]
+    fn a_local_failure_still_freezes_and_pens_nothing() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let t = FakeTransport::new(vec![page_json(
+            &[&freezing_event(&mut c, &sk, &kid)],
+            &[1],
+            true,
+        )]);
+        let boxed = do_pull(&mut c, &t, "peer-a", false, 2, None)
+            .expect_err("a frozen cycle fails loudly (#270)");
+        let ie = boxed
+            .downcast_ref::<PullIntegrityError>()
+            .unwrap_or_else(|| panic!("pull must fail as an INTEGRITY error: {boxed}"));
+        assert_eq!(ie.metrics["watermark_frozen"], true);
+        assert_eq!(ie.metrics["refused_verifiable"], 0);
+        assert!(
+            quarantine_rows(&mut c).is_empty(),
+            "a lock storm on this node is not the event's fault"
+        );
     }
 
     /// A full sweep's page 2 continues from the last seq RECEIVED, not from the checkpoint.
