@@ -184,12 +184,31 @@ async fn sign_attest_submit(
     human_sk: &SigningKey,
     human_kid: &str,
 ) -> Result<u64, tokio_postgres::Error> {
+    let w = sealed_attested_wire(body, human_sk, human_kid);
+    c.execute(
+        "SELECT submit_event($1, $2, $3, $4)",
+        &[&w.signed, &w.token, &w.attester_key, &w.dek.as_slice()],
+    )
+    .await
+}
+
+/// The four arguments both doors take for a sealed, human-attested event.
+struct AttestedWire {
+    signed: Vec<u8>,
+    token: Vec<u8>,
+    attester_key: Vec<u8>,
+    dek: Vec<u8>,
+}
+
+/// Seal, sign and self-attest `body`, returning the wire arguments WITHOUT submitting them,
+/// so a test can hand the SAME bytes to either door (`submit_event` or `apply_remote_event`).
+fn sealed_attested_wire(body: &EventBody, human_sk: &SigningKey, human_kid: &str) -> AttestedWire {
     // ADR-0052: the attestation event is clinical.* and must be born-sealed. Seal the
     // clear body (payload + twin under a fresh per-event DEK, outer stub twin), sign the
     // SEALED form (so the content_address the token binds to covers the ciphertext and
-    // survives a shred), and submit through the 4-arg strict door carrying the human token
-    // AND the DEK. The node unwrap key was registered in setup(), so the door wraps the
-    // DEK into custody. `body` is borrowed and reused by some callers, so seal a clone.
+    // survives a shred); the doors take the human token AND the DEK. The node unwrap key
+    // was registered in setup(), so the door wraps the DEK into custody. `body` is
+    // borrowed and reused by some callers, so seal a clone.
     let mut sealed = body.clone();
     let twin = sealed
         .plaintext_twin
@@ -202,18 +221,12 @@ async fn sign_attest_submit(
     sealed.plaintext_twin = Some(cairn_event::seal::seal_stub_twin(&sealed.event_type));
     let signed = sign(&sealed, human_sk).unwrap();
     let ca = event_address(&signed.signed_bytes);
-    let token = sign_attestation(&ca, human_kid, "attested", human_sk).unwrap();
-    let vk_h = human_sk.verifying_key().to_bytes().to_vec();
-    c.execute(
-        "SELECT submit_event($1, $2, $3, $4)",
-        &[
-            &signed.signed_bytes,
-            &token,
-            &vk_h,
-            &dek.as_bytes().as_slice(),
-        ],
-    )
-    .await
+    AttestedWire {
+        token: sign_attestation(&ca, human_kid, "attested", human_sk).unwrap(),
+        attester_key: human_sk.verifying_key().to_bytes().to_vec(),
+        dek: dek.as_bytes().to_vec(),
+        signed: signed.signed_bytes,
+    }
 }
 
 /// A syntactically-valid hex string for `reviewed_commitment` in tests that are NOT
@@ -1232,6 +1245,142 @@ async fn orphan_attestation_renders_nothing_until_thread_arrives() {
         n, 0,
         "an orphan attestation's thread renders nothing in the group rollup until it arrives"
     );
+}
+
+/// Mint two registered charts and one medication thread living on the FIRST. Returns
+/// `(thread_chart, other_chart, medication_id)` — the arrangement both #689 tests need.
+async fn thread_on_one_of_two_charts(
+    c: &mut Client,
+    sk_d: &SigningKey,
+    kid_d: &str,
+) -> (Uuid, Uuid, Uuid) {
+    let thread_chart = Uuid::now_v7();
+    let other_chart = Uuid::now_v7();
+    common::submit_registration(c, sk_d, kid_d, thread_chart, 0).await;
+    common::submit_registration(c, sk_d, kid_d, other_chart, 0).await;
+    let medication_id = assert_medication(
+        c,
+        sk_d,
+        kid_d,
+        "test-node",
+        thread_chart,
+        &sample_assert("metoprolol"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    (thread_chart, other_chart, medication_id)
+}
+
+/// The attestation body for `medication_id`'s current commitment, but filed under `chart`.
+async fn attestation_filed_under(
+    c: &Client,
+    chart: Uuid,
+    medication_id: Uuid,
+    kid_h: &str,
+) -> EventBody {
+    let commitment = thread_commitment(c, medication_id).await.unwrap();
+    let hlc = db::next_hlc(c, "test-node").await.unwrap();
+    let payload = serde_json::json!({
+        "medication_id": medication_id.to_string(),
+        "reviewed_commitment": hex::encode(&commitment),
+        "reviewed_count": 1,
+    });
+    build_attestation_body(Uuid::now_v7(), chart, payload, kid_h, hlc)
+}
+
+/// #689 — at the LOCAL door, a clinician's vouch for a thread must be filed under the chart
+/// that thread lives on. Before the fix the floor checked only that `patient_id` was a uuid,
+/// and the projection stored the envelope's chart, so an attestation of chart A's thread
+/// filed under chart B was admitted: a signed, responsibility-bearing vouch recorded against
+/// the wrong patient. Since ADR-0076's combined read puts a linked chart's threads on another
+/// chart's screen, that is one wrong argument away in any client. The refusal must name both
+/// charts so the caller can see which it got wrong, and nothing may land.
+#[tokio::test]
+async fn local_attestation_filed_under_another_chart_is_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let (thread_chart, other_chart, medication_id) =
+        thread_on_one_of_two_charts(&mut c, &sk_d, &kid_d).await;
+
+    let body = attestation_filed_under(&c, other_chart, medication_id, &kid_h).await;
+    let err = sign_attest_submit(&c, &body, &sk_h, &kid_h)
+        .await
+        .expect_err(
+            "an attestation filed under a chart its thread does not live on must be refused",
+        );
+    let db_err = err
+        .as_db_error()
+        .expect("a floor refusal, not a transport error");
+    // P0001: a deliberate floor refusal, which every caller classifies as "fix the request",
+    // never "retry" (ADR-0074).
+    assert_eq!(db_err.code().code(), "P0001", "got: {}", db_err.message());
+    let m = db_err.message();
+    assert!(
+        m.contains(&thread_chart.to_string()) && m.contains(&other_chart.to_string()),
+        "the refusal must name both the thread's chart and the chart it was filed under, got: {m}"
+    );
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 0, "the refused attestation never landed");
+
+    // Control: the SAME vouch filed under the thread's own chart is admitted, so the refusal
+    // above is about the chart and nothing else.
+    let good = attestation_filed_under(&c, thread_chart, medication_id, &kid_h).await;
+    sign_attest_submit(&c, &good, &sk_h, &kid_h)
+        .await
+        .expect("an attestation filed under the thread's own chart is accepted");
+}
+
+/// #689, the other door. A PEER has already admitted the event, so refusing it here would
+/// fork the event set and freeze this node's pull at it (ADR-0056). Which chart a thread
+/// lives on is node-local knowledge — it depends on what has synced so far — so this check
+/// belongs to the strict door alone, as db/031's #192 guard and db/033's cross-patient
+/// guard do. The remote door admits it. Unlike those two, nothing yet FLAGS the admitted
+/// misfiling (they write a conflict flag / feed a cross-patient view) — that is #768.
+#[tokio::test]
+async fn remote_attestation_filed_under_another_chart_is_admitted_not_refused() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let (_thread_chart, other_chart, medication_id) =
+        thread_on_one_of_two_charts(&mut c, &sk_d, &kid_d).await;
+
+    let body = attestation_filed_under(&c, other_chart, medication_id, &kid_h).await;
+    let w = sealed_attested_wire(&body, &sk_h, &kid_h);
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3, $4)",
+        &[&w.signed, &w.token, &w.attester_key, &w.dek.as_slice()],
+    )
+    .await
+    .expect("the sync door must admit a peer's verifiable event, never fork on node-local state");
+
+    let n: i64 = c
+        .query_one(
+            "SELECT count(*) FROM event_log WHERE event_type = 'clinical.medication-attestation.asserted'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(n, 1, "the peer's attestation is in the log");
 }
 
 // ---------------------------------------------------------------------------

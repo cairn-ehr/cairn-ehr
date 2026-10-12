@@ -165,9 +165,10 @@ async fn dispatcher_routes_patient_amended_to_patient_chart() {
 /// (`patient.amended` + `note.added` from db/005, `identity.registration.asserted` from
 /// db/047 — #345 swapped the retired `patient.created` for the registration act)
 /// (modeled on twin_registry.rs's steady_state_replay_leaves_registry_rows_untouched).
-/// connect_and_load_schema replays db/005's registration INSERT on every connect; without
-/// the `WHERE ... IS DISTINCT FROM` guard, an unconditional DO UPDATE writes a new row
-/// version (dead tuple + validate-trigger fire) for all three rows on EVERY connect. Pin
+/// connect_and_load_schema replays db/005's registration INSERT on every replay (once every
+/// connect; since ADR-0080, every schema change); without the `WHERE ... IS DISTINCT FROM`
+/// guard, an unconditional DO UPDATE writes a new row version (dead tuple + validate-trigger
+/// fire) for all three rows on EVERY replay. Pin
 /// that via xmin (the row version's inserting/updating txid), which only changes if the
 /// row is actually rewritten.
 #[tokio::test]
@@ -196,6 +197,10 @@ async fn steady_state_replay_leaves_projection_rows_untouched() {
         "expected 3 registered patient_chart_apply rows (patient.amended, note.added, \
          identity.registration.asserted)"
     );
+    // FORCE the second replay: since ADR-0080 an unchanged schema is not replayed, so without
+    // this the xmin comparison below would pass vacuously. A replay runs on every real schema
+    // change, which is when this guard matters.
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
 
     // Second connect replays over already-converged rows: no write may occur.
@@ -452,6 +457,8 @@ async fn replay_respects_eligibility_seam() {
         "an ineligible event must confer no projection effect"
     );
     // Restore the real predicate (schema replay redefines it).
+    // A replay only runs on a schema change since ADR-0080; the stubbed predicate IS one.
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
     let c2 = db::connect_and_load_schema(&base).await.unwrap();
     c2.query(

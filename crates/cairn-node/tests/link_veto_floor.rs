@@ -603,7 +603,8 @@ async fn an_unvouched_token_is_not_a_link_attestation() {
     // deferred_admission.rs does for patient.amended: remove BOTH things the migration
     // provides. Removing only the class row produces a registered-but-unclassified state no
     // real node can reach, and the AFTER-INSERT dispatcher would still fire. All three rows
-    // are restored by the next connect's migration replay, so this is self-healing.
+    // are restored by the next migration replay — the forced one below, or the next test's
+    // (`test_serial_guard` clears the stamp, #726) — so this is self-healing.
     for sql in [
         "DELETE FROM cairn_projection_apply WHERE event_type = 'identity.link.asserted'",
         "DELETE FROM cairn_event_twin_check WHERE event_type = 'identity.link.asserted'",
@@ -627,6 +628,9 @@ async fn an_unvouched_token_is_not_a_link_attestation() {
 
     // A fresh connect replays the migrations (restoring all three rows), re-adjudicates, and
     // projects what it promoted.
+    // The node gains the code (an upgrade, i.e. a different schema hash): the reconnect
+    // replays only because the schema changed (#726, ADR-0080).
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
     let c2 = db::connect_and_load_schema(&base).await.unwrap();
 

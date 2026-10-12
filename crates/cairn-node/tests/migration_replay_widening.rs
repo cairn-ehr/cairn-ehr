@@ -56,6 +56,9 @@ async fn replayed_schema_restores_widened_columns_on_a_pre_widening_table() {
         .await
         .unwrap();
     }
+    // The pre-widening table is an OLDER schema than this binary's, so the hash differs and the
+    // reconnect replays (ADR-0080); announce that difference here.
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
 
     // Reconnect = replay every migration, exactly what a node does on startup.

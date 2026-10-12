@@ -501,6 +501,25 @@ plain JS, no npm); pane/routing/freshness state machine tested but **not wired**
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
 
+### 2026-10-12 — tech-debt pass (cloud session): #602, #763, #689, #626 (db half), #726
+
+One branch, one commit per issue. **Strict door:** `submit_event` pins `cairn.remote_apply` off with a function-level
+`SET` (#602 — the bypass was proven end-to-end first); a medication attestation filed under a chart other than its
+thread's is refused there (#689). **Auto-apply** never links while `match_pending` holds a re-check for either chart
+(#763). **Sync door:** db/020's raw `::uuid` casts and db/037's shred-target cast go through `cairn_uuid_or_raise`, so a
+malformed peer id is penned, not a permanent pull freeze (#626; `do_pull`'s generic non-P0001 arm is still open there).
+- **⇒ #726: A CONNECT REPLAYS THE SCHEMA ONLY WHEN IT CHANGED ([ADR-0080](spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md)).**
+  Measured first: a no-op every-connect replay took 97 strong locks (ACCESS EXCLUSIVE on `event_log`, the identity tables
+  and 34 views). Maintainer's rule: the matcher reads committed data and must never block anything, so the fix is in the
+  loader. `node_schema` now records loader + a sha2-256 of the exact file texts (db/058); a matching connect skips the
+  replay. **Do not "simplify" the gate to the generation number** (strands in-place fixes) **or drop the loader check**
+  (cairn-sync's subset stamp would vouch for files it never replayed). `test_serial_guard` clears the stamp so every DB
+  test still starts from a full replay; a test reconnecting within itself to repair the schema calls
+  `db::force_schema_replay`. Pinned by `tests/schema_replay_gate.rs` (red with the gate disabled: 55P03).
+- **⇒ A cloud container can run the FULL DB gate.** PGDG apt is blocked, but conda-forge is not: micromamba →
+  `postgresql=18` → `cargo pgrx init --pg18 <conda pg_config>`; the conda headers need an `xlocale.h` shim
+  (`#include <locale.h>`) passed via both `CFLAGS` and `BINDGEN_EXTRA_CLANG_ARGS`.
+
 ### 2026-10-08/09 — R5b: the possible-duplicate worklist (draft PR #749)
 
 Brainstorm (maintainer: #741 first; #736 worded by status; #743 part 1 in; Review opens the NEWER record; a collapsed

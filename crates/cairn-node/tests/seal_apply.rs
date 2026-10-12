@@ -867,7 +867,9 @@ async fn schema_reload_rebuilds_the_shred_log() {
     assert_eq!(wiped, 0, "the wipe removed the row");
 
     // Reload the schema — db/037's rebuild-from-tombstones INSERT SELECT re-derives
-    // erasure_shred_log purely from event_log's tombstone row.
+    // erasure_shred_log purely from event_log's tombstone row. Since ADR-0080 the rebuild runs
+    // on every REPLAY (a fresh database, an upgrade), not every connect, so ask for one.
+    db::force_schema_replay(&c).await.unwrap();
     let c2 = db::connect_and_load_schema(&base).await.unwrap();
     let (logged_shred_id, basis): (String, String) = {
         let row = c2

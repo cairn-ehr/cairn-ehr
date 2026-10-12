@@ -131,7 +131,13 @@ BEGIN
         RAISE EXCEPTION 'apply_remote_event: event body could not be parsed after verify';
     END IF;
 
-    v_event_id := (b ->> 'event_id')::uuid;
+    -- #626: through cairn_uuid_or_raise (db/001), never a raw `::uuid`. EventBody's uuid fields
+    -- are plain strings, so VERIFIED bytes can still carry a non-uuid here (a misbehaving
+    -- trusted peer, cross-version skew). A raw cast fails 22P02, which cairn-sync's puller reads
+    -- as transient and freezes that peer's cursor on, forever: the cast fails identically every
+    -- cycle. The helper's P0001 is a deliberate refusal, which the puller pens and moves past.
+    -- Same grammar as the cast (pg_input_is_valid), so no event that applied before is refused.
+    v_event_id := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'apply_remote_event');
     v_type     := b ->> 'event_type';
     -- content_address = sha256 multihash of the signed wire bytes, identical to
     -- event_address() in cairn-event and the db/001 CHECK.
@@ -369,16 +375,12 @@ BEGIN
     -- before db/041, so there is nothing upstream of step 8 to regress either.
     --
     -- The one other WRITER is worth naming too: `cairn_reproject` (db/039) raises this
-    -- same marker for its whole heal/rebuild run and never clears it — before this
-    -- change that only ever relaxed projection guards during a heal. Now it also
-    -- relaxes this door's validation tier for anything that runs inside the SAME
-    -- transaction as a reproject call (e.g. `BEGIN; SELECT cairn_reproject(...);
-    -- SELECT submit_event(<event with an unregistered coding system>); COMMIT;` would
-    -- be admitted). `cairn_reproject` is owner-only (REVOKE ... FROM PUBLIC in db/039),
-    -- so this is not a runtime-role bypass — an operator with EXECUTE on it already has
-    -- the standing to load arbitrary schema — but it is a real widening of what that
-    -- marker now means, so a future reader extending either function should know the
-    -- two are now coupled.
+    -- same marker for its whole heal/rebuild run and never clears it. That once also
+    -- relaxed submit_event for anything later in the SAME transaction (`BEGIN; SELECT
+    -- cairn_reproject(...); SELECT submit_event(<unregistered coding>); COMMIT;` was
+    -- admitted), and — the wider hole — any client could raise the marker itself. Since
+    -- #602 submit_event pins the marker off with a function-level SET, so neither reaches
+    -- the strict door: the marker relaxes only the code that raised it.
     --
     -- Cleared once all three PHASES that read the 'on' window have run: step 8's per-type
     -- check_fns (immediately below), this INSERT's AFTER-ROW projection triggers, AND (since
@@ -386,8 +388,8 @@ BEGIN
     -- not functions — the reader functions themselves are named above.) The clear now sits
     -- AFTER that call, not immediately after the INSERT as it once did, so everything from
     -- there on — the event_deferred marker, the attachment learner, shred execution, the HLC
-    -- merge — runs with the marker OFF. A later submit_event in the same transaction (outside
-    -- a reproject) therefore still sees its veto, unchanged.
+    -- merge — runs with the marker OFF. (A later submit_event in the same transaction sees its
+    -- veto regardless: it pins the marker off itself, #602.)
     PERFORM set_config('cairn.remote_apply', 'on', true);
 
     -- 8. Plaintext twin + per-type structural floor, via the SAME cairn_event_twin hook
@@ -444,7 +446,9 @@ BEGIN
          signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed,
          clock_grade, safety)
     VALUES (
-        v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
+        -- #626: as event_id above — a deliberate P0001, never a 22P02 that freezes the pull.
+        v_event_id, cairn_uuid_or_raise('patient_id', b ->> 'patient_id', 'apply_remote_event'),
+        v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
         b -> 'hlc' ->> 'node_origin',
         v_t_eff,
@@ -557,7 +561,10 @@ BEGIN
     --     (v_sealed is false for erasure.*), so b_clear = b here.
     IF v_type = 'erasure.shred.asserted' THEN
         PERFORM cairn_execute_shred(
-            (b_clear -> 'payload' ->> 'target_event_id')::uuid,
+            -- #626: db/037's floor check has already refused a malformed target at step 8
+            -- through the same helper; this is the same read, so it cannot disagree.
+            cairn_uuid_or_raise('target_event_id', b_clear -> 'payload' ->> 'target_event_id',
+                                'apply_remote_event'),
             v_event_id, COALESCE(b_clear -> 'payload' ->> 'basis', '(unrecorded)'));
     END IF;
 

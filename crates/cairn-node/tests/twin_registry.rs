@@ -391,6 +391,9 @@ async fn medication_registry_rows_heal_to_migration_text_on_replay() {
     )
     .await
     .unwrap();
+    // The fix in the migration text arrives as a schema change, so the reconnect replays
+    // (ADR-0080: an unchanged schema is not replayed, and would leave a hand edit standing).
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
 
     // A fresh connection replays every migration; the DO UPDATE arm must restore the row.
@@ -420,8 +423,8 @@ async fn steady_state_replay_leaves_registry_rows_untouched() {
     // The DO UPDATE arm exists to CONVERGE a divergent row (test above) — but when
     // the row already matches the migration text, replay must not rewrite it: an
     // unconditional DO UPDATE writes a new row version (dead tuple + validate-trigger
-    // fire) for all seven medication rows on EVERY connect, and connect_and_load_schema
-    // replays on every connect. The WHERE ... IS DISTINCT FROM guard makes the
+    // fire) for all seven medication rows on EVERY replay (once every connect; since
+    // ADR-0080, every schema change). The WHERE ... IS DISTINCT FROM guard makes the
     // steady-state replay write-free; pin that via xmin (the row version's inserting/
     // updating txid), which only changes if the row is actually rewritten.
     let Some(base) = cs() else { return };
@@ -438,6 +441,10 @@ async fn steady_state_replay_leaves_registry_rows_untouched() {
         .await
         .unwrap()
         .get(0);
+    // FORCE the second replay: since ADR-0080 a connect with an unchanged schema skips the
+    // replay entirely, so without this the xmin comparison below would pass vacuously. A
+    // replay still runs on every real schema change, which is when this guard matters.
+    db::force_schema_replay(&c).await.unwrap();
     drop(c);
 
     // Second connect replays over an already-converged row: no write may occur.

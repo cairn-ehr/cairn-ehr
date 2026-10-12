@@ -405,6 +405,8 @@ async fn a_database_with_the_old_status_shape_is_healed_on_connect() {
     )
     .await
     .unwrap();
+    // An upgrade from the old shape is a schema change, so the reconnect replays (ADR-0080).
+    db::force_schema_replay(&c).await.unwrap();
     let healed = db::connect_and_load_schema(&base)
         .await
         .expect("loading the schema over the old shape must not fail");

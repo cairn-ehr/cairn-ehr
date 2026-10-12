@@ -108,7 +108,10 @@ BEGIN
     IF (b -> 'payload' ->> 'target_event_id') IS NULL THEN
         RAISE EXCEPTION 'erasure.shred: payload must name target_event_id (ADR-0052)';
     END IF;
-    PERFORM (b -> 'payload' ->> 'target_event_id')::uuid;
+    -- #626: a deliberate P0001 naming the field, never a raw cast's 22P02. This check runs
+    -- at BOTH doors, and on the sync door a non-P0001 failure freezes the peer's pull.
+    PERFORM cairn_uuid_or_raise('target_event_id', b -> 'payload' ->> 'target_event_id',
+                                'erasure.shred');
     IF COALESCE(b -> 'payload' ->> 'basis', '') = '' THEN
         RAISE EXCEPTION 'erasure.shred: payload must carry a non-empty basis (the audited "why" — ADR-0005 rung 3)';
     END IF;
@@ -229,7 +232,10 @@ $$;
 
 -- Rebuild the shred log from the append-only record on every load (idempotent):
 -- this is "restore replays the shred log before projecting" for the wiped-and-
--- reloaded case.
+-- reloaded case. "Every load" means every schema REPLAY — since ADR-0080 a fresh database
+-- or a schema change, not every connect. Nothing in the product wipes this table (restore
+-- writes it through db/020's shred step; reprojection does not truncate it), so a log wiped
+-- by hand on an unchanged schema is rebuilt by `db::force_schema_replay` + a connect.
 INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)
 SELECT (body ->> 'target_event_id')::uuid, event_id, COALESCE(body ->> 'basis', '(unrecorded)')
 FROM event_log WHERE event_type = 'erasure.shred.asserted'

@@ -150,9 +150,10 @@ async fn a_stopped_worker_on_a_busy_node_reads_stalled() {
 }
 
 /// `duplicate-check` is meant for cron (the runbook suggests it), so it must NOT replay the schema:
-/// the replay re-runs every db/*.sql, including the every-connect `ALTER TABLE … IF NOT EXISTS`
-/// statements that take ACCESS EXCLUSIVE locks (#726) — once a minute, during a drain, that is a
-/// stall. It connects plainly instead, so on a node whose schema lacks db/056 it fails loudly.
+/// the replay re-runs every db/*.sql, including `ALTER TABLE … IF NOT EXISTS` statements that take
+/// ACCESS EXCLUSIVE locks (#726) — once a minute, during a drain, that is a stall. (Since
+/// ADR-0080 a replaying connect skips an unchanged schema, but the first run after an upgrade
+/// would still replay mid-drain; a cron job has no business applying schema at all.) It connects plainly instead, so on a node whose schema lacks db/056 it fails loudly.
 /// Proven here by removing the status function: a replaying command would silently recreate it
 /// and succeed. The next schema load (the restore at the end, or any later test) puts it back.
 #[tokio::test]
@@ -170,7 +171,9 @@ async fn the_cli_reads_without_replaying_the_schema() {
         .args(["--conn", &base, "duplicate-check"])
         .output()
         .unwrap();
-    // Restore before asserting, so a failure here cannot leave the database without it.
+    // Restore before asserting, so a failure here cannot leave the database without it. A
+    // connect replays only on a schema change since ADR-0080, so ask for the replay.
+    db::force_schema_replay(&c).await.unwrap();
     db::connect_and_load_schema(&base).await.unwrap();
     assert!(
         !out.status.success(),
