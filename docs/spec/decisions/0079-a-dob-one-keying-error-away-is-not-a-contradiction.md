@@ -1,7 +1,7 @@
 # ADR-0079 — A date of birth one keying error away is not a contradiction
 
 - **Status:** Accepted
-- **Date:** 2026-10-11
+- **Date:** 2026-10-12
 - **Spec version at acceptance:** 0.81
 - **Issues:** none — a maintainer decision of 2026-10-11, raised in PR #749's review; decisions 3 and 4
   revised by the maintainer in PR #758's review (2026-10-12), before acceptance
@@ -32,7 +32,8 @@ the keying error.
 1. **A new agreement level, `NEAR`,** between `DISAGREE` and `PARTIAL`. Levels are persisted by name, so
    inserting it renumbers nothing stored.
 2. **`compare_dob` grades `NEAR`** when two **full-precision point dates** (year, month and day on both
-   sides, each a date that can exist) differ by exactly one keying error, named — first match wins — as
+   sides, each a date on the calendar — no 30 February, no 29 February outside a leap year, no year 0)
+   differ by exactly one keying error, named — first match wins — as
    "one digit differs", "adjacent digits swapped" (read in `YYYYMMDD` order, so a swap across the
    year/month boundary counts and one across a day-first entry's day/month boundary does not), "day and
    month swapped" (same year), or "years one apart" (same day and month, across a carry such as 1959 →
@@ -42,12 +43,13 @@ the keying error.
    (+6): the digits fit one person and a typo, and a one-keystroke miss is rare between strangers. A
    weights table without the key prices it at 0.0. A learned table may price it otherwise: decision 4
    keeps any positive price from auto-linking, but a negative one would hide these pairs again, so a
-   learned table must be checked for that.
+   learned table must be checked for that before the pipeline loads one (#765).
 4. **A DOB in doubt — graded `NEAR` or `DISAGREE` — forbids `AUTO_CANDIDATE`**, as a veto does: a human
    decides which DOB is right, which is also when the wrong one gets corrected. `DISAGREE` needs this as
    much as `NEAR`, because db/016's DOB veto fires only when *both* DOBs are verified; without it an
    unverified DOB that differs outright could still auto-link on a shared identifier and an agreeing name
-   (4 + 5 + 1 − 2 = 8 with the DOB at unknown provenance) while one a single keystroke off could not.
+   (identifier 4 + name 5 + sex 1 − DOB 2 = 8: every identifier currently scores at half its weight of 8,
+   and a DOB at unknown provenance at half its −4) while one a single keystroke off could not.
    Unlike a veto it does not trigger the below-threshold rescue. For the §5.4 unconfirmed-chart gate
    `NEAR` is neither corroboration nor a clash.
 5. **The proposal says why:** a proposal whose DOB was *scored* `NEAR` carries an evidence entry
@@ -56,9 +58,11 @@ the keying error.
    comparator graded `NEAR` on an error the default profile does not name.
 6. **A blocking pass, `name+monthday`** — a name token with the `MM-DD` of a day-precision ISO DOB — so a
    year keying error on a common name is generated at all: the capped `name` block drops such names at
-   scale, and every other DOB-keyed pass needs the same year. Its key reads the same grammar the scorer
-   parses at day precision (ASCII digits, a real month and day, unpadded allowed, surrounding whitespace
-   ignored), so a DOB the scorer can grade is not withheld from it.
+   scale, and every other DOB-keyed pass needs the same year. On ASCII input its key reads the grammar
+   the scorer parses at day precision (four year digits, a month 1–12 and a day 1–31, unpadded allowed,
+   surrounding ASCII whitespace ignored), so a DOB the scorer can grade is not withheld from it. The
+   scorer also reads a DOB written in another script's digits, which the key does not: such a DOB misses
+   this one pass, never its score.
 7. **This is the default comparator profile's behaviour, not core policy.** Day/month swaps are a
    culture-dependent hazard (day-first vs month-first entry); a locale pack may grade differently
    ([ADR-0014](0014-locale-pluggable-matcher-comparators.md)).

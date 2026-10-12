@@ -25,13 +25,14 @@ import uuid
 # The A/B toggle validates against this registry. name+monthday (spec 2026-10-11) rescues a
 # YEAR keying error on a common name, which every year-keyed pass misses.
 #
-# The compound passes are ADDITIVE rescues (like name+year). name+monthday is described
-# above; dob+first-initial groups
-# charts sharing a birth-year AND a name-token first-initial (a first-initial RELAXATION of
-# the name requirement -- it rescues true matches that share no full name token); name+sex
-# groups charts sharing a name-token AND a normalized sex value (a per-sex split that rescues
-# an oversized unisex-token 'name' block the cap would otherwise drop wholesale, and the only
-# name rescue that fires for the §5.4 John-Doe population, whose DOB is a range or absent).
+# The compound passes are ADDITIVE rescues, each pairing what a single-key pass misses:
+# - name+year groups a name-token AND a birth year (splits a common name's oversized block);
+# - name+monthday groups a name-token AND a birth MM-DD (a year typo, above);
+# - dob+first-initial groups a birth year AND a name-token first-initial (a RELAXATION of the
+#   name requirement -- it rescues true matches that share no full name token);
+# - name+sex groups a name-token AND a normalized sex value (a per-sex split that rescues an
+#   oversized unisex-token 'name' block the cap would otherwise drop wholesale, and the only
+#   name rescue that fires for the §5.4 John-Doe population, whose DOB is a range or absent).
 ALL_PASSES = (
     "identifier", "dob", "name", "name+year",
     "dob+first-initial", "name+sex", "name+monthday", "dob-range", "dob-range+sex",

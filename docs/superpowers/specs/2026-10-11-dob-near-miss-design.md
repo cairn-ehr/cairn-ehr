@@ -14,7 +14,8 @@
 - **Revised in PR #758's review (2026-10-12), by the maintainer:** `NEAR` is priced **+2**, not 0.0
   (decision 2), and a DOB graded `DISAGREE` is capped at review as well as `NEAR` (decision 3). The
   `dob_near_miss` entry follows the scored level (decision 4), and the `name+monthday` key reads
-  `parse_dob`'s grammar exactly (decision 5). Superseded text is kept where it explains a choice.
+  `parse_dob`'s grammar on ASCII input (decision 5; the scorer alone also folds other scripts' digits —
+  a later revision in the same review). Superseded text is kept where it explains a choice.
 
 ## Context
 
@@ -131,7 +132,8 @@ re-measures it on the ABS-modelled population with diagnoses (the current datase
   name, and a weights table round-trips `"NEAR"`.
 - A small pure helper, `keying_error_between(a: DateValue, b: DateValue) -> str | None`, returns the
   pattern's name or `None`; `compare_dob` calls it only in the point-vs-point, both-full-precision,
-  any-part-differs branch, and only for dates that can exist (month 1–12, day 1–31, a four-digit year).
+  any-part-differs branch, and only for dates that exist on the calendar (checked with `datetime.date`: no 30 February, no 29 February
+  outside a leap year, no year 0 — PR #758 review).
   Each pattern is unit-tested with its negatives (two digits differ; non-adjacent swap; day/month swap
   across different years; years two apart; a swap into an impossible date; New Year's Eve vs Day).
 - Name comparison is unaffected: `NEAR` is emitted by `compare_dob` only.
@@ -153,10 +155,11 @@ re-measures it on the ABS-modelled population with diagnoses (the current datase
 ### Blocking (`pipeline/blocking_sql.py`, `blocking.py`)
 
 - `name+monthday` joins `ALL_PASSES` / `SYMMETRIC_PASSES`. The key is the token plus the value's
-  zero-padded `MM-DD` for `precision = 'day'` only, read with exactly `parse_dob`'s day grammar
-  (surrounding whitespace ignored, four ASCII year digits, a 1–2 digit month 1–12 and day 1–31,
-  nothing after) — a
-  value the scorer can grade joins, and a value of any other shape does not.
+  zero-padded `MM-DD` for `precision = 'day'` only, read with `parse_dob`'s day grammar on ASCII input
+  (surrounding ASCII whitespace ignored, four year digits, a 1–2 digit month 1–12 and day 1–31,
+  nothing after) — a value the scorer can grade joins, and a value of any other shape does not. The one
+  difference: `parse_dob` folds another script's decimal digits to ASCII and the SQL key does not, so
+  such a DOB misses this pass only (recall, never a false group).
 - Registered through `require_registered` like every pass; the per-chart targeted path
   (`targeted.py`) gains the same pass.
 

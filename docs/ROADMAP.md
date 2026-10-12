@@ -539,7 +539,7 @@ change (generation 57).
   [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), spec v0.81.** A DOB one keying
   error away grades `NEAR` (+2, `dob_near_miss` evidence); a DOB graded `NEAR` or `DISAGREE` never auto-links; and
   `name+monthday` blocks year typos. Missed true duplicates 351 → 266 of 2 000 on the synthetic set, false auto-links
-  unchanged. Follow-ups #759 · #760 · #762 · #763 · #764 · #765.
+  unchanged. Follow-ups #759 · #760 · #762 · #763 · #764 · #765 · #766.
 - **Filed:** #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
   part 2 · #744–#747.
 - **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human

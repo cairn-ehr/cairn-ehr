@@ -117,6 +117,35 @@ class FieldSpec:
 ComparatorConfig = tuple[FieldSpec, ...]
 
 
+def require_one_dob_field(config: ComparatorConfig) -> None:
+    """Refuse a config whose DOB cannot be found under the one name banding reads.
+
+    Banding's no-auto-link cap (ADR-0079 decision 4) reads the level scored for the field
+    named "dob". A locale pack that named its DOB field "birth_date", or scored two of them,
+    would leave that cap reading nothing — and an auto-link on a DOB in doubt would pass
+    silently. So a config must carry exactly one field named "dob", and compare_dob may grade
+    no other. A pack is free to grade "dob" with its own comparator.
+
+    Called by banding.matcher_version, which runs when the worker starts and for every
+    proposal, so a bad config fails before a single pair is banded — the same
+    construct-time-invariant pattern as FieldSpec's callable check.
+    """
+    named_dob = [spec for spec in config if spec.field == "dob"]
+    if len(named_dob) != 1:
+        raise ValueError(
+            f"a comparator config needs exactly one field named 'dob' (banding's ADR-0079 "
+            f"cap reads it); this one has {len(named_dob)}"
+        )
+    elsewhere = sorted(
+        spec.field for spec in config if spec.comparator is compare_dob and spec.field != "dob"
+    )
+    if elsewhere:
+        raise ValueError(
+            f"compare_dob grades fields other than 'dob' ({', '.join(elsewhere)}); "
+            f"banding's ADR-0079 cap would never read them"
+        )
+
+
 # The shipped culture-neutral configuration. A locale pack (B3) ships its own.
 DEFAULT_CONFIG: ComparatorConfig = (
     FieldSpec("dob", compare_dob, _dob),

@@ -20,11 +20,12 @@
 >    BUILT on `feat/dob-near-miss`, which merged #749's branch in (no force-push) — so merge #749 FIRST.** Matcher only:
 >    `NEAR` (one digit / adjacent swap / day↔month / years ±1, full dates only), weight **+2**; a DOB graded `NEAR` **or
 >    `DISAGREE`** never auto-links (db/016 vetoes only two *verified* DOBs — revised in the PR review, 2026-10-12);
->    `dob_near_miss` evidence from the scored level, `name+monthday` blocking on `parse_dob`'s exact grammar; matcher
+>    `dob_near_miss` evidence from the scored level, `name+monthday` blocking on `parse_dob`'s ASCII grammar (the scorer alone folds other scripts' digits); matcher
 >    0.2.0 re-queues every chart once. Measured: missed true duplicates 351 → 266 of 2 000, false auto-links unchanged.
 >    Resolves all of #761 (the review minors). Follow-ups #759 (word it on banner/tray + §1.2 walk), #760 (ABS re-measure, + assigned 01-01/07-01
 >    dates), #762 (name side: a middle name or Smith/Smyth + a near miss still hidden), #763 (auto-apply acts on a stale
->    score while a re-check is queued), #764 (the search ranker's own near-miss rule), #765 (matcher minors). Trap: a
+>    score while a re-check is queued), #764 (the search ranker's own near-miss rule), #765 (matcher minors), #766 (a year-0000
+>    "year unknown" DOB still scores as a contradiction). Trap: a
 >    new blocking key can generate a pair an older test asserts absent — fix the fixture date, never the assertion.
 > 1. **The small slice: #716** (confirm a doubted standing link) **+ #723** (a doubted row reads "One person"). Then
 >    **#742** (no banner while catching up — a principle-4 decision) and **#743 part 2** (a soft-vetoed joined pair

@@ -23,7 +23,12 @@ from enum import Enum
 from cairn_matcher import __version__
 from cairn_matcher.agreement import AgreementLevel
 from cairn_matcher.comparators import keying_error_between
-from cairn_matcher.orchestrator import DEFAULT_CONFIG, ComparatorConfig, callable_identity
+from cairn_matcher.orchestrator import (
+    DEFAULT_CONFIG,
+    ComparatorConfig,
+    callable_identity,
+    require_one_dob_field,
+)
 from cairn_matcher.records import DateValue
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, Weights
 
@@ -151,8 +156,7 @@ def dob_near_miss_evidence(
     """
     if _scored_dob_level(score) is not AgreementLevel.NEAR:
         return ()
-    pattern = keying_error_between(a, b) if a is not None and b is not None else None
-    return ({"kind": "dob_near_miss", "pattern": pattern},)
+    return ({"kind": "dob_near_miss", "pattern": keying_error_between(a, b)},)
 
 
 def band(
@@ -291,7 +295,11 @@ def matcher_version(
     thresholds, comparator wiring, context params. Weights alone (the pre-#100 digest)
     left a bad threshold rollout indistinguishable in the proposal table, so a recall had
     no key to cascade on. Full §7.5 actor registration/signing is B3.
+
+    Raises ValueError for a config whose DOB the ADR-0079 cap could not find
+    (orchestrator.require_one_dob_field).
     """
+    require_one_dob_field(config)
     digest = hashlib.sha256(
         _config_fingerprint(weights, thresholds, config).encode()
     ).hexdigest()[:12]

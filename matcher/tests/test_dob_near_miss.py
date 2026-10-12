@@ -87,7 +87,8 @@ def test_near_is_weak_positive_evidence_below_exact():
 
 def test_a_learned_table_without_near_still_prices_it_at_zero():
     # An older persisted (B3-learned) table has no NEAR key; score() prices a level missing
-    # WITHIN a field's entry at 0.0 — exactly the shipped behaviour, never a crash.
+    # WITHIN a field's entry at 0.0 rather than crashing. That is NOT the shipped +2: loading
+    # such a table must be refused once the pipeline loads learned models (#765).
     legacy = Weights(per_field={"dob": FieldWeights({
         AgreementLevel.EXACT: 6.0, AgreementLevel.PARTIAL: 1.5, AgreementLevel.DISAGREE: -4.0,
     })})
@@ -107,12 +108,31 @@ def test_the_package_version_moved_with_the_comparator():
     (D(10000, 1, 1), D(1000, 1, 1)),     # five year digits would misalign the eight
     (D(1950, 31, 1), D(1950, 1, 31)),    # month 31 is no date: a "swap" into an impossible date
     (D(1950, 1, 0), D(1950, 1, 1)),      # day 0
+    (D(0, 1, 1), D(1, 1, 1)),            # year 0: no such year (a legacy "year unknown")
+    # In range field by field, but not on the calendar. parse_dob builds these (it range-checks
+    # only), so this is the check that keeps them from being named a typo.
+    (D(1950, 2, 30), D(1950, 2, 20)),    # 30 February
+    (D(1950, 4, 31), D(1950, 4, 30)),    # 31 April
+    (D(1981, 2, 29), D(1980, 2, 29)),    # 29 February in a year that is not a leap year
 ])
 def test_a_date_that_cannot_exist_is_never_a_keying_error(a, b):
-    # parse_dob never builds these, but compare_dob is public: an impossible date must never
-    # be named a typo of a real one (#761).
+    # compare_dob is public and parse_dob checks ranges, not the calendar: an impossible date
+    # must never be named a typo of a real one (#761). It stays DISAGREE, as before ADR-0079.
     assert keying_error_between(a, b) is None
     assert keying_error_between(b, a) is None
+    assert compare_dob(a, b, CTX) is not AgreementLevel.NEAR
+
+
+def test_29_february_in_a_leap_year_is_a_real_date():
+    # The calendar check must not overshoot: 29 Feb 1980 exists, so a one-digit slip from it is
+    # a keying error like any other.
+    assert keying_error_between(D(1980, 2, 29), D(1980, 2, 28)) == ONE_DIGIT
+
+
+def test_a_missing_date_is_never_a_keying_error():
+    # The function is public; an absent side is no information, never a typo (principle 4).
+    assert keying_error_between(None, D(1950, 1, 7)) is None
+    assert keying_error_between(D(1950, 1, 7), None) is None
 
 
 def test_keying_errors_are_symmetric_and_agree_with_compare_dob_randomized():

@@ -10,6 +10,7 @@ import uuid
 
 import pytest
 
+from cairn_matcher.pipeline.adapter import parse_dob
 from cairn_matcher.pipeline.runner import canonical_pair
 from tests.conftest import seed_patient
 
@@ -319,8 +320,9 @@ def _monthday_keys(conn, a_dob, b_dob):
     (("07/01/1951", 20), ("12/03/1960", 20)),                  # the format regex (NULL key)
     (("1950-01-07T00:00", 20), ("1951-01-07", 20)),            # the end anchor
     (("1950-01-07-x", 20), ("1951-01-07", 20)),                # trailing junk
-    (("١٩٥٠-٠١-٠٧", 20), ("1951-01-07", 20)),                  # non-ASCII digits
     (("1950-00-00", 20), ("1975-00-00", 20)),                  # legacy "day and month unknown"
+    (("\u00a01950-01-07", 20), ("1951-01-07", 20)),           # no-break space: not ASCII whitespace
+    (("1950-01-07\x1c", 20), ("1951-01-07", 20)),             # \x1c, which str.strip() would remove
     (("1950-13-07", 20), ("1951-13-07", 20)),                  # month out of range
     (("1950-01-32", 20), ("1951-01-32", 20)),                  # day out of range
 ])
@@ -331,11 +333,20 @@ def test_name_monthday_forms_no_key_from_a_value_the_scorer_cannot_read(pg_conn,
 @pytest.mark.parametrize("a_dob", [
     ("1950-01-07 ", 20),    # trailing space: the projection stores values untrimmed
     ("1950-1-7", 20),       # unpadded: parse_dob reads it as 7 Jan 1950
+    ("\t1950-01-07\r\n", 20),  # any ASCII whitespace around it, as parse_dob strips
 ])
 def test_name_monthday_keys_every_day_date_the_scorer_reads(pg_conn, a_dob):
     # The blocking grammar must equal parse_dob's at day precision, or a year typo the scorer
     # would grade NEAR is never generated — a silent false split.
     assert _monthday_keys(pg_conn, a_dob, ("1951-01-07", 20)) == ["smith|01-07"]
+
+
+def test_name_monthday_does_not_key_another_scripts_digits(pg_conn):
+    # The scorer folds "١٩٥٠-٠١-٠٧" to 1950-01-07 (adapter._fold_decimal_digits); the SQL key
+    # does not, so this pass forms no key. Pinned as the known, recall-only gap: the name pass
+    # still pairs the two charts, and a future fold on the SQL side flips this test on purpose.
+    assert parse_dob("١٩٥٠-٠١-٠٧", "day") is not None
+    assert _monthday_keys(pg_conn, ("١٩٥٠-٠١-٠٧", 20), ("1951-01-07", 20)) == []
 
 
 def test_name_monthday_is_the_pass_that_rescues_the_year_typo(pg_conn):

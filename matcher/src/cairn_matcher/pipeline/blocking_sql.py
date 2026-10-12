@@ -89,15 +89,21 @@ _BIRTH_MONTHDAY_CTE = """birth_monthday AS (
     -- name+monthday's key: the MM-DD of a DAY-precision ISO point DOB, and nothing else.
     -- A year keying error (1950 vs 1951) keeps the day and month, so this groups the pair the
     -- year-keyed passes cannot (ADR-0079). The anchored regex plus the range gate are
-    -- adapter.parse_dob's day grammar (optional surrounding whitespace, four ASCII year
-    -- digits, a 1-2 digit month 1-12 and day 1-31, nothing after), zero-padded into one key:
-    -- a value the scorer reads gets a key, and a month-precision, non-ISO, junk-suffixed,
-    -- out-of-range ("1980-00-00", a legacy "day and month unknown") or range value does not
-    -- — no withheld rescue, no false group. tests/test_candidate_generation.py pins both.
+    -- adapter.parse_dob's day grammar on ASCII input: optional surrounding ASCII whitespace
+    -- (the explicit class is adapter.ASCII_WHITESPACE; the regex shorthand for "space" would
+    -- follow the database locale), four year digits, a 1-2 digit month 1-12 and day 1-31,
+    -- nothing after, zero-padded into one key. So a value the scorer reads gets a key, and a
+    -- month-precision, non-ISO, junk-suffixed, out-of-range ("1980-00-00", a legacy "day and
+    -- month unknown") or range value does not — no withheld rescue, no false group.
+    -- The one deliberate difference: parse_dob also folds another script's digits ("١٩٥٠") to
+    -- ASCII and this does not, so such a DOB gets no key here — recall loss in this one pass,
+    -- never a false group (adapter._fold_decimal_digits). tests/test_candidate_generation.py
+    -- pins all of it.
     -- The ::int casts are safe: the regex has already guaranteed one or two ASCII digits.
     SELECT patient_id, lpad(m[1], 2, '0') || '-' || lpad(m[2], 2, '0') AS monthday
     FROM patient_demographic,
-         regexp_match(value, '^\\s*[0-9]{4}-([0-9]{1,2})-([0-9]{1,2})\\s*$') AS m
+         regexp_match(value, '^[ \\t\\n\\r\\f\\v]*[0-9]{4}-([0-9]{1,2})-([0-9]{1,2})'
+                             || '[ \\t\\n\\r\\f\\v]*$') AS m
     WHERE field = 'dob' AND (facets ->> 'precision') = 'day' AND m IS NOT NULL
       AND m[1]::int BETWEEN 1 AND 12 AND m[2]::int BETWEEN 1 AND 31
 )"""

@@ -136,8 +136,9 @@ def shares_blocking_key(a: Mapping, b: Mapping) -> bool:
     The symmetric keys (pipeline/blocking_sql.py _GROUPS_SQL): shared non-unknown identifier,
     equal exact-DOB value (excluding year-range rows, mirroring the SQL's
     IS DISTINCT FROM 'year-range' — two identical range strings must NOT fake an
-    exact key the SQL never groups), or a shared name token. The 'name+year' pass is
-    subsumed by the name-token check (it requires a shared token).
+    exact key the SQL never groups), or a shared name token. The 'name+year' and
+    'name+monthday' passes are subsumed by the name-token check (each requires a shared
+    token); like 'name+sex' below, they only rescue pairs the block-size cap would drop.
 
     The ANCHORED range passes (_RANGE_GROUPS_SQL): windows overlap AND at least one
     side is a real year-range (window_overlap requires a.is_range — two point DOBs
