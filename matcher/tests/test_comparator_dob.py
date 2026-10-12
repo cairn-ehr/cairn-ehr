@@ -17,8 +17,9 @@ def test_year_only_vs_full_is_partial():
 
 
 def test_shared_part_differs_is_disagree():
+    # Two days far apart (not one keying error — see test_dob_near_miss.py for those).
     assert (
-        compare_dob(DateValue(1980, 3, 15), DateValue(1980, 3, 16), CTX)
+        compare_dob(DateValue(1980, 3, 15), DateValue(1980, 7, 28), CTX)
         is AgreementLevel.DISAGREE
     )
     assert compare_dob(DateValue(1980), DateValue(1981, 3, 15), CTX) is AgreementLevel.DISAGREE

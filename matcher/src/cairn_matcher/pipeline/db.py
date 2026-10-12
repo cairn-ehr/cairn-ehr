@@ -165,7 +165,7 @@ def match_veto(conn, a, b) -> list[VetoFinding]:
         return [VetoFinding(*row) for row in cur.fetchall()]
 
 
-# The blocking SQL (the eight passes' statements, _GROUPS_SQL / _RANGE_GROUPS_SQL) lives in the
+# The blocking SQL (the nine passes' statements, _GROUPS_SQL / _RANGE_GROUPS_SQL) lives in the
 # pure `pipeline.blocking_sql` module, shared with the per-chart check (`pipeline.targeted`).
 
 
@@ -193,9 +193,9 @@ def generate_candidate_pairs(
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, int]]]:
     """Generate canonical candidate pairs via the blocking passes, capping huge blocks.
 
-    Eight passes (see blocking.ALL_PASSES): six SYMMETRIC group passes (identifier /
-    exact-DOB / name-token / name-token+birth-year / dob+first-initial / name+sex,
-    _GROUPS_SQL) and two ANCHORED birth-year-range passes (dob-range / dob-range+sex,
+    Nine passes (see blocking.ALL_PASSES): seven SYMMETRIC group passes (identifier /
+    exact-DOB / name-token / name-token+birth-year / dob+first-initial / name+sex /
+    name+monthday, _GROUPS_SQL) and two ANCHORED birth-year-range passes (dob-range / dob-range+sex,
     _RANGE_GROUPS_SQL — the §5.4 range-blocking slice).
 
     `enabled_passes` is the A/B measurement toggle: None runs every pass; a set runs only

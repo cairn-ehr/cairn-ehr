@@ -70,20 +70,27 @@ def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
         return _parse_year_range(value)
     if precision not in _PRECISION_PARTS:
         return None
-    parts = value.split("-")
+    parts = _fold_decimal_digits(value.strip(ASCII_WHITESPACE)).split("-")
     needed = _PRECISION_PARTS[precision]
     if len(parts) < needed:
         return None  # value is coarser than the precision it claims
+    # Nothing is finer than a day, so a day value with more parts ("1980-07-15-x") is junk,
+    # not a finer date. (A coarser precision may still carry a finer value; it reads a prefix.)
+    if precision == "day" and len(parts) != needed:
+        return None
     # The year field must be a full 4-digit run, mirroring the SQL blocking discipline
     # (blocking_sql.py requires `[0-9]{4}`). A 2-digit legacy year ("80") would otherwise parse to
     # DateValue(year=80) and fabricate a DISAGREE clash against the same person's 1980
     # record — a wrong DateValue from a formatting artefact, which principle 4 forbids.
-    if len(parts[0]) != 4 or not parts[0].isdigit():
+    # Month and day are 1-2 digits. Every field is ASCII digits only, read AFTER another
+    # script's decimal digits are folded to ASCII (_fold_decimal_digits): str.isdigit() alone
+    # would also accept a superscript "²", and int() inner spaces. On ASCII input the
+    # name+monthday blocking key (blocking_sql.py) reads exactly this grammar, so a pair the
+    # scorer can grade is generated; see _fold_decimal_digits for the one place they differ.
+    fields = zip(parts[:needed], _ISO_WIDTHS[:needed], strict=True)
+    if not all(_is_ascii_digits(part, lo, hi) for part, (lo, hi) in fields):
         return None
-    try:
-        nums = [int(p) for p in parts[:needed]]
-    except ValueError:
-        return None  # non-numeric field -> not ISO -> safe degrade
+    nums = [int(p) for p in parts[:needed]]
     year = nums[0]
     month = nums[1] if needed >= 2 else None
     day = nums[2] if needed >= 3 else None
@@ -95,6 +102,42 @@ def parse_dob(value: str | None, precision: str | None) -> DateValue | None:
     if day is not None and not 1 <= day <= 31:
         return None
     return DateValue(year=year, month=month, day=day)
+
+
+# The whitespace parse_dob strips from around a DOB: ASCII only, and exactly the class
+# blocking_sql's name+monthday regex strips. str.strip() with no argument would also remove a
+# no-break space or the \x1c-\x1f separators, and Postgres's \s matches a locale-dependent
+# set, so either would let one side read a value the other cannot key.
+ASCII_WHITESPACE = " \t\n\r\f\v"
+
+
+def _fold_decimal_digits(value: str) -> str:
+    """Rewrite every decimal digit of any script as its ASCII digit ("١٩٨٠" -> "1980").
+
+    A DOB is a number whatever script its digits are in (ADR-0014: no cultural capture), and
+    rejecting it would drop the pair's strongest field on a chart the name pass still pairs —
+    a real duplicate sunk below review with nothing to say why. Only true decimal digits fold
+    (unicodedata.decimal), so a superscript "²" stays itself and fails the ASCII check.
+
+    The SQL blocking key does NOT fold — Postgres has no such function — so a non-ASCII DOB
+    gets no name+monthday key. That is recall loss in one pass only, never a false match: the
+    name and identifier passes still pair such charts, and the same one-way gap is the designed
+    limit of the name tokenizer (_normalize_token).
+    """
+    return "".join(
+        c if c.isascii() or unicodedata.decimal(c, None) is None
+        else str(unicodedata.decimal(c))
+        for c in value
+    )
+
+
+# (min, max) digit count of each ISO field in order: year exactly 4, month and day 1-2.
+_ISO_WIDTHS = ((4, 4), (1, 2), (1, 2))
+
+
+def _is_ascii_digits(part: str, min_width: int, max_width: int) -> bool:
+    """True when `part` is between min_width and max_width ASCII digits, nothing else."""
+    return part.isascii() and part.isdigit() and min_width <= len(part) <= max_width
 
 
 def _parse_year_range(value: str) -> DateValue | None:

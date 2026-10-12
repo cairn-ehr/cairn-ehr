@@ -1,5 +1,5 @@
 # matcher/src/cairn_matcher/pipeline/blocking_sql.py
-"""The blocking SQL: the text of the eight blocking passes, and nothing else.
+"""The blocking SQL: the text of the nine blocking passes, and nothing else.
 
 Blocking decides which pairs of charts the scorer ever looks at (a pair never grouped is never
 scored, so never proposed). Two callers share this ONE definition, on purpose:
@@ -85,6 +85,29 @@ _BIRTH_YEAR_CTE = """birth_year AS (
       AND (facets ->> 'precision') IS DISTINCT FROM 'year-range'
 )"""
 
+_BIRTH_MONTHDAY_CTE = """birth_monthday AS (
+    -- name+monthday's key: the MM-DD of a DAY-precision ISO point DOB, and nothing else.
+    -- A year keying error (1950 vs 1951) keeps the day and month, so this groups the pair the
+    -- year-keyed passes cannot (ADR-0079). The anchored regex plus the range gate are
+    -- adapter.parse_dob's day grammar on ASCII input: optional surrounding ASCII whitespace
+    -- (the explicit class is adapter.ASCII_WHITESPACE; the regex shorthand for "space" would
+    -- follow the database locale), four year digits, a 1-2 digit month 1-12 and day 1-31,
+    -- nothing after, zero-padded into one key. So a value the scorer reads gets a key, and a
+    -- month-precision, non-ISO, junk-suffixed, out-of-range ("1980-00-00", a legacy "day and
+    -- month unknown") or range value does not — no withheld rescue, no false group.
+    -- The one deliberate difference: parse_dob also folds another script's digits ("١٩٥٠") to
+    -- ASCII and this does not, so such a DOB gets no key here — recall loss in this one pass,
+    -- never a false group (adapter._fold_decimal_digits). tests/test_candidate_generation.py
+    -- pins all of it.
+    -- The ::int casts are safe: the regex has already guaranteed one or two ASCII digits.
+    SELECT patient_id, lpad(m[1], 2, '0') || '-' || lpad(m[2], 2, '0') AS monthday
+    FROM patient_demographic,
+         regexp_match(value, '^[ \\t\\n\\r\\f\\v]*[0-9]{4}-([0-9]{1,2})-([0-9]{1,2})'
+                             || '[ \\t\\n\\r\\f\\v]*$') AS m
+    WHERE field = 'dob' AND (facets ->> 'precision') = 'day' AND m IS NOT NULL
+      AND m[1]::int BETWEEN 1 AND 12 AND m[2]::int BETWEEN 1 AND 31
+)"""
+
 _BLOCKING_SEX_CTE = """blocking_sex AS (
     -- Exclude the uncertainty sentinels (principle 4: no-data-is-never-agreement). The set
     -- is BOUND from adapter.VALUE_SENTINELS_PARAM -- the same set the Python scoring side
@@ -115,6 +138,7 @@ _BLOCKING_SEX_CTE = """blocking_sex AS (
 _GROUPS_SQL = f"""
 WITH {_NAME_TOKENS_CTE},
 {_BIRTH_YEAR_CTE},
+{_BIRTH_MONTHDAY_CTE},
 {_BLOCKING_SEX_CTE}
 SELECT 'identifier' AS pass_name, system || ':' || match_key AS key,
        array_agg(patient_id) AS members
@@ -165,6 +189,15 @@ UNION ALL
 SELECT 'name+sex', nt.token || '|' || bs.sex, array_agg(DISTINCT nt.patient_id)
 FROM name_tokens nt JOIN blocking_sex bs USING (patient_id)
 GROUP BY nt.token, bs.sex HAVING count(DISTINCT nt.patient_id) >= 2
+UNION ALL
+-- name+monthday: name token + the DOB's day and month. An ADDITIVE rescue for a year keying
+-- error on a common name: the bare 'name' block for "smith" exceeds the cap at scale, and
+-- name+year / dob / dob+first-initial all need the same year. For real birthdays blocks are
+-- ~token frequency / 365; ASSIGNED dates (01-01, 07-01, recorded when a birth date is not
+-- known) heap and can exceed the cap. Symmetric (sharing the key is itself the signal).
+SELECT 'name+monthday', nt.token || '|' || md.monthday, array_agg(DISTINCT nt.patient_id)
+FROM name_tokens nt JOIN birth_monthday md USING (patient_id)
+GROUP BY nt.token, md.monthday HAVING count(DISTINCT nt.patient_id) >= 2
 """
 
 # The two ANCHORED birth-year-range passes (§5.4 slice: design 2026-07-04). Separate

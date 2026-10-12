@@ -22,10 +22,10 @@ B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 C = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 
-def test_all_passes_is_the_eight_known_names():
+def test_all_passes_is_the_nine_known_names():
     assert ALL_PASSES == (
         "identifier", "dob", "name", "name+year",
-        "dob+first-initial", "name+sex", "dob-range", "dob-range+sex",
+        "dob+first-initial", "name+sex", "name+monthday", "dob-range", "dob-range+sex",
     )
 
 
@@ -33,8 +33,8 @@ def test_new_compound_passes_are_symmetric():
     # Both new compound passes pair every within-group member (C(s,2)); neither is
     # anchored. dropped_pair_estimate and the statement-level toggle skip both branch
     # on this membership, so a misfiled pass would corrupt them.
-    assert {"dob+first-initial", "name+sex"} <= SYMMETRIC_PASSES
-    assert {"dob+first-initial", "name+sex"} & ANCHORED_PASSES == frozenset()
+    assert {"dob+first-initial", "name+sex", "name+monthday"} <= SYMMETRIC_PASSES
+    assert {"dob+first-initial", "name+sex", "name+monthday"} & ANCHORED_PASSES == frozenset()
 
 
 def test_resolve_none_enables_every_pass():

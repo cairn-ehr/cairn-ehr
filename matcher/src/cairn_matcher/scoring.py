@@ -98,6 +98,11 @@ DEFAULT_WEIGHTS = Weights(per_field={
     "dob": FieldWeights({
         AgreementLevel.EXACT: 6.0,
         AgreementLevel.PARTIAL: 1.5,
+        # One keying error (ADR-0079): weak evidence FOR — a one-keystroke miss is rare between
+        # strangers — but far short of EXACT. Enough that a partial name + NEAR + sex reaches
+        # review at full provenance (0 + 2 + 1 = 3.0, the floor); never an auto-link at any price
+        # (banding caps a DOB in doubt).
+        AgreementLevel.NEAR: 2.0,
         AgreementLevel.DISAGREE: -4.0,
     }),
     "sex": FieldWeights({

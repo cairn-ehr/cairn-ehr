@@ -12,17 +12,20 @@ from dataclasses import replace
 import pytest
 
 from cairn_matcher.agreement import AgreementLevel, Context
-from cairn_matcher.comparators import compare_exact
-from cairn_matcher.orchestrator import DEFAULT_CONFIG
+from cairn_matcher.comparators import DAY_MONTH_SWAP, compare_dob, compare_exact
+from cairn_matcher.orchestrator import DEFAULT_CONFIG, FieldSpec
 from cairn_matcher.pipeline.banding import (
     Band,
     ProposalPayload,
     Thresholds,
     VetoFinding,
+    _corroborated_positive,
     band,
     build_payload,
+    dob_near_miss_evidence,
     matcher_version,
 )
+from cairn_matcher.records import DateValue
 from cairn_matcher.scoring import (
     DEFAULT_WEIGHTS,
     FieldEvidence,
@@ -397,3 +400,194 @@ def test_build_payload_appends_trust_evidence_after_alias_evidence():
     marker = {"kind": "identity_pending", "unconfirmed": ["11111111-1111-1111-1111-111111111111"]}
     payload = build_payload(score, (), Band.REVIEW, trust_evidence=(marker,))
     assert payload.evidence[-1] == marker
+
+
+# --- DOB near miss (spec 2026-10-11): never auto-linked; the proposal names the keying error ---
+
+def _near_score(total: float) -> MatchScore:
+    """Name EXACT + dob NEAR (+2) + a shared identifier making up the rest of `total`."""
+    return MatchScore(total=total, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 2.0),
+        FieldEvidence("identifier", AgreementLevel.EXACT, 60, total - 7.0),
+    ))
+
+
+def test_a_near_miss_dob_never_auto_links_even_with_a_shared_identifier():
+    # name 5 + dob NEAR 2 + identifier 8 = 15 >= auto (8), no veto: still REVIEW.
+    assert band(_near_score(15.0), ()) is Band.REVIEW
+
+
+def test_a_near_miss_below_review_is_not_rescued_by_a_shared_identifier():
+    # The shared-identifier rescue is for a VETO dragging the score under (ADR-0014 §6). A DOB
+    # in doubt is not a veto: below the review threshold such a pair is no proposal, as any
+    # pair below it is (band's docstring; ADR-0079 decision 4).
+    assert band(_near_score(2.5), ()) is None
+
+
+def test_a_near_miss_pair_above_review_is_review():
+    s = MatchScore(total=8.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 2.0),
+        FieldEvidence("sex", AgreementLevel.EXACT, 60, 1.0),
+    ))
+    assert band(s, ()) is Band.REVIEW
+
+
+def test_near_is_neither_corroboration_nor_a_clash():
+    # §5.4 unconfirmed-chart gate: >= 2 positive fields (>= PARTIAL) and NO DISAGREE.
+    # NEAR counts as neither — so name + sex + NEAR still corroborates, name + NEAR does not.
+    two_pos = MatchScore(total=8.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("sex", AgreementLevel.EXACT, 60, 1.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 2.0),
+    ))
+    one_pos = MatchScore(total=7.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", AgreementLevel.NEAR, 60, 2.0),
+    ))
+    assert _corroborated_positive(two_pos) is True
+    assert _corroborated_positive(one_pos) is False
+
+
+def _dob_scored(level: AgreementLevel) -> MatchScore:
+    return MatchScore(total=5.0, fields=(
+        FieldEvidence("name", AgreementLevel.EXACT, 60, 5.0),
+        FieldEvidence("dob", level, 60, 0.0),
+    ))
+
+
+def test_near_miss_evidence_names_the_pattern():
+    a, b = DateValue(1950, 1, 7), DateValue(1950, 7, 1)
+    near = _dob_scored(AgreementLevel.NEAR)
+    assert dob_near_miss_evidence(near, a, b) == (
+        {"kind": "dob_near_miss", "pattern": DAY_MONTH_SWAP},)
+    # Unreachable from assess (a scored NEAR has both DOBs) but never a crash: no pattern.
+    assert dob_near_miss_evidence(near, a, None) == ({"kind": "dob_near_miss", "pattern": None},)
+
+
+def test_near_miss_evidence_follows_the_scored_level_not_a_second_reading():
+    # The entry is emitted only when the configured comparator actually SCORED the DOB NEAR.
+    # A locale pack that grades a day/month swap DISAGREE must not get a payload that says
+    # "day and month swapped" beside a dob of -4 (#761 item 1).
+    a, b = DateValue(1950, 1, 7), DateValue(1950, 7, 1)
+    assert dob_near_miss_evidence(_dob_scored(AgreementLevel.DISAGREE), a, b) == ()
+    assert dob_near_miss_evidence(_dob_scored(AgreementLevel.EXACT), a, a) == ()
+
+
+def test_near_miss_evidence_without_a_default_pattern_still_says_near():
+    # A locale pack may grade NEAR on an error the default profile does not name (a day-first
+    # DD/MM boundary swap). The reviewer is still told it is a suspected keying error.
+    a, b = DateValue(1950, 11, 10), DateValue(1950, 1, 11)
+    assert dob_near_miss_evidence(_dob_scored(AgreementLevel.NEAR), a, b) == (
+        {"kind": "dob_near_miss", "pattern": None},)
+
+
+# --- A DOB in doubt (NEAR or DISAGREE) never auto-links (ADR-0079 decision 4) ---------------
+
+def _dob_level_score(level: AgreementLevel, dob_weight: float) -> MatchScore:
+    fields = (
+        FieldEvidence("name", AgreementLevel.EXACT, 70, 5.0),
+        FieldEvidence("sex", AgreementLevel.EXACT, 70, 1.0),
+        FieldEvidence("identifier", AgreementLevel.EXACT, 0, 4.0),
+        FieldEvidence("dob", level, 0, dob_weight),
+    )
+    return MatchScore(total=sum(f.weight_contribution for f in fields), fields=fields)
+
+
+def test_a_disagreeing_dob_never_auto_links_even_with_a_shared_identifier():
+    # name 5 + sex 1 + identifier 4 + dob DISAGREE at unknown provenance -2 = 8 >= auto, and
+    # db/016 is silent because the DOBs are not both verified. Before ADR-0079's cap this
+    # auto-linked two charts whose birth dates have nothing in common.
+    assert band(_dob_level_score(AgreementLevel.DISAGREE, -2.0), ()) is Band.REVIEW
+
+
+def test_an_exact_dob_in_the_same_shape_does_auto_link():
+    # Control: it is the DOB level, not the field mix, that holds the two above at review.
+    assert band(_dob_level_score(AgreementLevel.EXACT, 3.0), ()) is Band.AUTO_CANDIDATE
+
+
+def test_build_payload_appends_the_near_miss_evidence_last():
+    entry = {"kind": "dob_near_miss", "pattern": DAY_MONTH_SWAP}
+    p = build_payload(_score(6.0), (), Band.REVIEW, near_miss_evidence=(entry,))
+    assert p.evidence[-1] == entry
+
+
+# The band order a weaker DOB must never climb above: no proposal < REVIEW < AUTO_CANDIDATE.
+_BAND_RANK = {None: 0, Band.REVIEW: 1, Band.AUTO_CANDIDATE: 2}
+
+
+def _band_rank(name, sex, ident, rank, dob_level, dob_rank) -> int:
+    """Score one field mix with the real scorer and DEFAULT_WEIGHTS; return its band's rank."""
+    from cairn_matcher.records import FieldComparison
+    from cairn_matcher.scoring import score
+
+    s = score([
+        FieldComparison("name", name, rank),
+        FieldComparison("sex", sex, rank),
+        FieldComparison("identifier", ident, 0),
+        FieldComparison("dob", dob_level, dob_rank),
+    ])
+    return _BAND_RANK[band(s, ())]
+
+
+def test_a_weaker_dob_never_bands_higher_with_everything_else_fixed():
+    # Monotonicity over the real scorer and DEFAULT_WEIGHTS, across every mix of the other
+    # fields and of provenance. EXACT is the strongest DOB, and a DOB that disagrees outright
+    # must never band above one a single keying error off. (PARTIAL and NEAR are deliberately
+    # not ordered against each other: +2 for a one-keystroke miss is rarer by chance than
+    # +1.5 for a year-only DOB agreeing with a full one.)
+    from itertools import product
+
+    L = AgreementLevel
+    others = product(
+        (L.EXACT, L.EDIT_DISTANCE, L.PARTIAL, L.DISAGREE, L.INSUFFICIENT_DATA),  # name
+        (L.EXACT, L.DISAGREE, L.INSUFFICIENT_DATA),                              # sex
+        (L.EXACT, L.INSUFFICIENT_DATA),                                          # identifier
+        (0, 40, 70),                                                             # their rank
+        (0, 40, 70),                                                             # dob rank
+    )
+    for name, sex, ident, rank, dob_rank in others:
+        case = (name, sex, ident, rank, dob_rank)
+        at = {lvl: _band_rank(name, sex, ident, rank, lvl, dob_rank) for lvl in L}
+        assert at[L.DISAGREE] <= at[L.NEAR], case
+        for weaker in (L.NEAR, L.PARTIAL, L.DISAGREE, L.INSUFFICIENT_DATA):
+            assert at[weaker] <= at[L.EXACT], (case, weaker)
+
+
+# --- the no-auto-link cap needs to FIND the DOB (ADR-0079 decision 4) --------------------
+# _dob_in_doubt reads the level scored for the field named "dob". A config that names its DOB
+# field anything else, or scores two of them, would make the cap pass silently: an auto-link on
+# a DOB in doubt with nothing logged. So matcher_version — run when the worker starts and for
+# every proposal — refuses such a config, loudly, before a single pair is banded.
+
+def _renamed_dob(rec):
+    """A named extractor standing in for a locale pack's own DOB field."""
+    return (None, 0)
+
+
+def test_a_config_whose_dob_field_is_named_otherwise_is_refused():
+    renamed = tuple(
+        replace(spec, field="birth_date") if spec.field == "dob" else spec
+        for spec in DEFAULT_CONFIG
+    )
+    with pytest.raises(ValueError, match="dob"):
+        matcher_version(config=renamed)
+
+
+def test_a_config_with_two_dob_comparisons_is_refused():
+    second = FieldSpec("dob_second", compare_dob, _renamed_dob)
+    with pytest.raises(ValueError, match="dob"):
+        matcher_version(config=DEFAULT_CONFIG + (second,))
+    with pytest.raises(ValueError, match="dob"):
+        matcher_version(config=DEFAULT_CONFIG + (replace(second, field="dob"),))
+
+
+def test_a_config_with_its_own_dob_comparator_under_the_dob_name_is_accepted():
+    # The locale-pack seam stays open: any comparator may grade the DOB, as long as the field
+    # the cap reads is the one it grades.
+    swapped = tuple(
+        replace(spec, comparator=compare_exact) if spec.field == "dob" else spec
+        for spec in DEFAULT_CONFIG
+    )
+    assert matcher_version(config=swapped) != matcher_version()

@@ -7,6 +7,8 @@ exposes, gated by the declared precision. Anything it cannot read at that precis
 degrades to None (absence is safe; principle 4), never a wrong DateValue.
 """
 
+import pytest
+
 from cairn_matcher.pipeline.adapter import parse_dob
 from cairn_matcher.records import DateValue
 
@@ -67,3 +69,44 @@ def test_two_digit_year_degrades_to_none():
 def test_non_four_digit_year_degrades_to_none():
     assert parse_dob("198-07-15", "day") is None
     assert parse_dob("19800-07-15", "day") is None
+
+
+def test_a_day_date_is_iso_digits_and_nothing_after():
+    # The name+monthday blocking key reads this grammar on ASCII input; the two must agree, or
+    # a pair the scorer can grade is never generated (or a junk value forms a key).
+    assert parse_dob(" 1980-07-15 ", "day") == DateValue(year=1980, month=7, day=15)
+    assert parse_dob("\t1980-07-15\r\n", "day") == DateValue(year=1980, month=7, day=15)
+    assert parse_dob("1980-7-5", "day") == DateValue(year=1980, month=7, day=5)
+    assert parse_dob("1980-07-15-x", "day") is None
+    assert parse_dob("1980-07-15T00:00", "day") is None
+    assert parse_dob("1980-07- 15", "day") is None
+    assert parse_dob("1980-007-15", "day") is None
+    # Digits in the right shape but no real month or day: no DateValue, and no blocking key.
+    assert parse_dob("1980-00-00", "day") is None
+    assert parse_dob("1980-13-07", "day") is None
+    assert parse_dob("1980-01-32", "day") is None
+
+
+@pytest.mark.parametrize("value", [
+    "١٩٨٠-٠٧-١٥",   # Arabic-Indic digits
+    "۱۹۸۰-۰۷-۱۵",   # Extended Arabic-Indic (Persian) digits
+    "१९८०-०७-१५",   # Devanagari digits
+    "１９８０-０７-１５",  # full-width digits, as an East Asian IME types them
+])
+def test_a_dob_in_another_scripts_digits_is_read(value):
+    # A DOB is a number whatever script its digits are in. Rejecting it throws away the
+    # strongest field the pair has (EXACT +6) on a chart the name pass still pairs, so a real
+    # duplicate falls below review with nothing to say why (ADR-0014: no cultural capture).
+    assert parse_dob(value, "day") == DateValue(year=1980, month=7, day=15)
+
+
+@pytest.mark.parametrize("value", [
+    "\u00a01980-07-15",  # no-break space: not the ASCII whitespace the SQL key strips
+    "1980-07-15\u3000",  # ideographic space
+    "1980-07-15\x1c",    # HL7 MLLP's end-of-block byte, which str.strip() would remove
+    "1980-07-15²",       # a superscript digit: str.isdigit() accepts it, but it is no decimal
+])
+def test_only_ascii_whitespace_is_stripped_and_only_decimal_digits_read(value):
+    # Exactly the set blocking_sql's name+monthday regex strips, in every database locale (a
+    # bare \s follows the locale), so a value one side reads the other side keys.
+    assert parse_dob(value, "day") is None

@@ -55,3 +55,13 @@ def test_persist_of_a_below_floor_assessment_retracts_a_pending_row(pg_conn):
     with pg_conn.cursor() as cur:
         cur.execute("SELECT status FROM match_proposal")
         assert cur.fetchone()[0] == "retracted"
+
+
+def test_assess_names_a_dob_keying_error_in_the_evidence(pg_conn):
+    # Spec 2026-10-11: same name, DOBs one day/month swap apart -> NEAR (+2), REVIEW, and the
+    # payload says which keying error the matcher suspects.
+    seed_patient(pg_conn, PA, dob=("1950-01-07", 60), names=[("Mary Smith", 60)])
+    seed_patient(pg_conn, PB, dob=("1950-07-01", 60), names=[("Mary Smith", 60)])
+    a = assess(pg_conn, PA, PB)
+    assert a.band is Band.REVIEW
+    assert {"kind": "dob_near_miss", "pattern": "day and month swapped"} in a.payload.evidence
