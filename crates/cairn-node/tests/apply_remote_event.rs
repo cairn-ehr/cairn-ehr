@@ -734,3 +734,74 @@ async fn oversized_event_is_refused_at_apply() {
         db_msg(&err)
     );
 }
+
+// ---------------------------------------------------------------------------
+// #626 — a malformed uuid field from a peer is a deliberate refusal, never a cast error.
+// ---------------------------------------------------------------------------
+
+/// Apply `body` (signed by `sk`) and return the refusal's SQLSTATE and message. Panics if
+/// the door admitted it: every caller here expects a refusal.
+async fn refusal_of(c: &Client, sk: &SigningKey, body: &EventBody) -> (String, String) {
+    let signed = sign(body, sk).unwrap();
+    let err = apply(c, &signed.signed_bytes)
+        .await
+        .expect_err("a malformed uuid field must be refused");
+    let d = err
+        .as_db_error()
+        .expect("a door refusal, not a transport error");
+    (d.code().code().to_string(), d.message().to_string())
+}
+
+/// #626. `EventBody`'s uuid fields are plain `String`s, so bytes that VERIFY can still carry
+/// a non-uuid `event_id`, `patient_id` or shred `target_event_id` (a misbehaving trusted
+/// peer, or cross-version skew). db/020 cast them with a raw `::uuid`, which fails with
+/// SQLSTATE 22P02, not the P0001 every caller reads as "the floor refused these bytes".
+/// cairn-sync's puller treats a verifiable event that fails with anything but P0001 as
+/// TRANSIENT and freezes the peer's cursor to retry — but a cast fails identically every
+/// cycle, so that peer's whole clinical stream stopped for good, with nothing penned for an
+/// operator to see. As P0001 it is penned in sync_quarantine and the pull moves on.
+///
+/// Each field's refusal must be P0001 AND name the field, so the pen says what was wrong.
+#[tokio::test]
+async fn a_malformed_uuid_field_is_a_p0001_refusal_never_a_cast_error() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, _sk_h, _kid_h) = setup(&c).await;
+    let patient = Uuid::now_v7();
+
+    let mut bad_event_id = note(&kid_a, patient, WALL_2026, None);
+    bad_event_id.event_id = "not-a-uuid".into();
+
+    let mut bad_patient_id = note(&kid_a, patient, WALL_2026, None);
+    bad_patient_id.patient_id = "not-a-uuid".into();
+
+    // A shred is plaintext by design (ADR-0052), so its target is read straight from the
+    // signed payload — by the db/037 floor check at step 8 and again at step 10.
+    let mut bad_shred_target = note(&kid_a, patient, WALL_2026, None);
+    bad_shred_target.event_type = "erasure.shred.asserted".into();
+    bad_shred_target.schema_version = "erasure.shred/1".into();
+    bad_shred_target.payload =
+        serde_json::json!({"target_event_id": "not-a-uuid", "basis": "patient request"});
+    bad_shred_target.plaintext_twin = Some("Erasure: shred requested".into());
+
+    for (field, body) in [
+        ("event_id", &bad_event_id),
+        ("patient_id", &bad_patient_id),
+        ("target_event_id", &bad_shred_target),
+    ] {
+        let (code, msg) = refusal_of(&c, &sk_a, body).await;
+        assert_eq!(
+            code, "P0001",
+            "{field}: a malformed uuid must be a deliberate refusal (P0001), got {code}: {msg}"
+        );
+        assert!(
+            msg.contains(field),
+            "{field}: the refusal must name the field, got: {msg}"
+        );
+    }
+    assert_eq!(event_count(&c, patient).await, 0, "nothing was admitted");
+}

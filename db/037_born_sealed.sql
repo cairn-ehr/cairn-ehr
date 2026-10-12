@@ -108,7 +108,10 @@ BEGIN
     IF (b -> 'payload' ->> 'target_event_id') IS NULL THEN
         RAISE EXCEPTION 'erasure.shred: payload must name target_event_id (ADR-0052)';
     END IF;
-    PERFORM (b -> 'payload' ->> 'target_event_id')::uuid;
+    -- #626: a deliberate P0001 naming the field, never a raw cast's 22P02. This check runs
+    -- at BOTH doors, and on the sync door a non-P0001 failure freezes the peer's pull.
+    PERFORM cairn_uuid_or_raise('target_event_id', b -> 'payload' ->> 'target_event_id',
+                                'erasure.shred');
     IF COALESCE(b -> 'payload' ->> 'basis', '') = '' THEN
         RAISE EXCEPTION 'erasure.shred: payload must carry a non-empty basis (the audited "why" — ADR-0005 rung 3)';
     END IF;

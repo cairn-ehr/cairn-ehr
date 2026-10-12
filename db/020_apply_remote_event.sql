@@ -131,7 +131,13 @@ BEGIN
         RAISE EXCEPTION 'apply_remote_event: event body could not be parsed after verify';
     END IF;
 
-    v_event_id := (b ->> 'event_id')::uuid;
+    -- #626: through cairn_uuid_or_raise (db/001), never a raw `::uuid`. EventBody's uuid fields
+    -- are plain strings, so VERIFIED bytes can still carry a non-uuid here (a misbehaving
+    -- trusted peer, cross-version skew). A raw cast fails 22P02, which cairn-sync's puller reads
+    -- as transient and freezes that peer's cursor on, forever: the cast fails identically every
+    -- cycle. The helper's P0001 is a deliberate refusal, which the puller pens and moves past.
+    -- Same grammar as the cast (pg_input_is_valid), so no event that applied before is refused.
+    v_event_id := cairn_uuid_or_raise('event_id', b ->> 'event_id', 'apply_remote_event');
     v_type     := b ->> 'event_type';
     -- content_address = sha256 multihash of the signed wire bytes, identical to
     -- event_address() in cairn-event and the db/001 CHECK.
@@ -444,7 +450,9 @@ BEGIN
          signer_key_id, plaintext_twin, attachments, attestation, attester_key, actor_id, sealed,
          clock_grade, safety)
     VALUES (
-        v_event_id, (b ->> 'patient_id')::uuid, v_type, b ->> 'schema_version',
+        -- #626: as event_id above — a deliberate P0001, never a 22P02 that freezes the pull.
+        v_event_id, cairn_uuid_or_raise('patient_id', b ->> 'patient_id', 'apply_remote_event'),
+        v_type, b ->> 'schema_version',
         (b -> 'hlc' ->> 'wall')::bigint, (b -> 'hlc' ->> 'counter')::int,
         b -> 'hlc' ->> 'node_origin',
         v_t_eff,
@@ -557,7 +565,10 @@ BEGIN
     --     (v_sealed is false for erasure.*), so b_clear = b here.
     IF v_type = 'erasure.shred.asserted' THEN
         PERFORM cairn_execute_shred(
-            (b_clear -> 'payload' ->> 'target_event_id')::uuid,
+            -- #626: db/037's floor check has already refused a malformed target at step 8
+            -- through the same helper; this is the same read, so it cannot disagree.
+            cairn_uuid_or_raise('target_event_id', b_clear -> 'payload' ->> 'target_event_id',
+                                'apply_remote_event'),
             v_event_id, COALESCE(b_clear -> 'payload' ->> 'basis', '(unrecorded)'));
     END IF;
 
