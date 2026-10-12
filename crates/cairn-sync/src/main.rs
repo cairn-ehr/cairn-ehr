@@ -1336,6 +1336,29 @@ fn record_pull_failure(line: &mut serde_json::Value, e: &(dyn Error + 'static)) 
     }
 }
 
+/// The ONE operator line for a page whose sidecar DEKs this node could not open (issue #536).
+///
+/// Pure, so its wording is unit-tested. It replaces a line per EVENT: under the systematic
+/// cause — this node's unwrap secret is not the one the DEKs were wrapped to, which a backup
+/// medium makes possible by passing DEKs through wrapped to the CAPTURING node (slice 2d) —
+/// that was one line per sealed event in the log and no other signal at all, beside an exit 0.
+/// The count also reaches the pull's JSON as `custody_unopenable`. Every input is this node's
+/// own (its `--peer-name` and seqs it counted), so nothing here needs escaping.
+fn custody_unopenable_message(
+    peer_name: &str,
+    count: usize,
+    first_seq: i64,
+    last_seq: i64,
+) -> String {
+    format!(
+        "pull {peer_name}: {count} sidecar DEK(s) in seq {first_seq}..={last_seq} failed to open \
+         with this node's unwrap secret — those events were admitted WITHOUT custody, so their \
+         sealed bodies are unreadable here (counted in `custody_unopenable`). If this is every \
+         sealed event, this node's unwrap secret is not the one the DEKs were wrapped to — e.g. \
+         a restore that did not adopt the exported unwrap secret (ADR-0066)."
+    )
+}
+
 /// The operator line for a peer that withheld custody for a batch (issue #231).
 ///
 /// Extracted from `do_pull` and made pure so its ESCAPING is testable (#466 review). The
@@ -3486,6 +3509,12 @@ fn do_pull(
         // the pull having to fail. Revisit if a real deployment finds the line alone
         // too quiet to notice.
         "custody_withheld": cycle.custody_withheld,
+        // Slots whose sidecar DEK this node could NOT open (#536): admitted WITHOUT custody,
+        // so their sealed bodies are unreadable here. Not `custody_withheld` — the peer made
+        // no decision — and, on the same terms, not loud: the events all arrived. A monitor
+        // should alert on it, because the systematic case (a restore that did not adopt the
+        // exported unwrap secret, ADR-0066) makes it equal to every sealed event pulled.
+        "custody_unopenable": cycle.custody_unopenable,
         // Attachment references admitted-but-unlearnable this cycle (issue #465), for
         // the same reason and on the same terms as `custody_withheld` above: a real
         // degradation this node must know about, which must not fail the cycle. Counts
@@ -3871,6 +3900,10 @@ fn apply_page(
     // Verifiable events the floor refused and we penned IN THIS PAGE (issue #267). The
     // cycle's total is `CycleTally::refused_verifiable`, summed by `fold`.
     let mut refused_verifiable = 0usize;
+    // Slots whose sidecar DEK this node's unwrap secret could not open (#536), and the seq
+    // range they span — for the ONE summary line printed after the loop.
+    let mut custody_unopenable = 0usize;
+    let mut unopenable_seqs: Option<(i64, i64)> = None;
     // Content addresses of every event the door ADMITTED IN THIS PAGE — new or re-offered.
     // `fold` concatenates them across the cycle, and the OTHER key the attachment-reference
     // ledger is read back on — the flag high-water mark from before any of this cycle's
@@ -3973,10 +4006,14 @@ fn apply_page(
                     {
                         Some(d) => Some(d),
                         None => {
-                            eprintln!(
-                                "pull {peer_name}: sidecar DEK for seq {seq} failed to open — \
-                                 admitting the event WITHOUT custody"
-                            );
+                            // Counted, and reported ONCE per page below (#536) — not one
+                            // line per event, which under a wrong unwrap secret is one line
+                            // per sealed event in the whole log and nothing else.
+                            custody_unopenable += 1;
+                            unopenable_seqs = Some(match unopenable_seqs {
+                                Some((lo, hi)) => (lo.min(seq), hi.max(seq)),
+                                None => (seq, seq),
+                            });
                             None
                         }
                     },
@@ -4266,6 +4303,13 @@ fn apply_page(
         }
     }
 
+    if let Some((lo, hi)) = unopenable_seqs {
+        eprintln!(
+            "{}",
+            custody_unopenable_message(peer_name, custody_unopenable, lo, hi)
+        );
+    }
+
     pull_page::PageTally {
         shipped: resp.events.len(),
         applied,
@@ -4280,6 +4324,7 @@ fn apply_page(
         pen_refused,
         pin,
         custody_withheld: resp.custody_withheld.is_some(),
+        custody_unopenable,
         applied_addresses,
     }
 }
@@ -5892,29 +5937,73 @@ fn rewrap_custody_for_peer(
             let hexed = slot.as_deref()?;
             // A PRESENT local DEK that fails to re-wrap, though, is an operator-visible
             // degradation — the event still syncs but its custody silently vanishes, blanking
-            // the sealed projection on every puller. The usual cause is a serve `--key` whose
-            // derived unwrap secret does not match the registered node_unwrap_key (a misconfig,
-            // or an un-re-wrapped key rotation). Log it rather than fail silently — mirrors the
-            // pull-side "sidecar DEK failed to open — admitting WITHOUT custody" line.
-            let rewrap = || -> Option<String> {
-                let local = hex::decode(hexed).ok()?;
-                let dek = cairn_event::seal::unwrap_dek(&local, own_secret).ok()?;
-                let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub).ok()?;
-                Some(hex::encode(rewrapped))
-            };
-            if let Some(s) = rewrap() {
-                Some(s)
-            } else {
-                eprintln!(
-                    "cairn-sync serve: DEK re-wrap failed for custody slot {i} — serving this \
-                     event WITHOUT custody. Check the serve --key matches the node's registered \
-                     unwrap key (a mismatched key or un-re-wrapped rotation blanks sealed \
-                     projections on every puller)."
-                );
-                None
+            // the sealed projection on every puller. Log it rather than fail silently, naming
+            // WHICH step failed (#536): the three have different owners, and a single message
+            // used to send the operator to the serve `--key` for a corrupt row in this node's
+            // own `event_dek` table.
+            match rewrap_one_dek(hexed, own_secret, requester_pub) {
+                Ok(s) => Some(s),
+                Err(cause) => {
+                    eprintln!(
+                        "cairn-sync serve: DEK re-wrap failed for custody slot {i} — serving \
+                         this event WITHOUT custody: {}",
+                        cause.operator_text()
+                    );
+                    None
+                }
             }
         })
         .collect()
+}
+
+/// Which step of re-wrapping ONE stored DEK for a peer failed (#536). Each has a different
+/// owner, so each gets its own operator sentence.
+#[derive(Debug, PartialEq, Eq)]
+enum RewrapFailure {
+    /// This node's own `event_dek.dek_wrapped` is not valid hex: a corrupt row HERE.
+    StoredNotHex,
+    /// This node's unwrap secret cannot open its own stored DEK: the serve `--key` /
+    /// `--unwrap-key` does not match the registered node unwrap key (a misconfiguration, or a
+    /// rotation whose DEKs were never re-wrapped).
+    OwnSecretCannotOpen,
+    /// Wrapping for the requester's key failed: the requester's unwrap cert carries a key
+    /// that cannot be wrapped to.
+    RequesterKeyUnusable,
+}
+
+impl RewrapFailure {
+    fn operator_text(&self) -> &'static str {
+        match self {
+            RewrapFailure::StoredNotHex => {
+                "this node's stored dek_wrapped is not valid hex — a corrupt event_dek row on \
+                 THIS node"
+            }
+            RewrapFailure::OwnSecretCannotOpen => {
+                "this node's unwrap secret cannot open its own stored DEK — check the serve \
+                 --key/--unwrap-key matches the node's registered unwrap key (a mismatched key \
+                 or an un-re-wrapped rotation blanks sealed projections on every puller)"
+            }
+            RewrapFailure::RequesterKeyUnusable => {
+                "the DEK could not be wrapped to the requester's unwrap key — the requester's \
+                 unwrap cert is the thing to check"
+            }
+        }
+    }
+}
+
+/// Re-wrap ONE stored DEK (hex, wrapped to this node) for the requester. **Pure**, so each
+/// failure step is unit-tested with no socket and no database.
+fn rewrap_one_dek(
+    stored_hex: &str,
+    own_secret: &Secret32,
+    requester_pub: &PublicKey32,
+) -> Result<String, RewrapFailure> {
+    let local = hex::decode(stored_hex).map_err(|_| RewrapFailure::StoredNotHex)?;
+    let dek = cairn_event::seal::unwrap_dek(&local, own_secret)
+        .map_err(|_| RewrapFailure::OwnSecretCannotOpen)?;
+    let rewrapped = cairn_event::seal::wrap_dek_for(&dek, requester_pub)
+        .map_err(|_| RewrapFailure::RequesterKeyUnusable)?;
+    Ok(hex::encode(rewrapped))
 }
 
 /// `custody` (ADR-0052): this node's signing key and unwrap secret, resolved once at
@@ -8267,6 +8356,41 @@ mod tests {
         );
     }
 
+    /// #536 secondary: each failing step of a re-wrap is told apart, because each has a
+    /// different owner — a corrupt row here, this node's own key, or the requester's cert.
+    #[test]
+    fn rewrap_failures_name_the_step_that_failed() {
+        let own_secret =
+            cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(derived_bytes(0x81)));
+        let peer_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+            &Secret32::from_bytes(derived_bytes(0x82)),
+        ));
+        assert_eq!(
+            rewrap_one_dek("not hex", &own_secret, &peer_pub),
+            Err(RewrapFailure::StoredNotHex)
+        );
+        // Wrapped to a DIFFERENT node's key: this node's secret cannot open it.
+        let other_pub = cairn_event::seal::unwrap_public(&cairn_event::seal::derive_unwrap_secret(
+            &Secret32::from_bytes(derived_bytes(0x83)),
+        ));
+        let foreign =
+            cairn_event::seal::wrap_dek_for(&Secret32::from_bytes(derived_bytes(0x84)), &other_pub)
+                .unwrap();
+        assert_eq!(
+            rewrap_one_dek(&hex::encode(foreign), &own_secret, &peer_pub),
+            Err(RewrapFailure::OwnSecretCannotOpen)
+        );
+        assert!(RewrapFailure::StoredNotHex
+            .operator_text()
+            .contains("THIS node"));
+        assert!(!RewrapFailure::StoredNotHex
+            .operator_text()
+            .contains("--key"));
+        assert!(RewrapFailure::OwnSecretCannotOpen
+            .operator_text()
+            .contains("--key"));
+    }
+
     #[test]
     fn rewrap_custody_leaves_a_none_slot_none() {
         // (b) A None local slot (unsealed event / no custody here / shredded) stays
@@ -9630,6 +9754,90 @@ mod quarantine_tests {
     /// and every sealed body from page 2 onward of a multi-page catch-up is admitted with no
     /// DEK: an unrenderable chart and no crypto-shred custody, with zero operator signal.
     /// That is exactly the blindness #231 was filed to end, on the axis paging added.
+    /// Issue #536. A sidecar DEK this node cannot open degrades its slot to "no custody" —
+    /// the event is still admitted, which is right (ADR-0052: withhold the key, never the
+    /// bytes) — but it used to be counted NOWHERE: one stderr line per event, no tally, no
+    /// metric, `custody_withheld` false (that field means the peer DECIDED to withhold), and a
+    /// clean exit. Under a backup medium (slice 2d) a restore that adopted the wrong unwrap
+    /// secret fails EVERY sealed slot this way and reported a healthy pull over a node whose
+    /// sealed charts are all blank.
+    ///
+    /// Two slots fail to open here — one wrapped to a DIFFERENT node's key (the wrong-secret
+    /// case), one that is not even hex — and the third carries none at all, which is the
+    /// normal unsealed case and must not be counted. The pull stays Ok: like
+    /// `custody_withheld`, this degradation must not fail the cycle.
+    #[test]
+    fn an_unopenable_sidecar_dek_is_counted_and_published() {
+        let Some(base) = cs() else {
+            eprintln!("skipped: set CAIRN_TEST_PG");
+            return;
+        };
+        let mut c = locked_client(&base);
+        let (sk, kid) = enrolled_key(&mut c);
+        let ev: Vec<Vec<u8>> = (0..3)
+            .map(|i| peer_note(&sk, &kid, WALL_2026 + i))
+            .collect();
+        let custody = unwrap_key::NodeCustody {
+            signing_key: sk.clone(),
+            unwrap_secret: Secret32::from_bytes(std::array::from_fn(|i| {
+                (i as u8).wrapping_mul(7).wrapping_add(1)
+            })),
+        };
+        // Wrapped for SOME OTHER node's key, so this node's secret cannot open it.
+        let elsewhere =
+            cairn_event::seal::unwrap_public(&Secret32::from_bytes(std::array::from_fn(|i| {
+                (i as u8).wrapping_mul(13).wrapping_add(5)
+            })));
+        let foreign = cairn_event::seal::wrap_dek_for(
+            &Secret32::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_add(9))),
+            &elsewhere,
+        )
+        .unwrap();
+        let page = serde_json::to_vec(&EventsResponse {
+            events: ev.iter().map(hex::encode).collect(),
+            attestations: vec![None; 3],
+            attester_keys: vec![None; 3],
+            seqs: vec![1, 2, 3],
+            signing_context: Some(CTX_EVENT.as_str().to_string()),
+            wrapped_deks: vec![Some(hex::encode(foreign)), Some("not hex".into()), None],
+            custody_withheld: None,
+            complete: true,
+        })
+        .unwrap();
+        let t = FakeTransport::new(vec![page]);
+
+        let m = do_pull(&mut c, &t, "peer-a", false, 10, Some(&custody))
+            .expect("an unopenable DEK degrades custody; it must not fail the cycle");
+        assert_eq!(m["applied_new"], 3, "every event is still admitted");
+        assert_eq!(
+            m["custody_unopenable"], 2,
+            "both unopenable slots are counted, and the slot with no DEK is not: {m}"
+        );
+        assert_eq!(
+            m["custody_withheld"], false,
+            "the peer withheld nothing — that field must keep meaning a peer DECISION"
+        );
+    }
+
+    /// The one summary line a page with unopenable DEKs prints (#536), instead of one line per
+    /// event. Pure. It must name the count and the seq range, say plainly that the sealed
+    /// bodies are unreadable HERE, and point at the cause that makes it systematic.
+    #[test]
+    fn the_unopenable_custody_line_names_the_count_the_range_and_the_likely_cause() {
+        let m = custody_unopenable_message("peer-a", 7, 12, 40);
+        assert!(m.starts_with("pull peer-a: "), "{m}");
+        assert!(
+            m.contains("7 sidecar DEK(s)") && m.contains("seq 12..=40"),
+            "{m}"
+        );
+        assert!(
+            m.contains("WITHOUT custody") && m.contains("unreadable"),
+            "{m}"
+        );
+        assert!(m.contains("unwrap secret"), "{m}");
+        assert!(!m.contains('\n'), "one line: {m}");
+    }
+
     #[test]
     fn the_unwrap_cert_travels_on_every_page_of_a_cycle() {
         let Some(base) = cs() else {

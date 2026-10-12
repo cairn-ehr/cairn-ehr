@@ -107,6 +107,10 @@ pub(crate) struct PageTally {
     pub(crate) pin: Option<i64>,
     /// The peer deliberately withheld custody for this page (ADR-0052, #231).
     pub(crate) custody_withheld: bool,
+    /// Slots whose sidecar DEK this node could NOT open, admitted without custody (#536).
+    /// Not a peer decision — that is `custody_withheld` — but this node's own unwrap secret
+    /// failing to open what the peer sent; summed across the cycle, never loud.
+    pub(crate) custody_unopenable: usize,
     /// Content addresses of every event the door ADMITTED, for the #465 ledger read.
     pub(crate) applied_addresses: Vec<Vec<u8>>,
 }
@@ -138,6 +142,7 @@ impl PageTally {
             pen_refused: None,
             pin: None,
             custody_withheld: false,
+            custody_unopenable: 0,
             applied_addresses: Vec::new(),
         }
     }
@@ -159,6 +164,7 @@ pub(crate) struct CycleTally {
     pub(crate) pen_refused: Option<PenRefusal>,
     pub(crate) pin: Option<i64>,
     pub(crate) custody_withheld: bool,
+    pub(crate) custody_unopenable: usize,
     pub(crate) applied_addresses: Vec<Vec<u8>>,
     /// Pages folded so far — reported as a metric, and the thing to look at when a cycle is
     /// slow for a reason no counter explains.
@@ -183,6 +189,7 @@ impl CycleTally {
             pen_refused: None,
             pin: None,
             custody_withheld: false,
+            custody_unopenable: 0,
             applied_addresses: Vec::new(),
             pages: 0,
         }
@@ -212,6 +219,7 @@ impl CycleTally {
             pen_refused,
             pin,
             custody_withheld,
+            custody_unopenable,
             applied_addresses,
         } = page;
         self.shipped += shipped;
@@ -227,6 +235,7 @@ impl CycleTally {
         self.frozen |= frozen;
         self.local_apply_fault |= local_apply_fault;
         self.custody_withheld |= custody_withheld;
+        self.custody_unopenable += custody_unopenable;
         self.applied_addresses.extend(applied_addresses);
         if let Some(next) = pen_refused {
             // `merge_pen_refusal` already encodes the cross-refusal rule for a CYCLE:
