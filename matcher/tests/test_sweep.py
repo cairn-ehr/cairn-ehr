@@ -143,7 +143,7 @@ def test_sweep_reports_progress_only_after_a_successful_pair_in_both_passes(pg_c
         return None
 
     monkeypatch.setattr(sweep_mod, "propose", fake_propose)
-    monkeypatch.setattr(db, "pending_proposal_pairs", lambda conn: [orphan_ok, orphan_bad])
+    monkeypatch.setattr(db, "awaiting_proposal_pairs", lambda conn: [orphan_ok, orphan_bad])
     result = sweep_mod.sweep(pg_conn, on_progress=lambda: events.append(("progress",)))
     assert result.generated == 2 and result.reconciled == 1 and len(result.errors) == 2
     proposes = [e for e in events if e[0] == "propose"]

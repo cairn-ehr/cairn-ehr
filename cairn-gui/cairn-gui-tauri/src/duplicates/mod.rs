@@ -29,8 +29,8 @@ use cairn_node::duplicate_review::{self, DifferentPeople};
 use uuid::Uuid;
 use view::{
     check_lines, different_people_error_view, entry_view, fixture_section, medications_of,
-    section_view, ChartCheck, DuplicateSection, PairResult, DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN,
-    NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
+    section_view, ChartCheck, DuplicateSection, EntryFlags, PairResult, ACCEPTED_NOT_OVERRULED,
+    DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
 };
 
 /// The banner for the displayed record. Never fails: every failure is a worded line (an absent
@@ -94,7 +94,16 @@ pub async fn duplicate_section(
                     &entry.other_record,
                     read_chart_of(state, entry.review_chart).await,
                 );
-                shown.push(entry_view(entry.review_chart, entry.vetoed, ids, meds));
+                shown.push(entry_view(
+                    entry.review_chart,
+                    EntryFlags {
+                        vetoed: entry.vetoed,
+                        accepted: entry.accepted,
+                        disputed: entry.disputed,
+                    },
+                    ids,
+                    meds,
+                ));
             }
             Ok((shown, total))
         }
@@ -222,8 +231,16 @@ pub async fn different_people_impl(
         ),
         retry: Retry::Now,
     })?;
+    different_people_view(outcome)
+}
+
+/// The window's reading of a "Different people" outcome. **Pure**, so the refusals are
+/// testable without a database. `AcceptedAsSame` (#736): a human already accepted the pair as
+/// the same person, so this judgement would silently overrule them; nothing was written.
+fn different_people_view(outcome: DifferentPeople) -> Result<LinkReportView, ErrorView> {
     match outcome {
         DifferentPeople::NothingOpen => Err(refused(NOTHING_OPEN)),
+        DifferentPeople::AcceptedAsSame => Err(refused(ACCEPTED_NOT_OVERRULED)),
         DifferentPeople::Judged(judged) => view::different_people_report(
             judged
                 .into_iter()
@@ -402,7 +419,16 @@ mod tests {
     fn duplicates_js_reads_no_field_the_backend_does_not_send() {
         use crate::commands::tests::fields_read_in;
         let js = include_str!("../../src-ui/duplicates.js");
-        let entry = view::entry_view(Uuid::from_u128(9), true, Ok(vec![]), Err("x".into()));
+        let entry = view::entry_view(
+            Uuid::from_u128(9),
+            view::EntryFlags {
+                vetoed: true,
+                accepted: false,
+                disputed: false,
+            },
+            Ok(vec![]),
+            Err("x".into()),
+        );
         let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
             v.as_object().unwrap().keys().cloned().collect()
         };
@@ -425,5 +451,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// #736: "Different people" on an accepted pair is refused, wording and `Retry::Never`.
+    #[test]
+    fn accepted_as_same_maps_to_the_not_overruled_refusal() {
+        let err = different_people_view(DifferentPeople::AcceptedAsSame).unwrap_err();
+        assert_eq!(err.text, view::ACCEPTED_NOT_OVERRULED);
+        assert_eq!(err.retry, Retry::Never);
     }
 }

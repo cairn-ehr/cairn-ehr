@@ -4120,9 +4120,14 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!(
-                "auto-apply: applied {}  vetoed->review {}  human-judged (left pending) {}  \
-                 skipped {}  errored {}",
-                s.applied, s.vetoed_to_review, s.human_judged, s.skipped, s.errored
+                "auto-apply: applied {}  vetoed->review {}  disputed->review {}  \
+                 human-judged (left pending) {}  skipped {}  errored {}",
+                s.applied,
+                s.vetoed_to_review,
+                s.disputed_to_review,
+                s.human_judged,
+                s.skipped,
+                s.errored
             );
             // Non-zero exit when anything errored, so a systematic failure can't pass as a
             // healthy quiet run in a cron/pipeline (the summary line is still printed above).

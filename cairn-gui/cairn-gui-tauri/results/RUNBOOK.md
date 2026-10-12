@@ -456,3 +456,82 @@ not an adjustment. Five opens each, same session state (key locked or unlocked, 
 
 Record in the template's *Review a possible duplicate* section. **A figure outside the ≤ 20 s budget,
 or a banner open slower than the single-chart open, is a finding to file, never a budget to adjust.**
+
+## 12. Clear the possible-duplicate tray (R5b, [#680](https://github.com/cairn-ehr/cairn-ehr/issues/680))
+
+The repair path's fourth §1.2 figure: the records clerk's tray at the front door, which gets a human
+to the right chart without knowing which one to open. **Review opens the NEWER record** (usually the
+just-registered duplicate); its R5a banner then shows the older one, so the judgement itself is
+section 11's gesture.
+
+**Setup.** Five near-duplicate pairs, each pair a name and a date of birth registered twice (distinct
+names and dates, so pairs do not match each other), then one drain of the duplicate-check worker
+(exit 0, as in section 11). For a banner with a drug list to read, give the OLDER chart of a pair one
+active medication first (section 2's seeding). Launch WITHOUT `--patient`, with the human key:
+
+```bash
+while IFS='|' read -r n dob; do
+    for _ in 1 2; do
+        $NODE patient-register --name "$n" --birth-date "$dob" --confirm-new >/dev/null \
+            || echo "registration failed: $n" >&2
+    done
+done <<'SEED'
+Avery Alder|1961-01-11
+Blake Birchall|1962-02-12
+Casey Cedarwood|1963-03-13
+Drew Dunmore|1964-04-14
+Emery Elmsworth|1965-05-15
+SEED
+uv run --project matcher --extra pipeline cairn-matcher watch --once --dsn "$CONN"
+cd cairn-gui
+cargo run --release -p cairn-gui-tauri -- --conn "$CONN" --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+```
+
+The front door shows **"Possible duplicates (5)"** below the registration form (more if section 11's
+pairs are still open; record the figure). A status line above the tray means the node is not Current;
+record it, because then an empty tray would not mean "none".
+
+**Measurement 1 — tray to recorded judgement.** Start the stopwatch at the first act on the tray and
+stop it at section 11's outcome line ("Recorded: …" or "Linked — …").
+
+1. Expand the tray (once per session; it stays open across returns).
+2. Press the entry's **Review**. The newer chart opens.
+3. Press **Review** on the chart's banner. The compare panel opens.
+4. Read it.
+5. Press **Different people** or **Link — same person**.
+
+Then press **Find another patient**: the judged entry must be gone and the count one lower. Run the
+first entry with the tray closed (5 acts) and the rest with it already open (4 acts, steps 2–5).
+Budget **≤ 25 s per entry**. Record per run: the time, which verdict, and whether the tray was open.
+
+> [!NOTE]
+> The plan's step count (4 → 3) leaves out step 3, the banner's own Review. As built (UI),
+> the count is **5** with the tray closed and **4** with it open, against paper's 4. Record the
+> real count; whether the tray's Review should open the compare panel directly is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754).
+
+**Measurement 2 — find, with the tray present and with it OPEN.** Re-run section 8's step 1 (`mich`,
+budget **≤ 5 s**; needs section 8's seed on this node) three ways, five runs each: no open
+proposals (tray hidden); tray present and closed; tray **open**, timed right after **Find another
+patient**. An open tray re-reads its list on every return, over the connection the search shares.
+All three must be inside ≤ 5 s, and the open-tray figure must not be visibly slower than the hidden
+one. Record how many entries the tray showed.
+
+**`--mock` variant.** `--mock` has one fixture entry, under the status line "Duplicate check has
+never run on this node." Its Review opens the fixture chart with no banner (the mock has no
+proposals, #722). Time only steps 1–2 there (expand → chart open), and keyboard-walk it. Report it
+separately from the live figure; never merge the two.
+
+**Accessibility, same pass as section 6** (VoiceOver, keyboard only):
+
+- [ ] The tray's summary is announced with its count ("Possible duplicates (5)").
+- [ ] It expands and collapses from the keyboard (Tab to the summary, then Space or Enter), with no
+      mouse.
+- [ ] Each **Review** announces the newer record's first identity line, so two entries are told
+      apart by name, never a bare "Review" repeated.
+- [ ] Nothing in the tray takes focus by itself or is announced as an alert, on boot or on a return.
+- [ ] On a non-Current node the status line is read before the tray, so "(0)" is never heard as
+      "checked, none".
+
+Record in the template's *Clear the possible-duplicate tray* section. **A figure outside its budget,
+an open-tray find slower than the hidden one, or a step count above paper's is a finding to file,
+never a budget to adjust.**

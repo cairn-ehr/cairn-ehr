@@ -66,6 +66,21 @@
           <button id="register" type="submit">Register new patient</button>
           <p id="register-outcome" role="status" aria-live="polite"></p>
         </form>
+
+        <!-- The records clerk's possible-duplicate tray (R5b, #680). Below the find and register
+             forms (DOM order is clinical: the desk's work comes first); closed by default, its
+             summary the count. Never role="alert", never takes focus. Hidden only when nothing is
+             open AND the duplicate check is current (worklist/view.rs).
+             The status line (why the count may not be the whole truth: check not yet run,
+             stalled...) sits OUTSIDE the <details> on purpose: inside it, a collapsed tray would
+             show a bare "(0)" and hide the very reason that 0 is not "none" (principle 4). -->
+        <p id="duplicate-tray-status" hidden></p>
+        <details id="duplicate-tray" hidden>
+          <summary id="duplicate-tray-summary"></summary>
+          <p id="duplicate-tray-error" role="status" hidden></p>
+          <ol id="duplicate-tray-list" aria-label="Possible duplicates, newest first"></ol>
+          <p id="duplicate-tray-more" hidden></p>
+        </details>
       </section>
 
       <section id="chart-view" hidden>
@@ -207,6 +222,7 @@
     </main>
     <script src="main.js"></script>
     <script src="duplicates.js"></script>
+    <script src="worklist.js"></script>
     <script src="funnel.js"></script>
     <script src="link.js"></script>
     <script src="unlink.js"></script>

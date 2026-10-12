@@ -28,6 +28,26 @@ pub const OTHER_CHART_LABEL: &str = "On the other record — not part of this on
 /// (R2b-1's rule), read fresh; never worded here from stored JSON.
 pub const VETO_NOTE: &str =
     "Some recorded facts disagree between these charts — Review shows which.";
+/// An accepted pair's heading (#736): a human already said "same person" through C2, and the
+/// link has not been applied yet. "Not yet reviewed" would be false.
+pub const ACCEPTED_HEADING: &str = "Accepted as the same person — not yet linked";
+/// Another writer's un-attested unlink stands for the pair (ADR-0078). Shown, never hidden: the
+/// disagreement is exactly what the human should see (principle 4).
+pub const DISPUTED_NOTE: &str =
+    "Recorded as not the same person, without a clinician's confirmation on record here.";
+/// "Different people" on a pair a human already accepted as the same person (#736).
+pub const ACCEPTED_NOT_OVERRULED: &str = "a clinician has already accepted these as the same \
+     person, and that judgement is not overruled from here — nothing was done";
+
+/// What the node read says about one entry's pairs. `Default` (all false) is the plain
+/// "possible duplicate, not yet reviewed" entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EntryFlags {
+    pub vetoed: bool,
+    pub accepted: bool,
+    pub disputed: bool,
+}
+
 /// "Different people" after every pair between the two records was already judged or resolved
 /// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead).
 pub const NOTHING_OPEN: &str = "this possible duplicate has already been judged or resolved — \
@@ -75,8 +95,11 @@ pub struct DuplicateEntryView {
     pub heading: String,
     /// One line per chart of the other record (`member_line`'s text).
     pub identity_lines: Vec<String>,
-    /// Unread identity, veto note.
+    /// Unread identity, veto note, dispute note (an un-attested unlink stands, ADR-0078).
     pub notes: Vec<String>,
+    /// `false` for an accepted pair: "Different people" would silently overrule an earlier
+    /// human (#736). The backend refuses it anyway (`AcceptedAsSame`); this only hides the button.
+    pub offers_different_people: bool,
     pub medications_heading: String,
     /// The other record's CURRENT lines (the compare panel's own wording, `medication_lines`).
     pub medications: Vec<String>,
@@ -98,11 +121,13 @@ pub struct PairResult {
 }
 
 /// One banner entry from what was read about the other record: its identity lines (one per
-/// chart), whether the veto floor finds a disagreement now, and its current medications. A
-/// failed read is a note, never a missing entry; an entry always names at least a chart id.
+/// chart), its `flags` — the veto floor finds a disagreement now (a note), an un-attested unlink
+/// stands (the dispute note), a human already accepted the pair (the accepted heading, and no
+/// "Different people") — and its current medications. A failed read is a note, never a missing
+/// entry; an entry always names at least a chart id.
 pub fn entry_view(
     review_chart: Uuid,
-    vetoed: bool,
+    flags: EntryFlags,
     identities: Result<Vec<MemberLine>, String>,
     meds: Result<MedListView, String>,
 ) -> DuplicateEntryView {
@@ -120,8 +145,11 @@ pub fn entry_view(
             vec![format!("chart {review_chart}")]
         }
     };
-    if vetoed {
+    if flags.vetoed {
         notes.push(VETO_NOTE.into());
+    }
+    if flags.disputed {
+        notes.push(DISPUTED_NOTE.into());
     }
     let (medications, medication_notes) = match meds {
         Ok(list) => medication_lines(&list),
@@ -132,9 +160,16 @@ pub fn entry_view(
     };
     DuplicateEntryView {
         review_chart: review_chart.to_string(),
-        heading: HEADING.into(),
+        // An accepted pair is worded by its status, not as unreviewed (#736).
+        heading: if flags.accepted {
+            ACCEPTED_HEADING
+        } else {
+            HEADING
+        }
+        .into(),
         identity_lines,
         notes,
+        offers_different_people: !flags.accepted,
         medications_heading: OTHER_CHART_LABEL.into(),
         medications,
         medication_notes,
