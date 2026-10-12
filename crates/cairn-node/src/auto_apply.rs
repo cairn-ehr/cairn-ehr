@@ -90,6 +90,14 @@ pub enum AutoOutcome {
     /// machine overruling another — so the proposal went to human `review` and nothing was
     /// written. The worklist and banner show the dispute.
     DisputedToReview,
+    /// One of the two charts changed after the matcher scored the pair, and the matcher
+    /// worker has not re-scored it yet (a re-check notice still waits in db/056's
+    /// `match_pending`). The proposal's band describes the charts as they WERE, so linking on
+    /// it would act on a stale score (#763). Nothing was written; the proposal stays
+    /// `pending` and is met again once the worker has re-scored it. Its own variant, not a
+    /// [`AutoOutcome::Skipped`]: if the worker is down the same pairs return on every run,
+    /// and the operator's summary must show that.
+    AwaitingRecheck,
     /// Not eligible (not auto_candidate, not pending, absent), or the matcher link was
     /// outranked once submitted and rolled back; nothing changed. Carries the reason.
     Skipped(String),
@@ -99,8 +107,9 @@ pub enum AutoOutcome {
 /// status='pending', skip a pair a human has already judged (an attested `patient_link` row,
 /// which any matcher link loses to), send a pair another writer unlinked without a clinician's
 /// confirmation to `review` (ADR-0078), RE-CHECK the db/016 veto (any severity) — a veto that
-/// appeared since propose kicks the pair to human `review` instead of auto-linking — else
-/// build and sign an un-attested link with the matcher's key, submit it through the 1-arg
+/// appeared since propose kicks the pair to human `review` instead of auto-linking — leave a
+/// pair alone while a re-check of either chart is still queued (its score may be stale, #763),
+/// else build and sign an un-attested link with the matcher's key, submit it through the 1-arg
 /// `submit_event` door, CONFIRM it is now the pair's standing winner (rolling back if it was
 /// outranked), and mark the proposal 'auto_applied'. All in ONE transaction: any rejection
 /// rolls back, so no event is written and the proposal stays 'pending' to retry (atomicity =
@@ -238,6 +247,37 @@ pub async fn apply_auto_candidate(
         return Ok(AutoOutcome::VetoedToReview);
     }
 
+    // 3b. Is the score still current? (#763) Every change to a matcher input on a chart (a
+    //     name, DOB, sex, identifier, identity state) queues a re-check notice in db/056's
+    //     `match_pending`, and the worker deletes it only once it has re-scored the chart —
+    //     which re-bands or retracts this very proposal. So while a notice for EITHER chart
+    //     is still queued, the band read in step 1 may describe charts that no longer look
+    //     that way: a clerk may since have committed a DOB the matcher would now grade NEAR
+    //     or DISAGREE, neither of which may auto-link (ADR-0079). The same holds after a
+    //     matcher upgrade: the new worker's first run queues every chart. Write nothing and
+    //     leave the proposal `pending`; a later run acts on the fresh score.
+    //
+    //     Placed AFTER steps 2–3 on purpose: those decide on what is true NOW (a standing
+    //     human judgement, a dispute, a veto), not on the score, so they stay right even
+    //     over a stale score. Only the link below trusts the score, so only it waits.
+    //
+    //     A notice committed by a concurrent edit after this read is not seen; that is the
+    //     same as the edit landing just after this run, and the worker's re-score then
+    //     meets a linked pair as any later edit would. The gap this closes is the long one:
+    //     a worker that is down, backlogged or mid-sweep.
+    let recheck_queued: bool = tx
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM match_pending \
+              WHERE patient_id IN ($1::text::uuid, $2::text::uuid))",
+            &[&low_s, &high_s],
+        )
+        .await
+        .map_err(|e| LocalDbFault::new("reading whether a duplicate re-check is still queued", e))?
+        .get(0);
+    if recheck_queued {
+        return Ok(AutoOutcome::AwaitingRecheck);
+    }
+
     // 4. Build + sign the un-attested matcher link.
     let provenance = compose_auto_provenance(&matcher_version);
     let confidence = format!("{score:.3}");
@@ -311,6 +351,10 @@ pub struct AutoSummary {
     /// from `skipped` because each stays `pending` and returns on every run (#700) — the
     /// operator sees how many, rather than having them hidden among benign skips.
     pub human_judged: usize,
+    /// Pairs left `pending` because a chart changed after it was scored and the matcher
+    /// worker has not re-scored it yet ([`AutoOutcome::AwaitingRecheck`], #763). A count
+    /// that stays up across runs means the worker is not draining its queue.
+    pub awaiting_recheck: usize,
     pub skipped: usize,
     /// Pairs that hit a HARD error (matcher-actor resolve failed, or the apply txn errored).
     /// Kept separate from the benign `skipped` bucket so a systematic failure (a floor
@@ -440,6 +484,7 @@ async fn ceremony_locked(
         vetoed_to_review: 0,
         disputed_to_review: 0,
         human_judged: 0,
+        awaiting_recheck: 0,
         skipped: 0,
         errored: 0,
     };
@@ -487,6 +532,7 @@ async fn ceremony_locked(
             Ok(AutoOutcome::VetoedToReview) => summary.vetoed_to_review += 1,
             Ok(AutoOutcome::DisputedToReview) => summary.disputed_to_review += 1,
             Ok(AutoOutcome::AlreadyJudged { .. }) => summary.human_judged += 1,
+            Ok(AutoOutcome::AwaitingRecheck) => summary.awaiting_recheck += 1,
             Ok(AutoOutcome::Skipped(_)) => summary.skipped += 1,
             Err(e) => {
                 eprintln!("{}", apply_failure_line(low, high, &e));

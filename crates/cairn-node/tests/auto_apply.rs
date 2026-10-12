@@ -45,13 +45,39 @@ async fn reset(c: &Client) {
 }
 
 /// Seed one match_proposal for the canonical (low, high) pair with the given band/status.
+///
+/// A real proposal is written by the matcher worker AFTER it has drained the pair's
+/// re-check notices (db/056 `match_pending`) — and registering a chart queues one. So the
+/// seed models that drain: it clears both charts' notices first. Without it every seeded
+/// proposal would look scored-before-the-latest-change, and auto-apply rightly refuses to
+/// act on such a stale score (#763). A test that wants a STALE proposal queues a notice
+/// AFTER seeding (`queue_recheck`).
 async fn seed_proposal(c: &Client, low: Uuid, high: Uuid, band: &str, status: &str, version: &str) {
     let (low_s, high_s) = (low.to_string(), high.to_string());
+    c.execute(
+        "DELETE FROM match_pending WHERE patient_id IN ($1::text::uuid, $2::text::uuid)",
+        &[&low_s, &high_s],
+    )
+    .await
+    .unwrap();
     c.execute(
         "INSERT INTO match_proposal \
            (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version, status) \
          VALUES ($1::text::uuid,$2::text::uuid, 9.10, $3, '[]'::jsonb, '[]'::jsonb, $4, $5)",
         &[&low_s, &high_s, &band.to_string(), &version.to_string(), &status.to_string()],
+    )
+    .await
+    .unwrap();
+}
+
+/// Queue a duplicate re-check notice for `patient`, exactly as db/056's trigger does when one
+/// of the matcher's inputs (a name, DOB, sex, identifier…) changes on that chart. Inserting
+/// the row directly keeps the test about auto-apply's reading of the queue, not about which
+/// clinical write fires the trigger (that is `tests/match_pending.rs`'s job).
+async fn queue_recheck(c: &Client, patient: Uuid) {
+    c.execute(
+        "INSERT INTO match_pending (patient_id, reason) VALUES ($1::text::uuid, 'change')",
+        &[&patient.to_string()],
     )
     .await
     .unwrap();
@@ -362,6 +388,124 @@ async fn auto_candidate_becomes_unattested_link_and_projects_person() {
     let applied: Option<String> = r.get(1);
     assert_eq!(status, "auto_applied");
     assert!(applied.is_some());
+}
+
+/// #763 — never link on a stale score. The proposal was scored, then a clerk changed one of
+/// the charts (say, committed a DOB the matcher would now grade NEAR or DISAGREE — neither
+/// may auto-link under ADR-0079). The change queued a re-check notice, but the matcher worker
+/// has not drained it yet (down, backlogged, mid-sweep, or holding the chart after a failure).
+/// Until it does, the proposal's band describes charts that no longer exist in that form, so
+/// auto-apply must leave it alone: no event, status still `pending`, picked up again on a
+/// later run once the worker has re-scored it. Run for each side of the pair, so the check
+/// cannot be one-sided.
+#[tokio::test]
+async fn a_pair_with_a_queued_recheck_is_not_linked_on_its_stale_score() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    for edited_side in ["low", "high"] {
+        reset(&c).await;
+        let (low, high) = canonical(Uuid::now_v7(), Uuid::now_v7());
+        let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+        common::register_pair(&c, &seed_sk, &seed_kid, low, high).await;
+        seed_proposal(&c, low, high, "auto_candidate", "pending", "0.3.0+aaa").await;
+        // The edit lands AFTER the score: its notice is still waiting for the worker.
+        queue_recheck(&c, if edited_side == "low" { low } else { high }).await;
+
+        let (sk, kid) = resolve_matcher_actor(&c, dir.path(), None, "0.3.0+aaa")
+            .await
+            .unwrap();
+        let out = apply_auto_candidate(
+            &mut c,
+            low,
+            high,
+            &sk,
+            &kid,
+            Hlc {
+                wall: 100,
+                counter: 0,
+                node_origin: "testnode".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(out, AutoOutcome::AwaitingRecheck),
+            "edited {edited_side}: a pair whose chart awaits a re-check must not be linked"
+        );
+
+        let n_ev: i64 = c
+            .query_one(
+                "SELECT count(*) FROM event_log WHERE event_type='identity.link.asserted'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            n_ev, 0,
+            "edited {edited_side}: no link event on a stale score"
+        );
+        let status: String = c
+            .query_one(
+                "SELECT status FROM match_proposal WHERE patient_low=$1::text::uuid AND patient_high=$2::text::uuid",
+                &[&low.to_string(), &high.to_string()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            status, "pending",
+            "edited {edited_side}: left pending for the worker to re-score, not sent anywhere"
+        );
+    }
+}
+
+/// The batch driver counts a stale pair on its own line, apart from benign skips: if the
+/// matcher worker is down, the same pairs come back on every run, and the operator must be
+/// able to see that rather than have them vanish among `skipped`.
+#[tokio::test]
+async fn the_batch_counts_pairs_awaiting_a_recheck_apart_from_skips() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c: Client = db::connect_and_load_schema(&base).await.unwrap();
+    reset(&c).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (fresh_l, fresh_h) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (stale_l, stale_h) = canonical(Uuid::now_v7(), Uuid::now_v7());
+    let (seed_sk, seed_kid) = enroll_seeder(&c).await;
+    common::register_pair(&c, &seed_sk, &seed_kid, fresh_l, fresh_h).await;
+    common::register_pair(&c, &seed_sk, &seed_kid, stale_l, stale_h).await;
+    seed_proposal(
+        &c,
+        fresh_l,
+        fresh_h,
+        "auto_candidate",
+        "pending",
+        "0.3.0+aaa",
+    )
+    .await;
+    seed_proposal(
+        &c,
+        stale_l,
+        stale_h,
+        "auto_candidate",
+        "pending",
+        "0.3.0+aaa",
+    )
+    .await;
+    queue_recheck(&c, stale_h).await;
+
+    let s: AutoSummary = apply_auto_candidates(&mut c, dir.path(), None, "testnode")
+        .await
+        .unwrap();
+    assert_eq!(
+        (s.applied, s.awaiting_recheck, s.skipped, s.errored),
+        (1, 1, 0, 0),
+        "the fresh pair is linked; the stale one is counted as awaiting its re-check"
+    );
 }
 
 #[tokio::test]
