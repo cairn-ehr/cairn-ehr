@@ -566,7 +566,7 @@ async fn the_refold_happens_even_when_cairn_sync_stamped_the_generation_first() 
             AND pl.low = '{lo_s}'::uuid AND pl.high = '{hi_s}'::uuid;
          ALTER TABLE patient_link DROP COLUMN attested CASCADE;
          SELECT cairn_recompute_component('{lo_s}'::uuid, NULL);
-         UPDATE node_schema SET version = {gen};",
+         UPDATE node_schema SET version = {gen}, loader_build = 'cairn-sync 0.0.0';",
         gen = cairn_event::schema_generation::SCHEMA_GENERATION
     ))
     .await
@@ -577,7 +577,9 @@ async fn the_refold_happens_even_when_cairn_sync_stamped_the_generation_first() 
     );
     drop(c);
 
-    // No generation change on this connect, so no heal — db/055 alone must do it.
+    // No generation change on this connect, so no heal — db/055 alone must do it. The stamp
+    // names cairn-sync, as `cairn-sync init` really writes it, so cairn-node does not trust it
+    // and replays its own files (ADR-0080 decision 3) — which is what loads db/055 here.
     let c = db::connect_and_load_schema(&base).await.unwrap();
     assert_eq!(
         standing(&c, a, b).await,

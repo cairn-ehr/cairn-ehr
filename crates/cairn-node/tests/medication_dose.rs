@@ -1619,6 +1619,9 @@ async fn backfill_normalizes_legacy_row_idempotently() {
     )
     .await
     .unwrap();
+    // Each reconnect below must REPLAY (that is what this test is about), and since #726 a
+    // connect replays only when the schema changed — so each one is announced as an upgrade.
+    db::force_schema_replay(&a).await.unwrap();
     drop(a);
 
     // Connection B: reconnecting REPLAYS db/035, running the REAL backfill against the
@@ -1634,6 +1637,7 @@ async fn backfill_normalizes_legacy_row_idempotently() {
         "the old correction-why moves into note"
     );
     assert_eq!(reason, None, "reason is cleared (now a point-reason slot)");
+    db::force_schema_replay(&b).await.unwrap();
     drop(b);
 
     // Connection C: a THIRD replay makes NO further change (the `WHERE dose_corrected
