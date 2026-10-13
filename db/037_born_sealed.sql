@@ -152,6 +152,12 @@ DECLARE
     v_lo uuid;
     v_hi uuid;
 BEGIN
+    -- #604: wait for any transaction still granting the target custody (db/005's
+    -- cairn_lock_custody says why). Every statement below then runs on a snapshot that sees that
+    -- transaction's committed custody and projection rows, so the scrub reaches them; and a key
+    -- arriving after this point waits for THIS commit and then finds the shred-log row.
+    PERFORM cairn_lock_custody(p_target);
+
     INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)
     VALUES (p_target, p_shred_event, p_basis)
     ON CONFLICT (target_event_id) DO NOTHING;

@@ -374,6 +374,47 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 
+-- #604 — ONE event's custody is decided by one transaction at a time.
+--
+-- WHY THIS EXISTS. Two writers decide whether event E has custody on this node:
+--   * a door granting it (step 9 of submit_event / apply_remote_event), which first checks
+--     NOT EXISTS (erasure_shred_log row for E) — anti-resurrection — and then writes event_dek +
+--     event_clear (and, via cairn_project_late_custody, E's projection rows);
+--   * cairn_execute_shred (db/037), which records the shred-log row and deletes all of that.
+-- Under READ COMMITTED neither can see the other's UNCOMMITTED rows. Without a lock, a key landing
+-- while a shred of E is still open saw no shred row and granted custody; a shred landing while a
+-- key was still open deleted nothing it could see. Either way both committed and E's body was
+-- readable again under a recorded crypto-shred — the one promise ADR-0005 / ADR-0052 make about
+-- erasure. Both are pinned by crates/cairn-node/tests/shred_custody_race.rs.
+--
+-- HOW. Both writers take this lock BEFORE they read or touch E's custody. The second to arrive
+-- waits for the first to commit or roll back, and because PL/pgSQL gives every later statement a
+-- FRESH snapshot under READ COMMITTED, its anti-resurrection check (or its scrub) then reads the
+-- other's committed rows. A transaction-scoped advisory lock, released at COMMIT/ROLLBACK: nothing
+-- to clean up, and nothing held across transactions.
+--
+-- THE KEY is per event (hashtextextended over a namespaced string, the db/004 precedent), so
+-- unrelated events never wait for each other; a hash collision costs only an unnecessary wait.
+--
+-- WHAT IT DOES NOT COVER. REPEATABLE READ: there the snapshot is fixed at the transaction's first
+-- statement, so the waiting side still reads the pre-wait state. Every door caller in the tree runs
+-- READ COMMITTED (the server default); SERIALIZABLE is covered by SSI instead (the two sides form a
+-- read/write cycle and one aborts with 40001). A caller that raises the isolation level to
+-- REPEATABLE READ around a door reopens this race.
+--
+-- DEADLOCK SHAPE (accepted). A transaction that applies several events and has already taken
+-- another lock — CARNMR (db/033) in a projection, say — can meet one holding E's custody lock and
+-- wanting CARNMR. Postgres detects it and aborts one side with 40P01, a retryable failure that
+-- writes nothing. It needs two concurrent transactions over the SAME event, so it is rare.
+CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
+RETURNS void LANGUAGE sql
+SET search_path = public, pg_temp
+AS $$
+    SELECT pg_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
+$$;
+-- Called only by the SECURITY DEFINER doors and the shred executor, which run as the owner.
+REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
+
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
 -- format. TODO: spec §3.13/ADR-0012 want the clinical payload rendered too.
@@ -1486,6 +1527,13 @@ BEGIN
     --     INSERT projection triggers can already read the shadow (same txn).
     --     An already-shredded target gets NEITHER: set-union may re-deliver the
     --     row forever, but custody never resurrects (arrival-order independence).
+    --     cairn_lock_custody FIRST (#604): a shred of this event still open in another
+    --     transaction must commit before the NOT EXISTS below reads the shred log, or the check
+    --     passes on a shred it cannot yet see. Taken only for a sealed event — nothing else has
+    --     custody to resurrect.
+    IF v_sealed THEN
+        PERFORM cairn_lock_custody(v_event_id);
+    END IF;
     IF v_sealed AND NOT EXISTS (SELECT 1 FROM erasure_shred_log WHERE target_event_id = v_event_id) THEN
         SELECT unwrap_pub INTO v_pub FROM node_unwrap_key;
         IF v_pub IS NULL THEN
