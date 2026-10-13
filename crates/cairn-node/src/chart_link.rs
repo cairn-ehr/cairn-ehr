@@ -300,7 +300,7 @@ async fn refuse_unless_record_holds_both(
 ///
 /// `shown` (#708): when the judgement was made from a comparison, each subject's record must
 /// still read as it was shown, re-read under CARNLK in the same way — see
-/// [`refuse_unless_records_read_as_shown`]. `None` for a judgement made without one (the CLI, an
+/// `shown::refuse_unless_records_read_as_shown`. `None` for a judgement made without one (the CLI, an
 /// accepted proposal).
 ///
 /// Errors roll the caller's transaction back when it drops: nothing is written and the
