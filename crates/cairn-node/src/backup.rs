@@ -16,6 +16,7 @@
 //! lives in [`crate::capture`]; this module owns the durability and the health record around
 //! it.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -91,15 +92,25 @@ pub mod clinical_verdict;
 /// noted rather than "fixed" — narrowing the signature would break the interface this
 /// task was specified against for no behavioural gain (#500 slice 2c review).
 pub fn node_plane_events(image: &MediumImage) -> Result<Vec<Vec<u8>>, BackupError> {
-    Ok(match image {
-        MediumImage::Legacy(container) => container.events.clone(),
-        MediumImage::V3(medium) => medium
-            .segments
-            .iter()
-            .filter(|segment| segment.plane == Plane::Node)
-            .flat_map(|segment| segment.records.iter().map(|r| r.signed_bytes.clone()))
-            .collect(),
-    })
+    Ok(node_plane_signed(image).map(<[u8]>::to_vec).collect())
+}
+
+/// The federation-plane records of `image`, BORROWED, in file order — the one selection rule
+/// behind [`node_plane_events`] (which owns copies, for the restore path) and
+/// [`node_plane_addresses`] (which hashes them, for the legacy-succession guard). Borrowing is
+/// the point of the split: the guard runs while the staged image is the largest allocation in
+/// the process, and must not copy it to answer a membership question.
+fn node_plane_signed(image: &MediumImage) -> Box<dyn Iterator<Item = &[u8]> + '_> {
+    match image {
+        MediumImage::Legacy(container) => Box::new(container.events.iter().map(Vec::as_slice)),
+        MediumImage::V3(medium) => Box::new(
+            medium
+                .segments
+                .iter()
+                .filter(|segment| segment.plane == Plane::Node)
+                .flat_map(|segment| segment.records.iter().map(|r| r.signed_bytes.as_slice())),
+        ),
+    }
 }
 
 /// Which CLINICAL records the RESTORE path applies, for either medium revision — the
@@ -959,8 +970,9 @@ pub enum MediumOrigin {
     /// The same shape swallowed a clinic's only medium after a disk failure: re-`init`, then
     /// `backup --to` before `restore`, and an empty-but-SOUND successor overwrote it.
     /// `refuse_unsafe_legacy_succession` now refuses the write when the legacy medium names
-    /// another node or when the successor would carry fewer federation events than it did,
-    /// leaving the old file untouched; pinned by the two `…_refuses_…` tests in
+    /// another node or when any event it carried is missing from the successor (an event-set
+    /// check since #553, so an unmarked foreign medium is caught whatever its size), leaving
+    /// the old file untouched; pinned by the three legacy `…_refused…` tests in
     /// `tests/backup_carries_both_planes.rs`.
     SucceededLegacy,
 }
@@ -1091,12 +1103,19 @@ struct SupersededLegacy {
     /// SIGNED marker whose attestation does not verify against the events beside it. That
     /// last one is treated as "no claim" rather than as "a claim we distrust", because the
     /// only way to read an id out of an unverified attestation is to skip the signature
-    /// check — which this codebase does nowhere — and because the count check below still
+    /// check — which this codebase does nowhere — and because the event-set check below still
     /// covers the case. It can only ever WITHHOLD a refusal, never invent one.
     claimed_node_hex: Option<String>,
-    /// How many events it carried. A legacy container has no planes: every event on it is a
-    /// federation-plane event, which is why the successor's NODE count is what it compares to.
-    node_events: usize,
+    /// The content address ([`cairn_event::event_address`]) of every event it carried, in
+    /// medium order, duplicates included. A legacy container has no planes: every event on it
+    /// is a federation-plane event, which is why the successor's NODE plane is what it is
+    /// compared to.
+    ///
+    /// Addresses rather than the events themselves (#553): a medium is the size of a clinic's
+    /// whole federation log, and holding a second copy of it until the write would break the
+    /// peak-memory budget `backup_to`'s explicit drops exist for. 34 bytes per event is enough
+    /// to decide set inclusion exactly.
+    event_addresses: Vec<Vec<u8>>,
 }
 
 /// The bytes this backup will append to, plus WHY they are those bytes.
@@ -1212,7 +1231,11 @@ fn open_or_start_medium(path: &Path) -> anyhow::Result<OpenedMedium> {
             torn_tail_repaired: false,
             superseded: Some(SupersededLegacy {
                 claimed_node_hex: legacy_claimed_node(&container),
-                node_events: container.events.len(),
+                event_addresses: container
+                    .events
+                    .iter()
+                    .map(|signed| cairn_event::event_address(signed))
+                    .collect(),
             }),
             // The legacy arm carries its identity in `superseded` and is guarded by
             // `refuse_unsafe_legacy_succession`; two homes for one fact is the #522 defect.
@@ -1435,19 +1458,34 @@ fn refuse_foreign_continuation(
 /// Arm 2 is what makes this a hard refusal rather than a warning: by the time anything else
 /// could notice, the artifact it would have warned about no longer exists.
 ///
-/// # Why COUNTS, and why that is enough here
+/// # Why SET INCLUSION, not counts (#553)
 ///
-/// A count cannot prove set inclusion, and this codebase's own rule is *name, never count*.
-/// It does not need to prove it: the two planes are compared for the only property that can
-/// be violated by a full sweep of an append-only table, namely that the sweep found FEWER
-/// events than the medium already held. `node_event` is append-only, so for this node's own
-/// medium the successor's count is monotone — a shortfall is therefore proof of a different
-/// event set, never a false alarm about ordering or content. (The strict superset itself is
-/// pinned event-by-event by
+/// Arm 2 used to compare COUNTS: refuse when the successor held fewer events than the legacy
+/// medium. That is sound against this node's own medium, but it says nothing about whether the
+/// events are the SAME ones, and arm 1 cannot help when the medium has no marker it can verify
+/// (a CAIRNB1 medium has none at all). So a small peer's stick reused at a larger clinic — fewer
+/// events than this node holds, and no usable marker — passed both arms and was destroyed. The
+/// precondition succession actually needs is "the successor holds every event the medium held",
+/// and with both event sets in hand it can be checked exactly, so it is: every content address
+/// on the legacy medium must be on the staged successor's node plane. This is the codebase's
+/// own rule — *name, never count* — applied to the one destructive path in `backup`.
+///
+/// # The premise, and what breaks it
+///
+/// For this node's own medium the check passes because `node_event` is append-only: db/007's
+/// `BEFORE UPDATE OR DELETE` trigger refuses DML, so every event the node ever wrote to a
+/// medium is still in the table the fresh capture sweeps. That trigger does NOT stop
+/// `TRUNCATE` (row triggers never fire for it — `db::reset_node_federation_tables` does exactly
+/// that in tests), and it would not survive a future retention or compaction of `node_event`.
+/// Each of those breaks the premise in the SAFE direction: the check refuses a medium that was
+/// in fact ours, nothing is written, and the remedy below still gives the operator tonight's
+/// backup. It never turns into data loss.
+///
+/// (The superset is also pinned event-by-event against a real capture by
 /// `tests/backup_carries_both_planes.rs::a_legacy_medium_is_succeeded_by_a_cairnb3_medium_holding_at_least_as_much`.)
 fn refuse_unsafe_legacy_succession(
     legacy: &SupersededLegacy,
-    staged_node_records: usize,
+    staged_node_addresses: &HashSet<Vec<u8>>,
     self_id_hex: &str,
     path: &Path,
 ) -> anyhow::Result<()> {
@@ -1486,22 +1524,43 @@ fn refuse_unsafe_legacy_succession(
         }
     }
 
-    // ARM 2 — it is (or may be) our medium, but the successor would hold LESS. This is the
-    // arm that catches the un-enrolled/empty database even when the old medium named nobody.
-    if staged_node_records < legacy.node_events {
+    // ARM 2 — it is (or may be) our medium, but the successor would not hold everything it
+    // held. This is the arm that catches the un-enrolled/empty database even when the old
+    // medium named nobody, and — since #553 — an unmarked FOREIGN medium of any size: its
+    // events are not ours, so they are missing from our sweep however many we hold.
+    let held: HashSet<&Vec<u8>> = legacy.event_addresses.iter().collect();
+    let missing = held
+        .iter()
+        .filter(|address| !staged_node_addresses.contains(**address))
+        .count();
+    if missing > 0 {
         anyhow::bail!(
-            "refusing to replace the backup medium {}: it carries {} federation event(s) and \
-             the medium that would replace it carries only {}. Succeeding a legacy medium \
-             REPLACES the file, and is only safe when the fresh capture sweeps back at least \
-             everything the old medium held. It did not, so this database is not the one that \
-             wrote that medium (a restore that has not run yet, a re-`init`ed node, or \
-             another node's volume). {REMEDY}",
+            "refusing to replace the backup medium {}: it carries {} federation event(s), and \
+             {missing} of them are not in the medium that would replace it (which carries {}). \
+             Succeeding a legacy medium REPLACES the file, and is only safe when the fresh \
+             capture sweeps back every event the old medium held. It did not, so this database \
+             is not the one that wrote that medium (a restore that has not run yet, a \
+             re-`init`ed node, or another node's medium with no marker this build can verify). \
+             {REMEDY}",
             path.display(),
-            legacy.node_events,
-            staged_node_records
+            legacy.event_addresses.len(),
+            staged_node_addresses.len()
         );
     }
     Ok(())
+}
+
+/// The content address of every NODE-plane record on `image` — the successor's side of
+/// [`refuse_unsafe_legacy_succession`]'s set check. PURE.
+///
+/// The selection is [`node_plane_signed`]'s, so "which records are the federation plane" keeps
+/// ONE answer shared with [`node_plane_events`] (the restore path). The address rule is the
+/// legacy side's ([`cairn_event::event_address`] over `signed_bytes`), so an event captured
+/// byte-for-byte onto both media yields one address on both.
+fn node_plane_addresses(image: &MediumImage) -> HashSet<Vec<u8>> {
+    node_plane_signed(image)
+        .map(cairn_event::event_address)
+        .collect()
 }
 
 /// How strongly the medium on disk identifies its node. PURE — the classification alone, so
@@ -1813,7 +1872,7 @@ pub async fn backup_to(
     if let Some(legacy) = &superseded {
         refuse_unsafe_legacy_succession(
             legacy,
-            plane_counts(&staged_image).node,
+            &node_plane_addresses(&staged_image),
             &self_id_hex,
             medium_path,
         )?;
@@ -2430,20 +2489,120 @@ mod tests {
         .expect("hex case must not decide identity");
     }
 
+    /// Stand-in content addresses for events numbered `ids`: real `event_address` outputs over
+    /// one-byte inputs, so the two sides of the set check are built by the production rule.
+    fn addresses(ids: std::ops::Range<u8>) -> Vec<Vec<u8>> {
+        ids.map(|n| cairn_event::event_address(&[n])).collect()
+    }
+
+    /// The successor's side of the check: the same stand-ins, as the set the guard reads.
+    fn staged(ids: std::ops::Range<u8>) -> HashSet<Vec<u8>> {
+        addresses(ids).into_iter().collect()
+    }
+
     #[test]
     fn succeeding_our_own_legacy_medium_is_allowed_when_the_successor_holds_at_least_as_much() {
         let us = node_id_hex(1);
         let legacy = SupersededLegacy {
             claimed_node_hex: Some(us.clone()),
-            node_events: 7,
+            event_addresses: addresses(0..7),
         };
-        // Equal is fine (an unchanged log), and more is fine (the log grew since).
-        for staged in [7, 9] {
-            refuse_unsafe_legacy_succession(&legacy, staged, &us, Path::new("/mnt/usb/m"))
+        // The same events is fine (an unchanged log), and more is fine (the log grew since).
+        for successor in [staged(0..7), staged(0..9)] {
+            refuse_unsafe_legacy_succession(&legacy, &successor, &us, Path::new("/mnt/usb/m"))
                 .unwrap_or_else(|e| {
-                    panic!("the normal upgrade path must not be refused (staged={staged}): {e:#}")
+                    panic!(
+                        "the normal upgrade path must not be refused ({} staged): {e:#}",
+                        successor.len()
+                    )
                 });
         }
+    }
+
+    /// #553 — the case the count check could not see. A small peer's stick reused at a larger
+    /// clinic: a CAIRNB1 medium (no marker, so arm 1 has nothing to compare) holding FEWER
+    /// events than this node does. The old count arm passed it (9 >= 2) and the medium was
+    /// destroyed. None of its events are ours, so the set check refuses it.
+    #[test]
+    fn an_unmarked_foreign_medium_holding_fewer_events_is_refused() {
+        let err = refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: None,
+                event_addresses: addresses(100..102),
+            },
+            &staged(0..9),
+            &node_id_hex(1),
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("a medium whose events are not in this database must never be replaced");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("2 federation event(s)") && msg.contains("2 of them are not in"),
+            "the refusal must say how many of the medium's events would be lost: {msg}"
+        );
+        assert!(
+            msg.contains("--to at a NEW path"),
+            "and give the remedy that still produces tonight's backup: {msg}"
+        );
+    }
+
+    /// One missing event is enough: a successor holding MORE events than the medium, but not
+    /// one particular event the medium held, would still lose that event.
+    #[test]
+    fn a_successor_missing_one_event_is_refused_however_many_it_holds() {
+        let mut held = addresses(0..5);
+        held.push(cairn_event::event_address(&[200]));
+        let err = refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: Some(node_id_hex(1)),
+                event_addresses: held,
+            },
+            &staged(0..50),
+            &node_id_hex(1),
+            Path::new("/mnt/usb/m"),
+        )
+        .expect_err("an event the successor lacks must keep the old medium on disk");
+        assert!(
+            format!("{err:#}").contains("1 of them are not in"),
+            "{err:#}"
+        );
+    }
+
+    /// A legacy medium can carry the same event twice (set-union re-delivery). Its address is
+    /// one element of the set, so the duplicate neither inflates the missing count nor causes
+    /// a refusal when the successor holds the event once.
+    #[test]
+    fn a_duplicated_legacy_event_is_held_once() {
+        let mut held = addresses(0..3);
+        held.push(held[0].clone());
+        refuse_unsafe_legacy_succession(
+            &SupersededLegacy {
+                claimed_node_hex: Some(node_id_hex(1)),
+                event_addresses: held,
+            },
+            &staged(0..3),
+            &node_id_hex(1),
+            Path::new("/mnt/usb/m"),
+        )
+        .expect("the successor holds every distinct event, so nothing is lost");
+    }
+
+    /// The successor's side reads only the NODE plane of a CAIRNB3 image, and every event of a
+    /// legacy one, with the same address rule as the legacy side.
+    #[test]
+    fn node_plane_addresses_reads_every_legacy_event() {
+        let container = crate::medium::Container {
+            self_marker: None,
+            events: vec![vec![1], vec![2]],
+        };
+        let got = node_plane_addresses(&MediumImage::Legacy(container));
+        let want: HashSet<Vec<u8>> = [
+            cairn_event::event_address(&[1]),
+            cairn_event::event_address(&[2]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(got, want);
     }
 
     #[test]
@@ -2451,10 +2610,10 @@ mod tests {
         let err = refuse_unsafe_legacy_succession(
             &SupersededLegacy {
                 claimed_node_hex: Some(node_id_hex(2)),
-                node_events: 3,
+                event_addresses: addresses(0..3),
             },
-            // Deliberately NOT short: the count arm must not be what refuses this.
-            99,
+            // Deliberately a SUPERSET: the event-set arm must not be what refuses this.
+            &staged(0..99),
             &node_id_hex(1),
             Path::new("/mnt/usb/m"),
         )
@@ -2477,9 +2636,9 @@ mod tests {
         let err = refuse_unsafe_legacy_succession(
             &SupersededLegacy {
                 claimed_node_hex: Some(node_id_hex(3)),
-                node_events: 3,
+                event_addresses: addresses(0..3),
             },
-            0,
+            &staged(0..0),
             "",
             Path::new("/mnt/usb/m"),
         )
@@ -2499,17 +2658,19 @@ mod tests {
         let err = refuse_unsafe_legacy_succession(
             &SupersededLegacy {
                 claimed_node_hex: None,
-                node_events: 12,
+                event_addresses: addresses(0..12),
             },
-            0,
+            &staged(0..0),
             "",
             Path::new("/mnt/usb/m"),
         )
         .expect_err("a successor holding less must never replace its predecessor");
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("12 federation event(s)") && msg.contains("only 0"),
-            "the refusal must quote both counts so the shortfall is visible: {msg}"
+            msg.contains("12 federation event(s)")
+                && msg.contains("12 of them are not in")
+                && msg.contains("which carries 0"),
+            "the refusal must quote what would be lost and what would replace it: {msg}"
         );
     }
 
@@ -2522,9 +2683,9 @@ mod tests {
         refuse_unsafe_legacy_succession(
             &SupersededLegacy {
                 claimed_node_hex: Some(us.to_ascii_uppercase()),
-                node_events: 1,
+                event_addresses: addresses(0..1),
             },
-            1,
+            &staged(0..1),
             &us,
             Path::new("/mnt/usb/m"),
         )

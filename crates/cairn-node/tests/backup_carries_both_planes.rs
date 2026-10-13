@@ -554,6 +554,27 @@ async fn a_torn_medium_is_repaired_and_the_repair_is_reported() {
 /// database, and that is the whole point — the peer's events are precisely what a capture
 /// HERE cannot sweep back onto a successor.
 fn a_peers_legacy_medium() -> (Vec<u8>, String) {
+    let (events, peer_sk, peer_kid) = a_peers_signed_genesis();
+    // A node-id IS the content-address of its genesis, so this is the peer's real id — 32
+    // bytes of hex, the shape a marker actually carries, never a short word.
+    let peer_node_id = hex::encode(event_address(&events[0]));
+    let attestation = build_self_attestation(&peer_sk, &peer_kid, &peer_node_id, &events);
+    // ANTI-VACUITY: the marker must genuinely VERIFY against these events. An unreadable
+    // marker degrades to "no claim", so without this the refusal under test could fire for
+    // the event-set reason while the test claimed to be exercising the identity reason.
+    assert_eq!(
+        verify_self_attestation(&attestation, &events),
+        Some(peer_node_id.clone()),
+        "the fixture must be a real signed marker, not a blob that merely looks like one"
+    );
+    let bytes = serialize_container(Some(&SelfMarker::Signed(attestation)), &events)
+        .expect("the fixture fits the frame cap");
+    (bytes, peer_node_id)
+}
+
+/// A DIFFERENT node's signed genesis, as the one-event federation log it would back up, plus
+/// that node's key — the raw material of both peer-medium fixtures below.
+fn a_peers_signed_genesis() -> (Vec<Vec<u8>>, SigningKey, String) {
     let (peer_sk, peer_kid) = generate_key().expect("entropy for the peer's signing key");
     let genesis = EventBody {
         event_id: Uuid::now_v7().to_string(),
@@ -579,21 +600,7 @@ fn a_peers_legacy_medium() -> (Vec<u8>, String) {
             .expect("the peer signs its own genesis")
             .signed_bytes,
     ];
-    // A node-id IS the content-address of its genesis, so this is the peer's real id — 32
-    // bytes of hex, the shape a marker actually carries, never a short word.
-    let peer_node_id = hex::encode(event_address(&events[0]));
-    let attestation = build_self_attestation(&peer_sk, &peer_kid, &peer_node_id, &events);
-    // ANTI-VACUITY: the marker must genuinely VERIFY against these events. An unreadable
-    // marker degrades to "no claim", so without this the refusal under test could fire for
-    // the count reason while the test claimed to be exercising the identity reason.
-    assert_eq!(
-        verify_self_attestation(&attestation, &events),
-        Some(peer_node_id.clone()),
-        "the fixture must be a real signed marker, not a blob that merely looks like one"
-    );
-    let bytes = serialize_container(Some(&SelfMarker::Signed(attestation)), &events)
-        .expect("the fixture fits the frame cap");
-    (bytes, peer_node_id)
+    (events, peer_sk, peer_kid)
 }
 
 /// **ARM 1 — a peer's medium on a shared backup volume is refused, never replaced.**
@@ -652,6 +659,65 @@ async fn a_legacy_medium_belonging_to_another_node_is_refused_not_replaced() {
     );
 }
 
+/// **ARM 2, #553 — an UNMARKED foreign medium is refused even when it is the smaller one.**
+///
+/// A small peer's USB stick reused at a larger clinic, carrying a CAIRNB1-era medium: no
+/// self-marker at all, so arm 1 has no claim to compare. Before #553 arm 2 compared COUNTS,
+/// and this node already holds more federation events than the stick does — so both arms
+/// passed and the peer's only copy was replaced. Arm 2 now asks the question succession
+/// actually depends on: is every event on the old medium on its successor? The peer's genesis
+/// is not in this database, so the answer is no.
+#[tokio::test]
+async fn an_unmarked_foreign_legacy_medium_smaller_than_this_node_is_refused() {
+    let Some(cl) = clinic().await else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
+
+    let (peer_events, _, _) = a_peers_signed_genesis();
+    let ours = backup::read_event_set(&cl.db).await.unwrap();
+    assert!(
+        ours.len() >= peer_events.len(),
+        "anti-vacuity: this node must hold AT LEAST as many federation events as the stick, or \
+         the old count arm would have refused it too and the test would prove nothing \
+         ({} here, {} on the stick)",
+        ours.len(),
+        peer_events.len()
+    );
+    let stick = serialize_container(None, &peer_events).expect("the fixture fits the frame cap");
+    std::fs::write(cl.medium(), &stick).unwrap();
+
+    let err = backup::backup_to(
+        &cl.db,
+        &cl.medium(),
+        &cl.health(),
+        1_700_000_000,
+        Some((&cl.sk, &cl.kid)),
+    )
+    .await
+    .expect_err("an unmarked medium holding events this node lacks must never be replaced");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("1 of them are not in"),
+        "the refusal must say that an event would be lost, not merely that it refused: {msg}"
+    );
+    assert!(
+        msg.contains("--to at a NEW path"),
+        "and name the remedy: {msg}"
+    );
+    assert_eq!(
+        std::fs::read(cl.medium()).unwrap(),
+        stick,
+        "the peer's medium must be BYTE-IDENTICAL afterwards"
+    );
+    assert!(
+        backup::read_health(&cl.health()).is_none(),
+        "and health must not advance over a backup that did not happen"
+    );
+}
+
 /// **ARM 2 — the successor may never hold LESS than the medium it replaces.**
 ///
 /// The disaster the whole guard exists for, staged exactly as it happens: the clinic's disk
@@ -660,7 +726,7 @@ async fn a_legacy_medium_belonging_to_another_node_is_refused_not_replaced() {
 /// node this run can be compared against and arm 1 cannot help; the capture reads zero
 /// federation rows; and the staged image is genuinely SOUND (an intact chain over no node
 /// segments, 0 of 0 signatures vacuously intact, no torn tail), so `refuse_unsound` passes it
-/// happily. Only the count comparison stands between the operator and an empty file where
+/// happily. Only the event-set comparison stands between the operator and an empty file where
 /// their record used to be.
 ///
 /// The clinical rows are deliberately LEFT in the database, which makes the successor
@@ -675,8 +741,8 @@ async fn a_legacy_medium_is_refused_when_the_successor_would_hold_less() {
     author_sealed_clinical_event(&cl.db, &cl.sk, &cl.kid).await;
 
     // The stick: a marker-less legacy medium (a CAIRNB1-era backup, or one taken before
-    // enrolment). No identity claim at all, so ONLY the count arm can refuse this — the test
-    // isolates the arm it is named for.
+    // enrolment). No identity claim at all, so ONLY the event-set arm can refuse this — the
+    // test isolates the arm it is named for.
     let legacy_events = backup::read_event_set(&cl.db).await.unwrap();
     assert!(
         !legacy_events.is_empty(),
