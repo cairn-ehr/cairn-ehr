@@ -439,7 +439,8 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
 - **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733) and **R5a** (PR #735) are merged; **R5b** (the
-  worklist, #680) is BUILT on draft PR #749 (entry below). Then the small slice #716 + #723, #742, #743 part 2. Plan
+  worklist, #680, PR #749) and the DOB near miss (PR #758) are merged. Next: the small slice #716 + #723, then #742,
+  #743 part 2. Plan
   each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
@@ -523,10 +524,9 @@ widened.
   person or Different people) → target 2; a chart open adds 0 acts. Budget ≤ 20 s, and the open with the banner ≤ the
   single-chart open. RUNBOOK §11, a human act owed.
 
-### 2026-10-08/09 — repair path R5b: the possible-duplicate worklist (draft PR #749)
+### 2026-10-08/09 — repair path R5b: the possible-duplicate worklist (PR #749, merged)
 
-BUILT on draft PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749) (Refs #680 #741 #743 #736), awaiting gates,
-review and merge. Design page "R5b — the worklist" (designed + as built); plan
+Merged 2026-10-08 as PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749) (Refs #680 #741 #743 #736). Design page "R5b — the worklist" (designed + as built); plan
 `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`;
 [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), spec **v0.80**; no schema
 change (generation 57).
@@ -537,7 +537,7 @@ change (generation 57).
   review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
   door wait). The PR review's one Critical — an `auto_applied` pair an agent's un-attested unlink overruled reached no
   human — is fixed in `upsert_proposal` (reopened as `pending`).
-- **Then (PR #758, on top of #749): the DOB near miss —
+- **Then (PR #758, merged 2026-10-11): the DOB near miss —
   [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), spec v0.81.** A DOB one keying
   error away grades `NEAR` (+2, `dob_near_miss` evidence); a DOB graded `NEAR` or `DISAGREE` never auto-links; and
   `name+monthday` blocks year typos. Missed true duplicates 351 → 266 of 2 000 on the synthetic set, false auto-links
