@@ -116,6 +116,15 @@ gate, and it is available at every rung including the ones where a gate would ha
 - **`segment_commitment` does not bind `attestation`/`attester_key`**
   ([#556](https://github.com/cairn-ehr/cairn-ehr/issues/556)), so a stripped human-authorship token is not
   caught by the commitment even on a signed medium. Free only until a release ships a CAIRNB3 writer.
+
+  > **Erratum E1 (2026-10-13) — factual; the decision is unchanged.** The residual above is
+  > **closed**: `segment_commitment` now binds `attestation` and `attester_key` by the same
+  > presence-tag-then-digest rule as the wrapped DEK, so a stripped human-authorship token breaks a
+  > signed segment's attestation. The recipe was re-frozen in place rather than given a new container
+  > revision, on the maintainer's confirmation that no CAIRNB3 medium or distributed record existed
+  > outside development and test rigs. Two things stay true and are stated in `segment_commitment`'s
+  > own doc: a committed token is not a VOUCHED token (verification remains the apply door's), and
+  > the SYNC wire can still strip one — a separate residual, [#778](https://github.com/cairn-ehr/cairn-ehr/issues/778).
 - This ADR rules on **provenance only**. It says nothing about the several other ways a restore can
   recover less than the operator believes — a burned identity `seq`
   ([#549](https://github.com/cairn-ehr/cairn-ehr/issues/549)), an unopenable DEK
