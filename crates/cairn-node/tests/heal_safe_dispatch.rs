@@ -175,20 +175,38 @@ async fn late_custody_projection_skips_a_deferred_row() {
     );
 }
 
-/// An id with no `event_log` row is a silent no-op, not an error: both doors call the helper only
-/// after their own INSERT, so this arm is defensive, and a defensive arm must not become a refusal.
+/// An id with no `event_log` row is REFUSED, not skipped (#608). Both doors call the helper only
+/// after their own INSERT found the row, so the arm is unreachable today — and that is exactly why
+/// it must fail closed: reaching it means the log disagrees with what the door just read, and a
+/// silent `RETURN` would let the door report a landed key whose record never reached the chart.
+///
+/// A BARE `RAISE` (P0001), not the `USING ERRCODE` #608 first suggested: since #633,
+/// `floor_refusals_carry_no_errcode.rs` forbids an explicit SQLSTATE anywhere in `db/`, at file
+/// granularity, and db/005 is the last file that should be on its allow-list.
 #[tokio::test]
-async fn late_custody_projection_of_an_unknown_event_does_nothing() {
+async fn late_custody_projection_of_an_unknown_event_is_refused() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    c.execute(
-        "SELECT cairn_project_late_custody($1::text::uuid)",
-        &[&Uuid::now_v7().to_string()],
-    )
-    .await
-    .expect("an unknown id is not an error");
+    let missing = Uuid::now_v7().to_string();
+    let err = c
+        .execute(
+            "SELECT cairn_project_late_custody($1::text::uuid)",
+            &[&missing],
+        )
+        .await
+        .expect_err("an id with no event_log row must not pass silently");
+    assert_eq!(
+        err.code().map(|s| s.code()),
+        Some("P0001"),
+        "a bare RAISE, so every refusal classifier reads it the way it reads the floor's others"
+    );
+    let msg = common::db_msg(&err);
+    assert!(
+        msg.contains("cairn_project_late_custody") && msg.contains(&missing),
+        "the refusal names the helper and the id, so an operator can find the row: {msg}"
+    );
 }

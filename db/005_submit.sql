@@ -363,8 +363,15 @@ AS $$
 DECLARE v_row event_log;
 BEGIN
     SELECT * INTO v_row FROM event_log WHERE event_id = p_event_id;
+    -- FAIL CLOSED (#608). Both doors call this only after their own INSERT found the row, so this
+    -- arm is unreachable today. Reaching it would mean the log disagrees with what the door just
+    -- read, and the old `RETURN` let the door report a landed key whose record never reached the
+    -- chart — the same fail-open shape as the `<>` substitution guards db/053 replaced. A BARE
+    -- raise (P0001), not `USING ERRCODE`: floor_refusals_carry_no_errcode.rs (#633) forbids an
+    -- explicit SQLSTATE anywhere in db/, and this file must not join its allow-list.
     IF NOT FOUND THEN
-        RETURN; -- defensive: both doors call this only after their own INSERT
+        RAISE EXCEPTION 'cairn_project_late_custody: event % has no event_log row, although the calling door just read it — refusing rather than reporting custody that never reached the chart (#608)',
+            p_event_id;
     END IF;
     IF NOT cairn_replay_eligible(v_row) THEN
         RETURN;
