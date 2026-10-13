@@ -32,94 +32,10 @@ mod common;
 #[path = "common/late_custody_kit.rs"]
 mod late_custody_kit;
 
-use cairn_event::{sign, Hlc};
-use cairn_node::{db, shred::build_shred_body};
+use cairn_node::db;
 use late_custody_kit::*;
-use std::time::Duration;
-use tokio::task::JoinHandle;
 use tokio_postgres::Client;
 use uuid::Uuid;
-
-/// The signed bytes of a device-authored `erasure.shred.asserted` naming `e` as its target, filed
-/// on `e`'s own chart — the shape `cairn-node shred` produces without `--attest-as`.
-fn shred_of(keys: &Keys, e: &SealedAssert) -> Vec<u8> {
-    let body = build_shred_body(
-        Uuid::now_v7(),
-        e.patient,
-        e.event_id,
-        "retention ceiling",
-        &keys.kid_device,
-        None,
-        Hlc {
-            wall: WALL + 5,
-            counter: 0,
-            node_origin: "peer".into(),
-        },
-    );
-    sign(&body, &keys.sk_device)
-        .expect("sign the tombstone")
-        .signed_bytes
-}
-
-/// `(event_dek rows, event_clear rows)` for `event_id`: custody, and the readable body it opens.
-async fn custody(c: &Client, event_id: Uuid) -> (i64, i64) {
-    let row = c
-        .query_one(
-            "SELECT (SELECT count(*) FROM event_dek   WHERE event_id = $1::text::uuid), \
-                    (SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid)",
-            &[&event_id.to_string()],
-        )
-        .await
-        .unwrap();
-    (row.get(0), row.get(1))
-}
-
-/// Wait until `second` has either finished or is parked on a lock, observed through `observer`
-/// (any connection other than the second's own). Bounded at 10 s so a door that hangs for some
-/// unrelated reason fails with a message instead of stalling the suite.
-///
-/// Returns nothing: BOTH outcomes are legitimate here. An unfixed door finishes without waiting;
-/// a fixed one parks. What the test asserts is the end state after the first transaction commits.
-async fn until_finished_or_parked(
-    observer: &Client,
-    second_pid: i32,
-    second: &JoinHandle<Result<u64, tokio_postgres::Error>>,
-) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if second.is_finished() {
-            return;
-        }
-        let wait: Option<String> = observer
-            .query_one(
-                "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
-                &[&second_pid],
-            )
-            .await
-            .unwrap()
-            .get(0);
-        if wait.as_deref() == Some("Lock") {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the second transaction (pid {second_pid}) neither finished nor parked on a lock \
-             within 10 s (last wait_event_type = {wait:?})"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-/// A second connection to the same database, and its backend pid.
-async fn second_connection(base: &str) -> (Client, i32) {
-    let c2 = db::connect(base).await.unwrap();
-    let pid: i32 = c2
-        .query_one("SELECT pg_backend_pid()", &[])
-        .await
-        .unwrap()
-        .get(0);
-    (c2, pid)
-}
 
 /// INTERLEAVING 1 — the shred is recorded but uncommitted when the key arrives through `door`
 /// (the SQL that hands the door E's bytes and DEK). The key must wait for the shred and then find
@@ -255,4 +171,233 @@ async fn a_shred_racing_an_uncommitted_key_still_scrubs_it() {
         0,
         "and the medication list row the late key projected is scrubbed too"
     );
+}
+
+// =============================================================================================
+// #773 — the two paths that READ event_clear and WRITE projection rows without being a door:
+// the heal-mode `cairn_reproject` (db/039, run by the loader after a schema change) and deferred
+// re-adjudication's gate 4 (db/043). #604's lock covered only the doors and the shred, so either
+// path racing a shred could put the shredded record back on the medication list. Custody stays
+// gone; the projection comes back — and ADR-0005 / ADR-0052 promise the projection is scrubbed too.
+// =============================================================================================
+
+/// The heal pass the loader runs at connect after a schema change, as one statement.
+const HEAL: &str = "SELECT count(*) FROM cairn_reproject('', false, 'test')";
+
+/// The connect-time re-adjudication pass, as one statement.
+const READJUDICATE: &str = "SELECT count(*) FROM cairn_readjudicate_deferred()";
+
+/// A sealed assert admitted WITH its key, so it is on the chart: the state a shred acts on.
+async fn charted_assert(c: &Client, keys: &Keys) -> SealedAssert {
+    let e = sealed_assert(
+        keys,
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        "amoxicillin",
+        WALL,
+    );
+    apply_with_key(c, &e)
+        .await
+        .expect("premise: admitted with custody");
+    assert_eq!(
+        statement_rows(c, e.medication_id).await,
+        1,
+        "premise: on the chart"
+    );
+    e
+}
+
+/// Drop `e`'s projection rows by hand, leaving custody in place: the projection DEBT a heal pass
+/// exists to repay. A heal over a row that already exists UPDATEs it (and so takes a row lock the
+/// shred's DELETE waits on); only a heal that INSERTS a fresh row can slip past a shred's delete.
+async fn owe_projection(c: &Client, e: &SealedAssert) {
+    c.execute(
+        "DELETE FROM medication_statement WHERE medication_id = $1::text::uuid",
+        &[&e.medication_id.to_string()],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "DELETE FROM medication_dose_event WHERE medication_id = $1::text::uuid",
+        &[&e.medication_id.to_string()],
+    )
+    .await
+    .unwrap();
+}
+
+/// Mark `e` deferred: admitted uninterpreted, awaiting re-adjudication (db/020 writes this marker;
+/// writing it by hand reaches the same state without an unclassified event type).
+async fn mark_deferred(c: &Client, e: &SealedAssert) {
+    c.execute(
+        "INSERT INTO event_deferred (event_id, event_type) \
+         VALUES ($1::text::uuid, 'clinical.medication.asserted')",
+        &[&e.event_id.to_string()],
+    )
+    .await
+    .expect("mark it deferred");
+}
+
+/// What a shred must leave behind for `e`: no custody, and nothing of it on the medication list.
+async fn assert_shredded(c: &Client, e: &SealedAssert, how: &str) {
+    assert_eq!(
+        custody(c, e.event_id).await,
+        (0, 0),
+        "{how}: custody is gone"
+    );
+    assert_eq!(
+        (
+            statement_rows(c, e.medication_id).await,
+            dose_seed_rows(c, e.medication_id).await
+        ),
+        (0, 0),
+        "A SHRED ON RECORD MEANS THE RECORD IS OFF THE CHART ({how}): the projection pass read \
+         the body before the shred committed and wrote the drug back onto the medication list \
+         after the shred's scrub (#773)"
+    );
+}
+
+/// The shred holds first; the heal pass runs while it is uncommitted. Unfixed, the heal reads the
+/// still-committed `event_clear`, its upsert waits on the row the shred deleted, and when the
+/// shred commits the upsert finds no row and inserts one.
+#[tokio::test]
+async fn a_heal_racing_an_uncommitted_shred_does_not_re_project_it() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+    let e = charted_assert(&c, &keys).await;
+
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&shred_of(&keys, &e)])
+        .await
+        .expect("the shred is admitted and executes");
+
+    let (c2, pid2) = second_connection(&base).await;
+    let healing = tokio::spawn(async move { c2.execute(HEAL, &[]).await });
+    let (observer, _) = second_connection(&base).await;
+    until_finished_or_parked(&observer, pid2, &healing).await;
+
+    c.batch_execute("COMMIT").await.unwrap();
+    healing.await.unwrap().expect("the heal pass completes");
+    assert_shredded(&c, &e, "heal after an uncommitted shred").await;
+}
+
+/// The heal pass holds first, repaying a projection debt with a FRESH row; the shred runs while it
+/// is uncommitted. Unfixed, the shred's DELETE cannot see the heal's uncommitted insert, deletes
+/// nothing, and commits; the heal then commits the row.
+#[tokio::test]
+async fn a_shred_racing_an_uncommitted_heal_still_scrubs_what_it_wrote() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+    let e = charted_assert(&c, &keys).await;
+    owe_projection(&c, &e).await;
+
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute(HEAL, &[]).await.expect("the heal pass runs");
+    assert_eq!(
+        statement_rows(&c, e.medication_id).await,
+        1,
+        "premise: inside the heal, the debt is repaid with a fresh row"
+    );
+
+    let (c2, pid2) = second_connection(&base).await;
+    let shred = shred_of(&keys, &e);
+    let shredding =
+        tokio::spawn(async move { c2.execute("SELECT apply_remote_event($1)", &[&shred]).await });
+    let (observer, _) = second_connection(&base).await;
+    until_finished_or_parked(&observer, pid2, &shredding).await;
+
+    c.batch_execute("COMMIT").await.unwrap();
+    shredding
+        .await
+        .unwrap()
+        .expect("the shred is admitted and executes");
+    assert_shredded(&c, &e, "shred during an uncommitted heal").await;
+}
+
+/// The shred holds first; re-adjudication promotes the same (deferred, keyed) event while the
+/// shred is uncommitted. Unfixed, gate 4 reads the still-committed `event_clear` and projects the
+/// event into a row the shred never saw.
+#[tokio::test]
+async fn re_adjudication_racing_an_uncommitted_shred_does_not_project_it() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+    let e = charted_assert(&c, &keys).await;
+    owe_projection(&c, &e).await;
+    mark_deferred(&c, &e).await;
+
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&shred_of(&keys, &e)])
+        .await
+        .expect("the shred is admitted and executes");
+
+    let (c2, pid2) = second_connection(&base).await;
+    let adjudicating = tokio::spawn(async move { c2.execute(READJUDICATE, &[]).await });
+    let (observer, _) = second_connection(&base).await;
+    until_finished_or_parked(&observer, pid2, &adjudicating).await;
+
+    c.batch_execute("COMMIT").await.unwrap();
+    adjudicating
+        .await
+        .unwrap()
+        .expect("re-adjudication completes");
+    assert_shredded(&c, &e, "re-adjudication after an uncommitted shred").await;
+}
+
+/// Re-adjudication holds first, having projected the promoted event; the shred runs while it is
+/// uncommitted. Unfixed, the shred cannot see gate 4's uncommitted rows and scrubs nothing of them.
+#[tokio::test]
+async fn a_shred_racing_an_uncommitted_re_adjudication_still_scrubs_it() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+    let e = charted_assert(&c, &keys).await;
+    owe_projection(&c, &e).await;
+    mark_deferred(&c, &e).await;
+
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute(READJUDICATE, &[])
+        .await
+        .expect("re-adjudication runs");
+    assert_eq!(
+        statement_rows(&c, e.medication_id).await,
+        1,
+        "premise: inside re-adjudication, gate 4 projected the promoted event"
+    );
+
+    let (c2, pid2) = second_connection(&base).await;
+    let shred = shred_of(&keys, &e);
+    let shredding =
+        tokio::spawn(async move { c2.execute("SELECT apply_remote_event($1)", &[&shred]).await });
+    let (observer, _) = second_connection(&base).await;
+    until_finished_or_parked(&observer, pid2, &shredding).await;
+
+    c.batch_execute("COMMIT").await.unwrap();
+    shredding
+        .await
+        .unwrap()
+        .expect("the shred is admitted and executes");
+    assert_shredded(&c, &e, "shred during an uncommitted re-adjudication").await;
 }

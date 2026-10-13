@@ -152,10 +152,17 @@ DECLARE
     v_lo uuid;
     v_hi uuid;
 BEGIN
+    -- #773: wait for any whole-log heal/rebuild in progress, and make one that starts now wait for
+    -- this shred (db/005's cairn_lock_erasure_heal says why). SHARED, so shreds of different
+    -- events never wait for each other; and FIRST, before the custody lock — the lock order that
+    -- note fixes.
+    PERFORM cairn_lock_erasure_heal(false);
     -- #604: wait for any transaction still granting the target custody (db/005's
     -- cairn_lock_custody says why). Every statement below then runs on a snapshot that sees that
     -- transaction's committed custody and projection rows, so the scrub reaches them; and a key
-    -- arriving after this point waits for THIS commit and then finds the shred-log row.
+    -- arriving after this point waits for THIS commit and then finds the shred-log row. The same
+    -- lock covers re-adjudication's gate 4 and the late-custody path (#773), which take it in
+    -- cairn_projection_dispatch_heal_safe.
     PERFORM cairn_lock_custody(p_target);
 
     INSERT INTO erasure_shred_log (target_event_id, shred_event_id, basis)

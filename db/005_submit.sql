@@ -315,6 +315,29 @@ CREATE TRIGGER cairn_projection_dispatch_trg
 -- NO eligibility filter inside, deliberately: gate 4 must run on a row whose event_deferred marker
 -- is still present (that is its proof). The late-custody caller filters before calling.
 --
+-- THE CUSTODY LOCK FIRST, for a sealed event (#603, #773). Both callers read E's clear view (through
+-- the appliers) and write E's projection rows, and each races a writer in ANOTHER transaction that
+-- it cannot see under READ COMMITTED:
+--   * a SHRED of E (#773). Unlocked, gate 4 read the still-committed event_clear and projected E
+--     after a concurrent shred's scrub, or the shred's DELETE ran over gate 4's uncommitted rows
+--     and missed them. Either way the drug was back on the medication list under a recorded shred.
+--   * a LATE KEY for a deferred E (#603). Unlocked, re-adjudication projected nothing (it could not
+--     see the key's uncommitted event_clear) and promoted E, while the key saw the still-uncommitted
+--     marker and skipped: promoted, keyed, and off the chart, with nothing to retry it.
+-- The doors' step 9 and cairn_execute_shred take the same per-event lock, so whoever comes second
+-- waits and then runs on a fresh snapshot of the first's committed rows. The late-custody caller
+-- already holds the lock from its door's step 9; an advisory lock is re-entrant within a
+-- transaction, so taking it again here costs nothing. Pinned by tests/shred_custody_race.rs and
+-- tests/late_custody_readjudication_race.rs.
+--
+-- No shred re-check is needed after the wait: a shred that committed meanwhile deleted E's
+-- event_clear, and every applier reads E's body through cairn_clear_payload, so it finds nothing
+-- and writes nothing (a re-check here was tried and no test could tell it apart).
+--
+-- Gate 4 runs inside a per-row subtransaction, so a deadlock its wait might meet (the shape is in
+-- cairn_lock_custody's note below) is caught there: the event keeps its marker with the error
+-- recorded, and the next connect retries it. Nothing is lost.
+--
 -- search_path pinned for the %I EXECUTE, exactly like cairn_projection_dispatch (#426).
 CREATE OR REPLACE FUNCTION cairn_projection_dispatch_heal_safe(e event_log)
 RETURNS void LANGUAGE plpgsql
@@ -322,6 +345,9 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE v_fn text;
 BEGIN
+    IF e.sealed THEN
+        PERFORM cairn_lock_custody(e.event_id);
+    END IF;
     FOR v_fn IN
         SELECT apply_fn FROM cairn_projection_apply
         WHERE event_type = e.event_type AND heal_safe
@@ -403,11 +429,14 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- THE KEY is per event (hashtextextended over a namespaced string, the db/004 precedent), so
 -- unrelated events never wait for each other; a hash collision costs only an unnecessary wait.
 --
+-- THE OTHER TWO READERS of event_clear that write projections (#773):
+--   * deferred re-adjudication's gate 4 (db/043) and the late-custody path both dispatch through
+--     cairn_projection_dispatch_heal_safe above, which takes THIS lock for a sealed event;
+--   * the set-based heal/rebuild, cairn_reproject (db/039), scans the whole log, and one lock per
+--     row would hold millions of locks in one transaction (the shared lock table holds
+--     max_locks_per_transaction × max_connections). It takes cairn_lock_erasure_heal below instead.
+--
 -- WHAT IT DOES NOT COVER.
---   * Two READERS of event_clear that write projections without taking this lock: the heal-mode
---     cairn_reproject (db/039) and deferred re-adjudication's gate 4 (db/043). Either can still
---     re-project a record a concurrent shred is scrubbing — custody stays gone, the projection row
---     comes back. Issue #773.
 --   * REPEATABLE READ: there the snapshot is fixed at the transaction's first
 -- statement, so the waiting side still reads the pre-wait state. Every door caller in the tree runs
 -- READ COMMITTED (the server default); SERIALIZABLE is covered by SSI instead (the two sides form a
@@ -419,16 +448,66 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- A transaction that applied SEVERAL events would hold hlc_state (or CARNMR) from an earlier one
 -- when it takes E's lock for a later one, and could meet a single-event shred of E that holds E's
 -- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
--- that writes nothing. Every product caller (pull, requeue, restore) applies one event per
+-- that writes nothing. Every product DOOR caller (pull, requeue, restore) applies one event per
 -- statement, so a caller that starts batching events into one transaction must revisit this.
+-- The one multi-event holder is connect-time re-adjudication (db/043, #603/#773): its gate 4 takes
+-- each promoted event's lock and keeps it to the end of the pass, along with any CARNMR lock an
+-- earlier event's applier took. A shred of a later event that wants CARNMR can therefore deadlock
+-- with it. Whichever side Postgres aborts loses nothing: gate 4 runs in a per-row subtransaction,
+-- so a 40P01 there is recorded on the marker and retried at the next connect, and a 40P01 at the
+-- shred's door is a retryable failure that wrote nothing. The deferred set is empty on a healthy
+-- node, so the pass is short and rare.
 CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
 RETURNS void LANGUAGE sql
 SET search_path = public, pg_temp
 AS $$
     SELECT pg_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
 $$;
--- Called only by the SECURITY DEFINER doors and the shred executor, which run as the owner.
+-- Called only by the SECURITY DEFINER doors, the shred executor and the heal-safe dispatch (which
+-- only those doors and the owner-only re-adjudication call), all running as the owner.
 REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
+
+-- #773 — a crypto-shred and a whole-log heal/rebuild never interleave.
+--
+-- WHY THIS EXISTS. cairn_reproject (db/039) re-runs the appliers over every event in the log: they
+-- read each sealed event's clear view and upsert its projection rows. A shred running at the same
+-- time (cairn_execute_shred, db/037) deletes those rows and the clear view. Under READ COMMITTED,
+-- two interleavings put a shredded record back on the medication list, both reproduced by
+-- tests/shred_custody_race.rs:
+--   1. the shred deletes E's row but has not committed; the heal, having read E's still-committed
+--      clear view, upserts the row, waits on the shred's row lock, and inserts once it commits;
+--   2. the heal has inserted a FRESH row (repaying a projection debt) but not committed; the shred's
+--      DELETE cannot see that row, removes nothing, and commits; the heal then commits the row.
+-- Custody stays gone, but ADR-0005 / ADR-0052 promise the projection is scrubbed too.
+--
+-- HOW. One lock, two modes. Every shred takes it SHARED, so shreds of different events never wait
+-- for each other; the heal takes it EXCLUSIVE, before it reads anything. The heal therefore waits
+-- for every shred already open to commit, and every shred that starts during the heal waits for
+-- the heal to commit; whichever comes second runs on a fresh snapshot of the first's committed rows.
+-- (A per-event lock — cairn_lock_custody — cannot do this here: the heal would hold one per event.)
+--
+-- WHAT IT COSTS. A shred waits out a heal in progress. A heal runs only at a connect after a schema
+-- change (ADR-0080) or on the owner's `cairn-node reproject`, and that connect's schema replay
+-- already takes ACCESS EXCLUSIVE on event_log, so the doors are already waiting during an upgrade.
+-- Doors granting custody do NOT take this lock: a key arriving during a heal races nothing the heal
+-- can resurrect (custody-vs-shred is cairn_lock_custody's job).
+--
+-- LOCK ORDER. A shred takes this lock BEFORE its per-event custody lock; the heal takes only this
+-- one. No transaction takes a custody lock and then this one, so the two never form a cycle.
+CREATE OR REPLACE FUNCTION cairn_lock_erasure_heal(p_exclusive boolean)
+RETURNS void LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF p_exclusive THEN
+        PERFORM pg_advisory_xact_lock(hashtextextended('cairn.erasure-heal', 0));
+    ELSE
+        PERFORM pg_advisory_xact_lock_shared(hashtextextended('cairn.erasure-heal', 0));
+    END IF;
+END;
+$$;
+-- Called only by the shred executor and cairn_reproject, which run as the owner.
+REVOKE EXECUTE ON FUNCTION cairn_lock_erasure_heal(boolean) FROM PUBLIC;
 
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the

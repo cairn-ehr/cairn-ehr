@@ -85,6 +85,11 @@ DECLARE
     v_skipped text[] := '{}';
     v_skip    text[];
 BEGIN
+    -- #773: no shred may run while this pass reads clear views and writes projection rows, and
+    -- this pass waits for every shred already open. EXCLUSIVE, and before anything is read: a
+    -- shred racing this scan could otherwise have its record written back after its scrub (db/005's
+    -- cairn_lock_erasure_heal has both interleavings). Held to COMMIT, like every xact lock.
+    PERFORM cairn_lock_erasure_heal(true);
     PERFORM set_config('cairn.remote_apply', 'on', true);  -- true = SET LOCAL
 
     -- p_prefix is used un-escaped in every LIKE below, so a literal '_'/'%' in it

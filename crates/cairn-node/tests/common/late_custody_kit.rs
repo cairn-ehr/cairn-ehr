@@ -17,6 +17,9 @@
 use crate::common;
 use cairn_event::{sign, Hlc, SigningKey};
 use cairn_node::medication::{build_assert_body, AssertMedicationInput};
+use cairn_node::{db, shred::build_shred_body};
+use std::time::Duration;
+use tokio::task::JoinHandle;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -295,4 +298,94 @@ pub async fn probe_runs(c: &Client, applier: &str) -> i64 {
     .await
     .unwrap()
     .get(0)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Two-transaction race harness (#604, #603, #773). The FIRST transaction is opened on one
+// connection and left uncommitted; the SECOND runs on another connection in a spawned task; the
+// test waits until the second has FINISHED (nothing made it wait) or is PARKED on a lock, and only
+// then commits the first. Both outcomes are deterministic, so an end-state assertion is red before
+// a fix and green after it with no timing luck. HANDOVER, 2026-10-13: "a race found by reasoning
+// can be made deterministic".
+// ---------------------------------------------------------------------------------------------
+
+/// The signed bytes of a device-authored `erasure.shred.asserted` naming `e` as its target, filed
+/// on `e`'s own chart — the shape `cairn-node shred` produces without `--attest-as`.
+pub fn shred_of(keys: &Keys, e: &SealedAssert) -> Vec<u8> {
+    let body = build_shred_body(
+        Uuid::now_v7(),
+        e.patient,
+        e.event_id,
+        "retention ceiling",
+        &keys.kid_device,
+        None,
+        Hlc {
+            wall: WALL + 5,
+            counter: 0,
+            node_origin: "peer".into(),
+        },
+    );
+    sign(&body, &keys.sk_device)
+        .expect("sign the tombstone")
+        .signed_bytes
+}
+
+/// `(event_dek rows, event_clear rows)` for `event_id`: custody, and the readable body it opens.
+pub async fn custody(c: &Client, event_id: Uuid) -> (i64, i64) {
+    let row = c
+        .query_one(
+            "SELECT (SELECT count(*) FROM event_dek   WHERE event_id = $1::text::uuid), \
+                    (SELECT count(*) FROM event_clear WHERE event_id = $1::text::uuid)",
+            &[&event_id.to_string()],
+        )
+        .await
+        .unwrap();
+    (row.get(0), row.get(1))
+}
+
+/// Wait until `second` has either finished or is parked on a lock, observed through `observer`
+/// (any connection other than the second's own). Bounded at 10 s so a door that hangs for some
+/// unrelated reason fails with a message instead of stalling the suite.
+///
+/// Returns nothing: BOTH outcomes are legitimate here. An unfixed door finishes without waiting;
+/// a fixed one parks. What the test asserts is the end state after the first transaction commits.
+pub async fn until_finished_or_parked(
+    observer: &Client,
+    second_pid: i32,
+    second: &JoinHandle<Result<u64, tokio_postgres::Error>>,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if second.is_finished() {
+            return;
+        }
+        let wait: Option<String> = observer
+            .query_one(
+                "SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1",
+                &[&second_pid],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if wait.as_deref() == Some("Lock") {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the second transaction (pid {second_pid}) neither finished nor parked on a lock \
+             within 10 s (last wait_event_type = {wait:?})"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A second connection to the same database, and its backend pid.
+pub async fn second_connection(base: &str) -> (Client, i32) {
+    let c2 = db::connect(base).await.unwrap();
+    let pid: i32 = c2
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    (c2, pid)
 }
