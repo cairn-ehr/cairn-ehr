@@ -1432,42 +1432,26 @@ async fn seal_and_write_local_state_export(
         }
     };
 
-    // Snapshot the CURRENT clinical high-water mark BEFORE `read_local_state` runs, never
-    // after (#500 slice 2c Task 12 fix round 1, Important 2). `read_local_state` below reads
-    // `event_dek`/`actor_event`/etc — NOT `event_log` itself — to build the bundle this
-    // export seals, so it has no seq of its own to report; the seq recorded here is a claim
-    // made ABOUT that read, and the claim must never outrun it. If a clinical event committed
-    // in the window between the two queries, querying seq AFTER would fold that event's seq
-    // into `covers_seq` even though its `event_dek` row landed too late for THIS export to
-    // carry — an OVER-claim, and the direction that manufactures a false green. Querying
-    // FIRST is the strictly safer of the two orderings and is why it is done this way. Do
-    // not "tidy" it back to after the seal: that widens the false-green window.
-    //
-    // ⚠️ IT DOES NOT ELIMINATE THAT WINDOW, and an earlier version of this comment claimed it
-    // did ("can only UNDER-claim ... never a false green"). That claim assumed seq order is
-    // commit order, which `capture::plane`'s own header establishes is false: `event_log.seq`
-    // is `GENERATED ALWAYS AS IDENTITY`, handed out at INSERT, and commits land OUT OF ORDER.
-    // Two overlapping `submit_event` transactions take seqs 10 and 11; 11 commits; this query
-    // returns 11; `read_local_state` below reads `event_custody_surviving` and does not see
-    // 10's row; 10 then commits. Coverage now claims 11 over an export that lacks seq 10's
-    // DEK, and `kit_verdict(11, Some(11))` says `Restorable`.
-    //
-    // The residual is narrow (it needs a write in flight across these two statements) and it
-    // is NOT closed here, because closing it properly means reading both under ONE snapshot
-    // — a repeatable-read transaction spanning the seq query and the bundle read — which is
-    // a change to how the export is read, not a reordering. Tracked as #560 rather than
-    // papered over.
-    //
-    // `COALESCE(…, 0)` on a clinical-event-free node records harmless coverage of "nothing
-    // yet" — `kit_verdict` never even inspects `export_seq` when the medium itself reports no
-    // clinical events (see its doc), so this can never manufacture a false claim there.
-    let row = db
-        .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
-        .await
-        .context("querying the current clinical watermark for export coverage")?;
-    let covers_seq: i64 = row.get(0);
-
-    let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_ref()).await?;
+    // The bundle and the clinical seq it may honestly claim to cover, read together (#560).
+    // `covers_seq` is a promise that every clinical event up to it has its key in THIS bundle,
+    // and `seq` order is not commit order — so the reader waits out the writes still in flight
+    // below the high-water mark before reading custody. If they outlast the wait, `covers_seq`
+    // is `None`: the export is still written, but its coverage does not move. See
+    // `read_local_state_with_coverage` for why one snapshot would not have been enough.
+    let (covers_seq, bundle) = cairn_node::localstate::read_local_state_with_coverage(
+        db,
+        unwrap.as_ref(),
+        cairn_node::localstate::COVERAGE_SETTLE_WAIT,
+    )
+    .await?;
+    if covers_seq.is_none() {
+        eprintln!(
+            "WARNING: a clinical write was still in flight after {}s, so this export's coverage \
+             could not be settled — the export is written, but its coverage figure is left where \
+             the last export put it. The next backup will settle it.",
+            cairn_node::localstate::COVERAGE_SETTLE_WAIT.as_secs()
+        );
+    }
     let container = cairn_node::localstate::build_export_container(wraps, &op, &bundle)?;
     let export_path = cairn_node::localstate::localstate_path_for(medium);
     cairn_node::fsio::atomic_write(&export_path, &container, Some(0o600))?;

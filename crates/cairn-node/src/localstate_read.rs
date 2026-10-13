@@ -166,3 +166,110 @@ pub async fn read_local_state(
         actor_registry,
     ))
 }
+
+/// How long the export waits for clinical writes in flight to finish before giving up on
+/// advancing its coverage figure (#560). A clinical write is milliseconds; thirty seconds is
+/// generous enough that only a stuck or very long transaction exhausts it, and the cost of
+/// exhausting it is small and honest — coverage stays where the last export left it.
+pub const COVERAGE_SETTLE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Read the export bundle together with the clinical seq it can HONESTLY claim to cover — the
+/// `export_covers_seq` that `verify-backup` later compares against the medium (#560).
+///
+/// Returns `(None, bundle)` when coverage could not be settled within `max_wait`: the bundle is
+/// still good to write, but no figure may be recorded for it ([`crate::backup::export_outcome_for_write`]
+/// then leaves the previous coverage untouched). `None` is never "zero" — principle 4.
+///
+/// # Why the order matters, and why one snapshot is not enough
+///
+/// The figure means "every clinical event up to this seq has its key in this bundle". It used to
+/// be `MAX(event_log.seq)`, read just before the custody read. `seq` is an IDENTITY value handed
+/// out at INSERT, so commits land OUT OF ORDER: T10 inserts seq 10 and its `event_dek` row, T11
+/// inserts seq 11 and commits, `MAX(seq)` reads 11, the custody read cannot see T10's key, T10
+/// commits — and the export claims 11 without seq 10's key. `verify-backup` calls that kit
+/// `Restorable`, and seq 10's sealed body restores as ciphertext.
+///
+/// Reading both under one REPEATABLE READ snapshot does not help: T10 is just as invisible inside
+/// that snapshot. The fix is to WAIT, in [`settled_clinical_watermark`], and only then read.
+pub async fn read_local_state_with_coverage(
+    db: &tokio_postgres::Client,
+    unwrap_secret: Option<&Secret32>,
+    max_wait: std::time::Duration,
+) -> anyhow::Result<(Option<i64>, LocalState)> {
+    // Settle FIRST, read SECOND. The custody read below runs in a later snapshot than the one the
+    // wait ended in, so every event at or below the settled figure is visible to it; anything that
+    // commits in between only makes the bundle carry MORE than it claims (an under-claim, the safe
+    // direction).
+    let covers = settled_clinical_watermark(db, max_wait).await?;
+    let state = read_local_state(db, unwrap_secret).await?;
+    Ok((covers, state))
+}
+
+/// The highest `event_log.seq` below which no clinical write is still in flight, or `None` if the
+/// writers holding it did not finish within `max_wait`.
+///
+/// # How it knows, without blocking anyone
+///
+/// 1. Read `M = MAX(seq)`. Every seq at or below `M` was handed out before this read.
+/// 2. THEN list the transactions holding `RowExclusiveLock` on `event_log`. Any transaction still
+///    holding an uncommitted seq `s <= M` is among them: Postgres takes that lock when the INSERT
+///    statement opens the table — before the column default calls `nextval` — and holds it to
+///    the end of the transaction. Listing AFTER step 1 matters: a writer that started between the
+///    two reads holds the lock too, and is waited for (harmlessly).
+/// 3. Poll until none of those transactions is alive. Each is identified by its virtual
+///    transaction id, which a session never reuses for its next transaction, so "no lock held
+///    under that id" means "that transaction ended".
+///
+/// This takes NO lock of its own. A `LOCK TABLE event_log IN SHARE MODE` would answer the same
+/// question in one statement, but it queues every clinical write behind the slowest writer in
+/// flight — a backup must never cost a clinician the ability to write (the availability floor).
+///
+/// `COALESCE(…, 0)` on a clinical-event-free node records harmless coverage of "nothing yet" —
+/// `backup::kit_verdict` never inspects the export's figure when the medium itself reports no
+/// clinical events.
+pub async fn settled_clinical_watermark(
+    db: &tokio_postgres::Client,
+    max_wait: std::time::Duration,
+) -> anyhow::Result<Option<i64>> {
+    use anyhow::Context;
+
+    let high_water: i64 = db
+        .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
+        .await
+        .context("querying the clinical high-water mark for export coverage")?
+        .get(0);
+
+    // `pid IS DISTINCT FROM pg_backend_pid()`: this session is not a writer, but say so rather
+    // than rely on it. `relation = 'event_log'::regclass` names the one table whose seq the
+    // figure is about.
+    let in_flight: Vec<String> = db
+        .query_one(
+            "SELECT COALESCE(array_agg(DISTINCT virtualtransaction), '{}') FROM pg_locks \
+              WHERE locktype = 'relation' AND relation = 'event_log'::regclass \
+                AND mode = 'RowExclusiveLock' AND granted \
+                AND pid IS DISTINCT FROM pg_backend_pid()",
+            &[],
+        )
+        .await
+        .context("listing the clinical writes in flight for export coverage")?
+        .get(0);
+
+    let deadline = tokio::time::Instant::now() + max_wait;
+    let mut pending = in_flight;
+    while !pending.is_empty() {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(None);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        pending = db
+            .query_one(
+                "SELECT COALESCE(array_agg(DISTINCT virtualtransaction), '{}') FROM pg_locks \
+                  WHERE virtualtransaction = ANY($1)",
+                &[&pending],
+            )
+            .await
+            .context("checking whether the clinical writes in flight have finished")?
+            .get(0);
+    }
+    Ok(Some(high_water))
+}
