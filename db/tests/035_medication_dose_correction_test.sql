@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+\ir _scratch_database_guard.sql
 -- db/tests/035_medication_dose_correction_test.sql
 -- #346 — the SQL mirror of db/035's dose-correction `strike` rule, for the case the Rust suite
 -- cannot reach.
