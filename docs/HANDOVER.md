@@ -20,7 +20,8 @@
 > fail-open audit: one survivor, db/035's `strike: [null]`), **#553** (legacy-medium succession compares event SETS, so
 > an unmarked foreign stick is never destroyed), **#616** (`finalize_identity` is one transaction), **#744 + #704**
 > (`match_proposal.status` and `applied_event_id ⇔ applied` are CHECKs — #744 REVERSES db/017's pinned "status stays
-> open" choice; the PR says so for the maintainer to veto). Review + merge it. (PR #772 is merged.)
+> open" choice; **the maintainer confirmed the CHECK, 2026-10-13**: pre-production, no legacy data). Review + merge it.
+> (PR #772 is merged.)
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
