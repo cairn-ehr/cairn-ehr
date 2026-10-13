@@ -12,16 +12,17 @@
 > §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
 > **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
 >
-> **⇒ ALSO OPEN (2026-10-13, second cloud tech-debt session): draft PR
-> [#774](https://github.com/cairn-ehr/cairn-ehr/pull/774) on branch `claude/peaceful-archimedes-xuls4y`** — one commit
-> per issue, each driven by a test that failed first: **#773 + #603** (a shred never interleaves with the heal pass or
-> re-adjudication; a late key and re-adjudication never both skip a deferred event — six races reproduced red, fixed by
-> the custody lock in the heal-safe dispatch plus a new shared/exclusive `cairn_lock_erasure_heal`), **#346** (the floor
-> fail-open audit: one survivor, db/035's `strike: [null]`), **#553** (legacy-medium succession compares event SETS, so
-> an unmarked foreign stick is never destroyed), **#616** (`finalize_identity` is one transaction), **#744 + #704**
-> (`match_proposal.status` and `applied_event_id ⇔ applied` are CHECKs — #744 REVERSES db/017's pinned "status stays
-> open" choice; **the maintainer confirmed the CHECK, 2026-10-13**: pre-production, no legacy data). Review + merge it.
-> (PR #772 is merged.)
+> **⇒ ALSO OPEN (2026-10-13, third cloud tech-debt session): draft PR
+> [#776](https://github.com/cairn-ehr/cairn-ehr/pull/776) on branch `claude/festive-fermi-8j792j`** — one commit per
+> issue, each driven by a test that failed first: **#708** (a link/unlink judged from a comparison is signed only over
+> the records shown — `chart_link::RecordsShown`, re-read under CARNLK after the proposal-row lock; "Different people"
+> no longer silently overrules a colleague's attested link landing mid-judgement), **#713** (an interrupted judgement
+> COMMIT is `db_diagnosis::CommitOutcomeUnknown`; the window answers `Retry::AfterReread` — buttons gone, chart re-read
+> — never a live retry), **#569** (`restore_actor_registry` refuses a present row whose content differs; named-field
+> refusals for `actor_event_id` and `seq`), **#560** (export coverage waits out in-flight `event_log` writers —
+> `settled_clinical_watermark`; the issue's REPEATABLE READ fix would NOT have closed it), **#682** (NFC before
+> tokenising), **#509** (`establish-local-state-key` fails closed). Filed **#775** (a decision). PR #774 is merged.
+> Review + merge it.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
@@ -511,6 +512,29 @@ plain JS, no npm); pane/routing/freshness state machine tested but **not wired**
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
+
+### 2026-10-13 (third) — tech-debt pass (cloud session): #708, #713, #569, #560, #682, #509
+
+Picked by blast radius: two ways a human identity judgement silently overruled a colleague's (#708, #713), a restore
+that could keep a recalled actor authorised (#569), a backup kit's false green (#560), a false split that mints a
+duplicate chart (#682), an escrow clobber (#509).
+- **⇒ AN ISSUE'S PROPOSED FIX CAN BE WRONG ABOUT MVCC.** #560 proposed one REPEATABLE READ snapshot; an in-flight lower
+  seq is invisible inside that snapshot too. A seq watermark is SETTLED by waiting out the transactions holding
+  `RowExclusiveLock` on `event_log`, listed AFTER reading `MAX(seq)` (the lock precedes `nextval`), polled in `pg_locks`
+  — no lock taken, so a backup never queues a clinical write. Rests on CACHE 1 (pinned) and watches PREPARED holders.
+- **⇒ A judgement made from a comparison carries what was compared.** `RecordsShown`, re-read under CARNLK, after the
+  proposal-row lock (row-then-CARNLK). Harness: T1 holds CARNLK, the judgement is observed parked on `advisory`, the
+  peer event lands inside T1. Dropping the lock turns both races red.
+- **⇒ An unknown outcome is its own marker** — not a refusal, not an outage. Only an UNANSWERED commit gets it (a SQLSTATE
+  means a definite rollback). The marker must be the ROOT error with the cause as `source()`: anyhow's
+  `.context(marker)` is invisible to a `chain()` downcast.
+- **⇒ A fixture that passes a "record" no window could show will hide behind a new check:** duplicate_review's {x, u}
+  was two unrelated charts; it now joins them with a peer link.
+- **⇒ Rig:** the 2026-10-12 recipe, unchanged; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`
+  works here, so `cairn-gui-tauri` builds and tests in the cloud too. **Disk:** `target/` reaches ~23 GB; a second
+  target dir (e.g. for `cargo doc`) fills the allowance — delete `target/debug/incremental` first.
+- Left for a decision: **#775** (signed tokens' case vs the cluster's `lower()`), **#556** (whether `attestation` /
+  `attester_key` join `segment_commitment` — time-limited: before the first release that ships a CAIRNB3 writer).
 
 ### 2026-10-13 (second) — tech-debt pass (cloud session): #773, #603, #346, #553, #616, #744, #704
 
