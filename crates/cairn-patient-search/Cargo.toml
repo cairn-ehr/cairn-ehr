@@ -18,6 +18,11 @@ workspace = true
 # ones that arrive from the database.
 uuid = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+# NFC normalisation of a typed name BEFORE it is tokenised (#682): a decomposed accent is a
+# combining mark, not alphanumeric, so tokenising first trims or splits on it. Pure Rust, no
+# I/O, MIT OR Apache-2.0 (AGPL-compatible), and already in all three lockfiles transitively —
+# this adds an edge, not a crate, and keeps the "linkable by a picker window" constraint above.
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 # TESTS ONLY — deliberately not a real dependency, so the "linkable by a future picker
