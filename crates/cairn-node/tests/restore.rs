@@ -212,7 +212,7 @@ async fn restore_round_trip_rehydrates_under_a_new_identity() {
         return;
     };
     let _guard = db::test_serial_guard(&base).await.unwrap();
-    let a = db::connect_and_load_schema(&base).await.unwrap();
+    let mut a = db::connect_and_load_schema(&base).await.unwrap();
     db::reset_node_federation_tables(&a).await.ok();
 
     // --- original node A ---
@@ -253,7 +253,7 @@ async fn restore_round_trip_rehydrates_under_a_new_identity() {
         .unwrap();
     assert_eq!(applied, 1);
     let outcome = cairn_node::restore::finalize_identity(
-        &a,
+        &mut a,
         &sk_new,
         &kid_new,
         &name,
@@ -877,4 +877,74 @@ async fn restore_door_admits_within_ceiling_future_wall() {
     a.execute("SELECT restore_node_event($1)", &[&ev])
         .await
         .expect("a within-ceiling future wall must restore (honest skew)");
+}
+
+/// #616 — `finalize_identity` is ATOMIC: a failure between its two statements leaves NO
+/// identity behind.
+///
+/// It authors two events: the new genesis (`provision`, which writes `local_node` and so fences
+/// the restore door closed for good) and then `node.superseded`. They used to be two separate
+/// autocommit statements, so a fault between them (a dropped connection, a lock timeout, a full
+/// disk) left a database that was enrolled but never superseded — which `restore` then refused
+/// forever, while the error escaped before the summary that names the penned records could
+/// print. The operator's only move was a fresh database, discarding the pen.
+///
+/// The fault is made deterministic by handing the second statement a dead-node id that is not
+/// hex: the federation door refuses it (`cairn_decode_hex_or_raise`, P0001), AFTER `provision`
+/// has already run. If the two are one transaction, nothing of the first survives.
+#[tokio::test]
+async fn a_failure_between_genesis_and_supersede_leaves_no_identity() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut a = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&a).await.ok();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (sk, kid) = keystore::generate_plaintext(&tmp.path().join("a.key")).unwrap();
+    let err = cairn_node::restore::finalize_identity(
+        &mut a,
+        &sk,
+        &kid,
+        "restored",
+        "127.0.0.1:7921",
+        "not-a-hex-node-id",
+    )
+    .await
+    .expect_err("premise: the supersede is refused, after the genesis was authored");
+    assert!(
+        format!("{err:#}").contains("superseded_node_id_hex"),
+        "premise: it is the SECOND statement that failed: {err:#}"
+    );
+
+    assert!(
+        identity::load_local_opt(&a).await.unwrap().is_none(),
+        "A HALF-FINALIZED RESTORE MUST NOT EXIST: the genesis committed without its supersede, \
+         so local_node is written and `restore` will refuse this database forever (#616)"
+    );
+    let enrolled: i64 = a
+        .query_one("SELECT count(*) FROM node_event WHERE op = 'enroll'", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        enrolled, 0,
+        "and no genesis event survives in the log either"
+    );
+
+    // And the same database can still be finalized — the retry the operator needs.
+    let old_hex = "1220".to_string() + &"cd".repeat(32);
+    cairn_node::restore::finalize_identity(
+        &mut a,
+        &sk,
+        &kid,
+        "restored",
+        "127.0.0.1:7921",
+        &old_hex,
+    )
+    .await
+    .expect("a clean retry into the same database succeeds");
+    assert!(identity::load_local_opt(&a).await.unwrap().is_some());
 }

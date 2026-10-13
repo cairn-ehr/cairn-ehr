@@ -3508,7 +3508,7 @@ async fn main() -> anyhow::Result<()> {
                     })?;
 
             // 3. Connect to the FRESH db and load the schema (DDL: owner privileges, like init).
-            let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
+            let mut db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
             if cairn_node::identity::load_local_opt(&db).await?.is_some() {
                 anyhow::bail!(
                     "target database already has an enrolled node; restore is only into a \
@@ -3826,7 +3826,7 @@ async fn main() -> anyhow::Result<()> {
             // 8. Mint the NEW identity — LAST, so everything above ran inside the un-enrolled
             //    fence and a failure there left a database that is still restorable.
             let outcome = cairn_node::restore::finalize_identity(
-                &db,
+                &mut db,
                 &sk,
                 &kid,
                 &name,
