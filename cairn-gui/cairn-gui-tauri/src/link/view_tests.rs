@@ -423,8 +423,8 @@ fn an_unknown_commit_outcome_rereads_and_is_never_retried_live() {
             v.text,
             format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
-                 event {} was being saved. The chart is being re-read: check what it shows now \
-                 before judging again.",
+                 event {} was being saved. Re-read the chart before judging again: if it was \
+                 recorded but a later judgement outranks it, the chart will look unchanged.",
                 id(77)
             )
         );

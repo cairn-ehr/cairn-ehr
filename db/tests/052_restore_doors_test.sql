@@ -280,6 +280,10 @@ BEGIN
                "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb),
             ('seq', $json$[{"actor_event_id": "aaaaaaaa-0000-7000-8000-00000000000a",
                "actor_id": "01", "op": "enroll", "seq": 1.5,
+               "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb),
+            -- Beyond BIGINT: it must be the named refusal, never a bare cast error.
+            ('seq', $json$[{"actor_event_id": "aaaaaaaa-0000-7000-8000-00000000000a",
+               "actor_id": "01", "op": "enroll", "seq": 99999999999999999999,
                "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb)
         ) AS t(field, rows)
     LOOP

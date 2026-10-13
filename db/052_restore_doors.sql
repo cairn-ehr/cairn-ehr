@@ -142,10 +142,12 @@ BEGIN
         PERFORM cairn_uuid_or_raise('actor_event_id', v_row ->> 'actor_event_id',
                                     'restore_actor_registry');
         IF jsonb_typeof(v_row -> 'seq') IS DISTINCT FROM 'number'
-           OR (v_row ->> 'seq') !~ '^[0-9]+$' THEN
+           -- At most 18 digits, so every value that passes also fits the BIGINT the ORDER BY
+           -- below casts it to; a longer one would raise a bare cast error there instead.
+           OR (v_row ->> 'seq') !~ '^[0-9]{1,18}$' THEN
             RAISE EXCEPTION 'restore_actor_registry: row % carries seq %, not a non-negative '
-                'integer. seq is the replay order, and a missing or malformed one would '
-                'silently reorder the registry actor_current reads.',
+                'integer of at most 18 digits. seq is the replay order, and a missing or '
+                'malformed one would silently reorder the registry actor_current reads.',
                 v_row ->> 'actor_event_id', COALESCE(v_row -> 'seq', 'null'::jsonb);
         END IF;
     END LOOP;

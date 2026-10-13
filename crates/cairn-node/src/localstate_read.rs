@@ -218,7 +218,16 @@ pub async fn read_local_state_with_coverage(
 ///    two reads holds the lock too, and is waited for (harmlessly).
 /// 3. Poll until none of those transactions is alive. Each is identified by its virtual
 ///    transaction id, which a session never reuses for its next transaction, so "no lock held
-///    under that id" means "that transaction ended".
+///    under that id" means "that transaction ended" — with ONE exception, handled in the poll:
+///    `PREPARE TRANSACTION` hands a transaction's locks to a dummy backend (`pid` NULL, a new
+///    `-1/<xid>` id), so a listed writer that prepares vanishes from its old id while still
+///    uncommitted. Every poll therefore also waits on any PREPARED holder of `event_log`'s
+///    lock (unreachable at the default `max_prepared_transactions = 0`, and nothing here uses
+///    two-phase commit — but it is the same false green, so it is closed rather than argued).
+///
+/// ASSUMES `event_log.seq`'s sequence has CACHE 1 (the default, and pinned by
+/// `tests/export_coverage_settles.rs`). With a larger cache a session would hold
+/// pre-allocated seqs while holding no lock, and step 2 could not see it.
 ///
 /// This takes NO lock of its own. A `LOCK TABLE event_log IN SHARE MODE` would answer the same
 /// question in one statement, but it queues every clinical write behind the slowest writer in
@@ -264,7 +273,9 @@ pub async fn settled_clinical_watermark(
         pending = db
             .query_one(
                 "SELECT COALESCE(array_agg(DISTINCT virtualtransaction), '{}') FROM pg_locks \
-                  WHERE virtualtransaction = ANY($1)",
+                  WHERE virtualtransaction = ANY($1) \
+                     OR (locktype = 'relation' AND relation = 'event_log'::regclass \
+                         AND mode = 'RowExclusiveLock' AND pid IS NULL)",
                 &[&pending],
             )
             .await

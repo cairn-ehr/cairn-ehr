@@ -285,8 +285,8 @@ fn commit_unknown() -> ErrorView {
 fn commit_unknown_text() -> String {
     format!(
         "Whether the \"different people\" judgement was recorded is NOT known — the connection \
-         was lost while event {} was being saved. The chart is being re-read: check what it \
-         shows now before judging again.",
+         was lost while event {} was being saved. Re-read the chart before judging again: if it \
+         was recorded but a later judgement outranks it, the chart will look unchanged.",
         id(77)
     )
 }

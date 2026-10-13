@@ -210,6 +210,17 @@ async function showUnlinkFailure(sent, token, failure, button) {
       button.hidden = true;
     }
   }
+  // An unknown outcome also disarms a NEWER comparison of the same link (answered "chart" or
+  // "elsewhere" above): pressing it could record a second judgement over one that may have landed.
+  if (
+    reread &&
+    unlinkCompared_ !== null &&
+    unlinkCompared_.low === sent.low &&
+    unlinkCompared_.high === sent.high
+  ) {
+    unlinkCompared_ = null;
+    el("unlink-confirm").hidden = true;
+  }
   if (reread && displayedPatient !== null && sent.charts.includes(displayedPatient)) {
     await refresh(text);
   }

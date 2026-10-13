@@ -449,14 +449,16 @@ pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
 /// recorded, and `data_error_from` would otherwise read it as an outage and keep a live retry —
 /// the #713 hazard: a judgement that landed as Outranked leaves the record looking unchanged,
 /// so a second press records a second judgement stamped above the colleague's it lost to. It
-/// gets [`Retry::AfterReread`] instead: the webview re-reads the chart and takes the button away.
+/// gets [`Retry::AfterReread`] instead: the webview takes the button away (from any open
+/// comparison of the same pair) and re-reads the chart when the judgement touched it. The
+/// sentence says what a re-read cannot: an Outranked landing leaves the chart looking unchanged.
 pub fn judgement_error_view(act: &str, e: &anyhow::Error) -> ErrorView {
     match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
         Some(event) => ErrorView {
             text: format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
-                 event {event} was being saved. The chart is being re-read: check what it shows \
-                 now before judging again."
+                 event {event} was being saved. Re-read the chart before judging again: if it was \
+                 recorded but a later judgement outranks it, the chart will look unchanged."
             ),
             retry: Retry::AfterReread,
         },

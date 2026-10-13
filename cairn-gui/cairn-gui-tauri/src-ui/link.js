@@ -291,6 +291,14 @@ function linkChanged(sent, report) {
   return sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient);
 }
 
+/** Whether two comparisons are of the same two charts, in either order. */
+function samePair(a, b) {
+  return (
+    (a.patientId === b.patientId && a.otherId === b.otherId) ||
+    (a.patientId === b.otherId && a.otherId === b.patientId)
+  );
+}
+
 /** Send the Link judgement for whatever `compare` last rendered. */
 async function linkCompared() {
   return sendJudgement("link_records");
@@ -371,6 +379,15 @@ async function sendJudgement(command) {
         el("link-confirm").hidden = true;
         el("link-different").hidden = true;
       }
+    }
+    // An unknown outcome also disarms a NEWER comparison of the same two charts (a second Review
+    // pressed while this answer was in flight lands as "chart" or "elsewhere", above): its buttons
+    // would sign over a record that may already carry this judgement — and if it landed Outranked
+    // the record looks unchanged, so #708's check would not catch the second press (#713 review).
+    if (reread && compared !== null && samePair(compared, sent)) {
+      compared = null;
+      el("link-confirm").hidden = true;
+      el("link-different").hidden = true;
     }
     // Re-read whenever the chart open NOW is one the judgement was about (the same test as
     // `linkChanged`, without its `reload` flag — nobody knows yet whether anything changed).

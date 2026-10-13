@@ -1448,7 +1448,9 @@ async fn seal_and_write_local_state_export(
         eprintln!(
             "WARNING: a clinical write was still in flight after {}s, so this export's coverage \
              could not be settled — the export is written, but its coverage figure is left where \
-             the last export put it. The next backup will settle it.",
+             the last export put it. A later backup settles it once that transaction ends; if \
+             this repeats, look for a long-open transaction writing event_log \
+             (pg_stat_activity, state 'idle in transaction').",
             cairn_node::localstate::COVERAGE_SETTLE_WAIT.as_secs()
         );
     }

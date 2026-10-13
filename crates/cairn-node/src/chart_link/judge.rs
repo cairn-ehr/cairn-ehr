@@ -340,13 +340,19 @@ async fn judge(
     // The one failure that may have written: a connection lost DURING the commit leaves
     // its outcome unknown. Name the event so the operator looks before retrying.
     tx.commit().await.map_err(|e| {
-        // Marked (#713), so a surface re-reads before offering this judgement again rather than
+        // A server that ANSWERED the COMMIT with an error (it carries a SQLSTATE) rolled the
+        // transaction back: nothing was written, and that is an ordinary failure. Only a commit
+        // the server never answered — the connection lost mid-flight — may have landed, and is
+        // marked (#713), so a surface re-reads before offering this judgement again rather than
         // treating it as an outage: a commit that DID land as `Outranked` leaves the record
         // reading as before, and a second press would overrule the colleague it lost to.
-        crate::db_diagnosis::commit_outcome_unknown(
-            asserted.event_id,
-            anyhow::Error::new(LocalDbFault::new("committing the judgement", e)),
-        )
+        let answered = e.as_db_error().is_some();
+        let fault = anyhow::Error::new(LocalDbFault::new("committing the judgement", e));
+        if answered {
+            fault
+        } else {
+            crate::db_diagnosis::commit_outcome_unknown(asserted.event_id, fault)
+        }
     })?;
     Ok(LinkOutcome {
         event_id: asserted.event_id,

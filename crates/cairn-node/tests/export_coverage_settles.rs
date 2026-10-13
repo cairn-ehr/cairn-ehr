@@ -270,3 +270,29 @@ async fn a_writer_outlasting_the_wait_leaves_coverage_unsettled() {
         "and with nothing in flight it settles at the log's high-water mark"
     );
 }
+
+/// The settle argument (`settled_clinical_watermark`'s doc) ASSUMES `event_log.seq` hands out
+/// one value at a time: with a sequence CACHE above 1, a session holds pre-allocated seqs while
+/// holding no lock on `event_log`, and the wait cannot see a writer that has not inserted yet.
+/// Review finding on #560 — pinned so a future "performance" tweak to the identity column
+/// cannot quietly reopen the false green.
+#[tokio::test]
+async fn the_clinical_seq_hands_out_one_value_at_a_time() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let cache: i64 = c
+        .query_one(
+            "SELECT s.cache_size FROM pg_sequences s \
+              WHERE format('%I.%I', s.schemaname, s.sequencename) \
+                  = pg_get_serial_sequence('public.event_log', 'seq')",
+            &[],
+        )
+        .await
+        .expect("event_log.seq is an identity column with a sequence")
+        .get(0);
+    assert_eq!(cache, 1, "event_log.seq must not cache values (#560)");
+}
