@@ -111,6 +111,15 @@ DECLARE
     v_foreign   TEXT;
     v_op        TEXT;
     v_recorded  TEXT;
+    v_id        UUID;
+    v_actor     BYTEA;
+    v_kind      TEXT;
+    v_pinned    JSONB;
+    v_key       TEXT;
+    v_succ      BYTEA;
+    v_at        TIMESTAMPTZ;
+    v_present   actor_event%ROWTYPE;
+    v_differs   TEXT;
 BEGIN
     -- Fence 1.
     IF EXISTS (SELECT 1 FROM local_node) THEN
@@ -122,6 +131,24 @@ BEGIN
         RAISE EXCEPTION 'restore_actor_registry: p_rows must be a JSON array of registry rows, got %',
             COALESCE(jsonb_typeof(p_rows), 'NULL');
     END IF;
+
+    -- The two fields the door relies on BEFORE it reads a row's content are checked first,
+    -- each refusal naming its field (#569). `actor_event_id` is the identity fence 2 and the
+    -- resume path compare on, and a bare `::UUID` cast named neither row nor field. `seq` is
+    -- the replay ORDER: the loop below sorts on it, so a missing one sorted NULLS LAST and
+    -- silently reordered the registry, and a non-integer one raised a bare cast error from
+    -- the ORDER BY — before any per-row check could name it.
+    FOR v_row IN SELECT r FROM jsonb_array_elements(p_rows) r LOOP
+        PERFORM cairn_uuid_or_raise('actor_event_id', v_row ->> 'actor_event_id',
+                                    'restore_actor_registry');
+        IF jsonb_typeof(v_row -> 'seq') IS DISTINCT FROM 'number'
+           OR (v_row ->> 'seq') !~ '^[0-9]+$' THEN
+            RAISE EXCEPTION 'restore_actor_registry: row % carries seq %, not a non-negative '
+                'integer. seq is the replay order, and a missing or malformed one would '
+                'silently reorder the registry actor_current reads.',
+                v_row ->> 'actor_event_id', COALESCE(v_row -> 'seq', 'null'::jsonb);
+        END IF;
+    END LOOP;
 
     -- Fence 2. Named, never counted: an operator seeing "a foreign row is present" cannot
     -- act on it, and the id is what tells a half-provisioned node from a partial restore.
@@ -161,26 +188,56 @@ BEGIN
                 COALESCE(v_row ->> 'actor_event_id', '(no actor_event_id)');
         END IF;
 
+        -- Decode once, so the INSERT and the conflict comparison below read the SAME values.
+        v_id     := (v_row ->> 'actor_event_id')::UUID;  -- shape already checked above
+        v_actor  := cairn_decode_hex_or_raise('actor_id', v_row ->> 'actor_id',
+                                              'restore_actor_registry');
+        v_kind   := v_row ->> 'kind';
+        v_pinned := CASE WHEN v_row ->> 'pinned' IS NULL THEN NULL
+                         ELSE (v_row ->> 'pinned')::JSONB END;
+        v_key    := v_row ->> 'signing_key_id';
+        v_succ   := CASE WHEN v_row ->> 'superseded_by' IS NULL THEN NULL
+                         ELSE cairn_decode_hex_or_raise('superseded_by', v_row ->> 'superseded_by',
+                                                        'restore_actor_registry') END;
+        v_at     := v_recorded::TIMESTAMPTZ;
+
         INSERT INTO actor_event
             (actor_event_id, actor_id, op, kind, pinned, signing_key_id, superseded_by, recorded_at)
-        VALUES (
-            (v_row ->> 'actor_event_id')::UUID,
-            cairn_decode_hex_or_raise('actor_id', v_row ->> 'actor_id', 'restore_actor_registry'),
-            v_op,
-            v_row ->> 'kind',
-            CASE WHEN v_row ->> 'pinned' IS NULL THEN NULL ELSE (v_row ->> 'pinned')::JSONB END,
-            v_row ->> 'signing_key_id',
-            CASE WHEN v_row ->> 'superseded_by' IS NULL THEN NULL
-                 ELSE cairn_decode_hex_or_raise('superseded_by', v_row ->> 'superseded_by',
-                                                'restore_actor_registry') END,
-            v_recorded::TIMESTAMPTZ
-        )
+        VALUES (v_id, v_actor, v_op, v_kind, v_pinned, v_key, v_succ, v_at)
         -- Idempotent by row identity, which is what makes a resume safe to re-run any number
         -- of times. Fence 2 has already established that every row present belongs to this
-        -- set, so a conflict here is a row this same restore already placed.
+        -- set BY ID; whether it is the SAME row is checked just below.
         ON CONFLICT (actor_event_id) DO NOTHING;
 
         GET DIAGNOSTICS v_hit = ROW_COUNT;
+
+        -- A row already present must be THIS row, field for field (#569). Fence 2 compares
+        -- ids only, so without this a present row whose content differs — a different op,
+        -- recorded_at or key — was silently kept and counted as "already present — a resumed
+        -- restore". That is the hazard this file's header spends its recorded_at argument on,
+        -- by a second route: the carried version (say, a `revoke`) never lands and a recalled
+        -- actor stays authorised. `actor_event` is append-only, so there is no reconciling
+        -- the two versions here; the only honest verdict is to refuse and name the field.
+        IF v_hit = 0 THEN
+            SELECT * INTO v_present FROM actor_event WHERE actor_event_id = v_id;
+            v_differs := CASE
+                WHEN v_present.actor_id       IS DISTINCT FROM v_actor  THEN 'actor_id'
+                WHEN v_present.op             IS DISTINCT FROM v_op     THEN 'op'
+                WHEN v_present.kind           IS DISTINCT FROM v_kind   THEN 'kind'
+                WHEN v_present.pinned         IS DISTINCT FROM v_pinned THEN 'pinned'
+                WHEN v_present.signing_key_id IS DISTINCT FROM v_key    THEN 'signing_key_id'
+                WHEN v_present.superseded_by  IS DISTINCT FROM v_succ   THEN 'superseded_by'
+                WHEN v_present.recorded_at    IS DISTINCT FROM v_at     THEN 'recorded_at'
+            END;
+            IF v_differs IS NOT NULL THEN
+                RAISE EXCEPTION 'restore_actor_registry: row % is already present with a different '
+                    '% than the registry being restored carries. That is not the residue of an '
+                    'interrupted restore of this registry, and keeping either version silently could '
+                    'leave a recalled actor authorised. Restore into a fresh database.',
+                    v_id, v_differs;
+            END IF;
+        END IF;
+
         v_inserted := v_inserted + v_hit;
     END LOOP;
 

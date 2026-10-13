@@ -202,6 +202,108 @@ BEGIN
 END $$;
 ROLLBACK;
 
+BEGIN;
+-- 7b. A RESUME NEVER KEEPS THE OTHER VERSION OF A ROW (#569). Fence 2 proves every present
+--     row's ID is in the set; it used to prove nothing about its CONTENT, and the insert's
+--     ON CONFLICT DO NOTHING then kept whichever version was already there and reported it
+--     as "already present — a resumed restore". A present row that disagrees with the
+--     carried one is not this restore's residue, and silently keeping it is how a carried
+--     `revoke` fails to land. Each differing field must refuse the call and be NAMED.
+DO $$
+DECLARE
+    v_case  RECORD;
+    ok      BOOLEAN;
+BEGIN
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            -- (field the present row disagrees on, present key, present recorded_at, present op)
+            ('signing_key_id', 'dead99', '2026-01-01 00:00:00.000001+00'::timestamptz, 'enroll'),
+            ('recorded_at',    'beef01', '2026-01-01 00:00:05+00'::timestamptz,        'enroll'),
+            ('op',             'beef01', '2026-01-01 00:00:00.000001+00'::timestamptz, 'supersede')
+        ) AS t(field, key, at, op)
+    LOOP
+        ok := FALSE;
+        BEGIN
+            -- The residue: row ...01 present, but carrying a different value in ONE field.
+            INSERT INTO actor_event (actor_event_id, actor_id, op, kind, signing_key_id, recorded_at)
+            VALUES ('aaaaaaaa-0000-7000-8000-000000000001',
+                    decode('0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20', 'hex'),
+                    v_case.op, 'human', v_case.key, v_case.at);
+            PERFORM restore_actor_registry($json$[
+              {"actor_event_id": "aaaaaaaa-0000-7000-8000-000000000001",
+               "actor_id": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+               "op": "enroll", "kind": "human", "signing_key_id": "beef01", "seq": 1,
+               "recorded_at": "2026-01-01 00:00:00.000001+00"},
+              {"actor_event_id": "aaaaaaaa-0000-7000-8000-000000000002",
+               "actor_id": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+               "op": "revoke", "seq": 2,
+               "recorded_at": "2026-01-01 00:00:00.000001+00"}
+            ]$json$::jsonb);
+        EXCEPTION WHEN others THEN
+            ok := TRUE;
+            -- "different <field>" rather than the bare field name: `op` alone is a substring
+            -- of half the words in any refusal, so it would pass on the wrong message.
+            IF SQLERRM NOT LIKE '%restore_actor_registry%'
+               OR SQLERRM NOT LIKE '%different ' || v_case.field || '%' THEN
+                RAISE EXCEPTION 'a % conflict must be refused naming its door and its field, got: %',
+                    v_case.field, SQLERRM;
+            END IF;
+        END;
+        IF NOT ok THEN
+            RAISE EXCEPTION 'a present row differing in % must refuse the restore, not be kept as '
+                'if it were this restore''s residue', v_case.field;
+        END IF;
+    END LOOP;
+END $$;
+ROLLBACK;
+
+BEGIN;
+-- 7c. EVERY FIELD THE DOOR READS IS NAMED WHEN IT IS BAD (#569). `actor_event_id` used to hit
+--     a bare `::UUID` cast (no row, no field), and `seq` was unvalidated: a missing one sorted
+--     NULLS LAST and silently changed replay order — the one property this door's ordering
+--     argument rests on — and a non-integer one raised a bare cast error from the ORDER BY.
+DO $$
+DECLARE
+    v_case  RECORD;
+    ok      BOOLEAN;
+BEGIN
+    FOR v_case IN
+        SELECT * FROM (VALUES
+            ('actor_event_id', $json$[{"actor_event_id": "not-a-uuid", "actor_id": "01",
+               "op": "enroll", "seq": 1, "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb),
+            ('actor_event_id', $json$[{"actor_id": "01",
+               "op": "enroll", "seq": 1, "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb),
+            ('seq', $json$[{"actor_event_id": "aaaaaaaa-0000-7000-8000-00000000000a",
+               "actor_id": "01", "op": "enroll", "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb),
+            ('seq', $json$[{"actor_event_id": "aaaaaaaa-0000-7000-8000-00000000000a",
+               "actor_id": "01", "op": "enroll", "seq": "first",
+               "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb),
+            ('seq', $json$[{"actor_event_id": "aaaaaaaa-0000-7000-8000-00000000000a",
+               "actor_id": "01", "op": "enroll", "seq": 1.5,
+               "recorded_at": "2026-01-01 00:00:00+00"}]$json$::jsonb)
+        ) AS t(field, rows)
+    LOOP
+        ok := FALSE;
+        BEGIN
+            PERFORM restore_actor_registry(v_case.rows);
+        EXCEPTION WHEN others THEN
+            ok := TRUE;
+            IF SQLSTATE <> 'P0001' OR SQLERRM NOT LIKE '%restore_actor_registry%'
+               OR SQLERRM NOT LIKE '%' || v_case.field || '%' THEN
+                RAISE EXCEPTION 'a bad % must be a P0001 refusal naming its door and field, got % %',
+                    v_case.field, SQLSTATE, SQLERRM;
+            END IF;
+        END;
+        IF NOT ok THEN
+            RAISE EXCEPTION 'a row with a bad % must be refused: %', v_case.field, v_case.rows;
+        END IF;
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM actor_event) THEN
+        RAISE EXCEPTION 'a refused call must leave nothing behind';
+    END IF;
+END $$;
+ROLLBACK;
+
 -- ---------------------------------------------------------------------------
 -- cairn_quarantine_event
 -- ---------------------------------------------------------------------------
