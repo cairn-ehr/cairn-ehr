@@ -7,7 +7,7 @@
 //! [`check_lines`] says when this record's check has not run, reusing R4's own sentences.
 use crate::chart_set::MemberLine;
 use crate::funnel::view::{ErrorView, Retry};
-use crate::link::view::{judgement_error_from, medication_lines, refused, LinkReportView};
+use crate::link::view::{judgement_error_view, medication_lines, refused, LinkReportView};
 use cairn_gui_tab_medications::view::MedListView;
 use cairn_medication_view::{ChartSet, PatientMedicationList};
 use cairn_node::chart_link::LinkEffect;
@@ -293,10 +293,7 @@ pub fn fixture_section() -> DuplicateSection {
 /// named for what was pressed. Never "The unlink was …": the two charts were never linked, and
 /// that wording would send the clinician looking for a link to undo.
 pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
-    judgement_error_from(
-        "\"different people\" judgement",
-        cairn_gui_live::error::data_error_from(e),
-    )
+    judgement_error_view("\"different people\" judgement", e)
 }
 
 /// The outcome line for "Different people".
@@ -343,23 +340,21 @@ fn report_sentence(results: &[PairResult]) -> String {
         .join(" ")
 }
 
-/// The retry advice for several failed pairs: the MOST retryable among them — `Now` over
-/// `AfterOperator` over `Never`. **Pure.**
+/// The retry advice for several failed pairs. **Pure.**
 ///
-/// Why the most retryable is the cautious choice here: a commit-unknown pair is worded "not
-/// confirmed" and gets `Now` (`judgement_error_from`: no refusal marker and no SQLSTATE, so
-/// `data_error_from` reads an outage) — its judgement may or may not have been recorded. A
-/// `Never` beside it would tell the webview the outcome was DECIDED and take the button away,
-/// claiming a verdict that does not exist. Keeping the button cannot re-sign blindly: "Different
-/// people" re-reads the open pairs fresh on every press, and `unlink_charts` moves a pair's
-/// proposal in the same transaction as its event — so a pair whose lost commit did land is no
-/// longer open, and is never signed twice; a refused pair is refused again, before anything is
-/// signed. The sentence names the event, so the clinician can also look before pressing.
+/// [`Retry::AfterReread`] first (#713): if ANY pair's commit was interrupted, that pair may have
+/// been recorded, and the window must re-read before anything is offered again — whatever the
+/// other pairs said. Otherwise the MOST retryable among them — `Now` over `AfterOperator` over
+/// `Never` — because a `Never` beside an outage would tell the webview the outcome was DECIDED
+/// and take the button away, claiming a verdict that does not exist. Keeping the button for an
+/// outage cannot re-sign blindly: "Different people" re-reads the open pairs fresh on every
+/// press, and a refused pair is refused again, before anything is signed.
 fn combined_retry<'a>(errors: impl Iterator<Item = &'a ErrorView>) -> Retry {
     let rank = |r: Retry| match r {
         Retry::Never => 0,
         Retry::AfterOperator => 1,
         Retry::Now => 2,
+        Retry::AfterReread => 3,
     };
     // Never empty (only called with two or more failures); were it ever, nothing was decided,
     // so the fallback keeps the button rather than claim a verdict.

@@ -687,11 +687,19 @@ pub fn export_coverage_after(previous: Option<i64>, outcome: ExportOutcome) -> O
 /// medium — see `tests/backup_health_v2.rs`.
 ///
 /// [ADR-0066]: https://github.com/cairn-ehr/cairn-ehr/blob/main/docs/spec/decisions/0066-identity-dies-with-the-disk-custody-must-not.md
-pub fn export_outcome_for_write(custody_key_carried: bool, covers_seq: i64) -> ExportOutcome {
-    if custody_key_carried {
-        ExportOutcome::Written(covers_seq)
-    } else {
-        ExportOutcome::Skipped
+///
+/// `covers_seq` is `None` when the export's reader could not SETTLE a figure — a clinical write
+/// below the high-water mark was still in flight when its wait ran out (#560,
+/// [`crate::localstate::read_local_state_with_coverage`]). The bundle is still sound to keep, but
+/// no figure is owed by it, so that is `Skipped` too: recording a guess would be the same false
+/// green by another route.
+pub fn export_outcome_for_write(
+    custody_key_carried: bool,
+    covers_seq: Option<i64>,
+) -> ExportOutcome {
+    match (custody_key_carried, covers_seq) {
+        (true, Some(seq)) => ExportOutcome::Written(seq),
+        _ => ExportOutcome::Skipped,
     }
 }
 

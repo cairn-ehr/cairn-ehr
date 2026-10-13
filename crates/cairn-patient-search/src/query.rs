@@ -63,8 +63,19 @@ pub struct SearchQuery {
 /// an extra one is merely something a clerk dismisses. Sorted + deduplicated because
 /// this list is carried, verbatim, into a permanent signed registration attestation
 /// (db/045) — no duplicate tokens belong in that record.
+///
+/// NFC FIRST, THEN TOKENISE (#682). A name typed or pasted DECOMPOSED — `e` + U+0301 COMBINING
+/// ACUTE ACCENT, as macOS file names and some web forms emit — carries its accent as a separate,
+/// non-alphanumeric character. Tokenised as it arrived, a word-final accent was trimmed as edge
+/// punctuation ("José" → `jose`, which matches no stored `josé`) and an interior one split the
+/// word ("émile" → a phantom `mile`). The stored side is NFC-normalised by Postgres
+/// (`lower(normalize(value, NFC))`, db/046) before IT is split, so composing here first makes
+/// both sides split the same string. Idempotent on already-composed input, which is what
+/// `crate::rank` hands this function for a stored name.
 pub fn name_tokens(raw_name: &str) -> Vec<String> {
-    let mut tokens: Vec<String> = raw_name
+    use unicode_normalization::UnicodeNormalization;
+    let composed: String = raw_name.nfc().collect();
+    let mut tokens: Vec<String> = composed
         .split_whitespace()
         .flat_map(|word| {
             // The whole whitespace-delimited word, edge punctuation trimmed only —
@@ -132,6 +143,31 @@ impl SearchQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #682: a name typed or pasted DECOMPOSED (NFD: `e` + U+0301 COMBINING ACUTE ACCENT, as
+    /// macOS file names and some web forms emit) must tokenise exactly as its composed form.
+    /// The combining mark is not alphanumeric, so tokenising BEFORE normalising trimmed a
+    /// word-final accent as edge punctuation ("José" → `jose`, never matching a stored `josé`)
+    /// and split on an interior one ("émile" → a phantom `mile` that prefix-matches "Miles").
+    #[test]
+    fn a_decomposed_name_tokenises_as_its_composed_form() {
+        assert_eq!(
+            name_tokens("Jose\u{301} Nguyen"),
+            name_tokens("Jos\u{e9} Nguyen")
+        );
+        assert!(name_tokens("Jose\u{301}").contains(&"jos\u{e9}".to_string()));
+        let emile = name_tokens("e\u{301}mile");
+        assert_eq!(emile, vec!["\u{e9}mile".to_string()], "no phantom `mile`");
+    }
+
+    /// The same holds for the query a registration SIGNS (db/045): its tokens are the composed
+    /// form, so the attestation records what the clerk meant, not the bytes their keyboard sent.
+    #[test]
+    fn the_signed_query_carries_the_composed_tokens() {
+        let nfd = SearchQuery::new("Jose\u{301} Nguyen", None, &[]);
+        let nfc = SearchQuery::new("Jos\u{e9} Nguyen", None, &[]);
+        assert_eq!(nfd, nfc);
+    }
 
     #[test]
     fn a_name_becomes_lowercase_tokens_sorted_and_deduplicated() {

@@ -342,8 +342,15 @@ async fn one_pairs_failure_is_carried_and_the_others_stand() {
     let (sk_h, kid_h) = enroll_human(&c).await;
     let (a, x, u) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
     register_pair(&c, &sk, &kid, a, x).await;
+    // u is not held on this node, but a peer's machine linked it to x (filed under x, the chart
+    // the peer held), so the other record genuinely reads {x, u} — the set the window would show
+    // and pass. #708: the judgement is signed only over records as shown, so the fixture's
+    // `right` must be a record that exists, not two unrelated charts.
+    let mut joined = link_assertion_event(&kid, x, u, LinkVerb::Link, 60, 0, "peer", false);
+    joined.patient_id = x.to_string();
+    apply_remote_raw(&c, &sk, joined).await.unwrap();
     seed_proposal(&c, a, x, "pending").await;
-    seed_proposal(&c, a, u, "pending").await; // u: not held on this node
+    seed_proposal(&c, a, u, "pending").await;
     let who = Reviewer {
         human_sk: &sk_h,
         human_kid: &kid_h,

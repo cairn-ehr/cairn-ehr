@@ -34,6 +34,8 @@ pub mod admit;
 pub use admit::*;
 pub mod judge;
 pub use judge::*;
+pub mod shown;
+pub use shown::*;
 
 /// Which judgement the human made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,6 +298,11 @@ async fn refuse_unless_record_holds_both(
 /// before this judgement commits. A record that no
 /// longer holds both is refused as a verdict about the input (reload and judge again).
 ///
+/// `shown` (#708): when the judgement was made from a comparison, each subject's record must
+/// still read as it was shown, re-read under CARNLK in the same way — see
+/// `shown::refuse_unless_records_read_as_shown`. `None` for a judgement made without one (the CLI, an
+/// accepted proposal).
+///
 /// Errors roll the caller's transaction back when it drops: nothing is written and the
 /// proposal does not move (the db/005 gate refuses a non-human attester, db/018 a
 /// self-link or empty provenance).
@@ -306,6 +313,7 @@ pub async fn assert_link_in_tx(
     low: Uuid,
     high: Uuid,
     filed: FiledUnder,
+    shown: Option<RecordsShown<'_>>,
     provenance: &str,
     confidence: Option<&str>,
     reviewer: &Reviewer<'_>,
@@ -345,6 +353,9 @@ pub async fn assert_link_in_tx(
     .map_err(|e| LocalDbFault::new("locking the pair's match proposal", e))?;
     if let FiledUnder::RecordOf(opened) = filed {
         refuse_unless_record_holds_both(tx, opened, low, high).await?;
+    }
+    if let Some(shown) = shown {
+        refuse_unless_records_read_as_shown(tx, shown, low, high).await?;
     }
 
     let event_id = Uuid::now_v7();

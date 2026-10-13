@@ -145,7 +145,7 @@ async function unlinkCompared() {
         high: sent.high,
       });
     } catch (failure) {
-      showUnlinkFailure(sent, token, failure, button);
+      await showUnlinkFailure(sent, token, failure, button);
       return;
     }
     await showUnlinkReport(sent, token, report);
@@ -182,10 +182,17 @@ async function showUnlinkReport(sent, token, report) {
   }
 }
 
-/** An unlink the backend refused or never reached: nothing was recorded. */
-function showUnlinkFailure(sent, token, failure, button) {
+/**
+ * An unlink that failed: refused or never reached (nothing was recorded) — or, the one
+ * exception, interrupted during its commit (`"after_reread"`, #713), when it MAY have been.
+ */
+async function showUnlinkFailure(sent, token, failure, button) {
   const place = unlinkAnswerPlace(sent, token);
   const text = failureText(failure);
+  // #713: an interrupted commit may have recorded the unlink. A second press over a chart that
+  // still looks unchanged (the unlink landed as Outranked) would record a second judgement over a
+  // colleague's: the button goes and the chart is re-read, never a live retry.
+  const reread = Boolean(failure && failure.retry === "after_reread");
   if (place === "elsewhere") {
     sayAnywhere("For chart " + sent.patientId + ": " + text);
   } else if (place === "chart") {
@@ -193,11 +200,29 @@ function showUnlinkFailure(sent, token, failure, button) {
   } else {
     setMessage(el("unlink-status"), text);
     // A verdict, or a node whose state must change first, will refuse the same comparison
-    // again: take the button away. A bare IPC failure or a locked key keeps it.
-    if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
+    // again: take the button away. So does an unknown outcome (above). A bare IPC failure or a
+    // locked key keeps it.
+    if (
+      failure &&
+      (failure.retry === "never" || failure.retry === "after_operator" || reread)
+    ) {
       unlinkCompared_ = null;
       button.hidden = true;
     }
+  }
+  // An unknown outcome also disarms a NEWER comparison of the same link (answered "chart" or
+  // "elsewhere" above): pressing it could record a second judgement over one that may have landed.
+  if (
+    reread &&
+    unlinkCompared_ !== null &&
+    unlinkCompared_.low === sent.low &&
+    unlinkCompared_.high === sent.high
+  ) {
+    unlinkCompared_ = null;
+    el("unlink-confirm").hidden = true;
+  }
+  if (reread && displayedPatient !== null && sent.charts.includes(displayedPatient)) {
+    await refresh(text);
   }
 }
 

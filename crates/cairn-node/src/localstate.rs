@@ -940,7 +940,9 @@ pub fn lsk_sidecar_path_for(key: &Path) -> PathBuf {
 /// GUIDELINE (a guideline, not a cap — `tests/patient_register_demographics.rs` records the
 /// correction to the "house limit" phrasing); reading custody out of a database is a
 /// different job with a different dependency.
-pub use crate::localstate_read::read_local_state;
+pub use crate::localstate_read::{
+    read_local_state, read_local_state_with_coverage, COVERAGE_SETTLE_WAIT,
+};
 
 /// Where a restored node's INHERITED unwrap key is written, and at what at-rest posture.
 ///

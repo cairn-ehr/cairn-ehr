@@ -406,3 +406,36 @@ async fn a_chart_found_by_its_repudiated_name_still_ranks_by_it() {
     );
     assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
 }
+
+/// #682 (the issue comment's first test): a name pasted DECOMPOSED — "José" as `e` + U+0301 —
+/// must find and rank the chart stored composed, exactly as the composed spelling does. Before
+/// the query was NFC-normalised before tokenising, the typed token was `jose`, which matches no
+/// stored `josé` (exactly or as a prefix), so the duplicate tied every "Nguyen" namesake on one
+/// token and, being newest, fell to the back of the prompt — a false split, the dangerous
+/// direction (a second chart for one patient).
+#[tokio::test]
+async fn a_decomposed_name_finds_and_ranks_the_composed_chart() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let older = six_older_namesakes(&c, &sk, &kid, "Nguyen").await;
+    let dup = chart_named(&c, &sk, &kid, 100, "Jos\u{e9} Nguyen").await;
+
+    let query = SearchQuery::new("Jose\u{301} Nguyen", None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
+    assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
+    assert_eq!(
+        ids[0], dup,
+        "the decomposed spelling matches both tokens and comes first: {list:?}"
+    );
+    assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
+}

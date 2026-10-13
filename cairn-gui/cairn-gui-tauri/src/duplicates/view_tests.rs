@@ -271,19 +271,28 @@ fn a_partly_failed_judgement_names_the_pair_not_confirmed() {
     )));
 }
 
-/// What `unlink_charts` returns when the connection drops DURING the commit, as the window words
-/// it: no refusal marker and no SQLSTATE, so `data_error_from` reads an outage — "not
-/// confirmed", `Retry::Now`. The judgement may have been recorded.
+/// What `unlink_charts` returns when the connection drops DURING the commit, built the way the
+/// node builds it (#713: `commit_outcome_unknown`, the marker), as the window words it: outcome
+/// unknown, and `AfterReread` — the webview re-reads rather than keeping a live retry.
 fn commit_unknown() -> ErrorView {
-    different_people_error_view(&anyhow::anyhow!(
-        "commit outcome unknown for event {} — check whether it was recorded before retrying, \
-         or the judgement may be recorded twice",
-        id(77)
+    different_people_error_view(&cairn_node::db_diagnosis::commit_outcome_unknown(
+        id(77),
+        anyhow::anyhow!("connection reset"),
     ))
 }
 
-/// Final review I2: a lone commit-unknown pair is its own ErrorView, unchanged — "not
-/// confirmed", and the button kept (`Now`), exactly as a lone Link or Unlink outage is.
+/// The commit-unknown sentence for "Different people", as `judgement_error_view` words it.
+fn commit_unknown_text() -> String {
+    format!(
+        "Whether the \"different people\" judgement was recorded is NOT known — the connection \
+         was lost while event {} was being saved. Re-read the chart before judging again: if it \
+         was recorded but a later judgement outranks it, the chart will look unchanged.",
+        id(77)
+    )
+}
+
+/// Final review I2: a lone commit-unknown pair is its own ErrorView, unchanged — and since #713
+/// that view re-reads (`AfterReread`) instead of keeping the button live.
 #[test]
 fn a_lone_commit_unknown_pair_is_its_own_error_unchanged() {
     let err = different_people_report(vec![PairResult {
@@ -293,16 +302,8 @@ fn a_lone_commit_unknown_pair_is_its_own_error_unchanged() {
     }])
     .unwrap_err();
     assert_eq!(err, commit_unknown());
-    assert_eq!(err.retry, Retry::Now);
-    assert_eq!(
-        err.text,
-        format!(
-            "The \"different people\" judgement was not confirmed: commit outcome unknown for \
-             event {} — check whether \
-             it was recorded before retrying, or the judgement may be recorded twice",
-            id(77)
-        )
-    );
+    assert_eq!(err.retry, Retry::AfterReread);
+    assert_eq!(err.text, commit_unknown_text());
 }
 
 /// Final review I2: a commit-unknown pair beside a recorded one is "Not confirmed" — never
@@ -331,22 +332,20 @@ fn a_commit_unknown_pair_beside_a_recorded_one_is_not_confirmed_never_not_record
         r.sentence,
         format!(
             "Recorded: charts {} and {} are different people. This pair is closed on this node, \
-             and on every node once the judgement syncs. Not confirmed for charts {} and {}: The \
-             \"different people\" judgement was not confirmed: commit outcome unknown for event {} \
-             — check whether it was recorded before retrying, or the judgement may be recorded \
-             twice.",
+             and on every node once the judgement syncs. Not confirmed for charts {} and {}: {}",
             id(1),
             id(8),
             id(2),
             id(9),
-            id(77)
+            commit_unknown_text()
         )
     );
 }
 
 /// Final review I2 (the #713 hazard): when EVERY pair failed, a refused first pair must not
 /// hide a commit-unknown second one. One ErrorView names both, and carries the commit-unknown's
-/// `Now` — a `Never` would claim a decided outcome that may not exist.
+/// `AfterReread` — a `Never` would claim a decided outcome that may not exist, and a `Now` would
+/// invite a press over a record that may already have changed.
 #[test]
 fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verdict() {
     let err = different_people_report(vec![
@@ -364,19 +363,17 @@ fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verd
         },
     ])
     .unwrap_err();
-    assert_eq!(err.retry, Retry::Now);
+    assert_eq!(err.retry, Retry::AfterReread);
     assert_eq!(
         err.text,
         format!(
             "Not confirmed for charts {} and {}: The \"different people\" judgement was refused: \
-             held elsewhere. Not confirmed for charts {} and {}: The \"different people\" \
-             judgement was not confirmed: commit outcome unknown for event {} — check whether it \
-             was recorded before retrying, or the judgement may be recorded twice.",
+             held elsewhere. Not confirmed for charts {} and {}: {}",
             id(1),
             id(8),
             id(2),
             id(9),
-            id(77)
+            commit_unknown_text()
         )
     );
 }
@@ -404,6 +401,16 @@ fn the_combined_retry_is_the_most_retryable_among_the_failed_pairs() {
     assert_eq!(
         combined(vec![fail(1, Retry::Never), fail(2, Retry::Never)]),
         Retry::Never
+    );
+    // #713: a pair whose outcome is unknown outranks every other class — the window must
+    // re-read before anything is offered again, whatever the other pairs said.
+    assert_eq!(
+        combined(vec![fail(1, Retry::AfterReread), fail(2, Retry::Now)]),
+        Retry::AfterReread
+    );
+    assert_eq!(
+        combined(vec![fail(1, Retry::Never), fail(2, Retry::AfterReread)]),
+        Retry::AfterReread
     );
 }
 

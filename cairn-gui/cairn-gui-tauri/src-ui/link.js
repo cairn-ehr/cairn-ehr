@@ -291,6 +291,14 @@ function linkChanged(sent, report) {
   return sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient);
 }
 
+/** Whether two comparisons are of the same two charts, in either order. */
+function samePair(a, b) {
+  return (
+    (a.patientId === b.patientId && a.otherId === b.otherId) ||
+    (a.patientId === b.otherId && a.otherId === b.patientId)
+  );
+}
+
 /** Send the Link judgement for whatever `compare` last rendered. */
 async function linkCompared() {
   return sendJudgement("link_records");
@@ -343,6 +351,11 @@ async function sendJudgement(command) {
   } catch (failure) {
     const place = linkAnswerPlace(sent, token);
     const text = failureText(failure);
+    // #713: the judgement's COMMIT was interrupted, so it may have been recorded. A judgement that
+    // landed as Outranked leaves the chart looking unchanged, and a second press would record a
+    // second judgement over the colleague's it lost to — so never a live button over it: the
+    // buttons go (below) and the chart is re-read (at the end), wherever the answer lands.
+    const reread = Boolean(failure && failure.retry === "after_reread");
     if (place === "elsewhere") {
       sayAnywhere("For chart " + sent.patientId + ": " + text);
     } else if (place === "chart") {
@@ -356,13 +369,32 @@ async function sendJudgement(command) {
       // should compare AGAIN, not judge over the old panel. The comparison and the sentence stay
       // on screen — what was refused is still legible. A bare IPC failure (no `retry`), an
       // outage and a locked key (`"now"`) keep it: nothing about the comparison was wrong.
-      if (failure && (failure.retry === "never" || failure.retry === "after_operator")) {
+      // An unknown outcome (`"after_reread"`) takes them too: see `reread` above.
+      if (
+        failure &&
+        (failure.retry === "never" || failure.retry === "after_operator" || reread)
+      ) {
         compared = null;
         // Both judgement buttons: with `compared` gone, either would silently do nothing.
         el("link-confirm").hidden = true;
         el("link-different").hidden = true;
       }
     }
+    // An unknown outcome also disarms a NEWER comparison of the same two charts (a second Review
+    // pressed while this answer was in flight lands as "chart" or "elsewhere", above): its buttons
+    // would sign over a record that may already carry this judgement — and if it landed Outranked
+    // the record looks unchanged, so #708's check would not catch the second press (#713 review).
+    if (reread && compared !== null && samePair(compared, sent)) {
+      compared = null;
+      el("link-confirm").hidden = true;
+      el("link-different").hidden = true;
+    }
+    // Re-read whenever the chart open NOW is one the judgement was about (the same test as
+    // `linkChanged`, without its `reload` flag — nobody knows yet whether anything changed).
+    const touched =
+      displayedPatient !== null &&
+      (sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient));
+    if (reread && touched) await refresh(text);
   } finally {
     for (const b of buttons) b.disabled = false;
   }

@@ -936,10 +936,21 @@ fn establish_local_state_escrow(
 ) -> anyhow::Result<()> {
     use cairn_node::localstate::{establish_lsk, lsk_sidecar_path_for, serialize_sidecar};
     let sidecar = lsk_sidecar_path_for(key_path);
-    if sidecar.exists() && !overwrite {
-        anyhow::bail!("local-state escrow already exists at {}", sidecar.display());
-    }
-    let replacing = sidecar.exists();
+    // The two policies ask the filesystem different questions, so they fail differently
+    // (#509). The REFUSING verb must fail closed: `Path::exists()` reads an unstattable
+    // sidecar (EIO, a stale NFS handle, ENOTDIR) as absent, which would let the verb write a
+    // new escrow over the one the operator's written-down recovery code opens.
+    // The REPLACING paths write the sidecar regardless — they have already resealed the key,
+    // and stopping here is the desync described above — so for them the answer only chooses
+    // the wording of the line below, and an unanswered stat must not abort them.
+    let replacing = if overwrite {
+        std::fs::metadata(&sidecar).is_ok()
+    } else {
+        if custody_file_exists(&sidecar)? {
+            anyhow::bail!("local-state escrow already exists at {}", sidecar.display());
+        }
+        false
+    };
     let wraps = establish_lsk(op_pass, recovery_code)?;
     cairn_node::fsio::atomic_write(&sidecar, &serialize_sidecar(&wraps), Some(0o600))?;
     eprintln!(
@@ -1421,42 +1432,28 @@ async fn seal_and_write_local_state_export(
         }
     };
 
-    // Snapshot the CURRENT clinical high-water mark BEFORE `read_local_state` runs, never
-    // after (#500 slice 2c Task 12 fix round 1, Important 2). `read_local_state` below reads
-    // `event_dek`/`actor_event`/etc — NOT `event_log` itself — to build the bundle this
-    // export seals, so it has no seq of its own to report; the seq recorded here is a claim
-    // made ABOUT that read, and the claim must never outrun it. If a clinical event committed
-    // in the window between the two queries, querying seq AFTER would fold that event's seq
-    // into `covers_seq` even though its `event_dek` row landed too late for THIS export to
-    // carry — an OVER-claim, and the direction that manufactures a false green. Querying
-    // FIRST is the strictly safer of the two orderings and is why it is done this way. Do
-    // not "tidy" it back to after the seal: that widens the false-green window.
-    //
-    // ⚠️ IT DOES NOT ELIMINATE THAT WINDOW, and an earlier version of this comment claimed it
-    // did ("can only UNDER-claim ... never a false green"). That claim assumed seq order is
-    // commit order, which `capture::plane`'s own header establishes is false: `event_log.seq`
-    // is `GENERATED ALWAYS AS IDENTITY`, handed out at INSERT, and commits land OUT OF ORDER.
-    // Two overlapping `submit_event` transactions take seqs 10 and 11; 11 commits; this query
-    // returns 11; `read_local_state` below reads `event_custody_surviving` and does not see
-    // 10's row; 10 then commits. Coverage now claims 11 over an export that lacks seq 10's
-    // DEK, and `kit_verdict(11, Some(11))` says `Restorable`.
-    //
-    // The residual is narrow (it needs a write in flight across these two statements) and it
-    // is NOT closed here, because closing it properly means reading both under ONE snapshot
-    // — a repeatable-read transaction spanning the seq query and the bundle read — which is
-    // a change to how the export is read, not a reordering. Tracked as #560 rather than
-    // papered over.
-    //
-    // `COALESCE(…, 0)` on a clinical-event-free node records harmless coverage of "nothing
-    // yet" — `kit_verdict` never even inspects `export_seq` when the medium itself reports no
-    // clinical events (see its doc), so this can never manufacture a false claim there.
-    let row = db
-        .query_one("SELECT COALESCE(MAX(seq), 0) FROM event_log", &[])
-        .await
-        .context("querying the current clinical watermark for export coverage")?;
-    let covers_seq: i64 = row.get(0);
-
-    let bundle = cairn_node::localstate::read_local_state(db, unwrap.as_ref()).await?;
+    // The bundle and the clinical seq it may honestly claim to cover, read together (#560).
+    // `covers_seq` is a promise that every clinical event up to it has its key in THIS bundle,
+    // and `seq` order is not commit order — so the reader waits out the writes still in flight
+    // below the high-water mark before reading custody. If they outlast the wait, `covers_seq`
+    // is `None`: the export is still written, but its coverage does not move. See
+    // `read_local_state_with_coverage` for why one snapshot would not have been enough.
+    let (covers_seq, bundle) = cairn_node::localstate::read_local_state_with_coverage(
+        db,
+        unwrap.as_ref(),
+        cairn_node::localstate::COVERAGE_SETTLE_WAIT,
+    )
+    .await?;
+    if covers_seq.is_none() {
+        eprintln!(
+            "WARNING: a clinical write was still in flight after {}s, so this export's coverage \
+             could not be settled — the export is written, but its coverage figure is left where \
+             the last export put it. A later backup settles it once that transaction ends; if \
+             this repeats, look for a long-open transaction writing event_log \
+             (pg_stat_activity, state 'idle in transaction').",
+            cairn_node::localstate::COVERAGE_SETTLE_WAIT.as_secs()
+        );
+    }
     let container = cairn_node::localstate::build_export_container(wraps, &op, &bundle)?;
     let export_path = cairn_node::localstate::localstate_path_for(medium);
     cairn_node::fsio::atomic_write(&export_path, &container, Some(0o600))?;
@@ -6277,6 +6274,48 @@ mod tests {
         assert!(
             !custody_file_exists(&dir.path().join("nope")).unwrap(),
             "and a genuinely absent one does not"
+        );
+    }
+
+    #[test]
+    fn establish_local_state_key_refuses_an_unstattable_sidecar_rather_than_writing_over_it() {
+        // #509. The explicit `establish-local-state-key` verb (`overwrite = false`) promises
+        // the operator it will never clobber a working escrow. With `Path::exists()` an
+        // unstattable sidecar (EIO, a stale NFS handle, ENOTDIR) read as "absent", so the
+        // verb went on to mint a new LSK under a new recovery code and write it over the
+        // one the operator has written down. The refusal must come from the EXISTENCE
+        // check — naming the unanswered question — not from a later write failing by luck.
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = a_path_that_cannot_be_stated(dir.path());
+        let msg = format!(
+            "{:#}",
+            establish_local_state_escrow(&key_path, "op-pass", "recovery", false)
+                .expect_err("an unanswerable existence question must stop the verb")
+        );
+        assert!(
+            msg.contains("cannot tell whether"),
+            "the refusal must name the unanswered question, not a downstream write error: {msg}"
+        );
+    }
+
+    #[test]
+    fn establish_local_state_key_still_refuses_a_present_sidecar_and_leaves_it_untouched() {
+        // Positive control for the test above: the ordinary "an escrow is already here"
+        // refusal must survive the fail-closed rewrite, byte-for-byte on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("node.key");
+        let sidecar = cairn_node::localstate::lsk_sidecar_path_for(&key_path);
+        std::fs::write(&sidecar, b"an escrow the operator relies on").unwrap();
+        let msg = format!(
+            "{:#}",
+            establish_local_state_escrow(&key_path, "op-pass", "recovery", false)
+                .expect_err("a present sidecar must be refused")
+        );
+        assert!(msg.contains("already exists"), "{msg}");
+        assert_eq!(
+            std::fs::read(&sidecar).unwrap(),
+            b"an escrow the operator relies on",
+            "the refused verb must not have written anything"
         );
     }
 

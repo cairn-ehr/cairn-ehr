@@ -604,6 +604,7 @@ name = "cairn-patient-search"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "unicode-normalization",
  "uuid",
 ]
 

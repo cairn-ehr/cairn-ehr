@@ -150,19 +150,19 @@ const PINNED_V2_JSON: &str = r#"{
 #[test]
 fn an_export_carrying_no_custody_key_does_not_advance_coverage() {
     assert_eq!(
-        export_outcome_for_write(false, 900),
+        export_outcome_for_write(false, Some(900)),
         ExportOutcome::Skipped,
         "no key carried means the export achieved nothing a restore can use"
     );
     // And the ratchet must then leave the previous figure exactly where it was — the two
     // halves are asserted together because either one alone still permits the false green.
     assert_eq!(
-        export_coverage_after(Some(500), export_outcome_for_write(false, 900)),
+        export_coverage_after(Some(500), export_outcome_for_write(false, Some(900))),
         Some(500),
         "coverage must stay at the last figure an export genuinely achieved"
     );
     assert_eq!(
-        export_coverage_after(None, export_outcome_for_write(false, 900)),
+        export_coverage_after(None, export_outcome_for_write(false, Some(900))),
         None,
         "and a keyless export must not manufacture a first coverage claim from nothing"
     );
@@ -173,13 +173,29 @@ fn an_export_carrying_no_custody_key_does_not_advance_coverage() {
 #[test]
 fn an_export_carrying_the_custody_key_advances_coverage() {
     assert_eq!(
-        export_outcome_for_write(true, 900),
+        export_outcome_for_write(true, Some(900)),
         ExportOutcome::Written(900),
         "a key-bearing export is the only thing that may move the figure"
     );
     assert_eq!(
-        export_coverage_after(Some(500), export_outcome_for_write(true, 900)),
+        export_coverage_after(Some(500), export_outcome_for_write(true, Some(900))),
         Some(900)
+    );
+}
+
+/// #560 — an export whose reader could not SETTLE a figure (a lower clinical write still in
+/// flight when its wait ran out) carries a sound bundle but owes no figure. Recording one would
+/// be the false green the in-flight race produced in the first place.
+#[test]
+fn an_unsettled_coverage_read_does_not_advance_coverage() {
+    assert_eq!(
+        export_outcome_for_write(true, None),
+        ExportOutcome::Skipped,
+        "a key-bearing export with no settled figure must not move coverage"
+    );
+    assert_eq!(
+        export_coverage_after(Some(500), export_outcome_for_write(true, None)),
+        Some(500)
     );
 }
 
@@ -268,7 +284,7 @@ fn a_field_from_a_newer_build_survives_a_read_modify_write() {
     let mut health = read_health(&path).expect("a newer sidecar must still parse");
     health.export_covers_seq = export_coverage_after(
         health.export_covers_seq,
-        export_outcome_for_write(true, 900),
+        export_outcome_for_write(true, Some(900)),
     );
     write_health(&path, &health).unwrap();
 

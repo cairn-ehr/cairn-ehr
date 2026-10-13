@@ -203,10 +203,24 @@ pub async fn link_impl(
     };
     // No gesture-timing row: db/044's `gesture_kind` CHECK admits only signoff/cease; the
     // runbook's stopwatch measures this gesture (design "R2b").
-    let outcome =
-        cairn_node::chart_link::link_charts(&mut db, patient, other, &reviewer, &state.node_origin)
-            .await
-            .map_err(|e| link_error_view(&e))?;
+    // `link_charts_as_shown` re-reads both records under the link lock (CARNLK) before signing
+    // (#708): the checks above close the human-scale Compare→Link window, and this closes the
+    // last milliseconds — a peer's link applied between them and the submit is refused as a
+    // changed record ("compare again"), never signed over.
+    let shown = cairn_node::chart_link::RecordsShown {
+        this: &left,
+        other: &right,
+    };
+    let outcome = cairn_node::chart_link::link_charts_as_shown(
+        &mut db,
+        patient,
+        other,
+        shown,
+        &reviewer,
+        &state.node_origin,
+    )
+    .await
+    .map_err(|e| link_error_view(&e))?;
     Ok(link_report(outcome.effect, &outcome.charts, &compared))
 }
 
