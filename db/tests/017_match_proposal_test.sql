@@ -155,22 +155,108 @@ BEGIN
     END;
 END $$;
 
--- `status` must stay UNCONSTRAINED — the deliberate asymmetry documented in db/017. It is
--- the open disposition axis (human verdicts, matcher auto-application, retraction, and
--- whatever a later slice adds); only `band` is enum-owned. Pin the intent so a future
--- reader does not "complete" the work above by locking `status` down too, which would
--- break the next disposition value the moment it is introduced.
+-- ---------------------------------------------------------------------------------------------
+-- #744 — `status` is CONSTRAINED too, now. It used to be pinned here as deliberately open, so
+-- the next disposition value could be introduced without a schema change. The cost of that
+-- openness turned out to be a safety hole on the human-review path: db/057's
+-- `match_proposal_open` lists the OPEN statuses, so a status nobody recognises — a typo in any
+-- writer, a raw-SQL session, a future service — is silently CLOSED. That proposal reaches neither
+-- the banner nor the worklist, and "no banner" is supposed to mean only "checked, none open". The
+-- definition-guarded ALTER makes a widening cheap (edit the list; every database converges on its
+-- next replay), so the CHECK costs the next status one line, not a migration.
+-- ---------------------------------------------------------------------------------------------
+
+-- The constraint is present after a full replay.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'match_proposal_status_check'
+                      AND conrelid = 'match_proposal'::regclass) THEN
+        RAISE EXCEPTION 'FAIL: match_proposal_status_check missing after replay (#744)';
+    END IF;
+    RAISE NOTICE 'PASS: match_proposal_status_check present';
+END $$;
+
+-- The guarded ALTER installs it on a PRE-EXISTING table (the only path a deployed node takes:
+-- its CREATE TABLE IF NOT EXISTS is a no-op), exactly as the band check's simulation above does.
+DO $$
+BEGIN
+    ALTER TABLE match_proposal DROP CONSTRAINT match_proposal_status_check;
+END $$;
+\i db/017_match_proposal.sql
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'match_proposal_status_check'
+                      AND conrelid = 'match_proposal'::regclass) THEN
+        RAISE EXCEPTION 'FAIL: replay did not install the status CHECK on an existing table (#744)';
+    END IF;
+    RAISE NOTICE 'PASS: guarded ALTER installs the status CHECK on a pre-existing table';
+END $$;
+
+-- ...and the guard is write-free once current: a stable oid across a replay.
+DO $$
+BEGIN
+    PERFORM set_config('cairn.test_status_check_oid',
+        (SELECT oid::text FROM pg_constraint
+          WHERE conname = 'match_proposal_status_check'
+            AND conrelid = 'match_proposal'::regclass), false);
+END $$;
+\i db/017_match_proposal.sql
+DO $$
+BEGIN
+    IF (SELECT oid::text FROM pg_constraint
+         WHERE conname = 'match_proposal_status_check'
+           AND conrelid = 'match_proposal'::regclass)
+       IS DISTINCT FROM current_setting('cairn.test_status_check_oid') THEN
+        RAISE EXCEPTION 'FAIL: replay re-created the status CHECK although it was current — '
+                        'every connect would take an ACCESS EXCLUSIVE lock (#744)';
+    END IF;
+    RAISE NOTICE 'PASS: the status guard is write-free when current';
+END $$;
+
+-- Every status a writer in the tree sets is storable. The list is the whole disposition axis:
+-- pending (the matcher's proposal), accepted/rejected/applied (a human, C2 and chart_link),
+-- auto_applied/review (C2b auto_apply.rs), retracted (the matcher's withdrawal). `applied_event_id`
+-- rides along so db/019's own CHECK (#704) is satisfied for the two applied statuses.
 DO $$
 DECLARE
-    low  uuid := '00000000-0000-4000-8000-000000000005';
-    high uuid := '00000000-0000-4000-8000-000000000006';
+    s    text;
+    i    int := 0;
 BEGIN
-    INSERT INTO match_proposal
-        (patient_low, patient_high, score_total, band, veto_findings, evidence, matcher_version,
-         status)
-    VALUES (low, high, 9.0, 'review', '[]'::jsonb, '[]'::jsonb, 'sqltest',
-            'a-status-no-slice-has-invented-yet');
-    RAISE NOTICE 'PASS: status remains deliberately open';
+    FOREACH s IN ARRAY ARRAY['pending', 'accepted', 'review', 'rejected', 'applied',
+                             'auto_applied', 'retracted'] LOOP
+        i := i + 1;
+        INSERT INTO match_proposal
+            (patient_low, patient_high, score_total, band, veto_findings, evidence,
+             matcher_version, status, applied_event_id)
+        VALUES (('00000000-0000-4000-8000-0000000001' || lpad(i::text, 2, '0'))::uuid,
+                ('00000000-0000-4000-8000-0000000002' || lpad(i::text, 2, '0'))::uuid,
+                9.0, 'review', '[]'::jsonb, '[]'::jsonb, 'sqltest', s,
+                CASE WHEN s IN ('applied', 'auto_applied')
+                     THEN '00000000-0000-7000-8000-000000000099'::uuid END);
+    END LOOP;
+    RAISE NOTICE 'PASS: every disposition a writer sets is storable';
+EXCEPTION WHEN check_violation THEN
+    RAISE EXCEPTION 'FAIL: status "%" is refused, but a writer in the tree sets it (#744): %',
+        s, SQLERRM;
+END $$;
+
+-- A status nobody recognises is REFUSED — the property #744 exists for. Without this block the
+-- one above passes equally well against a table with no status CHECK at all.
+DO $$
+BEGIN
+    BEGIN
+        INSERT INTO match_proposal
+            (patient_low, patient_high, score_total, band, veto_findings, evidence,
+             matcher_version, status)
+        VALUES ('00000000-0000-4000-8000-000000000005', '00000000-0000-4000-8000-000000000006',
+                9.0, 'review', '[]'::jsonb, '[]'::jsonb, 'sqltest', 'pendng');
+        RAISE EXCEPTION 'FAIL: a misspelt status was stored — that proposal would vanish from '
+                        'the banner and the worklist with no error anywhere (#744)';
+    EXCEPTION WHEN check_violation THEN
+        RAISE NOTICE 'PASS: an unrecognised status is refused at the write';
+    END;
 END $$;
 
 -- Leave no residue for the next file in the run.

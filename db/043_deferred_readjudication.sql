@@ -117,6 +117,16 @@ BEGIN
         -- the node on one bad event — precisely the failure mode ADR-0056 exists to remove.
         -- The refusal is captured and recorded instead.
         BEGIN
+            -- THE CUSTODY LOCK FIRST, before any gate reads the clear view (#603, and its PR's
+            -- review). Gate 4's dispatch takes this lock too, but gate 0 below reads the body
+            -- earlier: a late key still uncommitted on another connection made gate 0 see no body
+            -- and skip the structural check, and then gate 4 waited, saw the committed body and
+            -- projected it unchecked. Taken here, every gate reads one committed state. The lock is
+            -- re-entrant, so the dispatch's own call costs nothing. Pinned by
+            -- tests/late_custody_readjudication_race.rs::re_adjudication_checks_the_body_a_racing_late_key_opened.
+            IF (r.el_row).sealed THEN
+                PERFORM cairn_lock_custody(r.event_id);
+            END IF;
             -- Re-derive the envelope from the SIGNED BYTES, never from the projection
             -- columns: the predicates below must see exactly what the door saw, and a
             -- reconstruction from columns would drift from db/020 on the next edit.

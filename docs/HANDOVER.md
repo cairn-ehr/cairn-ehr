@@ -12,14 +12,16 @@
 > §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
 > **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
 >
-> **⇒ ALSO OPEN (2026-10-13, cloud tech-debt session): draft PR on branch `claude/dreamy-archimedes-99l8dg`** —
-> one commit per issue: **#604** (a shred and a late key for one event serialise on `cairn_lock_custody`, a per-event
-> advisory xact lock — both interleavings reproduced red first), **#608**'s late-custody half (the not-found arm raises,
-> bare P0001 — #633's guard forbids `USING ERRCODE`), **#431** (behavioural decoy test for `cairn_execute_shred`, with a
-> rolled-back positive control), **#464** (db/050's lenient learner validates per rendition and writes once: a
-> 200-rendition peer event went from 64 cached subxids, overflowed, to none), **#768** (`medication_attestation_misfiled`
-> view, and a misfiled peer vouch reads STALE — it used to read "signed" on the thread's chart). Review + merge it.
-> (PR #770, 2026-10-12, is merged.)
+> **⇒ ALSO OPEN (2026-10-13, second cloud tech-debt session): draft PR
+> [#774](https://github.com/cairn-ehr/cairn-ehr/pull/774) on branch `claude/peaceful-archimedes-xuls4y`** — one commit
+> per issue, each driven by a test that failed first: **#773 + #603** (a shred never interleaves with the heal pass or
+> re-adjudication; a late key and re-adjudication never both skip a deferred event — six races reproduced red, fixed by
+> the custody lock in the heal-safe dispatch plus a new shared/exclusive `cairn_lock_erasure_heal`), **#346** (the floor
+> fail-open audit: one survivor, db/035's `strike: [null]`), **#553** (legacy-medium succession compares event SETS, so
+> an unmarked foreign stick is never destroyed), **#616** (`finalize_identity` is one transaction), **#744 + #704**
+> (`match_proposal.status` and `applied_event_id ⇔ applied` are CHECKs — #744 REVERSES db/017's pinned "status stays
+> open" choice; **the maintainer confirmed the CHECK, 2026-10-13**: pre-production, no legacy data). Review + merge it.
+> (PR #772 is merged.)
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
@@ -509,6 +511,29 @@ plain JS, no npm); pane/routing/freshness state machine tested but **not wired**
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
+
+### 2026-10-13 (second) — tech-debt pass (cloud session): #773, #603, #346, #553, #616, #744, #704
+
+Picked by blast radius again: erasure and the chart (#773/#603), the permanent record (#346), the only backup (#553),
+a restore that fences itself (#616), a duplicate hidden from every reviewer (#744/#704).
+- **⇒ A PER-ROW LOCK CANNOT GUARD A WHOLE-LOG SCAN.** `cairn_reproject` would have held one advisory lock per event (the
+  shared lock table is `max_locks_per_transaction × max_connections`). The fix is one lock in two modes: every shred
+  SHARED (shreds never wait on each other), the heal EXCLUSIVE. Lock order: erasure-heal, then custody — nothing takes
+  them the other way round.
+- **⇒ A "BELT AND BRACES" RE-CHECK WITH NO TEST IS NOT BRACES.** The shred re-check after the wait was mutation-tested,
+  changed nothing (a committed shred already deleted the clear view every applier reads), and was removed.
+- **⇒ Parallel test output hides FAILED lines from a naive grep.** Read the `failures:` block, or run
+  `--test-threads=1`, before concluding a mutation survived — M1 looked like it survived and had not.
+- **⇒ A count is not a set, even where it is "monotone".** #553's count arm was sound for our own medium and blind to a
+  foreign one; it also falsely refused a legacy medium carrying a duplicate. Name, never count.
+- **⇒ The gate catches house rules too:** a new db/tests mirror needs `\ir _scratch_database_guard.sql`
+  (`db_sql_mirror_scratch_guard.rs`), and `cargo test` stops at the first failing binary — re-run the whole gate after.
+- **⇒ Rig:** the 2026-10-12 recipe worked unchanged; do NOT pre-create `cairn_pgx` in `template1` (the SQL-mirror runner
+  creates it in its throwaway database and fails on "already exists").
+- Left for a decision: #649 (caller-minted patient id vs a cancellation contract), #613 (is INCOMPLETE about records or
+  the recovery?), #628 (the NUL fix needs a `cairn_pgx` version bump; its restore-abort arm is close to unreachable,
+  since no door admits such an event). #427 is lower than it reads: `safety` is a clear field of `signed_bytes`, which
+  `cairn_agent` reads anyway (#424), and ADR-0080 made replays rare.
 
 ### 2026-10-13 — tech-debt pass (cloud session): #604, #608, #431, #464, #768
 

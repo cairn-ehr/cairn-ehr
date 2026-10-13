@@ -2,7 +2,7 @@ use cairn_event::{
     event_address, short_fingerprint, sign, EventBody, Hlc, PairingBundle, SigningKey,
 };
 use std::path::Path;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 
 // The nil patient id is a WIRE constant (it is serialized inside signed bodies), so it
 // lives in `cairn-event` with the rest of the wire format. Re-exported — not
@@ -64,7 +64,7 @@ fn node_event_body(
 /// HLC is the displayed clock), and node authoring IS effectively single-threaded —
 /// but do NOT parallelize authoring without making tick+submit one transaction first,
 /// or the HLC↔seq correspondence silently breaks.
-async fn next_hlc(db: &Client) -> anyhow::Result<(i64, i32)> {
+async fn next_hlc(db: &(impl GenericClient + Sync)) -> anyhow::Result<(i64, i32)> {
     let row = db
         .query_one("SELECT wall, counter FROM node_hlc_tick()", &[])
         .await?;
@@ -73,7 +73,7 @@ async fn next_hlc(db: &Client) -> anyhow::Result<(i64, i32)> {
 
 /// Author the genesis node.enrolled, submit it, return node_id (hex of its content-address).
 pub async fn provision(
-    db: &Client,
+    db: &(impl GenericClient + Sync),
     sk: &SigningKey,
     key_id: &str,
     display_name: &str,
@@ -202,7 +202,7 @@ pub async fn author_unpeer(
 /// forever, but the new node cannot sign as the old one — a destroyed node is a new
 /// physical trust boundary. Authored by THIS (new) node's key, like peer/revoke.
 pub async fn author_supersede(
-    db: &Client,
+    db: &(impl GenericClient + Sync),
     sk: &SigningKey,
     key_id: &str,
     node_origin: &str,

@@ -402,16 +402,36 @@ fn substitution_remedy(door_message: &str) -> &'static str {
 /// (sets local_node = NEW and permanently fences the restore door closed), then author a
 /// node-level supersede(dead -> new). The signing key is the freshly-minted one (the old
 /// key was never backed up). Returns the new + superseded node-ids for the operator.
+///
+/// # ONE transaction (#616)
+///
+/// The two events commit together or not at all. They used to be two autocommit statements,
+/// and the first one is the one that cannot be undone: `local_node` fences the restore door
+/// for good. A fault between them (a dropped connection, a lock timeout, a full disk) left a
+/// database that was enrolled but never superseded, which `restore` then refused forever, and
+/// the error escaped before the summary naming the penned records could print. Inside one
+/// transaction, a failure at either step rolls the genesis back with it, so the operator can
+/// simply re-run the restore into the same database. Pinned by
+/// `tests/restore.rs::a_failure_between_genesis_and_supersede_leaves_no_identity`.
+///
+/// The one window left is the COMMIT itself: a connection lost while it is in flight leaves
+/// the outcome unknown to this process (it reports the error, and `local_node` says which way
+/// it went). That is Postgres's own boundary and no client-side ordering can close it.
+///
+/// Takes `&mut Client` because a `tokio_postgres` transaction borrows its client mutably.
 pub async fn finalize_identity(
-    db: &Client,
+    db: &mut Client,
     sk: &cairn_event::SigningKey,
     key_id: &str,
     name: &str,
     address: &str,
     old_node_id_hex: &str,
 ) -> anyhow::Result<RestoreOutcome> {
-    let new_node_id_hex = crate::identity::provision(db, sk, key_id, name, address).await?;
-    crate::identity::author_supersede(db, sk, key_id, name, old_node_id_hex).await?;
+    let tx = db.transaction().await?;
+    let new_node_id_hex = crate::identity::provision(&tx, sk, key_id, name, address).await?;
+    crate::identity::author_supersede(&tx, sk, key_id, name, old_node_id_hex).await?;
+    // Dropping `tx` on the `?` paths above rolls back both statements.
+    tx.commit().await?;
     Ok(RestoreOutcome {
         new_node_id_hex,
         superseded_node_id_hex: old_node_id_hex.to_ascii_lowercase(),

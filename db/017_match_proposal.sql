@@ -56,8 +56,19 @@ CREATE TABLE IF NOT EXISTS match_proposal (
     -- matcher 'auto_applied'/'review' (C2b) or matcher 'retracted' (the pair dropped below
     -- the review floor after being surfaced — e.g. a §5.4 forced-REVIEW Doe was identified,
     -- issue #135; matcher-owned and reversible: a genuine re-proposal reverts it to
-    -- 'pending'). No CHECK — deliberately open (advisory table).
-    status             TEXT    NOT NULL DEFAULT 'pending',  -- disposition (see band note above)
+    -- 'pending').
+    --
+    -- CONSTRAINED since #744; it was deliberately open before, so a later slice could add a
+    -- disposition without a schema change. That openness failed in the dangerous direction:
+    -- db/057's match_proposal_open lists the OPEN statuses, so a status no reader recognises
+    -- (a typo in any writer, a raw-SQL session) silently reads as CLOSED, and a possible
+    -- duplicate reaches neither the banner nor the worklist — while "no banner" must only ever
+    -- mean "checked, none open". The guarded ALTER below makes widening one edit to its list.
+    -- A NEW STATUS NEEDS: this list, the guarded ALTER's list and `want` literal, db/057's view
+    -- if it is open, and chart_link.rs's OPEN_PROPOSAL_STATUSES if a human judgement resolves it.
+    status             TEXT    NOT NULL DEFAULT 'pending'  -- disposition (see band note above)
+        CONSTRAINT match_proposal_status_check CHECK (status IN
+            ('pending', 'accepted', 'review', 'rejected', 'applied', 'auto_applied', 'retracted')),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     -- NO UPDATE TRIGGER, DELIBERATELY (#79). EVERY writer listed in the header sets
     -- updated_at = clock_timestamp() explicitly today: db.py's upsert_proposal (in its
@@ -122,6 +133,36 @@ BEGIN
         ALTER TABLE match_proposal
             ADD CONSTRAINT match_proposal_band_check
             CHECK (band IN ('auto_candidate','review')) NOT VALID;
+    END IF;
+END $$;
+
+-- #744 — the same paired, definition-guarded, NOT VALID ALTER for `status` (the column note
+-- above says why it is constrained at all). Every reason given for the band block applies
+-- unchanged, NOT VALID above all: a pre-existing row with an unrecognised status must never
+-- become a schema-load outage on the recovery commands. NOT VALID does not make such a row
+-- harmless, though: the next UPDATE of it (the matcher's ON CONFLICT refresh, auto_apply's review
+-- move) raises 23514 and so stalls that pair's duplicate check, loudly, until the row is repaired
+-- by hand. Only a raw-SQL write could have left one — every writer in the tree has always set a
+-- listed status. Pinned by
+-- db/tests/017 (installed on an existing table, write-free once current, every writer's status
+-- storable, a misspelt one refused).
+DO $$
+DECLARE
+    want CONSTANT text :=
+        'CHECK ((status = ANY (ARRAY[''pending''::text, ''accepted''::text, ''review''::text, '
+        '''rejected''::text, ''applied''::text, ''auto_applied''::text, ''retracted''::text])))';
+    have text;
+BEGIN
+    SELECT regexp_replace(pg_get_constraintdef(oid), '\s+NOT VALID$', '') INTO have
+      FROM pg_constraint
+     WHERE conname = 'match_proposal_status_check'
+       AND conrelid = 'match_proposal'::regclass;
+    IF have IS DISTINCT FROM want THEN
+        ALTER TABLE match_proposal DROP CONSTRAINT IF EXISTS match_proposal_status_check;
+        ALTER TABLE match_proposal
+            ADD CONSTRAINT match_proposal_status_check
+            CHECK (status IN ('pending', 'accepted', 'review', 'rejected', 'applied',
+                              'auto_applied', 'retracted')) NOT VALID;
     END IF;
 END $$;
 
