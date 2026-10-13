@@ -433,25 +433,45 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
 /// A failed link, worded by the SAME classification the funnel uses (`data_error_from`: a
 /// `P0001` floor refusal or a marked `cairn-node` verdict is a verdict; anything else an
 /// outage) and the funnel's `Retry` vocabulary (#702). An outage is "not confirmed", never
-/// "nothing changed": a connection lost during the commit leaves the outcome unknown, and the
-/// node's own message (carried in `t`) says to check before retrying. A second identical link
-/// is harmless (the same standing state), so `Retry::Now` is safe.
+/// "nothing changed", and keeps `Retry::Now`: it wrote nothing. The one failure that MAY have
+/// written — a connection lost during the commit — is marked by the node and never reaches that
+/// arm; see [`judgement_error_view`] (#713).
 pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
-    link_error_from(cairn_gui_live::error::data_error_from(e))
+    judgement_error_view("link", e)
 }
 
-/// The wording half of [`link_error_view`], split out so every arm is unit-tested with no
-/// database: the classification (`data_error_from`) is `cairn-gui-live`'s and tested there,
-/// and the verdicts `cairn-node` raises are `pub(crate)` to it, so this crate cannot build them.
+/// A failed judgement worded for its act — the one entry point every judgement surface (Link,
+/// Unlink, "Different people") goes through, so the commit-unknown case below cannot be
+/// handled in one and missed in another.
+///
+/// It asks ONE question before the shared classification: was the failure an interrupted
+/// COMMIT (`cairn_node::db_diagnosis::commit_outcome_unknown`)? That judgement may have been
+/// recorded, and `data_error_from` would otherwise read it as an outage and keep a live retry —
+/// the #713 hazard: a judgement that landed as Outranked leaves the record looking unchanged,
+/// so a second press records a second judgement stamped above the colleague's it lost to. It
+/// gets [`Retry::AfterReread`] instead: the webview re-reads the chart and takes the button away.
+pub fn judgement_error_view(act: &str, e: &anyhow::Error) -> ErrorView {
+    match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
+        Some(event) => ErrorView {
+            text: format!(
+                "Whether the {act} was recorded is NOT known — the connection was lost while \
+                 event {event} was being saved. The chart is being re-read: check what it shows \
+                 now before judging again."
+            ),
+            retry: Retry::AfterReread,
+        },
+        None => judgement_error_from(act, cairn_gui_live::error::data_error_from(e)),
+    }
+}
+
+/// The wording half of [`judgement_error_view`] for every failure that is NOT an interrupted
+/// commit, worded for its act (`"link"` / `"unlink"` / `"\"different people\" judgement"`) by the
+/// classification the funnel uses. Split out so every arm is unit-tested with no database: the
+/// classification (`data_error_from`) is `cairn-gui-live`'s and tested there, and the verdicts
+/// `cairn-node` raises are `pub(crate)` to it, so this crate cannot build them.
 ///
 /// `NotProvisioned` says "yet", not "until an operator acts": one of its causes (a chart this
 /// node does not hold yet) resolves by sync, with no operator involved (final review M4).
-pub fn link_error_from(error: DataError) -> ErrorView {
-    judgement_error_from("link", error)
-}
-
-/// A failed judgement worded for its act (`"link"` / `"unlink"`), by the classification the
-/// funnel uses — see [`link_error_from`], which is this with `"link"`.
 pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
     match error {
         DataError::Refused(t) => ErrorView {

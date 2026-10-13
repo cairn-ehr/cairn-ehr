@@ -528,6 +528,64 @@ pub fn carries_refusal_marker(e: &anyhow::Error) -> bool {
         .any(|cause| cause.downcast_ref::<DeliberateRefusal>().is_some())
 }
 
+/// A write whose COMMIT was interrupted, so whether it landed is unknown (#713).
+///
+/// A connection lost DURING `COMMIT` is the one failure after which the database may or may not
+/// hold the event. It is neither a verdict (nothing was decided about the call) nor an ordinary
+/// outage (an outage wrote nothing, so the same act may simply be tried again). Treating it as an
+/// outage is the #713 hazard: a judgement that DID commit — say as `Outranked`, so the record
+/// still reads as before — invites a second press, and that second event, stamped above a
+/// colleague's, silently overrules them. The only safe way forward is to RE-READ before acting
+/// again, and this marker is what lets a surface know to do that instead of offering a retry.
+///
+/// Distinct from [`DeliberateRefusal`] on purpose: [`carries_refusal_marker`] and
+/// [`refusal_scope`] answer `false`/`None` for it, so no surface can mistake an unknown outcome
+/// for a decided one. Ask [`commit_outcome_unknown_event`].
+#[derive(Debug)]
+pub struct CommitOutcomeUnknown {
+    /// The event whose commit was interrupted — what the operator looks for.
+    event_id: uuid::Uuid,
+    /// The commit's own failure, kept as this error's `source()` so a chain walk finds the
+    /// marker FIRST and still reaches what went wrong (`operator_chain` renders both).
+    cause: anyhow::Error,
+}
+
+impl std::fmt::Display for CommitOutcomeUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "commit outcome unknown for event {} — check whether it was recorded before \
+             retrying, or the judgement may be recorded twice",
+            self.event_id
+        )
+    }
+}
+
+impl std::error::Error for CommitOutcomeUnknown {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+/// Wrap the failure of a COMMIT that may have landed, naming the event (#713). `cause` is the
+/// commit's own error, kept BELOW the marker so `operator_chain` still renders what went wrong.
+///
+/// `pub`, unlike the refusal mints: this marker claims LESS than an ordinary error, not more —
+/// "nobody knows yet" — so a caller outside this crate that attaches it can only make a surface
+/// more cautious (re-read before acting), never hide a remedy behind a false verdict.
+pub fn commit_outcome_unknown(event_id: uuid::Uuid, cause: anyhow::Error) -> anyhow::Error {
+    anyhow::Error::new(CommitOutcomeUnknown { event_id, cause })
+}
+
+/// The event whose commit outcome is unknown, if this chain carries the [`CommitOutcomeUnknown`]
+/// marker anywhere. Walks the whole chain, like [`refusal_scope`], because callers add
+/// `.context(…)` layers above it.
+pub fn commit_outcome_unknown_event(e: &anyhow::Error) -> Option<uuid::Uuid> {
+    e.chain()
+        .find_map(|cause| cause.downcast_ref::<CommitOutcomeUnknown>())
+        .map(|marker| marker.event_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -943,6 +1001,33 @@ mod refusal_scope_tests {
     /// Pins the property that makes the split safe to add: widening the enum must never turn a
     /// verdict back into an outage, so the marker question and the scope question stay
     /// separate.
+    /// #713: an interrupted commit is found through any context layered above it, names its
+    /// event, and is NEVER mistaken for a verdict — it is the one failure that may have written.
+    #[test]
+    fn an_unknown_commit_outcome_is_marked_and_is_not_a_refusal() {
+        let id = uuid::Uuid::from_u128(77);
+        let e = commit_outcome_unknown(id, anyhow::anyhow!("connection reset"))
+            .context("recording the unlink");
+        assert_eq!(commit_outcome_unknown_event(&e), Some(id));
+        assert!(
+            !carries_refusal_marker(&e),
+            "an unknown outcome is not a verdict"
+        );
+        assert_eq!(refusal_scope(&e), None);
+        let text = format!("{e:#}");
+        assert!(text.contains(&id.to_string()), "names the event: {text}");
+        assert!(text.contains("connection reset"), "keeps the cause: {text}");
+        // And an ordinary failure, or a verdict, does not carry it.
+        assert_eq!(
+            commit_outcome_unknown_event(&anyhow::anyhow!("timeout")),
+            None
+        );
+        assert_eq!(
+            commit_outcome_unknown_event(&deliberate_refusal("no")),
+            None
+        );
+    }
+
     #[test]
     fn every_scope_is_still_a_refusal() {
         for e in [

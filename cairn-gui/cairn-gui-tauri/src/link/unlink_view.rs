@@ -1,9 +1,7 @@
 //! Every sentence the "Not the same person" panel shows, as pure functions (R2b-2). The same
 //! rule as `view.rs`: on this panel the wording IS the safety content.
 
-use super::view::{
-    fact_rows, finding_line, heading, judgement_error_from, ColumnView, FactRowView, LinkReportView,
-};
+use super::view::{fact_rows, finding_line, heading, ColumnView, FactRowView, LinkReportView};
 use crate::funnel::view::ErrorView;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::LinkEffect;
@@ -212,7 +210,7 @@ fn effect_report(
 
 /// A failed unlink, classified exactly as a failed link is.
 pub fn unlink_error_view(e: &anyhow::Error) -> ErrorView {
-    judgement_error_from("unlink", cairn_gui_live::error::data_error_from(e))
+    crate::link::view::judgement_error_view("unlink", e)
 }
 
 #[cfg(test)]

@@ -369,11 +369,12 @@ fn a_chart_the_comparison_never_showed_is_named() {
 /// verdict (refused / not provisioned) is never retried as-is; only an outage is retryable.
 #[test]
 fn every_data_error_arm_is_worded_for_a_link() {
-    let refused_view = link_error_from(DataError::Refused("floor says no".into()));
+    let refused_view = judgement_error_from("link", DataError::Refused("floor says no".into()));
     assert_eq!(refused_view.retry, Retry::Never);
     assert_eq!(refused_view.text, "The link was refused: floor says no");
 
-    let unprovisioned = link_error_from(DataError::NotProvisioned("key not held".into()));
+    let unprovisioned =
+        judgement_error_from("link", DataError::NotProvisioned("key not held".into()));
     assert_eq!(unprovisioned.retry, Retry::AfterOperator);
     assert_eq!(
         unprovisioned.text,
@@ -384,11 +385,11 @@ fn every_data_error_arm_is_worded_for_a_link() {
         "the not-held arm resolves by sync, not by an operator"
     );
 
-    let outage = link_error_from(DataError::Unavailable("connection reset".into()));
+    let outage = judgement_error_from("link", DataError::Unavailable("connection reset".into()));
     assert_eq!(outage.retry, Retry::Now);
     assert!(outage.text.contains("not confirmed"), "{}", outage.text);
 
-    let missing = link_error_from(DataError::NotFound);
+    let missing = judgement_error_from("link", DataError::NotFound);
     assert_eq!(missing.retry, Retry::Never);
     assert_eq!(missing.text, "The link was not recorded.");
 }
@@ -401,6 +402,33 @@ fn an_outage_is_worded_not_confirmed_and_retryable() {
     assert_eq!(link_error_view(&outage).retry, Retry::Now);
     let text = link_error_view(&outage).text;
     assert!(text.contains("not confirmed"), "{text}");
+}
+
+/// #713: a judgement whose COMMIT was interrupted may have been recorded. It is never offered
+/// as a live retry: a commit that landed as Outranked leaves the record reading as before, and a
+/// second press would overrule the colleague it lost to. The window re-reads instead.
+#[test]
+fn an_unknown_commit_outcome_rereads_and_is_never_retried_live() {
+    let e = cairn_node::db_diagnosis::commit_outcome_unknown(
+        id(77),
+        anyhow::anyhow!("connection reset"),
+    )
+    .context("recording the judgement");
+    for (act, v) in [
+        ("link", link_error_view(&e)),
+        ("unlink", crate::link::unlink_view::unlink_error_view(&e)),
+    ] {
+        assert_eq!(v.retry, Retry::AfterReread, "{act}");
+        assert_eq!(
+            v.text,
+            format!(
+                "Whether the {act} was recorded is NOT known — the connection was lost while \
+                 event {} was being saved. The chart is being re-read: check what it shows now \
+                 before judging again.",
+                id(77)
+            )
+        );
+    }
 }
 
 /// PR #707 review: the veto check is the most safety-relevant read. If it fails, the panel

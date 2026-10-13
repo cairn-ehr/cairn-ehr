@@ -41,6 +41,12 @@ pub enum Retry {
     /// A verdict, or nothing left to retry with. The way forward is to change the form or wait
     /// for the next search, never to press the same button again.
     Never,
+    /// A write whose COMMIT was interrupted: it may or may not have been recorded (#713). The
+    /// webview re-reads the chart and takes the button away — never a live retry, because a
+    /// judgement that DID land (as Outranked, say) leaves the screen looking unchanged, and a
+    /// second press would record a second judgement over a colleague's. Only the judgement
+    /// views produce it (`link::view::judgement_error_view`).
+    AfterReread,
 }
 
 /// A failure, as the clerk reads it.
@@ -476,6 +482,12 @@ pub(crate) mod tests {
         assert_eq!(
             serde_json::to_value(Retry::Never).unwrap(),
             serde_json::json!("never")
+        );
+        // ...and against "after_reread" to re-read the chart and take the button away after a
+        // judgement whose commit outcome is unknown (#713) — renamed, the button would stay live.
+        assert_eq!(
+            serde_json::to_value(Retry::AfterReread).unwrap(),
+            serde_json::json!("after_reread")
         );
     }
 
