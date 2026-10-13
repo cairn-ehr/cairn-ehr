@@ -264,8 +264,8 @@ lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; HANDOVE
 - **DR 2a + 2b — the medium format and the transport seam (08-31 / 09-02; `cairn-medium`, `cairn-wire`; #101 item 1
   only).** `CAIRNB3`; `Transport` as the one seam. *19 of 19 mutations survived a round-trip suite* → `wire_pins.rs`
   golden bytes. Open: #531 · #532 · #534 (a freeze stops content convergence) · #535 · #536 (an unopenable DEK is
-  counted nowhere on sync) · #537 · #538 · #556 (`segment_commitment` does not bind the attestation — **free only until
-  a release ships a CAIRNB3 writer**) · #557 · #558 · #559 (operator messages naming the wrong remedy) · #560 · #561 ·
+  counted nowhere on sync) · #537 · #538 · #556 (`segment_commitment` did not bind the attestation — **fixed in PR #779**,
+  re-frozen before any CAIRNB3 writer shipped; the sync-wire half is #778) · #557 · #558 · #559 (operator messages naming the wrong remedy) · #560 · #561 ·
   #562 · #563.
 - **#511 — the custody newtypes (09-04; opens #541, #543, #544, #545).** `Secret32`/`PublicKey32` make
   public-for-secret a compile error; they do NOT separate secret roles (trap 5).

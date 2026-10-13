@@ -87,6 +87,9 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
         // collation; drop it from one and these are the fixtures that go red.
         "\u{130}nce Y\u{131}lmaz",
         "\u{393}\u{399}\u{391}\u{39d}\u{39d}\u{397}\u{3a3} \u{3a0}\u{391}\u{3a0}\u{391}\u{3a3}",
+        // A NO-BREAK SPACE between the words (#775 review): under the collation's Unicode
+        // White_Space `\s` it is a word break, as Rust's `split_whitespace` already treated it.
+        "Anne\u{a0}Smith",
     ];
 
     let mut seeded: Vec<(&str, Uuid)> = Vec::new();

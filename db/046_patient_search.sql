@@ -153,12 +153,19 @@ AS $$
     -- typed query is lowercased in Rust under FULL mapping (`İ` -> `i` + U+0307, word-final
     -- `Σ` -> `ς`). The two sides then never met: "İnce" and an all-capitals Greek name typed back
     -- exactly as registered missed their own chart — a false split, the direction that mints a
-    -- duplicate. `pg_unicode_fast` IS full mapping, identical to Rust's and Python's `lower()`,
-    -- and is the same on every cluster. Only six BMP code points (İ and five recently-encoded
-    -- letters) plus the contextual final-sigma rule lower differently under it; every other key
-    -- is unchanged. Pinned by `patient_search_ranking.rs` (the two cases above, against the
-    -- real cluster) and by `patient_search_equivalence.rs`, whose U+0130 row no longer depends
-    -- on the deployment. Drop the COLLATE from ONE site and the sides drift apart again.
+    -- duplicate. `pg_unicode_fast` IS full mapping, the rule Rust's and Python's `lower()` apply,
+    -- and does not depend on the cluster's locale (its Unicode tables move with the PostgreSQL
+    -- major version, as Rust's and Python's move with theirs). Two things change under it, both
+    -- toward agreeing with the query side: CASE — six BMP code points (İ and five recently-encoded
+    -- letters) plus the contextual final-sigma rule lower differently; and the regex CLASSES the
+    -- splitters below use, which follow their input's collation — `\s` becomes Unicode
+    -- White_Space, so a NO-BREAK SPACE (U+00A0, U+2007, U+202F) or U+0085 now separates words,
+    -- exactly as Rust's `split_whitespace` already did on the query side. No chart becomes harder
+    -- to find. Pinned by `patient_search_ranking.rs` (both cases, against the real cluster, and
+    -- raw capital tokens for the query-side sites), `patient_search_drift.rs` (one fixture per
+    -- changed shape), and `patient_search_equivalence.rs` (exactly four collation sites; its
+    -- U+0130 row no longer depends on the deployment). Drop the COLLATE from ONE site and the
+    -- sides drift apart again.
     --
     -- The tokenising expression is COPIED VERBATIM from matcher/src/cairn_matcher/pipeline/
     -- blocking_sql.py's _NAME_TOKENS_CTE:
@@ -299,8 +306,9 @@ AS $$
                --     the whole-token split does not, and skipping the branch loses a token that
                --     found the chart. It is the ONLY such character in Unicode (the exhaustive
                --     test above enumerates them, so this is measured, not asserted), and it fires
-               --     only under full case mapping — ICU providers do it, libc does not — which is
-               --     exactly the deployment-dependent drift this guard exists to survive.
+               --     only under full case mapping. That used to depend on the deployment (ICU did
+               --     it, libc did not); since #775 every site here names `pg_unicode_fast`, so it
+               --     fires on every cluster — this guard is what keeps it harmless there.
                --
                -- Pinned three ways: the exhaustive class test named above; a `İnce` chart in
                -- `patient_search_equivalence.rs`, whose `nce` gesture goes red if `lower` is

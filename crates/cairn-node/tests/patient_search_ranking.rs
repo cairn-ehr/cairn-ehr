@@ -513,3 +513,60 @@ async fn a_greek_name_in_capitals_is_found_by_typing_it_back() {
         "the chart registered as \"ΓΙΑΝΝΗΣ ΠΑΠΑΣ\" must be found by typing exactly that: {list:?}"
     );
 }
+
+/// The QUERY side's collation (#775 review). `SearchQuery::new` lowercases in Rust before db/046
+/// and the ranking see a token, so the two query-side `COLLATE pg_unicode_fast` sites — db/046's
+/// query-token join and `search_rank::normalise_query_tokens` — are invisible to every test that
+/// builds its query that way. A caller handing raw, UN-lowered tokens (a raw-SQL client, a future
+/// port) is exactly who they protect, so this test is that caller: the dotted capital and the
+/// final sigma, in capitals, straight in. Drop the COLLATE from either site and the chart is
+/// missed (db/046) or ranks behind its namesakes (the ranking).
+#[tokio::test]
+async fn raw_capital_tokens_are_lowered_by_the_same_rule_as_the_stored_names() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let older = six_older_namesakes(&c, &sk, &kid, "Nguyen").await;
+    let dup = chart_named(&c, &sk, &kid, 100, "\u{130}nce Nguyen").await;
+
+    // db/046's query-token join: `İNCE` ALONE, straight into the function, must find the chart —
+    // it is the only token the duplicate does not share with its namesakes.
+    let found: Vec<String> = c
+        .query(
+            "SELECT patient_id::text FROM cairn_search_candidates($1, NULL, NULL)",
+            &[&vec!["\u{130}NCE".to_string()]],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert!(
+        found.contains(&dup.to_string()),
+        "db/046 must lower a raw capital query token by the stored names' rule: {found:?}"
+    );
+
+    // The ranking's `normalise_query_tokens`: built by hand, NOT through `SearchQuery::new`, so
+    // nothing lowercases the tokens first. Lowered by a different rule, `İNCE` matches nothing
+    // and the duplicate ties its six older namesakes on `nguyen` — and loses on chart age.
+    let query = SearchQuery {
+        name_tokens: vec!["\u{130}NCE".into(), "NGUYEN".into()],
+        birth_date: None,
+        identifiers: vec![],
+    };
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
+    assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
+    assert_eq!(
+        ids[0], dup,
+        "the ranking must lower a raw capital token by the same rule: {list:?}"
+    );
+    assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
+}

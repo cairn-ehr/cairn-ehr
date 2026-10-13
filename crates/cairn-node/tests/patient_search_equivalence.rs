@@ -647,6 +647,34 @@ const DB046: &str = include_str!("../../../db/046_patient_search.sql");
 /// read — while the splitter read the lowered one. The two agreed on every probe in the list, so
 /// nothing was red, and `İnce` lost a token. Pinning the exact composed expression, rather than its
 /// pieces, is what makes that class of drift a compile-time-ish failure instead of a silent one.
+/// #775 review: `contains` cannot tell the four collation sites apart — the splitters' string is a
+/// substring of the guard's — so dropping the collation from ONE splitter leaves every literal above
+/// still present. Count the sites in db/046's CODE instead (comment lines excluded): exactly four,
+/// the two splitters, the parts-branch guard and the query-token join. A fifth is a new site to
+/// reason about; a third is a side lowercasing by the cluster's default again.
+#[test]
+fn db046_names_the_collation_at_exactly_its_four_lowercasing_sites() {
+    let code_sites = DB046
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .map(|l| l.matches("COLLATE pg_unicode_fast").count())
+        .sum::<usize>();
+    assert_eq!(
+        code_sites, 4,
+        "db/046 must lowercase names with `COLLATE pg_unicode_fast` at exactly its four sites \
+         (both splitters, the parts guard, the query-token join) — see its ONE CASE MAPPING note"
+    );
+    let bare = DB046
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .filter(|l| l.contains("lower(") && !l.contains("COLLATE"))
+        .collect::<Vec<_>>();
+    assert!(
+        bare.is_empty(),
+        "a code line in db/046 lowercases without naming a collation: {bare:?}"
+    );
+}
+
 #[test]
 fn the_subset_probe_still_describes_the_query_db046_runs() {
     for expression in [

@@ -8,6 +8,8 @@
   plane), [ADR-0026](0026-node-durability-and-disaster-recovery.md) (node durability and disaster
   recovery), and **principle 3** (paper-parity — *confirmation dialogs are explicitly NOT an acceptable
   safety mechanism*).
+- **Implementation notes:** N1 (2026-10-13) — the `segment_commitment` residual
+  ([#556](https://github.com/cairn-ehr/cairn-ehr/issues/556)) is closed.
 
 ---
 
@@ -117,10 +119,10 @@ gate, and it is available at every rung including the ones where a gate would ha
   ([#556](https://github.com/cairn-ehr/cairn-ehr/issues/556)), so a stripped human-authorship token is not
   caught by the commitment even on a signed medium. Free only until a release ships a CAIRNB3 writer.
 
-  > **Erratum E1 (2026-10-13) — factual; the decision is unchanged.** The residual above is
-  > **closed**: `segment_commitment` now binds `attestation` and `attester_key` by the same
-  > presence-tag-then-digest rule as the wrapped DEK, so a stripped human-authorship token breaks a
-  > signed segment's attestation. The recipe was re-frozen in place rather than given a new container
+  > **Implementation note N1 (2026-10-13) — the residual above is now closed; the decision is unchanged.**
+  > The bullet stands as written — it was true when this ADR was accepted. What changed is the build:
+  > `segment_commitment` now binds `attestation` and `attester_key` by the same presence-tag-then-digest
+  > rule as the wrapped DEK, so a stripped human-authorship token breaks a signed segment's attestation. The recipe was re-frozen in place rather than given a new container
   > revision, on the maintainer's confirmation that no CAIRNB3 medium or distributed record existed
   > outside development and test rigs. Two things stay true and are stated in `segment_commitment`'s
   > own doc: a committed token is not a VOUCHED token (verification remains the apply door's), and

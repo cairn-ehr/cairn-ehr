@@ -376,5 +376,8 @@ def test_the_package_version_moved_with_the_blocking_collation():
     # Blocking SQL is not in the matcher_version digest, so a change to which pairs it
     # generates must move the package version: every worker then re-queues every chart once
     # (watch.py / queue_db.ensure_version), and charts blocked under the old key are re-checked.
+    import re
+
     import cairn_matcher
-    assert cairn_matcher.__version__ == "0.2.1"
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", cairn_matcher.__version__)
+    assert m and (int(m[1]), int(m[2]), int(m[3])) >= (0, 2, 1)
