@@ -138,8 +138,12 @@ END $$;
 
 -- #744 — the same paired, definition-guarded, NOT VALID ALTER for `status` (the column note
 -- above says why it is constrained at all). Every reason given for the band block applies
--- unchanged, NOT VALID above all: a pre-existing row with an unrecognised status must stay
--- findable by a query, never become a schema-load outage on the recovery commands. Pinned by
+-- unchanged, NOT VALID above all: a pre-existing row with an unrecognised status must never
+-- become a schema-load outage on the recovery commands. NOT VALID does not make such a row
+-- harmless, though: the next UPDATE of it (the matcher's ON CONFLICT refresh, auto_apply's review
+-- move) raises 23514 and so stalls that pair's duplicate check, loudly, until the row is repaired
+-- by hand. Only a raw-SQL write could have left one — every writer in the tree has always set a
+-- listed status. Pinned by
 -- db/tests/017 (installed on an existing table, write-free once current, every writer's status
 -- storable, a misspelt one refused).
 DO $$

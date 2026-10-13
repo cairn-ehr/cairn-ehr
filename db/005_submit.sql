@@ -450,13 +450,16 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
 -- that writes nothing. Every product DOOR caller (pull, requeue, restore) applies one event per
 -- statement, so a caller that starts batching events into one transaction must revisit this.
--- The one multi-event holder is connect-time re-adjudication (db/043, #603/#773): its gate 4 takes
--- each promoted event's lock and keeps it to the end of the pass, along with any CARNMR lock an
--- earlier event's applier took. A shred of a later event that wants CARNMR can therefore deadlock
--- with it. Whichever side Postgres aborts loses nothing: gate 4 runs in a per-row subtransaction,
--- so a 40P01 there is recorded on the marker and retried at the next connect, and a 40P01 at the
--- shred's door is a retryable failure that wrote nothing. The deferred set is empty on a healthy
--- node, so the pass is short and rare.
+-- The one multi-event holder is connect-time re-adjudication (db/043, #603/#773): it takes each
+-- sealed candidate's lock at the top of its row and keeps it to the end of the pass, along with any
+-- CARNMR lock or projection row lock an earlier event's appliers took. Two shapes can therefore
+-- deadlock with it: a late-key door holding a later event's lock from step 9 whose applier wants a
+-- CARNMR lock re-adjudication holds, and a shred holding a later event's lock that blocks on a
+-- medication_reconciliation / medication_group_member row an earlier gate-4 applier wrote (the
+-- shred itself takes no CARNMR lock). Whichever side Postgres aborts loses nothing: the row runs in
+-- a per-row subtransaction, so a 40P01 there is recorded on the marker and retried at the next
+-- connect, and a 40P01 at the door is a retryable failure that wrote nothing. The deferred set is
+-- empty on a healthy node, so the pass is short and rare.
 CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
 RETURNS void LANGUAGE sql
 SET search_path = public, pg_temp

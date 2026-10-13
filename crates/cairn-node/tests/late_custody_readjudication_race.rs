@@ -164,3 +164,92 @@ async fn a_late_key_racing_an_uncommitted_re_adjudication_still_charts_it() {
     key_landing.await.unwrap().expect("the key is admitted");
     assert_promoted_and_charted(&c, &e, "late key during an uncommitted re-adjudication").await;
 }
+
+/// Put the real structural check back on `clinical.medication.asserted` and drop the probe —
+/// called at test START (a predecessor that panicked may have left it, the #583 reset-at-start
+/// rule) and at the end, so the registry other suites pin is never left modified.
+async fn remove_gate0_probe(c: &Client) {
+    c.batch_execute(
+        "UPDATE cairn_event_twin_check SET check_fn = 'cairn_check_medication_assertion' \
+          WHERE event_type = 'clinical.medication.asserted'; \
+         DROP FUNCTION IF EXISTS cairn_test_gate0_probe(text, jsonb); \
+         DROP TABLE IF EXISTS cairn_test_gate0_runs;",
+    )
+    .await
+    .unwrap();
+}
+
+/// Swap the medication assert's structural check for a probe that records WHICH backend ran it
+/// and then runs the real check, so a test can ask "did re-adjudication's own connection check
+/// this body?" without changing what the check refuses.
+async fn install_gate0_probe(c: &Client) {
+    remove_gate0_probe(c).await;
+    c.batch_execute(
+        "CREATE TABLE cairn_test_gate0_runs (pid int NOT NULL); \
+         CREATE FUNCTION cairn_test_gate0_probe(p_type text, b jsonb) RETURNS void \
+           LANGUAGE plpgsql AS $$ BEGIN \
+             INSERT INTO cairn_test_gate0_runs VALUES (pg_backend_pid()); \
+             PERFORM cairn_check_medication_assertion(p_type, b); \
+           END $$; \
+         UPDATE cairn_event_twin_check SET check_fn = 'cairn_test_gate0_probe' \
+          WHERE event_type = 'clinical.medication.asserted';",
+    )
+    .await
+    .unwrap();
+}
+
+/// Review finding on #603's fix: gate 0 (the per-type structural check, db/043) reads the clear
+/// view too, and it ran BEFORE the custody lock that gate 4 takes. In the interleaving above it
+/// therefore saw no body (the key was uncommitted), skipped the check, and gate 4 — having waited
+/// — then projected a body no re-adjudication gate had checked. Gates 0-4 must read ONE committed
+/// state, so re-adjudication takes the lock at the top of the row.
+#[tokio::test]
+async fn re_adjudication_checks_the_body_a_racing_late_key_opened() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    remove_gate0_probe(&c).await;
+    let keys = fresh_node(&c).await;
+    remove_probe(&c).await;
+    let e = deferred_without_key(&c, &keys).await;
+    install_gate0_probe(&c).await;
+
+    c.batch_execute("BEGIN").await.unwrap();
+    apply_with_key(&c, &e).await.expect("the key is admitted");
+
+    let (c2, pid2) = second_connection(&base).await;
+    let adjudicating = tokio::spawn(async move { c2.execute(READJUDICATE, &[]).await });
+    let (observer, _) = second_connection(&base).await;
+    until_finished_or_parked(&observer, pid2, &adjudicating).await;
+
+    c.batch_execute("COMMIT").await.unwrap();
+    adjudicating
+        .await
+        .unwrap()
+        .expect("re-adjudication completes");
+
+    let gate0_runs: i64 = c
+        .query_one(
+            "SELECT count(*) FROM cairn_test_gate0_runs WHERE pid = $1",
+            &[&pid2],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    remove_gate0_probe(&c).await;
+    assert_eq!(
+        gate0_runs, 1,
+        "RE-ADJUDICATION MUST CHECK WHAT IT PROMOTES: gate 0 ran before the custody lock, saw no \
+         body while the key was uncommitted, and skipped the structural check that gate 4 then \
+         projected past"
+    );
+    assert_promoted_and_charted(
+        &c,
+        &e,
+        "re-adjudication after checking the racing key's body",
+    )
+    .await;
+}

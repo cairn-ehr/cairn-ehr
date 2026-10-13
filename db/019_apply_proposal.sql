@@ -32,8 +32,10 @@ ALTER TABLE match_proposal ADD COLUMN IF NOT EXISTS applied_event_id UUID;
 -- matcher's ADR-0078 reopen (auto_applied -> pending) clears the id in the same UPDATE, which is
 -- exactly the shape this admits. Same idiom as db/017's band and status checks: guarded on the
 -- deparsed definition (idempotent, write-free once current) and NOT VALID, so a pre-existing
--- bad advisory row is found by a query rather than aborting a schema load. Pinned by
--- db/tests/019.
+-- bad advisory row cannot abort a schema load. It is not made harmless: the next UPDATE of that
+-- row raises 23514 and stalls that pair's duplicate check, loudly, until it is repaired by hand.
+-- Only a raw-SQL write could have left one — auto_apply.rs and this file have set the id together
+-- since their first commit. Pinned by db/tests/019.
 DO $$
 DECLARE
     want CONSTANT text :=

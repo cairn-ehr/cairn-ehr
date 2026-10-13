@@ -1535,15 +1535,16 @@ fn refuse_unsafe_legacy_succession(
         .count();
     if missing > 0 {
         anyhow::bail!(
-            "refusing to replace the backup medium {}: it carries {} federation event(s), and \
-             {missing} of them are not in the medium that would replace it (which carries {}). \
+            "refusing to replace the backup medium {}: it carries {} distinct federation \
+             event(s), and {missing} of them are not in the medium that would replace it (which \
+             carries {}). \
              Succeeding a legacy medium REPLACES the file, and is only safe when the fresh \
              capture sweeps back every event the old medium held. It did not, so this database \
              is not the one that wrote that medium (a restore that has not run yet, a \
              re-`init`ed node, or another node's medium with no marker this build can verify). \
              {REMEDY}",
             path.display(),
-            legacy.event_addresses.len(),
+            held.len(),
             staged_node_addresses.len()
         );
     }
@@ -2537,7 +2538,7 @@ mod tests {
         .expect_err("a medium whose events are not in this database must never be replaced");
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("2 federation event(s)") && msg.contains("2 of them are not in"),
+            msg.contains("2 distinct federation event(s)") && msg.contains("2 of them are not in"),
             "the refusal must say how many of the medium's events would be lost: {msg}"
         );
         assert!(
@@ -2667,7 +2668,7 @@ mod tests {
         .expect_err("a successor holding less must never replace its predecessor");
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("12 federation event(s)")
+            msg.contains("12 distinct federation event(s)")
                 && msg.contains("12 of them are not in")
                 && msg.contains("which carries 0"),
             "the refusal must quote what would be lost and what would replace it: {msg}"

@@ -765,7 +765,10 @@ async fn a_legacy_medium_is_refused_when_the_successor_would_hold_less() {
 
     let msg = format!("{err:#}");
     assert!(
-        msg.contains(&format!("{} federation event(s)", legacy_events.len())),
+        msg.contains(&format!(
+            "{} distinct federation event(s)",
+            legacy_events.len()
+        )),
         "the refusal must quote what the old medium holds, so the operator can see the \
          shortfall rather than take it on trust: {msg}"
     );
