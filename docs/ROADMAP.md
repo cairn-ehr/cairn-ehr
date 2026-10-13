@@ -231,7 +231,7 @@ and the node-compromise threat model; the `clock_grade` still unrendered in the 
 UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody grants leave no audit trail).
 #303 #304 #305 #306 — the tech-debt loop's own tooling, stopped.
 #602 — any client can set `cairn.remote_apply` before `submit_event`, turning the strict door's refusals into flags (a decision; found in #584's review, see the ADR-0070 entry under Phase 8/9).
-#603 — a late key racing connect-time re-adjudication of a deferred event can leave the promoted record off the chart, and `requeue` then exits 0 (a cross-transaction race; ADR-0070 residual).
+#603 — a late key racing connect-time re-adjudication of a deferred event could leave the promoted record off the chart, and `requeue` then exits 0 (a cross-transaction race; ADR-0070 residual); **fixed in PR #774** (the heal-safe dispatch takes the event's custody lock). Same PR: #773 (a heal pass or re-adjudication racing a shred re-projected the shredded record; `cairn_lock_erasure_heal`, shared by shreds, exclusive by `cairn_reproject`), #346, #553, #616, #744, #704.
 #604 — a shred racing a late key could resurrect custody (and, since ADR-0070, the projection); **fixed 2026-10-13** by `cairn_lock_custody`, a per-event xact lock both doors' step 9 and the shred executor take (`tests/shred_custody_race.rs` reproduces both interleavings). Same session: #608's late-custody half, #431, #464 (db/050 writes once per event, not per rendition), #768 (a misfiled peer vouch is named and reads stale).
 
 **2026-08-23 → 09-12 — the sweep's tail, the misclassification cluster, §5.9 C+D designed, the DR audit, DR slices
@@ -275,7 +275,8 @@ lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; HANDOVE
   merge also closed #182, #404, #430, #431 and #441 — the last three open again, as is #522; #550 opened and closed
   in-branch).** A backup reproduces the state at CAPTURE TIME (trap 7); the shred predicate has ONE home; `seq` holes
   are routine (#549 owes the operator surface); a torn tail must NOT refuse `restore`. Open: #551 · #552 (a capture is
-  O(whole medium)) · #553 (an unmarked foreign legacy medium can be destroyed by succession).
+  O(whole medium)). #553 (an unmarked foreign legacy medium could be destroyed by succession) is fixed in PR #774:
+  succession now compares event sets, not counts.
 - **DR slice 2d — the record comes home** ([ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md), v0.69;
   `db/052`; closes #554; opens #567–#571). **The headline test DECRYPTS a body**; the pen moves into the database and
   gains custody; the gap pin inverts to `a_clinical_event_restores_from_a_medium`. **2e is retired as a label.**
