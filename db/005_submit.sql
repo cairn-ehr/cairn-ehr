@@ -381,7 +381,7 @@ END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 
--- #604 — ONE event's custody is decided by one transaction at a time.
+-- #604 — ONE event's custody GRANT and its SHRED never interleave.
 --
 -- WHY THIS EXISTS. Two writers decide whether event E has custody on this node:
 --   * a door granting it (step 9 of submit_event / apply_remote_event), which first checks
@@ -403,16 +403,24 @@ REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
 -- THE KEY is per event (hashtextextended over a namespaced string, the db/004 precedent), so
 -- unrelated events never wait for each other; a hash collision costs only an unnecessary wait.
 --
--- WHAT IT DOES NOT COVER. REPEATABLE READ: there the snapshot is fixed at the transaction's first
+-- WHAT IT DOES NOT COVER.
+--   * Two READERS of event_clear that write projections without taking this lock: the heal-mode
+--     cairn_reproject (db/039) and deferred re-adjudication's gate 4 (db/043). Either can still
+--     re-project a record a concurrent shred is scrubbing — custody stays gone, the projection row
+--     comes back. Issue #773.
+--   * REPEATABLE READ: there the snapshot is fixed at the transaction's first
 -- statement, so the waiting side still reads the pre-wait state. Every door caller in the tree runs
 -- READ COMMITTED (the server default); SERIALIZABLE is covered by SSI instead (the two sides form a
 -- read/write cycle and one aborts with 40001). A caller that raises the isolation level to
 -- REPEATABLE READ around a door reopens this race.
 --
--- DEADLOCK SHAPE (accepted). A transaction that applies several events and has already taken
--- another lock — CARNMR (db/033) in a projection, say — can meet one holding E's custody lock and
--- wanting CARNMR. Postgres detects it and aborts one side with 40P01, a retryable failure that
--- writes nothing. It needs two concurrent transactions over the SAME event, so it is rare.
+-- DEADLOCK SHAPE (accepted, unreachable today). Within one event the order is always this lock,
+-- then any projection lock (CARNMR, db/033), then the hlc_state row the sync door merges into last.
+-- A transaction that applied SEVERAL events would hold hlc_state (or CARNMR) from an earlier one
+-- when it takes E's lock for a later one, and could meet a single-event shred of E that holds E's
+-- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
+-- that writes nothing. Every product caller (pull, requeue, restore) applies one event per
+-- statement, so a caller that starts batching events into one transaction must revisit this.
 CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
 RETURNS void LANGUAGE sql
 SET search_path = public, pg_temp
