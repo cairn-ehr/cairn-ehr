@@ -936,10 +936,21 @@ fn establish_local_state_escrow(
 ) -> anyhow::Result<()> {
     use cairn_node::localstate::{establish_lsk, lsk_sidecar_path_for, serialize_sidecar};
     let sidecar = lsk_sidecar_path_for(key_path);
-    if sidecar.exists() && !overwrite {
-        anyhow::bail!("local-state escrow already exists at {}", sidecar.display());
-    }
-    let replacing = sidecar.exists();
+    // The two policies ask the filesystem different questions, so they fail differently
+    // (#509). The REFUSING verb must fail closed: `Path::exists()` reads an unstattable
+    // sidecar (EIO, a stale NFS handle, ENOTDIR) as absent, which would let the verb write a
+    // new escrow over the one the operator's written-down recovery code opens.
+    // The REPLACING paths write the sidecar regardless — they have already resealed the key,
+    // and stopping here is the desync described above — so for them the answer only chooses
+    // the wording of the line below, and an unanswered stat must not abort them.
+    let replacing = if overwrite {
+        std::fs::metadata(&sidecar).is_ok()
+    } else {
+        if custody_file_exists(&sidecar)? {
+            anyhow::bail!("local-state escrow already exists at {}", sidecar.display());
+        }
+        false
+    };
     let wraps = establish_lsk(op_pass, recovery_code)?;
     cairn_node::fsio::atomic_write(&sidecar, &serialize_sidecar(&wraps), Some(0o600))?;
     eprintln!(
@@ -6277,6 +6288,48 @@ mod tests {
         assert!(
             !custody_file_exists(&dir.path().join("nope")).unwrap(),
             "and a genuinely absent one does not"
+        );
+    }
+
+    #[test]
+    fn establish_local_state_key_refuses_an_unstattable_sidecar_rather_than_writing_over_it() {
+        // #509. The explicit `establish-local-state-key` verb (`overwrite = false`) promises
+        // the operator it will never clobber a working escrow. With `Path::exists()` an
+        // unstattable sidecar (EIO, a stale NFS handle, ENOTDIR) read as "absent", so the
+        // verb went on to mint a new LSK under a new recovery code and write it over the
+        // one the operator has written down. The refusal must come from the EXISTENCE
+        // check — naming the unanswered question — not from a later write failing by luck.
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = a_path_that_cannot_be_stated(dir.path());
+        let msg = format!(
+            "{:#}",
+            establish_local_state_escrow(&key_path, "op-pass", "recovery", false)
+                .expect_err("an unanswerable existence question must stop the verb")
+        );
+        assert!(
+            msg.contains("cannot tell whether"),
+            "the refusal must name the unanswered question, not a downstream write error: {msg}"
+        );
+    }
+
+    #[test]
+    fn establish_local_state_key_still_refuses_a_present_sidecar_and_leaves_it_untouched() {
+        // Positive control for the test above: the ordinary "an escrow is already here"
+        // refusal must survive the fail-closed rewrite, byte-for-byte on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("node.key");
+        let sidecar = cairn_node::localstate::lsk_sidecar_path_for(&key_path);
+        std::fs::write(&sidecar, b"an escrow the operator relies on").unwrap();
+        let msg = format!(
+            "{:#}",
+            establish_local_state_escrow(&key_path, "op-pass", "recovery", false)
+                .expect_err("a present sidecar must be refused")
+        );
+        assert!(msg.contains("already exists"), "{msg}");
+        assert_eq!(
+            std::fs::read(&sidecar).unwrap(),
+            b"an escrow the operator relies on",
+            "the refused verb must not have written anything"
         );
     }
 
