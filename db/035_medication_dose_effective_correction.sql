@@ -83,13 +83,20 @@ BEGIN
             RAISE EXCEPTION 'medication dose-correction: corrects must be a valid uuid';
         END;
         -- `strike`, if present, is a JSON array over the closed group set.
+        --
+        -- `(g IN (...)) IS NOT TRUE`, never `g NOT IN (...)` (#346). A JSON null element gives
+        -- g = NULL, and `NULL NOT IN (...)` is NULL, so the WHERE never selected it: `strike:
+        -- [null]` was admitted, and then also passed the "set or strike at least one group"
+        -- floor below (it counts the array) — a correction that changes nothing, permanently
+        -- in the record. IS NOT TRUE sends the NULL to the refusing side. Pinned by
+        -- db/tests/035_medication_dose_correction_test.sql.
         IF p ? 'strike' THEN
             IF jsonb_typeof(p -> 'strike') IS DISTINCT FROM 'array' THEN
                 RAISE EXCEPTION 'medication dose-correction: strike must be a JSON array of group names';
             END IF;
             IF EXISTS (
                 SELECT 1 FROM jsonb_array_elements_text(p -> 'strike') g
-                WHERE g NOT IN ('dose', 'effective', 'reason')
+                WHERE (g IN ('dose', 'effective', 'reason')) IS NOT TRUE
             ) THEN
                 RAISE EXCEPTION 'medication dose-correction: strike may only contain dose|effective|reason';
             END IF;
