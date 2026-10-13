@@ -69,8 +69,15 @@ _NAME_TOKENS_CTE = """name_tokens AS (
     -- ordinary John Does apart (distinct callsigns are already distinct tokens; the
     -- load-bearing exclusion is the scoring one in load_candidate). The name+year and
     -- dob+first-initial passes read this same CTE, so they inherit the exclusion for free.
+    -- COLLATE pg_unicode_fast (#775): FULL Unicode case mapping on every cluster, not the
+    -- database default's. A libc C.UTF-8 default lowers a word-final capital SIGMA to a medial
+    -- σ and Turkish İ to plain i; Python's lower() (eval/generator.py's mirror), Rust's (the
+    -- search query) and db/046's search all use full mapping. Same key extraction as db/046,
+    -- so the DRIFT NOTE's sweep-paired ⊆ search-found holds — drop it here alone and it breaks.
     SELECT DISTINCT patient_id, token
-    FROM patient_name, regexp_split_to_table(lower(normalize(value, NFC)), '\\s+') AS token
+    FROM patient_name,
+         regexp_split_to_table(lower(normalize(value, NFC) COLLATE pg_unicode_fast), '\\s+')
+           AS token
     WHERE token <> '' AND use_key <> ALL(%s)
 )"""
 

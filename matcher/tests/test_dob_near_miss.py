@@ -100,7 +100,10 @@ def test_the_package_version_moved_with_the_comparator():
     # matcher_version = package version + a digest of weights/thresholds/config. Comparator
     # CODE is not in the digest, so a behaviour change must move the version (spec: Rollout).
     import cairn_matcher
-    assert cairn_matcher.__version__ == "0.2.0"
+    # 0.2.0 shipped the ADR-0079 comparator; later behaviour changes move it further (0.2.1:
+    # the #775 blocking collation). What this pins is that it never fell back below 0.2.0.
+    major, minor, patch = (int(p) for p in cairn_matcher.__version__.split("."))
+    assert (major, minor, patch) >= (0, 2, 0)
 
 
 @pytest.mark.parametrize("a, b", [

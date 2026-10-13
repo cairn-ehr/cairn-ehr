@@ -38,8 +38,11 @@ _MIRRORED_PASSES = [
      _GROUPS_SQL, "FROM patient_demographic WHERE field = 'dob'"),
     ("identifier pass excluding 'unknown' (_identifier_keys)",
      _GROUPS_SQL, "FROM patient_identifier WHERE system <> 'unknown'"),
-    ("name-token pass: NFC + lower + whitespace split (name_tokens)",
-     _GROUPS_SQL, "regexp_split_to_table(lower(normalize(value, NFC)), '\\s+')"),
+    # #775: FULL case mapping on every cluster (pg_unicode_fast), which is what the mirror's
+    # str.lower() applies — a bare lower() would follow the cluster's default collation.
+    ("name-token pass: NFC + full-mapping lower + whitespace split (name_tokens)",
+     _GROUPS_SQL,
+     "regexp_split_to_table(lower(normalize(value, NFC) COLLATE pg_unicode_fast), '\\s+')"),
     # §5.4: the placeholder-use exclusion the name_tokens mirror
     # (generator._is_placeholder_name) depends on.
     ("placeholder-use exclusion in name_tokens (§5.4)",

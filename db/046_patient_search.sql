@@ -145,8 +145,24 @@ AS $$
     -- depends on this table holding the row. A "surely this should read the _current view"
     -- cleanup would silently reverse both, with no test failing to say so.
     --
+    -- ONE CASE MAPPING, WHATEVER THE CLUSTER'S LOCALE (#775). Every `lower()` over a name in this
+    -- file — and in the matcher's blocking SQL and search_rank.rs — names the built-in
+    -- `pg_unicode_fast` collation (PostgreSQL >= 18, no ICU needed). A bare `lower()` uses the
+    -- database's DEFAULT collation, whose case mapping depends on how the cluster was initdb'd:
+    -- libc `C.UTF-8` uses SIMPLE mapping (Turkish `İ` -> `i`, Greek `ΣΑΣ` -> `σασ`), while the
+    -- typed query is lowercased in Rust under FULL mapping (`İ` -> `i` + U+0307, word-final
+    -- `Σ` -> `ς`). The two sides then never met: "İnce" and an all-capitals Greek name typed back
+    -- exactly as registered missed their own chart — a false split, the direction that mints a
+    -- duplicate. `pg_unicode_fast` IS full mapping, identical to Rust's and Python's `lower()`,
+    -- and is the same on every cluster. Only six BMP code points (İ and five recently-encoded
+    -- letters) plus the contextual final-sigma rule lower differently under it; every other key
+    -- is unchanged. Pinned by `patient_search_ranking.rs` (the two cases above, against the
+    -- real cluster) and by `patient_search_equivalence.rs`, whose U+0130 row no longer depends
+    -- on the deployment. Drop the COLLATE from ONE site and the sides drift apart again.
+    --
     -- The tokenising expression is COPIED VERBATIM from matcher/src/cairn_matcher/pipeline/
-    -- db.py's _GROUPS_SQL: `regexp_split_to_table(lower(normalize(value, NFC)), '\s+')`,
+    -- blocking_sql.py's _NAME_TOKENS_CTE:
+    -- `regexp_split_to_table(lower(normalize(value, NFC) COLLATE pg_unicode_fast), '\s+')`,
     -- including its `token <> ''` guard (see below). Same key extraction, so a chart the
     -- sweep would pair is a chart this search finds. NFC normalisation is load-bearing, not
     -- decoration: without it a composed and a decomposed "José" are different tokens and the
@@ -191,7 +207,7 @@ AS $$
             -- The whole whitespace-delimited token, as before: this is what matches a
             -- punctuated name typed back exactly as printed, and an intact callsign.
             SELECT w AS tok
-              FROM regexp_split_to_table(lower(normalize(pn.value, NFC)), '\s+') AS w
+              FROM regexp_split_to_table(lower(normalize(pn.value, NFC) COLLATE pg_unicode_fast), '\s+') AS w
              WHERE w <> ''
             -- `UNION ALL`, NOT `UNION` (#639). The two sources overlap — a punctuated value
             -- holding an unpunctuated word projects that word twice, `Smith, John` giving whole
@@ -227,7 +243,7 @@ AS $$
             -- whose whole claim was that no candidate set changes. It is the same shape #638
             -- closed one level up, where the GATE encoded a Latin selectivity model.
             SELECT p
-              FROM regexp_split_to_table(lower(normalize(pn.value, NFC)),
+              FROM regexp_split_to_table(lower(normalize(pn.value, NFC) COLLATE pg_unicode_fast),
                                          '[^[:alnum:]]+') AS p
              WHERE length(p) > 1
                AND pn.use_key <> 'callsign'
@@ -291,7 +307,7 @@ AS $$
                -- dropped from this line; and an unpunctuated multi-word name carrying a
                -- SINGLE-CHARACTER word, kept by the whole-token source and dropped by this one,
                -- so a version of this change that skipped the wrong branch loses a chart too.
-               AND lower(normalize(pn.value, NFC)) ~ '[^[:alnum:][:space:]]'
+               AND lower(normalize(pn.value, NFC) COLLATE pg_unicode_fast) ~ '[^[:alnum:][:space:]]'
       ) AS toks
       -- NORMALISE EACH QUERY TOKEN ONCE, NOT ONCE PER COMPARISON (#639). `lower(normalize(t,
       -- NFC))` used to be written out at all THREE sites below — the equality, the byte gate and
@@ -308,7 +324,7 @@ AS $$
       --
       -- Semantically free: `lower` and `normalize` are IMMUTABLE, so one evaluation per query token
       -- yields the same string as one per pair.
-      JOIN (SELECT lower(normalize(t, NFC)) AS qt
+      JOIN (SELECT lower(normalize(t, NFC) COLLATE pg_unicode_fast) AS qt
               FROM unnest(COALESCE(p_name_tokens, ARRAY[]::text[])) AS t
              OFFSET 0) AS q
         ON toks.tok = q.qt

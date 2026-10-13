@@ -30,8 +30,8 @@ def _is_placeholder_name(n: Mapping) -> bool:
 def name_tokens(record: Mapping) -> set[str]:
     """NFC-normalised, lower-cased whitespace tokens across a record's NON-placeholder names.
 
-    Mirrors the SQL 'name' blocking pass (lower(normalize(value, NFC)) split on
-    whitespace) so this predicate agrees with what generate_candidate_pairs actually
+    Mirrors the SQL 'name' blocking pass (lower(normalize(value, NFC) COLLATE pg_unicode_fast)
+    split on whitespace) so this predicate agrees with what generate_candidate_pairs actually
     blocks on — including the NFC fold that lets NFD/NFC variants of a name co-block, and
     the §5.4 exclusion of placeholder-use (callsign) names (`use_key <> ALL(...)`). The
     placeholder set is imported from the shared `cairn_matcher.placeholder_uses` (the single
@@ -45,6 +45,9 @@ def name_tokens(record: Mapping) -> set[str]:
     for n in record.get("names", ()):
         if _is_placeholder_name(n):
             continue
+        # str.lower() is FULL Unicode case mapping (İ -> i + U+0307, word-final Σ -> ς), which
+        # is exactly what pg_unicode_fast applies — so this mirror and the SQL agree on every
+        # cluster since #775, where a libc-default lower() made them differ.
         tokens.update(unicodedata.normalize("NFC", str(n["value"])).lower().split())
     return tokens
 
