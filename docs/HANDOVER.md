@@ -12,17 +12,15 @@
 > §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
 > **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
 >
-> **⇒ ALSO OPEN (2026-10-13, third cloud tech-debt session): draft PR
-> [#776](https://github.com/cairn-ehr/cairn-ehr/pull/776) on branch `claude/festive-fermi-8j792j`** — one commit per
-> issue, each driven by a test that failed first: **#708** (a link/unlink judged from a comparison is signed only over
-> the records shown — `chart_link::RecordsShown`, re-read under CARNLK after the proposal-row lock; "Different people"
-> no longer silently overrules a colleague's attested link landing mid-judgement), **#713** (an interrupted judgement
-> COMMIT is `db_diagnosis::CommitOutcomeUnknown`; the window answers `Retry::AfterReread` — buttons gone, chart re-read
-> — never a live retry), **#569** (`restore_actor_registry` refuses a present row whose content differs; named-field
-> refusals for `actor_event_id` and `seq`), **#560** (export coverage waits out in-flight `event_log` writers —
-> `settled_clinical_watermark`; the issue's REPEATABLE READ fix would NOT have closed it), **#682** (NFC before
-> tokenising), **#509** (`establish-local-state-key` fails closed). Filed **#775** (a decision). PR #774 is merged.
-> Review + merge it.
+> **⇒ ALSO OPEN (2026-10-13, fourth cloud session): draft PR
+> [#779](https://github.com/cairn-ehr/cairn-ehr/pull/779) on branch `claude/festive-fermi-8j792j`** — the two decisions
+> the third session left, as the maintainer decided them: **#775** (option A: every name-lowercasing site — db/046's
+> four, `search_rank.rs`'s two, the matcher's blocking SQL — is `lower(normalize(x, NFC) COLLATE pg_unicode_fast)`, so
+> `İ`/Greek capitals case-map the same on every cluster; matcher **0.2.1** re-queues every chart once) and **#556**
+> (`segment_commitment` binds `attestation` + `attester_key` as tagged digests; goldens re-frozen IN PLACE, no revision
+> bump — the maintainer confirmed nothing is deployed). Filed **#778** (the sync wire can still strip a token) and
+> **#780** (`casefold()` for σ/ς, ß/ss — a design change touching signed tokens). PR #776 (#708, #713, #569, #560,
+> #682, #509) is merged. Review + merge #779.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
@@ -412,18 +410,23 @@
 >     #625, #631, #632, #633, #634.
 > 15. **⇒ THREE THINGS IN `db/046`'s PASS 3 LOOK LIKE NOISE AND ARE EACH WORTH HUNDREDS OF MS ON A PI (#639).** (a)
 >     **`OFFSET 0` is an optimisation fence** — removing it changes no result, so nothing fails. (b) **The lateral is
->     `UNION ALL` on purpose.** (c) **The parts-branch skip must test `lower(normalize(pn.value, NFC))`** — U+0130 `İ`
->     lowercases to `i` + U+0307; dropping `lower` LOSES A TOKEN (ICU only).
+>     `UNION ALL` on purpose.** (c) **The parts-branch skip must test the same `lower(normalize(pn.value, NFC) COLLATE
+>     pg_unicode_fast)` it splits** — U+0130 `İ` lowercases to `i` + U+0307; dropping `lower` LOSES A TOKEN.
 >     `the_subset_argument_holds_for_every_unicode_code_point` checks all 1,114,111 code points;
 >     `the_subset_probe_still_describes_the_query_db046_runs` pins the composed expression. **A probe list is a sample,
 >     not an argument; re-measure with `scripts/measure_patient_search.py`, do not reason.** Residuals #641, #640,
 >     #643, #637.
 > 16. **⇒ A GUARD AND THE THING IT GUARDS MUST BE ASKED ABOUT THE SAME STRING** — pin the COMPOSED expression as a
 >     literal (`include_str!` + `contains`), not its pieces.
-> 17. **⇒ LOCAL POSTGRES IS ICU, CI's IS libc, AND `lower()` DIFFERS** (full vs simple case mapping). Derive such rows
->     from the SERVER (`patient_search_equivalence.rs`'s `full_case_mapping`). To reproduce CI: `CREATE DATABASE
->     cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE 'en_US.UTF-8' ENCODING UTF8;` + `CREATE EXTENSION
->     cairn_pgx;`. **Any test touching case, collation or character classes runs against both before pushing.**
+> 17. **⇒ EVERY NAME `lower()` NAMES ITS COLLATION: `COLLATE pg_unicode_fast` (#775).** A bare `lower()` follows the
+>     cluster (ICU locally: full mapping; CI's libc `C.UTF-8`: simple — `İ`→`i`, `Σ`→`σ`), so a stored token and a
+>     typed one could case-map differently and a chart went unfindable. The COLLATE also moves the regex classes
+>     (`\s` = Unicode White_Space: NBSP now splits). Search side and sweep side (matcher `blocking_sql.py`) must move
+>     TOGETHER — the db/046 DRIFT invariant (sweep-paired ⊆ search-found) — and a matcher-side change bumps
+>     `__version__` (blocking SQL is not in the digest). Pins: `db046_names_the_collation_at_exactly_its_four_lowercasing_sites`,
+>     the drift fixtures, `test_eval_generator_sync.py`. A libc test DB is still the way to reproduce CI for anything
+>     else locale-shaped: `CREATE DATABASE cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE
+>     'en_US.UTF-8' ENCODING UTF8;` + `CREATE EXTENSION cairn_pgx;`.
 > 18. **⇒ A TARGETED `cargo test --test X` REPORTING `ok` IS NOT PROOF — ONLY THE SWEEP IS (#661).** A stale test
 >     binary (shared `target/`, a running rust-analyzer) reported `ok` twice against source it contradicts — silent
 >     and green. **Gate on the sweep**; `CARGO_TARGET_DIR=/tmp/…` when an IDE is open; re-run every CI gate in CI's
@@ -512,6 +515,25 @@ plain JS, no npm); pane/routing/freshness state machine tested but **not wired**
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
+
+### 2026-10-13 (fourth) — #775 option A and #556, as decided (cloud session, draft PR #779)
+
+- **⇒ A CASE-MAPPING CHANGE ON ONE SIDE OF A SUBSET INVARIANT BREAKS THE INVARIANT.** Option A was first scoped as
+  "search only, matcher untouched" — wrong: the sweep's blocking SQL must lowercase by the same rule or the drift
+  test's sweep-paired ⊆ search-found fails. Grep every `lower(` over names, in Rust, SQL AND Python, before claiming a
+  change is one-sided.
+- **⇒ A COLLATE moves more than `lower()`.** It changes what `\s` and `[:alnum:]` match for that input. Fixtures for
+  NBSP, Turkish `İ` and Greek capitals now sit in `patient_search_drift.rs`.
+- **⇒ A test that ranks "first" among zero rivals proves nothing.** The raw-capital ranking test first matched only the
+  target; it now has six older same-surname namesakes, and both query sites were mutation-checked.
+- **⇒ Never run matcher pytest while the cargo DB gate runs** — both load the schema into `cairn_test`; the collision
+  surfaced as a 40P01 deadlock in an unrelated restore test. **Disk:** a clean `target/` + `cairn-gui/target` filled
+  the allowance twice; delete both outright when it does (the rebuild is ~20 min).
+- **⇒ COMMITTED IS NOT VOUCHED.** #556 binds the token's bytes into the segment chain so stripping is detected; it does
+  not make an unvouched token (db/020's deferred arm) trustworthy. The sync wire is still unbound: **#778**.
+- Left for a decision: **#780** (`casefold()` for σ/ς and ß/ss, and the Python scorer's agreement); Turkish dotless `ı`
+  vs `YILMAZ` (a capital `I` lowercases to dotted `i` under every Unicode-default mapping — only a Turkish-tailored
+  comparator fixes it, which is the ADR-0014 profile's job, not db/046's).
 
 ### 2026-10-13 (third) — tech-debt pass (cloud session): #708, #713, #569, #560, #682, #509
 
