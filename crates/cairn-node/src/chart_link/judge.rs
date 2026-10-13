@@ -10,7 +10,7 @@
 
 use super::{
     admit_judgement, assert_link_in_tx, canonical_pair, compose_review_provenance,
-    record_holds_both, AdmitRefusal, LinkVerb, OpenedChart, Reviewer,
+    record_holds_both, AdmitRefusal, LinkVerb, OpenedChart, RecordsShown, Reviewer,
 };
 use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault, RefusalScope};
 use anyhow::Context;
@@ -101,7 +101,67 @@ pub async fn link_charts(
     reviewer: &Reviewer<'_>,
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
-    judge(client, LinkVerb::Link, a, b, None, reviewer, node_origin).await
+    judge(
+        client,
+        LinkVerb::Link,
+        a,
+        b,
+        None,
+        None,
+        reviewer,
+        node_origin,
+    )
+    .await
+}
+
+/// "Same person", judged from a COMPARISON: as [`link_charts`], but signed only while each
+/// chart's record still reads as `shown` — the two records the clinician compared (#708). A
+/// record that changed since (a peer's link or unlink landed) refuses the judgement as stale
+/// input, before anything is signed; see [`RecordsShown`].
+pub async fn link_charts_as_shown(
+    client: &mut tokio_postgres::Client,
+    a: Uuid,
+    b: Uuid,
+    shown: RecordsShown<'_>,
+    reviewer: &Reviewer<'_>,
+    node_origin: &str,
+) -> anyhow::Result<LinkOutcome> {
+    judge(
+        client,
+        LinkVerb::Link,
+        a,
+        b,
+        None,
+        Some(shown),
+        reviewer,
+        node_origin,
+    )
+    .await
+}
+
+/// "Not the same person" about two SEPARATE records the clinician compared ("Different people"
+/// on a possible duplicate): as [`unlink_charts`] with no `opened` chart, but signed only while
+/// each chart's record still reads as `shown` (#708). A colleague's link of the pair landing
+/// mid-judgement is refused here rather than silently overruled; see [`RecordsShown`].
+pub async fn unlink_charts_as_shown(
+    client: &mut tokio_postgres::Client,
+    a: Uuid,
+    b: Uuid,
+    shown: RecordsShown<'_>,
+    reviewer: &Reviewer<'_>,
+    node_origin: &str,
+) -> anyhow::Result<LinkOutcome> {
+    judge(
+        client,
+        LinkVerb::Unlink,
+        a,
+        b,
+        None,
+        Some(shown),
+        reviewer,
+        node_origin,
+    )
+    .await
 }
 
 /// "Not the same person": record the reviewer's attested judgement that two charts are two
@@ -136,6 +196,7 @@ pub async fn unlink_charts(
         a,
         b,
         opened,
+        None,
         reviewer,
         node_origin,
     )
@@ -166,13 +227,16 @@ fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
 /// The shared body of both entry points: pre-checks (legible refusals before anything is
 /// signed), then ONE transaction that writes the judgement AND reads back what it did — so
 /// once the commit succeeds there is nothing left that can fail. `opened`: the chart the
-/// judgement is made from, if the caller named one (see [`unlink_charts`]).
+/// judgement is made from, if the caller named one (see [`unlink_charts`]). `shown`: the two
+/// records the judgement was made over, if the caller compared them (see [`RecordsShown`]).
+#[allow(clippy::too_many_arguments)]
 async fn judge(
     client: &mut tokio_postgres::Client,
     verb: LinkVerb,
     a: Uuid,
     b: Uuid,
     opened: Option<Uuid>,
+    shown: Option<RecordsShown<'_>>,
     reviewer: &Reviewer<'_>,
     node_origin: &str,
 ) -> anyhow::Result<LinkOutcome> {
@@ -246,6 +310,7 @@ async fn judge(
         low,
         high,
         filed,
+        shown,
         &provenance,
         None,
         reviewer,

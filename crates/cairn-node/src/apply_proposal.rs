@@ -147,6 +147,7 @@ pub async fn apply_accepted_proposal(
         low,
         high,
         crate::chart_link::FiledUnder::Subject(low), // subject_a = low: the C1 convention, unchanged by R2a
+        None, // an accepted proposal's charts were not compared on a screen here
         &provenance,
         Some(&confidence),
         &reviewer,

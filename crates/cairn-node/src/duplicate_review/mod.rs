@@ -15,7 +15,9 @@
 //! Nothing here links, and nothing here writes a proposal status: `chart_link::unlink_charts`
 //! writes the event and moves the proposal, in its own transaction, as it does for R2b-2.
 
-use crate::chart_link::{canonical_pair, unlink_charts, LinkOutcome, Reviewer};
+use crate::chart_link::{
+    canonical_pair, unlink_charts_as_shown, LinkOutcome, RecordsShown, Reviewer,
+};
 use crate::patient::person::person_charts;
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
@@ -308,7 +310,8 @@ pub enum DifferentPeople {
 /// banner showed, which may be stale. The two chart SETS are the caller's: it must pass sets it
 /// has just read (the window re-reads both and refuses one that changed since the comparison),
 /// because a pair joining a chart outside them is not looked for. Each is
-/// `unlink_charts(low, high, None, …)`: a proposal's charts are normally both held here, so the
+/// `unlink_charts_as_shown(low, high, {left, right}, …)` — `unlink_charts` with no open chart, signed
+/// only while both records still read as the caller's sets (#708): a proposal's charts are normally both held here, so the
 /// judgement files under a subject, and a pair whose in-record side is a linked member — not
 /// the chart on screen — is judged the same way (#699 (a)'s third-chart filing is for unlinking
 /// a standing link, not a proposal). A proposal CAN name a chart not held here — the matcher
@@ -345,7 +348,13 @@ pub async fn record_different_people(
     }
     let mut judged = Vec::with_capacity(pairs.len());
     for (low, high) in pairs {
-        let outcome = unlink_charts(client, low, high, None, reviewer, node_origin).await;
+        // Signed only while both records still read as `left` and `right` (#708): a colleague's
+        // link of this pair landing by sync mid-judgement is refused, never silently overruled.
+        let shown = RecordsShown {
+            this: left,
+            other: right,
+        };
+        let outcome = unlink_charts_as_shown(client, low, high, shown, reviewer, node_origin).await;
         judged.push(PairJudgement { low, high, outcome });
     }
     Ok(DifferentPeople::Judged(judged))
