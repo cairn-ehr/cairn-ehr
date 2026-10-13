@@ -413,6 +413,11 @@ BEGIN
     --     unwrap-key-missing case is downgraded to a WARNING + skip (NOT the strict
     --     door's RAISE): a pulling node that never registered its unwrap key must still
     --     ADMIT the event, just without shred capability, rather than lose it.
+    --     cairn_lock_custody FIRST (#604; db/005 says why): a shred of this event still open in
+    --     another transaction must commit before the NOT EXISTS below reads the shred log.
+    IF v_sealed AND v_inner IS NOT NULL THEN
+        PERFORM cairn_lock_custody(v_event_id);
+    END IF;
     IF v_sealed AND v_inner IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM erasure_shred_log WHERE target_event_id = v_event_id) THEN
         SELECT unwrap_pub INTO v_pub FROM node_unwrap_key;

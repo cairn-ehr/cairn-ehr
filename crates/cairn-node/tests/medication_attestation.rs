@@ -1349,8 +1349,8 @@ async fn local_attestation_filed_under_another_chart_is_refused() {
 /// fork the event set and freeze this node's pull at it (ADR-0056). Which chart a thread
 /// lives on is node-local knowledge — it depends on what has synced so far — so this check
 /// belongs to the strict door alone, as db/031's #192 guard and db/033's cross-patient
-/// guard do. The remote door admits it. Unlike those two, nothing yet FLAGS the admitted
-/// misfiling (they write a conflict flag / feed a cross-patient view) — that is #768.
+/// guard do. The remote door admits it; what it owes instead is a trace, which is #768's
+/// `a_misfiled_peer_attestation_is_listed_and_never_reads_as_signed` below.
 #[tokio::test]
 async fn remote_attestation_filed_under_another_chart_is_admitted_not_refused() {
     let Some(base) = cs() else {
@@ -1381,6 +1381,137 @@ async fn remote_attestation_filed_under_another_chart_is_admitted_not_refused() 
         .unwrap()
         .get(0);
     assert_eq!(n, 1, "the peer's attestation is in the log");
+}
+
+/// The rows `medication_attestation_misfiled` lists for one thread, as
+/// `(filed_under, thread_chart)`.
+async fn misfiled_rows(c: &Client, medication_id: Uuid) -> Vec<(Uuid, Uuid)> {
+    c.query(
+        "SELECT filed_under::text, thread_chart::text FROM medication_attestation_misfiled \
+         WHERE medication_id = $1::text::uuid ORDER BY hlc_wall, hlc_counter",
+        &[&medication_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| {
+        (
+            r.get::<_, String>(0).parse().unwrap(),
+            r.get::<_, String>(1).parse().unwrap(),
+        )
+    })
+    .collect()
+}
+
+/// `medication_thread_attestation.stale` for one thread — what the list reads to decide
+/// "signed" versus "out of date" (`read_member_vouches`).
+async fn thread_vouch_stale(c: &Client, medication_id: Uuid) -> Option<bool> {
+    c.query_opt(
+        "SELECT stale FROM medication_thread_attestation WHERE medication_id = $1::text::uuid",
+        &[&medication_id.to_string()],
+    )
+    .await
+    .unwrap()
+    .map(|r| r.get(0))
+}
+
+/// Apply an attestation body through the SYNC door, as a peer's event arrives.
+async fn apply_attestation_as_peer(c: &Client, body: &EventBody, sk_h: &SigningKey, kid_h: &str) {
+    let w = sealed_attested_wire(body, sk_h, kid_h);
+    c.execute(
+        "SELECT apply_remote_event($1, $2, $3, $4)",
+        &[&w.signed, &w.token, &w.attester_key, &w.dek.as_slice()],
+    )
+    .await
+    .expect("the sync door admits a peer's verifiable attestation");
+}
+
+/// #768 — the admitted misfiling is SURFACED, and it never reads as a current signature.
+///
+/// The remote door must admit a peer's attestation of chart A's thread filed under chart B
+/// (the test above). Before #768 nothing said so anywhere, and worse than silent:
+/// `medication_thread_attestation` picks the latest vouch per THREAD, whatever chart it was
+/// filed under, so the commitment matched and chart A's list showed "signed" — a clinician's
+/// signature over chart A that they gave while looking at chart B. Now:
+/// 1. `medication_attestation_misfiled` NAMES the vouch, the chart it was filed under and the
+///    chart its thread lives on (read-time, like db/033's cross-patient view — so it lights
+///    up whichever of the two events arrives second);
+/// 2. the thread's vouch reads STALE, so the list asks for a fresh signature (ADR-0049's rule:
+///    uncertainty may only WITHHOLD "fresh");
+/// 3. a correctly filed vouch made afterwards restores "signed", and the misfiled one stays
+///    listed — it is history, never erased.
+#[tokio::test]
+async fn a_misfiled_peer_attestation_is_listed_and_never_reads_as_signed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let (thread_chart, other_chart, medication_id) =
+        thread_on_one_of_two_charts(&mut c, &sk_d, &kid_d).await;
+
+    let misfiled = attestation_filed_under(&c, other_chart, medication_id, &kid_h).await;
+    apply_attestation_as_peer(&c, &misfiled, &sk_h, &kid_h).await;
+
+    assert_eq!(
+        misfiled_rows(&c, medication_id).await,
+        vec![(other_chart, thread_chart)],
+        "the misfiled vouch is listed, naming the chart it was filed under and the thread's own"
+    );
+    assert_eq!(
+        thread_vouch_stale(&c, medication_id).await,
+        Some(true),
+        "A VOUCH FILED UNDER ANOTHER CHART IS NOT A SIGNATURE ON THIS ONE: its commitment \
+         matches the thread, so before #768 this read false and the list showed 'signed'"
+    );
+
+    // The repair is the ordinary gesture: sign again, on the right chart.
+    let good = attestation_filed_under(&c, thread_chart, medication_id, &kid_h).await;
+    apply_attestation_as_peer(&c, &good, &sk_h, &kid_h).await;
+    assert_eq!(
+        thread_vouch_stale(&c, medication_id).await,
+        Some(false),
+        "a correctly filed vouch afterwards reads as a current signature"
+    );
+    assert_eq!(
+        misfiled_rows(&c, medication_id).await,
+        vec![(other_chart, thread_chart)],
+        "the misfiled vouch stays listed: the event is history (never erase, always overlay)"
+    );
+}
+
+/// #768 — a vouch for a thread this node does not hold cannot evidence a misfiling (principle
+/// 4: no data is never disagreement), exactly as the strict door lets it pass. Its thread
+/// reads nothing until it arrives (`orphan_attestation_renders_nothing_until_thread_arrives`).
+#[tokio::test]
+async fn an_attestation_for_an_unknown_thread_is_not_called_misfiled() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_d, kid_d, sk_h, kid_h) = setup(&c).await;
+    let chart = Uuid::now_v7();
+    common::submit_registration(&c, &sk_d, &kid_d, chart, 0).await;
+
+    let unknown_thread = Uuid::now_v7();
+    let hlc = db::next_hlc(&c, "test-node").await.unwrap();
+    let payload = serde_json::json!({
+        "medication_id": unknown_thread.to_string(),
+        "reviewed_commitment": placeholder_commitment_hex(),
+        "reviewed_count": 1,
+    });
+    let body = build_attestation_body(Uuid::now_v7(), chart, payload, &kid_h, hlc);
+    apply_attestation_as_peer(&c, &body, &sk_h, &kid_h).await;
+
+    assert_eq!(
+        misfiled_rows(&c, unknown_thread).await,
+        vec![],
+        "a thread whose chart is unknown here cannot contradict the chart the vouch names"
+    );
 }
 
 // ---------------------------------------------------------------------------

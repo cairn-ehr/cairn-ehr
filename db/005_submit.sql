@@ -363,8 +363,15 @@ AS $$
 DECLARE v_row event_log;
 BEGIN
     SELECT * INTO v_row FROM event_log WHERE event_id = p_event_id;
+    -- FAIL CLOSED (#608). Both doors call this only after their own INSERT found the row, so this
+    -- arm is unreachable today. Reaching it would mean the log disagrees with what the door just
+    -- read, and the old `RETURN` let the door report a landed key whose record never reached the
+    -- chart — the same fail-open shape as the `<>` substitution guards db/053 replaced. A BARE
+    -- raise (P0001), not `USING ERRCODE`: floor_refusals_carry_no_errcode.rs (#633) forbids an
+    -- explicit SQLSTATE anywhere in db/, and this file must not join its allow-list.
     IF NOT FOUND THEN
-        RETURN; -- defensive: both doors call this only after their own INSERT
+        RAISE EXCEPTION 'cairn_project_late_custody: event % has no event_log row, although the calling door just read it — refusing rather than reporting custody that never reached the chart (#608)',
+            p_event_id;
     END IF;
     IF NOT cairn_replay_eligible(v_row) THEN
         RETURN;
@@ -373,6 +380,55 @@ BEGIN
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_project_late_custody(uuid) FROM PUBLIC;
+
+-- #604 — ONE event's custody GRANT and its SHRED never interleave.
+--
+-- WHY THIS EXISTS. Two writers decide whether event E has custody on this node:
+--   * a door granting it (step 9 of submit_event / apply_remote_event), which first checks
+--     NOT EXISTS (erasure_shred_log row for E) — anti-resurrection — and then writes event_dek +
+--     event_clear (and, via cairn_project_late_custody, E's projection rows);
+--   * cairn_execute_shred (db/037), which records the shred-log row and deletes all of that.
+-- Under READ COMMITTED neither can see the other's UNCOMMITTED rows. Without a lock, a key landing
+-- while a shred of E is still open saw no shred row and granted custody; a shred landing while a
+-- key was still open deleted nothing it could see. Either way both committed and E's body was
+-- readable again under a recorded crypto-shred — the one promise ADR-0005 / ADR-0052 make about
+-- erasure. Both are pinned by crates/cairn-node/tests/shred_custody_race.rs.
+--
+-- HOW. Both writers take this lock BEFORE they read or touch E's custody. The second to arrive
+-- waits for the first to commit or roll back, and because PL/pgSQL gives every later statement a
+-- FRESH snapshot under READ COMMITTED, its anti-resurrection check (or its scrub) then reads the
+-- other's committed rows. A transaction-scoped advisory lock, released at COMMIT/ROLLBACK: nothing
+-- to clean up, and nothing held across transactions.
+--
+-- THE KEY is per event (hashtextextended over a namespaced string, the db/004 precedent), so
+-- unrelated events never wait for each other; a hash collision costs only an unnecessary wait.
+--
+-- WHAT IT DOES NOT COVER.
+--   * Two READERS of event_clear that write projections without taking this lock: the heal-mode
+--     cairn_reproject (db/039) and deferred re-adjudication's gate 4 (db/043). Either can still
+--     re-project a record a concurrent shred is scrubbing — custody stays gone, the projection row
+--     comes back. Issue #773.
+--   * REPEATABLE READ: there the snapshot is fixed at the transaction's first
+-- statement, so the waiting side still reads the pre-wait state. Every door caller in the tree runs
+-- READ COMMITTED (the server default); SERIALIZABLE is covered by SSI instead (the two sides form a
+-- read/write cycle and one aborts with 40001). A caller that raises the isolation level to
+-- REPEATABLE READ around a door reopens this race.
+--
+-- DEADLOCK SHAPE (accepted, unreachable today). Within one event the order is always this lock,
+-- then any projection lock (CARNMR, db/033), then the hlc_state row the sync door merges into last.
+-- A transaction that applied SEVERAL events would hold hlc_state (or CARNMR) from an earlier one
+-- when it takes E's lock for a later one, and could meet a single-event shred of E that holds E's
+-- lock and wants hlc_state — the hot one. Postgres aborts one side with 40P01, a retryable failure
+-- that writes nothing. Every product caller (pull, requeue, restore) applies one event per
+-- statement, so a caller that starts batching events into one transaction must revisit this.
+CREATE OR REPLACE FUNCTION cairn_lock_custody(p_event_id uuid)
+RETURNS void LANGUAGE sql
+SET search_path = public, pg_temp
+AS $$
+    SELECT pg_advisory_xact_lock(hashtextextended('cairn.custody:' || p_event_id::text, 0));
+$$;
+-- Called only by the SECURITY DEFINER doors and the shred executor, which run as the owner.
+REVOKE EXECUTE ON FUNCTION cairn_lock_custody(uuid) FROM PUBLIC;
 
 -- Skeleton plaintext twin: the mechanical §3.13 fallback rendering. Kept as its own
 -- helper so the per-type twin hook below can fall back to it without duplicating the
@@ -1486,6 +1542,13 @@ BEGIN
     --     INSERT projection triggers can already read the shadow (same txn).
     --     An already-shredded target gets NEITHER: set-union may re-deliver the
     --     row forever, but custody never resurrects (arrival-order independence).
+    --     cairn_lock_custody FIRST (#604): a shred of this event still open in another
+    --     transaction must commit before the NOT EXISTS below reads the shred log, or the check
+    --     passes on a shred it cannot yet see. Taken only for a sealed event — nothing else has
+    --     custody to resurrect.
+    IF v_sealed THEN
+        PERFORM cairn_lock_custody(v_event_id);
+    END IF;
     IF v_sealed AND NOT EXISTS (SELECT 1 FROM erasure_shred_log WHERE target_event_id = v_event_id) THEN
         SELECT unwrap_pub INTO v_pub FROM node_unwrap_key;
         IF v_pub IS NULL THEN

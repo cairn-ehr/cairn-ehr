@@ -194,6 +194,34 @@ $$;
 -- yields its original and its extracted text (ADR-0060, applied where it does fit — these ARE
 -- independent lines).
 --
+-- TWO PHASES, AND THE SPLIT IS THE POINT (#464). Phase 1 VALIDATES every rendition, each in its
+-- own `BEGIN … EXCEPTION` block, and only collects into local arrays: the well-formed references
+-- to learn, the faults to record. Phase 2 then WRITES both, outside any handler.
+--
+-- Why: in PL/pgSQL an exception block is a subtransaction, and a subtransaction that WRITES is
+-- assigned an XID. The first version wrote inside the per-rendition block, so a peer event with N
+-- renditions assigned N subtransaction XIDs. A backend caches only 64 (PGPROC_MAX_CACHED_SUBXIDS);
+-- past that its snapshot is suboverflowed and EVERY concurrent snapshot on the cluster sends
+-- pg_subtrans lookups to disk. Nothing bounds N below the 8 MB envelope (cairn_max_event_bytes,
+-- db/001) — on the order of 10^5 minimal renditions — so one signed event at the sync door, from
+-- an honest 2 000-page scan import or a hostile peer alike, could slow the whole cluster with
+-- nothing logged. A block that only reads assigns no XID, so phase 1 costs a savepoint per
+-- rendition and NO subxid-cache entry, whatever N is.
+--
+-- MEASURED PROPERTY (not an assumption about typical N): a 200-rendition peer event leaves the
+-- applying backend with 64 cached subxids, overflowed, under the old shape, and with none under
+-- this one — pinned by attachment_reference_shape.rs's
+-- `many_renditions_open_no_subtransaction_xid_per_rendition`, which reads
+-- pg_stat_get_backend_subxact before COMMIT. Phase 1's savepoints and phase 2's writes are still
+-- O(N) work; what is bounded is the cluster-wide effect, which is what made N a peer's lever.
+--
+-- PHASE 2 RUNS OUTSIDE EVERY HANDLER, which is also strictly safer than before: a failure in
+-- blob_note_reference or the recorder now propagates to the door instead of being caught. That
+-- matters for the warning below — under the old shape, a P0001 from INSIDE blob_note_reference
+-- (db/026's present-guard, were its WHEN clause ever widened) would have been laundered into the
+-- ledger as "the peer sent a malformed reference". Now nothing but the db/027 accessors and the
+-- traversal ever runs inside a handler.
+--
 -- ⚠️ `WHEN raise_exception` IS NARROW ON PURPOSE, AND `WHEN OTHERS` HERE WOULD BE A DISASTER.
 -- `WHEN OTHERS` would write a disk error, a serialization failure or a broken constraint into
 -- the ledger as "the peer sent a malformed reference" and then admit the event as though
@@ -201,27 +229,25 @@ $$;
 -- robbed of the non-P0001 SQLSTATE it needs to treat the failure as transient and RETRY.
 -- (`OTHERS` also does not catch a statement timeout: 57014 query_canceled is one of the two
 -- codes it excludes — the Slice 68 lesson.) Measured on PG 18.1: a 22-class error raised
--- inside this block propagates past the handler untouched, and
+-- inside this function propagates untouched, and
 -- `the_lenient_learner_does_not_swallow_a_real_fault` pins it with an injected fault.
 --
--- ⚠️ BUT P0001 IS NOT A SYNONYM FOR "OUR ACCESSORS", AND AN EARLIER DRAFT SAID IT WAS.
--- The precise reason this narrow catch is safe today is: the only P0001 reachable inside the
--- inner block comes from db/027's accessors, because `blob_note_reference` (db/003) is plain
--- SQL and the one trigger on `blob_store` that raises bare — db/026's `cairn_blob_present_guard`
--- — is declared `FOR EACH ROW WHEN (NEW.present)`, and `blob_note_reference` writes a row with
--- `present` defaulted FALSE. THAT CONDITION LIVES IN ANOTHER FILE. Widen db/026's WHEN clause,
--- or teach blob_note_reference to set `present`, and a wrong-bytes-under-a-content-address
--- integrity refusal — the seam ADR-0013 names as this tier's safety-critical one — is silently
--- rewritten as "the peer sent a malformed reference" and the event admitted. Pinned by
--- `the_blob_present_guard_stays_out_of_reach_of_the_lenient_catch` in the Rust suite, which
--- fails if that WHEN clause moves.
+-- ⚠️ P0001 IS NOT A SYNONYM FOR "OUR ACCESSORS", AND AN EARLIER DRAFT SAID IT WAS. The narrow
+-- catch is safe because the only P0001 reachable inside phase 1's blocks comes from db/027's
+-- accessors and traversal. Since #464 blob_note_reference no longer runs inside a handler at all,
+-- so db/026's `cairn_blob_present_guard` (`FOR EACH ROW WHEN (NEW.present)`) is out of the catch's
+-- reach structurally, not only by that WHEN clause.
+-- `the_blob_present_guard_stays_out_of_reach_of_the_lenient_catch` still pins the clause: it is
+-- the second line of defence, and the reason the old shape was safe at all.
 --
 -- The OUTER handler catches the ONE fault that has no attachment to name: `attachments` itself
 -- not being a list. A malformed `renditions` list is NOT caught here — db/027's traversal
 -- returns it as a fault row so its siblings still learn and the flag names its attachment.
--- Nothing has been learned when the outer handler fires, because a set-returning PL/pgSQL
--- function materialises before its first row is returned — and here that costs nothing, since a
--- non-list `attachments` had nothing learnable in it.
+-- When the outer handler fires, phase 1 has collected nothing: a set-returning PL/pgSQL
+-- function materialises before its first row is returned, and a non-list `attachments` had
+-- nothing learnable in it. The arrays are reset there all the same, so the claim "nothing is
+-- learned from a body whose attachments were unreadable" holds by construction, not by that
+-- materialisation detail.
 --
 -- A NEW NAME rather than a second signature: `CREATE OR REPLACE FUNCTION` matches on the
 -- argument list, so adding a parameter to cairn_learn_attachment_refs would create an OVERLOAD
@@ -234,34 +260,63 @@ DECLARE
     v_door CONSTANT text := 'cairn_learn_attachment_refs_lenient';
     v_event_id uuid := (b ->> 'event_id')::uuid;
     v_detail text;
+    -- Phase 1's output. Parallel arrays: element i of the three ref_* arrays is one reference to
+    -- learn; element i of the three flag_* arrays is one fault to record.
+    v_ref_address    bytea[]  := '{}';
+    v_ref_media_type text[]   := '{}';
+    v_ref_byte_len   bigint[] := '{}';
+    v_flag_att       int[]    := '{}';
+    v_flag_rend      int[]    := '{}';
+    v_flag_reason    text[]   := '{}';
+    -- One rendition's validated fields, assigned inside the block so a refusal by the second or
+    -- third accessor leaves nothing half-collected for that rendition.
+    v_address    bytea;
+    v_media_type text;
+    v_byte_len   bigint;
 BEGIN
+    -- PHASE 1 — validate and collect. Nothing in here writes.
     BEGIN
         FOR rec IN SELECT * FROM cairn_by_reference_renditions(b, v_door) LOOP
             -- A whole attachment whose renditions were not a list. Its index EXISTS, so the
             -- flag names it; recording NULL here would be a precise untruth (principle 4).
             IF rec.fault IS NOT NULL THEN
-                PERFORM cairn_record_attachment_reference_flag(
-                    v_event_id, rec.attachment_index, NULL,
-                    cairn_flag_reason_text(rec.fault, rec.fault_detail));
+                v_flag_att    := v_flag_att    || rec.attachment_index;
+                v_flag_rend   := v_flag_rend   || NULL::int;
+                v_flag_reason := v_flag_reason || cairn_flag_reason_text(rec.fault, rec.fault_detail);
                 CONTINUE;
             END IF;
             BEGIN
-                PERFORM blob_note_reference(
-                    cairn_rendition_address(rec.rendition, v_door),
-                    cairn_rendition_media_type(rec.rendition, v_door),
-                    cairn_rendition_byte_len(rec.rendition, v_door));
+                v_address    := cairn_rendition_address(rec.rendition, v_door);
+                v_media_type := cairn_rendition_media_type(rec.rendition, v_door);
+                v_byte_len   := cairn_rendition_byte_len(rec.rendition, v_door);
+                v_ref_address    := v_ref_address    || v_address;
+                v_ref_media_type := v_ref_media_type || v_media_type;
+                v_ref_byte_len   := v_ref_byte_len   || v_byte_len;
             EXCEPTION WHEN raise_exception THEN
                 GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-                PERFORM cairn_record_attachment_reference_flag(
-                    v_event_id, rec.attachment_index, rec.rendition_index,
-                    cairn_flag_reason_text(SQLERRM, v_detail));
+                v_flag_att    := v_flag_att    || rec.attachment_index;
+                v_flag_rend   := v_flag_rend   || rec.rendition_index;
+                v_flag_reason := v_flag_reason || cairn_flag_reason_text(SQLERRM, v_detail);
             END;
         END LOOP;
     EXCEPTION WHEN raise_exception THEN
         GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
-        PERFORM cairn_record_attachment_reference_flag(
-            v_event_id, NULL, NULL, cairn_flag_reason_text(SQLERRM, v_detail));
+        v_ref_address    := '{}';
+        v_ref_media_type := '{}';
+        v_ref_byte_len   := '{}';
+        v_flag_att    := ARRAY[NULL::int];
+        v_flag_rend   := ARRAY[NULL::int];
+        v_flag_reason := ARRAY[cairn_flag_reason_text(SQLERRM, v_detail)];
     END;
+
+    -- PHASE 2 — write, outside every handler: one XID for the whole event (the door's own).
+    FOR i IN 1 .. cardinality(v_ref_address) LOOP
+        PERFORM blob_note_reference(v_ref_address[i], v_ref_media_type[i], v_ref_byte_len[i]);
+    END LOOP;
+    FOR i IN 1 .. cardinality(v_flag_reason) LOOP
+        PERFORM cairn_record_attachment_reference_flag(
+            v_event_id, v_flag_att[i], v_flag_rend[i], v_flag_reason[i]);
+    END LOOP;
 END;
 $$;
 

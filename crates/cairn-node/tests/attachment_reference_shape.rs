@@ -978,6 +978,107 @@ async fn the_lenient_learner_does_not_swallow_a_real_fault() {
     );
 }
 
+/// **#464 — one peer event must not open a subtransaction XID per rendition.**
+///
+/// The lenient learner wraps each rendition in `BEGIN … EXCEPTION`, which in PL/pgSQL is a
+/// subtransaction; when that block also WRITES (`blob_note_reference`, or the flag recorder) the
+/// subtransaction is assigned an XID. A backend caches at most 64 of those (`PGPROC_MAX_CACHED_
+/// SUBXIDS`); past that its snapshot is *suboverflowed* and every concurrent snapshot on the
+/// CLUSTER starts sending `pg_subtrans` lookups to disk. Nothing bounds the renditions a signed
+/// peer event may carry below the 8 MB envelope (on the order of 10⁵), so one honest 2 000-page
+/// scan import — or one hostile peer — could slow the whole cluster from the sync door.
+///
+/// 200 renditions, every fourth malformed, are applied in one transaction, and the backend's own
+/// subtransaction state is read before COMMIT (`pg_stat_get_backend_subxact`, PG ≥ 16). Before the
+/// fix: 64 cached and overflowed. After: the per-rendition blocks only VALIDATE (no writes, so no
+/// XID) and the writes happen once, outside any handler. The behaviour assertions — every good
+/// reference learned, every bad one flagged by position — pin that the refactor changed the cost
+/// and nothing else.
+#[tokio::test]
+async fn many_renditions_open_no_subtransaction_xid_per_rendition() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = enrolled_signer(&c).await;
+
+    // `seed` numbers the rendition; a malformed one gets a non-hex digest.
+    const RENDITIONS: usize = 200;
+    let digest_of = |seed: usize| -> String {
+        if seed % 4 == 3 {
+            format!("0xBAD{seed}")
+        } else {
+            format!("1e2077{seed:08x}")
+        }
+    };
+    let good: Vec<String> = (0..RENDITIONS)
+        .filter(|i| i % 4 != 3)
+        .map(digest_of)
+        .collect();
+    for hex in &good {
+        c.execute(
+            "DELETE FROM blob_store WHERE blob_address = decode($1, 'hex')",
+            &[hex],
+        )
+        .await
+        .unwrap();
+    }
+
+    let mut body = note_with_digest(&kid, Uuid::now_v7(), &digest_of(0));
+    body.attachments[0].renditions = (0..RENDITIONS)
+        .map(|i| rendition("page", &digest_of(i)))
+        .collect();
+    let signed = sign(&body, &sk).unwrap().signed_bytes;
+
+    c.batch_execute("BEGIN").await.unwrap();
+    c.execute("SELECT apply_remote_event($1)", &[&signed])
+        .await
+        .expect("the event is admitted");
+    let row = c
+        .query_one(
+            "SELECT s.subxact_count, s.subxact_overflowed              FROM pg_stat_get_backend_idset() AS b(id),                   LATERAL pg_stat_get_backend_subxact(b.id) AS s              WHERE pg_stat_get_backend_pid(b.id) = pg_backend_pid()",
+            &[],
+        )
+        .await
+        .unwrap();
+    let (subxacts, overflowed): (i32, bool) = (row.get(0), row.get(1));
+    c.batch_execute("COMMIT").await.unwrap();
+
+    assert!(
+        !overflowed && subxacts < 8,
+        "one peer event with {RENDITIONS} renditions left this backend with {subxacts} cached \
+         subtransaction XIDs (overflowed = {overflowed}): a per-rendition write inside an \
+         exception block, and past 64 every snapshot on the cluster is suboverflowed (#464)"
+    );
+
+    let learned: i64 = c
+        .query_one(
+            "SELECT count(*) FROM blob_store              WHERE blob_address = ANY (SELECT decode(h, 'hex') FROM unnest($1::text[]) AS h)",
+            &[&good],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        learned as usize,
+        good.len(),
+        "every well-formed reference is still learned (ADR-0060: one bad line never \
+         invalidates another)"
+    );
+    let flags = flags_for(&c, &body.event_id).await;
+    let flagged: Vec<Option<i32>> = flags.iter().map(|f| f.1).collect();
+    let expected: Vec<Option<i32>> = (0..RENDITIONS as i32)
+        .filter(|i| i % 4 == 3)
+        .map(Some)
+        .collect();
+    assert_eq!(
+        flagged, expected,
+        "every malformed rendition is flagged, BY POSITION — name, never count"
+    );
+}
+
 // Shared scaffolding, for `submit_registration`: since #345 the first event on a chart must
 // be its registration, so every suite that mints a patient arranges one (#120/#327 — one copy).
 mod common;

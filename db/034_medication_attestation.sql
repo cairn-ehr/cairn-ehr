@@ -111,8 +111,10 @@ BEGIN
     -- like this one or db/041's coding sub-tier can tell the doors apart; deferred
     -- re-adjudication (db/043) raises it too. submit_event pins it off (#602), so a client
     -- cannot switch this refusal off by raising the marker itself.
-    -- KNOWN GAP (#768): unlike db/031's guard (a conflict flag) and db/033's (a cross-patient
-    -- view), the admitted misfiling is not yet surfaced anywhere on the sync-door path.
+    -- The lenient arm's trace (#768): unlike db/031's guard (a conflict flag) the admitted
+    -- misfiling is surfaced at READ time, as db/033's cross-patient check is — the
+    -- medication_attestation_misfiled view (section 7b) names it, and
+    -- medication_thread_attestation reads such a vouch as stale, never as a signature.
     --
     -- A thread not known here passes (principle 4: the attestation may arrive before the
     -- thread — see orphan_attestation_renders_nothing_until_thread_arrives). A plain RAISE
@@ -398,11 +400,57 @@ SELECT DISTINCT ON (a.medication_id)
        a.hlc_counter  AS attested_counter,
        a.reviewed_count,
        (cairn_medication_thread_readable_count(a.medication_id) < a.reviewed_count
-        OR cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment)
+        OR cairn_medication_thread_commitment(a.medication_id) IS DISTINCT FROM a.reviewed_commitment
+        -- #768: a vouch filed under a chart its thread does not live on (a peer's, admitted by
+        -- the sync door; the strict door refuses it) is NOT a signature on the thread's chart —
+        -- the clinician gave it while looking at another patient. Its commitment can match
+        -- exactly, so without this the list read "signed". Forced stale: uncertainty may only
+        -- WITHHOLD fresh (ADR-0049), and "out of date — sign again" is the right remedy. Same
+        -- predicate as medication_attestation_misfiled (7b): an UNKNOWN thread chart is never
+        -- disagreement, hence COALESCE to false rather than letting NULL decide.
+        OR COALESCE(cairn_medication_thread_patient(a.medication_id) <> a.patient_id, false))
            AS stale
 FROM medication_attestation a
 ORDER BY a.medication_id, a.hlc_wall DESC, a.hlc_counter DESC, a.content_address DESC;
 GRANT SELECT ON medication_thread_attestation TO cairn_agent;
+
+-- 7b. #768 — every vouch filed under a chart its thread does not live on.
+--
+--    The strict door refuses this (#689, cairn_check_medication_attestation above); the SYNC
+--    door must admit it, because where a thread lives is node-local knowledge and refusing a
+--    peer's verifiable event forks the event set (ADR-0056). This view is the trace the lenient
+--    arm owes, as db/031's #192 guard leaves a conflict flag and db/033 leaves
+--    medication_group_cross_patient. A VIEW, not a ledger row written at admission, for the
+--    reason db/033 chose one: the contradiction appears when EITHER event arrives second — the
+--    thread may land after its vouch — and a read-time join sees it whichever order they came
+--    in. (Slice 68's rule — flag what cannot self-heal, view what can — points the same way:
+--    a later correct re-signature repairs the standing vouch, so the hazard is not permanent.)
+--
+--    The thread's chart comes from cairn_medication_thread_patient, the SAME source the strict
+--    door's check and every #192 guard read. A thread whose chart is unknown here contributes
+--    nothing: no data is never disagreement (principle 4), and the strict door passes it too.
+--
+--    It NAMES each vouch (never a count): which attestation, by whom, filed where, belonging
+--    where. A row stays listed after a correct re-signature — the event is history (never
+--    erase); what changes is that the thread's standing vouch reads fresh again. The same
+--    predicate is folded into `stale` in medication_thread_attestation (section 7, above), and
+--    THAT is what puts it on the list a clinician reads — a view alone would be a signal that
+--    reaches nobody (#606).
+CREATE OR REPLACE VIEW medication_attestation_misfiled AS
+SELECT a.event_id AS attestation_event_id,
+       a.medication_id,
+       a.patient_id   AS filed_under,
+       tp.patient_id  AS thread_chart,
+       a.attester_kid,
+       a.hlc_wall,
+       a.hlc_counter
+FROM medication_attestation a
+CROSS JOIN LATERAL (
+    SELECT cairn_medication_thread_patient(a.medication_id) AS patient_id
+) tp
+WHERE tp.patient_id IS NOT NULL
+  AND tp.patient_id <> a.patient_id;
+GRANT SELECT ON medication_attestation_misfiled TO cairn_agent;
 
 -- 8. Group rollup (conservative): a reconciled group is "attested & current" iff
 --    EVERY member thread has a non-stale attestation. Singletons (group_id =

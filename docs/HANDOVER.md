@@ -12,11 +12,14 @@
 > §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
 > **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
 >
-> **⇒ ALSO OPEN (2026-10-12, cloud tech-debt session): draft PR [#770](https://github.com/cairn-ehr/cairn-ehr/pull/770)**
-> (branch `claude/cool-archimedes-cmk20o`): #626's cairn-sync half (a deterministic no-verdict apply failure is PENNED,
-> not frozen — also settles #534, left open for the maintainer), #727 (a failed bulk sweep falls back to per-chart, the
-> sweep held in the `RetryBook`), #536 (`custody_unopenable` metric + per-page line; `RewrapFailure` names the failing
-> re-wrap step). Follow-up filed: #769 (one home for the SQLSTATE classifier). Review + merge it.
+> **⇒ ALSO OPEN (2026-10-13, cloud tech-debt session): draft PR on branch `claude/dreamy-archimedes-99l8dg`** —
+> one commit per issue: **#604** (a shred and a late key for one event serialise on `cairn_lock_custody`, a per-event
+> advisory xact lock — both interleavings reproduced red first), **#608**'s late-custody half (the not-found arm raises,
+> bare P0001 — #633's guard forbids `USING ERRCODE`), **#431** (behavioural decoy test for `cairn_execute_shred`, with a
+> rolled-back positive control), **#464** (db/050's lenient learner validates per rendition and writes once: a
+> 200-rendition peer event went from 64 cached subxids, overflowed, to none), **#768** (`medication_attestation_misfiled`
+> view, and a misfiled peer vouch reads STALE — it used to read "signed" on the thread's chart). Review + merge it.
+> (PR #770, 2026-10-12, is merged.)
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
@@ -506,6 +509,29 @@ plain JS, no npm); pane/routing/freshness state machine tested but **not wired**
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
+
+### 2026-10-13 — tech-debt pass (cloud session): #604, #608, #431, #464, #768
+
+One branch, one commit per issue, picked for blast radius (erasure, the availability floor, a false signature).
+- **⇒ A RACE "FOUND BY REASONING" CAN BE MADE DETERMINISTIC.** Hold transaction 1 open on one connection, run
+  transaction 2 in a spawned task on another, and wait until it has either FINISHED (no lock — the bug) or is PARKED
+  (`pg_stat_activity.wait_event_type = 'Lock'` — the fix); only then commit 1. Both outcomes are deterministic, so the
+  end-state assertion is red-before/green-after with no sleeps (`tests/shred_custody_race.rs`). #603 can use the same
+  harness.
+- **⇒ An issue's suggested fix can predate a guard.** #608 asked for `USING ERRCODE = '55000'`; #633's guard has since
+  made any explicit SQLSTATE in `db/` a failure at FILE granularity, so allow-listing db/005 would have unguarded the
+  main door. Re-read the guards before following an old issue's recipe.
+- **⇒ A per-row `BEGIN … EXCEPTION` that WRITES is a subtransaction XID per row**; one that only reads costs none.
+  Validate inside the handler, collect, write outside it. `pg_stat_get_backend_subxact` (PG ≥ 16) read before COMMIT
+  measures it.
+- **⇒ A "silent" lenient arm can be worse than silent.** #768 was filed as "no flag"; reading the read path showed the
+  misfiled vouch was picked per THREAD and displayed as a current signature on the other chart. A view alone would have
+  been another signal that reaches nobody (#606), so the predicate also feeds `stale`.
+- **⇒ The cloud rig recipe** (2026-10-12's, with one fix): `micro.mamba.pm` is blocked — fetch micromamba from
+  `github.com/mamba-org/micromamba-releases`, then conda-forge `postgresql=18`, `cargo install cargo-pgrx --version
+  =0.18.1 --locked`, `cargo pgrx init --pg18 <conda pg_config>` with the `xlocale.h` shim, `initdb` as `postgres`,
+  `CREATE ROLE root SUPERUSER`, and run the gate with `PGHOST/PGPORT/PGUSER` exported. Never edit tracked files while
+  the gate compiles — it builds whatever is on disk at that moment.
 
 ### 2026-10-12 — tech-debt pass (cloud session): #602, #763, #689, #626 (db half), #726
 

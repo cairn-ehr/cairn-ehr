@@ -232,7 +232,7 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
 #303 #304 #305 #306 — the tech-debt loop's own tooling, stopped.
 #602 — any client can set `cairn.remote_apply` before `submit_event`, turning the strict door's refusals into flags (a decision; found in #584's review, see the ADR-0070 entry under Phase 8/9).
 #603 — a late key racing connect-time re-adjudication of a deferred event can leave the promoted record off the chart, and `requeue` then exits 0 (a cross-transaction race; ADR-0070 residual).
-#604 — a shred racing a late key can resurrect custody, and since ADR-0070 the projection too; step 9's anti-resurrection check takes no lock (pre-existing, widened; ADR-0070 residual).
+#604 — a shred racing a late key could resurrect custody (and, since ADR-0070, the projection); **fixed 2026-10-13** by `cairn_lock_custody`, a per-event xact lock both doors' step 9 and the shred executor take (`tests/shred_custody_race.rs` reproduces both interleavings). Same session: #608's late-custody half, #431, #464 (db/050 writes once per event, not per rendition), #768 (a misfiled peer vouch is named and reads stale).
 
 **2026-08-23 → 09-12 — the sweep's tail, the misclassification cluster, §5.9 C+D designed, the DR audit, DR slices
 1 → 2d, the restore's §1.2, #511, the closing-keyword guard, #527 and the CodeQL pack — condensed.** The *why* of each
