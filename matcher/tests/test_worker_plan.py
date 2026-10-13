@@ -70,3 +70,27 @@ def test_a_failed_sweep_is_held_for_the_backoff_then_released():
 def test_a_held_sweep_makes_even_a_big_backlog_per_chart():
     assert choose_mode(501, 500, sweep_held=True) is Mode.PER_CHART
     assert choose_mode(501, 500, sweep_held=False) is Mode.SWEEP
+
+
+def test_the_sweep_gate_reconsiders_a_sweep_every_step_but_sweeps_once_per_crossing():
+    # #729: the mode used to be chosen once per round, so a backlog queued mid-drain (a rebuild,
+    # a restore, a first pull) was worked chart by chart -- hours, against one sweep. The gate is
+    # asked before every step; it sweeps when the backlog is over the threshold, and not again
+    # until the backlog has been seen at or under it -- or a sweep that kept its charts' notices
+    # (every pair failed) would be re-run before every single chart.
+    from cairn_matcher.pipeline.worker_plan import SweepGate
+
+    gate = SweepGate()
+    assert gate.decide(2, 3, sweep_held=False) is Mode.PER_CHART
+    assert gate.decide(900, 3, sweep_held=False) is Mode.SWEEP     # a backlog arrived mid-round
+    assert gate.decide(900, 3, sweep_held=False) is Mode.PER_CHART  # the sweep left it: not again
+    assert gate.decide(3, 3, sweep_held=False) is Mode.PER_CHART    # drained under the threshold
+    assert gate.decide(900, 3, sweep_held=False) is Mode.SWEEP      # ... so a new backlog sweeps
+
+
+def test_a_held_sweep_rearms_the_gate_once_the_hold_lifts():
+    from cairn_matcher.pipeline.worker_plan import SweepGate
+
+    gate = SweepGate()
+    assert gate.decide(900, 3, sweep_held=True) is Mode.PER_CHART
+    assert gate.decide(900, 3, sweep_held=False) is Mode.SWEEP

@@ -35,6 +35,37 @@ def choose_mode(charts_waiting: int, bulk_threshold: int, sweep_held: bool = Fal
 
 
 @dataclass
+class SweepGate:
+    """Decides, before EVERY step of a drain, whether that step is a sweep (#729).
+
+    The mode used to be chosen once, at the start of a round. A backlog queued while a per-chart
+    round was already running -- a `reproject --rebuild`, a restore, a first pull -- was then
+    worked chart by chart (about 25 hours at 10 000 charts, against one ~2-minute sweep), and a
+    round fed changes faster than one per check never ended and never reconsidered.
+
+    So the drain asks the gate before each step. The gate answers SWEEP when choose_mode would,
+    but only once per crossing of the threshold: after a sweep it stays shut until the backlog
+    has been seen at or under the threshold again. Without that, a sweep that leaves its charts'
+    notices behind (every pair failed, so they are kept) would leave the backlog over the
+    threshold and be re-run before every single chart. A held sweep (RetryBook.sweep_held) reads
+    as per-chart and so re-arms the gate: once the hold lifts, a backlog still over the
+    threshold is swept again -- the retry #727's hold exists to schedule.
+    """
+
+    _armed: bool = True
+
+    def decide(self, charts_waiting: int, bulk_threshold: int, sweep_held: bool) -> Mode:
+        mode = choose_mode(charts_waiting, bulk_threshold, sweep_held)
+        if mode is Mode.PER_CHART:
+            self._armed = True
+            return Mode.PER_CHART
+        if not self._armed:
+            return Mode.PER_CHART
+        self._armed = False
+        return Mode.SWEEP
+
+
+@dataclass
 class RetryBook:
     """Work that raised, held back for `backoff_s` so the worker never spins on it.
 

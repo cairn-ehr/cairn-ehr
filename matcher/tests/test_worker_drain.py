@@ -305,6 +305,38 @@ def test_a_held_sweep_is_not_retried_while_the_hold_lasts(pg_conn, monkeypatch):
     assert _count(pg_conn, "SELECT count(*) FROM match_pending") == 0
 
 
+def test_a_backlog_queued_mid_drain_is_swept_next_not_worked_chart_by_chart(pg_conn,
+                                                                           monkeypatch):
+    # #729: a per-chart round re-asks for the mode before each step. Here a bulk enqueue lands
+    # while the round's FIRST chart is being checked (as a `reproject --rebuild`, a restore or a
+    # first pull would), and the very next step must be a sweep, not 900 more single checks.
+    import psycopg
+
+    _state(pg_conn)
+    seed_patient(pg_conn, A, names=[("First Arrival", 20)])
+    real_check, real_bulk = worker.check_chart, worker.run_bulk
+    steps = []
+
+    def check(conn, patient, settings):
+        if not steps:                         # while the first chart is being checked ...
+            with psycopg.connect(cairn_test_dsn()) as other:
+                _backlog(other, 1000, n=6)     # ... a backlog over the threshold is queued
+        steps.append("chart")
+        return real_check(conn, patient, settings)
+
+    def bulk(conn, settings, clock):
+        steps.append("sweep")
+        return real_bulk(conn, settings, clock)
+
+    monkeypatch.setattr(worker, "check_chart", check)
+    monkeypatch.setattr(worker, "run_bulk", bulk)
+    report = _drain(pg_conn, Settings(bulk_threshold=3))
+    assert steps[:2] == ["chart", "sweep"], steps
+    assert steps.count("sweep") == 1, steps
+    assert report.swept
+    assert _count(pg_conn, "SELECT count(*) FROM match_pending") == 0
+
+
 def test_a_sweep_in_which_every_pair_fails_stamps_no_progress(pg_conn, monkeypatch):
     # R4 review N3: a failed pair is not progress. If every propose() raises for a systematic
     # reason (a missing grant after a schema change, a persist timeout), the sweep keeps the failed

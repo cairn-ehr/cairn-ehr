@@ -142,7 +142,10 @@ chart held only on another node) always reads "not yet run": nothing here has ch
 `reproject --rebuild`, a restore, or a new node's first pull rewrites the projections, so **every chart
 queues a notice**. That is correct: the inputs changed. The worker sees a backlog above
 `--bulk-threshold`, runs **one full sweep**, clears the notices the sweep covered, and then works through
-anything left newest-first. One sweep is the cheaper way through a large backlog: measured on an Apple M3
+anything left newest-first. It re-counts the backlog before every step, so a rebuild or restore that
+starts while the worker is already checking charts one by one is swept next, not worked chart by chart
+(#729). It sweeps once per crossing of the threshold: not again until the backlog has fallen to the
+threshold or below. One sweep is the cheaper way through a large backlog: measured on an Apple M3
 Max with 10 000 records, one sweep took about 2.5 minutes, while one per-chart check took about 0.8
 seconds, so the sweep cost the same as about 200 charts checked singly (about 330 at 2 000 records). The
 default threshold of 250 sits between those break-evens. While the worker makes progress the status line reads
