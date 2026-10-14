@@ -43,6 +43,11 @@ pub fn ellipsize(s: &str, width: usize) -> String {
 /// Marks a chart that is clipped to the row above it (same person, another chart).
 const LINKED_PREFIX: &str = "\u{21b3} linked: ";
 
+/// The same marker when db/054 doubts a link in the row (R6, #723): the set is disputed, so it
+/// must not read as settled "one person". It sits inside the same ellipsized name cell, so no
+/// column moves.
+const DOUBTED_PREFIX: &str = "\u{21b3} linked, in doubt: ";
+
 /// One chart's fixed-column line, with `name` (already prefixed if linked) in the name cell.
 /// **Pure.**
 fn chart_line(c: &cairn_patient_search::Candidate, name: &str) -> String {
@@ -108,7 +113,12 @@ pub fn candidate_lines(list: &CandidateList) -> Vec<String> {
                 let name = if i == 0 {
                     c.display_name.clone()
                 } else {
-                    format!("{LINKED_PREFIX}{}", c.display_name)
+                    let prefix = if row.is_doubted() {
+                        DOUBTED_PREFIX
+                    } else {
+                        LINKED_PREFIX
+                    };
+                    format!("{prefix}{}", c.display_name)
                 };
                 out.push(chart_line(c, &name));
             }
@@ -170,6 +180,20 @@ mod tests {
             incomplete: false,
             incomplete_reason: None,
         }
+    }
+
+    #[test]
+    fn a_doubted_rows_further_members_say_in_doubt() {
+        // A short name: the 20-character prefix shares the 28-character ellipsized cell.
+        let row = PersonRow::new(vec![full(0xa, "Jane CITIZEN"), bare(0xb, "Mary S")])
+            .unwrap()
+            .with_doubt(true);
+        let lines = candidate_lines(&list(vec![row]));
+        assert!(
+            lines[2].contains("\u{21b3} linked, in doubt: Mary S"),
+            "{}",
+            lines[2]
+        );
     }
 
     const HEADER: &str = "patient_id                            name                           age  trust         last activity  locale";

@@ -30,6 +30,10 @@ use uuid::Uuid;
 #[serde(try_from = "Vec<Candidate>", into = "Vec<Candidate>")]
 pub struct PersonRow {
     members: Vec<Candidate>,
+    /// Whether db/054 doubts a link among this person's charts (R6, #723). A display property
+    /// read at search time: it is NOT part of the row's wire shape (the serde conversion is the
+    /// member array) and never part of what a registration signs.
+    doubted: bool,
 }
 
 /// The error for building a row from nothing: a person row needs at least one chart.
@@ -50,7 +54,10 @@ impl PersonRow {
         if members.is_empty() {
             None
         } else {
-            Some(PersonRow { members })
+            Some(PersonRow {
+                members,
+                doubted: false,
+            })
         }
     }
 
@@ -58,6 +65,7 @@ impl PersonRow {
     pub fn alone(candidate: Candidate) -> PersonRow {
         PersonRow {
             members: vec![candidate],
+            doubted: false,
         }
     }
 
@@ -69,6 +77,18 @@ impl PersonRow {
     /// The charts of this person, best match first.
     pub fn members(&self) -> &[Candidate] {
         &self.members
+    }
+
+    /// This row, marked (or unmarked) as holding a link db/054 doubts. A builder so the
+    /// constructors stay the one place a row's members are validated.
+    pub fn with_doubt(mut self, doubted: bool) -> PersonRow {
+        self.doubted = doubted;
+        self
+    }
+
+    /// True when a link among this person's charts is in doubt (R6, #723). Display only.
+    pub fn is_doubted(&self) -> bool {
+        self.doubted
     }
 
     /// True when more than one chart is clipped together in this row.
@@ -203,6 +223,35 @@ mod tests {
         // Falling back to a row of one would put one person in two prompt places with nothing said.
         let err = group_by_person(&[id(1)], &HashMap::new()).unwrap_err();
         assert_eq!(err, MissingComponent(id(1)));
+    }
+
+    fn cand(n: u128) -> Candidate {
+        Candidate {
+            patient_id: id(n),
+            display_name: format!("Person {n}"),
+            age: None,
+            trust: crate::candidate::TrustState::Unconfirmed,
+            last_activity: None,
+            locale: None,
+            photo_ref: None,
+        }
+    }
+
+    #[test]
+    fn a_row_is_undoubted_unless_marked_and_the_mark_never_reaches_the_wire() {
+        let row = PersonRow::new(vec![cand(1), cand(2)]).unwrap();
+        assert!(!row.is_doubted());
+        let doubted = row.clone().with_doubt(true);
+        assert!(doubted.is_doubted());
+        // The wire shape is the bare member array either way (the signed list is unchanged).
+        assert_eq!(
+            serde_json::to_value(&doubted).unwrap(),
+            serde_json::to_value(&row).unwrap()
+        );
+        // And a row read back off the wire is undoubted.
+        let back: PersonRow =
+            serde_json::from_value(serde_json::to_value(&doubted).unwrap()).unwrap();
+        assert!(!back.is_doubted());
     }
 
     #[test]

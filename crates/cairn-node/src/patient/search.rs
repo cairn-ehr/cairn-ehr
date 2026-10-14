@@ -82,7 +82,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
     // component first, so every display read below covers EVERY member of every person
     // shown - a registration signs "displayed" over exactly what these reads return.
     let components = read_components(client, &matched).await?;
-    let mut ids: Vec<Uuid> = components.values().flatten().copied().collect();
+    let mut ids: Vec<Uuid> = components.members.values().flatten().copied().collect();
     ids.sort();
     ids.dedup();
 
@@ -102,7 +102,7 @@ pub async fn search_patients<C: GenericClient + Sync>(
         facts.dobs(),
     ));
     // A chart without its component would drop out of every row: fail the search loudly.
-    let groups = group_by_person(&ranked_ids, &components)?;
+    let groups = group_by_person(&ranked_ids, &components.members)?;
 
     // The one field a candidate cannot honestly render as `None`: `Candidate::display_name`
     // is a plain `String`, not `Option<String>`, because a nameless row on a search results
@@ -122,7 +122,11 @@ pub async fn search_patients<C: GenericClient + Sync>(
     let people: Vec<PersonRow> = groups
         .iter()
         .map(|group| {
+            // R6 (#723): a row is doubted when any member the search anchored on reads a doubted
+            // component - every member of a row shares one component, so one anchor suffices.
+            let doubted = group.iter().any(|id| components.doubted.contains(id));
             PersonRow::new(group.iter().map(&mut candidate_for).collect())
+                .map(|row| row.with_doubt(doubted))
                 .ok_or_else(|| anyhow::anyhow!("a person row was grouped with no chart in it"))
         })
         .collect::<anyhow::Result<_>>()?;
