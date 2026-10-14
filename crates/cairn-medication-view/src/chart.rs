@@ -72,11 +72,12 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
      without a clinician's confirmation on record here and the node's hard identity check has \
      found a clash between them, or when a clinician has recorded that two of the record's \
      charts are different people while other links still join them. In the window, \
-     \"Not the same person…\" beside a link under \"How these charts are linked\" unlinks it. \
-     In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key <key-file>` unlinks (add \
-     `--from <open_chart>` when neither chart is held on this node), and `link-charts <chart_a> \
-     <chart_b> --attester-key <key-file>` confirms a link — both charts must be held on this \
-     node to link them (the window cannot confirm a link that already stands yet). The hold \
+     \"Review this link…\" beside a link marked in doubt under \"How these charts are \
+     linked\" compares the two charts and either confirms the link (both charts must be held on \
+     this node) or unlinks it. In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key \
+     <key-file>` unlinks (add `--from <open_chart>` when neither chart is held on this node), and \
+     `link-charts <chart_a> <chart_b> --attester-key <key-file>` confirms a link — both charts \
+     must be held on this node to link them. The hold \
      lifts once no link in the record is in doubt. After an unlink, a line shared between the \
      two charts may then reach a chart outside the record, and its threads must then be \
      separated — the list will say so. Judge the links before separating any threads.";
@@ -321,7 +322,13 @@ mod tests {
         // "link-charts" alone would be satisfied by "unlink-charts": pin the confirm verb by
         // its own backtick-opened spelling.
         assert!(DOUBTED_LINK_INSTRUCTION.contains("`link-charts "));
-        assert!(DOUBTED_LINK_INSTRUCTION.contains("Not the same person"));
+        // R6 (#716): the window's one gesture for a doubted link both confirms and unlinks, so
+        // the remedy names it by its label; the old "Not the same person…" wording is gone.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("\"Review this link…\""));
+        assert!(
+            !DOUBTED_LINK_INSTRUCTION.contains("cannot confirm"),
+            "the window confirms a standing link since R6 (#716)"
+        );
         assert!(DOUBTED_LINK_INSTRUCTION.contains("How these charts are linked"));
         assert!(!DOUBTED_LINK_INSTRUCTION.contains("medication-separate"));
     }
