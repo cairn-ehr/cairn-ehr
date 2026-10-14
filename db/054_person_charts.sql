@@ -127,34 +127,40 @@ GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_age
 --    cairn_agent. It is kept so this slice makes no privilege change (issue #718 decides
 --    whether to drop it); the answer is one boolean about a set the caller already holds,
 --    and search_path is pinned.
+--    R6 (#716, #723): the three cases are now ONE per-link read, cairn_chart_set_doubts, and
+--    the boolean is EXISTS over it — so the sign-off hold (R1b) and the window's per-link marks
+--    cannot disagree. kind 'clash' = (a)+(b) (the link a clinician may confirm or unlink);
+--    'separated' = (c) (the attested unlink the bridge keeps standing). hlc_wall dates the line.
+--    A link_veto_flag row always has its patient_link row: db/018 writes the flag FROM the
+--    standing winner it has just read, so joining through patient_link loses no flag.
+CREATE OR REPLACE FUNCTION cairn_chart_set_doubts(p_charts uuid[])
+RETURNS TABLE (low uuid, high uuid, kind text, hlc_wall bigint)
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT pl.low, pl.high, 'clash'::text, pl.hlc_wall
+    FROM patient_link pl
+    WHERE pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
+      AND (EXISTS (SELECT 1 FROM link_veto_flag f WHERE f.low = pl.low AND f.high = pl.high)
+           OR (pl.state = 'link' AND NOT pl.attested AND cairn_has_hard_veto(pl.low, pl.high)))
+    UNION ALL
+    SELECT pl.low, pl.high, 'separated'::text, pl.hlc_wall
+    FROM patient_link pl
+    WHERE pl.state = 'unlink'
+      AND pl.attested
+      AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_chart_set_doubts(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_chart_set_doubts(uuid[]) TO cairn_agent;
+
 CREATE OR REPLACE FUNCTION cairn_chart_set_has_doubted_link(p_charts uuid[])
 RETURNS boolean
 LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-    SELECT EXISTS (
-        SELECT 1 FROM link_veto_flag f
-        WHERE f.low = ANY(p_charts) AND f.high = ANY(p_charts)
-    ) OR EXISTS (
-        -- #701: the STORED winner attestation (R2a, ADR-0076 decision 5 - one definition,
-        -- evaluated when the winner was applied). Never re-derive it through event_log: that
-        -- is a second spelling, and the join dropped a legacy row whose content_address is
-        -- NULL (pre-#115).
-        SELECT 1
-        FROM patient_link pl
-        WHERE pl.state = 'link'
-          AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
-          AND NOT pl.attested
-          AND cairn_has_hard_veto(pl.low, pl.high)
-    ) OR EXISTS (
-        -- (c): a human's "not the same person" about two charts this set still joins.
-        SELECT 1
-        FROM patient_link pl
-        WHERE pl.state = 'unlink'
-          AND pl.attested
-          AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
-    )
+    SELECT EXISTS (SELECT 1 FROM cairn_chart_set_doubts(p_charts))
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) TO cairn_agent;
