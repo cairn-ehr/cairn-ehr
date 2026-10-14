@@ -73,19 +73,34 @@ async fn a_set_with_a_doubted_link_is_one_doubted_row_and_signs_the_same_charts(
     .await
     .unwrap();
 
+    // The charts of earlier runs persist (only the link tables are truncated), so find THIS
+    // run's row by its members rather than assuming it is the only one.
     let doubted = find(&c, "DOUBTWELL").await;
-    assert_eq!(doubted.people.len(), 1, "{doubted:?}");
-    assert!(doubted.people[0].is_doubted());
-    let mut shown = doubted.displayed_charts();
-    shown.sort();
+    let row = doubted
+        .people
+        .iter()
+        .find(|r| r.members().iter().any(|m| m.patient_id == a))
+        .expect("the doubted pair is shown");
+    assert!(row.is_doubted());
+    let mut in_row: Vec<Uuid> = row.members().iter().map(|m| m.patient_id).collect();
+    in_row.sort();
     let mut both = vec![a, b];
     both.sort();
-    assert_eq!(shown, both, "the signed list is every member, as before");
+    assert_eq!(in_row, both, "one row holds both charts");
+    let shown = doubted.displayed_charts();
+    assert!(
+        shown.contains(&a) && shown.contains(&b),
+        "the signed list still names every member"
+    );
 
     let quiet = find(&c, "QUIETLINK").await;
-    assert_eq!(quiet.people.len(), 1);
+    let quiet_row = quiet
+        .people
+        .iter()
+        .find(|r| r.members().iter().any(|m| m.patient_id == p))
+        .expect("the quiet pair is shown");
     assert!(
-        !quiet.people[0].is_doubted(),
+        !quiet_row.is_doubted(),
         "a linked pair with no doubt is not marked"
     );
 

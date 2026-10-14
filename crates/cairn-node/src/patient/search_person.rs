@@ -69,7 +69,8 @@ pub(super) struct Components {
     pub doubted: HashSet<Uuid>,
 }
 
-/// Group `(chart, member-of-its-component, doubted)` triples into one sorted member list per chart, and
+/// Group `(chart, member-of-its-component, doubted)` triples into one sorted member list per
+/// chart, and
 /// REFUSE any list that does not contain the chart it belongs to.
 ///
 /// `group_by_person` trusts that precondition: a component missing its own anchor would be
