@@ -210,6 +210,7 @@ pub async fn link_impl(
     let shown = cairn_node::chart_link::RecordsShown {
         this: &left,
         other: &right,
+        pair: None,
     };
     let outcome = cairn_node::chart_link::link_charts_as_shown(
         &mut db,

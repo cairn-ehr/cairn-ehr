@@ -139,6 +139,43 @@ pub async fn link_charts_as_shown(
     .await
 }
 
+/// "Same person — confirm" a link INSIDE one record (R6, #716): a link that already stands
+/// without a clinician's confirmation, or — the bridge — two charts a clinician once recorded as
+/// different people while other links still join them. As [`link_charts`], but signed only while
+/// the record still reads as `record` AND the pair's standing assertion is still `standing`, the
+/// one the panel showed (see [`RecordsShown::pair`]). Both charts must be held here.
+///
+/// Why the pair, not just the record: inside one record a third chart can keep A and B joined, so
+/// a colleague's attested unlink of A–B landing meanwhile leaves `record` unchanged — and our
+/// confirm, stamped later by this node's clock, would silently overrule it. The pair's content
+/// address is what changes, so that is what is re-checked under CARNLK before anything is signed.
+pub async fn confirm_link_as_shown(
+    client: &mut tokio_postgres::Client,
+    a: Uuid,
+    b: Uuid,
+    record: &ChartSet,
+    standing: &[u8],
+    reviewer: &Reviewer<'_>,
+    node_origin: &str,
+) -> anyhow::Result<LinkOutcome> {
+    let shown = RecordsShown {
+        this: record,
+        other: record,
+        pair: Some(standing),
+    };
+    judge(
+        client,
+        LinkVerb::Link,
+        a,
+        b,
+        None,
+        Some(shown),
+        reviewer,
+        node_origin,
+    )
+    .await
+}
+
 /// "Not the same person" about two SEPARATE records the clinician compared ("Different people"
 /// on a possible duplicate): as [`unlink_charts`] with no `opened` chart, but signed only while
 /// each chart's record still reads as `shown` (#708). A colleague's link of the pair landing

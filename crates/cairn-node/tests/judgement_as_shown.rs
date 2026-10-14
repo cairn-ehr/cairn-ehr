@@ -240,6 +240,7 @@ async fn a_link_is_refused_when_a_peer_link_changes_a_compared_record_mid_judgem
                 let shown = RecordsShown {
                     this: &left,
                     other: &right,
+                    pair: None,
                 };
                 link_charts_as_shown(&mut jc, a, b, shown, &who, ORIGIN).await
             })
@@ -294,6 +295,7 @@ async fn an_unlink_never_silently_overrules_a_colleagues_link_that_landed_mid_ju
                 let shown = RecordsShown {
                     this: &left,
                     other: &right,
+                    pair: None,
                 };
                 unlink_charts_as_shown(&mut jc, a, b, shown, &who, ORIGIN).await
             })
@@ -338,6 +340,7 @@ async fn a_stale_shown_record_is_refused_and_a_current_one_is_judged() {
     let shown = RecordsShown {
         this: &stale,
         other: &right,
+        pair: None,
     };
     for verb in [LinkVerb::Link, LinkVerb::Unlink] {
         let err = match verb {
@@ -358,6 +361,7 @@ async fn a_stale_shown_record_is_refused_and_a_current_one_is_judged() {
     let shown = RecordsShown {
         this: &current,
         other: &right,
+        pair: None,
     };
     let out = link_charts_as_shown(&mut c, a, b, shown, &who, ORIGIN)
         .await

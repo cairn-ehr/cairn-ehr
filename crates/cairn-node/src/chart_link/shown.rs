@@ -1,10 +1,15 @@
 //! #708 — a human judgement made from a COMPARISON is signed only over the records the clinician
 //! was shown: [`RecordsShown`], the re-check `assert_link_in_tx` runs under the link lock
 //! (CARNLK) before anything is signed, and the pure comparison it rests on ([`stale_record`]).
+//! R6 (#716) adds the PAIR: a confirm made inside one record also carries the pair's standing
+//! assertion as the panel read it ([`RecordsShown::pair`]), re-checked under the same lock by
+//! [`stale_pair`], because a colleague's judgement of that pair can land without changing the
+//! record's set at all.
 //!
 //! Lives apart from `chart_link.rs` (house rule 4: files under 500 lines); re-exported by the
 //! parent, so `chart_link::RecordsShown` keeps its path.
 
+use super::StandingLink;
 use crate::db_diagnosis::{deliberate_refusal, LocalDbFault};
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
@@ -17,6 +22,12 @@ use uuid::Uuid;
 pub struct RecordsShown<'a> {
     pub this: &'a ChartSet,
     pub other: &'a ChartSet,
+    /// The pair's STANDING assertion (its content address) as the panel the clinician judged
+    /// from read it — set by a judgement about a link INSIDE one record (R6's confirm), where
+    /// both shown records are that one record and only the pair can tell a colleague's
+    /// judgement of it landing meanwhile. `None` when the judgement was made over two separate
+    /// records.
+    pub pair: Option<&'a [u8]>,
 }
 
 /// The one fact a judgement made from a COMPARISON rests on — each subject's record still reads
@@ -60,6 +71,15 @@ pub(super) async fn refuse_unless_records_read_as_shown(
             return Err(deliberate_refusal(stale));
         }
     }
+    // R6: a confirm happens INSIDE one record, so a colleague's judgement of the same pair can
+    // land without changing either record's set (C still joins A and B). Ask the pair itself,
+    // under the same CARNLK, before anything is signed.
+    if let Some(pair) = shown.pair {
+        let now = super::standing_link(tx, low, high).await?;
+        if let Some(stale) = stale_pair(pair, now.as_ref(), low, high) {
+            return Err(deliberate_refusal(stale));
+        }
+    }
     Ok(())
 }
 
@@ -87,6 +107,27 @@ pub fn stale_record(shown: RecordsShown<'_>, subject: Uuid, now: &ChartSet) -> O
     }
 }
 
+/// Why the pair's standing assertion (`now`) is no longer the one the panel showed (`shown`),
+/// or `None` if it is. **Pure.** No assertion at all is stale too: the panel showed one.
+///
+/// "Changed" means a different EVENT now wins the overlay for the pair — whatever it says. A
+/// colleague's confirm (same verb, now attested) is as stale as a colleague's unlink: either way
+/// the clinician judged a picture that no longer holds, and must look again before signing.
+pub fn stale_pair(
+    shown: &[u8],
+    now: Option<&StandingLink>,
+    low: Uuid,
+    high: Uuid,
+) -> Option<String> {
+    match now {
+        Some(winner) if winner.is(shown) => None,
+        _ => Some(format!(
+            "the link between charts {low} and {high} changed while you were judging it (another \
+             judgement about it was recorded meanwhile) — nothing was done; review it again"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,6 +139,7 @@ mod tests {
         let shown = RecordsShown {
             this: &this,
             other: &other,
+            pair: None,
         };
         // As shown, from either record.
         assert_eq!(stale_record(shown, a, &ChartSet::single(a)), None);
@@ -114,11 +156,35 @@ mod tests {
         let shown_wide = RecordsShown {
             this: &wide,
             other: &other,
+            pair: None,
         };
         assert!(stale_record(shown_wide, a, &ChartSet::single(a)).is_some());
         // A subject the judgement was not made over.
         assert!(stale_record(shown, x, &ChartSet::single(x))
             .unwrap()
             .contains("neither"));
+    }
+
+    #[test]
+    fn a_pair_is_stale_exactly_when_another_assertion_now_stands() {
+        let (lo, hi) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let shown: Vec<u8> = (0u8..34).collect(); // a content address, computed (house rule 6)
+        let same = StandingLink {
+            content_address: shown.clone(),
+            state: "link".into(),
+            attested: false,
+        };
+        assert_eq!(stale_pair(&shown, Some(&same), lo, hi), None);
+        let other = StandingLink {
+            content_address: (1u8..35).collect(),
+            state: "unlink".into(),
+            attested: true,
+        };
+        let text = stale_pair(&shown, Some(&other), lo, hi).expect("a different winner is stale");
+        assert!(text.contains("review it again"), "{text}");
+        assert!(
+            stale_pair(&shown, None, lo, hi).is_some(),
+            "no assertion at all is stale too"
+        );
     }
 }
