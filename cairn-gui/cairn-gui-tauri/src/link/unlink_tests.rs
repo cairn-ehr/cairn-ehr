@@ -148,6 +148,7 @@ fn edge(a: u128, b: u128) -> RecordEdge {
 /// A read with these standing links and no doubts.
 fn links(edges: Vec<RecordEdge>) -> Result<RecordLinks, String> {
     Ok(RecordLinks {
+        unverified: vec![],
         edges,
         doubts: vec![],
     })
@@ -190,6 +191,7 @@ fn a_separated_pair_must_still_be_separated() {
     };
     let links = || {
         Ok(RecordLinks {
+            unverified: vec![],
             edges: vec![],
             doubts: vec![sep(1, 3)],
         })
@@ -206,6 +208,7 @@ fn a_separated_pair_must_still_be_separated() {
 #[test]
 fn a_clash_link_carries_its_attestation_into_the_shown_pair() {
     let links = Ok(RecordLinks {
+        unverified: vec![],
         edges: vec![RecordEdge {
             attested: false,
             ..edge(1, 2)
@@ -236,6 +239,7 @@ fn the_shown_pair_carries_its_own_date_and_a_clash_is_not_a_separation() {
     let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(2));
     let read = || {
         Ok(RecordLinks {
+            unverified: vec![],
             edges: vec![edge(1, 2)],
             doubts: vec![clash.clone()],
         })

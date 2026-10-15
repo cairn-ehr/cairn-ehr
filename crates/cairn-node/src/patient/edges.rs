@@ -13,7 +13,8 @@
 //!
 //! `record_doubts` reads which of a record's pairs db/054 doubts — the marks beside the links, R6
 //! — and `record_is_doubted` whether any is: the R1b hold's boolean and the doubted person row's
-//! mark (#723). Neither re-derives db/054's rule.
+//! mark (#723). Neither re-derives db/054's rule. `record_unverified_links` reads the links this
+//! node cannot verify (R7, #743 part 2): a non-holding note, deliberately NOT a doubt.
 use crate::db_diagnosis::LocalDbFault;
 use cairn_medication_view::ChartSet;
 use tokio_postgres::GenericClient;
@@ -148,4 +149,45 @@ pub async fn record_is_doubted<C: GenericClient + Sync>(
             )
         })?;
     Ok(row.get("doubted"))
+}
+
+/// A standing, un-attested link whose two charts hold different identifiers in one `system`,
+/// where this node has no format profile to tell a real mismatch from formatting (db/016's
+/// `degrade_hold`). Not a doubt: db/016 says it must never demote a link, so nothing is held; the
+/// window notes it on the link's line (R7, #743 part 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnverifiedLink {
+    /// The pair, canonical (`low < high`).
+    pub low: Uuid,
+    pub high: Uuid,
+    /// The identifier system whose values differ (e.g. a local MRN's system name).
+    pub system: String,
+}
+
+const UNVERIFIED_SQL: &str = "SELECT low::text AS low, high::text AS high, system \
+     FROM cairn_chart_set_unverified_links($1::text[]::uuid[]) ORDER BY low, high, system";
+
+/// Every un-attested standing link among `charts` this node cannot verify, one row per (pair,
+/// identifier system), ordered. Asks db/054's `cairn_chart_set_unverified_links`, which computes
+/// the finding from the identifiers as they stand now, and never re-derives it.
+pub async fn record_unverified_links<C: GenericClient + Sync>(
+    client: &C,
+    charts: &ChartSet,
+) -> anyhow::Result<Vec<UnverifiedLink>> {
+    let ids: Vec<String> = charts.members().iter().map(Uuid::to_string).collect();
+    let rows = client.query(UNVERIFIED_SQL, &[&ids]).await.map_err(|e| {
+        LocalDbFault::new(
+            "reading which of this record's links this node cannot verify",
+            e,
+        )
+    })?;
+    rows.iter()
+        .map(|r| {
+            Ok(UnverifiedLink {
+                low: r.get::<_, String>("low").parse()?,
+                high: r.get::<_, String>("high").parse()?,
+                system: r.get("system"),
+            })
+        })
+        .collect()
 }

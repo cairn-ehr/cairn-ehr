@@ -350,10 +350,13 @@ async fn the_status_counts_the_charts_with_a_waiting_change() {
         return;
     };
     async fn charts_changing(c: &Client) -> i64 {
-        c.query_one("SELECT charts_changing FROM cairn_duplicate_check_status()", &[])
-            .await
-            .unwrap()
-            .get(0)
+        c.query_one(
+            "SELECT charts_changing FROM cairn_duplicate_check_status()",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0)
     }
     assert_eq!(charts_changing(&c).await, 0, "nothing waits");
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
@@ -366,7 +369,11 @@ async fn the_status_counts_the_charts_with_a_waiting_change() {
     )
     .await
     .unwrap();
-    assert_eq!(charts_changing(&c).await, 0, "a config re-check alone is not a change");
+    assert_eq!(
+        charts_changing(&c).await,
+        0,
+        "a config re-check alone is not a change"
+    );
     c.execute(
         "INSERT INTO match_pending (patient_id, reason) VALUES \
          ($1::text::uuid, 'change'), ($1::text::uuid, 'change')",
@@ -374,7 +381,11 @@ async fn the_status_counts_the_charts_with_a_waiting_change() {
     )
     .await
     .unwrap();
-    assert_eq!(charts_changing(&c).await, 1, "two notices for one chart count once");
+    assert_eq!(
+        charts_changing(&c).await,
+        1,
+        "two notices for one chart count once"
+    );
 }
 
 #[tokio::test]
@@ -483,7 +494,10 @@ async fn a_database_with_the_pre_r7_status_shape_is_healed_on_connect() {
         .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
         .await
         .unwrap();
-    assert!(r.columns().iter().any(|col| col.name() == "charts_changing"));
+    assert!(r
+        .columns()
+        .iter()
+        .any(|col| col.name() == "charts_changing"));
 }
 
 /// The status function's `last_drained_hhmm` column, which the test below expects to be set.

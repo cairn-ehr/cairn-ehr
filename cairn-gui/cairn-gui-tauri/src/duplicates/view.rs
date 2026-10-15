@@ -278,7 +278,9 @@ pub fn check_lines(
             let explains = match state {
                 CheckState::Stalled { .. } => true,
                 CheckState::Current { .. } => false,
-                CheckState::CatchingUp { change_waiting, .. } => change_waiting || !lines.is_empty(),
+                CheckState::CatchingUp { change_waiting, .. } => {
+                    change_waiting || !lines.is_empty()
+                }
                 CheckState::NeverRun { .. } => !lines.is_empty(),
             };
             if explains {
