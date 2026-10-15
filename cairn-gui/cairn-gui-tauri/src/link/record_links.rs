@@ -20,10 +20,11 @@ pub const REVIEW_LINK: &str = "Review this link…";
 /// The door on a bridged separation's line.
 pub const REVIEW_JUDGEMENT: &str = "Review this judgement…";
 
-/// Appended to a standing link db/054 doubts (case (a)/(b)). Says what is held, and by what.
+/// Appended to a standing link db/054 doubts (case (a)/(b)). Says what is held, and by what. It
+/// says "while", never "until": with two doubted links, judging this one leaves the hold.
 const CLASH_NOTE: &str = " — in doubt: this node's identity check finds a clash between these two \
-     charts; lines not recorded only on the chart you opened cannot be signed off until a \
-     clinician judges this link";
+     charts; lines from other charts of this record cannot be signed off while this link is in \
+     doubt";
 
 /// What a line's pair IS, which decides the verdicts its review panel can offer. It travels to
 /// the webview and comes back with "Review…", so the panel reviews the pair the line showed —
@@ -309,6 +310,20 @@ mod tests {
             .contains("in doubt: this node's identity check finds a clash"));
         assert_eq!(lines[0].button, REVIEW_LINK);
         assert_eq!(lines[0].kind, PairKind::Link);
+    }
+
+    /// With two doubted links, judging this one leaves the hold: the note may say only what is
+    /// always true — lines from the record's other charts are held WHILE this link is in doubt —
+    /// never that a judgement of this link lifts the hold ("until").
+    #[test]
+    fn a_clash_note_never_promises_that_judging_this_link_lifts_the_hold() {
+        assert!(!CLASH_NOTE.contains("until"), "{CLASH_NOTE}");
+        assert_eq!(
+            CLASH_NOTE,
+            " — in doubt: this node's identity check finds a clash between these two charts; \
+             lines from other charts of this record cannot be signed off while this link is in \
+             doubt"
+        );
     }
 
     #[test]

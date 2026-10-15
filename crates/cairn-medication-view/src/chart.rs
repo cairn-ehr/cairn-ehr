@@ -54,13 +54,15 @@ pub const SEPARATION_INSTRUCTION: &str =
 /// node only doubts that they are one person. Separating threads is right only if they are two
 /// people, and even then the LINK is what is wrong — so the links are judged first. An attested
 /// link outranks the machine's (ADR-0076 decision 5); an attested unlink splits the record, or
-/// is recorded but leaves it joined through another link. The window cannot yet confirm a link
-/// that already stands (#716), so the confirm half names the CLI verb, with its required
-/// `--attester-key` (both verbs refuse to run without one). Each verb's holding rule is named
-/// because the record can list a member whose registration has not reached this node: an
-/// unlink needs `--from` only when NEITHER chart is held, but a link needs BOTH held
-/// (`cairn-node` `chart_link::admit_judgement`) — a deliberate act from this node must not
-/// attach a chart it has never seen.
+/// is recorded but leaves it joined through another link. The window judges both from its review
+/// panel (R6, #716): "Review this link…" on a doubted link, "Review this judgement…" on the
+/// bridge's "different people" line — in the bridge no link line is marked, so naming only the
+/// first door would point at nothing. The CLI verbs are named too, for a node run without the
+/// window, with their required `--attester-key` (both refuse to run without one). Each verb's
+/// holding rule is named because the record can list a member whose registration has not
+/// reached this node: an unlink needs `--from` only when NEITHER chart is held, but a link needs
+/// BOTH held (`cairn-node` `chart_link::admit_judgement`) — a deliberate act from this node must
+/// not attach a chart it has never seen.
 ///
 /// WHY NOT "EITHER JUDGEMENT LIFTS THIS HOLD". It is false in reachable cases: with two doubted
 /// links, judging one leaves the hold; in the A–C–X bridge, unlinking A–X leaves the record
@@ -71,10 +73,13 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
     "A clinician must judge this record's links. A link is in doubt when it joins two charts \
      without a clinician's confirmation on record here and the node's hard identity check has \
      found a clash between them, or when a clinician has recorded that two of the record's \
-     charts are different people while other links still join them. In the window, \
-     \"Review this link…\" beside a link marked in doubt under \"How these charts are \
-     linked\" compares the two charts and either confirms the link (both charts must be held on \
-     this node) or unlinks it. In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key \
+     charts are different people while other links still join them. In the window, under \
+     \"How these charts are linked\": \"Review this link…\" beside a link marked in doubt \
+     compares the two charts and either confirms the link (both charts must be held on this \
+     node) or unlinks it; \"Review this judgement…\" beside a line saying a clinician recorded \
+     two charts as different people compares them and can link them (both charts must be held \
+     on this node) — if they are different people, unlink one of the links still joining them \
+     instead. In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key \
      <key-file>` unlinks (add `--from <open_chart>` when neither chart is held on this node), and \
      `link-charts <chart_a> <chart_b> --attester-key <key-file>` confirms a link — both charts \
      must be held on this node to link them. The hold \
@@ -348,5 +353,22 @@ mod tests {
         // Both causes db/054 can report: the hard check's clash, and a human's unlink.
         assert!(DOUBTED_LINK_INSTRUCTION.contains("hard identity check"));
         assert!(DOUBTED_LINK_INSTRUCTION.contains("different people"));
+    }
+
+    /// In the A–C–X bridge no link line is marked in doubt: the doubt is the line saying a
+    /// clinician recorded two charts as different people, and its door is "Review this
+    /// judgement…". A remedy naming only "Review this link…" would point at nothing.
+    #[test]
+    fn the_doubted_link_remedy_names_the_bridge_lines_door_too() {
+        assert!(DOUBTED_LINK_INSTRUCTION.contains(
+            "\"Review this judgement…\" beside a line saying a clinician recorded two charts as \
+             different people"
+        ));
+        // Both ways forward from that line: link them, or unlink a link still joining them. The
+        // second is the instruction's own, never claimed of the panel (which shows a not-held
+        // note instead when a chart is not held here).
+        assert!(DOUBTED_LINK_INSTRUCTION.contains("can link them"));
+        assert!(DOUBTED_LINK_INSTRUCTION
+            .contains("if they are different people, unlink one of the links still joining them"));
     }
 }
