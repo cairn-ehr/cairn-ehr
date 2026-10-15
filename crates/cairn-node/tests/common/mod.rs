@@ -694,10 +694,26 @@ pub async fn register_pair(c: &Client, sk: &SigningKey, kid: &str, low: Uuid, hi
 /// effect, and was left in place rather than re-basing that suite's eight tests on a new
 /// fixture.
 pub async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid) {
-    use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
     let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
     register_pair(c, sk, kid, a, b).await;
-    for (p, wall, value) in [(a, 2, "1980-07-15"), (b, 3, "1975-01-02")] {
+    assert_clashing_dobs(c, sk, kid, a, b, (2, 3)).await;
+    (a, b)
+}
+
+/// Clashing document-verified DOBs on two charts that already exist, at HLC walls `walls` —
+/// the hard veto, asserted, then checked. [`vetoed_pair`] asserts them at registration; a test of
+/// issue #220's path (a link that synced AHEAD of the clash, so db/018 raised no flag) asserts
+/// them after the link.
+pub async fn assert_clashing_dobs(
+    c: &Client,
+    sk: &SigningKey,
+    kid: &str,
+    a: Uuid,
+    b: Uuid,
+    walls: (i64, i64),
+) {
+    use cairn_event::demographics::{dob_assertion_body, render_dob_twin};
+    for (p, wall, value) in [(a, walls.0, "1980-07-15"), (b, walls.1, "1975-01-02")] {
         let body = EventBody {
             event_id: Uuid::now_v7().to_string(),
             patient_id: p.to_string(),
@@ -731,7 +747,6 @@ pub async fn vetoed_pair(c: &Client, sk: &SigningKey, kid: &str) -> (Uuid, Uuid)
         .unwrap()
         .get(0);
     assert!(vetoed, "precondition: the pair must trip the hard veto");
-    (a, b)
 }
 
 /// The effective trust state `chart_trust` reports for a subject, or `None` (== confirmed).

@@ -514,20 +514,13 @@ async fn read_coding_conflict_groups(
 /// function for why all three) — an input to
 /// `medication::hazard::wrong_chart_reasons`.
 ///
-/// A set of one cannot hold a link, so it is answered without a query: a never-linked chart
-/// costs exactly the statements it cost before.
+/// One Rust spelling of the read: [`crate::patient::edges::record_is_doubted`], which the
+/// duplicate-review tray asks too (a set of one costs no query there either).
 async fn set_has_doubted_link(
     client: &(impl tokio_postgres::GenericClient + Sync),
     charts: &ChartSet,
 ) -> anyhow::Result<bool> {
-    if !charts.is_linked() {
-        return Ok(false);
-    }
-    let sql = "SELECT cairn_chart_set_has_doubted_link($1::text[]::uuid[]) AS doubted";
-    let row = client
-        .query_one(sql, &[&uuid_strings(charts.members())])
-        .await?;
-    Ok(row.get("doubted"))
+    crate::patient::edges::record_is_doubted(client, charts).await
 }
 
 /// Run a one-column `group_id` query bound to the set's charts and collect the ids.

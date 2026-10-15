@@ -229,13 +229,15 @@ fn derivation_finds_the_expected_helpers() {
             // `auto_apply.rs`): attested and un-attested link bodies at a chosen HLC triple.
             // `vetoed_pair` (R2a; `link_precedence.rs`, `chart_link.rs`): a registered pair
             // with clashing verified DOBs (a hard veto by construction), promoted from the
-            // local copy `link_precedence.rs` had.
+            // local copy `link_precedence.rs` had. `assert_clashing_dobs` (R6, PR #777 review)
+            // is its second half, split out for `link_doubts.rs`'s veto-after-link case (#220).
             // `seed_proposal` (R5a): `chart_link.rs`'s fixture, promoted when
             // `match_proposal_open.rs` and `duplicate_review.rs` needed the identical shape.
             "async fn apply_remote_attested(",
             "async fn apply_remote_medication_with_raw_safety(",
             "async fn apply_remote_raw(",
             "async fn assert_chart_grade(",
+            "async fn assert_clashing_dobs(",
             "async fn attestation_count(",
             "async fn chart_named(",
             "async fn content_address_of(",

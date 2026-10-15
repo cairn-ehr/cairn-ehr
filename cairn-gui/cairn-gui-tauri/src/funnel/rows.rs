@@ -14,7 +14,8 @@
 //! # Why the label is worded here
 //!
 //! "One person — 2 linked charts" is a sentence a clerk acts on, so it is tested in Rust like every
-//! other sentence on the front door (`view.rs`); `funnel.js` only draws it.
+//! other sentence on the front door (`view.rs`); `funnel.js` only draws it. A row whose links db/054
+//! doubts never says "One person" (#723, principle 4).
 use crate::funnel::view::{candidate_view, CandidateView};
 use cairn_patient_search::PersonRow;
 use serde::Serialize;
@@ -33,12 +34,24 @@ pub fn linked_row_label(charts: usize) -> String {
     format!("One person — {charts} linked charts")
 }
 
-/// A person row as the webview draws it. Pure.
+/// The label over a linked row whose link is in doubt. It names the doubt instead of the person,
+/// so the clerk never reads a set the record cannot vouch for as one person.
+pub fn doubted_row_label(charts: usize) -> String {
+    format!("Linked charts — a link between them is in doubt ({charts} charts)")
+}
+
+/// A person row as the webview draws it. Pure. A doubted row takes [`doubted_row_label`]; an
+/// undoubted linked row keeps [`linked_row_label`] byte for byte.
 pub fn person_row_view(row: &PersonRow) -> PersonRowView {
+    let charts = row.members().len();
     PersonRowView {
-        label: row
-            .is_linked()
-            .then(|| linked_row_label(row.members().len())),
+        label: row.is_linked().then(|| {
+            if row.is_doubted() {
+                doubted_row_label(charts)
+            } else {
+                linked_row_label(charts)
+            }
+        }),
         members: row.members().iter().map(candidate_view).collect(),
     }
 }
@@ -95,6 +108,29 @@ mod tests {
                 uuid::Uuid::from_u128(2).to_string(),
                 uuid::Uuid::from_u128(1).to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn a_doubted_linked_row_never_says_one_person() {
+        let row = PersonRow::new(vec![chart(2), chart(1)])
+            .unwrap()
+            .with_doubt(true);
+        let label = person_row_view(&row).label.unwrap();
+        assert_eq!(
+            label,
+            "Linked charts — a link between them is in doubt (2 charts)"
+        );
+        assert!(!label.contains("One person"));
+    }
+
+    /// Golden: an undoubted linked row is byte-identical to R3's.
+    #[test]
+    fn an_undoubted_linked_row_reads_exactly_as_before() {
+        let row = PersonRow::new(vec![chart(2), chart(1)]).unwrap();
+        assert_eq!(
+            person_row_view(&row).label.as_deref(),
+            Some("One person — 2 linked charts")
         );
     }
 

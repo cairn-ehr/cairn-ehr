@@ -251,6 +251,12 @@ function updateLinkLock(unlocked) {
   el("link-different").textContent = keyUnlocked
     ? "Different people — not the same person"
     : "Different people — not the same person (unlock your signing key first)";
+  // The review panel's second verdict (R6): its label is Rust's (`view.same_label`), stored by
+  // `renderUnlinkComparison` in `dataset.label`, so the suffix is added to the BASE each time and
+  // never appended twice. No label (no verdict offered) stays empty.
+  const same = el("unlink-same");
+  const base = same.dataset.label || "";
+  same.textContent = base && !keyUnlocked ? base + " (unlock your signing key first)" : base;
 }
 
 /**
@@ -297,6 +303,21 @@ function samePair(a, b) {
     (a.patientId === b.patientId && a.otherId === b.otherId) ||
     (a.patientId === b.otherId && a.otherId === b.patientId)
   );
+}
+
+/**
+ * Disarm a NEWER comparison of the same two charts as `sent` — a second Review pressed while
+ * `sent`'s answer was in flight. Called once `sent` landed (any recorded answer) or may have
+ * (#713's unknown outcome). The case that matters: landed Outranked, the record looks unchanged,
+ * so #708's record check would pass a second press — a second judgement over the colleague's
+ * that won. After any other answer the comparison is stale anyway.
+ */
+function disarmNewerComparison(sent) {
+  if (compared !== null && samePair(compared, sent)) {
+    compared = null;
+    el("link-confirm").hidden = true;
+    el("link-different").hidden = true;
+  }
 }
 
 /** Send the Link judgement for whatever `compare` last rendered. */
@@ -347,7 +368,17 @@ async function sendJudgement(command) {
       // own `#link-status` says this ONCE — not also through `say()`, which would read as two
       // different outcomes rather than one.
       setMessage(el("link-status"), report.sentence);
+      // The verdict LANDED (as Outranked): neither judgement may be signed again over this now
+      // stale read. Forget the comparison and take BOTH buttons away; a fresh Review re-reads.
+      compared = null;
+      el("link-confirm").hidden = true;
+      el("link-different").hidden = true;
     }
+    // Wherever it landed, a recorded judgement leaves a newer comparison of these two charts
+    // stale. Not keyed on `reload`: "Different people" answers `reload: true` even when every
+    // pair was Outranked (`different_people_report`), and then the record looks unchanged — #708
+    // would pass a second press. After a change, a fresh Review must re-read anyway.
+    disarmNewerComparison(sent);
   } catch (failure) {
     const place = linkAnswerPlace(sent, token);
     const text = failureText(failure);
@@ -384,11 +415,7 @@ async function sendJudgement(command) {
     // pressed while this answer was in flight lands as "chart" or "elsewhere", above): its buttons
     // would sign over a record that may already carry this judgement — and if it landed Outranked
     // the record looks unchanged, so #708's check would not catch the second press (#713 review).
-    if (reread && compared !== null && samePair(compared, sent)) {
-      compared = null;
-      el("link-confirm").hidden = true;
-      el("link-different").hidden = true;
-    }
+    if (reread) disarmNewerComparison(sent);
     // Re-read whenever the chart open NOW is one the judgement was about (the same test as
     // `linkChanged`, without its `reload` flag — nobody knows yet whether anything changed).
     const touched =

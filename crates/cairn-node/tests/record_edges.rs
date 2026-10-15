@@ -1,5 +1,5 @@
 //! R2b-2 Task 3: `record_edges` lists the STANDING links inside a chart set — the read behind the
-//! window's per-link "Not the same person…" (ADR-0076 decision 4).
+//! window's per-link "Review this link…" (ADR-0076 decision 4; "Not the same person…" before R6).
 //!
 //! Real Postgres, gated on `$CAIRN_TEST_PG`, serialized via `db::test_serial_guard`.
 use cairn_event::{generate_key, SigningKey};

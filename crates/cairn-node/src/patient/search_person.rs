@@ -8,6 +8,7 @@
 //!
 //! WHY A NEW FILE. `search.rs` was at its size ceiling, and these helpers answer a distinct
 //! question ("who else is this person?") from the ones it already owns ("who matched?").
+use crate::db_diagnosis::LocalDbFault;
 use cairn_patient_search::TrustState;
 use std::collections::{HashMap, HashSet};
 use tokio_postgres::GenericClient;
@@ -16,41 +17,67 @@ use uuid::Uuid;
 use super::person::trust_of;
 
 /// Read the link component of every chart in `ids`: for each chart, every chart of the same
-/// person (itself included), sorted ascending (UUIDv7, so oldest first).
+/// person (itself included), sorted ascending (UUIDv7, so oldest first), and whether db/054
+/// doubts a link in that component (R6, #723).
 ///
 /// ONE statement, not one call per candidate. `cairn_person_charts` is `LANGUAGE sql STABLE`
-/// (db/054), so a single query reads every component from one snapshot: two members of the
-/// same person can never be seen with different link states half-way through a search, and
-/// the search pays one round trip however many charts it matched. A chart that was never
-/// linked comes back as its own set of one, so the caller never needs a fallback for a
-/// missing entry - and must not invent one: [`assemble_components`] refuses an answer that
+/// (db/054), so a single query reads every component, and its doubt, from one snapshot: two
+/// members of the same person can never be seen with different link states half-way through a
+/// search, and the search pays one round trip however many charts it matched. A never-linked
+/// chart (a component of one) is not asked about doubt at all (the `CASE`): a lone chart has no
+/// link to doubt. It comes back as its own set of one, so the caller never needs a fallback for
+/// a missing entry - and must not invent one: [`assemble_components`] refuses an answer that
 /// does not contain the chart it was asked about.
 pub(super) async fn read_components<C: GenericClient + Sync>(
     client: &C,
     ids: &[Uuid],
-) -> anyhow::Result<HashMap<Uuid, Vec<Uuid>>> {
+) -> anyhow::Result<Components> {
     let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
     let rows = client
         .query(
-            "SELECT m::text AS chart, c::text AS member \
-             FROM unnest($1::text[]::uuid[]) AS m, LATERAL cairn_person_charts(m) AS c",
+            "SELECT m::text AS chart, c::text AS member, d.doubted \
+             FROM unnest($1::text[]::uuid[]) AS m \
+             CROSS JOIN LATERAL (SELECT array_agg(x) AS charts FROM cairn_person_charts(m) AS x) AS s \
+             CROSS JOIN LATERAL (SELECT CASE WHEN cardinality(s.charts) > 1 \
+                                             THEN cairn_chart_set_has_doubted_link(s.charts) \
+                                             ELSE false END AS doubted) AS d \
+             CROSS JOIN LATERAL unnest(s.charts) AS c",
             &[&id_strs],
         )
-        .await?;
-    let pairs: Vec<(Uuid, Uuid)> = rows
+        .await
+        .map_err(|e| {
+            LocalDbFault::new(
+                "reading each matched chart's linked charts and whether a link among them is in \
+                 doubt",
+                e,
+            )
+        })?;
+    let triples: Vec<(Uuid, Uuid, bool)> = rows
         .iter()
         .map(|r| {
             Ok((
                 r.try_get::<_, String>("chart")?.parse()?,
                 r.try_get::<_, String>("member")?.parse()?,
+                r.try_get::<_, bool>("doubted")?,
             ))
         })
         .collect::<anyhow::Result<_>>()?;
-    assemble_components(pairs)
+    assemble_components(triples)
 }
 
-/// Group `(chart, member-of-its-component)` pairs into one sorted member list per chart, and
-/// REFUSE any list that does not contain the chart it belongs to.
+/// What [`read_components`] reads: each matched chart's component, and which matched charts
+/// sit in a component db/054 doubts.
+#[derive(Debug, Default)]
+pub(super) struct Components {
+    /// For each matched chart, every chart of its person, sorted ascending.
+    pub members: HashMap<Uuid, Vec<Uuid>>,
+    /// The matched charts whose component is doubted. Display only; never signed.
+    pub doubted: HashSet<Uuid>,
+}
+
+/// Group `(chart, member-of-its-component, doubted)` triples into one sorted member list per
+/// chart, collect the charts whose component is doubted, and REFUSE any list that does not
+/// contain the chart it belongs to.
 ///
 /// `group_by_person` trusts that precondition: a component missing its own anchor would be
 /// placed in a row without it, and the chart would vanish from every row - the silent
@@ -58,10 +85,14 @@ pub(super) async fn read_components<C: GenericClient + Sync>(
 /// chart itself in, so this cannot fire today; it is refused (the same refusal
 /// `person::person_charts` makes) rather than guessed around should that function change.
 /// Pure, so the rule is tested without a database.
-fn assemble_components(pairs: Vec<(Uuid, Uuid)>) -> anyhow::Result<HashMap<Uuid, Vec<Uuid>>> {
+fn assemble_components(rows: Vec<(Uuid, Uuid, bool)>) -> anyhow::Result<Components> {
     let mut out: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-    for (chart, member) in pairs {
+    let mut doubted: HashSet<Uuid> = HashSet::new();
+    for (chart, member, is_doubted) in rows {
         out.entry(chart).or_default().push(member);
+        if is_doubted {
+            doubted.insert(chart);
+        }
     }
     for (chart, members) in &mut out {
         members.sort();
@@ -72,7 +103,10 @@ fn assemble_components(pairs: Vec<(Uuid, Uuid)>) -> anyhow::Result<HashMap<Uuid,
             );
         }
     }
-    Ok(out)
+    Ok(Components {
+        members: out,
+        doubted,
+    })
 }
 
 /// What the name column of one member reads, and whether that counts against the search.
@@ -222,21 +256,34 @@ mod tests {
 
     #[test]
     fn components_are_grouped_per_chart_and_sorted() {
-        let pairs = vec![
-            (id(2), id(2)),
-            (id(2), id(1)),
-            (id(1), id(2)),
-            (id(1), id(1)),
+        let rows = vec![
+            (id(2), id(2), false),
+            (id(2), id(1), false),
+            (id(1), id(2), false),
+            (id(1), id(1), false),
         ];
-        let out = assemble_components(pairs).unwrap();
-        assert_eq!(out[&id(1)], vec![id(1), id(2)]);
-        assert_eq!(out[&id(2)], vec![id(1), id(2)]);
+        let out = assemble_components(rows).unwrap();
+        assert_eq!(out.members[&id(1)], vec![id(1), id(2)]);
+        assert_eq!(out.members[&id(2)], vec![id(1), id(2)]);
+        assert!(out.doubted.is_empty());
+    }
+
+    #[test]
+    fn a_doubted_component_marks_its_anchor_chart() {
+        let rows = vec![
+            (id(1), id(1), true),
+            (id(1), id(2), true),
+            (id(3), id(3), false),
+        ];
+        let out = assemble_components(rows).unwrap();
+        assert!(out.doubted.contains(&id(1)) && !out.doubted.contains(&id(3)));
+        assert_eq!(out.members[&id(1)], vec![id(1), id(2)]);
     }
 
     #[test]
     fn a_component_that_omits_its_own_chart_is_refused() {
         // Chart 2's answer names only chart 1: grouping would drop chart 2 from every row.
-        let err = assemble_components(vec![(id(2), id(1))]).unwrap_err();
+        let err = assemble_components(vec![(id(2), id(1), false)]).unwrap_err();
         assert!(err.to_string().contains("did not return"), "{err}");
     }
 }

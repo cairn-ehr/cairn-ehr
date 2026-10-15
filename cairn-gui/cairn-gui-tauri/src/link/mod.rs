@@ -12,9 +12,12 @@
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
 //!
-//! Its sibling gesture, "Not the same person…" (R2b-2 — undo ONE link of a combined record),
-//! lives in `unlink.rs` with its own rule order and its own panel; `record_links.rs` reads the
-//! "How these charts are linked" list both gestures sit beside, and `unlink_view.rs` words it.
+//! Its sibling gesture, the review panel opened by "Review this link…" / "Review this judgement…"
+//! (R2b-2, R6 — undo ONE link of a combined record, or confirm it), lives in `unlink.rs` and
+//! `confirm.rs` with its own rule order and its own panel; `record_links.rs` reads the "How these
+//! charts are linked" list it opens from, and `unlink_view.rs` / `confirm_view.rs` word it.
+pub mod confirm;
+pub mod confirm_view;
 pub mod record_links;
 pub mod search;
 pub mod unlink;
@@ -210,6 +213,7 @@ pub async fn link_impl(
     let shown = cairn_node::chart_link::RecordsShown {
         this: &left,
         other: &right,
+        pair: None,
     };
     let outcome = cairn_node::chart_link::link_charts_as_shown(
         &mut db,

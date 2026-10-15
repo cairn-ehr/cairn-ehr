@@ -353,6 +353,7 @@ pub async fn record_different_people(
         let shown = RecordsShown {
             this: left,
             other: right,
+            pair: None,
         };
         let outcome = unlink_charts_as_shown(client, low, high, shown, reviewer, node_origin).await;
         judged.push(PairJudgement { low, high, outcome });

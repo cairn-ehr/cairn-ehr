@@ -1,5 +1,6 @@
-//! The two public entry points of a human's link/unlink judgement — [`link_charts`] and
-//! [`unlink_charts`] — and what they report back ([`LinkOutcome`], [`LinkEffect`]).
+//! The public entry points of a human's link/unlink judgement — [`link_charts`] and
+//! [`unlink_charts`], and their "as shown" variants for a judgement made from a comparison — and
+//! what they report back ([`LinkOutcome`], [`LinkEffect`]).
 //!
 //! Lives apart from `chart_link.rs` (house rule 4: files under 500 lines); every item is
 //! re-exported by the parent, so `chart_link::unlink_charts` and friends keep their paths. The
@@ -139,6 +140,43 @@ pub async fn link_charts_as_shown(
     .await
 }
 
+/// "Same person — confirm" a link INSIDE one record (R6, #716): a link that already stands
+/// without a clinician's confirmation, or — the bridge — two charts a clinician once recorded as
+/// different people while other links still join them. As [`link_charts`], but signed only while
+/// the record still reads as `record` AND the pair's standing assertion is still `standing`, the
+/// one the panel showed (see [`RecordsShown::pair`]). Both charts must be held here.
+///
+/// Why the pair, not just the record: inside one record a third chart can keep A and B joined, so
+/// a colleague's attested unlink of A–B landing meanwhile leaves `record` unchanged — and our
+/// confirm, stamped later by this node's clock, would silently overrule it. The pair's content
+/// address is what changes, so that is what is re-checked under CARNLK before anything is signed.
+pub async fn confirm_link_as_shown(
+    client: &mut tokio_postgres::Client,
+    a: Uuid,
+    b: Uuid,
+    record: &ChartSet,
+    standing: &[u8],
+    reviewer: &Reviewer<'_>,
+    node_origin: &str,
+) -> anyhow::Result<LinkOutcome> {
+    let shown = RecordsShown {
+        this: record,
+        other: record,
+        pair: Some(standing),
+    };
+    judge(
+        client,
+        LinkVerb::Link,
+        a,
+        b,
+        None,
+        Some(shown),
+        reviewer,
+        node_origin,
+    )
+    .await
+}
+
 /// "Not the same person" about two SEPARATE records the clinician compared ("Different people"
 /// on a possible duplicate): as [`unlink_charts`] with no `opened` chart, but signed only while
 /// each chart's record still reads as `shown` (#708). A colleague's link of the pair landing
@@ -157,6 +195,49 @@ pub async fn unlink_charts_as_shown(
         a,
         b,
         None,
+        Some(shown),
+        reviewer,
+        node_origin,
+    )
+    .await
+}
+
+/// "Not the same person — unlink" a link INSIDE one record, from the review panel (R6, #716): as
+/// [`unlink_charts`] judged from `opened` (the chart on screen), but signed only while the record
+/// still reads as `record` AND the pair's standing assertion is still `standing`, the one the
+/// panel showed (see [`RecordsShown::pair`]).
+///
+/// Why the pair, not just the record — the mirror of [`confirm_link_as_shown`]: inside one record
+/// a third chart can keep A and B joined, so a colleague's attested LINK of A–B (their confirm)
+/// landing while our clinician reads leaves `record` unchanged. Our unlink is attested too and,
+/// stamped later by this node's clock, would win the attested-vs-attested tie-break — silently
+/// overruling the colleague's confirm and reporting an ordinary `StillJoined`. The pair's content
+/// address is what changes, so it is re-checked under CARNLK (row lock first, then CARNLK, as
+/// every judgement) before anything is signed; a changed pair is refused as stale input ("review
+/// it again"). The CLI and every other caller of [`unlink_charts`] judge without a panel and keep
+/// that function's behaviour.
+#[allow(clippy::too_many_arguments)]
+pub async fn unlink_charts_as_shown_from(
+    client: &mut tokio_postgres::Client,
+    a: Uuid,
+    b: Uuid,
+    opened: Uuid,
+    record: &ChartSet,
+    standing: &[u8],
+    reviewer: &Reviewer<'_>,
+    node_origin: &str,
+) -> anyhow::Result<LinkOutcome> {
+    let shown = RecordsShown {
+        this: record,
+        other: record,
+        pair: Some(standing),
+    };
+    judge(
+        client,
+        LinkVerb::Unlink,
+        a,
+        b,
+        Some(opened),
         Some(shown),
         reviewer,
         node_origin,
@@ -224,11 +305,12 @@ fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
     }
 }
 
-/// The shared body of both entry points: pre-checks (legible refusals before anything is
+/// The shared body of every entry point above: pre-checks (legible refusals before anything is
 /// signed), then ONE transaction that writes the judgement AND reads back what it did — so
 /// once the commit succeeds there is nothing left that can fail. `opened`: the chart the
-/// judgement is made from, if the caller named one (see [`unlink_charts`]). `shown`: the two
-/// records the judgement was made over, if the caller compared them (see [`RecordsShown`]).
+/// judgement is made from, if the caller named one (see [`unlink_charts`]). `shown`: the
+/// records the judgement was made over, if the caller compared them, and — for a verdict inside
+/// one record — the pair's standing assertion as the panel read it (see [`RecordsShown`]).
 #[allow(clippy::too_many_arguments)]
 async fn judge(
     client: &mut tokio_postgres::Client,
@@ -245,6 +327,16 @@ async fn judge(
         return Err(deliberate_refusal(format!(
             "{a} and {b} are the same chart — a chart cannot be linked to itself"
         )));
+    }
+    if shown.and_then(|s| s.pair).is_some_and(<[u8]>::is_empty) {
+        // Also about the INPUT: a panel that read no standing judgement has nothing to sign
+        // over. Without this the pair check would refuse it anyway (no real address is empty),
+        // but as "changed while you were judging" — untrue; the window's `require_standing`
+        // says the same sentence, so a non-window caller gets the true reason too.
+        return Err(deliberate_refusal(
+            "the comparison did not read which judgement stands on this pair — nothing was \
+             done; review it again",
+        ));
     }
     let (a_held, b_held) = (is_held(client, a).await?, is_held(client, b).await?);
     // Only asked when it can change the answer: an unlink with exactly one chart unheld.
