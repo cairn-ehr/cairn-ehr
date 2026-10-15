@@ -22,7 +22,7 @@
 //! attests directly and submits through the 3-argument `submit_event` door — never the
 //! medication seal path.
 
-use crate::db_diagnosis::{deliberate_refusal, LocalDbFault};
+use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault};
 use anyhow::Context;
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
@@ -203,6 +203,15 @@ impl StandingLink {
 
 /// Read the standing winner for the canonical pair, inside the caller's transaction (so it
 /// sees the caller's own just-submitted event). `None`: no assertion about the pair exists.
+///
+/// **A row with no content address is refused, never read as a judgement (#787).** A database
+/// older than #115 gained `content_address` through db/018's `ADD COLUMN IF NOT EXISTS`, which
+/// leaves it nullable, so such a pair's row can still carry a NULL. Every caller compares this
+/// address against something: the panel's shown pair, or "is my event the one standing?". With
+/// no address, neither comparison can be made truthfully. So this read says so and names the
+/// operator act that refills the column (a rebuild of the projections). The read used to
+/// `Row::get` the column, which PANICS on a NULL: the review panel stayed blank, and a verdict
+/// lost its transaction mid-way.
 pub async fn standing_link(
     client: &(impl tokio_postgres::GenericClient + Sync),
     low: Uuid,
@@ -216,11 +225,32 @@ pub async fn standing_link(
         )
         .await
         .map_err(|e| LocalDbFault::new("reading the pair's standing link", e))?;
-    Ok(row.map(|r| StandingLink {
-        content_address: r.get(0),
+    let Some(r) = row else {
+        return Ok(None);
+    };
+    let Some(content_address) = r.get::<_, Option<Vec<u8>>>(0) else {
+        return Err(node_state_refusal(legacy_address_refusal(low, high)));
+    };
+    Ok(Some(StandingLink {
+        content_address,
         state: r.get(1),
         attested: r.get(2),
     }))
+}
+
+/// The words for a standing row that predates #115 and has no content address. **Pure**, so the
+/// sentence is pinned apart from the database. It names the one operator act that fixes it:
+/// `reproject --rebuild` truncates the projections, `patient_link` among them, and replays every
+/// link/unlink through db/018's applier, which writes each winner's address. It names the WHOLE
+/// log on purpose: `--prefix identity.` is refused by `cairn_reproject`, because it would truncate
+/// `patient_chart`, which registrations outside that prefix also feed
+/// (`tests/standing_link_legacy_address.rs` runs the rebuild named here).
+pub fn legacy_address_refusal(low: Uuid, high: Uuid) -> String {
+    format!(
+        "the judgement standing between charts {low} and {high} has no recorded content address \
+         (a row written before #115), so it cannot be judged as shown — nothing was done; an \
+         operator must rebuild the projections first: `cairn-node reproject --rebuild`"
+    )
 }
 
 /// The proposal statuses a human judgement resolves. Every other status is CLOSED and a
