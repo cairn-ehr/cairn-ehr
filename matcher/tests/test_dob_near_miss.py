@@ -1,5 +1,7 @@
 """A DOB one keying error away is NEAR, not DISAGREE (spec 2026-10-11, ADR-0079). Pure."""
 
+import re
+
 import pytest
 
 from cairn_matcher.agreement import AgreementLevel, Context
@@ -100,7 +102,9 @@ def test_the_package_version_moved_with_the_comparator():
     # matcher_version = package version + a digest of weights/thresholds/config. Comparator
     # CODE is not in the digest, so a behaviour change must move the version (spec: Rollout).
     import cairn_matcher
-    assert cairn_matcher.__version__ == "0.2.0"
+    # 0.2.0 shipped the ADR-0079 comparator; later behaviour changes move it further (0.2.1:
+    # the #775 blocking collation). What this pins is that it never fell back below 0.2.0.
+    assert _version_tuple(cairn_matcher.__version__) >= (0, 2, 0)
 
 
 @pytest.mark.parametrize("a, b", [
@@ -172,3 +176,10 @@ def test_a_middle_name_and_a_day_month_swap_reach_review_at_full_provenance():
                                 rec(("mary", "jane"), D(1950, 7, 1))))
     assert s.total == 3.0
     assert band(s, ()) is Band.REVIEW
+
+def _version_tuple(version: str) -> tuple[int, int, int]:
+    """The leading MAJOR.MINOR.PATCH of a version string, tolerating a pre-release suffix
+    ("0.3.0rc1" -> (0, 3, 0)) so a later bump never crashes this guard."""
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+    assert m, f"unparseable version {version!r}"
+    return int(m[1]), int(m[2]), int(m[3])

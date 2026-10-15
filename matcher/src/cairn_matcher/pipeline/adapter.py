@@ -44,13 +44,14 @@ def _normalize_token(token: str) -> str:
     is culture-NEUTRAL (not the anglo transliteration ADR-0014 forbids).
 
     The SQL blocking tokenizer (pipeline/blocking_sql.py `_NAME_TOKENS_CTE`) applies the SAME NFC
-    fold but `lower()`, NOT `casefold()` — Postgres has no casefold. The two AGREE on the ASCII and
-    accented-Latin names this pool carries, but DIVERGE where casefold expands a code point
-    that lower() leaves alone: "Weiß".casefold() == "weiss" (matches "WEISS") while
-    "Weiß".lower() == "weiß"; ligatures ("ﬀ" -> "ff") behave the same way. So such a pair
-    scores EXACT in this scorer yet never shares a blocking token, and the true pair is never
-    generated (issue #211 gap 3). This is recall loss ONLY — never a false match — and it is
-    the *designed* limit of a deliberately-simple SQL tokenizer (blocking_sql.py), whose declared
+    fold but `lower()`, NOT `casefold()` — PostgreSQL 18 has `casefold()`, but the SQL side does
+    not use it yet (#780; it would move signed search tokens and every blocking key). The two
+    AGREE on the ASCII and accented-Latin names this pool carries, but DIVERGE where casefold
+    expands a code point that lower() leaves alone: "Weiß".casefold() == "weiss" (matches
+    "WEISS") while "Weiß".lower() == "weiß"; ligatures ("ﬀ" -> "ff") behave the same way. So
+    such a pair scores EXACT in this scorer yet never shares a blocking token, and the true pair
+    is never generated (issue #211 gap 3). This is recall loss ONLY — never a false match — and it
+    is the *designed* limit of a deliberately-simple SQL tokenizer (blocking_sql.py), whose declared
     backstop is the §5.13 hub duplicate sweep. Do NOT "align" the two by folding this to
     lower(): that would drop the correct "Weiß"/"WEISS" EXACT match the scorer should make.
     """

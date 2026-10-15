@@ -3,6 +3,24 @@
 ## ⇒ NEXT
 
 > [!NOTE]
+> **⇒ R5b — THE POSSIBLE-DUPLICATE WORKLIST (#680) — BUILT on draft PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749)
+> (2026-10-09), awaiting its gates, PR review and merge** (branch `feat/r5b-worklist-build`). R5a (PR #735), R4 (PR #724)
+> and #725 (PR #733) are merged. Repair path #679 · #680 · #681; design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice designed + as built); plan
+> `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`; R4's worker runbook
+> `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11 (banner) and
+> §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
+> **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
+>
+> **⇒ ALSO OPEN (2026-10-13, fourth cloud session): draft PR
+> [#779](https://github.com/cairn-ehr/cairn-ehr/pull/779) on branch `claude/festive-fermi-8j792j`** — the two decisions
+> the third session left, as the maintainer decided them: **#775** (option A: every name-lowercasing site — db/046's
+> four, `search_rank.rs`'s two, the matcher's blocking SQL — is `lower(normalize(x, NFC) COLLATE pg_unicode_fast)`, so
+> `İ`/Greek capitals case-map the same on every cluster; matcher **0.2.1** re-queues every chart once) and **#556**
+> (`segment_commitment` binds `attestation` + `attester_key` as tagged digests; goldens re-frozen IN PLACE, no revision
+> bump — the maintainer confirmed nothing is deployed). Filed **#778** (the sync wire can still strip a token) and
+> **#780** (`casefold()` for σ/ς, ß/ss — a design change touching signed tokens). PR #776 (#708, #713, #569, #560,
+> #682, #509) is merged. Review + merge #779.
 > **⇒ THE REPAIR PATH (#679 · #680 · #681) IS MERGED THROUGH R5b; R6 IS BUILT ON DRAFT PR #777 AND AWAITS THE
 > MAINTAINER'S REVIEW AND MERGE** (branch `feat/716-723-doubted-link-confirm`; #716 and #723 close with it). On `main`:
 > R5b's worklist (PR #749), the DOB near miss (PR #758, [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md),
@@ -397,18 +415,23 @@
 >     #625, #631, #632, #633, #634.
 > 15. **⇒ THREE THINGS IN `db/046`'s PASS 3 LOOK LIKE NOISE AND ARE EACH WORTH HUNDREDS OF MS ON A PI (#639).** (a)
 >     **`OFFSET 0` is an optimisation fence** — removing it changes no result, so nothing fails. (b) **The lateral is
->     `UNION ALL` on purpose.** (c) **The parts-branch skip must test `lower(normalize(pn.value, NFC))`** — U+0130 `İ`
->     lowercases to `i` + U+0307; dropping `lower` LOSES A TOKEN (ICU only).
+>     `UNION ALL` on purpose.** (c) **The parts-branch skip must test the same `lower(normalize(pn.value, NFC) COLLATE
+>     pg_unicode_fast)` it splits** — U+0130 `İ` lowercases to `i` + U+0307; dropping `lower` LOSES A TOKEN.
 >     `the_subset_argument_holds_for_every_unicode_code_point` checks all 1,114,111 code points;
 >     `the_subset_probe_still_describes_the_query_db046_runs` pins the composed expression. **A probe list is a sample,
 >     not an argument; re-measure with `scripts/measure_patient_search.py`, do not reason.** Residuals #641, #640,
 >     #643, #637.
 > 16. **⇒ A GUARD AND THE THING IT GUARDS MUST BE ASKED ABOUT THE SAME STRING** — pin the COMPOSED expression as a
 >     literal (`include_str!` + `contains`), not its pieces.
-> 17. **⇒ LOCAL POSTGRES IS ICU, CI's IS libc, AND `lower()` DIFFERS** (full vs simple case mapping). Derive such rows
->     from the SERVER (`patient_search_equivalence.rs`'s `full_case_mapping`). To reproduce CI: `CREATE DATABASE
->     cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE 'en_US.UTF-8' ENCODING UTF8;` + `CREATE EXTENSION
->     cairn_pgx;`. **Any test touching case, collation or character classes runs against both before pushing.**
+> 17. **⇒ EVERY NAME `lower()` NAMES ITS COLLATION: `COLLATE pg_unicode_fast` (#775).** A bare `lower()` follows the
+>     cluster (ICU locally: full mapping; CI's libc `C.UTF-8`: simple — `İ`→`i`, `Σ`→`σ`), so a stored token and a
+>     typed one could case-map differently and a chart went unfindable. The COLLATE also moves the regex classes
+>     (`\s` = Unicode White_Space: NBSP now splits). Search side and sweep side (matcher `blocking_sql.py`) must move
+>     TOGETHER — the db/046 DRIFT invariant (sweep-paired ⊆ search-found) — and a matcher-side change bumps
+>     `__version__` (blocking SQL is not in the digest). Pins: `db046_names_the_collation_at_exactly_its_four_lowercasing_sites`,
+>     the drift fixtures, `test_eval_generator_sync.py`. A libc test DB is still the way to reproduce CI for anything
+>     else locale-shaped: `CREATE DATABASE cairn_test_libc TEMPLATE template0 LOCALE_PROVIDER libc LOCALE
+>     'en_US.UTF-8' ENCODING UTF8;` + `CREATE EXTENSION cairn_pgx;`.
 > 18. **⇒ A TARGETED `cargo test --test X` REPORTING `ok` IS NOT PROOF — ONLY THE SWEEP IS (#661).** A stale test
 >     binary (shared `target/`, a running rust-analyzer) reported `ok` twice against source it contradicts — silent
 >     and green. **Gate on the sweep**; `CARGO_TARGET_DIR=/tmp/…` when an IDE is open; re-run every CI gate in CI's
@@ -500,6 +523,101 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its ⇒ DURABLE RULES block above).
 
+### 2026-10-13 (fourth) — #775 option A and #556, as decided (cloud session, draft PR #779)
+
+- **⇒ A CASE-MAPPING CHANGE ON ONE SIDE OF A SUBSET INVARIANT BREAKS THE INVARIANT.** Option A was first scoped as
+  "search only, matcher untouched" — wrong: the sweep's blocking SQL must lowercase by the same rule or the drift
+  test's sweep-paired ⊆ search-found fails. Grep every `lower(` over names, in Rust, SQL AND Python, before claiming a
+  change is one-sided.
+- **⇒ A COLLATE moves more than `lower()`.** It changes what `\s` and `[:alnum:]` match for that input. Fixtures for
+  NBSP, Turkish `İ` and Greek capitals now sit in `patient_search_drift.rs`.
+- **⇒ A test that ranks "first" among zero rivals proves nothing.** The raw-capital ranking test first matched only the
+  target; it now has six older same-surname namesakes, and both query sites were mutation-checked.
+- **⇒ Never run matcher pytest while the cargo DB gate runs** — both load the schema into `cairn_test`; the collision
+  surfaced as a 40P01 deadlock in an unrelated restore test. **Disk:** a clean `target/` + `cairn-gui/target` filled
+  the allowance twice; delete both outright when it does (the rebuild is ~20 min).
+- **⇒ COMMITTED IS NOT VOUCHED.** #556 binds the token's bytes into the segment chain so stripping is detected; it does
+  not make an unvouched token (db/020's deferred arm) trustworthy. The sync wire is still unbound: **#778**.
+- Left for a decision: **#780** (`casefold()` for σ/ς and ß/ss, and the Python scorer's agreement); Turkish dotless `ı`
+  vs `YILMAZ` (a capital `I` lowercases to dotted `i` under every Unicode-default mapping — only a Turkish-tailored
+  comparator fixes it, which is the ADR-0014 profile's job, not db/046's).
+
+### 2026-10-13 (third) — tech-debt pass (cloud session): #708, #713, #569, #560, #682, #509
+
+Picked by blast radius: two ways a human identity judgement silently overruled a colleague's (#708, #713), a restore
+that could keep a recalled actor authorised (#569), a backup kit's false green (#560), a false split that mints a
+duplicate chart (#682), an escrow clobber (#509).
+- **⇒ AN ISSUE'S PROPOSED FIX CAN BE WRONG ABOUT MVCC.** #560 proposed one REPEATABLE READ snapshot; an in-flight lower
+  seq is invisible inside that snapshot too. A seq watermark is SETTLED by waiting out the transactions holding
+  `RowExclusiveLock` on `event_log`, listed AFTER reading `MAX(seq)` (the lock precedes `nextval`), polled in `pg_locks`
+  — no lock taken, so a backup never queues a clinical write. Rests on CACHE 1 (pinned) and watches PREPARED holders.
+- **⇒ A judgement made from a comparison carries what was compared.** `RecordsShown`, re-read under CARNLK, after the
+  proposal-row lock (row-then-CARNLK). Harness: T1 holds CARNLK, the judgement is observed parked on `advisory`, the
+  peer event lands inside T1. Dropping the lock turns both races red.
+- **⇒ An unknown outcome is its own marker** — not a refusal, not an outage. Only an UNANSWERED commit gets it (a SQLSTATE
+  means a definite rollback). The marker must be the ROOT error with the cause as `source()`: anyhow's
+  `.context(marker)` is invisible to a `chain()` downcast.
+- **⇒ A fixture that passes a "record" no window could show will hide behind a new check:** duplicate_review's {x, u}
+  was two unrelated charts; it now joins them with a peer link.
+- **⇒ Rig:** the 2026-10-12 recipe, unchanged; `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`
+  works here, so `cairn-gui-tauri` builds and tests in the cloud too. **Disk:** `target/` reaches ~23 GB; a second
+  target dir (e.g. for `cargo doc`) fills the allowance — delete `target/debug/incremental` first.
+- Left for a decision: **#775** (signed tokens' case vs the cluster's `lower()`), **#556** (whether `attestation` /
+  `attester_key` join `segment_commitment` — time-limited: before the first release that ships a CAIRNB3 writer).
+
+### 2026-10-13 (second) — tech-debt pass (cloud session): #773, #603, #346, #553, #616, #744, #704
+
+Picked by blast radius again: erasure and the chart (#773/#603), the permanent record (#346), the only backup (#553),
+a restore that fences itself (#616), a duplicate hidden from every reviewer (#744/#704).
+- **⇒ A PER-ROW LOCK CANNOT GUARD A WHOLE-LOG SCAN.** `cairn_reproject` would have held one advisory lock per event (the
+  shared lock table is `max_locks_per_transaction × max_connections`). The fix is one lock in two modes: every shred
+  SHARED (shreds never wait on each other), the heal EXCLUSIVE. Lock order: erasure-heal, then custody — nothing takes
+  them the other way round.
+- **⇒ A "BELT AND BRACES" RE-CHECK WITH NO TEST IS NOT BRACES.** The shred re-check after the wait was mutation-tested,
+  changed nothing (a committed shred already deleted the clear view every applier reads), and was removed.
+- **⇒ Parallel test output hides FAILED lines from a naive grep.** Read the `failures:` block, or run
+  `--test-threads=1`, before concluding a mutation survived — M1 looked like it survived and had not.
+- **⇒ A count is not a set, even where it is "monotone".** #553's count arm was sound for our own medium and blind to a
+  foreign one; it also falsely refused a legacy medium carrying a duplicate. Name, never count.
+- **⇒ The gate catches house rules too:** a new db/tests mirror needs `\ir _scratch_database_guard.sql`
+  (`db_sql_mirror_scratch_guard.rs`), and `cargo test` stops at the first failing binary — re-run the whole gate after.
+- **⇒ Rig:** the 2026-10-12 recipe worked unchanged; do NOT pre-create `cairn_pgx` in `template1` (the SQL-mirror runner
+  creates it in its throwaway database and fails on "already exists").
+- Left for a decision: #649 (caller-minted patient id vs a cancellation contract), #613 (is INCOMPLETE about records or
+  the recovery?), #628 (the NUL fix needs a `cairn_pgx` version bump; its restore-abort arm is close to unreachable,
+  since no door admits such an event). #427 is lower than it reads: `safety` is a clear field of `signed_bytes`, which
+  `cairn_agent` reads anyway (#424), and ADR-0080 made replays rare.
+
+### 2026-10-13 — tech-debt pass (cloud session): #604, #608, #431, #464, #768
+
+One branch, one commit per issue, picked for blast radius (erasure, the availability floor, a false signature).
+- **⇒ A RACE "FOUND BY REASONING" CAN BE MADE DETERMINISTIC.** Hold transaction 1 open on one connection, run
+  transaction 2 in a spawned task on another, and wait until it has either FINISHED (no lock — the bug) or is PARKED
+  (`pg_stat_activity.wait_event_type = 'Lock'` — the fix); only then commit 1. Both outcomes are deterministic, so the
+  end-state assertion is red-before/green-after with no sleeps (`tests/shred_custody_race.rs`). #603 can use the same
+  harness.
+- **⇒ An issue's suggested fix can predate a guard.** #608 asked for `USING ERRCODE = '55000'`; #633's guard has since
+  made any explicit SQLSTATE in `db/` a failure at FILE granularity, so allow-listing db/005 would have unguarded the
+  main door. Re-read the guards before following an old issue's recipe.
+- **⇒ A per-row `BEGIN … EXCEPTION` that WRITES is a subtransaction XID per row**; one that only reads costs none.
+  Validate inside the handler, collect, write outside it. `pg_stat_get_backend_subxact` (PG ≥ 16) read before COMMIT
+  measures it.
+- **⇒ A "silent" lenient arm can be worse than silent.** #768 was filed as "no flag"; reading the read path showed the
+  misfiled vouch was picked per THREAD and displayed as a current signature on the other chart. A view alone would have
+  been another signal that reaches nobody (#606), so the predicate also feeds `stale`.
+- **⇒ The cloud rig recipe** (2026-10-12's, with one fix): `micro.mamba.pm` is blocked — fetch micromamba from
+  `github.com/mamba-org/micromamba-releases`, then conda-forge `postgresql=18`, `cargo install cargo-pgrx --version
+  =0.18.1 --locked`, `cargo pgrx init --pg18 <conda pg_config>` with the `xlocale.h` shim, `initdb` as `postgres`,
+  `CREATE ROLE root SUPERUSER`, and run the gate with `PGHOST/PGPORT/PGUSER` exported. Never edit tracked files while
+  the gate compiles — it builds whatever is on disk at that moment.
+
+### 2026-10-12 — tech-debt pass (cloud session): #602, #763, #689, #626 (db half), #726
+
+One branch, one commit per issue. **Strict door:** `submit_event` pins `cairn.remote_apply` off with a function-level
+`SET` (#602 — the bypass was proven end-to-end first); a medication attestation filed under a chart other than its
+thread's is refused there (#689). **Auto-apply** never links while `match_pending` holds a re-check for either chart
+(#763). **Sync door:** db/020's raw `::uuid` casts and db/037's shred-target cast go through `cairn_uuid_or_raise`, so a
+malformed peer id is penned, not a permanent pull freeze (#626; `do_pull`'s generic non-P0001 arm is still open there).
 ### 2026-10-14/15 — R6: confirm a doubted link; name the doubt at the front door (draft PR #777)
 
 Brainstorm (maintainer: one door per line, "Review this link…"; every un-attested link offers Confirm; the bridge is

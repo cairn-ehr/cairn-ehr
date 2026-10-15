@@ -19,7 +19,7 @@ from cairn_matcher.records import (
 )
 from cairn_matcher.scoring import DEFAULT_WEIGHTS, MatchScore, score
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "AgreementLevel",

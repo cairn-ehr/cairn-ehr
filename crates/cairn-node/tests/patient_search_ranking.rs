@@ -439,3 +439,134 @@ async fn a_decomposed_name_finds_and_ranks_the_composed_chart() {
     );
     assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
 }
+
+/// #775: Turkish dotted capital İ (U+0130). Rust lowercases it under FULL Unicode case mapping
+/// to `i` + U+0307, and a libc `C.UTF-8` cluster's `lower()` (simple mapping) to plain `i`. The
+/// query was lowercased by one and the stored name by the other, so "İnce Yılmaz" typed back
+/// exactly as registered matched only on `yılmaz`, tied six older namesakes and fell out of the
+/// five-row prompt — a false split. db/046 now lowercases with the built-in `pg_unicode_fast`
+/// collation, the same full mapping Rust uses, on every cluster whatever its locale.
+#[tokio::test]
+async fn a_turkish_dotted_capital_i_finds_and_ranks_its_chart_on_any_cluster() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let older = six_older_namesakes(&c, &sk, &kid, "Y\u{131}lmaz").await;
+    let dup = chart_named(&c, &sk, &kid, 100, "\u{130}nce Y\u{131}lmaz").await;
+
+    let query = SearchQuery::new("\u{130}nce Y\u{131}lmaz", None, &[]);
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
+    assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
+    assert_eq!(
+        ids[0], dup,
+        "both tokens match, so the chart comes first: {list:?}"
+    );
+    assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
+}
+
+/// #775's second instance, found while fixing it: Greek FINAL SIGMA. A name registered in
+/// capitals, as copied from an identity document, lowercases in Rust to `γιαννης` (word-final
+/// `ς`) but under a libc cluster's `lower()` to `γιαννησ` (medial `σ`), so typing it back exactly
+/// as registered matched NO token and the chart was not in the candidate set at all. The same
+/// collation fixes it: `pg_unicode_fast` applies the final-sigma rule exactly as Rust does.
+#[tokio::test]
+async fn a_greek_name_in_capitals_is_found_by_typing_it_back() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let chart = chart_named(
+        &c,
+        &sk,
+        &kid,
+        100,
+        "\u{393}\u{399}\u{391}\u{39d}\u{39d}\u{397}\u{3a3} \u{3a0}\u{391}\u{3a0}\u{391}\u{3a3}",
+    )
+    .await;
+
+    let query = SearchQuery::new(
+        "\u{393}\u{399}\u{391}\u{39d}\u{39d}\u{397}\u{3a3} \u{3a0}\u{391}\u{3a0}\u{391}\u{3a3}",
+        None,
+        &[],
+    );
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
+    assert_eq!(
+        ids,
+        vec![chart],
+        "the chart registered as \"ΓΙΑΝΝΗΣ ΠΑΠΑΣ\" must be found by typing exactly that: {list:?}"
+    );
+}
+
+/// The QUERY side's collation (#775 review). `SearchQuery::new` lowercases in Rust before db/046
+/// and the ranking see a token, so the two query-side `COLLATE pg_unicode_fast` sites — db/046's
+/// query-token join and `search_rank::normalise_query_tokens` — are invisible to every test that
+/// builds its query that way. A caller handing raw, UN-lowered tokens (a raw-SQL client, a future
+/// port) is exactly who they protect, so this test is that caller: the dotted capital and the
+/// final sigma, in capitals, straight in. Drop the COLLATE from either site and the chart is
+/// missed (db/046) or ranks behind its namesakes (the ranking).
+#[tokio::test]
+async fn raw_capital_tokens_are_lowered_by_the_same_rule_as_the_stored_names() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+
+    let older = six_older_namesakes(&c, &sk, &kid, "Nguyen").await;
+    let dup = chart_named(&c, &sk, &kid, 100, "\u{130}nce Nguyen").await;
+
+    // db/046's query-token join: `İNCE` ALONE, straight into the function, must find the chart —
+    // it is the only token the duplicate does not share with its namesakes.
+    let found: Vec<String> = c
+        .query(
+            "SELECT patient_id::text FROM cairn_search_candidates($1, NULL, NULL)",
+            &[&vec!["\u{130}NCE".to_string()]],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
+    assert!(
+        found.contains(&dup.to_string()),
+        "db/046 must lower a raw capital query token by the stored names' rule: {found:?}"
+    );
+
+    // The ranking's `normalise_query_tokens`: built by hand, NOT through `SearchQuery::new`, so
+    // nothing lowercases the tokens first. Lowered by a different rule, `İNCE` matches nothing
+    // and the duplicate ties its six older namesakes on `nguyen` — and loses on chart age.
+    let query = SearchQuery {
+        name_tokens: vec!["\u{130}NCE".into(), "NGUYEN".into()],
+        birth_date: None,
+        identifiers: vec![],
+    };
+    let list = cairn_node::patient::search::search_patients(&c, &query, "2026-09-26")
+        .await
+        .expect("search succeeds");
+    let ids: Vec<_> = list.charts().map(|c| c.patient_id).collect();
+    assert_eq!(ids.len(), 7, "the SET is unchanged: {list:?}");
+    assert_eq!(
+        ids[0], dup,
+        "the ranking must lower a raw capital token by the same rule: {list:?}"
+    );
+    assert_eq!(ids[1..].to_vec(), older, "namesakes keep chart-age order");
+}

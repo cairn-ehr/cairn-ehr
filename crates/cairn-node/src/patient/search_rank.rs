@@ -130,7 +130,10 @@ pub(super) async fn read_retained_names<C: GenericClient + Sync>(
     ids: &[Uuid],
 ) -> anyhow::Result<RetainedNames> {
     let id_strs: Vec<String> = ids.iter().map(Uuid::to_string).collect();
-    let sql = "SELECT patient_id::text AS patient_id, lower(normalize(value, NFC)) AS value, \
+    // `COLLATE pg_unicode_fast`: the same full case mapping db/046 and the query side use, on
+    // any cluster (#775) — see db/046's "ONE CASE MAPPING" note.
+    let sql = "SELECT patient_id::text AS patient_id, \
+                      lower(normalize(value, NFC) COLLATE pg_unicode_fast) AS value, \
                       use_key = 'callsign' AS is_callsign \
                FROM patient_name \
                WHERE patient_id = ANY($1::text[]::uuid[])";
@@ -156,7 +159,7 @@ pub(super) async fn normalise_query_tokens<C: GenericClient + Sync>(
 ) -> anyhow::Result<Vec<String>> {
     let row = client
         .query_one(
-            "SELECT coalesce(array_agg(lower(normalize(t, NFC))), '{}') \
+            "SELECT coalesce(array_agg(lower(normalize(t, NFC) COLLATE pg_unicode_fast)), '{}') \
              FROM unnest($1::text[]) AS t",
             &[&tokens],
         )

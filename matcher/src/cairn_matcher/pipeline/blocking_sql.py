@@ -58,10 +58,11 @@ _NAME_TOKENS_CTE = """name_tokens AS (
     -- precomposed (NFC) on another produces the SAME blocking token — otherwise the two
     -- are different code points and a true duplicate is never even grouped. Mirrors the NFC
     -- fold of the adapter's _normalize_token; but this side folds case with lower() while the
-    -- scorer casefold()s (Postgres has no casefold), so the two DIVERGE where casefold expands
-    -- a code point lower() leaves alone ("Weiß".casefold()=="weiss" vs "Weiß".lower()=="weiß";
-    -- ligatures likewise). Such a pair scores EXACT but never shares a token here — recall loss
-    -- only (never a false group), the designed limit of this deliberately-simple tokenizer;
+    -- scorer casefold()s (PostgreSQL 18's casefold() is not used here yet — #780), so the two
+    -- DIVERGE where casefold expands a code point lower() leaves alone
+    -- ("Weiß".casefold()=="weiss" vs "Weiß".lower()=="weiß"; ligatures likewise). Such a pair
+    -- scores EXACT but never shares a token here — recall loss only (never a false group), the
+    -- designed limit of this deliberately-simple tokenizer;
     -- the §5.13 hub duplicate sweep is the declared backstop (issue #211 gap 3, adapter.py).
     -- Exclude placeholder-use names (callsigns) from BLOCKING (§5.4). A callsign is a
     -- single whitespace-free token, so this bites only when two callsign STRINGS are
@@ -69,8 +70,15 @@ _NAME_TOKENS_CTE = """name_tokens AS (
     -- ordinary John Does apart (distinct callsigns are already distinct tokens; the
     -- load-bearing exclusion is the scoring one in load_candidate). The name+year and
     -- dob+first-initial passes read this same CTE, so they inherit the exclusion for free.
+    -- COLLATE pg_unicode_fast (#775): FULL Unicode case mapping on every cluster, not the
+    -- database default's. A libc C.UTF-8 default lowers a word-final capital SIGMA to a medial
+    -- σ and Turkish İ to plain i; Python's lower() (eval/generator.py's mirror), Rust's (the
+    -- search query) and db/046's search all use full mapping. Same key extraction as db/046,
+    -- so the DRIFT NOTE's sweep-paired ⊆ search-found holds — drop it here alone and it breaks.
     SELECT DISTINCT patient_id, token
-    FROM patient_name, regexp_split_to_table(lower(normalize(value, NFC)), '\\s+') AS token
+    FROM patient_name,
+         regexp_split_to_table(lower(normalize(value, NFC) COLLATE pg_unicode_fast), '\\s+')
+           AS token
     WHERE token <> '' AND use_key <> ALL(%s)
 )"""
 

@@ -13,13 +13,12 @@
 //! regression test; `the_subset_argument_holds_for_every_unicode_code_point` is the reason no
 //! second such character can exist.
 //!
-//! ⚠️ **One row of this table is deployment-dependent, and it is asked of the server rather than
-//! assumed.** U+0130 only grows a combining mark under FULL Unicode case mapping — an ICU-provider
-//! database — so on a simple-case-mapping (libc) server `İnce` lowercases to plain `ince` and `nce`
-//! is not a token at all. Both answers are correct; see `full_case_mapping`. The `nce` gesture
-//! pinned the ICU answer unconditionally when first written, passed on every local database and
-//! failed in CI, which is the lesson: a contract suite must derive its expectation from the
-//! contract, and on this row the contract has a locale in it.
+//! **The U+0130 row used to be deployment-dependent and no longer is (#775).** `İnce` grows a
+//! combining mark only under FULL Unicode case mapping, and a bare `lower()` follows the cluster's
+//! default collation — full on an ICU database, simple on libc — so this suite once asked the server
+//! which it was and expected `nce` only on the former. db/046 now lowercases with the built-in
+//! `pg_unicode_fast` collation, full mapping on every cluster, so the expectation is one fact again
+//! and the row guards the U+0130 defect everywhere, CI's libc cluster included.
 //!
 //! **Why this suite exists rather than more cases in `patient_search.rs`.** Every test there asserts
 //! that a chart IS found (`rows.iter().any(...)`), which is the right shape for "this gesture must
@@ -213,37 +212,6 @@ async fn seed(c: &mut Client, sk: &SigningKey, kid: &str) -> Corpus {
     }
 }
 
-/// Does this server apply FULL Unicode case mapping, or the simple one-to-one kind?
-///
-/// The distinction has exactly one consequence for pass 3, and the `nce` gesture below turns on it.
-/// Under full case mapping — what an ICU-provider database does — `lower('İ')` is `i` + U+0307
-/// COMBINING DOT ABOVE, two characters, the second of which is not `[:alnum:]`. Under simple case
-/// mapping — libc, which is what a default `initdb` on the CI runner gives — `lower('İ')` is plain
-/// `i`, and the combining mark never appears.
-///
-/// So a chart named `İnce` genuinely has DIFFERENT tokens on the two, and both are correct:
-///
-/// | | lowered value | whole tokens | parts tokens | parts branch |
-/// |---|---|---|---|---|
-/// | ICU  | `i̇nce` | `{i̇nce}` | `{nce}` | runs |
-/// | libc | `ince`  | `{ince}`  | `{ince}` | skipped, and rightly |
-///
-/// **This is asked of the server rather than assumed, because assuming it is what broke the suite
-/// once already.** The `nce` gesture first shipped pinning the ICU answer unconditionally; it passed
-/// on every local database (all ICU) and failed in CI (libc) — where `nce` had never been a token at
-/// all, before the rewrite or after, so the neutrality claim held trivially. A contract suite must
-/// derive its expectation from the contract, and on this one row the contract depends on a property
-/// of the deployment.
-async fn full_case_mapping(c: &Client) -> bool {
-    c.query_one(
-        "SELECT lower(normalize('\u{130}', NFC)) ~ '[^[:alnum:][:space:]]' AS full_mapping",
-        &[],
-    )
-    .await
-    .unwrap()
-    .get(0)
-}
-
 /// What a clerk types, and the EXACT set of charts that must come back.
 ///
 /// `why` is not decoration: it is the contract each row is derived from, so a reviewer can check
@@ -275,7 +243,7 @@ fn tokens(typed: &[&str], expected: impl IntoIterator<Item = Uuid>, why: &'stati
 /// The table the whole suite is. Every arm of pass 3 appears at least once, and — the half that
 /// makes this a neutrality guard rather than a findability one — several gestures expect the EMPTY
 /// set, which is what a widening rewrite would break first.
-fn gestures(k: &Corpus, full_mapping: bool) -> Vec<Gesture> {
+fn gestures(k: &Corpus) -> Vec<Gesture> {
     vec![
         gesture(
             "smith",
@@ -319,36 +287,20 @@ fn gestures(k: &Corpus, full_mapping: bool) -> Vec<Gesture> {
              and the lateral now emits it TWICE. Exactly one row must still reach the caller, \
              which `name_candidates` asserts on multiplicity before collapsing to a set.",
         ),
-        if full_mapping {
-            gesture(
-                "nce",
-                [k.turkish],
-                "THE U+0130 REGRESSION (#639 review), on a server that applies FULL case mapping. \
-                 `İnce` lowercases to `i` + U+0307 COMBINING DOT ABOVE, and a combining mark is \
-                 not `[:alnum:]`, so the parts split projects `nce` while the whole-token split \
-                 projects only `i̇nce`. This chart is therefore reachable ONLY through the parts \
-                 branch — and `db/046`'s skip guard must decide whether to run that branch by \
-                 looking at the LOWERED value. A guard that tests the un-lowered \
-                 `normalize(pn.value, NFC)` sees an unpunctuated string, skips the branch, and \
-                 this gesture returns EMPTY: a chart findable by `nce` before the rewrite is not \
-                 after it, which falsifies the whole neutrality claim.",
-            )
-        } else {
-            gesture(
-                "nce",
-                [],
-                "EMPTY, and CORRECTLY so: this server applies SIMPLE case mapping, so `İnce` \
-                 lowercases to plain `ince`, the two splits coincide on it, and `nce` was never a \
-                 projected token — not before the rewrite and not after. Pass 3 cannot return a \
-                 chart by a token that does not exist, and neutrality holds here trivially. \
-                 ⚠️ This row therefore does NOT guard the U+0130 defect on such a server; on a \
-                 simple-case-mapping database the guard is \
-                 `the_subset_probe_still_describes_the_query_db046_runs`, which pins the composed \
-                 `lower(normalize(pn.value, NFC)) ~ …` as a literal and is locale-independent. \
-                 That layering is the point: the gesture bites where the defect is real, the \
-                 literal bites everywhere.",
-            )
-        },
+        gesture(
+            "nce",
+            [k.turkish],
+            "THE U+0130 REGRESSION (#639 review), under the FULL case mapping db/046 now \
+             applies on every cluster (`pg_unicode_fast`, #775). \
+             `İnce` lowercases to `i` + U+0307 COMBINING DOT ABOVE, and a combining mark is \
+             not `[:alnum:]`, so the parts split projects `nce` while the whole-token split \
+             projects only `i̇nce`. This chart is therefore reachable ONLY through the parts \
+             branch — and `db/046`'s skip guard must decide whether to run that branch by \
+             looking at the LOWERED value. A guard that tests the un-lowered \
+             `normalize(pn.value, NFC)` sees an unpunctuated string, skips the branch, and \
+             this gesture returns EMPTY: a chart findable by `nce` before the rewrite is not \
+             after it, which falsifies the whole neutrality claim.",
+        ),
         gesture(
             "李小",
             [k.cjk],
@@ -445,8 +397,7 @@ async fn every_typing_gesture_returns_exactly_the_charts_it_should() {
     // Collected rather than asserted one at a time: a rewrite that breaks several gestures should
     // report all of them in one run, not send the next session round the loop once per gesture.
     let mut failures: Vec<String> = Vec::new();
-    let full_mapping = full_case_mapping(&c).await;
-    for g in gestures(&corpus, full_mapping) {
+    for g in gestures(&corpus) {
         let got = name_candidates(&c, &g.typed).await;
         if got != g.expected {
             let lost: Vec<_> = g.expected.difference(&got).collect();
@@ -573,6 +524,8 @@ async fn the_subset_argument_holds_for_every_unicode_code_point() {
 
     // The surrogate range is excluded because `chr()` refuses it under a UTF-8 encoding — those
     // code points cannot appear in a `text` value at all, so they are not part of the space.
+    // The classes are asked under `pg_unicode_fast` because that is the collation db/046's
+    // splitters see since #775: a regex character class follows its input's collation.
     let row = c
         .query_one(
             "WITH cps AS ( \
@@ -580,12 +533,13 @@ async fn the_subset_argument_holds_for_every_unicode_code_point() {
                  FROM generate_series(1, 1114111) g \
                 WHERE g NOT BETWEEN 55296 AND 57343 \
              ) \
+             , classed AS (SELECT ch COLLATE pg_unicode_fast AS ch FROM cps) \
              SELECT \
                count(*) FILTER (WHERE (ch ~ '\\s') IS DISTINCT FROM (ch ~ '[[:space:]]')) \
                  AS space_class_divergences, \
                count(*) FILTER (WHERE ch ~ '[[:space:]]' AND ch ~ '[[:alnum:]]') \
                  AS both_space_and_alnum \
-               FROM cps",
+               FROM classed",
             &[],
         )
         .await
@@ -632,14 +586,18 @@ async fn skipping_the_parts_branch_can_never_drop_a_token() {
     for value in SEPARATOR_PROBES {
         let row = c
             .query_one(
-                "SELECT lower(normalize($1, NFC)) ~ '[^[:alnum:][:space:]]' AS branch_runs, \
+                "SELECT lower(normalize($1, NFC) COLLATE pg_unicode_fast) \
+                          ~ '[^[:alnum:][:space:]]' AS branch_runs, \
                  NOT EXISTS ( \
                    SELECT 1 \
-                     FROM regexp_split_to_table(lower(normalize($1, NFC)), '[^[:alnum:]]+') p \
+                     FROM regexp_split_to_table( \
+                            lower(normalize($1, NFC) COLLATE pg_unicode_fast), \
+                            '[^[:alnum:]]+') p \
                     WHERE length(p) > 1 \
                       AND p NOT IN (SELECT w \
                                       FROM regexp_split_to_table( \
-                                             lower(normalize($1, NFC)), '\\s+') w \
+                                             lower(normalize($1, NFC) COLLATE pg_unicode_fast), \
+                                             '\\s+') w \
                                      WHERE w <> '') \
                  ) AS parts_subset_of_whole",
                 &[&value],
@@ -689,14 +647,43 @@ const DB046: &str = include_str!("../../../db/046_patient_search.sql");
 /// read — while the splitter read the lowered one. The two agreed on every probe in the list, so
 /// nothing was red, and `İnce` lost a token. Pinning the exact composed expression, rather than its
 /// pieces, is what makes that class of drift a compile-time-ish failure instead of a silent one.
+/// #775 review: `contains` cannot tell the four collation sites apart — the splitters' string is a
+/// substring of the guard's — so dropping the collation from ONE splitter leaves every literal above
+/// still present. Count the sites in db/046's CODE instead (comment lines excluded): exactly four,
+/// the two splitters, the parts-branch guard and the query-token join. A fifth is a new site to
+/// reason about; a third is a side lowercasing by the cluster's default again.
+#[test]
+fn db046_names_the_collation_at_exactly_its_four_lowercasing_sites() {
+    let code_sites = DB046
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .map(|l| l.matches("COLLATE pg_unicode_fast").count())
+        .sum::<usize>();
+    assert_eq!(
+        code_sites, 4,
+        "db/046 must lowercase names with `COLLATE pg_unicode_fast` at exactly its four sites \
+         (both splitters, the parts guard, the query-token join) — see its ONE CASE MAPPING note"
+    );
+    let bare = DB046
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .filter(|l| l.contains("lower(") && !l.contains("COLLATE"))
+        .collect::<Vec<_>>();
+    assert!(
+        bare.is_empty(),
+        "a code line in db/046 lowercases without naming a collation: {bare:?}"
+    );
+}
+
 #[test]
 fn the_subset_probe_still_describes_the_query_db046_runs() {
     for expression in [
         // the punctuation test that decides whether the parts branch runs at all — applied to the
         // LOWERED, normalised value, because that is the string the splitters below are handed
-        "lower(normalize(pn.value, NFC)) ~ '[^[:alnum:][:space:]]'",
-        // the string both splitters actually receive
-        "lower(normalize(pn.value, NFC))",
+        "lower(normalize(pn.value, NFC) COLLATE pg_unicode_fast) ~ '[^[:alnum:][:space:]]'",
+        // the string both splitters actually receive — under ONE named collation (#775), since
+        // both the case mapping and the regex classes follow the input's collation
+        "lower(normalize(pn.value, NFC) COLLATE pg_unicode_fast)",
         // the parts separator class
         "'[^[:alnum:]]+'",
         // the whole-token separator class

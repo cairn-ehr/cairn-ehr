@@ -69,7 +69,8 @@ pub struct SearchQuery {
 /// non-alphanumeric character. Tokenised as it arrived, a word-final accent was trimmed as edge
 /// punctuation ("José" → `jose`, which matches no stored `josé`) and an interior one split the
 /// word ("émile" → a phantom `mile`). The stored side is NFC-normalised by Postgres
-/// (`lower(normalize(value, NFC))`, db/046) before IT is split, so composing here first makes
+/// (`lower(normalize(value, NFC) COLLATE pg_unicode_fast)`, db/046) before IT is split — the
+/// same FULL case mapping `to_lowercase` applies below (#775) — so composing here first makes
 /// both sides split the same string. Idempotent on already-composed input, which is what
 /// `crate::rank` hands this function for a stored name.
 pub fn name_tokens(raw_name: &str) -> Vec<String> {

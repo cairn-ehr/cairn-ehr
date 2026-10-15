@@ -358,3 +358,26 @@ def test_name_monthday_is_the_pass_that_rescues_the_year_typo(pg_conn):
     without = set(ALL_PASSES) - {"name+monthday"}
     pairs, _skipped = _gen(pg_conn, max_block_size=2, enabled_passes=without)
     assert canonical_pair(PA, PB) not in pairs
+
+
+def test_a_name_in_capitals_blocks_with_its_lowercase_spelling_on_any_cluster(pg_conn):
+    # #775: blocking lowercases with the built-in pg_unicode_fast collation (full Unicode case
+    # mapping), not the cluster's default. Under a libc C.UTF-8 default, word-final capital
+    # SIGMA lowercased to a medial σ ("ΓΙΑΝΝΗΣ" -> "γιαννησ") while the same name written in
+    # lowercase carries ς ("Γιαννης" -> "γιαννης"), so a registration copied in capitals off an
+    # identity document never shared a token with its own duplicate — and db/046's search, now
+    # on the same collation, would find a pair the sweep never generated (the drift note).
+    seed_patient(pg_conn, PA, names=[("ΓΙΑΝΝΗΣ Α", 20)], identifiers=[("mrn:a", "1", "1")])
+    seed_patient(pg_conn, PB, names=[("Γιαννης Β", 20)], identifiers=[("mrn:a", "2", "2")])
+    assert canonical_pair(PA, PB) in _pairs(pg_conn)
+
+
+def test_the_package_version_moved_with_the_blocking_collation():
+    # Blocking SQL is not in the matcher_version digest, so a change to which pairs it
+    # generates must move the package version: every worker then re-queues every chart once
+    # (watch.py / queue_db.ensure_version), and charts blocked under the old key are re-checked.
+    import re
+
+    import cairn_matcher
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", cairn_matcher.__version__)
+    assert m and (int(m[1]), int(m[2]), int(m[3])) >= (0, 2, 1)

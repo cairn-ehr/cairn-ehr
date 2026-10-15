@@ -9,13 +9,11 @@
 //! layer. A third test covers the federation plane's `read_node_page`, whose three `NULL`
 //! columns are the point: they must decode as `None`, not as some other falsy value.
 //!
-//! ⚠️ **The AUTHORSHIP token is NOT covered here, despite what a test name below suggests.**
-//! Every fixture in this branch authors through `submit_event($1, NULL, NULL, $2)`, so
-//! `attestation`/`attester_key` are NULL and there is nothing to assert. Dropping those two
-//! columns from `db/051`'s `cairn_clinical_page`, or the two clones in `to_medium_record`,
-//! leaves this suite green. Tracked as
-//! [#556](https://github.com/cairn-ehr/cairn-ehr/issues/556), together with the question of
-//! whether `segment_commitment` should bind them at all.
+//! **The AUTHORSHIP token is covered by `a_clinical_page_carries_a_human_token_byte_for_byte`**
+//! (#556). Until then every fixture here authored through `submit_event($1, NULL, NULL, $2)`, so
+//! dropping `attestation`/`attester_key` from `db/051`'s `cairn_clinical_page`, or the two clones
+//! in `to_medium_record`, left the suite green while every backup lost its human authorship. The
+//! medium's segment commitment now binds both fields too (`cairn-medium`'s `segment_commitment`).
 //!
 //! Fixtures are copied from `dr_clinical_guarantee_gap.rs` rather than shared, because
 //! integration-test binaries in this crate cannot `use` another test binary's private
@@ -255,4 +253,91 @@ async fn a_node_page_carries_no_attestation_and_no_custody() {
         assert_eq!(record.source_seq, row.seq);
         assert_eq!(record.signed_bytes, row.signed_bytes);
     }
+}
+
+/// #556: a human-authorship token travels from the door onto the medium BYTE-FOR-BYTE, and an
+/// event that carried none stays `None`.
+///
+/// The attested event is an identity LINK — a human judgement whose token the strict door
+/// verifies and stores — authored with a token this test computes itself, so the assertion is
+/// against bytes the test knows rather than against whatever the log happens to hold. The
+/// unattested companion is the sealed medication event the rest of this suite authors.
+/// `MediumRecord::attestation`'s doc says `None` and `Some(vec![])` are different facts to the
+/// apply door; this pins that a missing token is not manufactured into an empty one on the way
+/// out of the database.
+#[tokio::test]
+async fn a_clinical_page_carries_a_human_token_byte_for_byte() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    db::reset_node_federation_tables(&c).await.unwrap();
+    let (sk, kid, sk_human, kid_human) = common::medication_setup(&c).await;
+    identity::provision(&c, &sk, &kid, "solo-clinic", "127.0.0.1:7931")
+        .await
+        .unwrap();
+
+    // The unattested companion.
+    let tokenless = author_sealed_clinical_event(&c, &sk, &kid).await;
+
+    // Two charts, then the human's attested "same person" judgement about them.
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    common::submit_registration(&c, &sk, &kid, a, 1).await;
+    common::submit_registration(&c, &sk, &kid, b, 2).await;
+    let body = common::link_assertion_event(
+        &kid_human,
+        a,
+        b,
+        cairn_node::chart_link::LinkVerb::Link,
+        3,
+        0,
+        "test-node",
+        true,
+    );
+    let signed = sign(&body, &sk_human).unwrap().signed_bytes;
+    let token = cairn_event::sign_attestation(
+        &cairn_event::event_address(&signed),
+        &kid_human,
+        "attested",
+        &sk_human,
+    )
+    .unwrap();
+    let attester_key = sk_human.verifying_key().to_bytes().to_vec();
+    c.execute(
+        "SELECT submit_event($1, $2, $3)",
+        &[&signed, &token, &attester_key],
+    )
+    .await
+    .expect("an attested human judgement is admitted at the strict door");
+
+    let page = capture::read_clinical_page(&c, 0, 500).await.unwrap();
+
+    let attested = page
+        .iter()
+        .find(|r| r.signed_bytes == signed)
+        .expect("the attested judgement must be on the page");
+    let record = capture::to_medium_record(attested);
+    assert_eq!(
+        record.attestation.as_deref(),
+        Some(token.as_slice()),
+        "the human-authorship token must reach the medium byte-for-byte"
+    );
+    assert_eq!(
+        record.attester_key.as_deref(),
+        Some(attester_key.as_slice()),
+        "and so must the attester's key"
+    );
+
+    let unattested = page
+        .iter()
+        .find(|r| r.signed_bytes == tokenless)
+        .expect("the tokenless event must be on the page");
+    let record = capture::to_medium_record(unattested);
+    assert_eq!(
+        (record.attestation, record.attester_key),
+        (None, None),
+        "an event that carried no token must reach the medium with none — never an empty one"
+    );
 }

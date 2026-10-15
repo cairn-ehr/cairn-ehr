@@ -82,6 +82,14 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
         "Fyodorowksi-Eschenbacher",
         "Samantha Michaelowski",
         "García Pérez",
+        // #775: the two shapes whose key depends on WHICH case mapping lowers them — Turkish
+        // dotted capital İ, and a word-final capital SIGMA. Both sides now name the same
+        // collation; drop it from one and these are the fixtures that go red.
+        "\u{130}nce Y\u{131}lmaz",
+        "\u{393}\u{399}\u{391}\u{39d}\u{39d}\u{397}\u{3a3} \u{3a0}\u{391}\u{3a0}\u{391}\u{3a3}",
+        // A NO-BREAK SPACE between the words (#775 review): under the collation's Unicode
+        // White_Space `\s` it is a word break, as Rust's `split_whitespace` already treated it.
+        "Anne\u{a0}Smith",
     ];
 
     let mut seeded: Vec<(&str, Uuid)> = Vec::new();
@@ -99,12 +107,14 @@ async fn every_sweep_block_key_is_still_reachable_by_search() {
         // `lower`/`normalize` — rather than computed in Rust so that at least the NORMALISATION
         // SEMANTICS cannot drift from the matcher's (both sides ask Postgres, not two independent
         // implementations of Unicode case-folding/NFC). This does NOT cover the EXPRESSION
-        // itself: the `regexp_split_to_table(lower(normalize($1, NFC)), '\s+')` below is still
+        // itself: the `regexp_split_to_table(lower(normalize($1, NFC) COLLATE pg_unicode_fast), '\s+')` below is still
         // a hand-copy of `_NAME_TOKENS_CTE`, same as db/046's own comment — see the note on
         // the assertion message below for what that leaves uncovered.
         let keys: Vec<String> = c
             .query(
-                "SELECT tok FROM regexp_split_to_table(lower(normalize($1, NFC)), '\\s+') AS tok \
+                "SELECT tok FROM \
+                   regexp_split_to_table(lower(normalize($1, NFC) COLLATE pg_unicode_fast), '\\s+') \
+                   AS tok \
                  WHERE tok <> ''",
                 &[name],
             )

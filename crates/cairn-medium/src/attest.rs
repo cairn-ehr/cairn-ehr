@@ -43,7 +43,8 @@ use cairn_event::{event_address, sign, verify_self_described, EventBody, Hlc, Si
 pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 
 /// Commitment over a segment's records — over each record's `(event_address(signed_bytes),
-/// source_seq, dek_wrapped)`, DEK absence included. Order-independent, sharing
+/// source_seq, dek_wrapped, attestation, attester_key)`, the absence of each of the last three
+/// included. Order-independent, sharing
 /// `marker::commitment_over` (the per-record digest is fed straight back through it, so the
 /// crate keeps ONE definition of what "a commitment over these bytes" means) — a build that
 /// reorders the byte inputs before hashing would defeat that reuse, so don't; frame
@@ -77,15 +78,26 @@ pub const SEGMENT_ATTEST_TYPE: &str = "node.segment_attested";
 /// fully healthy end to end, while a later restore found a sealed body it could never open —
 /// see `deleting_a_wrapped_dek_breaks_the_commitment` below.
 ///
-/// `attestation` and `attester_key` — the record's HUMAN-authorship sidecars, as distinct
-/// from `dek_wrapped`'s custody — stay OUT of the commitment. Unlike a silently-stripped
-/// DEK, which nothing else in the system catches, a silently-stripped `attestation` is
-/// already caught fail-closed one layer up: the clinical apply door refuses a suppressing
-/// event outright for want of the token it needs to be admitted at all (see
-/// `crate::record::MediumRecord::attestation`, which documents that dependence). Committing
-/// them here would be redundant defense for a gap that is not, in fact, silent — unlike the
-/// DEK gap this function now closes. If that downstream catch is ever removed or found to
-/// have its own hole, this exclusion needs revisiting; it is not committed to here today.
+/// WHY `attestation` AND `attester_key` ARE NOW INCLUDED (#556 — this used to argue they could
+/// stay out). The record's HUMAN-authorship sidecars (ADR-0053) are committed by the same
+/// presence-tag-then-digest rule as the DEK. The old argument was that a stripped token is caught
+/// fail-closed one layer up, because the clinical apply door refuses a suppressing or
+/// responsibility-bearing event without one. That holds only for an event type the restoring node
+/// can CLASSIFY. For one it cannot (principle 11's ordinary mixed-version case), db/020's deferred
+/// arm stores whatever token travelled WITHOUT gating on it — and a stripped one means
+/// `cairn_readjudicate_deferred` (db/043) later has nothing to verify, so the event can never
+/// gain power. That was the DEK gap's exact shape: every signature and chain link valid, the
+/// medium reported sound, the loss silent. Now the strip breaks the segment's attestation.
+///
+/// ⚠️ COMMITTED IS NOT VOUCHED. The commitment proves "this is the token the node held when it
+/// captured the record" — nothing about whether the token is valid. A token held for a deferred
+/// event was never verified (db/020 marks it in `event_attestation_unvouched`), and the medium
+/// carries it exactly as held. Nothing may read a token's presence on a sound medium as a vouch;
+/// verification stays where it is, at the apply door.
+///
+/// RESIDUAL, stated so nobody assumes it is closed: this closes the BACKUP route only. The token
+/// also travels unsigned beside the event on the SYNC wire, where a relay can still strip it,
+/// with the same never-promotable result (#778).
 ///
 /// ⚠️ THIS RECIPE IS A WIRE FORMAT, not an internal implementation detail, the moment any
 /// CAIRNB3 medium exists in the field (see the re-freeze note on
@@ -100,22 +112,32 @@ pub fn segment_commitment(records: &[MediumRecord]) -> String {
         .map(|r| {
             let mut item = event_address(&r.signed_bytes);
             item.extend_from_slice(&r.source_seq.to_be_bytes());
-            // #524 — custody is committed to, ABSENCE INCLUDED. The one-byte tag makes the
-            // None/Some distinction explicit rather than incidental (see the doc comment
-            // above for why it is belt-and-braces here but would be load-bearing for a
-            // variant that appended raw DEK bytes instead of a digest).
-            match &r.dek_wrapped {
-                None => item.push(0u8),
-                Some(dek) => {
-                    item.push(1u8);
-                    item.extend_from_slice(&event_address(dek));
-                }
-            }
+            // #524 custody, then #556's two human-authorship sidecars — each committed by the
+            // SAME rule, absence included, in this fixed order (see the doc comment above).
+            push_optional_field(&mut item, r.dek_wrapped.as_deref());
+            push_optional_field(&mut item, r.attestation.as_deref());
+            push_optional_field(&mut item, r.attester_key.as_deref());
             item
         })
         .collect();
     let refs: Vec<&[u8]> = per_record.iter().map(Vec::as_slice).collect();
     crate::marker::commitment_over(&refs)
+}
+
+/// Append one optional byte field to a record's commitment item: a ONE-BYTE presence tag (`0`
+/// = absent, `1` = present), then — when present — the field's content-address. **Pure.**
+///
+/// The tag makes `None` and `Some(vec![])` different facts unconditionally (the apply door
+/// treats a missing attestation and an empty one differently), and one helper for all three
+/// fields means the wrapped DEK and the two token fields cannot drift onto different rules.
+fn push_optional_field(item: &mut Vec<u8>, field: Option<&[u8]>) {
+    match field {
+        None => item.push(0u8),
+        Some(bytes) => {
+            item.push(1u8);
+            item.extend_from_slice(&event_address(bytes));
+        }
+    }
 }
 
 /// Build the signed attestation for one segment.
@@ -587,24 +609,36 @@ mod tests {
     /// `backup_to` still wrote CAIRNB2 — so no medium in the field carried the old
     /// commitment. After slice 2c that is no longer true: from here on a change to this
     /// recipe is a FORMAT BREAK and needs a new container revision, not a re-freeze.
+    ///
+    /// ⚠️ RE-FROZEN AGAIN 2026-10-13 (#556): the commitment gained `attestation` and
+    /// `attester_key`, by the DEK's presence-tag-then-digest rule. A re-freeze rather than a new
+    /// container revision ON THE MAINTAINER'S CONFIRMATION that nothing is deployed: no CAIRNB3
+    /// medium and no distributed record exists outside development and test rigs, so no medium
+    /// in the field carries the old value. That is a fact about 2026-10-13, not a precedent —
+    /// once a release ships a CAIRNB3 writer, the paragraph above governs again.
     #[test]
     fn segment_commitment_recipe_is_pinned_independently() {
         // Derive the expectation by hand, from the format definition rather than from the
         // function: content-address each record's bytes, append its big-endian source_seq,
-        // then a one-byte DEK-presence tag (0 = absent; 1 = present, followed by the DEK's
-        // own content-address — #524), and feed the whole item through the crate's one
-        // commitment primitive.
+        // then for each of the DEK (#524), the attestation and the attester key (#556) a
+        // one-byte presence tag (0 = absent; 1 = present, followed by that field's own
+        // content-address), and feed the whole item through the crate's one commitment
+        // primitive.
         let by_hand = |records: &[MediumRecord]| -> String {
             let items: Vec<Vec<u8>> = records
                 .iter()
                 .map(|r| {
                     let mut v = cairn_event::event_address(&r.signed_bytes);
                     v.extend_from_slice(&r.source_seq.to_be_bytes());
-                    match &r.dek_wrapped {
-                        None => v.push(0u8),
-                        Some(dek) => {
-                            v.push(1u8);
-                            v.extend_from_slice(&cairn_event::event_address(dek));
+                    // The same presence-tag-then-digest rule, in this order, for the wrapped
+                    // DEK (#524) and then the two human-authorship sidecars (#556).
+                    for field in [&r.dek_wrapped, &r.attestation, &r.attester_key] {
+                        match field {
+                            None => v.push(0u8),
+                            Some(b) => {
+                                v.push(1u8);
+                                v.extend_from_slice(&cairn_event::event_address(b));
+                            }
                         }
                     }
                     v
@@ -627,7 +661,7 @@ mod tests {
         // verifies against. Only a hard-coded expectation catches that class of change.
         assert_eq!(
             segment_commitment(&one),
-            "12207f7083a5a9cfa69b67fbab46e17e66c02238d065180bd9552a299753ac0cb691",
+            "122031999f74cdfdac9a842e35731d86ed1c4db7108013ee6ea819af0bade31493e5",
             "N=1 golden commitment changed — this is a FORMAT BREAK, see segment_commitment's docstring"
         );
 
@@ -678,7 +712,7 @@ mod tests {
         // two independently-pinned literals at once.
         assert_eq!(
             segment_commitment(&no_dek),
-            "1220ef08ea1ea159b8b07b77ffee93f547d0814bd5f6bb1b06b63a761e6285a21df2",
+            "1220060ce248d7501d2e4990bb869e3efead2f8069b94abd8323c2f68d5800088156",
             "N=1 no-DEK golden commitment changed — this is a FORMAT BREAK, see segment_commitment's docstring"
         );
     }
@@ -690,6 +724,97 @@ mod tests {
     /// stands in for, so its real name is also the safe name.
     fn dek_bytes(seed: u8) -> [u8; 32] {
         std::array::from_fn(|i| seed ^ i as u8)
+    }
+
+    /// A record carrying a human-authorship token and attester key, both runtime-derived and
+    /// distinguished by `seed` (house rule 6 — never literals). Everything else is fixed, so a
+    /// commitment difference between two calls is attributable to the token fields alone.
+    fn record_with_token(
+        attestation: Option<Vec<u8>>,
+        attester_key: Option<Vec<u8>>,
+    ) -> MediumRecord {
+        MediumRecord {
+            signed_bytes: bytes(1, 40),
+            attestation,
+            attester_key,
+            dek_wrapped: None,
+            source_seq: 1,
+        }
+    }
+
+    fn token(seed: u8) -> Vec<u8> {
+        bytes(seed, 64)
+    }
+
+    /// #556: the human-authorship token is committed to. Stripping it out of a medium used to
+    /// leave every signature and chain link valid; for an event of a type the restoring node
+    /// cannot classify yet, the door then stores it tokenless and re-adjudication (db/043) has
+    /// nothing to verify — the event can never gain power, silently. Deleting, swapping, or
+    /// emptying either sidecar must now change the commitment.
+    #[test]
+    fn stripping_or_swapping_a_human_authorship_token_breaks_the_commitment() {
+        let carried = segment_commitment(&[record_with_token(Some(token(3)), Some(token(4)))]);
+        for (what, altered) in [
+            (
+                "attestation stripped",
+                record_with_token(None, Some(token(4))),
+            ),
+            (
+                "attester key stripped",
+                record_with_token(Some(token(3)), None),
+            ),
+            (
+                "attestation swapped",
+                record_with_token(Some(token(5)), Some(token(4))),
+            ),
+            (
+                "attester key swapped",
+                record_with_token(Some(token(3)), Some(token(5))),
+            ),
+            (
+                "attestation emptied",
+                record_with_token(Some(vec![]), Some(token(4))),
+            ),
+            (
+                "attester key emptied",
+                record_with_token(Some(token(3)), Some(vec![])),
+            ),
+        ] {
+            assert_ne!(
+                carried,
+                segment_commitment(&[altered]),
+                "{what}: the commitment must change, or the strip is invisible on the medium"
+            );
+        }
+    }
+
+    /// The two sidecars are committed in separate slots, so the same bytes moved from one field
+    /// to the other is a different record. Without the per-field tag this could collide.
+    #[test]
+    fn a_token_in_the_wrong_slot_is_a_different_record() {
+        assert_ne!(
+            segment_commitment(&[record_with_token(Some(token(3)), None)]),
+            segment_commitment(&[record_with_token(None, Some(token(3)))]),
+        );
+    }
+
+    /// #556, end to end: stripping the token out of an already-SIGNED segment breaks its
+    /// attestation — the path `chain_report` and restore actually take.
+    #[test]
+    fn stripping_a_token_breaks_a_signed_segments_attestation() {
+        let sk = sk();
+        let mut seg = signed_segment(&sk, "abcd", Plane::Clinical, 0, "", 2);
+        assert!(
+            seg.records[0].attestation.is_some(),
+            "fixture bug: nothing to strip"
+        );
+        seg.records[0].attestation = None;
+        assert_eq!(
+            verify_segment_attestation(&seg),
+            None,
+            "stripping a human-authorship token out of a verified segment must break its \
+             attestation, or a restored event can silently never gain power (#556)"
+        );
     }
 
     /// A `MediumRecord` fixture for isolating the DEK's effect on the commitment.
