@@ -22,7 +22,10 @@
 > 2. **Open repair-path issues:** from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
 >    missed if `lock_state` resolves before `link.js` defines `updateLinkLock`) · **#783** (the bridge remedy should say
 >    the unmarked joining links carry "Review this link…" too) · **#784** (a verdict is not re-checked against identity
->    facts or vetoes that changed while the panel was open) · from R5b **#750** ("Registered more recently" trusts a
+>    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
+>    constructors, a `LinkState` enum, `ShownPair` as an enum) · **#786** (the doubt mark is absent from
+>    `CandidateList`'s wire shape — a non-reference UI shows a disputed set as one person) · **#787** (`standing_link`
+>    panics on a legacy NULL `content_address`) · from R5b **#750** ("Registered more recently" trusts a
 >    UUIDv7 time) · **#751** (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a
 >    stale list after return, a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link
 >    by HLC is shown nowhere — ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check) · **#756**
@@ -68,8 +71,20 @@
 > - **Both verdicts are disabled in flight and hidden once one lands — Outranked included** (`unlink.js`, and R5a's
 >   `link.js`). `same_verdict` offers nothing for an attested link and needs both charts of the pair known held.
 > - **"Review this link…" / "Review this judgement…" is the ONE door per line**; the panel, not the list, decides which
->   verdicts apply. The clash mark says "while", never "until" (two doubted links: judging one leaves the hold), and
+>   verdicts apply. The clash mark says "while", never "until" (two doubted links: judging one leaves the hold), names
+>   what CAN be signed ("only lines recorded on this chart alone" — hazard.rs withholds shared lines too), and
 >   `DOUBTED_LINK_INSTRUCTION` names both doors.
+> - **A door carries the attestation its line showed** (`RecordLinkView::attested` → `compare_linked`): a pair judged
+>   since the list was drawn is refused (`line_still_shows`, `LINE_STALE`) before any panel is drawn — otherwise an
+>   attested link opens a silent panel offering only Unlink. The list's two reads (`read_record_links`) share ONE
+>   read-only REPEATABLE READ snapshot, and a clash naming no standing link is said ("reload"), never dropped.
+> - **Any recorded verdict disarms a newer comparison of the same pair**, in both panels (`disarmNewerReview` /
+>   `disarmNewerComparison` — the scripts share one global scope, so never one name for both). Never key it on
+>   `reload`: "Different people" reloads even when every pair was outranked.
+> - **One Rust spelling of the doubt boolean: `patient::edges::record_is_doubted`** — the hold (via the medication
+>   read) and the duplicate-review tray's doubted side (#723 on the tray) both ask it; an unread doubt is a worded
+>   side error, never "not doubted". An empty standing address is refused by the node itself (`judge()`), with the
+>   true reason.
 >
 > **⇒ R5b'S DURABLE RULES (PR #749) — do not undo any of these** (pins: `matcher/tests/test_{judged,proposal_retraction}.py`,
 > `tests/{auto_apply,duplicate_worklist,duplicate_review_flags}.rs`, `duplicate_review/{worklist.rs,tests.rs}`,
@@ -500,6 +515,14 @@ review → one fix wave → docs. No ADR, no schema generation change. Filed #78
 - **⇒ A prefix inside a fixed-width cell can eat the very name it qualifies.** The designed "↳ linked, in doubt: "
   (20 chars) left a doubted member's name at ~8 chars of the CLI's 28-char cell ("Mary SM…"); "↳ in doubt: " keeps it
   legible. Check a label against the width it renders in, not the sentence it reads as.
+- **2026-10-15, a /pr-review-toolkit pass on the PR and a /fixall round (eight commits).** Fixed: the pre-click race
+  (a colleague's confirm between drawing the list and "Review…"), the two-snapshot links read, the tray's "One person"
+  on a doubted side, the Outranked disarm (then widened: any recorded answer), a node-side empty-address refusal,
+  pins for the window's routing to the `_as_shown` doors and the Compare's guard, an isolated #220 clash test, and
+  rustls 0.23.46 (four RUSTSEC advisories failed cargo-deny on every PR). Filed #785 · #786 · #787.
+  **⇒ A fix wave gets its own review.** The fixes' own review found a hole in one of them: the disarm keyed on
+  `reload`, which "Different people" sets even when outranked. **⇒ Two classic `<script>`s share one global scope**:
+  a helper added to both under one name silently becomes the later file's.
 
 ### 2026-10-12 → 10-13 — four cloud tech-debt passes (PRs #770–#776)
 

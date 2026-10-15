@@ -563,6 +563,10 @@ no event type, no wire change; `SCHEMA_GENERATION` stays **58**, spec **v0.82**.
     prefixes "↳ in doubt: "; the flag never enters the signed list.
   - The remedy names both doors; an Outranked verdict hides both verdicts (R5a's panel too).
 - **Filed:** #781 · #782 · #783 · #784; commented #738.
+- **Review round (2026-10-15):** a door now carries its line's attestation, so a pair judged since the list was drawn
+  opens no verdict; the list's reads share one snapshot; the duplicate-review tray marks a doubted side too (#723);
+  any recorded verdict disarms a newer review of the same pair; the node refuses an unread standing address itself;
+  rustls 0.23.46. Filed #785 · #786 · #787.
 - **§1.2:** two clipped folders laid side by side and the clip initialled. Confirm paper 2 → forced 2 → target 2; the
   bridge re-link 3 → 2 → 2; the front door +0 acts. Budget ≤ 15 s (R2b-2's unlink budget); RUNBOOK §13, a human act
   owed.
