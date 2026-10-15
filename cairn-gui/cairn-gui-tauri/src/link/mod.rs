@@ -15,6 +15,7 @@
 //! Its sibling gesture, "Not the same person…" (R2b-2 — undo ONE link of a combined record),
 //! lives in `unlink.rs` with its own rule order and its own panel; `record_links.rs` reads the
 //! "How these charts are linked" list both gestures sit beside, and `unlink_view.rs` words it.
+pub mod confirm;
 pub mod confirm_view;
 pub mod record_links;
 pub mod search;

@@ -7,7 +7,7 @@
 //! opens the review panel (`compare_linked`), whose verdicts the panel decides (`unlink_view.rs`'s
 //! `link_review_view`). The verdict click IS the signature under the unlocked key (ADR-0053);
 //! there is no confirmation dialog (principle 3). This file holds the read and the Unlink; the
-//! "same person" verdict's command builds on [`resolve_edge`] beside it.
+//! "same person" verdict's command (`confirm.rs`) builds on [`resolve_edge`] beside it.
 //!
 //! Every command applies the chart-command rules IN THIS ORDER, each pinned by a test: the chart
 //! on screen (`displayed_patient`), the displayed set (`check_displayed_set`), the pair is still
@@ -35,15 +35,7 @@ use uuid::Uuid;
 pub(super) enum Act {
     Compare,
     Unlink,
-    /// The "same person" verdict. Built by R6 Task 7's `confirm_link`; the attribute below
-    /// fails clippy once it is, so it cannot outlive its reason.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "R6 Task 7's `confirm_link` constructs it; delete this then"
-        )
-    )]
+    /// The "same person" verdict (`confirm.rs`'s `confirm_link`).
     Confirm,
 }
 

@@ -85,13 +85,6 @@ pub fn same_verdict(shown: &ShownPair, held: &[(Uuid, bool)]) -> SameVerdict {
 /// a bridged pair joins charts that were already one record through other links.
 ///
 /// The non-effect arms are the link's own (`view.rs`): a confirm IS a link judgement.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "R6 Task 7's `confirm_link` command calls it; delete this then"
-    )
-)]
 pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid) -> LinkReportView {
     match (effect, kind) {
         (LinkEffect::TookEffect, PairKind::Link) => LinkReportView {
