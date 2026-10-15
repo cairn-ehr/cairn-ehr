@@ -225,7 +225,8 @@ pub fn section_view(
     }
 }
 
-/// The record's check lines. A checked record on a node that is not stalled has none.
+/// The record's check lines. A checked record has none, unless the node is `Stalled`, or is
+/// `CatchingUp` while a change notice waits (#742, below).
 ///
 /// R4's `chart_line` says "This chart: …" — ambiguous on a linked record — so only the OPENED
 /// chart uses it; every other member is named. The node's status line follows a member line
@@ -236,11 +237,14 @@ pub fn section_view(
 /// unreadable status is always shown.
 ///
 /// `CatchingUp` also shows it on a fully checked record while a CHANGE notice waits (#742, R7):
-/// a pair is proposed when its NEWER chart is checked, so a duplicate registered after this
-/// record's check cannot have been proposed yet, and without the line "no banner" would mean
-/// "not yet known". A change notice for one of THIS record's charts already shows that chart's
-/// pending line, so the node-wide flag adds the line only for changes elsewhere. A config-only
-/// re-check does not: it was queued before this record's check ran, so that check saw it.
+/// a pair is proposed only by a check that runs once both charts' evidence is in place, so a
+/// duplicate registered (or edited) after this record's check is proposed only when ITS own check
+/// runs, and without the line "no banner" would mean "not yet known". A change notice for one of
+/// THIS record's charts already shows that chart's pending line, so the node-wide flag adds the
+/// line only for changes elsewhere. A config-only re-check does not: it was queued before this
+/// record's check ran, so that check saw it. Known over-warns, open: a bulk `change` backlog (a
+/// rebuild, a restore, a first pull; #790) and a chart whose check keeps failing (#791) both put
+/// the line on every checked record — the first for one sweep, the second until it is fixed.
 pub fn check_lines(
     opened: Uuid,
     checks: &[ChartCheck],

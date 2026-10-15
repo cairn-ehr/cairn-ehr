@@ -151,7 +151,9 @@ $$;
 -- "no banner" would mean "not yet known". A 'config' notice never counts: a whole-population
 -- re-check queues every chart at once, before this chart's own check ran, so that check already
 -- scored this chart against them (and the line on every chart for hours would train staff to
--- ignore it).
+-- ignore it). KNOWN GAPS: a bulk 'change' backlog (rebuild, restore, first pull) is queued the
+-- same way yet counts (#790), and a chart whose check keeps failing keeps a 'change' notice that
+-- counts forever (#791) — both put the line on every checked chart.
 --
 -- The OUT columns have changed twice (newest_age_s -> quiet_age_s; then + charts_changing), and
 -- CREATE OR REPLACE cannot change a function's return type. This heals a database that loaded ANY
@@ -188,8 +190,8 @@ AS $$
         EXISTS (SELECT 1 FROM match_worker_state),
         -- "HH:MM" when the last completed work was today, else "YYYY-MM-DD HH:MM" (database-
         -- local date and time): "last ran 09:41" about a worker that stopped two days ago would
-        -- read as this morning. The OUT column keeps its historical name and type (text) so this
-        -- CREATE OR REPLACE needs no DROP.
+        -- read as this morning. The OUT column keeps its historical name and type (text); the DROP
+        -- guard above is for the columns that did change.
         (SELECT to_char(last_drained_at,
                         CASE WHEN last_drained_at::date = current_date
                              THEN 'HH24:MI' ELSE 'YYYY-MM-DD HH24:MI' END)

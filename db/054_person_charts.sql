@@ -1,5 +1,5 @@
--- db/054 — the person's chart set, a duplicate flag over it, and whether it holds a doubted
--- link (ADR-0076 decision 1).
+-- db/054 — the person's chart set, a duplicate flag over it, whether it holds a doubted link
+-- (ADR-0076 decision 1), and which of its links this node cannot verify (section 4, R7).
 --
 -- WHY IN THE DATABASE. Every combined read — the medication list now, allergies when they
 -- exist, the duplicate banner (R5) — must agree on which charts are "this person". One
@@ -190,11 +190,16 @@ GRANT EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) TO cairn_agen
 --    match_proposal, so it covers a link that arrived before any check here and a finding that
 --    arrived after the link. Only an UN-attested standing link: an attested one is a clinician's
 --    decision, the very one the note asks for. One row per (pair, identifier system). A pair that
---    also clashes may be listed; the window shows the clash note alone on such a line.
+--    also clashes may be listed; the window shows the clash note alone on such a line. The
+--    veto_kind filter is redundant TODAY (db/016's field clashes are always hard_veto), and is kept
+--    because the note's wording names an identifier system: a future soft field veto needs its
+--    own wording, not a silent ride on this one.
 --
 --    SECURITY DEFINER, search_path pinned and EXECUTE granted only to cairn_agent, exactly as its
 --    two siblings above (same reasoning: it returns patient_link rows cairn_agent may already
---    SELECT, plus the identifier system db/016 already reports to cairn_agent).
+--    SELECT, plus the identifier system db/016 already reports to cairn_agent). As for them,
+--    DEFINER is not strictly required — cairn_agent can read everything this reads — and is kept
+--    only so the three functions share one privilege shape until issue #718 decides.
 CREATE OR REPLACE FUNCTION cairn_chart_set_unverified_links(p_charts uuid[])
 RETURNS TABLE (low uuid, high uuid, system text)
 LANGUAGE sql STABLE

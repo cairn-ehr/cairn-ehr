@@ -20,7 +20,8 @@
 //! All wording lives here, in pure functions with a golden test; R5's window will reuse them.
 
 use anyhow::Context;
-use tokio_postgres::Client;
+use tokio_postgres::types::FromSql;
+use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
 /// How long the quiet time may run — since the oldest waiting notice or the worker's last completed
@@ -78,7 +79,9 @@ pub enum CheckState {
     /// first run) is among them. `change_waiting` is true while at least one CHANGE notice waits:
     /// a chart already checked may yet be proposed against by it, so its banner must not read as
     /// "checked, none open" (#742). A config-only backlog leaves it false — that re-check was
-    /// queued before any checked chart's own check ran, so the check already saw it.
+    /// queued before any checked chart's own check ran, so the check already saw it. A bulk
+    /// `change` backlog sets it although the same holds (#790), as does a chart whose check keeps
+    /// failing (#791).
     CatchingUp {
         waiting: i64,
         config_recheck: bool,
@@ -175,18 +178,35 @@ pub fn chart_line(pending: bool) -> &'static str {
 }
 
 /// Read the node-wide snapshot.
+///
+/// Every column is read with `status_column` (below), never `Row::get`: `cairn-node
+/// duplicate-check` reads without replaying the schema (#726), so a binary upgraded before its
+/// database's next replaying connect meets an OLDER shape of db/056's function, and `get` would
+/// panic on the missing column instead of saying what is wrong (PR #788 review).
 pub async fn read_snapshot(client: &Client) -> anyhow::Result<QueueSnapshot> {
     let r = client
         .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
         .await
         .context("reading the duplicate-check status")?;
     Ok(QueueSnapshot {
-        charts_waiting: r.get("charts_waiting"),
-        quiet_age_secs: r.get("quiet_age_s"),
-        config_recheck: r.get("config_recheck"),
-        worker_seen: r.get("worker_seen"),
-        last_drained_hhmm: r.get("last_drained_hhmm"),
-        charts_changing: r.get("charts_changing"),
+        charts_waiting: status_column(&r, "charts_waiting")?,
+        quiet_age_secs: status_column(&r, "quiet_age_s")?,
+        config_recheck: status_column(&r, "config_recheck")?,
+        worker_seen: status_column(&r, "worker_seen")?,
+        last_drained_hhmm: status_column(&r, "last_drained_hhmm")?,
+        charts_changing: status_column(&r, "charts_changing")?,
+    })
+}
+
+/// One column of db/056's status row, or an error naming the column and the remedy: a missing
+/// or mistyped column means the database's schema predates this binary.
+fn status_column<'a, T: FromSql<'a>>(row: &'a Row, name: &str) -> anyhow::Result<T> {
+    row.try_get(name).with_context(|| {
+        format!(
+            "reading the duplicate-check status: no usable `{name}` column — this database's \
+             schema predates this binary, so a schema replay is owed (run `cairn-node deferred` \
+             once — it loads the schema — then retry)"
+        )
     })
 }
 

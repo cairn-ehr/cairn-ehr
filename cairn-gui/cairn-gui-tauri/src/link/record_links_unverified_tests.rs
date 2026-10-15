@@ -1,7 +1,7 @@
 //! R7 (#743 part 2): the note on a link this node cannot verify. db/054's
 //! `cairn_chart_set_unverified_links` lists an un-attested standing link whose charts hold
-//! different identifiers in one system that this node has no format profile for (db/016's
-//! `degrade_hold`). It is never a doubt: nothing is held, so the note says only what is known,
+//! different identifiers in one system where at least one side carries no normalized form, so
+//! this node cannot tell a real mismatch from formatting (db/016's `degrade_hold`). It is never a doubt: nothing is held, so the note says only what is known,
 //! and the line keeps its one door.
 
 use super::*;
@@ -35,7 +35,7 @@ fn lines(links: RecordLinks) -> Vec<RecordLinkView> {
 fn an_unverified_link_is_noted_with_its_system_and_keeps_its_door() {
     let l = lines(RecordLinks {
         edges: vec![edge(false)],
-        unverified: vec![unverified("local-mrn")],
+        unverified: Ok(vec![unverified("local-mrn")]),
         ..RecordLinks::default()
     });
     assert_eq!(l.len(), 1);
@@ -60,7 +60,7 @@ fn an_unverified_link_is_noted_with_its_system_and_keeps_its_door() {
 fn two_unverified_systems_share_one_note() {
     let l = lines(RecordLinks {
         edges: vec![edge(false)],
-        unverified: vec![unverified("local-mrn"), unverified("ward-id")],
+        unverified: Ok(vec![unverified("local-mrn"), unverified("ward-id")]),
         ..RecordLinks::default()
     });
     assert_eq!(l[0].text.matches("unverified here").count(), 1);
@@ -83,7 +83,7 @@ fn a_clash_line_carries_only_its_clash_note() {
             kind: DoubtKind::Clash,
             recorded_on: "2026-10-15".into(),
         }],
-        unverified: vec![unverified("local-mrn")],
+        unverified: Ok(vec![unverified("local-mrn")]),
     });
     assert!(l[0].text.contains("in doubt"));
     assert!(!l[0].text.contains("unverified here"), "{}", l[0].text);
@@ -96,11 +96,11 @@ fn a_clash_line_carries_only_its_clash_note() {
 fn a_note_naming_no_standing_link_is_dropped_and_the_list_still_draws() {
     let l = lines(RecordLinks {
         edges: vec![edge(false)],
-        unverified: vec![UnverifiedLink {
+        unverified: Ok(vec![UnverifiedLink {
             low: Uuid::from_u128(3),
             high: Uuid::from_u128(4),
             system: "local-mrn".into(),
-        }],
+        }]),
         ..RecordLinks::default()
     });
     assert_eq!(l.len(), 1);
@@ -115,4 +115,28 @@ fn an_unnoted_link_line_is_byte_identical_to_before() {
         ..RecordLinks::default()
     });
     assert_eq!(l[0], record_link_line(&edge(false), &[]));
+}
+
+/// The note's read failing must not cost the list (PR #788 review). The notes hold nothing back,
+/// while the lines carry every repair door: refusing the list over them would leave a wrong link
+/// un-undoable until an unrelated read recovers. So the lines draw — with no note, because an
+/// unread note is unknown, not absent — and the section SAYS the verification could not be read,
+/// so a line without a note is never taken for "verified".
+#[test]
+fn a_failed_note_read_still_draws_every_line_and_says_so() {
+    let (l, error) = links_section(
+        Ok(RecordLinks {
+            edges: vec![edge(false)],
+            unverified: Err("statement timeout".into()),
+            ..RecordLinks::default()
+        }),
+        &[],
+        true,
+    );
+    assert_eq!(l.len(), 1, "the line and its door survive");
+    assert_eq!(l[0].button, REVIEW_LINK);
+    assert!(!l[0].text.contains("unverified here"));
+    let error = error.expect("an unread note is said, never shown as none");
+    assert!(error.contains("could not be read"), "{error}");
+    assert!(error.contains("statement timeout"), "{error}");
 }

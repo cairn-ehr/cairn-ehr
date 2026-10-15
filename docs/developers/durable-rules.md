@@ -10,6 +10,26 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ R7'S DURABLE RULES (PR #788) — do not undo any of these** (pins: `tests/{unverified_link_note,
+duplicate_check_status}.rs`, `cairn-gui-tauri/src/duplicates/{read_order_tests,view_catchup_tests}.rs`,
+`cairn-gui-tauri/src/link/record_links_unverified_tests.rs`, `unlink_tests.rs::an_unread_note_list_never_blocks_a_verdict`):
+- **A soft veto stays OUT of `cairn_chart_set_doubts`.** `cairn_chart_set_unverified_links` is a separate function so
+  the R1b hold, `EXISTS` over the doubts, can never see a `degrade_hold` (db/016: it must never demote a link). Folding
+  it in as a third kind would freeze sign-off on formatting differences.
+- **The banner and the tray read the check state BEFORE the open pairs** (`duplicate_section`, `tray_count_impl`). The
+  worker never deletes a notice before the proposals it caused are committed (`queue_db.clear_notices`); pairs read
+  first can miss one that
+  lands between the reads, then "nothing waiting" — a silent "checked, none open". **Tempting wrong fix:** "tidy" the
+  reads back into display order.
+- **A failed unverified-notes read never costs the links list** — `RecordLinks.unverified` is a `Result`, the lines
+  and their doors draw, and the section says the notes are unknown. A line without a note must never be read as
+  "verified", so an unread note is said, never shown as none.
+- **`read_snapshot` reads every status column with `try_get`** (`status_column`): `cairn-node duplicate-check` never
+  replays the schema (#726), so a binary newer than its database meets an older function shape and must say so, not
+  panic.
+- **db/056's heal guard is the NEWEST OUT column's absence** (`charts_changing`), so one guard covers every older shape.
+  A future column change moves the guard to the new newest column.
+
 **⇒ R6'S DURABLE RULES (PR #777) — do not undo any of these** (pins: `tests/{link_doubts,confirm_link,unlink_as_shown,
 search_doubted_row}.rs`, `cairn-gui-tauri/src/link/{confirm_view.rs,record_links.rs,unlink_tests.rs,
 unlink_view_tests.rs}`, the `unlink.js` field-name drift guards):

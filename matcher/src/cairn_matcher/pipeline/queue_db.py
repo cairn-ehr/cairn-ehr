@@ -73,7 +73,12 @@ def notice_ids(conn, patient=None) -> list[int]:
 
 def clear_notices(conn, ids: list[int], keep=()) -> int:
     """Delete exactly the notices in `ids`, except those of the charts in `keep` (charts in a
-    pair a sweep failed to score stay "not yet checked"). Does NOT commit."""
+    pair a sweep failed to score stay "not yet checked"). Does NOT commit.
+
+    ORDERING CONTRACT (PR #788): call this only in, or after, the transaction that commits the
+    proposals these notices caused — never before. The window reads "nothing waiting" BEFORE it
+    reads the open pairs, and relies on this: a notice gone means its proposals are visible.
+    `check_chart` deletes in the proposals' own transaction; `run_bulk` after `sweep` commits."""
     with conn.cursor() as cur:
         cur.execute(
             "DELETE FROM match_pending WHERE id = ANY(%s::bigint[]) "

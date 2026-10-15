@@ -4,7 +4,10 @@
 
 > [!NOTE]
 > **⇒ R7 (#742 + #743 part 2) IS BUILT ON PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788) (branch
-> `feat/742-743-catchup-line-and-soft-veto-note`, 2026-10-15) — ALL GATES GREEN (local sweep 2 668 passed, CI green); AWAITING THE MAINTAINER'S REVIEW AND MERGE.** Everything
+> `feat/742-743-catchup-line-and-soft-veto-note`, 2026-10-15); ITS SECOND REVIEW (2026-10-16, five agents) IS ANSWERED
+> ON THE PR (see "Second review" below) — locally green: fmt, clippy and `cargo doc` on both trees, the whole GUI
+> workspace, `db/tests`, and the touched cairn-node suites; the full workspace sweep is CI's. AWAITING THE MAINTAINER'S
+> REVIEW AND MERGE.** Everything
 > before it is merged: the repair path (#679 · #680 · #681) through R6 (PR #777), #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
@@ -22,7 +25,8 @@
 >    **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays open until the
 >    maintainer closes it.
 > 2. **Open repair-path issues:** from R7 **#789** (`duplicates/view_tests.rs` over 500 lines) · **#790** (the
->    "running" line on every checked chart through a rebuild/restore backlog — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
+>    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
+>    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
 >    missed if `lock_state` resolves before `link.js` defines `updateLinkLock`) · **#783** (the bridge remedy should say
 >    the unmarked joining links carry "Review this link…" too) · **#784** (a verdict is not re-checked against identity
 >    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
@@ -51,11 +55,11 @@
 >    row; VoiceOver/keyboard — `TEMPLATE.md` has no §13 section yet), and R4's **running a supervised worker** on a real
 >    node per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` ≥ 30 s).
 > 4. **#620**, the only open item that can still change the wire (brainstorm first). Then **#769**, **#652 + #655**,
->    the advisory-tier **#640**, **#641**, **#775**, and **#683–#686** (#685 needs the maintainer's permission to clear
+>    the advisory-tier **#640**, **#641**, and **#683–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
 >
 > **⇒ DURABLE RULES — READ BEFORE TOUCHING THE CODE THEY NAME:**
-> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (R6, R5b,
+> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (R7, R6, R5b,
 > R5a, #725, R4, R3, R1b, R2a, R2b-1, R2b-2, R1, the funnel) and the **eighteen traps**, each with its pin and its
 > tempting wrong fix. A slice that adds rules adds its block there, not here.
 >
@@ -210,6 +214,16 @@ Decisions asked first (both maintainer calls); then design section, plan, TDD in
   filed **#789** (`duplicates/view_tests.rs` was already 563 lines) and **#790** (a rebuild/restore queues `change`
   notices in bulk, so the "running" line shows on every checked chart through that backlog — a decision); commented
   #718 (a fourth definer, `cairn_chart_set_unverified_links`).
+- **Second review (2026-10-16, five agents in parallel), all fixed in the PR:** the banner and tray read the open pairs
+  BEFORE the check state, so a proposal committed between the reads read as "checked, none open" (now status first,
+  pinned by a source-order guard — the GUI has no DB tests, #738); a failed unverified-notes read took down the whole
+  links list and every repair door (now a `Result` of its own); `read_snapshot` panicked on a pre-R7 status shape
+  read without replay (now `try_get`); db/054 negatives (an end outside the set, an unlinked pair — both
+  mutation-checked); comment fixes (a false `check_lines` sentence, db/020's trap cited by number, db/001's
+  `attested`-reader list). Filed **#791** (the poison-chart over-warn). `techdebt-next` Step 8 now routes durable
+  rules to `durable-rules.md`.
+- **⇒ Two autocommit reads racing a separate process that never clears a notice before its proposals commit: read
+  the side that proves completeness FIRST.** "Nothing waiting" read first guarantees the later pairs read sees every proposal.
 - **⇒ The per-slice rules and the eighteen traps moved to [`developers/durable-rules.md`](developers/durable-rules.md)**
   (HANDOVER 803 → ~400 lines); the four per-pass 10-12/10-13 session entries, duplicated by the combined one, were
   dropped after a script confirmed no issue number was lost. ROADMAP's R1–R6 entries became one table (581 → ~460).
@@ -348,7 +362,9 @@ Narrative: ROADMAP; durable rules: `developers/durable-rules.md` (traps 7–18, 
 
 ## Read these first (the durable state)
 
-CLAUDE.md carries the document hierarchy in full; this adds only what it does not. **`docs/spikes/`** — 0001 (walking
+CLAUDE.md carries the document hierarchy in full; this adds only what it does not.
+**`docs/developers/durable-rules.md`** — the per-slice rules and the numbered trap list every session must hold (moved out
+of this file in R7; a new rule or trap goes there, never here). **`docs/spikes/`** — 0001 (walking
 skeleton — Bet A ✓ → ADR-0015; Bet B ✓ twice); 0002 (advisory-actor, C1–C5 ✓ → ADR-0029/0030); 0003 (Postgres on
 Android, G0–G3 ✓); 0004 (iced UI — FAIL on a11y → Tauri 2). **`docs/case-studies/0001`**: 16 GP-software failure modes,
 all absorbed, **0 new architecture**. **`docs/ecosystem/`** 0001, 0003 · **`docs/principles/`** — mission/governance.

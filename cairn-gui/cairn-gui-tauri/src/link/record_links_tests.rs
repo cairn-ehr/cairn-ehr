@@ -66,7 +66,7 @@ fn an_unread_link_list_says_so_and_offers_no_unlink() {
 fn a_read_list_carries_no_error() {
     let (links, error) = links_section(
         Ok(RecordLinks {
-            unverified: vec![],
+            unverified: Ok(vec![]),
             edges: vec![edge(true)],
             doubts: vec![],
         }),
@@ -93,7 +93,7 @@ fn a_single_chart_with_no_edges_is_silent() {
 #[test]
 fn a_clash_line_says_it_is_in_doubt_and_why() {
     let links = RecordLinks {
-        unverified: vec![],
+        unverified: Ok(vec![]),
         edges: vec![edge(false)],
         doubts: vec![doubt(DoubtKind::Clash)],
     };
@@ -125,7 +125,7 @@ fn a_clash_note_never_promises_that_judging_this_link_lifts_the_hold() {
 #[test]
 fn an_undoubted_link_line_is_byte_identical_to_before() {
     let links = RecordLinks {
-        unverified: vec![],
+        unverified: Ok(vec![]),
         edges: vec![edge(true)],
         doubts: vec![],
     };
@@ -143,7 +143,7 @@ fn a_separated_pair_gets_its_own_line_after_the_links() {
         recorded_on: "2026-10-01".into(),
     };
     let links = RecordLinks {
-        unverified: vec![],
+        unverified: Ok(vec![]),
         edges: vec![edge(false)],
         doubts: vec![sep],
     };
@@ -165,7 +165,7 @@ fn a_separated_pair_gets_its_own_line_after_the_links() {
 #[test]
 fn a_clash_on_a_pair_with_no_line_is_said_never_dropped() {
     let links = RecordLinks {
-        unverified: vec![],
+        unverified: Ok(vec![]),
         edges: vec![edge(true)],
         doubts: vec![LinkDoubt {
             high: Uuid::from_u128(3),
@@ -192,7 +192,7 @@ fn a_line_carries_the_attestation_it_shows() {
 #[test]
 fn a_pair_reported_as_both_kinds_renders_both_lines() {
     let links = RecordLinks {
-        unverified: vec![],
+        unverified: Ok(vec![]),
         edges: vec![edge(false)],
         doubts: vec![doubt(DoubtKind::Clash), doubt(DoubtKind::Separated)],
     };
@@ -221,7 +221,7 @@ fn a_pair_kind_parses_only_its_own_spellings() {
 #[test]
 fn a_linked_record_with_only_doubts_still_says_reload() {
     let links = RecordLinks {
-        unverified: vec![],
+        unverified: Ok(vec![]),
         edges: vec![],
         doubts: vec![doubt(DoubtKind::Separated)],
     };

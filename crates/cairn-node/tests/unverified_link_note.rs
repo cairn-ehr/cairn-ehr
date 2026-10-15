@@ -200,22 +200,94 @@ async fn a_trustworthy_identifier_clash_is_a_doubt_not_unverified() {
     assert!(record_unverified_links(&c, &set).await.unwrap().is_empty());
 }
 
-/// The window reads the list as `cairn_agent`, as it reads db/054's other two functions.
+/// The window reads the list as `cairn_agent`, as it reads db/054's other two functions — over
+/// a seeded finding, so the read proves the rows reach the role, not only that the call is
+/// granted (random charts would return nothing either way).
 #[tokio::test]
-async fn the_agent_role_can_read_it() {
+async fn the_agent_role_reads_the_finding() {
     let Some(base) = cs() else {
         eprintln!("skipped: set CAIRN_TEST_PG");
         return;
     };
     let _g = db::test_serial_guard(&base).await.unwrap();
     let c = db::connect_and_load_schema(&base).await.unwrap();
-    let ids = vec![Uuid::now_v7().to_string(), Uuid::now_v7().to_string()];
+    clean(&c).await;
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let (a, b) = unverified_pair(&c, &sk, &kid).await;
+    let set = ChartSet::new([a, b]).unwrap();
     c.batch_execute("SET ROLE cairn_agent").await.unwrap();
-    c.query(
-        "SELECT * FROM cairn_chart_set_unverified_links($1::text[]::uuid[])",
-        &[&ids],
-    )
-    .await
-    .expect("cairn_agent may read the unverified links");
+    let read = record_unverified_links(&c, &set).await;
     c.batch_execute("RESET ROLE").await.unwrap();
+    assert_eq!(
+        read.expect("cairn_agent may read the unverified links")
+            .len(),
+        1
+    );
+}
+
+/// Registers two charts, joins them by a peer's UN-attested link, then gives them differing
+/// identifiers in [`SYSTEM`] with no normalized form: one `degrade_hold`, one listed row.
+async fn unverified_pair(c: &Client, sk: &cairn_event::SigningKey, kid: &str) -> (Uuid, Uuid) {
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(c, sk, kid, a, b).await;
+    let ev = link_assertion_event(kid, a, b, LinkVerb::Link, 40, 0, "peer-matcher", false);
+    apply_remote_raw(c, sk, ev).await.unwrap();
+    assert_unprofiled_identifier(c, sk, kid, a, "00123", 50).await;
+    assert_unprofiled_identifier(c, sk, kid, b, "123", 51).await;
+    (a, b)
+}
+
+/// Only links with BOTH ends in the asked-for set are listed. A soft-vetoed link elsewhere, or
+/// one with a single end in the set, must not appear: the window drops a row naming no standing
+/// line of the record, so a widened filter (AND to OR) would be invisible on screen — this
+/// guards the floor itself.
+#[tokio::test]
+async fn a_link_with_an_end_outside_the_set_is_not_listed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    clean(&c).await;
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let (a, b) = unverified_pair(&c, &sk, &kid).await;
+    let (d, _e) = unverified_pair(&c, &sk, &kid).await;
+    let both = record_unverified_links(&c, &ChartSet::new([a, b]).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(both.len(), 1, "positive control: {both:?}");
+    assert_eq!((both[0].low, both[0].high), (a.min(b), a.max(b)));
+    let straddling = ChartSet::new([a, d]).unwrap();
+    assert!(
+        record_unverified_links(&c, &straddling)
+            .await
+            .unwrap()
+            .is_empty(),
+        "neither a-b nor d-e has both ends in {{a, d}}"
+    );
+}
+
+/// A link no longer standing — a later peer unlink won — is not listed: there is no line left
+/// to carry the note.
+#[tokio::test]
+async fn an_unlinked_pair_is_not_listed() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    clean(&c).await;
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let (a, b) = unverified_pair(&c, &sk, &kid).await;
+    let set = ChartSet::new([a, b]).unwrap();
+    assert_eq!(
+        record_unverified_links(&c, &set).await.unwrap().len(),
+        1,
+        "positive control: listed while linked"
+    );
+    let ev = link_assertion_event(&kid, a, b, LinkVerb::Unlink, 60, 0, "peer-matcher", false);
+    apply_remote_raw(&c, &sk, ev).await.unwrap();
+    assert!(record_unverified_links(&c, &set).await.unwrap().is_empty());
 }

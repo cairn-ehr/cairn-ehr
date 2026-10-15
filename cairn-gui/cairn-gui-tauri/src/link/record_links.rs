@@ -30,7 +30,8 @@ const CLASH_NOTE: &str = " — in doubt: this node's identity check finds a clas
 
 /// Appended to an un-attested link whose charts hold different identifiers this node cannot
 /// verify (db/054's `cairn_chart_set_unverified_links`, R7, #743 part 2). `systems` names each
-/// identifier system once. It says only what is known: db/016's `degrade_hold` must never demote
+/// identifier system once — db/054 returns one row per (pair, system), because db/016 compares
+/// identifiers per system (an INTERSECT of the two charts' systems). It says only what is known: db/016's `degrade_hold` must never demote
 /// a link, so nothing is held back, and the note claims nothing about sign-off — it stays true
 /// whether or not another link of the record is in doubt. Acting on it is the line's own door.
 fn unverified_note(systems: &[&str]) -> String {
@@ -68,15 +69,29 @@ impl PairKind {
 
 /// The three reads the list is built from, made in one snapshot ([`read_record_links`]): the
 /// standing links, db/054's doubts about the record's pairs, and the links it cannot verify.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordLinks {
     /// The record's standing links (`record_edges`).
     pub edges: Vec<RecordEdge>,
     /// What db/054 doubts (`record_doubts`): clashing links and bridged separations.
     pub doubts: Vec<LinkDoubt>,
     /// Un-attested links over a pair this node cannot verify (`record_unverified_links`, R7):
-    /// a note on the line, never a doubt.
-    pub unverified: Vec<UnverifiedLink>,
+    /// a note on the line, never a doubt. A `Result` of its own, unlike the two reads above: the
+    /// notes hold nothing back, so a failure to read them must not cost the lines and their
+    /// repair doors (PR #788 review) — [`links_section`] draws the lines and says the notes are
+    /// unknown.
+    pub unverified: Result<Vec<UnverifiedLink>, String>,
+}
+
+/// Nothing read: no links, no doubts, no notes — what a single chart has.
+impl Default for RecordLinks {
+    fn default() -> Self {
+        RecordLinks {
+            edges: vec![],
+            doubts: vec![],
+            unverified: Ok(vec![]),
+        }
+    }
 }
 
 /// One line as the pane lists it. `low`/`high`/`kind` travel back with the line's door.
@@ -187,12 +202,13 @@ fn has_orphan_clash(links: &RecordLinks) -> bool {
 
 /// Read the record's standing links, db/054's doubts about them, and the links it cannot verify.
 /// All three are empty for a single chart (nothing joins it); an error, never an empty list, when
-/// a linked set cannot be read — see [`links_section`]. Takes `state.db`'s lock, which means the caller must not already hold
-/// it: `tokio::sync::Mutex` is not re-entrant.
+/// a linked set cannot be read — see [`links_section`]. Only the notes may fail alone: their
+/// failure is kept in `unverified`, and the links and doubts already read are returned. Takes
+/// `state.db`'s lock, which means the caller must not already hold it: `tokio::sync::Mutex` is
+/// not re-entrant.
 ///
 /// All three reads run in ONE read-only REPEATABLE READ transaction, so they describe the same
-/// moment.
-/// The lock alone would not do that: it keeps out only this window's other commands, while the
+/// moment. The lock alone would not do that: it keeps out only this window's other commands, while the
 /// sync door commits peer links through its own connection, and each autocommit statement takes
 /// its own snapshot. Two snapshots could mark a clash on a link the edge read had not yet seen.
 pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<RecordLinks, String> {
@@ -217,14 +233,19 @@ pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<Re
     let doubts = cairn_node::patient::edges::record_doubts(&snapshot, charts)
         .await
         .map_err(diagnose)?;
+    // The notes' read goes LAST, so its failure cannot cost the two reads above: they are
+    // already in memory, and a failed statement only aborts the rest of the transaction.
     let unverified = cairn_node::patient::edges::record_unverified_links(&snapshot, charts)
         .await
-        .map_err(diagnose)?;
-    // Read-only: dropping would roll back just as well; committing says the read is finished.
-    snapshot
-        .commit()
-        .await
-        .map_err(|e| format!("could not finish the read of the links: {e}"))?;
+        .map_err(diagnose);
+    if unverified.is_ok() {
+        // Read-only: dropping would roll back just as well; committing says the read is finished.
+        snapshot
+            .commit()
+            .await
+            .map_err(|e| format!("could not finish the read of the links: {e}"))?;
+    }
+    // On a failed notes read the aborted transaction is dropped, which rolls it back.
     Ok(RecordLinks {
         edges,
         doubts,
@@ -233,7 +254,9 @@ pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<Re
 }
 
 /// The list, or — when it could not be read — no lines and a sentence saying so. An unread
-/// list must never render as an empty one: that reads as "nothing joins these charts".
+/// list must never render as an empty one: that reads as "nothing joins these charts". Unread
+/// NOTES are the one partial case: the lines draw without them, and the sentence says so, since a
+/// line with no note would otherwise read as "verified".
 ///
 /// The lines: one per standing link, carrying [`CLASH_NOTE`] when db/054 doubts it, else the
 /// unverified note when it cannot verify it (a clash line already says "in doubt"); then one per
@@ -269,12 +292,13 @@ pub fn links_section(
             ),
         ),
         Ok(links) => {
+            let notes: &[UnverifiedLink] = links.unverified.as_deref().unwrap_or(&[]);
             let link_lines = links.edges.iter().map(|e| {
                 let mut line = record_link_line(e, members);
                 if has_clash(e, &links.doubts) {
                     line.text.push_str(CLASH_NOTE);
                 } else {
-                    let systems = unverified_systems(e, &links.unverified);
+                    let systems = unverified_systems(e, notes);
                     if !systems.is_empty() {
                         line.text.push_str(&unverified_note(&systems));
                     }
@@ -286,7 +310,15 @@ pub fn links_section(
                 .iter()
                 .filter(|d| d.kind == DoubtKind::Separated)
                 .map(|d| separated_line(d, members));
-            (link_lines.chain(separated_lines).collect(), None)
+            let lines = link_lines.chain(separated_lines).collect();
+            let notes_unread = links.unverified.as_ref().err().map(|e| {
+                format!(
+                    "Whether this node can verify these links could not be read, so a link may \
+                     lack its \"unverified here\" note — reload the chart; if this persists, the \
+                     node needs its operator: {e}"
+                )
+            });
+            (lines, notes_unread)
         }
         Err(e) => (
             vec![],

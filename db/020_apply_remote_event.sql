@@ -487,7 +487,8 @@ BEGIN
     --
     -- ⚠️ ITS POSITION IS STILL LOAD-BEARING and did not move when the comparison was extracted:
     -- it must stay ABOVE cairn_project_late_custody so a rival body never reaches an applier
-    -- (ADR-0070 decision 1, docs/developers/durable-rules.md trap 10; pinned by
+    -- (ADR-0070 decision 1; docs/developers/durable-rules.md, the trap "never remove or move the
+    -- cairn_project_late_custody calls" — cited by title, as the list is renumbered; pinned by
     -- late_custody_reaches_the_chart.rs::a_rival_body_never_reaches_an_applier).
     --
     -- The COMPARISON lives in cairn_refuse_substitution (db/053) since #615, shared with

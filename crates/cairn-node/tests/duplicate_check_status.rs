@@ -1,6 +1,6 @@
 //! Repair path R7 (#742): db/056's status read reports `charts_changing` — how many charts have
-//! a waiting CHANGE notice — so the banner of a chart that is itself already checked can say "running"
-//! while a duplicate registered after its check may still be proposed against it. Split from
+//! a waiting CHANGE notice — so the banner of a chart that is itself already checked can say
+//! "running" while a duplicate registered after its check may still be proposed against it. Split from
 //! `match_pending.rs` (R4's suite) to keep that file under 500 lines.
 //!
 //! DB-gated on $CAIRN_TEST_PG, serialized via `db::test_serial_guard`.
@@ -105,4 +105,42 @@ async fn a_database_with_the_pre_r7_status_shape_is_healed_on_connect() {
         .columns()
         .iter()
         .any(|col| col.name() == "charts_changing"));
+}
+
+/// `cairn-node duplicate-check` reads without replaying the schema (#726), so a binary upgraded
+/// before its database's next replaying connect meets the pre-R7 shape. It must fail LEGIBLY,
+/// naming the remedy — never panic on the missing `charts_changing` column (PR #788 review).
+#[tokio::test]
+async fn a_pre_r7_status_shape_read_without_replay_is_a_legible_error() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    c.batch_execute(
+        "DROP FUNCTION cairn_duplicate_check_status(); \
+         CREATE FUNCTION cairn_duplicate_check_status(OUT charts_waiting bigint, \
+           OUT quiet_age_s bigint, OUT config_recheck boolean, OUT worker_seen boolean, \
+           OUT last_drained_hhmm text) LANGUAGE sql AS $$ SELECT 0::bigint, NULL::bigint, \
+           false, false, NULL::text $$;",
+    )
+    .await
+    .unwrap();
+    // The CLI's own connect: no replay. Spawned, so a panic comes back as a JoinError AFTER the
+    // restore below, never leaving the old shape for the next test.
+    let plain = db::connect(&base).await.unwrap();
+    let read = tokio::spawn(async move {
+        cairn_node::duplicate_check::read_snapshot(&plain)
+            .await
+            .map_err(|e| format!("{e:#}"))
+    })
+    .await;
+    db::force_schema_replay(&c).await.unwrap();
+    db::connect_and_load_schema(&base).await.unwrap();
+    let err = read
+        .expect("reading an older status shape must not panic")
+        .expect_err("an older status shape is an error");
+    assert!(err.contains("charts_changing"), "{err}");
+    assert!(err.contains("replay"), "names the remedy: {err}");
 }

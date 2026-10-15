@@ -57,8 +57,8 @@ pub async fn record_edges<C: GenericClient + Sync>(
     rows.iter()
         .map(|r| {
             Ok(RecordEdge {
-                low: r.get::<_, String>("low").parse()?,
-                high: r.get::<_, String>("high").parse()?,
+                low: chart_id(r.get("low"))?,
+                high: chart_id(r.get("high"))?,
                 attested: r.get("attested"),
                 recorded_on: r.get("recorded_on"),
             })
@@ -112,8 +112,8 @@ pub async fn record_doubts<C: GenericClient + Sync>(
                 other => anyhow::bail!("db/054 returned an unknown doubt kind {other:?}"),
             };
             Ok(LinkDoubt {
-                low: r.get::<_, String>("low").parse()?,
-                high: r.get::<_, String>("high").parse()?,
+                low: chart_id(r.get("low"))?,
+                high: chart_id(r.get("high"))?,
                 kind,
                 recorded_on: r.get("recorded_on"),
             })
@@ -152,8 +152,9 @@ pub async fn record_is_doubted<C: GenericClient + Sync>(
 }
 
 /// A standing, un-attested link whose two charts hold different identifiers in one `system`,
-/// where this node has no format profile to tell a real mismatch from formatting (db/016's
-/// `degrade_hold`). Not a doubt: db/016 says it must never demote a link, so nothing is held; the
+/// where at least one side's identifier carries no normalized form (no format profile was
+/// applied when it was asserted), so this node cannot tell a real mismatch from formatting
+/// (db/016's `degrade_hold`). Not a doubt: db/016 says it must never demote a link, so nothing is held; the
 /// window notes it on the link's line (R7, #743 part 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnverifiedLink {
@@ -169,7 +170,7 @@ const UNVERIFIED_SQL: &str = "SELECT low::text AS low, high::text AS high, syste
 
 /// Every un-attested standing link among `charts` this node cannot verify, one row per (pair,
 /// identifier system), ordered. Asks db/054's `cairn_chart_set_unverified_links`, which computes
-/// the finding from the identifiers as they stand now, and never re-derives it.
+/// the finding from the identifiers as they stand now; this function never re-derives it.
 pub async fn record_unverified_links<C: GenericClient + Sync>(
     client: &C,
     charts: &ChartSet,
@@ -184,10 +185,33 @@ pub async fn record_unverified_links<C: GenericClient + Sync>(
     rows.iter()
         .map(|r| {
             Ok(UnverifiedLink {
-                low: r.get::<_, String>("low").parse()?,
-                high: r.get::<_, String>("high").parse()?,
+                low: chart_id(r.get("low"))?,
+                high: chart_id(r.get("high"))?,
                 system: r.get("system"),
             })
         })
         .collect()
+}
+
+/// A chart id as db/054 and db/018 return it (`uuid::text`), with the step named if it does not
+/// parse. Unreachable from a uuid column today; named so a future change to a read's SQL fails
+/// legibly rather than as a bare "invalid character".
+fn chart_id(text: String) -> anyhow::Result<Uuid> {
+    text.parse()
+        .map_err(|bad| anyhow::anyhow!("a link read returned a malformed chart id {text:?}: {bad}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chart_id;
+
+    #[test]
+    fn a_malformed_chart_id_is_named_in_its_error() {
+        let msg = chart_id("not-a-uuid".into()).unwrap_err().to_string();
+        assert!(
+            msg.contains("malformed chart id") && msg.contains("not-a-uuid"),
+            "{msg}"
+        );
+        assert!(chart_id(uuid::Uuid::from_u128(7).to_string()).is_ok());
+    }
 }

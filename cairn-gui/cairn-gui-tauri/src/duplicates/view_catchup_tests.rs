@@ -55,3 +55,31 @@ fn a_checked_record_stays_quiet_through_a_config_only_recheck() {
     );
     assert!(lines.is_empty(), "{lines:?}");
 }
+
+/// A pending chart of THIS record and a change waiting elsewhere both call for the node's line;
+/// it is said once, after the pending line it explains — never twice.
+#[test]
+fn a_pending_record_with_a_change_waiting_says_the_node_line_once() {
+    let checks = [ChartCheck {
+        chart: id(1),
+        pending: Ok(true),
+    }];
+    let lines = check_lines(
+        id(1),
+        &checks,
+        &[],
+        Ok(CheckState::CatchingUp {
+            waiting: 3,
+            config_recheck: false,
+            change_waiting: true,
+        }),
+    );
+    assert_eq!(
+        lines,
+        vec![
+            "This chart: duplicate check not yet run since its identity details last changed."
+                .to_string(),
+            "Duplicate check running — 3 charts waiting.".to_string(),
+        ]
+    );
+}
