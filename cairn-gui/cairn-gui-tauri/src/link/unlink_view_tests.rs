@@ -1,8 +1,9 @@
 //! Tests for `link/unlink_view.rs`, in a sibling file like `view_tests.rs`.
 use super::*;
-use crate::link::confirm_view::LINK_THEM;
+use crate::link::confirm_view::{LINK_THEM, PAIR_CHANGED_MID_READ};
 use crate::link::record_links::PairKind;
 use crate::link::unlink::ShownPair;
+use cairn_node::chart_link::StandingLink;
 use cairn_node::patient::compare::{FieldFact, NameFact};
 
 fn id(n: u128) -> Uuid {
@@ -37,8 +38,17 @@ fn whole_parts() -> UnlinkParts {
         low: Ok(vec![held(1)]),
         high: Ok(vec![held(2)]),
         findings: Ok(vec![]),
+        standing: Ok(Some(standing("link", false))),
+    }
+}
+
+/// The judgement standing on the pair, as `standing_link` reads it.
+fn standing(state: &str, attested: bool) -> StandingLink {
+    StandingLink {
         // A content address, computed — not key material (house rule 6).
-        standing: Ok(Some(vec![7; 34])),
+        content_address: vec![7; 34],
+        state: state.into(),
+        attested,
     }
 }
 
@@ -382,7 +392,9 @@ fn a_partial_review_offers_no_verdict() {
 
 #[test]
 fn a_separated_review_offers_no_unlink() {
-    let v = link_review_view(whole_parts(), &set(&[1, 2]), id(1), id(2), &separated());
+    let mut parts = whole_parts();
+    parts.standing = Ok(Some(standing("unlink", true)));
+    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &separated());
     assert!(!v.can_unlink, "a separated pair is already unlinked");
     assert!(v.can_confirm && v.same_label.as_deref() == Some(LINK_THEM));
 }
@@ -431,4 +443,36 @@ fn a_chart_not_held_here_still_offers_unlink_but_not_confirm() {
     assert!(whole.can_confirm);
     assert_eq!(whole.standing, vec![7; 34]);
     assert_eq!(whole.kind, PairKind::Link);
+}
+
+/// Task 6 review, A (safety): the line and the pair's standing judgement are read under two
+/// lock acquisitions. A colleague's attested unlink landing between them (a third chart still
+/// joining the record) must not let the panel offer "Same person — confirm" carrying the
+/// UNLINK's address — the node's pair check would accept it. Neither verdict is offered.
+#[test]
+fn a_standing_judgement_that_changed_mid_read_offers_no_verdict() {
+    let mut parts = whole_parts();
+    parts.standing = Ok(Some(standing("unlink", true)));
+    let v = link_review_view(parts, &set(&[1, 2, 3]), id(1), id(2), &unattested_link());
+    assert!(!v.can_confirm && !v.can_unlink);
+    assert_eq!(v.same_label, None);
+    assert!(
+        v.standing.is_empty(),
+        "the unlink's address never reaches the webview"
+    );
+    assert_eq!(v.problems, vec![PAIR_CHANGED_MID_READ.to_string()]);
+    assert_eq!(
+        PAIR_CHANGED_MID_READ,
+        "This link changed while it was being read — close the comparison and review it again."
+    );
+}
+
+/// The same rule for a separation that was relinked mid-read.
+#[test]
+fn a_separation_relinked_mid_read_offers_no_verdict() {
+    let mut parts = whole_parts();
+    parts.standing = Ok(Some(standing("link", true)));
+    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &separated());
+    assert!(!v.can_confirm && !v.can_unlink && v.standing.is_empty());
+    assert_eq!(v.problems, vec![PAIR_CHANGED_MID_READ.to_string()]);
 }

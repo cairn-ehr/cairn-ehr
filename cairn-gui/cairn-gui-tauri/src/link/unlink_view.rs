@@ -7,13 +7,13 @@
 //! "Not the same person — unlink" (worded here) and the "same person" verdict
 //! (`confirm_view.rs`'s [`same_verdict`]).
 
-use super::confirm_view::same_verdict;
+use super::confirm_view::{same_verdict, standing_agrees, PAIR_CHANGED_MID_READ};
 use super::record_links::PairKind;
 use super::unlink::ShownPair;
 use super::view::{fact_rows, finding_line, heading, ColumnView, FactRowView, LinkReportView};
 use crate::funnel::view::ErrorView;
 use cairn_medication_view::ChartSet;
-use cairn_node::chart_link::LinkEffect;
+use cairn_node::chart_link::{LinkEffect, StandingLink};
 use cairn_node::patient::compare::{ChartFacts, VetoFinding};
 use serde::Serialize;
 use uuid::Uuid;
@@ -34,10 +34,11 @@ pub struct UnlinkParts {
     pub high: Result<Vec<ChartFacts>, String>,
     /// The veto findings between the two charts.
     pub findings: Result<Vec<VetoFinding>, String>,
-    /// The content address of the judgement standing on the pair (`standing_link`), which a
+    /// The judgement standing on the pair (`standing_link`). Its content address is what a
     /// "same person" verdict sends back so the node can refuse it if the pair changed since this
-    /// read. `Ok(None)`: no assertion stands on the pair (it vanished since the list was read).
-    pub standing: Result<Option<Vec<u8>>, String>,
+    /// read — kept only when it agrees with the line ([`standing_agrees`]). `Ok(None)`: no
+    /// assertion stands on the pair (it vanished since the list was read).
+    pub standing: Result<Option<StandingLink>, String>,
 }
 
 /// What the review panel hands the webview.
@@ -112,7 +113,13 @@ pub fn link_review_view(
         }
     };
     let standing = match parts.standing {
-        Ok(Some(address)) => address,
+        Ok(Some(judgement)) if standing_agrees(&judgement, shown) => judgement.content_address,
+        // The line and the pair were read under two locks and something landed between them:
+        // offer NO verdict (a problem withholds both) and never send this address back.
+        Ok(Some(_)) => {
+            problems.push(PAIR_CHANGED_MID_READ.into());
+            vec![]
+        }
         Ok(None) => vec![],
         Err(e) => {
             problems.push(format!(
@@ -125,7 +132,7 @@ pub fn link_review_view(
     // Empty when a facts read failed — which already put a problem on the panel, so no verdict
     // is offered whatever `same_verdict` makes of it.
     let held: Vec<(Uuid, bool)> = both.iter().map(|f| (f.patient_id, f.held)).collect();
-    let same = same_verdict(shown, &held);
+    let same = same_verdict(shown, low, high, &held);
     let whole = problems.is_empty();
     // A partial read offers NO verdict (Review Focus 5): the label goes too, so the webview
     // never draws a "same person" button that cannot be pressed. The note stays — it is about

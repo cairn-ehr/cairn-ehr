@@ -166,7 +166,9 @@ pub(super) fn shown_pair(
 ///
 /// `kind` is the line's own kind, as the webview got it; an unknown one is refused before
 /// anything is read (it cannot name a pair). The facts, the findings and which judgement stands
-/// are read under ONE lock, after [`resolve_edge`] has released its own.
+/// are read under ONE lock, after [`resolve_edge`] has released its own — so the line (`shown`)
+/// and the standing judgement come from two reads; `link_review_view` offers no verdict when
+/// they disagree (`confirm_view::standing_agrees`).
 pub async fn compare_linked_impl(
     state: &AppState,
     patient_id: &str,
@@ -191,7 +193,7 @@ pub async fn compare_linked_impl(
         low: as_text(cairn_node::patient::compare::chart_facts(&*db, &l).await),
         high: as_text(cairn_node::patient::compare::chart_facts(&*db, &h).await),
         findings: as_text(cairn_node::patient::compare::cross_vetoes(&*db, &l, &h).await),
-        standing: as_text(standing).map(|s| s.map(|s| s.content_address)),
+        standing: as_text(standing),
     };
     Ok(link_review_view(
         parts,
