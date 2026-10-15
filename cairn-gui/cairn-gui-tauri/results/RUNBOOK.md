@@ -364,8 +364,10 @@ earlier in this runbook; substitute your own.
 > were reading, it is refused ("what stands between charts … changed while you were judging it … —
 > nothing was done; review it again") and you compare again. An un-attested link also shows **Same
 > person — confirm** beside it when both charts are held on this node; that verdict is timed in
-> section 13, not here. A line drawn before a colleague judged the pair opens no panel: it says the
-> pair "has been judged since the list was drawn" — reload the chart.
+> section 13, not here. If the pair's attestation changed after the list was drawn (a colleague
+> confirmed it, say), the panel opens with no comparison and no verdict, only "this pair has been
+> judged since the list was drawn — reload the chart…". A change that leaves the attestation as it
+> was is caught later instead: each verdict is signed only over the judgement the panel read.
 
 Start the stopwatch at the press of **"Review this link…"** on a link's line, not before — choosing
 WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then

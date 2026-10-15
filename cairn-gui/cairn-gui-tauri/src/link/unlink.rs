@@ -71,7 +71,8 @@ pub struct ShownPair {
 }
 
 /// Refused when the pair no longer reads the way its list line did: the line was drawn before a
-/// colleague's judgement landed on it (see [`line_still_shows`]). Nothing was opened.
+/// colleague's judgement changed its attestation (see `line_still_shows`). The webview has
+/// already opened the empty panel, so this sentence is all it shows — no comparison, no verdict.
 pub const LINE_STALE: &str =
     "this pair has been judged since the list was drawn — reload the chart to see the judgement \
      that stands, then review it again";

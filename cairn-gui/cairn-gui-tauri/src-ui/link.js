@@ -307,9 +307,10 @@ function samePair(a, b) {
 
 /**
  * Disarm a NEWER comparison of the same two charts as `sent` — a second Review pressed while
- * `sent`'s answer was in flight. Called when `sent` may have landed with the record looking
- * unchanged (Outranked, or an unknown outcome, #713): #708's record check would then pass a second
- * press, recording a second judgement over the colleague's that won.
+ * `sent`'s answer was in flight. Called once `sent` landed (any recorded answer) or may have
+ * (#713's unknown outcome). The case that matters: landed Outranked, the record looks unchanged,
+ * so #708's record check would pass a second press — a second judgement over the colleague's
+ * that won. After any other answer the comparison is stale anyway.
  */
 function disarmNewerComparison(sent) {
   if (compared !== null && samePair(compared, sent)) {
@@ -373,9 +374,11 @@ async function sendJudgement(command) {
       el("link-confirm").hidden = true;
       el("link-different").hidden = true;
     }
-    // Outranked answered on the chart line or elsewhere: a newer comparison of these two charts
-    // is just as stale as the one the panel arm forgets above.
-    if (!report.reload) disarmNewerComparison(sent);
+    // Wherever it landed, a recorded judgement leaves a newer comparison of these two charts
+    // stale. Not keyed on `reload`: "Different people" answers `reload: true` even when every
+    // pair was Outranked (`different_people_report`), and then the record looks unchanged — #708
+    // would pass a second press. After a change, a fresh Review must re-read anyway.
+    disarmNewerComparison(sent);
   } catch (failure) {
     const place = linkAnswerPlace(sent, token);
     const text = failureText(failure);

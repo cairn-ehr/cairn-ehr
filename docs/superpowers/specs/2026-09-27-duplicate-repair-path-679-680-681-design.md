@@ -1717,8 +1717,10 @@ db/054 is edited in place, `SCHEMA_GENERATION` stays **58**, the spec stays **v0
   it ate the very name in doubt. The ↳ already says "a further chart of this row".
 - **`cairn_chart_set_doubts` also returns `hlc_wall`** (`RETURNS TABLE (low, high, kind, hlc_wall)`):
   it dates the separated line ("a clinician recorded on {D} (UTC)…").
-- **The clash mark never says "until"** (final review I3). `CLASH_NOTE` ends "…cannot be signed off
-  while this link is in doubt": with two doubted links, judging one does not lift the hold.
+- **The clash mark never says "until"** (final review I3). `CLASH_NOTE` says "while this link is in
+  doubt, only lines recorded on this chart alone can be signed off": with two doubted links, judging
+  one does not lift the hold. (Its earlier "lines from other charts … cannot be signed off" undersold
+  the hold — a line shared with another chart is withheld too — PR #777 review.)
 - **The panel's Unlink is signed only over the pair it showed** (final review I1). The design guarded
   only the confirm; the mirror race (a colleague's attested confirm landing mid-review, overruled by
   our later unlink) was the same gap. The panel sends `standing` with `unlink_records`, and the node's

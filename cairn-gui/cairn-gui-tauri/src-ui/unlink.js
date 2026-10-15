@@ -13,6 +13,7 @@
 // forgets the comparison; a fresh "Review…" click re-reads the pair. An Outranked or unknown
 // answer that lands after a newer Review of the SAME pair disarms that one too
 // (`disarmNewerReview`): the pair looks unchanged, so the node would not catch a second press.
+// So does any other recorded answer — that newer Review is stale too.
 // Renders and decides nothing: every sentence comes from Rust, every check from the backend.
 // Classic script, loaded after main.js, funnel.js and link.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `invoke`, `displayedPatient`, `renderedPatient`,
@@ -240,9 +241,10 @@ async function confirmCompared() {
 
 /**
  * Disarm a NEWER comparison of the same pair as `sent` — a second Review pressed while `sent`'s
- * answer was in flight. Called when `sent` may have landed with the pair's standing judgement
- * unchanged (Outranked, or an unknown outcome, #713): the node's stale-pair check would then pass
- * a second press, which would record a second judgement over the colleague's that won.
+ * answer was in flight. Called once `sent` landed (any recorded answer) or may have (#713's
+ * unknown outcome). The case that matters: landed Outranked, the pair's standing judgement is
+ * unchanged, so the node's stale-pair check would pass a second press — a second judgement over
+ * the colleague's that won. After any other answer the comparison is stale anyway.
  */
 function disarmNewerReview(sent) {
   if (
@@ -284,9 +286,10 @@ async function showUnlinkReport(sent, token, report) {
     unlinkCompared_ = null;
     hideVerdicts();
   }
-  // Outranked answered on the chart line or elsewhere: a newer comparison of this pair is just as
-  // stale as the one the panel arm forgets above.
-  if (!report.reload) disarmNewerReview(sent);
+  // Wherever it landed, a recorded verdict leaves a newer comparison of this pair stale: after an
+  // Outranked the pair looks unchanged, so the node would pass a second press; after anything else
+  // the record changed and a fresh Review must re-read it anyway.
+  disarmNewerReview(sent);
 }
 
 /**
