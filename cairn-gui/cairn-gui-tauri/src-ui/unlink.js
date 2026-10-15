@@ -9,12 +9,16 @@
 // and once one lands or is refused for good BOTH are hidden — one human must never sign two
 // verdicts milliseconds apart. An `"after_reread"` failure (outcome unknown) disarms and
 // re-reads the chart, never offers a live retry. No confirmation dialog: the click is the act.
-// Renders and decides nothing: every sentence comes
-// from Rust, every check from the backend. Classic script, loaded after main.js, funnel.js and
-// link.js, sharing their scope: `el`, `cell`, `setMessage`, `say`, `refresh`, `invoke`,
-// `displayedPatient`, `renderedPatient`, `renderedCharts` (main.js), `failureText` (funnel.js),
-// `sayAnywhere`, `updateLinkLock`, `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's rules — read its header — and is a SEPARATE
-// panel: one panel with two verbs could show one verb's button over the other's comparison.
+// A verdict that LANDS (even as "outranked" by a colleague's) takes BOTH buttons off the panel and
+// forgets the comparison; a fresh "Review…" click re-reads the pair.
+// Renders and decides nothing: every sentence comes from Rust, every check from the backend.
+// Classic script, loaded after main.js, funnel.js and link.js, sharing their scope: `el`, `cell`,
+// `setMessage`, `say`, `refresh`, `invoke`, `displayedPatient`, `renderedPatient`,
+// `renderedCharts` (main.js), `failureText` (funnel.js), `sayAnywhere`, `updateLinkLock`,
+// `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's rules (read its header) and is
+// a panel SEPARATE FROM THE LINK PANEL: the link panel judges "link / different people" over a
+// searched-for chart; this one reviews a link or judgement that already stands. Its two verdicts
+// are guarded together (above), so one human cannot sign both.
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`: `#unlink-status` is hidden whenever empty and
 // `[hidden]` wins over everything, so a bare `.textContent = …` would never reach the screen.
@@ -23,13 +27,14 @@
 /** Bumped on every open, click on a link, or close; an answer for an older token is dropped. */
 let unlinkToken = 0;
 /**
- * What the panel compared, as the backend read it: Unlink sends exactly these back, never the
- * window's current `renderedCharts`, so the judgement names what the clinician looked at.
+ * What the panel compared, as the backend read it: BOTH verdicts (Unlink and Same person) send
+ * exactly these back, never the window's current `renderedCharts`, so the judgement names what
+ * the clinician looked at. `canUnlink`/`canConfirm` say which verdict this read allows.
  * `null` until a WHOLE comparison (`can_unlink` or `can_confirm`) has landed. `standing` is the
  * pair's content address, opaque: sent back unchanged so the node can refuse a stale confirm.
  */
 let unlinkCompared_ = null; // { patientId, charts, low, high, kind, standing, canUnlink, canConfirm }
-/** The link (low/high) whose button opened the panel: Close returns focus to that button. */
+/** The line (low/high/kind) whose button opened the panel: Close returns focus to that button. */
 let unlinkOpener = null;
 
 /** Empty every part of the panel that a fresh comparison must replace. */
@@ -123,7 +128,8 @@ function renderUnlinkComparison(view) {
   // No verdict unless the whole comparison was read: a judgement needs the whole picture.
   el("unlink-confirm").hidden = !view.can_unlink;
   const same = el("unlink-same");
-  same.textContent = view.same_label || "";
+  // The BASE label; updateLinkLock (link.js) adds the unlock hint to it, below.
+  same.dataset.label = view.same_label || "";
   same.hidden = !view.can_confirm;
   setMessage(el("unlink-same-note"), view.same_note || "");
   updateLinkLock(keyUnlocked);
@@ -165,7 +171,7 @@ function unlinkChanged(sent, report) {
 
 /** Send the Unlink judgement for whatever `compareLinked` last rendered. */
 async function unlinkCompared() {
-  if (unlinkCompared_ === null) return;
+  if (unlinkCompared_ === null || !unlinkCompared_.canUnlink) return;
   // What this click signs over, captured before the round trip.
   const sent = unlinkCompared_;
   const token = unlinkToken;
@@ -198,7 +204,7 @@ async function unlinkCompared() {
  * comparison, with the pair's `standing` address handed back unchanged.
  */
 async function confirmCompared() {
-  if (unlinkCompared_ === null) return;
+  if (unlinkCompared_ === null || !unlinkCompared_.canConfirm) return;
   const sent = unlinkCompared_;
   const token = unlinkToken;
   setVerdictsDisabled(true);
@@ -224,7 +230,7 @@ async function confirmCompared() {
   }
 }
 
-/** A recorded unlink: say what it did, where the clinician is now, and re-read if it changed. */
+/** A recorded verdict (Unlink or Same person): say what it did, where the clinician is now, and re-read if it changed. */
 async function showUnlinkReport(sent, token, report) {
   const place = unlinkAnswerPlace(sent, token);
   if (place === "elsewhere") {
@@ -247,14 +253,17 @@ async function showUnlinkReport(sent, token, report) {
     say(report.sentence);
   } else {
     // Outranked (`reload` false — see `LinkReportView::reload`): the panel stays open and says
-    // this ONCE.
+    // this ONCE. The verdict LANDED, so neither verdict may be signed again over this stale read:
+    // forget the comparison and take BOTH buttons away (a fresh Review re-reads the pair).
     setMessage(el("unlink-status"), report.sentence);
+    unlinkCompared_ = null;
+    hideVerdicts();
   }
 }
 
 /**
- * An unlink that failed: refused or never reached (nothing was recorded) — or, the one
- * exception, interrupted during its commit (`"after_reread"`, #713), when it MAY have been.
+ * A verdict (Unlink or Same person) that failed: refused or never reached (nothing was
+ * recorded) — or, the one exception, interrupted during its commit (`"after_reread"`, #713), when it MAY have been.
  */
 async function showUnlinkFailure(sent, token, failure) {
   const place = unlinkAnswerPlace(sent, token);

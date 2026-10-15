@@ -377,7 +377,20 @@ fn unlink_js_reads_no_field_the_backend_does_not_send() {
     // The other direction, for the fields whose SILENCE is the dangerous failure.
     assert!(fields_read_in(js, "report").contains("reload"));
     assert!(fields_read_in(js, "failure").contains("retry"));
-    assert!(fields_read_in(js, "view").contains("can_unlink"));
+    let view_reads = fields_read_in(js, "view");
+    for field in [
+        "can_unlink",
+        "can_confirm",
+        "standing",
+        "kind",
+        "same_label",
+        "same_note",
+    ] {
+        assert!(
+            view_reads.contains(field),
+            "unlink.js no longer reads `view.{field}`"
+        );
+    }
 }
 
 /// Review Focus 5: a partial read offers neither verdict.

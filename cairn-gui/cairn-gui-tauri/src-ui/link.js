@@ -251,6 +251,12 @@ function updateLinkLock(unlocked) {
   el("link-different").textContent = keyUnlocked
     ? "Different people — not the same person"
     : "Different people — not the same person (unlock your signing key first)";
+  // The review panel's second verdict (R6): its label is Rust's (`view.same_label`), stored by
+  // `renderUnlinkComparison` in `dataset.label`, so the suffix is added to the BASE each time and
+  // never appended twice. No label (no verdict offered) stays empty.
+  const same = el("unlink-same");
+  const base = same.dataset.label || "";
+  same.textContent = base && !keyUnlocked ? base + " (unlock your signing key first)" : base;
 }
 
 /**
@@ -347,6 +353,11 @@ async function sendJudgement(command) {
       // own `#link-status` says this ONCE — not also through `say()`, which would read as two
       // different outcomes rather than one.
       setMessage(el("link-status"), report.sentence);
+      // The verdict LANDED (as Outranked): neither judgement may be signed again over this now
+      // stale read. Forget the comparison and take BOTH buttons away; a fresh Review re-reads.
+      compared = null;
+      el("link-confirm").hidden = true;
+      el("link-different").hidden = true;
     }
   } catch (failure) {
     const place = linkAnswerPlace(sent, token);
