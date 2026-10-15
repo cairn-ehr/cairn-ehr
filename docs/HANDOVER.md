@@ -4,7 +4,7 @@
 
 > [!NOTE]
 > **⇒ R7 (#742 + #743 part 2) IS BUILT ON PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788) (branch
-> `feat/742-743-catchup-line-and-soft-veto-note`, 2026-10-15) — AWAITING ITS CI GATES, REVIEW AND MERGE.** Everything
+> `feat/742-743-catchup-line-and-soft-veto-note`, 2026-10-15) — ALL GATES GREEN (local sweep 2 668 passed, CI green); AWAITING THE MAINTAINER'S REVIEW AND MERGE.** Everything
 > before it is merged: the repair path (#679 · #680 · #681) through R6 (PR #777), #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
