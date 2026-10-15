@@ -1,4 +1,15 @@
-// "Not the same person" (repair path R2b-2). Renders and decides nothing: every sentence comes
+// The REVIEW panel (repair path R2b-2, R5a, R6). One panel, opened from a line under "How these
+// charts are linked", that shows the two charts side by side and offers up to TWO verdicts:
+//   - "Unlink — not the same person"  (`#unlink-confirm`, command `unlink_records`), and
+//   - the second verdict (`#unlink-same`, command `confirm_link`), "Same person — confirm" over
+//     a doubted link or "Same person — link them" over a separated pair; its label and the note
+//     beside it (`#unlink-same-note`) come from Rust (`view.same_label`, `view.same_note`).
+// Which verdicts appear is Rust's call (`view.can_unlink`, `view.can_confirm`), never ours.
+// THE SHARED IN-FLIGHT RULE (R5a): while EITHER verdict is being sent BOTH buttons are disabled,
+// and once one lands or is refused for good BOTH are hidden — one human must never sign two
+// verdicts milliseconds apart. An `"after_reread"` failure (outcome unknown) disarms and
+// re-reads the chart, never offers a live retry. No confirmation dialog: the click is the act.
+// Renders and decides nothing: every sentence comes
 // from Rust, every check from the backend. Classic script, loaded after main.js, funnel.js and
 // link.js, sharing their scope: `el`, `cell`, `setMessage`, `say`, `refresh`, `invoke`,
 // `displayedPatient`, `renderedPatient`, `renderedCharts` (main.js), `failureText` (funnel.js),
@@ -14,21 +25,35 @@ let unlinkToken = 0;
 /**
  * What the panel compared, as the backend read it: Unlink sends exactly these back, never the
  * window's current `renderedCharts`, so the judgement names what the clinician looked at.
- * `null` until a WHOLE comparison (`can_unlink`) has landed.
+ * `null` until a WHOLE comparison (`can_unlink` or `can_confirm`) has landed. `standing` is the
+ * pair's content address, opaque: sent back unchanged so the node can refuse a stale confirm.
  */
-let unlinkCompared_ = null; // { patientId, charts, low, high }
+let unlinkCompared_ = null; // { patientId, charts, low, high, kind, standing, canUnlink, canConfirm }
 /** The link (low/high) whose button opened the panel: Close returns focus to that button. */
 let unlinkOpener = null;
 
 /** Empty every part of the panel that a fresh comparison must replace. */
 function clearUnlinkComparison() {
-  for (const id of ["unlink-findings", "unlink-table", "unlink-confirm", "unlink-problems"]) {
+  for (const id of ["unlink-findings", "unlink-table", "unlink-confirm", "unlink-same", "unlink-same-note", "unlink-problems"]) {
     el(id).hidden = true;
   }
   el("unlink-findings").replaceChildren();
   el("unlink-table").tHead.replaceChildren();
   el("unlink-table").tBodies[0].replaceChildren();
   setMessage(el("unlink-status"), "");
+  setMessage(el("unlink-same-note"), "");
+}
+
+/** Disable (or re-enable) BOTH verdicts: one human must never sign two verdicts ms apart. */
+function setVerdictsDisabled(disabled) {
+  el("unlink-confirm").disabled = disabled;
+  el("unlink-same").disabled = disabled;
+}
+
+/** Hide BOTH verdicts once one has landed or been refused for good. */
+function hideVerdicts() {
+  el("unlink-confirm").hidden = true;
+  el("unlink-same").hidden = true;
 }
 
 /**
@@ -36,25 +61,35 @@ function clearUnlinkComparison() {
  * comparison: problems, then findings, then the table (DOM order is clinical, already right in
  * the markup). Focus goes to the heading so a screen reader is told what appeared.
  */
-async function compareLinked(low, high) {
+async function compareLinked(low, high, kind) {
   const token = ++unlinkToken;
   // Captured NOW, synchronously: the chart this comparison is about.
   const patientId = renderedPatient;
   const charts = renderedCharts;
   unlinkCompared_ = null; // until a whole answer lands, there is nothing an Unlink could be signed over
-  unlinkOpener = { low, high };
+  unlinkOpener = { low, high, kind };
   // The two panels are mutually exclusive: never one verb's button over the other's comparison.
   if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
   clearUnlinkComparison();
   el("unlink-panel").hidden = false;
   el("unlink-heading").focus();
   try {
-    const view = await invoke("compare_linked", { patientId, charts, low, high });
+    const view = await invoke("compare_linked", { patientId, charts, low, high, kind });
     if (token !== unlinkToken) return; // a newer click, or a close, came after this one
     renderUnlinkComparison(view);
-    unlinkCompared_ = view.can_unlink
-      ? { patientId, charts: view.charts, low: view.low, high: view.high }
-      : null;
+    unlinkCompared_ =
+      view.can_unlink || view.can_confirm
+        ? {
+            patientId,
+            charts: view.charts,
+            low: view.low,
+            high: view.high,
+            kind: view.kind,
+            standing: view.standing,
+            canUnlink: view.can_unlink,
+            canConfirm: view.can_confirm,
+          }
+        : null;
   } catch (failure) {
     if (token !== unlinkToken) return;
     setMessage(el("unlink-status"), failureText(failure));
@@ -85,8 +120,12 @@ function renderUnlinkComparison(view) {
   );
   table.hidden = view.columns.length === 0;
 
-  // No Unlink button unless the whole comparison was read: a judgement needs the whole picture.
+  // No verdict unless the whole comparison was read: a judgement needs the whole picture.
   el("unlink-confirm").hidden = !view.can_unlink;
+  const same = el("unlink-same");
+  same.textContent = view.same_label || "";
+  same.hidden = !view.can_confirm;
+  setMessage(el("unlink-same-note"), view.same_note || "");
   updateLinkLock(keyUnlocked);
 }
 
@@ -105,7 +144,7 @@ function closeUnlinkPanel(returnFocus) {
   if (returnFocus) {
     // The button that opened the panel, if it still exists; otherwise the first link's.
     const buttons = [...el("record-links").querySelectorAll("button")];
-    const own = opener && buttons.find((b) => b.dataset.low === opener.low && b.dataset.high === opener.high);
+    const own = opener && buttons.find((b) => b.dataset.low === opener.low && b.dataset.high === opener.high && b.dataset.kind === opener.kind);
     const target = own || buttons[0];
     if (target) target.focus();
   }
@@ -130,9 +169,9 @@ async function unlinkCompared() {
   // What this click signs over, captured before the round trip.
   const sent = unlinkCompared_;
   const token = unlinkToken;
-  const button = el("unlink-confirm");
-  // Disabled for the whole round trip: a double click must never send a second judgement.
-  button.disabled = true;
+  // BOTH verdicts disabled for the whole round trip: neither a double click nor the other verdict
+  // may send a second judgement.
+  setVerdictsDisabled(true);
   try {
     let report;
     // ONLY the backend call is caught: once it returns, the judgement is recorded, and a fault in
@@ -145,12 +184,43 @@ async function unlinkCompared() {
         high: sent.high,
       });
     } catch (failure) {
-      await showUnlinkFailure(sent, token, failure, button);
+      await showUnlinkFailure(sent, token, failure);
       return;
     }
     await showUnlinkReport(sent, token, report);
   } finally {
-    button.disabled = false;
+    setVerdictsDisabled(false);
+  }
+}
+
+/**
+ * Send the second verdict (R6): "Same person". A mirror of `unlinkCompared`, over the same
+ * comparison, with the pair's `standing` address handed back unchanged.
+ */
+async function confirmCompared() {
+  if (unlinkCompared_ === null) return;
+  const sent = unlinkCompared_;
+  const token = unlinkToken;
+  setVerdictsDisabled(true);
+  try {
+    let report;
+    // ONLY the backend call is caught (see `unlinkCompared`).
+    try {
+      report = await invoke("confirm_link", {
+        patientId: sent.patientId,
+        charts: sent.charts,
+        low: sent.low,
+        high: sent.high,
+        kind: sent.kind,
+        standing: sent.standing,
+      });
+    } catch (failure) {
+      await showUnlinkFailure(sent, token, failure);
+      return;
+    }
+    await showUnlinkReport(sent, token, report);
+  } finally {
+    setVerdictsDisabled(false);
   }
 }
 
@@ -186,7 +256,7 @@ async function showUnlinkReport(sent, token, report) {
  * An unlink that failed: refused or never reached (nothing was recorded) — or, the one
  * exception, interrupted during its commit (`"after_reread"`, #713), when it MAY have been.
  */
-async function showUnlinkFailure(sent, token, failure, button) {
+async function showUnlinkFailure(sent, token, failure) {
   const place = unlinkAnswerPlace(sent, token);
   const text = failureText(failure);
   // #713: an interrupted commit may have recorded the unlink. A second press over a chart that
@@ -207,7 +277,7 @@ async function showUnlinkFailure(sent, token, failure, button) {
       (failure.retry === "never" || failure.retry === "after_operator" || reread)
     ) {
       unlinkCompared_ = null;
-      button.hidden = true;
+      hideVerdicts();
     }
   }
   // An unknown outcome also disarms a NEWER comparison of the same link (answered "chart" or
@@ -219,7 +289,7 @@ async function showUnlinkFailure(sent, token, failure, button) {
     unlinkCompared_.high === sent.high
   ) {
     unlinkCompared_ = null;
-    el("unlink-confirm").hidden = true;
+    hideVerdicts();
   }
   if (reread && displayedPatient !== null && sent.charts.includes(displayedPatient)) {
     await refresh(text);
@@ -228,6 +298,7 @@ async function showUnlinkFailure(sent, token, failure, button) {
 
 el("unlink-close").addEventListener("click", () => closeUnlinkPanel(true));
 el("unlink-confirm").addEventListener("click", unlinkCompared);
+el("unlink-same").addEventListener("click", confirmCompared);
 el("unlink-panel").addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeUnlinkPanel(true);
 });
