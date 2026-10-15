@@ -33,8 +33,10 @@ pub struct PersonRow {
     /// Whether db/054 doubts a link among this person's charts (R6, #723). A display property
     /// read at search time: it is NOT part of the row's wire shape (the serde conversion is the
     /// member array) and never part of what a registration signs. So `false` means "not marked",
-    /// never "verified undoubted": every constructor but `with_doubt`, and deserialisation,
-    /// leave it false.
+    /// never "verified undoubted": every constructor but `with_doubt`, and deserialising a bare
+    /// row, leave it false. A whole [`crate::CandidateList`] carries the mark across the wire as
+    /// its additive `doubted_rows` (#786, `list_wire.rs`), so a list keeps it where a lone row
+    /// cannot.
     ///
     /// The derived `PartialEq` DOES compare it, deliberately: two rows that render differently
     /// are not equal. The consequence is that a doubted row is not equal to its own serde round
@@ -255,7 +257,8 @@ mod tests {
             serde_json::to_value(&doubted).unwrap(),
             serde_json::to_value(&row).unwrap()
         );
-        // And a row read back off the wire is undoubted.
+        // And a BARE row read back off the wire is undoubted (a list carries the mark as its
+        // `doubted_rows`, #786 — pinned in `list_wire.rs`).
         let back: PersonRow =
             serde_json::from_value(serde_json::to_value(&doubted).unwrap()).unwrap();
         assert!(!back.is_doubted());
