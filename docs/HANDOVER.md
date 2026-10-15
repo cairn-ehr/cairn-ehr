@@ -3,28 +3,12 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R5b — THE POSSIBLE-DUPLICATE WORKLIST (#680) — BUILT on draft PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749)
-> (2026-10-09), awaiting its gates, PR review and merge** (branch `feat/r5b-worklist-build`). R5a (PR #735), R4 (PR #724)
-> and #725 (PR #733) are merged. Repair path #679 · #680 · #681; design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice designed + as built); plan
-> `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`; R4's worker runbook
-> `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11 (banner) and
-> §12 (tray). [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md) (#741), spec
-> **v0.80**; `db/057`, **`SCHEMA_GENERATION` 57** (R5b changed no schema).
->
-> **⇒ ALSO OPEN (2026-10-13, fourth cloud session): draft PR
-> [#779](https://github.com/cairn-ehr/cairn-ehr/pull/779) on branch `claude/festive-fermi-8j792j`** — the two decisions
-> the third session left, as the maintainer decided them: **#775** (option A: every name-lowercasing site — db/046's
-> four, `search_rank.rs`'s two, the matcher's blocking SQL — is `lower(normalize(x, NFC) COLLATE pg_unicode_fast)`, so
-> `İ`/Greek capitals case-map the same on every cluster; matcher **0.2.1** re-queues every chart once) and **#556**
-> (`segment_commitment` binds `attestation` + `attester_key` as tagged digests; goldens re-frozen IN PLACE, no revision
-> bump — the maintainer confirmed nothing is deployed). Filed **#778** (the sync wire can still strip a token) and
-> **#780** (`casefold()` for σ/ς, ß/ss — a design change touching signed tokens). PR #776 (#708, #713, #569, #560,
-> #682, #509) is merged. Review + merge #779.
-> **⇒ THE REPAIR PATH (#679 · #680 · #681) IS MERGED THROUGH R5b; R6 IS BUILT ON DRAFT PR #777 AND AWAITS THE
-> MAINTAINER'S REVIEW AND MERGE** (branch `feat/716-723-doubted-link-confirm`; #716 and #723 close with it). On `main`:
-> R5b's worklist (PR #749), the DOB near miss (PR #758, [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md),
-> spec **v0.81**) and three cloud tech-debt passes (PRs #772, #774, #776). Design
+> **⇒ THE REPAIR PATH (#679 · #680 · #681) IS MERGED THROUGH R6 (PR #777); #775/#556 ARE MERGED (PR #779). NO PR IS
+> OPEN.** On 2026-10-15 the maintainer decided the two ⇒ NEXT decisions — **#742**: a checked chart's banner shows the
+> node's "running" line while a `change` notice waits for a chart OUTSIDE its record (`config` notices alone never
+> trigger it); **#743 part 2**: an un-attested link whose pair has a `degrade_hold` finding (computed fresh) carries a
+> NON-holding note in the links list (db/016: a soft veto must never demote a link). Both are being built as **R7** on
+> branch `feat/742-743-catchup-line-and-soft-veto-note`. Design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice designed + as built); R4's
 > worker runbook `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11
 > (banner), §12 (tray) and §13 (R6's confirm). spec **v0.82** (newest ADR-0080). DOB-near-miss follow-ups: #759 ·
@@ -33,8 +17,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR #777 (R6)**: the maintainer's review and merge (read `gh pr checks 777` first). Then **#742** (no banner
->    while catching up — a principle-4 decision) and **#743 part 2** (a soft-vetoed joined pair flagged nowhere).
+> 1. **R7 (#742 + #743 part 2, decided above)** on `feat/742-743-catchup-line-and-soft-veto-note`.
 >    **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays open until the
 >    maintainer closes it.
 > 2. **Open repair-path issues:** from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be

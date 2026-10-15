@@ -439,8 +439,8 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
 - **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733), R5a (PR #735), R5b (PR #749) and the DOB near
-  miss (PR #758) are merged; **R6** (#716 + #723) is built on draft PR #777, awaiting review and merge. Next: #742 and
-  #743 part 2. Plan each from the design page's section.
+  miss (PR #758) and **R6** (#716 + #723, PR #777) are merged. Next: #742 and #743 part 2 (decided
+  2026-10-15 — see the design page's R7 section).
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -544,10 +544,9 @@ change (generation 57).
 - **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
   act owed.
 
-### 2026-10-14/15 — repair path R6: confirm a doubted link; name the doubt at the front door (draft PR #777)
+### 2026-10-14/15 — repair path R6: confirm a doubted link; name the doubt at the front door (PR #777, merged)
 
-Built on draft PR [#777](https://github.com/cairn-ehr/cairn-ehr/pull/777) (branch `feat/716-723-doubted-link-confirm`),
-awaiting the maintainer's review and merge; #716 and #723 close with it. Design page "R6" (designed 2026-10-14 + as
+Merged as PR [#777](https://github.com/cairn-ehr/cairn-ehr/pull/777); #716 and #723 closed with it. Design page "R6" (designed 2026-10-14 + as
 built); plan `docs/superpowers/plans/2026-10-14-repair-path-r6-confirm-doubted-link.md`. db/054 edited in place; no ADR,
 no event type, no wire change; `SCHEMA_GENERATION` stays **58**, spec **v0.82**.
 - **Built:**
