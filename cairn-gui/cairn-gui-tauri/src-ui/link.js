@@ -305,6 +305,20 @@ function samePair(a, b) {
   );
 }
 
+/**
+ * Disarm a NEWER comparison of the same two charts as `sent` — a second Review pressed while
+ * `sent`'s answer was in flight. Called when `sent` may have landed with the record looking
+ * unchanged (Outranked, or an unknown outcome, #713): #708's record check would then pass a second
+ * press, recording a second judgement over the colleague's that won.
+ */
+function disarmNewerComparison(sent) {
+  if (compared !== null && samePair(compared, sent)) {
+    compared = null;
+    el("link-confirm").hidden = true;
+    el("link-different").hidden = true;
+  }
+}
+
 /** Send the Link judgement for whatever `compare` last rendered. */
 async function linkCompared() {
   return sendJudgement("link_records");
@@ -359,6 +373,9 @@ async function sendJudgement(command) {
       el("link-confirm").hidden = true;
       el("link-different").hidden = true;
     }
+    // Outranked answered on the chart line or elsewhere: a newer comparison of these two charts
+    // is just as stale as the one the panel arm forgets above.
+    if (!report.reload) disarmNewerComparison(sent);
   } catch (failure) {
     const place = linkAnswerPlace(sent, token);
     const text = failureText(failure);
@@ -395,11 +412,7 @@ async function sendJudgement(command) {
     // pressed while this answer was in flight lands as "chart" or "elsewhere", above): its buttons
     // would sign over a record that may already carry this judgement — and if it landed Outranked
     // the record looks unchanged, so #708's check would not catch the second press (#713 review).
-    if (reread && compared !== null && samePair(compared, sent)) {
-      compared = null;
-      el("link-confirm").hidden = true;
-      el("link-different").hidden = true;
-    }
+    if (reread) disarmNewerComparison(sent);
     // Re-read whenever the chart open NOW is one the judgement was about (the same test as
     // `linkChanged`, without its `reload` flag — nobody knows yet whether anything changed).
     const touched =

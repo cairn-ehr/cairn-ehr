@@ -318,6 +318,55 @@ fn the_door_sends_the_attestation_its_line_showed() {
     assert!(call.contains("attested"), "{call}");
 }
 
+/// The body of top-level JS function `name` in `src`: from its declaration to the first line
+/// that is a lone `}` (the house formatting closes every top-level function that way).
+fn js_function<'a>(src: &'a str, name: &str) -> &'a str {
+    let start = src
+        .find(&format!("function {name}("))
+        .unwrap_or_else(|| panic!("{name} is declared"));
+    let len = src[start..]
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("{name} closes"));
+    &src[start..start + len]
+}
+
+/// The Outranked race (PR #777 review): a verdict is in flight, the clinician presses the SAME
+/// pair's "Review…" again, and the first answer lands Outranked on the chart line ("chart"), not
+/// on the panel. Outranked leaves the pair's standing judgement unchanged, so the node's
+/// stale-pair check would pass a second press — a second attested judgement over the colleague's
+/// that already outranked the first. Wherever an Outranked answer lands, a newer comparison of
+/// the same pair is disarmed, exactly as an unknown outcome (#713) already disarms it.
+#[test]
+fn an_outranked_verdict_disarms_a_newer_comparison_of_the_same_pair() {
+    let js = include_str!("../../src-ui/unlink.js");
+    let report = js_function(js, "showUnlinkReport");
+    assert!(
+        report.contains("if (!report.reload) disarmNewerReview(sent);"),
+        "{report}"
+    );
+    let failure = js_function(js, "showUnlinkFailure");
+    assert!(
+        failure.contains("if (reread) disarmNewerReview(sent);"),
+        "{failure}"
+    );
+
+    // R5a's banner panel has the same race over its Link's Outranked answer.
+    let link = include_str!("../../src-ui/link.js");
+    let send = js_function(link, "sendJudgement");
+    assert!(
+        send.contains("if (!report.reload) disarmNewerComparison(sent);"),
+        "{send}"
+    );
+    assert!(
+        send.contains("if (reread) disarmNewerComparison(sent);"),
+        "{send}"
+    );
+    // The webview's scripts share ONE global scope (plain <script> tags): a helper declared in
+    // both files under one name would silently become the later file's.
+    assert!(!js.contains("function disarmNewerComparison("));
+    assert!(!link.contains("function disarmNewerReview("));
+}
+
 /// A Confirm read failure is worded like an Unlink's: it is about to write.
 #[test]
 fn an_unread_list_before_a_confirm_says_nothing_was_done() {

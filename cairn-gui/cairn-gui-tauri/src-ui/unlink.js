@@ -10,7 +10,9 @@
 // verdicts milliseconds apart. An `"after_reread"` failure (outcome unknown) disarms and
 // re-reads the chart, never offers a live retry. No confirmation dialog: the click is the act.
 // A verdict that LANDS (even as "outranked" by a colleague's) takes BOTH buttons off the panel and
-// forgets the comparison; a fresh "Review…" click re-reads the pair.
+// forgets the comparison; a fresh "Review…" click re-reads the pair. An Outranked or unknown
+// answer that lands after a newer Review of the SAME pair disarms that one too
+// (`disarmNewerReview`): the pair looks unchanged, so the node would not catch a second press.
 // Renders and decides nothing: every sentence comes from Rust, every check from the backend.
 // Classic script, loaded after main.js, funnel.js and link.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `invoke`, `displayedPatient`, `renderedPatient`,
@@ -236,6 +238,23 @@ async function confirmCompared() {
   }
 }
 
+/**
+ * Disarm a NEWER comparison of the same pair as `sent` — a second Review pressed while `sent`'s
+ * answer was in flight. Called when `sent` may have landed with the pair's standing judgement
+ * unchanged (Outranked, or an unknown outcome, #713): the node's stale-pair check would then pass
+ * a second press, which would record a second judgement over the colleague's that won.
+ */
+function disarmNewerReview(sent) {
+  if (
+    unlinkCompared_ !== null &&
+    unlinkCompared_.low === sent.low &&
+    unlinkCompared_.high === sent.high
+  ) {
+    unlinkCompared_ = null;
+    hideVerdicts();
+  }
+}
+
 /** A recorded verdict (Unlink or Same person): say what it did, where the clinician is now, and re-read if it changed. */
 async function showUnlinkReport(sent, token, report) {
   const place = unlinkAnswerPlace(sent, token);
@@ -265,6 +284,9 @@ async function showUnlinkReport(sent, token, report) {
     unlinkCompared_ = null;
     hideVerdicts();
   }
+  // Outranked answered on the chart line or elsewhere: a newer comparison of this pair is just as
+  // stale as the one the panel arm forgets above.
+  if (!report.reload) disarmNewerReview(sent);
 }
 
 /**
@@ -297,15 +319,7 @@ async function showUnlinkFailure(sent, token, failure) {
   }
   // An unknown outcome also disarms a NEWER comparison of the same link (answered "chart" or
   // "elsewhere" above): pressing it could record a second judgement over one that may have landed.
-  if (
-    reread &&
-    unlinkCompared_ !== null &&
-    unlinkCompared_.low === sent.low &&
-    unlinkCompared_.high === sent.high
-  ) {
-    unlinkCompared_ = null;
-    hideVerdicts();
-  }
+  if (reread) disarmNewerReview(sent);
   if (reread && displayedPatient !== null && sent.charts.includes(displayedPatient)) {
     await refresh(text);
   }
