@@ -35,9 +35,16 @@ async fn compare_linked_is_bound_to_the_chart_on_screen() {
 #[tokio::test]
 async fn unlink_is_bound_to_the_chart_on_screen() {
     let state = AppState::mock(Some(fixture()));
-    let err = unlink_impl(&state, &Uuid::from_u128(9).to_string(), vec![], "1", "2")
-        .await
-        .unwrap_err();
+    let err = unlink_impl(
+        &state,
+        &Uuid::from_u128(9).to_string(),
+        vec![],
+        "1",
+        "2",
+        vec![],
+    )
+    .await
+    .unwrap_err();
     assert!(
         err.text.contains("not the chart"),
         "must refuse a chart that is not on screen"
@@ -54,6 +61,7 @@ async fn unlink_refuses_a_changed_record() {
         vec![p.clone(), Uuid::from_u128(7).to_string()],
         &Uuid::from_u128(1).to_string(),
         &Uuid::from_u128(2).to_string(),
+        vec![],
     )
     .await
     .unwrap_err();
@@ -78,14 +86,21 @@ async fn compare_linked_refuses_a_changed_record_in_the_lists_wording() {
     assert!(err.text.contains("linked charts changed"));
 }
 
-/// Review Focus 3.
+/// A link a colleague's unlink (or this clinician's own) already removed: nothing to judge.
 #[tokio::test]
 async fn unlink_refuses_a_link_the_record_no_longer_has() {
     let state = AppState::mock(Some(fixture()));
     let (p, charts) = on_screen();
-    let err = unlink_impl(&state, &p, charts, &p, &Uuid::from_u128(2).to_string())
-        .await
-        .unwrap_err();
+    let err = unlink_impl(
+        &state,
+        &p,
+        charts,
+        &p,
+        &Uuid::from_u128(2).to_string(),
+        vec![],
+    )
+    .await
+    .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
 }
 
@@ -112,7 +127,7 @@ async fn compare_linked_refuses_a_link_the_record_no_longer_has() {
 async fn an_unparseable_link_is_refused_not_guessed() {
     let state = AppState::mock(Some(fixture()));
     let (p, charts) = on_screen();
-    let err = unlink_impl(&state, &p, charts, "not-a-uuid", "2")
+    let err = unlink_impl(&state, &p, charts, "not-a-uuid", "2", vec![])
         .await
         .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
@@ -228,15 +243,38 @@ fn the_shown_pair_carries_its_own_date_and_a_clash_is_not_a_separation() {
     assert_eq!(err.text, LINK_GONE);
 }
 
-/// A kind the webview did not get from us is refused like a vanished link, never guessed.
+/// A kind the webview did not get from us is refused like a vanished link, never guessed — and
+/// FIRST, before any screen check reads anything. Real chart ids of a link the record does not
+/// have, sent with a CHANGED chart set: were the kind checked after `resolve_edge`, the answer
+/// would be the changed-set sentence instead.
 #[tokio::test]
 async fn compare_refuses_an_unknown_pair_kind() {
     let state = AppState::mock(Some(fixture()));
-    let (p, charts) = on_screen();
-    let err = compare_linked_impl(&state, &p, charts, "1", "2", "merged")
-        .await
-        .unwrap_err();
+    let (p, _) = on_screen();
+    let err = compare_linked_impl(
+        &state,
+        &p,
+        vec![p.clone(), Uuid::from_u128(7).to_string()],
+        &Uuid::from_u128(1).to_string(),
+        &Uuid::from_u128(2).to_string(),
+        "merged",
+    )
+    .await
+    .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+}
+
+/// The webview half of the Unlink's stale-pair check: `unlink.js` must send the standing
+/// address back with `unlink_records`, or the node has nothing to re-check (the command would
+/// refuse every Unlink as unread). `unlink.js` is untyped, so this reads its source.
+#[test]
+fn unlink_js_sends_the_standing_address_with_the_unlink() {
+    let js = include_str!("../../src-ui/unlink.js");
+    let start = js
+        .find("invoke(\"unlink_records\"")
+        .expect("unlink.js invokes unlink_records");
+    let call = &js[start..start + js[start..].find("});").expect("the call's object closes")];
+    assert!(call.contains("standing: sent.standing"), "{call}");
 }
 
 /// A Confirm read failure is worded like an Unlink's: it is about to write.

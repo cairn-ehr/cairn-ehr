@@ -9,16 +9,25 @@
 //! there is no confirmation dialog (principle 3). This file holds the read and the Unlink; the
 //! "same person" verdict's command (`confirm.rs`) builds on [`resolve_edge`] beside it.
 //!
-//! Every command applies the chart-command rules IN THIS ORDER, each pinned by a test: the chart
-//! on screen (`displayed_patient`), the displayed set (`check_displayed_set`), the pair is still
-//! what the line showed — a standing link, or a standing separation (`shown_pair`). A verdict
-//! then checks fixture mode, then the key; the Compare, which writes nothing, needs neither (with
-//! no database it refuses). The pair is named by its two charts; the node is told which chart it
-//! is judged FROM, so a judgement on charts not held here is filed under the open chart (#699 (a)).
+//! Every command applies the chart-command rules IN THIS ORDER (the screen rules are pinned by
+//! `unlink_tests.rs`): the chart on screen (`displayed_patient`), the displayed set
+//! (`check_displayed_set`), the pair is still what the line showed — a standing link, or a
+//! standing separation (`shown_pair`). A verdict then checks fixture mode, then that it carries
+//! the standing address the panel read (`require_standing`), then the key; the Compare, which
+//! writes nothing, needs none of them (with no database it refuses). The pair is named by its two
+//! charts; the node is told which chart it is judged FROM, so a judgement on charts not held here
+//! is filed under the open chart (#699 (a)).
+//!
+//! Why the Unlink carries `standing` too: inside one record a third chart can keep the pair
+//! joined, so a colleague's confirm of the pair landing while this clinician reads leaves the
+//! record's chart set unchanged. The node re-checks the pair's standing judgement under the
+//! chart-link lock (`unlink_charts_as_shown_from`) and refuses a changed one, so this attested
+//! unlink — stamped later — never silently overrules the colleague's.
 
 use super::record_links::{read_record_links, PairKind, RecordLinks};
 use super::unlink_view::{
-    link_review_view, unlink_error_view, unlink_report, LinkReviewView, UnlinkParts, LINK_GONE,
+    link_review_view, require_standing, unlink_error_view, unlink_report, LinkReviewView,
+    UnlinkParts, LINK_GONE,
 };
 use super::view::{key_locked_for, refused, LinkReportView, THIS_CHANGED};
 use super::{as_text, chart_set_of};
@@ -205,12 +214,18 @@ pub async fn compare_linked_impl(
 }
 
 /// "Unlink — not the same person" — the attested judgement on ONE link, then what it did.
+///
+/// `charts`, `low`, `high` and `standing` are exactly what the review panel (`LinkReviewView`)
+/// handed the webview; the webview sends them back untouched. `standing` is the content address
+/// of the judgement the panel showed standing on the pair: the node signs only while it still
+/// stands (see the module doc).
 pub async fn unlink_impl(
     state: &AppState,
     patient_id: &str,
     charts: Vec<String>,
     low: &str,
     high: &str,
+    standing: Vec<u8>,
 ) -> Result<LinkReportView, ErrorView> {
     // An unlink applies to a standing link only: a separated pair is already unlinked.
     let edge = resolve_edge(
@@ -228,6 +243,8 @@ pub async fn unlink_impl(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
+    // An empty address means the panel never read which judgement stands: nothing to sign over.
+    require_standing(&standing)?;
     // An unlink is a clinical act, so taking the key counts as activity (`live_key`).
     let (human_sk, human_kid) = state
         .live_key(Now::read())
@@ -244,12 +261,15 @@ pub async fn unlink_impl(
         human_kid: &human_kid,
     };
     // No gesture-timing row: db/044's CHECK admits only signoff/cease; the runbook's
-    // stopwatch measures this gesture.
-    let outcome = cairn_node::chart_link::unlink_charts(
+    // stopwatch measures this gesture. The node re-reads the record AND the pair under the
+    // chart-link lock before signing.
+    let outcome = cairn_node::chart_link::unlink_charts_as_shown_from(
         &mut db,
         edge.low,
         edge.high,
-        Some(edge.opened),
+        edge.opened,
+        &edge.set,
+        &standing,
         &reviewer,
         &state.node_origin,
     )
@@ -278,6 +298,7 @@ pub async fn compare_linked(
     compare_linked_impl(&state, &patient_id, charts, &low, &high, &kind).await
 }
 
+/// JS keys: `patientId, charts, low, high, standing`.
 #[tauri::command]
 pub async fn unlink_records(
     state: tauri::State<'_, AppState>,
@@ -285,8 +306,9 @@ pub async fn unlink_records(
     charts: Vec<String>,
     low: String,
     high: String,
+    standing: Vec<u8>,
 ) -> Result<LinkReportView, ErrorView> {
-    unlink_impl(&state, &patient_id, charts, &low, &high).await
+    unlink_impl(&state, &patient_id, charts, &low, &high, standing).await
 }
 
 #[cfg(test)]

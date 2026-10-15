@@ -13,23 +13,25 @@
 //! verdict click IS that initial — the signature under the unlocked key (ADR-0053). There is no
 //! confirmation dialog (principle 3): the comparison the clinician just read is the check.
 //!
-//! The rule order, each pinned by a test (the review panel's own, `unlink.rs`): the pair kind
-//! the panel sent must be one we know (an unknown one names no pair, so nothing is guessed);
-//! then [`resolve_edge`] — the chart on screen, the displayed set (a changed one makes the
-//! comparison stale), the pair still being what the line showed; then fixture mode; then the
-//! standing address is present; then the key (a locked key is not a verdict: the button stays
-//! for after the unlock).
+//! The rule order: the pair kind the panel sent must be one we know (an unknown one names no
+//! pair, so nothing is guessed); then [`resolve_edge`] — the chart on screen, the displayed set
+//! (a changed one makes the comparison stale), the pair still being what the line showed; then
+//! fixture mode; then the standing address is present ([`require_standing`]); then the key (a
+//! locked key is not a verdict: the button stays for after the unlock). The screen rules are
+//! pinned by this file's tests (and `resolve_edge`'s own in `unlink_tests.rs`); the write-side
+//! arms — fixture, key, the node call — are pinned by the node's DB tests
+//! (`cairn-node/tests/confirm_link.rs`), since the window has no DB-backed tests yet (#738).
 //!
 //! Why `standing` travels: the panel read the content address of the judgement standing on the
 //! pair when it was drawn (`compare_linked`). The node re-reads the record AND the pair under
 //! the chart-link lock before signing (`confirm_link_as_shown`, #708) and refuses if the pair's
-//! standing judgement is no longer that one — so a colleague's unlink or confirm that landed
-//! while this clinician was reading is never signed over (Review Focus 1 and 3).
+//! standing judgement is no longer that one — so neither a colleague's unlink nor a colleague's
+//! confirm that landed while this clinician was reading is ever signed over.
 
 use super::confirm_view::{confirm_report, CONFIRM_SAME, LINK_THEM};
 use super::record_links::PairKind;
 use super::unlink::{resolve_edge, Act};
-use super::unlink_view::LINK_GONE;
+use super::unlink_view::{require_standing, LINK_GONE};
 use super::view::{judgement_error_view, key_locked_for, refused, LinkReportView};
 use crate::funnel::view::ErrorView;
 use crate::state::{AppState, Now};
@@ -67,10 +69,8 @@ pub async fn confirm_link_impl(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
-    // An empty address means the panel never read which judgement stands: nothing to confirm.
-    if standing.is_empty() {
-        return Err(refused(LINK_GONE));
-    }
+    // An empty address means the panel never read which judgement stands: nothing to sign over.
+    require_standing(&standing)?;
     // 5: the key. A confirm is a clinical act, so taking the key counts as activity.
     let (human_sk, human_kid) = state
         .live_key(Now::read())

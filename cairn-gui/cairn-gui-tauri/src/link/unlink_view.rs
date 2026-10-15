@@ -5,12 +5,16 @@
 //! charts are linked" ("Review this link…" / "Review this judgement…"). Since R6 it is a REVIEW
 //! panel: [`link_review_view`] decides which verdicts it offers on the pair the line showed —
 //! "Not the same person — unlink" (worded here) and the "same person" verdict
-//! (`confirm_view.rs`'s [`same_verdict`]).
+//! (`confirm_view.rs`'s [`same_verdict`]). Both verdicts send back the content address of the
+//! judgement standing on the pair as the panel read it ([`LinkReviewView::standing`]), and the
+//! node signs neither if that judgement has changed since.
 
 use super::confirm_view::{same_verdict, standing_agrees, PAIR_CHANGED_MID_READ};
 use super::record_links::PairKind;
 use super::unlink::ShownPair;
-use super::view::{fact_rows, finding_line, heading, ColumnView, FactRowView, LinkReportView};
+use super::view::{
+    fact_rows, finding_line, heading, refused, ColumnView, FactRowView, LinkReportView,
+};
 use crate::funnel::view::ErrorView;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::{LinkEffect, StandingLink};
@@ -26,6 +30,23 @@ use uuid::Uuid;
 pub const LINK_GONE: &str =
     "that link is no longer part of this record — nothing was done; reload the chart";
 
+/// Refused because the verdict arrived without the content address of the judgement standing on
+/// the pair — the address the review panel read and the node re-checks before signing. The panel
+/// never offers a verdict without one, so this is a webview that sent something else; the pair
+/// itself may be fine, so it is never worded as [`LINK_GONE`].
+pub const STANDING_UNREAD: &str = "the comparison did not read which judgement stands on this \
+     pair — nothing was done; review it again";
+
+/// Both verdicts' guard on the standing address the panel sent back (`confirm.rs`, `unlink.rs`):
+/// without it the node has nothing to re-check the pair against, so nothing is signed.
+pub fn require_standing(standing: &[u8]) -> Result<(), ErrorView> {
+    if standing.is_empty() {
+        Err(refused(STANDING_UNREAD))
+    } else {
+        Ok(())
+    }
+}
+
 /// The reads a review panel is built from, each of which may have failed alone.
 pub struct UnlinkParts {
     /// The lower chart's identity facts.
@@ -34,10 +55,10 @@ pub struct UnlinkParts {
     pub high: Result<Vec<ChartFacts>, String>,
     /// The veto findings between the two charts.
     pub findings: Result<Vec<VetoFinding>, String>,
-    /// The judgement standing on the pair (`standing_link`). Its content address is what a
-    /// "same person" verdict sends back so the node can refuse it if the pair changed since this
-    /// read — kept only when it agrees with the line ([`standing_agrees`]). `Ok(None)`: no
-    /// assertion stands on the pair (it vanished since the list was read).
+    /// The judgement standing on the pair (`standing_link`). Its content address is what either
+    /// verdict sends back so the node can refuse it if the pair changed since this read — kept
+    /// only when it agrees with the line ([`standing_agrees`]). `Ok(None)`: no assertion stands
+    /// on the pair, though the line showed one — it changed between the two reads.
     pub standing: Result<Option<StandingLink>, String>,
 }
 
@@ -61,8 +82,9 @@ pub struct LinkReviewView {
     pub kind: PairKind,
     /// What could NOT be read. Non-empty means neither verdict is offered.
     pub problems: Vec<String>,
-    /// True only when everything was read AND the pair is a standing link: never offer a
-    /// judgement on a partial comparison, and a separated pair is already unlinked.
+    /// True only when everything was read, the pair is a standing link, and the standing
+    /// judgement's address was read: never offer a judgement on a partial comparison, a
+    /// separated pair is already unlinked, and the Unlink cannot be sent without the address.
     pub can_unlink: bool,
     /// The "same person" button's text ([`super::confirm_view::CONFIRM_SAME`] /
     /// [`super::confirm_view::LINK_THEM`]), or `None` when that verdict does not apply or the
@@ -73,8 +95,8 @@ pub struct LinkReviewView {
     /// True only when everything was read, a "same person" verdict applies, and the standing
     /// judgement's address was read (the verdict cannot be sent without it).
     pub can_confirm: bool,
-    /// The standing judgement's content address — empty when unread. Sent back with the "same
-    /// person" verdict. A content address, not key material: it serializes as a number array.
+    /// The standing judgement's content address — empty when unread. Sent back with either
+    /// verdict. A content address, not key material: it serializes as a number array.
     pub standing: Vec<u8>,
 }
 
@@ -114,16 +136,17 @@ pub fn link_review_view(
     };
     let standing = match parts.standing {
         Ok(Some(judgement)) if standing_agrees(&judgement, shown) => judgement.content_address,
-        // The line and the pair were read under two locks and something landed between them:
-        // offer NO verdict (a problem withholds both) and never send this address back.
-        Ok(Some(_)) => {
+        // The line showed a standing judgement (a link, or a clinician's "different people"); the
+        // panel's read, under another lock, finds a different one — or none at all. Something
+        // landed between the two reads: offer NO verdict (a problem withholds both) and never
+        // send an address back that the clinician was not shown.
+        Ok(_) => {
             problems.push(PAIR_CHANGED_MID_READ.into());
             vec![]
         }
-        Ok(None) => vec![],
         Err(e) => {
             problems.push(format!(
-                "Which judgement stands on this link could not be read: {e}"
+                "Which judgement stands on this pair could not be read: {e}"
             ));
             vec![]
         }
@@ -134,10 +157,16 @@ pub fn link_review_view(
     let held: Vec<(Uuid, bool)> = both.iter().map(|f| (f.patient_id, f.held)).collect();
     let same = same_verdict(shown, low, high, &held);
     let whole = problems.is_empty();
-    // A partial read offers NO verdict (Review Focus 5): the label goes too, so the webview
-    // never draws a "same person" button that cannot be pressed. The note stays — it is about
-    // the pair, true whatever else failed to read.
+    // A note that explains what the button overrides goes with the button; a note that says why
+    // there is NO button (a chart not held here) is true whatever failed to read, so it stays.
+    let same_note = match (&same.label, whole) {
+        (Some(_), false) => None,
+        _ => same.note,
+    };
+    // A partial read offers NO verdict — a judgement needs the whole picture: the label goes
+    // too, so the webview never draws a "same person" button that cannot be pressed.
     let same_label = if whole { same.label } else { None };
+    let has_standing = !standing.is_empty();
     LinkReviewView {
         findings,
         columns: both
@@ -152,10 +181,10 @@ pub fn link_review_view(
         low: low.to_string(),
         high: high.to_string(),
         kind: shown.kind,
-        can_unlink: whole && shown.kind == PairKind::Link,
-        can_confirm: same_label.is_some() && !standing.is_empty(),
+        can_unlink: whole && shown.kind == PairKind::Link && has_standing,
+        can_confirm: same_label.is_some() && has_standing,
         same_label,
-        same_note: same.note,
+        same_note,
         standing,
         problems,
     }

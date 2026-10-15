@@ -31,7 +31,8 @@ let unlinkToken = 0;
  * exactly these back, never the window's current `renderedCharts`, so the judgement names what
  * the clinician looked at. `canUnlink`/`canConfirm` say which verdict this read allows.
  * `null` until a WHOLE comparison (`can_unlink` or `can_confirm`) has landed. `standing` is the
- * pair's content address, opaque: sent back unchanged so the node can refuse a stale confirm.
+ * pair's content address, opaque: sent back unchanged with EITHER verdict so the node can refuse
+ * one made over a pair that changed since.
  */
 let unlinkCompared_ = null; // { patientId, charts, low, high, kind, standing, canUnlink, canConfirm }
 /** The line (low/high/kind) whose button opened the panel: Close returns focus to that button. */
@@ -47,6 +48,7 @@ function clearUnlinkComparison() {
   el("unlink-table").tBodies[0].replaceChildren();
   setMessage(el("unlink-status"), "");
   setMessage(el("unlink-same-note"), "");
+  el("unlink-same").dataset.label = ""; // updateLinkLock must never redraw an old comparison's label
 }
 
 /** Disable (or re-enable) BOTH verdicts: one human must never sign two verdicts ms apart. */
@@ -188,6 +190,9 @@ async function unlinkCompared() {
         charts: sent.charts,
         low: sent.low,
         high: sent.high,
+        // Handed back unchanged: the node refuses the unlink if the pair's standing judgement
+        // is no longer this one (a colleague's confirm landed meanwhile).
+        standing: sent.standing,
       });
     } catch (failure) {
       await showUnlinkFailure(sent, token, failure);

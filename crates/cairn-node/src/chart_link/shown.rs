@@ -1,10 +1,10 @@
 //! #708 — a human judgement made from a COMPARISON is signed only over the records the clinician
 //! was shown: [`RecordsShown`], the re-check `assert_link_in_tx` runs under the link lock
 //! (CARNLK) before anything is signed, and the pure comparison it rests on ([`stale_record`]).
-//! R6 (#716) adds the PAIR: a confirm made inside one record also carries the pair's standing
-//! assertion as the panel read it ([`RecordsShown::pair`]), re-checked under the same lock by
-//! [`stale_pair`], because a colleague's judgement of that pair can land without changing the
-//! record's set at all.
+//! R6 (#716) adds the PAIR: a verdict made inside one record (the review panel's confirm or
+//! unlink) also carries the pair's standing assertion as the panel read it
+//! ([`RecordsShown::pair`]), re-checked under the same lock by [`stale_pair`], because a
+//! colleague's judgement of that pair can land without changing the record's set at all.
 //!
 //! Lives apart from `chart_link.rs` (house rule 4: files under 500 lines); re-exported by the
 //! parent, so `chart_link::RecordsShown` keeps its path.
@@ -23,10 +23,10 @@ pub struct RecordsShown<'a> {
     pub this: &'a ChartSet,
     pub other: &'a ChartSet,
     /// The pair's STANDING assertion (its content address) as the panel the clinician judged
-    /// from read it — set by a judgement about a link INSIDE one record (R6's confirm), where
-    /// both shown records are that one record and only the pair can tell a colleague's
-    /// judgement of it landing meanwhile. `None` when the judgement was made over two separate
-    /// records.
+    /// from read it — set by a judgement about a pair INSIDE one record (R6's review panel: its
+    /// confirm and its unlink), where both shown records are that one record and only the pair
+    /// can tell a colleague's judgement of it landing meanwhile. `None` when the judgement was
+    /// made over two separate records.
     pub pair: Option<&'a [u8]>,
 }
 
@@ -71,9 +71,9 @@ pub(super) async fn refuse_unless_records_read_as_shown(
             return Err(deliberate_refusal(stale));
         }
     }
-    // R6: a confirm happens INSIDE one record, so a colleague's judgement of the same pair can
-    // land without changing either record's set (C still joins A and B). Ask the pair itself,
-    // under the same CARNLK, before anything is signed.
+    // R6: a review-panel verdict (confirm or unlink) happens INSIDE one record, so a colleague's
+    // judgement of the same pair can land without changing either record's set (C still joins A
+    // and B). Ask the pair itself, under the same CARNLK, before anything is signed.
     if let Some(pair) = shown.pair {
         let now = super::standing_link(tx, low, high).await?;
         if let Some(stale) = stale_pair(pair, now.as_ref(), low, high) {
@@ -122,8 +122,9 @@ pub fn stale_pair(
     match now {
         Some(winner) if winner.is(shown) => None,
         _ => Some(format!(
-            "the link between charts {low} and {high} changed while you were judging it (another \
-             judgement about it was recorded meanwhile) — nothing was done; review it again"
+            "what stands between charts {low} and {high} changed while you were judging it \
+             (another judgement about the pair was recorded meanwhile) — nothing was done; review \
+             it again"
         )),
     }
 }

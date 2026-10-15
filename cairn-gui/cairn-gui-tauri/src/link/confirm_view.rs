@@ -23,22 +23,27 @@ pub const CONFIRM_SAME: &str = "Same person — confirm";
 pub const LINK_THEM: &str = "Same person — link them";
 
 /// The review panel's problem line when the pair's standing judgement, read under the panel's
-/// lock, is no longer what the list line showed (see [`standing_agrees`]).
+/// lock, is no longer what the list line showed (see [`standing_agrees`]), or is gone. "Pair",
+/// not "link": the line may have shown a clinician's "different people" judgement.
 pub const PAIR_CHANGED_MID_READ: &str =
-    "This link changed while it was being read — close the comparison and review it again.";
+    "This pair changed while it was being read — close the comparison and review it again.";
 
 /// Does the judgement standing on the pair (`standing_link`, read by the review panel) agree
 /// with what the list line showed (`ShownPair`, read a moment earlier under another lock)?
 ///
-/// Why it matters (Task 6 review, A — safety): the panel sends the standing judgement's content
-/// address back with "Same person", and the node accepts the verdict only if that address still
-/// stands. If a colleague's attested unlink landed between the two reads while a third chart
-/// still joins the record, the line says "doubted link" but the address is the UNLINK's — and
-/// the node would accept a confirm "as shown" over a judgement the clinician never saw. So the
-/// panel keeps the address only when the two reads agree:
+/// Why it matters (safety): the panel sends the standing judgement's content address back with
+/// either verdict, and the node accepts the verdict only if that address still stands. If a
+/// colleague's attested unlink landed between the two reads while a third chart still joins the
+/// record, the line says "doubted link" but the address is the UNLINK's — and the node would
+/// accept a confirm "as shown" over a judgement the clinician never saw. So the panel keeps the
+/// address only when the two reads agree:
 /// - a `Link` line needs a standing `link` with the same attestation (a colleague's confirm
 ///   landing mid-read changes the attestation: the line is stale too);
 /// - a `Separated` line needs a standing CLINICIAN's `unlink` (db/054 reports only those).
+///
+/// This is NOT a second rule for what is doubted (db/054's `cairn_chart_set_doubts` is the one
+/// spelling of that): it only checks that two reads of the same pair agree, and a mismatch
+/// withholds both verdicts — fail-safe, never a verdict offered on a guess.
 pub fn standing_agrees(standing: &StandingLink, shown: &ShownPair) -> bool {
     match shown.kind {
         PairKind::Link => standing.state == "link" && standing.attested == shown.attested,
@@ -61,13 +66,16 @@ pub struct SameVerdict {
 ///
 /// `held` is each chart the panel read facts for, with whether this node holds it
 /// (`ChartFacts::held`). In order:
-/// 1. a chart not held here → no button, and a note naming it: the node refuses a judgement it
-///    cannot make on both charts (`admit_judgement`), so the panel never offers one (Review
-///    Focus 2). Unlink is unaffected — that is decided elsewhere.
-/// 2. `low` or `high` missing from `held` → no button, no note: a judgement needs BOTH charts
+/// 1. an attested link → nothing to confirm, nothing to say: a clinician already vouches for it.
+///    First, because it is true whether or not both charts are held here — a not-held note
+///    ("can be confirmed only on a node that holds both") would contradict the line's own
+///    "linked by a clinician's judgement".
+/// 2. a chart not held here → no button, and a note naming it: the node refuses a judgement it
+///    cannot make on both charts (`admit_judgement`), so the panel never offers one. Unlink is
+///    unaffected — that is decided elsewhere.
+/// 3. `low` or `high` missing from `held` → no button, no note: a judgement needs BOTH charts
 ///    of the pair known to be held. A short facts read already puts a problem on the panel;
-///    this is the defence in depth that keeps the rule true here too (Task 6 review, B).
-/// 3. an attested link → nothing to confirm, nothing to say: a clinician already vouches for it.
+///    this is the defence in depth that keeps the rule true here too.
 /// 4. an un-attested link → "Same person — confirm".
 /// 5. a separated pair → "Same person — link them", with a note that it overrides an earlier
 ///    clinician's judgement (both stay on record), and the alternative if they ARE different.
@@ -77,6 +85,13 @@ pub fn same_verdict(
     high: Uuid,
     held: &[(Uuid, bool)],
 ) -> SameVerdict {
+    let nothing = SameVerdict {
+        label: None,
+        note: None,
+    };
+    if shown.kind == PairKind::Link && shown.attested {
+        return nothing;
+    }
     if let Some((chart, _)) = held.iter().find(|(_, is_held)| !is_held) {
         let what = match shown.kind {
             PairKind::Link => "this link can be confirmed",
@@ -91,16 +106,9 @@ pub fn same_verdict(
         };
     }
     if !(known_held(held, low) && known_held(held, high)) {
-        return SameVerdict {
-            label: None,
-            note: None,
-        };
+        return nothing;
     }
     match shown.kind {
-        PairKind::Link if shown.attested => SameVerdict {
-            label: None,
-            note: None,
-        },
         PairKind::Link => SameVerdict {
             label: Some(CONFIRM_SAME.into()),
             note: None,
@@ -131,9 +139,10 @@ fn known_held(held: &[(Uuid, bool)], chart: Uuid) -> bool {
 pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid) -> LinkReportView {
     match (effect, kind) {
         (LinkEffect::TookEffect, PairKind::Link) => LinkReportView {
+            // No "no longer in doubt": a confirm may be of a machine link nothing doubted.
             sentence: format!(
                 "Confirmed — charts {low} and {high} are recorded as the same person by your \
-                 judgement; this link is no longer in doubt."
+                 judgement."
             ),
             reload: true,
         },
@@ -183,8 +192,8 @@ mod tests {
         }
     }
 
-    /// Defence in depth (Task 6 review, B): a verdict needs BOTH charts of the pair known to be
-    /// held. An empty or one-sided `held` — a facts read that came back short — offers nothing.
+    /// Defence in depth: a verdict needs BOTH charts of the pair known to be held. An empty or
+    /// one-sided `held` — a facts read that came back short — offers nothing.
     #[test]
     fn a_verdict_needs_both_charts_of_the_pair_known_held() {
         for kind in [PairKind::Link, PairKind::Separated] {
@@ -203,7 +212,7 @@ mod tests {
         assert_eq!(v.label, None);
     }
 
-    /// Task 6 review, A: which judgement stands must be the one the line showed.
+    /// Which judgement stands must be the one the line showed.
     #[test]
     fn a_standing_judgement_agrees_only_with_the_pair_it_is() {
         let link = |attested| shown(PairKind::Link, attested);
@@ -243,6 +252,16 @@ mod tests {
         assert_eq!(v.note, None);
     }
 
+    /// An attested link has nothing to confirm, and that is true whether or not both charts are
+    /// held here: a note saying it "can be confirmed only on a node that holds both charts" would
+    /// contradict the line's own "linked by a clinician's judgement".
+    #[test]
+    fn an_attested_link_with_a_chart_not_held_says_nothing() {
+        let held = [(LOW, true), (HIGH, false)];
+        let v = same_verdict(&shown(PairKind::Link, true), LOW, HIGH, &held);
+        assert_eq!((v.label, v.note), (None, None));
+    }
+
     #[test]
     fn an_attested_link_offers_no_confirm_and_says_nothing() {
         let v = same_verdict(&shown(PairKind::Link, true), LOW, HIGH, &BOTH);
@@ -266,7 +285,7 @@ mod tests {
         );
     }
 
-    /// Review Focus 2.
+    /// A doubted link with one chart not held here: no confirm, and the note says which chart.
     #[test]
     fn a_chart_not_held_here_offers_no_confirm_and_names_it() {
         let held = [(Uuid::from_u128(1), true), (Uuid::from_u128(2), false)];
@@ -296,11 +315,16 @@ mod tests {
     fn a_confirm_report_never_says_it_combined_charts() {
         let (lo, hi) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let r = confirm_report(LinkEffect::TookEffect, PairKind::Link, lo, hi);
-        assert!(
-            r.sentence.starts_with("Confirmed —") && r.reload,
-            "{}",
-            r.sentence
+        assert_eq!(
+            r.sentence,
+            format!(
+                "Confirmed — charts {lo} and {hi} are recorded as the same person by your \
+                 judgement."
+            )
         );
+        // A confirm may be of a machine link nothing doubted: never presuppose a doubt.
+        assert!(!r.sentence.contains("doubt"), "{}", r.sentence);
+        assert!(r.reload);
         let r = confirm_report(LinkEffect::TookEffect, PairKind::Separated, lo, hi);
         assert!(r.sentence.contains("now stands over the earlier judgement") && r.reload);
         let r = confirm_report(LinkEffect::Outranked, PairKind::Link, lo, hi);
