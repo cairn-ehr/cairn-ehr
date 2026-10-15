@@ -1614,8 +1614,10 @@ a human has disputed (principle 4, #723).
   landing in the last milliseconds while C still joins the record, leaves the set unchanged, so the
   confirm would silently overrule it. The shown input therefore also carries the pair's standing
   assertion as the panel read it (its content address). Under CARNLK, a different standing
-  assertion is refused as stale input ("the link changed while you were judging it — nothing was
-  done; review it again"). The test uses the 2026-10-13 parked-on-lock harness: hold the colleague's
+  assertion is refused as stale input ("what stands between charts {low} and {high} changed while
+  you were judging it (another judgement about the pair was recorded meanwhile) — nothing was done;
+  review it again" — `chart_link::shown::stale_pair`; "what stands", not "the link", because the pair
+  may be a separation). The test uses the 2026-10-13 parked-on-lock harness: hold the colleague's
   transaction open, park the confirm on CARNLK, commit, and assert the refusal.
 - **The panel's Unlink carries the same pair check** (final-review finding I1). Its mirror race is a
   colleague's attested LINK (their confirm) of the same pair landing while C still joins the record:
@@ -1682,6 +1684,87 @@ pinned tests change with it.
 
 **Out of R6:** #690 (reconciling threads across linked charts), #753 (an un-attested unlink that
 loses by HLC, shown nowhere), #691 (short member tags), #742, #743 part 2.
+
+#### R6 — as built (2026-10-15)
+
+Plan `docs/superpowers/plans/2026-10-14-repair-path-r6-confirm-doubted-link.md`, nine tasks, each
+reviewed, then an opus whole-branch review and one fix wave; draft PR
+[#777](https://github.com/cairn-ehr/cairn-ehr/pull/777). No ADR, no event type, no wire change:
+db/054 is edited in place, `SCHEMA_GENERATION` stays **58**, the spec stays **v0.82**.
+
+**What was built, per layer.**
+- **DB (db/054):** `cairn_chart_set_doubts(uuid[])` and `cairn_chart_set_has_doubted_link` as
+  `EXISTS` over it (A, as designed).
+- **Node:**
+  - `patient::edges::record_doubts` → `Vec<LinkDoubt>`.
+  - `RecordsShown::pair` (`chart_link/shown.rs`): the pair's standing content address, re-checked
+    under CARNLK by `stale_pair`.
+  - `chart_link::confirm_link_as_shown` and `chart_link::unlink_charts_as_shown_from`.
+  - The search's per-row doubt flag (`search_person.rs`, `cairn-patient-search`'s `PersonRow::
+    {with_doubt, is_doubted}`), and the CLI's doubted prefix (`candidate_text.rs`).
+  - `DOUBTED_LINK_INSTRUCTION` reworded (C).
+- **Window (Rust):** `link/record_links.rs` (the per-pair lines, `PairKind`, `CLASH_NOTE`, the two
+  doors); `link/confirm_view.rs` (`standing_agrees`, `same_verdict`, `confirm_report`);
+  `link/confirm.rs` (`confirm_link_impl`, the `confirm_link` command); `link/unlink_view.rs`'s
+  `LinkReviewView` offers both verdicts; `funnel/rows.rs`' `doubted_row_label`.
+- **Window (JS):** `unlink.js` draws and sends the second verdict; `main.js` takes the line's door
+  from Rust (`button`) and sends the line's `kind` with "Review…".
+
+**Deviations from the design text above, and why.**
+- **The CLI prefix is "↳ in doubt: "**, not "↳ linked, in doubt: " (D). The longer prefix, inside the
+  28-character name cell, truncated a doubted member's name to about eight characters ("Mary SM…") —
+  it ate the very name in doubt. The ↳ already says "a further chart of this row".
+- **`cairn_chart_set_doubts` also returns `hlc_wall`** (`RETURNS TABLE (low, high, kind, hlc_wall)`):
+  it dates the separated line ("a clinician recorded on {D} (UTC)…").
+- **The clash mark never says "until"** (final review I3). `CLASH_NOTE` ends "…cannot be signed off
+  while this link is in doubt": with two doubted links, judging one does not lift the hold.
+- **The panel's Unlink is signed only over the pair it showed** (final review I1). The design guarded
+  only the confirm; the mirror race (a colleague's attested confirm landing mid-review, overruled by
+  our later unlink) was the same gap. The panel sends `standing` with `unlink_records`, and the node's
+  `unlink_charts_as_shown_from` re-checks it under CARNLK exactly as the confirm does. The CLI's
+  `unlink-charts` keeps `unlink_charts`.
+- **`standing_agrees`: the list's read and the panel's read must agree, or neither verdict is
+  offered.** The line and the panel's standing address come from two reads under two locks; a
+  colleague's unlink landing between them would have let a "confirm" carry the UNLINK's address. A
+  standing read of nothing (`Ok(None)`) while a line was shown is the same disagreement
+  (`PAIR_CHANGED_MID_READ`, "This pair changed while it was being read — …"). An empty address is
+  refused truthfully (`STANDING_UNREAD`, shared by both verdicts via `require_standing`).
+- **`same_verdict` needs BOTH subjects known held, and returns nothing for an attested link** (before
+  the not-held rule, so a not-held note never contradicts the line's "linked by a clinician's
+  judgement"). On a partial panel only the not-held note is kept.
+- **An Outranked verdict hides BOTH verdicts**, in `unlink.js` and also in R5a's `link.js` panel (the
+  same rule had the same gap there; fixed in place, house rule 5). The opposite judgement is never one
+  click away over a stale read.
+- **The remedy also names "Review this judgement…"** beside the bridge's "different people" line (final
+  review I2): in the A–C–X bridge no link line is marked, so "Review this link…" alone pointed at
+  nothing.
+- **The stale-pair refusal says "what stands between charts …"**, not "the link …" (above): the pair
+  may be a separation.
+- `tests/db_errors_stay_legible.rs`' pinned count went 1 → 2 (`record_doubts` is a second wrapped call
+  in `edges.rs`); no per-task review ran that guard, only the full suite did.
+
+**Tests that pin it** (node, DB-gated): `link_doubts.rs` (each kind; the hold ≡ `EXISTS` doubts),
+`confirm_link.rs` (the confirm lifts the hold; refused when the pair changed, before and under CARNLK;
+the bridge re-link), `unlink_as_shown.rs` (the Unlink's mirror race, with a recorded mutation),
+`search_doubted_row.rs` (the flag; the attestation byte-identical with and without the doubt). Window:
+`confirm_view.rs`, `record_links.rs`, `unlink_view_tests.rs`, `unlink_tests.rs` (the rule order; the
+source-reading pin that `unlink_records` sends `standing`), and the `unlink.js` field-name drift guards.
+
+**Headless walk** (Playwright, stubbed `invoke`, visibility asserted; nothing committed). All PASS: the
+two doors and their `aria-label`s; `compare_linked` sends the line's kind; a link line shows Unlink and
+"Same person — confirm"; a separated line shows only "Same person — link them" with its note; both
+verdicts disabled in flight and hidden after; Outranked hides both (also R5a's banner panel); the
+locked-key suffix. **Not walked:** the failure paths (`after_reread`, refused-for-good), and the I1
+`standing` argument (pinned by the source-reading test instead).
+
+**Owed by a human:** RUNBOOK §13 — the ≤ 15 s confirm and bridge re-link, the front door's doubted
+row, VoiceOver and keyboard-only. A miss is a finding to file.
+
+**Follow-ons filed:** #781 (four `link/` files over 500 lines) · #782 (`updateLinkLock` load-order race
+between `main.js` and `link.js`) · #783 (the bridge remedy's door wording, a parked minor) · #784 (a
+verdict is not re-checked against facts or vetoes that changed since the comparison). Commented:
+#738 (the window's fixture and locked-key arms are unpinned in the mock; no DB test of
+`unlink_charts_as_shown_from` in the #699 (a) neither-held case).
 
 ## Error handling
 
