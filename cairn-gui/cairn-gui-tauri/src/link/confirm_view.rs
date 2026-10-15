@@ -118,8 +118,9 @@ pub fn same_verdict(
             note: Some(format!(
                 "A clinician recorded on {} (UTC) that these two charts are different people. \
                  Linking them records your judgement over theirs; both judgements stay on record. \
-                 If they are different people, unlink one of the links that still joins them \
-                 instead.",
+                 If they are different people, open \"Review this link…\" on one of the links \
+                 still joining them, under \"How these charts are linked\" (every link line \
+                 carries it, marked in doubt or not), and unlink it instead.",
                 shown.recorded_on
             )),
         },
@@ -279,8 +280,14 @@ mod tests {
             "{note}"
         );
         assert!(note.contains("both judgements stay on record"), "{note}");
+        // #783 (the PR #792 review): the note names the unlink's door, as the hold's remedy does
+        // — the links still joining the pair may carry no doubt mark.
         assert!(
-            note.contains("unlink one of the links that still joins them"),
+            note.contains(
+                "open \"Review this link…\" on one of the links still joining them, under \"How \
+                 these charts are linked\" (every link line carries it, marked in doubt or not), \
+                 and unlink it instead"
+            ),
             "{note}"
         );
     }

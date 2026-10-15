@@ -37,7 +37,8 @@ pub(crate) struct CandidateListWire {
     people: Vec<PersonRow>,
     incomplete: bool,
     incomplete_reason: Option<String>,
-    /// Indices into `people` of the rows whose links db/054 doubts, ascending.
+    /// Indices into `people` of the rows whose links db/054 doubts. Written in row order; a
+    /// reader accepts any order and repeats, since marking a row twice changes nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     doubted_rows: Vec<usize>,
 }
@@ -162,6 +163,24 @@ mod tests {
             keys,
             vec!["incomplete", "incomplete_reason", "people"],
             "no doubted_rows key unless a row is doubted (additive: an older reader sees no change)"
+        );
+    }
+
+    /// The key-set test above reads a `serde_json::Value`, a sorted map, so it cannot see field
+    /// ORDER. This one pins the exact text: the pre-#786 bytes, in declaration order.
+    #[test]
+    fn an_undoubted_list_serialises_to_the_same_bytes_as_before_786() {
+        let undoubted = CandidateList {
+            people: vec![PersonRow::alone(member(1))],
+            incomplete: true,
+            incomplete_reason: Some("why".into()),
+        };
+        let member_json = serde_json::to_string(&member(1)).unwrap();
+        assert_eq!(
+            serde_json::to_string(&undoubted).unwrap(),
+            format!(
+                r#"{{"people":[[{member_json}]],"incomplete":true,"incomplete_reason":"why"}}"#
+            )
         );
     }
 

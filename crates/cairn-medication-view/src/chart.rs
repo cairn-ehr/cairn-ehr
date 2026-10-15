@@ -60,8 +60,9 @@ pub const SEPARATION_INSTRUCTION: &str =
 /// the first door would point at nothing. The bridge's unlink half names "Review this link…" too,
 /// and says every link line carries it (#783): the links still joining the two charts may be
 /// unmarked, and the sentence had introduced that door as a MARKED link's only. It never calls
-/// them unmarked — one may also trip the hard check, and then it is marked. The CLI verbs are named too, for a node run without the
-/// window, with their required `--attester-key` (both refuse to run without one). Each verb's
+/// them unmarked — one may also trip the hard check, and then it is marked. The CLI verbs are
+/// named too, for a node run without the window, with their required `--attester-key` (both
+/// refuse to run without one). Each verb's
 /// holding rule is named because the record can list a member whose registration has not
 /// reached this node: an unlink needs `--from` only when NEITHER chart is held, but a link needs
 /// BOTH held (`cairn-node` `chart_link::admit_judgement`) — a deliberate act from this node must

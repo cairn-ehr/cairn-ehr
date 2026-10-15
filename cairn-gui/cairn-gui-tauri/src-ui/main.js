@@ -371,7 +371,7 @@ el("unlock-form").addEventListener("submit", async (event) => {
 // `updateLinkLock`: `renderLockState` then skipped it, and the verdict buttons showed link.js's
 // default "locked" state until the next poll, up to LOCK_POLL_MS later. DOMContentLoaded fires
 // only after every classic, synchronous script has run, so every reader of the lock exists by
-// then (pinned in `link/lock_hint_tests.rs`, which also pins that no script tag is deferred).
+// then (pinned in `link/lock_hint_tests.rs`, which also keeps every script tag classic).
 document.addEventListener("DOMContentLoaded", () => void pollLock());
 // The key re-locks on a timer in the backend; the window must not learn about it only when
 // a signature is refused (state is ambient, never modal).

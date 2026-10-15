@@ -10,14 +10,16 @@
 //! found no `updateLinkLock` and skipped it, and `link.js` then started from its own default
 //! (`keyUnlocked = false`). The verdict buttons showed the wrong lock state until the next poll,
 //! up to `LOCK_POLL_MS` later. A headless walk with an instant `lock_state` reproduced it
-//! (R6's Task 8).
+//! (R6's Task 8), and showed the fix (PR #792).
 //!
 //! # The fix these tests pin
 //!
 //! The first poll starts on `DOMContentLoaded`. The browser fires that event only after every
-//! classic, synchronous script in the page has run, so `updateLinkLock` exists by then. That
-//! guarantee holds only while no script tag is `defer`, `async` or a module, so the second test
-//! pins that too.
+//! parser-inserted classic script has run, so `updateLinkLock` exists by then. The second test
+//! keeps the page that way. An `async` script may run AFTER `DOMContentLoaded`, which reopens the
+//! race. A `defer` script would run before the event, but out of step with the classic ones
+//! around it. A module gets its own scope, so `main.js` could not see `updateLinkLock` at all.
+//! None of the three belongs in this page.
 //!
 //! `main.js` and `index.html` are untyped, so these tests read their source, like the
 //! field-name drift guards beside them.
@@ -25,22 +27,26 @@
 const MAIN_JS: &str = include_str!("../../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../../src-ui/index.html");
 
+/// The three top-level lines of `main.js` that may name `pollLock`: its definition, the first poll
+/// (deferred to `DOMContentLoaded`), and the timer. A top-level line is one that starts in
+/// column 0; a comment line is not code.
+const TOP_LEVEL_POLL_LOCK: [&str; 3] = [
+    "async function pollLock() {",
+    "document.addEventListener(\"DOMContentLoaded\", () => void pollLock());",
+    "setInterval(pollLock, LOCK_POLL_MS);",
+];
+
 #[test]
 fn the_first_lock_poll_waits_for_every_script_to_load() {
-    assert!(
-        !MAIN_JS
-            .lines()
-            .any(|line| line.trim() == "void pollLock();"),
-        "main.js must not start the first lock poll while it is itself loading: link.js, which \
-         defines updateLinkLock, has not run yet"
-    );
-    let at = MAIN_JS
-        .find("document.addEventListener(\"DOMContentLoaded\"")
-        .expect("main.js starts the first lock poll on DOMContentLoaded");
-    let listener = &MAIN_JS[at..at + MAIN_JS[at..].find(';').expect("the call ends")];
-    assert!(
-        listener.contains("pollLock()"),
-        "the DOMContentLoaded listener runs the first lock poll: {listener}"
+    let top_level: Vec<&str> = MAIN_JS
+        .lines()
+        .filter(|line| !line.starts_with(char::is_whitespace) && !line.starts_with("//"))
+        .filter(|line| line.contains("pollLock"))
+        .collect();
+    assert_eq!(
+        top_level, TOP_LEVEL_POLL_LOCK,
+        "main.js may poll the lock at load time only from DOMContentLoaded: a poll started while \
+         main.js is still loading can land before link.js defines updateLinkLock (#782)"
     );
 }
 
@@ -56,11 +62,12 @@ fn every_script_is_classic_and_synchronous_so_domcontentloaded_follows_them_all(
         "index.html loads link.js: {tags:?}"
     );
     for tag in tags {
-        for word in ["defer", "async", "type=\"module\""] {
+        for word in ["async", "defer", "type=\"module\""] {
             assert!(
                 !tag.contains(word),
-                "{tag} is `{word}`: DOMContentLoaded would no longer wait for it, and the first \
-                 lock poll could again land before updateLinkLock exists (#782)"
+                "{tag} is `{word}`: async can run after DOMContentLoaded, defer out of step with \
+                 the classic scripts, and a module outside their shared scope — each can cost \
+                 the lock hint again (#782)"
             );
         }
     }
