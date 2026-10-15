@@ -3,12 +3,10 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R7 (#742 + #743 part 2) IS BUILT ON PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788) (branch
-> `feat/742-743-catchup-line-and-soft-veto-note`, 2026-10-15); ITS SECOND REVIEW (2026-10-16, five agents) IS ANSWERED
-> ON THE PR (see "Second review" below) — locally green: fmt, clippy and `cargo doc` on both trees, the whole GUI
-> workspace, `db/tests`, and the touched cairn-node suites; the full workspace sweep is CI's. AWAITING THE MAINTAINER'S
-> REVIEW AND MERGE.** Everything
-> before it is merged: the repair path (#679 · #680 · #681) through R6 (PR #777), #775/#556 (PR #779). R7, as the
+> **⇒ IN FLIGHT (2026-10-16): R6's four residuals — #787 (`standing_link` panics on a NULL address), #786 (the doubt
+> mark on `CandidateList`'s wire shape), #782 (the lock hint's script-order race), #783 (the bridge remedy's wording) —
+> on branch `fix/786-787-782-783-r6-residuals`.** The whole repair path (#679 · #680 · #681) is MERGED through R7
+> (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
 > identifier finding (computed now) carries a NON-holding note on its links-list line (db/016: a soft veto never demotes
@@ -21,9 +19,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR #788 (R7)**: read `gh pr checks 788`, then the maintainer's review and merge (#742 and #743 close with it).
->    **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays open until the
->    maintainer closes it.
+> 1. **This branch's PR** (#786 · #787 · #782 · #783): review and merge. **#728** (the Pi re-measure; now also the
+>    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** from R7 **#789** (`duplicates/view_tests.rs` over 500 lines) · **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
 >    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be

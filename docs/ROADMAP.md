@@ -426,7 +426,7 @@ lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; `docs/d
 [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
 (spec **v0.78**); design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice
 designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2 section); durable rules
-`docs/developers/durable-rules.md`; human passes RUNBOOK §9–§13. Everything through R6 is merged; **R7 is on PR #788.**
+`docs/developers/durable-rules.md`; human passes RUNBOOK §9–§13. Everything through R7 is merged (R7: PR #788, 2026-10-15).
 
 | Slice (PR) | What it built | Schema / spec | Filed |
 |---|---|---|---|
@@ -448,7 +448,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   §11); unlink 2 → 1 → 2, ≤ 15 s (§10); the tray: paper 4 → 5 closed / 4 open (#754), ≤ 25 s per entry, the find ≤ 5 s
   with the tray open (§12); confirm 2 → 2 → 2 and bridge re-link 3 → 2 → 2, ≤ 15 s (§13); the commit-time check and
   R7's two lines 0 → 0 → 0. Every figure is a human act still owed.
-- **Next:** R7's review and merge; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until
+- **Next:** R6's residuals #782 · #783 · #786 · #787 (in flight 2026-10-16); then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until
   the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
