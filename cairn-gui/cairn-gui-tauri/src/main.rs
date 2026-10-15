@@ -26,6 +26,8 @@ mod commands;
 mod duplicates;
 mod funnel;
 mod link;
+#[cfg(test)]
+mod source_guard;
 mod state;
 mod worklist;
 

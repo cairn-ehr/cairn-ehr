@@ -50,11 +50,14 @@ pub async fn tray_count_impl(state: &AppState) -> TrayCountView {
         return tray_count_view(Ok(1), Ok(CheckState::NeverRun { waiting: 0 }));
     };
     let db = db.lock().await;
-    let count = worklist_count(&*db).await.map_err(|e| operator_chain(&e));
+    // Status BEFORE count (PR #788 review; pinned by duplicates/read_order_tests.rs): the worker,
+    // from its own process, never deletes a notice before the proposals it caused are committed.
+    // Counted first, a pair can fall between the reads — a count of none, then "nothing waiting".
     let status = read_snapshot(&db)
         .await
         .map(|s| classify(&s, STALLED_AFTER_SECS))
         .map_err(|e| operator_chain(&e));
+    let count = worklist_count(&*db).await.map_err(|e| operator_chain(&e));
     tray_count_view(count, status)
 }
 

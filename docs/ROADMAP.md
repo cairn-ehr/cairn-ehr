@@ -237,7 +237,7 @@ UI, NOT a floor rule). #392 #393 — federation (`peer_pubkey` hex case; custody
 
 **2026-08-23 → 09-12 — the sweep's tail, the misclassification cluster, §5.9 C+D designed, the DR audit, DR slices
 1 → 2d, the restore's §1.2, #511, the closing-keyword guard, #527 and the CodeQL pack — condensed.** The *why* of each
-lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; HANDOVER's traps hold the rules that still bite.
+lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; `docs/developers/durable-rules.md`'s traps hold the rules that still bite.
 
 - **The sweep's tail (08-23; closes [#481](https://github.com/cairn-ehr/cairn-ehr/issues/481), [#479](https://github.com/cairn-ehr/cairn-ehr/issues/479), [#477](https://github.com/cairn-ehr/cairn-ehr/issues/477)).**
   A guard runs only when its crate is tested (`db_gate.rs`); one pure `operator_chain`. Opened #485 (89 postgres call
@@ -352,7 +352,7 @@ lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; HANDOVE
 - **Phase 9 — ICD-11 canonical interlingua + local-terminology overlay** ([ADR-0025](spec/decisions/0025-icd-11-canonical-interlingua-and-local-terminology-overlay.md)).
 
 **2026-09-11 → 09-20 — the DR close-out and the node-plane doors, condensed.** Each ADR (0069–0074) and plan
-(`docs/superpowers/plans/2026-09-1*`) carries the argument and review ledger; HANDOVER's traps 8–14 carry the rules.
+(`docs/superpowers/plans/2026-09-1*`) carries the argument and review ledger; `docs/developers/durable-rules.md`'s traps 8–14 carry the rules.
 
 - **The restore takes its recovery code from a file** ([ADR-0069](spec/decisions/0069-the-restore-takes-its-recovery-code-from-a-file.md),
   v0.71; closes #572 and #570; PR [#574](https://github.com/cairn-ehr/cairn-ehr/pull/574)): `--old-recovery-code-file
@@ -421,155 +421,35 @@ lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; HANDOVE
   is lost) · #683 (`CandidateList`'s partiality as one sum type) · #684 (`1980-3-7` misses `1980-03-07` — a SET gap) ·
   #685 · #686 · #687 (fixed). §1.2: 1 → 1 → 1; a warning that fired on 92% of registrations is gone.
 
-### 2026-09-27 — the duplicate repair path designed; R1, the combined read, built (ADR-0076, PR #688)
+### 2026-09-27 → 10-15 — the duplicate repair path, R1 → R7 (#679 · #680 · #681)
 
-Merged 2026-09-27. [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md),
-spec **v0.78**; design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (slices **R1 →
-R5**, each with its own plan, PR and §1.2 section); plan `docs/superpowers/plans/2026-09-27-repair-path-r1-combined-read.md`;
-`db/054_person_charts.sql`, `SCHEMA_GENERATION` 53 → **54** (#284). ADR-0075's *"repair by `link` is easy"* rested on
-four missing things; ADR-0076 answers all four, R1 builds the first.
-- **Built:** `cairn_person_charts(uuid)`, the set-wide `cairn_medication_duplicate_groups(uuid[])`, `ChartSet`,
-  `patient/person.rs`; the read selects groups by MEMBERSHIP (**#334 fixed**); sign-off attests each thread under its
-  OWN chart and refuses a changed chart set; `ChartPane` with member lines and per-row source labels; the doubted-link
-  withholding (db/054 `cairn_chart_set_has_doubted_link`, containing [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220)
-  for this read; widened by R1b); an unheld linked chart reads `unknown`. Tests: `person_charts.rs`,
-  `medication_duplicate_groups.rs`, `medication_dup_key_drift.rs`, `combined_read.rs` (incl. the golden
-  `a_never_linked_chart_reads_exactly_as_before`), `combined_signoff.rs`.
-- **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
-  decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
-  Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733), R5a (PR #735), R5b (PR #749) and the DOB near
-  miss (PR #758) are merged; **R6** (#716 + #723) is built on draft PR #777, awaiting review and merge. Next: #742 and
-  #743 part 2. Plan each from the design page's section.
-- **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
-  1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
+[ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
+(spec **v0.78**); design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice
+designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2 section); durable rules
+`docs/developers/durable-rules.md`; human passes RUNBOOK §9–§13. Everything through R6 is merged; **R7 is on PR #788.**
 
-### 2026-09-27 → 10-03 — repair path R2a, R2b-1, R2b-2, R1b (PRs #698, #707, #711, #717)
+| Slice (PR) | What it built | Schema / spec | Filed |
+|---|---|---|---|
+| **R1** (#688) — a linked chart reads as one | `cairn_person_charts`, set-wide `cairn_medication_duplicate_groups`, `ChartSet`, membership read (**#334 fixed**), per-thread sign-off over a named set, the doubted-link hold (containing [#220](https://github.com/cairn-ehr/cairn-ehr/issues/220) for this read) | db/054, gen **54** (#284) | #689 · #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696 · #697 (built in R1b); commented #333 |
+| **R2a** (#698) — a human's judgement outranks a machine's | `patient_link.attested`, attested-first winner order, db/055's heal + re-fold (#703); `chart_link` with a human `Reviewer`; one lock order | db/055, gen **55** | #699 (built in R2b-2) · #700 · #701 (fixed in R1b) · #702 · #703 · #704 · #705 · #706 |
+| **R2b-1** (#707) — "Same person as…" | set-against-set compare, marked refusals, the compare-and-link panel | — | #708 · #709 · #710 |
+| **R2b-2** (#711) — "Not the same person…" | an unlink filed under the record it was judged from, the per-LINK list, `unlink.js` | [ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md), **v0.79** | #712 · #713 · #714 · #715 |
+| **R1b** (#717) — a doubted set withholds every line not on the opened chart | `WrongChartReasons`, the A–C–X bridge as a doubt, per-reason wording | — | #716 · #718 · #719 · #720; commented #335 |
+| **R3** (#721) — the front door collapses by person | `group_by_person`, `displayed_charts()` (the ONE signed list), rows capped by person, one open per member | — | #722 · #723 |
+| **R4** (#724) + **#725** (#733) — the commit-time duplicate check | db/056's notice log + non-raising hook, `cairn-matcher watch`, `cairn-node duplicate-check`; anchored range blocking, per-chart p95 **9 651 → 1 398 ms** at 10 000 charts | db/056, gen **56** | #725 (Pi figure #728) · #726 · #727 · #728 · #729 · #730 · #731 · #732 · #734 |
+| **R5a** (#735) — the possible-duplicate banner | db/057 `match_proposal_open`, `duplicate_review`, "Different people", a fresh veto note | db/057, gen **57** | #736 (built in R5b) · #737 · #738 · #739 · #740 · #741 (fixed in R5b) · #742 · #743 · #744 · #745 · #746 · #747; commented #708, #722 |
+| **R5b** (#749) — the possible-duplicate tray | the matcher skips what db/057 holds closed (#741), re-assesses `review` rows (#743 part 1), `DISPUTED_SQL`, the tray | [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), **v0.80** | #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738, #332, #728 |
+| **DOB near miss** (#758) | a DOB one keying error away grades `NEAR`, never auto-links; `name+monthday` blocking; missed duplicates 351 → 266 of 2 000 | [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), **v0.81** | #759 · #760 · #762 · #763 · #764 · #765 · #766 |
+| **R6** (#777) — confirm a doubted link; name the doubt at the front door | `cairn_chart_set_doubts` (one per-link spelling of "doubted"), one door per line, both verdicts signed only over the pair shown, the doubted person row (#723) | db/054 in place, gen 58 | #781 · #782 · #783 · #784 · #785 · #786 · #787; commented #738 |
+| **R7** (#788) — a "running" line on a checked chart; a note on an unverified link | `charts_changing` / `change_waiting` (#742); `cairn_chart_set_unverified_links`, a non-holding note (#743 part 2) | db/054 + db/056 in place, gen 58 | #789 · #790 · #791 |
 
-All merged; each plan is under `docs/superpowers/plans/` and each slice has an as-built note on the design page. Durable
-rules: HANDOVER's per-slice blocks.
-- **R2a — a human's link judgement outranks a machine's** (ADR-0076 decisions 4–5; `db/055`, generation **55**):
-  `patient_link.attested`, `cairn_link_overlay_wins` (attested first, then HLC), db/055's backfill + heal + re-fold
-  (#703); `chart_link` `link_charts`/`unlink_charts` with a human `Reviewer`, `LinkOutcome::effect` read back in its own
-  transaction, one lock order (proposal row, then CARNLK); CLI `link-charts`/`unlink-charts`. Filed #699 (decided (a),
-  built in R2b-2) · #700 · #701 (fixed in R1b) · #702 (addressed) · #703 · #704 · #705 · #706. §1.2 3 → 3 → 3.
-- **R2b-1 — "Same person as…"**: `patient::compare` (`cross_vetoes` over BOTH displayed sets), marked pre-check
-  refusals, the compare-and-link panel (`link/{view,mod,search}.rs`, `link.js`); every message through `setMessage`.
-  Filed #708 · #709 · #710. §1.2 3 → 3 → 3 (2 from R5's banner), ≤ 20 s owed (runbook §9).
-- **R2b-2 — "Not the same person…"** ([ADR-0077](spec/decisions/0077-an-unlink-may-be-filed-under-the-record-it-was-judged-from.md),
-  spec **v0.79**): `chart_link/admit.rs` + `judge.rs` (the SUBJECTS asked "still joined?", a `RecordOf` re-check under
-  CARNLK), `unlink-charts --from`, `record_edges`, the per-LINK list and `unlink.js`, runbook §10. Filed #712 · #713 ·
-  #714 · #715. §1.2 2 → 1 → 2, ≤ 15 s owed.
-- **R1b — a doubted set withholds every line not on the opened chart** (#697 (b), #701): `WrongChartReasons` beside the
-  kept `cross_patient`; `is_wrong_chart_hazard()` / `hazard_reasons()` / `withheld_reasons()`; db/054 reads the stored
-  `pl.attested` and counts an attested unlink inside the set (the A–C–X bridge); per-reason wording, the CLI's one
-  `doubted_link_note`. Filed #716 · #718 · #719 · #720; commented #335. §1.2 1 → 1 → 1 per doubted link.
-
-### 2026-10-03 — repair path R3: the front door collapses by person (ADR-0076 decision 6; PR #721)
-
-Merged. Plan `docs/superpowers/plans/2026-10-03-repair-path-r3-front-door-by-person.md`; design page R3 + as-built note.
-No SQL object; generation stays 55. Maintainer's decisions: each member line is its own open target; browse collapses too.
-- **Built:** `PersonRow` / pure `group_by_person` / `CandidateList.displayed_charts()` (the ONE signed list) /
-  `TrustState::Unknown` (`cairn-patient-search`); `patient/search_person.rs` (one component read; a missing component
-  fails the search) and `patient/candidate_text.rs` (`cairn-node`); the prompt cap counts ROWS (`cairn-gui-funnel`);
-  `funnel/rows.rs`, an open button per member, `aria-describedby` labels (`cairn-gui-tauri`). A chart not held here
-  reads `Unknown` and no longer sets the signed `incomplete`. Tests: `person.rs`, `tests/search_by_person.rs` (8 DB
-  tests), single-chart goldens. Durable rules: HANDOVER.
-- **Filed:** #722 (`--mock` has no linked pair) · #723 (a doubted set called "One person" — with R5).
-- **§1.2:** the card index's clipped slot. Find, open, register 1 → 1 → 1 each; one added query per search.
-
-### 2026-10-04/05 — repair path R4: the commit-time duplicate check (PR #724) and #725 (PR #733) — merged 2026-10-05
-
-Plans `docs/superpowers/plans/2026-10-04-repair-path-r4-commit-time-worker.md` and `…/2026-10-05-725-range-blocking-cost.md`;
-design page "R4 — designed / as built" and "#725 — as fixed". `db/056_match_pending.sql`, `SCHEMA_GENERATION` 56.
-Maintainer's decisions: the node read + CLI now, the window's lines with R5; a standalone operator-run worker; an
-append-only notice log.
-- **Built (R4):** db/056 (append-only notices, a structurally non-raising hook on the six matcher inputs,
-  `match_worker_state`, `cairn_duplicate_check_status()`, `cairn_chart_check_pending(uuid)`); the matcher worker
-  (`targeted.py`, `judged.py`, `assess`/`persist`, `queue_db.py`, `worker.py`, `cairn-matcher watch`,
-  `eval/measure_check.py`); `cairn-node duplicate-check` + `duplicate_check.rs`; runbook
-  `docs/developers/running-the-duplicate-check.md`.
-- **#725:** the cost was the range statement's `dob-range+sex` self-join (a 14.7 M-row planner cross-product); the
-  sexes now ride on the window rows and the per-chart statement is anchored. Per-chart p95 **9 651 → 1 398 ms at 10 000
-  charts** (budget ≤ 2 s met); `bulk_threshold` 30 → 250; blocking SQL in the pure `pipeline/blocking_sql.py`.
-- **Filed:** #725 (left open; the Pi figure is #728) · #726 · #727 · #728 · #729 · #730 · #731 · #732 · #734.
-- **§1.2:** the clerk's possible-duplicate tray; at the desk 0 → 0 → 0.
-
-### 2026-10-06 — repair path R5a: the possible-duplicate banner (PR #735)
-
-Merged 2026-10-06 as PR [#735](https://github.com/cairn-ehr/cairn-ehr/pull/735) (Refs #680). Design page "R5a — the
-banner, designed 2026-10-06" + its as-built note; plan `docs/superpowers/plans/2026-10-06-repair-path-r5a-duplicate-banner.md`.
-`db/057_match_proposal_open.sql`, `SCHEMA_GENERATION` 56 → **57**. No wire change, no ADR (ADR-0076's decisions).
-Maintainer's decisions: R5 → R5a banner then R5b worklist; the other record's FULL active list shows read-only (the
-privacy trade-off recorded in the design); "Different people" only from a banner entry; Review re-reads, `shown` not
-widened.
-- **Built:** db/057 `match_proposal_open` (open proposals minus pairs in one record or with an ATTESTED unlink —
-  correcting the R5 bullets' "any `patient_link` row"); `cairn_node::duplicate_review` (grouped by the other record, a
-  fresh veto via `cairn_match_veto`, `open_pairs_between`, `record_different_people` — one attested unlink per
-  still-open pair, failures carried); the window's `duplicates/` (every sentence in Rust; `admit_other`;
-  `duplicate_section` + `duplicates.js`; `different_people_impl`; `sendJudgement` disables both buttons in flight).
-- **Reviews:** the opus final review's I1–I4 (both buttons live in flight; "NOT recorded" over an outcome-unknown
-  commit; a stale stored veto note; no carried-Err test) were fixed in one wave; a five-reviewer PR review found no
-  critical defect (its fixes landed on the PR, #740's verb among them).
-- **Filed:** #736 (an `accepted` row's wording; built in R5b) · #737 (identical entry headings) · #738
-  (`cairn-gui-tauri` has no DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure
-  wording) · from the PR review: #741 (the matcher counts an un-attested unlink as judged; fixed in R5b) · #742 (no
-  banner while catching up) · #743 (`review` rows never re-assessed; part 1 built in R5b) · #744 (an unrecognised
-  status) · #745 (a missing or stale banner after a failure) · #746 (Different people with an unreadable drug list) ·
-  #747 (the banner query and its index). Commented on #708 (CARNLK re-check) and #722 (no proposal fixture).
-- **§1.2:** the clerk lays two folders side by side and clips or marks them. Paper 3 → forced 2 (Review, then Same
-  person or Different people) → target 2; a chart open adds 0 acts. Budget ≤ 20 s, and the open with the banner ≤ the
-  single-chart open. RUNBOOK §11, a human act owed.
-
-### 2026-10-08/09 — repair path R5b: the possible-duplicate worklist (PR #749, merged)
-
-Merged 2026-10-08 as PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749) (Refs #680 #741 #743 #736). Design page "R5b — the worklist" (designed + as built); plan
-`docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`;
-[ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), spec **v0.80**; no schema
-change (generation 57).
-- **Built:** the matcher skips what db/057 holds closed, save ADR-0078's clamp-and-flag exception (#741, a six-case drift test) and re-assesses `review`
-  rows (#743 part 1); auto-apply sends a disputed pair to `review`, writing nothing; `DISPUTED_SQL`, the one spelling;
-  `candidate_read.rs`; `duplicate_review/worklist.rs`; the banner's `accepted`/`disputed` (#736); the front door's
-  "Possible duplicates (N)" tray (`worklist/`, `worklist.js`), whose Review opens the NEWER record. The opus final
-  review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
-  door wait). The PR review's one Critical — an `auto_applied` pair an agent's un-attested unlink overruled reached no
-  human — is fixed in `upsert_proposal` (reopened as `pending`).
-- **Then (PR #758, merged 2026-10-11): the DOB near miss —
-  [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), spec v0.81.** A DOB one keying
-  error away grades `NEAR` (+2, `dob_near_miss` evidence); a DOB graded `NEAR` or `DISAGREE` never auto-links; and
-  `name+monthday` blocks year typos. Missed true duplicates 351 → 266 of 2 000 on the synthetic set, false auto-links
-  unchanged. Follow-ups #759 · #760 · #762 · #763 · #764 · #765 · #766.
-- **Filed:** #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738 · #332 · #728. Still open beside it:
-  #716 · #723 (built in R6, below) · #742 · #743 part 2 · #744–#747.
-- **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
-  act owed.
-
-### 2026-10-14/15 — repair path R6: confirm a doubted link; name the doubt at the front door (draft PR #777)
-
-Built on draft PR [#777](https://github.com/cairn-ehr/cairn-ehr/pull/777) (branch `feat/716-723-doubted-link-confirm`),
-awaiting the maintainer's review and merge; #716 and #723 close with it. Design page "R6" (designed 2026-10-14 + as
-built); plan `docs/superpowers/plans/2026-10-14-repair-path-r6-confirm-doubted-link.md`. db/054 edited in place; no ADR,
-no event type, no wire change; `SCHEMA_GENERATION` stays **58**, spec **v0.82**.
-- **Built:**
-  - db/054 `cairn_chart_set_doubts` — ONE per-link spelling of "doubted" (`clash` / `separated`, dated by `hlc_wall`);
-    R1b's hold is `EXISTS` over it. `patient::edges::record_doubts` reads it.
-  - One door per line of "How these charts are linked" — "Review this link…" (a doubted link marked with why) and, for
-    the A–C–X bridge's separation, now listed, "Review this judgement…" — whose panel offers "Same person — confirm" /
-    "Same person — link them" beside the Unlink.
-  - Both verdicts signed only over the pair the panel showed: `RecordsShown::pair`, re-checked under CARNLK
-    (`confirm_link_as_shown`, and `unlink_charts_as_shown_from` for the Unlink — the final review's I1);
-    `standing_agrees` withholds both verdicts when the list's and the panel's reads disagree.
-  - The front door's doubted row reads "Linked charts — a link between them is in doubt (N charts)" (#723); the CLI
-    prefixes "↳ in doubt: "; the flag never enters the signed list.
-  - The remedy names both doors; an Outranked verdict hides both verdicts (R5a's panel too).
-- **Filed:** #781 · #782 · #783 · #784; commented #738.
-- **Review round (2026-10-15):** a door now carries its line's attestation, so a pair judged since the list was drawn
-  opens no verdict; the list's reads share one snapshot; the duplicate-review tray marks a doubted side too (#723);
-  any recorded verdict disarms a newer review of the same pair; the node refuses an unread standing address itself;
-  rustls 0.23.46. Filed #785 · #786 · #787.
-- **§1.2:** two clipped folders laid side by side and the clip initialled. Confirm paper 2 → forced 2 → target 2; the
-  bridge re-link 3 → 2 → 2; the front door +0 acts. Budget ≤ 15 s (R2b-2's unlink budget); RUNBOOK §13, a human act
-  owed.
+- **§1.2 (each slice's own section carries the detail):** reading a linked chart, signing off a combined list, find /
+  open / register at the front door: 1 → 1 → 1 each. Link judgement 3 → 3 → 3 (2 from the banner), ≤ 20 s (RUNBOOK §9,
+  §11); unlink 2 → 1 → 2, ≤ 15 s (§10); the tray: paper 4 → 5 closed / 4 open (#754), ≤ 25 s per entry, the find ≤ 5 s
+  with the tray open (§12); confirm 2 → 2 → 2 and bridge re-link 3 → 2 → 2, ≤ 15 s (§13); the commit-time check and
+  R7's two lines 0 → 0 → 0. Every figure is a human act still owed.
+- **Next:** R7's review and merge; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until
+  the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
 

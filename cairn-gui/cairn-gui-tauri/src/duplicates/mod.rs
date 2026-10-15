@@ -45,12 +45,31 @@ pub async fn duplicate_section(
     let Some(db) = state.db.as_ref() else {
         return fixture_section();
     };
-    // Phase 1, under ONE lock: the proposals, each shown entry's identities, the checks.
-    // `found` is `(how many entries exist, each SHOWN entry WITH its identity read)` — the two
-    // travel together as one tuple, so no later step can pair one person's name with another
-    // person's medications by index.
+    // Phase 1, under ONE lock: the checks and the node's status, THEN the proposals and each
+    // shown entry's identities. `found` is `(how many entries exist, each SHOWN entry WITH its
+    // identity read)` — the two travel together as one tuple, so no later step can pair one
+    // person's name with another person's medications by index.
+    //
+    // The ORDER is load-bearing (PR #788 review; pinned by `read_order_tests.rs`). The matcher
+    // worker, from its own process, never deletes a notice before the proposals it caused are
+    // committed — and either can land between any two of these autocommit reads. Read the proposals first and such a pair falls
+    // between them: no entry, and a status of "nothing waiting" — a silent "checked, none open".
+    // Read the check state first and "nothing waiting" proves every proposal was already in.
     let (found, checks, status) = {
         let db = db.lock().await;
+        let mut checks = vec![];
+        for chart in charts.members() {
+            checks.push(ChartCheck {
+                chart: *chart,
+                pending: chart_check_pending(&db, *chart)
+                    .await
+                    .map_err(|e| operator_chain(&e)),
+            });
+        }
+        let status = read_snapshot(&db)
+            .await
+            .map(|s| classify(&s, STALLED_AFTER_SECS))
+            .map_err(|e| operator_chain(&e));
         let found = match duplicate_review::possible_duplicates(&*db, charts).await {
             Err(e) => Err(operator_chain(&e)),
             Ok(entries) => {
@@ -67,19 +86,6 @@ pub async fn duplicate_section(
                 Ok((total, shown))
             }
         };
-        let mut checks = vec![];
-        for chart in charts.members() {
-            checks.push(ChartCheck {
-                chart: *chart,
-                pending: chart_check_pending(&db, *chart)
-                    .await
-                    .map_err(|e| operator_chain(&e)),
-            });
-        }
-        let status = read_snapshot(&db)
-            .await
-            .map(|s| classify(&s, STALLED_AFTER_SECS))
-            .map_err(|e| operator_chain(&e));
         (found, checks, status)
     };
     // The lock is released here: `read_chart_of` below takes it again.
@@ -267,6 +273,9 @@ pub async fn record_different_people(
 ) -> Result<LinkReportView, ErrorView> {
     different_people_impl(&state, &patient_id, charts, &other_id, other_charts).await
 }
+
+#[cfg(test)]
+mod read_order_tests;
 
 #[cfg(test)]
 mod tests {

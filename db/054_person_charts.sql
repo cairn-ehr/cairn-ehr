@@ -1,5 +1,5 @@
--- db/054 — the person's chart set, a duplicate flag over it, and whether it holds a doubted
--- link (ADR-0076 decision 1).
+-- db/054 — the person's chart set, a duplicate flag over it, whether it holds a doubted link
+-- (ADR-0076 decision 1), and which of its links this node cannot verify (section 4, R7).
 --
 -- WHY IN THE DATABASE. Every combined read — the medication list now, allergies when they
 -- exist, the duplicate banner (R5) — must agree on which charts are "this person". One
@@ -171,5 +171,51 @@ AS $$
 $$;
 REVOKE EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION cairn_chart_set_has_doubted_link(uuid[]) TO cairn_agent;
+
+
+-- 4. R7 (#743 part 2): the standing links of a chart set that this node cannot VERIFY — for a
+--    NON-holding note on the link's line in the window's links list (cairn-gui-tauri
+--    link/record_links.rs). Read by cairn-node patient::edges::record_unverified_links.
+--
+--    db/016 has two veto severities. A hard_veto (a trustworthy clash) makes an un-attested link a
+--    doubt above (case (b)) and holds sign-off. A degrade_hold means two identifiers in one system
+--    differ while at least one side has no format profile, so this node cannot tell a real mismatch
+--    from formatting ('00123' vs '123'). db/016 says it "must NOT demote an existing link", so it
+--    is DELIBERATELY NOT part of cairn_chart_set_doubts: the hold is EXISTS over the doubts, and a
+--    third kind there would freeze sign-off on a soft veto. Before R7 such a link, typically a
+--    peer's machine link, was flagged nowhere: its charts read as one record, so db/057 drops the
+--    pair from the banner and the tray. Pinned by cairn-node tests/unverified_link_note.rs.
+--
+--    Computed NOW from the identifiers as they stand (cairn_match_veto), never from a stored
+--    match_proposal, so it covers a link that arrived before any check here and a finding that
+--    arrived after the link. Only an UN-attested standing link: an attested one is a clinician's
+--    decision, the very one the note asks for. One row per (pair, identifier system). A pair that
+--    also clashes may be listed; the window shows the clash note alone on such a line. The
+--    veto_kind filter is redundant TODAY (db/016's field clashes are always hard_veto), and is kept
+--    because the note's wording names an identifier system: a future soft field veto needs its
+--    own wording, not a silent ride on this one.
+--
+--    SECURITY DEFINER, search_path pinned and EXECUTE granted only to cairn_agent, exactly as its
+--    two siblings above (same reasoning: it returns patient_link rows cairn_agent may already
+--    SELECT, plus the identifier system db/016 already reports to cairn_agent). As for them,
+--    DEFINER is not strictly required — cairn_agent can read everything this reads — and is kept
+--    only so the three functions share one privilege shape until issue #718 decides.
+CREATE OR REPLACE FUNCTION cairn_chart_set_unverified_links(p_charts uuid[])
+RETURNS TABLE (low uuid, high uuid, system text)
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT pl.low, pl.high, v.subject
+    FROM patient_link pl
+    CROSS JOIN LATERAL cairn_match_veto(pl.low, pl.high) v
+    WHERE pl.state = 'link'
+      AND NOT pl.attested
+      AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
+      AND v.veto_kind = 'identifier'
+      AND v.severity = 'degrade_hold'
+$$;
+REVOKE EXECUTE ON FUNCTION cairn_chart_set_unverified_links(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION cairn_chart_set_unverified_links(uuid[]) TO cairn_agent;
 
 COMMIT;

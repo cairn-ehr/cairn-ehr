@@ -1,5 +1,6 @@
 //! Tests for `link/unlink.rs`, in a sibling file like `unlink_view_tests.rs`.
 use super::*;
+use crate::source_guard::rust_fn;
 use crate::state::AppState;
 use cairn_node::patient::edges::{LinkDoubt, RecordEdge};
 use uuid::Uuid;
@@ -148,6 +149,7 @@ fn edge(a: u128, b: u128) -> RecordEdge {
 /// A read with these standing links and no doubts.
 fn links(edges: Vec<RecordEdge>) -> Result<RecordLinks, String> {
     Ok(RecordLinks {
+        unverified: Ok(vec![]),
         edges,
         doubts: vec![],
     })
@@ -166,6 +168,18 @@ fn an_absent_link_is_gone() {
     let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(3));
     let err = shown_pair(links(vec![edge(1, 2)]), l, h, PairKind::Link, Act::Unlink).unwrap_err();
     assert_eq!(err.text, LINK_GONE);
+}
+
+/// A failed read of the "unverified" notes is not a failed read of the links (PR #788 review):
+/// the notes hold nothing, so every verdict and Compare still finds its pair.
+#[test]
+fn an_unread_note_list_never_blocks_a_verdict() {
+    let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let read = Ok(RecordLinks {
+        unverified: Err("boom".into()),
+        ..links(vec![edge(1, 2)]).unwrap()
+    });
+    assert!(shown_pair(read, l, h, PairKind::Link, Act::Unlink).is_ok());
 }
 
 #[test]
@@ -190,6 +204,7 @@ fn a_separated_pair_must_still_be_separated() {
     };
     let links = || {
         Ok(RecordLinks {
+            unverified: Ok(vec![]),
             edges: vec![],
             doubts: vec![sep(1, 3)],
         })
@@ -206,6 +221,7 @@ fn a_separated_pair_must_still_be_separated() {
 #[test]
 fn a_clash_link_carries_its_attestation_into_the_shown_pair() {
     let links = Ok(RecordLinks {
+        unverified: Ok(vec![]),
         edges: vec![RecordEdge {
             attested: false,
             ..edge(1, 2)
@@ -236,6 +252,7 @@ fn the_shown_pair_carries_its_own_date_and_a_clash_is_not_a_separation() {
     let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(2));
     let read = || {
         Ok(RecordLinks {
+            unverified: Ok(vec![]),
             edges: vec![edge(1, 2)],
             doubts: vec![clash.clone()],
         })
@@ -371,18 +388,6 @@ fn a_recorded_verdict_disarms_a_newer_comparison_of_the_same_pair() {
     // both files under one name would silently become the later file's.
     assert!(!js.contains("function disarmNewerComparison("));
     assert!(!link.contains("function disarmNewerReview("));
-}
-
-/// The body of Rust function `name` in `src`, to the first line that is a lone `}` (rustfmt
-/// closes every top-level fn that way).
-fn rust_fn<'a>(src: &'a str, name: &str) -> &'a str {
-    let start = src
-        .find(&format!("fn {name}("))
-        .unwrap_or_else(|| panic!("{name} is declared"));
-    let len = src[start..]
-        .find("\n}\n")
-        .unwrap_or_else(|| panic!("{name} closes"));
-    &src[start..start + len]
 }
 
 /// The window's half of the stale-pair guarantee (PR #777 review): the node's pair re-check

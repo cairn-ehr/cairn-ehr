@@ -55,7 +55,7 @@ fn canon(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
 
 #[test]
 fn the_view_lists_exactly_chart_links_open_statuses() {
-    // A guard and the thing it guards must be asked about the same string (HANDOVER's trap
+    // A guard and the thing it guards must be asked about the same string (durable-rules.md's trap
     // list): pin the COMPOSED expression, not its pieces. If chart_link.rs gains or loses an
     // open status, the banner and the judgement writer would disagree on what "open" means.
     let sql = include_str!("../../../db/057_match_proposal_open.sql");

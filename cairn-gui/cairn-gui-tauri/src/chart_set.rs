@@ -201,7 +201,9 @@ pub struct ChartPane {
     /// The standing links joining the record's charts, one line each (R2b-2), then one line per
     /// bridged "different people" judgement (R6) — empty for a chart linked to nothing.
     pub links: Vec<crate::link::record_links::RecordLinkView>,
-    /// Set when those links could not be read; the list and the member lines still show.
+    /// Set when those links could not be read (the list is then empty), or when only the
+    /// "unverified here" notes could not be (the lines show, without notes); the member lines
+    /// still show either way.
     pub links_error: Option<String>,
     /// The possible-duplicate banner (R5a); empty and hidden when checked and none open.
     pub duplicates: crate::duplicates::view::DuplicateSection,

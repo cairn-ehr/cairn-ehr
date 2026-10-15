@@ -169,9 +169,11 @@ fn a_pending_member_is_named_and_the_node_status_explains_it() {
         id(1),
         &checks,
         &[member(2, "Ann LEE")],
+        // No change waits elsewhere: the pending lines alone bring the status line, as before R7.
         Ok(CheckState::CatchingUp {
             waiting: 2,
             config_recheck: false,
+            change_waiting: false,
         }),
     );
     assert_eq!(

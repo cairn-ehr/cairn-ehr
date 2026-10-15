@@ -115,9 +115,9 @@ pub fn write_key_file(dir: &Path, name: &str, sk: &SigningKey) -> String {
 /// `<key>.unwrap` sibling file or, absent one, by deriving it from the signing seed and checking
 /// that it matches what `node_unwrap_key` has registered (the pre-ADR-0066 fallback — the decision
 /// table on `unwrap_key::resolve` is the durable statement of it, and ADR-0066 the reasoning;
-/// HANDOVER's trap list says the same thing but is renumbered as traps are minted, so it is not a
-/// citable address). Registering a DERIVED key here is what lets these tests drive the shipped binary
-/// with `--key` alone. A generated key would satisfy the authoring path and then silently fail to
+/// docs/developers/durable-rules.md's trap list says the same thing but is renumbered as traps
+/// are minted, so it is not a citable address). Registering a DERIVED key here is what lets these
+/// tests drive the shipped binary with `--key` alone. A generated key would satisfy the authoring path and then silently fail to
 /// resolve at requeue time — turning a loud failure into a quiet wrong answer.
 pub fn derived_unwrap_secret(sk: &SigningKey) -> Secret32 {
     cairn_event::seal::derive_unwrap_secret(&Secret32::from_bytes(sk.to_bytes()))

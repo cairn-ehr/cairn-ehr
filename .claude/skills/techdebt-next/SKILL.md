@@ -231,7 +231,9 @@ silently.
 
 1. If this change materially alters build state, update `docs/HANDOVER.md`
    / `ROADMAP.md` in the SAME PR (keep both under 500 lines). Skip when
-   nothing material changed — most tech debt.
+   nothing material changed — most tech debt. A durable rule or trap this
+   fix mints (something every later session must hold) goes in
+   `docs/developers/durable-rules.md`, never in HANDOVER, which is pruned.
 2. `gh pr merge <pr> --auto --merge` (merge commit; --auto waits for the
    required checks).
 3. If that command fails because auto-merge is not allowed on the

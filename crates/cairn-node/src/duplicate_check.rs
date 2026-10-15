@@ -20,7 +20,8 @@
 //! All wording lives here, in pure functions with a golden test; R5's window will reuse them.
 
 use anyhow::Context;
-use tokio_postgres::Client;
+use tokio_postgres::types::FromSql;
+use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
 /// How long the quiet time may run — since the oldest waiting notice or the worker's last completed
@@ -53,6 +54,10 @@ pub struct QueueSnapshot {
     /// a worker is crash-looping or in a long blocking phase it is active but this stays earlier
     /// — on purpose.
     pub last_drained_hhmm: Option<String>,
+    /// How many distinct charts have a waiting CHANGE notice (`config` re-check notices are not
+    /// counted). R7 (#742): the banner of an already-checked chart names a waiting change, which
+    /// may yet propose a duplicate against it.
+    pub charts_changing: i64,
 }
 
 /// What the node may honestly say about its duplicate check.
@@ -71,8 +76,17 @@ pub enum CheckState {
     /// Charts are waiting, and either the oldest change is recent or the worker completed work
     /// recently: it is working through them.
     /// `config_recheck` is true while a whole-population re-check (a matcher update, or the
-    /// first run) is among them.
-    CatchingUp { waiting: i64, config_recheck: bool },
+    /// first run) is among them. `change_waiting` is true while at least one CHANGE notice waits:
+    /// a chart already checked may yet be proposed against by it, so its banner must not read as
+    /// "checked, none open" (#742). A config-only backlog leaves it false — that re-check was
+    /// queued before any checked chart's own check ran, so the check already saw it. A bulk
+    /// `change` backlog sets it although the same holds (#790), as does a chart whose check keeps
+    /// failing (#791).
+    CatchingUp {
+        waiting: i64,
+        config_recheck: bool,
+        change_waiting: bool,
+    },
     /// Nothing is waiting: every chart has been checked since its identity evidence last changed.
     /// `last_ran` is the worker's last completed work (HH:MM, with the date when not today).
     Current { last_ran: Option<String> },
@@ -99,6 +113,7 @@ pub fn classify(s: &QueueSnapshot, stalled_after_secs: i64) -> CheckState {
         Some(_) => CheckState::CatchingUp {
             waiting: s.charts_waiting,
             config_recheck: s.config_recheck,
+            change_waiting: s.charts_changing > 0,
         },
     }
 }
@@ -136,6 +151,7 @@ pub fn status_line(state: &CheckState) -> String {
         CheckState::CatchingUp {
             waiting,
             config_recheck,
+            ..
         } => format!(
             "Duplicate check running — {} waiting{}.",
             charts(*waiting),
@@ -162,17 +178,35 @@ pub fn chart_line(pending: bool) -> &'static str {
 }
 
 /// Read the node-wide snapshot.
+///
+/// Every column is read with `status_column` (below), never `Row::get`: `cairn-node
+/// duplicate-check` reads without replaying the schema (#726), so a binary upgraded before its
+/// database's next replaying connect meets an OLDER shape of db/056's function, and `get` would
+/// panic on the missing column instead of saying what is wrong (PR #788 review).
 pub async fn read_snapshot(client: &Client) -> anyhow::Result<QueueSnapshot> {
     let r = client
         .query_one("SELECT * FROM cairn_duplicate_check_status()", &[])
         .await
         .context("reading the duplicate-check status")?;
     Ok(QueueSnapshot {
-        charts_waiting: r.get("charts_waiting"),
-        quiet_age_secs: r.get("quiet_age_s"),
-        config_recheck: r.get("config_recheck"),
-        worker_seen: r.get("worker_seen"),
-        last_drained_hhmm: r.get("last_drained_hhmm"),
+        charts_waiting: status_column(&r, "charts_waiting")?,
+        quiet_age_secs: status_column(&r, "quiet_age_s")?,
+        config_recheck: status_column(&r, "config_recheck")?,
+        worker_seen: status_column(&r, "worker_seen")?,
+        last_drained_hhmm: status_column(&r, "last_drained_hhmm")?,
+        charts_changing: status_column(&r, "charts_changing")?,
+    })
+}
+
+/// One column of db/056's status row, or an error naming the column and the remedy: a missing
+/// or mistyped column means the database's schema predates this binary.
+fn status_column<'a, T: FromSql<'a>>(row: &'a Row, name: &str) -> anyhow::Result<T> {
+    row.try_get(name).with_context(|| {
+        format!(
+            "reading the duplicate-check status: no usable `{name}` column — this database's \
+             schema predates this binary, so a schema replay is owed (run `cairn-node deferred` \
+             once — it loads the schema — then retry)"
+        )
     })
 }
 
@@ -202,6 +236,7 @@ mod tests {
             config_recheck: config,
             worker_seen: seen,
             last_drained_hhmm: seen.then(|| "09:41".to_string()),
+            charts_changing: 0,
         }
     }
 
@@ -235,6 +270,30 @@ mod tests {
         ));
     }
 
+    /// #742 (R7): a catching-up node says whether a CHANGE notice waits — the banner of an
+    /// already-checked chart shows the "running" line only then. A config-only backlog does not.
+    #[test]
+    fn catching_up_says_whether_a_change_waits() {
+        let mut s = snap(5, Some(10), true, true);
+        s.charts_changing = 0;
+        assert_eq!(
+            classify(&s, 300),
+            CheckState::CatchingUp {
+                waiting: 5,
+                config_recheck: true,
+                change_waiting: false
+            }
+        );
+        s.charts_changing = 1;
+        assert!(matches!(
+            classify(&s, 300),
+            CheckState::CatchingUp {
+                change_waiting: true,
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn the_wording_golden() {
         assert_eq!(
@@ -262,12 +321,17 @@ mod tests {
         assert_eq!(
             status_line(&CheckState::CatchingUp {
                 waiting: 7,
-                config_recheck: false
+                config_recheck: false,
+                change_waiting: true
             }),
             "Duplicate check running — 7 charts waiting."
         );
         assert_eq!(
-            status_line(&CheckState::CatchingUp { waiting: 7, config_recheck: true }),
+            status_line(&CheckState::CatchingUp {
+                waiting: 7,
+                config_recheck: true,
+                change_waiting: false
+            }),
             "Duplicate check running — 7 charts waiting (re-checking every chart: first run or matcher update)."
         );
         assert_eq!(

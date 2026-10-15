@@ -276,9 +276,10 @@ fn every_postgres_call_in_the_comparison_names_what_it_was_doing() {
     );
 }
 
-/// `patient/edges.rs` has THREE postgres calls — the standing-links read (`record_edges`),
-/// db/054's per-link doubts read (`record_doubts`, R6) and its boolean (`record_is_doubted`).
-const EDGES_LOCAL_DB_FAULT_SITES: usize = 3;
+/// `patient/edges.rs` has FOUR postgres calls — the standing-links read (`record_edges`),
+/// db/054's per-link doubts read (`record_doubts`, R6), its boolean (`record_is_doubted`) and the
+/// links this node cannot verify (`record_unverified_links`, R7).
+const EDGES_LOCAL_DB_FAULT_SITES: usize = 4;
 
 /// The link read names what it was doing (R2b-2).
 #[test]

@@ -446,6 +446,17 @@ Budget: banner open **≤ single-chart open**. The banner reads eagerly (the oth
 included); a miss decides whether the other record's lines move to a second paint — it is a finding,
 not an adjustment. Five opens each, same session state (key locked or unlocked, the same for both).
 
+**Check 3 — the "running" line on a checked chart (R7, [#742](https://github.com/cairn-ehr/cairn-ehr/issues/742)).**
+No stopwatch: it adds no act. With chart A checked (the worker drained) and **no** worker running,
+register one more chart (`C=$(reg)`) and re-open A within five minutes **of registering C**. A's
+banner area reads "Duplicate check running — 1 chart waiting." although A itself is checked: a
+duplicate registered after A's check can only be proposed when IT is checked, so "no banner" would
+mean "not yet known". Later than five minutes the node correctly reads "Duplicate check is behind —
+…; 1 chart waiting." instead (no worker ran) — a slow re-open, not a failure of this check.
+Then drain once (`cairn-matcher watch --once`) and re-open A: the line is gone, and C, being a
+near-duplicate, now shows as a banner entry. A whole-population re-check alone (a matcher update)
+never brings this line onto a checked chart.
+
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
 - [ ] The banner is announced as a **region** with its label, **never as an alert** — no interruption
@@ -636,6 +647,25 @@ doubt (N charts)"**, never "One person — N linked charts"; after Measurement 1
 same find reads "One person — 2 linked charts". The label adds no act, so the budget is section 8's.
 In the CLI's `patient-search`, a doubted row's further charts are prefixed "↳ in doubt: " (an
 undoubted row keeps "↳ linked: ").
+
+**Check 4 — an unverified link (R7, [#743](https://github.com/cairn-ehr/cairn-ehr/issues/743)).**
+No stopwatch: it adds no act (acting on it is Measurement 1's gesture). Setup: an **un-attested**
+link (as Setup A) between two charts whose identifiers in ONE system differ while at least one side
+carries no normalized form (no format profile — e.g. `00123` vs `123`: db/016's `degrade_hold`).
+Registering the two charts with differing `--identifier` values does NOT build this: Setup A's
+`apply-auto-candidates` refuses an auto-link on ANY veto, this soft one included, so the differing
+identifiers must arrive AFTER the link — and there is no CLI recipe for an identifier assertion on
+an existing chart here. Whatever you use, check the setup before looking:
+
+```bash
+psql "$CONN" -Atc "SELECT low, high, system FROM cairn_chart_set_unverified_links(ARRAY['$A','$B']::uuid[])"
+```
+
+It must print one row naming the system. The link's line then ends "— unverified here: the two
+charts hold different {system} identifiers, and this node cannot tell a real mismatch from a
+difference in formatting"; it is NOT marked "in doubt", and the medication list holds nothing back
+because of it (db/016: a soft veto never demotes a link). "Review this link…" opens the usual panel;
+after **Same person — confirm** the note is gone.
 
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
 

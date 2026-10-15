@@ -738,7 +738,8 @@ CREATE INDEX IF NOT EXISTS event_deferred_type_idx ON event_deferred (event_type
 -- written from this exclusion when a link winner is applied, so it must never be
 -- recomputed from attester_key alone. Its readers (recount with
 -- `git grep -n attested -- db crates`): db/018 itself (read-back, ranking), db/054's
--- cairn_chart_set_has_doubted_link (#701), db/055's re-fold, and cairn-node's
+-- cairn_chart_set_doubts (#701, R6; cairn_chart_set_has_doubted_link wraps it) and
+-- cairn_chart_set_unverified_links (R7), db/055's re-fold, and cairn-node's
 -- chart_link.rs (the link door's read-back), patient/edges.rs and auto_apply.rs.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS event_attestation_unvouched (
