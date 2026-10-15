@@ -1837,6 +1837,34 @@ unverified.
 **Out of R7:** the CLI's links listing (it has no per-link note yet), #786 (the doubt mark on the
 wire shape), #784 (a verdict not re-checked against changed facts).
 
+#### R7 — as built (2026-10-15)
+
+Plan `docs/superpowers/plans/2026-10-15-repair-path-r7-catchup-line-and-unverified-link-note.md`;
+built inline by TDD (two small slices, six files each side). No ADR, no event type, no wire change:
+db/054 and db/056 are edited in place (ADR-0080's hash gate replays them), `SCHEMA_GENERATION` stays
+**58**, spec **v0.82**.
+
+- **#742:** `cairn_duplicate_check_status()` gains `charts_changing`; its heal guard now drops ANY shape
+  lacking that newest column (the pre-merge `newest_age_s` shape included). `QueueSnapshot::charts_changing`,
+  `CheckState::CatchingUp { change_waiting }`; `check_lines` names every `CheckState` arm (the `_`
+  wildcard is gone, so a new state must be decided). Pins: `tests/match_pending.rs`
+  (`the_status_counts_the_charts_with_a_waiting_change`, `a_database_with_the_pre_r7_status_shape_is_healed_on_connect`),
+  `duplicate_check.rs`'s unit tests, `duplicates/view_tests.rs` (a checked record names a waiting
+  change; stays quiet through a config-only re-check; the pending-line case pinned with
+  `change_waiting: false`).
+- **#743 part 2:** db/054 `cairn_chart_set_unverified_links(uuid[])` (un-attested standing links with an
+  identifier `degrade_hold` from `cairn_match_veto` now); `patient::edges::{UnverifiedLink,
+  record_unverified_links}`; `RecordLinks::unverified`, read in the links list's one REPEATABLE READ
+  snapshot; the note in `links_section` (a clash line keeps only its clash note; an orphan row is
+  dropped). Pins: `tests/unverified_link_note.rs` (listed and holding nothing, the hold read through
+  `record_is_doubted`; a confirm ends it; a trustworthy identifier clash is a doubt, not unverified;
+  `cairn_agent` reads it) — the `NOT pl.attested` and `severity` filters each mutation-checked red;
+  `link/record_links_unverified_tests.rs` (the clash precedence mutation-checked red).
+  `db_errors_stay_legible.rs`' edges.rs count is 4. `record_links.rs`'s inline tests moved to
+  `record_links_tests.rs` (it would otherwise have crossed 500 lines).
+- **Human checks:** RUNBOOK §11 check 3 (the "running" line) and §13 check 4 (the unverified note); no
+  stopwatch, neither adds an act.
+
 ## Error handling
 
 - Worker down or behind → the honest-lag line; writes are never affected (the trigger cannot raise).

@@ -112,6 +112,7 @@ nav:
       - Codebase tour: developers/codebase-tour.md
       - Contributing workflow: developers/contributing-workflow.md
       - Running the duplicate check: developers/running-the-duplicate-check.md
+      - Durable rules: developers/durable-rules.md
       - Glossary: developers/glossary.md
   - Architecture:
       - Vision & goals: spec/vision.md
