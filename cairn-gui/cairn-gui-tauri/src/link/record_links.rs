@@ -185,12 +185,13 @@ fn has_orphan_clash(links: &RecordLinks) -> bool {
         })
 }
 
-/// Read the record's standing links, db/054's doubts about them, and the links it cannot verify. Both empty for a single
-/// chart (nothing joins it); an error, never an empty list, when a linked set cannot be read —
-/// see [`links_section`]. Takes `state.db`'s lock, which means the caller must not already hold
+/// Read the record's standing links, db/054's doubts about them, and the links it cannot verify.
+/// All three are empty for a single chart (nothing joins it); an error, never an empty list, when
+/// a linked set cannot be read — see [`links_section`]. Takes `state.db`'s lock, which means the caller must not already hold
 /// it: `tokio::sync::Mutex` is not re-entrant.
 ///
-/// All three reads run in ONE read-only REPEATABLE READ transaction, so they describe the same moment.
+/// All three reads run in ONE read-only REPEATABLE READ transaction, so they describe the same
+/// moment.
 /// The lock alone would not do that: it keeps out only this window's other commands, while the
 /// sync door commits peer links through its own connection, and each autocommit statement takes
 /// its own snapshot. Two snapshots could mark a clash on a link the edge read had not yet seen.

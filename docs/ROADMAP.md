@@ -426,7 +426,7 @@ lives in its ADR (0065–0068) and design doc under `docs/superpowers/`; `docs/d
 [ADR-0076](spec/decisions/0076-duplicate-repair-a-linked-chart-reads-as-one-and-a-human-judgement-outranks-a-machine.md)
 (spec **v0.78**); design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice
 designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2 section); durable rules
-`docs/developers/durable-rules.md`; human passes RUNBOOK §9–§13. Everything through R6 is merged; **R7 is on its PR.**
+`docs/developers/durable-rules.md`; human passes RUNBOOK §9–§13. Everything through R6 is merged; **R7 is on PR #788.**
 
 | Slice (PR) | What it built | Schema / spec | Filed |
 |---|---|---|---|
@@ -441,7 +441,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 | **R5b** (#749) — the possible-duplicate tray | the matcher skips what db/057 holds closed (#741), re-assesses `review` rows (#743 part 1), `DISPUTED_SQL`, the tray | [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), **v0.80** | #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738, #332, #728 |
 | **DOB near miss** (#758) | a DOB one keying error away grades `NEAR`, never auto-links; `name+monthday` blocking; missed duplicates 351 → 266 of 2 000 | [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), **v0.81** | #759 · #760 · #762 · #763 · #764 · #765 · #766 |
 | **R6** (#777) — confirm a doubted link; name the doubt at the front door | `cairn_chart_set_doubts` (one per-link spelling of "doubted"), one door per line, both verdicts signed only over the pair shown, the doubted person row (#723) | db/054 in place, gen 58 | #781 · #782 · #783 · #784 · #785 · #786 · #787; commented #738 |
-| **R7** (this PR) — a "running" line on a checked chart; a note on an unverified link | `charts_changing` / `change_waiting` (#742); `cairn_chart_set_unverified_links`, a non-holding note (#743 part 2) | db/054 + db/056 in place, gen 58 | — |
+| **R7** (#788) — a "running" line on a checked chart; a note on an unverified link | `charts_changing` / `change_waiting` (#742); `cairn_chart_set_unverified_links`, a non-holding note (#743 part 2) | db/054 + db/056 in place, gen 58 | — |
 
 - **§1.2 (each slice's own section carries the detail):** reading a linked chart, signing off a combined list, find /
   open / register at the front door: 1 → 1 → 1 each. Link judgement 3 → 3 → 3 (2 from the banner), ≤ 20 s (RUNBOOK §9,

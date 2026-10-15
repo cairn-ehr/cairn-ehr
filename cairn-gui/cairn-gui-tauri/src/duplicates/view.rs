@@ -412,3 +412,7 @@ fn pair_sentence(r: &PairResult) -> String {
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "view_catchup_tests.rs"]
+mod catchup_tests;

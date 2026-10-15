@@ -1791,8 +1791,14 @@ node's status line for `CatchingUp` only when the record already had a pending l
   every checked chart during a re-check would train staff to ignore it, which would blunt the ED
   case the line exists for.
 - **Known over-warn, on the safe side:** a `change` notice queued before this chart's check (and so
-  already seen by it) still shows the line until the worker drains it, typically for seconds (p95
-  1.4 s a chart, #725). It never under-warns. The precise alternative, a per-chart "checked" stamp,
+  already seen by it) still shows the line until the worker drains it. It never under-warns. In
+  normal use that is seconds (p95 1.4 s a chart, #725). **But a `reproject --rebuild`, a restore or a
+  new node's first pull re-writes every projection row, so the hook queues a `change` notice (never
+  `config`) for EVERY chart at once**: through that backlog, about an hour at 10 000 charts, every
+  checked chart shows the line. That is true, and rare (an operator act, like a matcher update), but
+  it is the same staff-fatigue effect the `config` exclusion avoids. Tagging those bulk notices
+  differently would need the bulk writer to tell the hook why a row was re-written: a decision,
+  filed as #790. The precise alternative, a per-chart "checked" stamp,
   was declined: it needs a schema generation, and an MVCC-correct comparison (a notice inserted
   before the check but committed after it was NOT seen by the check, so comparing `queued_at` fails
   open).
@@ -1847,11 +1853,16 @@ db/054 and db/056 are edited in place (ADR-0080's hash gate replays them), `SCHE
 - **#742:** `cairn_duplicate_check_status()` gains `charts_changing`; its heal guard now drops ANY shape
   lacking that newest column (the pre-merge `newest_age_s` shape included). `QueueSnapshot::charts_changing`,
   `CheckState::CatchingUp { change_waiting }`; `check_lines` names every `CheckState` arm (the `_`
-  wildcard is gone, so a new state must be decided). Pins: `tests/match_pending.rs`
+  wildcard is gone, so a new state must be decided). Pins: `tests/duplicate_check_status.rs`
   (`the_status_counts_the_charts_with_a_waiting_change`, `a_database_with_the_pre_r7_status_shape_is_healed_on_connect`),
-  `duplicate_check.rs`'s unit tests, `duplicates/view_tests.rs` (a checked record names a waiting
-  change; stays quiet through a config-only re-check; the pending-line case pinned with
-  `change_waiting: false`).
+  `duplicate_check.rs`'s unit tests, `duplicates/view_catchup_tests.rs` (a checked record names a
+  waiting change; stays quiet through a config-only re-check) and `view_tests.rs`'s pending-line case,
+  now pinned with `change_waiting: false`. `view_tests.rs` was already over 500 lines: #789.
+- **Rollback hazard (not new):** `SCHEMA_GENERATION` stays 58, so an OLDER binary connecting to a
+  database this branch loaded replays its own db/056, whose guard looks only for `newest_age_s`, and
+  then fails "cannot change return type". The `newest_age_s` → `quiet_age_s` heal had the same
+  property. Remedy: `DROP FUNCTION cairn_duplicate_check_status();` before switching back (e.g. on the
+  shared `cairn_test` when moving from this branch to an older `main`).
 - **#743 part 2:** db/054 `cairn_chart_set_unverified_links(uuid[])` (un-attested standing links with an
   identifier `degrade_hold` from `cairn_match_veto` now); `patient::edges::{UnverifiedLink,
   record_unverified_links}`; `RecordLinks::unverified`, read in the links list's one REPEATABLE READ

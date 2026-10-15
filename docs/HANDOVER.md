@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R7 (#742 + #743 part 2) IS BUILT ON PR [#NNN](https://github.com/cairn-ehr/cairn-ehr/pull/NNN) (branch
+> **⇒ R7 (#742 + #743 part 2) IS BUILT ON PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788) (branch
 > `feat/742-743-catchup-line-and-soft-veto-note`, 2026-10-15) — AWAITING ITS CI GATES, REVIEW AND MERGE.** Everything
 > before it is merged: the repair path (#679 · #680 · #681) through R6 (PR #777), #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
@@ -18,10 +18,11 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR #NNN (R7)**: read `gh pr checks NNN`, then the maintainer's review and merge (#742 and #743 close with it).
+> 1. **PR #788 (R7)**: read `gh pr checks 788`, then the maintainer's review and merge (#742 and #743 close with it).
 >    **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays open until the
 >    maintainer closes it.
-> 2. **Open repair-path issues:** from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
+> 2. **Open repair-path issues:** from R7 **#789** (`duplicates/view_tests.rs` over 500 lines) · **#790** (the
+>    "running" line on every checked chart through a rebuild/restore backlog — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
 >    missed if `lock_state` resolves before `link.js` defines `updateLinkLock`) · **#783** (the bridge remedy should say
 >    the unmarked joining links carry "Review this link…" too) · **#784** (a verdict is not re-checked against identity
 >    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
@@ -155,7 +156,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-15 (R7, #742 + #743 part 2, PR #NNN) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -176,7 +177,7 @@ compare-and-link panel (R2b-1, PR #707) + unlink from a record (R2b-2, PR #711) 
 not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher watch`, `cairn-node
 duplicate-check`; R4, PR #724; per-chart range blocking anchored, #725) · the possible-duplicate banner + "Different
 people" (`db/057`; R5a, PR #735) + the front door's possible-duplicate tray (R5b, PR #749) · confirming a doubted link
-from the window and a doubted row at the front door (R6, PR #777) · a "running" line on a checked chart and a note on an unverified link (R7, PR #NNN) · generic reprojection (ADR-0057; ADR-0070) ·
+from the window and a doubted row at the front door (R6, PR #777) · a "running" line on a checked chart and a note on an unverified link (R7, PR #788) · generic reprojection (ADR-0057; ADR-0070) ·
 ADR-0056 admit-uninterpreted floor · **the L3 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates;
 `cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine
 tested but **not wired**.
@@ -188,7 +189,7 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
 
-### 2026-10-15 — R7: #742 and #743 part 2, as decided (PR #NNN)
+### 2026-10-15 — R7: #742 and #743 part 2, as decided (PR #788)
 
 Decisions asked first (both maintainer calls); then design section, plan, TDD inline (small slices), mutation checks.
 - **⇒ HANDOVER WAS STALE ON ARRIVAL:** it called #777 and #779 drafts, but both had merged. A ⇒ NEXT that names a PR goes
@@ -202,6 +203,13 @@ Decisions asked first (both maintainer calls); then design section, plan, TDD in
   function precisely so the R1b hold cannot see it; the pin asks the hold, not the new function.
 - **⇒ A struct literal gaining a field breaks every test that builds it** (eleven here); field order is free, so insert
   it after the opening brace. **Moving an inline test module to a `#[path]` file** kept `record_links.rs` under 500.
+- **⇒ ROLLBACK HAZARD (not new):** with `SCHEMA_GENERATION` unchanged, an OLDER binary on a database this branch
+  loaded fails "cannot change return type" on db/056. Before switching the shared `cairn_test` back to an older
+  `main`, run `DROP FUNCTION cairn_duplicate_check_status();`.
+- **Review (one agent pass, nothing safety-critical):** the R7 tests moved out so no file it touched crosses 500;
+  filed **#789** (`duplicates/view_tests.rs` was already 563 lines) and **#790** (a rebuild/restore queues `change`
+  notices in bulk, so the "running" line shows on every checked chart through that backlog — a decision); commented
+  #718 (a fourth definer, `cairn_chart_set_unverified_links`).
 - **⇒ The per-slice rules and the eighteen traps moved to [`developers/durable-rules.md`](developers/durable-rules.md)**
   (HANDOVER 803 → ~400 lines); the four per-pass 10-12/10-13 session entries, duplicated by the combined one, were
   dropped after a script confirmed no issue number was lost. ROADMAP's R1–R6 entries became one table (581 → ~460).
@@ -363,7 +371,7 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ The repair path: R7 (PR #NNN)'s review and merge, then the open repair-path issues** — see ⇒ NEXT.
+- **⇒ The repair path: R7 (PR #788)'s review and merge, then the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
   restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain, beyond ⇒ NEXT's node-plane list: #525 ·
