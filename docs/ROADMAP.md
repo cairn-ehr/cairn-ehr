@@ -438,9 +438,9 @@ four missing things; ADR-0076 answers all four, R1 builds the first.
 - **Filed:** #689 (db/034 admits an attestation naming another chart) · #690 (reconciling across LINKED charts — a
   decision) · #691 (a short per-member tag) · #692 · #693 · #694 · #695 · #696 · #697 (decided (b); built in R1b).
   Commented on [#333](https://github.com/cairn-ehr/cairn-ehr/issues/333).
-- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733) and **R5a** (PR #735) are merged; **R5b** (the
-  worklist, #680) is BUILT on draft PR #749 (entry below). Then the small slice #716 + #723, #742, #743 part 2. Plan
-  each from the design page's section.
+- **Next:** R2a, R2b-1, R2b-2, R1b, R3, R4 (PR #724), #725 (PR #733), R5a (PR #735), R5b (PR #749) and the DOB near
+  miss (PR #758) are merged; **R6** (#716 + #723) is built on draft PR #777, awaiting review and merge. Next: #742 and
+  #743 part 2. Plan each from the design page's section.
 - **§1.2:** two folders of one patient clipped together. Reading a linked chart 1 → 1 → 1; signing off a combined list
   1 → 1 → 1. Budget: opening a linked chart ≤ the single-chart open (runbook pass, a human act).
 
@@ -508,11 +508,9 @@ widened.
   fresh veto via `cairn_match_veto`, `open_pairs_between`, `record_different_people` — one attested unlink per
   still-open pair, failures carried); the window's `duplicates/` (every sentence in Rust; `admit_other`;
   `duplicate_section` + `duplicates.js`; `different_people_impl`; `sendJudgement` disables both buttons in flight).
-- **Reviews:** Tasks 4 and 6 took one fix round each. The opus final review's I1–I4 (both buttons live in flight; "NOT
-  recorded" over an outcome-unknown commit; a stale stored veto note; no carried-Err test) were fixed in one wave. A
-  five-reviewer PR review (2026-10-07) found no critical defect; fixed on the PR: the refusal order, the failure
-  wording (#740's verb), names and drugs carried as one tuple, a reload closing a newer comparison, focus back to
-  Review, six new DB tests.
+- **Reviews:** the opus final review's I1–I4 (both buttons live in flight; "NOT recorded" over an outcome-unknown
+  commit; a stale stored veto note; no carried-Err test) were fixed in one wave; a five-reviewer PR review found no
+  critical defect (its fixes landed on the PR, #740's verb among them).
 - **Filed:** #736 (an `accepted` row's wording; built in R5b) · #737 (identical entry headings) · #738
   (`cairn-gui-tauri` has no DB-gated tests) · #739 (an unheld member's line) · #740 ("Different people" failure
   wording) · from the PR review: #741 (the matcher counts an un-attested unlink as judged; fixed in R5b) · #742 (no
@@ -523,10 +521,9 @@ widened.
   person or Different people) → target 2; a chart open adds 0 acts. Budget ≤ 20 s, and the open with the banner ≤ the
   single-chart open. RUNBOOK §11, a human act owed.
 
-### 2026-10-08/09 — repair path R5b: the possible-duplicate worklist (draft PR #749)
+### 2026-10-08/09 — repair path R5b: the possible-duplicate worklist (PR #749, merged)
 
-BUILT on draft PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749) (Refs #680 #741 #743 #736), awaiting gates,
-review and merge. Design page "R5b — the worklist" (designed + as built); plan
+Merged 2026-10-08 as PR [#749](https://github.com/cairn-ehr/cairn-ehr/pull/749) (Refs #680 #741 #743 #736). Design page "R5b — the worklist" (designed + as built); plan
 `docs/superpowers/plans/2026-10-08-repair-path-r5b-duplicate-worklist.md`;
 [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), spec **v0.80**; no schema
 change (generation 57).
@@ -537,15 +534,42 @@ change (generation 57).
   review's C1 and I2–I5 were fixed in one wave (ADR-0078 retitled before merge; an open tray no longer makes the front
   door wait). The PR review's one Critical — an `auto_applied` pair an agent's un-attested unlink overruled reached no
   human — is fixed in `upsert_proposal` (reopened as `pending`).
-- **Then (PR #758, on top of #749): the DOB near miss —
+- **Then (PR #758, merged 2026-10-11): the DOB near miss —
   [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), spec v0.81.** A DOB one keying
   error away grades `NEAR` (+2, `dob_near_miss` evidence); a DOB graded `NEAR` or `DISAGREE` never auto-links; and
   `name+monthday` blocks year typos. Missed true duplicates 351 → 266 of 2 000 on the synthetic set, false auto-links
   unchanged. Follow-ups #759 · #760 · #762 · #763 · #764 · #765 · #766.
-- **Filed:** #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738 · #332 · #728. Still open beside it: #716 · #723 · #742 · #743
-  part 2 · #744–#747.
+- **Filed:** #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738 · #332 · #728. Still open beside it:
+  #716 · #723 (built in R6, below) · #742 · #743 part 2 · #744–#747.
 - **§1.2:** the clerk's possible-duplicate tray. Paper 4 → as built (UI) 5 with the tray closed, 4 open — the banner's own Review is unbundled ([#754](https://github.com/cairn-ehr/cairn-ehr/issues/754)); M ≤ N. Budget ≤ 25 s per entry; the find ≤ 5 s with the tray open. RUNBOOK §12, a human
   act owed.
+
+### 2026-10-14/15 — repair path R6: confirm a doubted link; name the doubt at the front door (draft PR #777)
+
+Built on draft PR [#777](https://github.com/cairn-ehr/cairn-ehr/pull/777) (branch `feat/716-723-doubted-link-confirm`),
+awaiting the maintainer's review and merge; #716 and #723 close with it. Design page "R6" (designed 2026-10-14 + as
+built); plan `docs/superpowers/plans/2026-10-14-repair-path-r6-confirm-doubted-link.md`. db/054 edited in place; no ADR,
+no event type, no wire change; `SCHEMA_GENERATION` stays **58**, spec **v0.82**.
+- **Built:**
+  - db/054 `cairn_chart_set_doubts` — ONE per-link spelling of "doubted" (`clash` / `separated`, dated by `hlc_wall`);
+    R1b's hold is `EXISTS` over it. `patient::edges::record_doubts` reads it.
+  - One door per line of "How these charts are linked" — "Review this link…" (a doubted link marked with why) and, for
+    the A–C–X bridge's separation, now listed, "Review this judgement…" — whose panel offers "Same person — confirm" /
+    "Same person — link them" beside the Unlink.
+  - Both verdicts signed only over the pair the panel showed: `RecordsShown::pair`, re-checked under CARNLK
+    (`confirm_link_as_shown`, and `unlink_charts_as_shown_from` for the Unlink — the final review's I1);
+    `standing_agrees` withholds both verdicts when the list's and the panel's reads disagree.
+  - The front door's doubted row reads "Linked charts — a link between them is in doubt (N charts)" (#723); the CLI
+    prefixes "↳ in doubt: "; the flag never enters the signed list.
+  - The remedy names both doors; an Outranked verdict hides both verdicts (R5a's panel too).
+- **Filed:** #781 · #782 · #783 · #784; commented #738.
+- **Review round (2026-10-15):** a door now carries its line's attestation, so a pair judged since the list was drawn
+  opens no verdict; the list's reads share one snapshot; the duplicate-review tray marks a doubted side too (#723);
+  any recorded verdict disarms a newer review of the same pair; the node refuses an unread standing address itself;
+  rustls 0.23.46. Filed #785 · #786 · #787.
+- **§1.2:** two clipped folders laid side by side and the clip initialled. Confirm paper 2 → forced 2 → target 2; the
+  bridge re-link 3 → 2 → 2; the front door +0 acts. Budget ≤ 15 s (R2b-2's unlink budget); RUNBOOK §13, a human act
+  owed.
 
 ## Above the foundation line (NOT in this roadmap)
 

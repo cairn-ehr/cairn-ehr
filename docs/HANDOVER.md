@@ -21,243 +21,247 @@
 > bump — the maintainer confirmed nothing is deployed). Filed **#778** (the sync wire can still strip a token) and
 > **#780** (`casefold()` for σ/ς, ß/ss — a design change touching signed tokens). PR #776 (#708, #713, #569, #560,
 > #682, #509) is merged. Review + merge #779.
+> **⇒ THE REPAIR PATH (#679 · #680 · #681) IS MERGED THROUGH R5b; R6 IS BUILT ON DRAFT PR #777 AND AWAITS THE
+> MAINTAINER'S REVIEW AND MERGE** (branch `feat/716-723-doubted-link-confirm`; #716 and #723 close with it). On `main`:
+> R5b's worklist (PR #749), the DOB near miss (PR #758, [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md),
+> spec **v0.81**) and three cloud tech-debt passes (PRs #772, #774, #776). Design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice designed + as built); R4's
+> worker runbook `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11
+> (banner), §12 (tray) and §13 (R6's confirm). spec **v0.82** (newest ADR-0080). DOB-near-miss follow-ups: #759 ·
+> #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate a pair an older test asserts absent — fix the
+> fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
-> 0. Check `gh pr list` before trusting this list (house rule 8). **If #749 is still open:** its full gates (CI's
->    order, after the final edit), the PR review, merge. #741 may close with it — ask the maintainer before writing a
->    closing keyword. R5b built #741, #743 part 1 and #736 (worded by status).
->    **Then PR [#758](https://github.com/cairn-ehr/cairn-ehr/pull/758) — the DOB near miss (ADR-0079, spec v0.81),
->    BUILT on `feat/dob-near-miss`, which merged #749's branch in (no force-push) — so merge #749 FIRST.** Matcher only:
->    `NEAR` (one digit / adjacent swap / day↔month / years ±1, full dates only), weight **+2**; a DOB graded `NEAR` **or
->    `DISAGREE`** never auto-links (db/016 vetoes only two *verified* DOBs — revised in the PR review, 2026-10-12);
->    `dob_near_miss` evidence from the scored level, `name+monthday` blocking on `parse_dob`'s ASCII grammar (the scorer alone folds other scripts' digits); matcher
->    0.2.0 re-queues every chart once. Measured: missed true duplicates 351 → 266 of 2 000, false auto-links unchanged.
->    Resolves all of #761 (the review minors). Follow-ups #759 (word it on banner/tray + §1.2 walk), #760 (ABS re-measure, + assigned 01-01/07-01
->    dates), #762 (name side: a middle name or Smith/Smyth + a near miss still hidden), #763 (auto-apply acts on a stale
->    score while a re-check is queued), #764 (the search ranker's own near-miss rule), #765 (matcher minors), #766 (a year-0000
->    "year unknown" DOB still scores as a contradiction). Trap: a
->    new blocking key can generate a pair an older test asserts absent — fix the fixture date, never the assertion.
-> 1. **The small slice: #716** (confirm a doubted standing link) **+ #723** (a doubted row reads "One person"). Then
->    **#742** (no banner while catching up — a principle-4 decision) and **#743 part 2** (a soft-vetoed joined pair
->    flagged nowhere). **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays
->    open until the maintainer closes it.
-> 2. **Open repair-path issues:** from R5b **#750** ("Registered more recently" trusts a UUIDv7 time) · **#751**
->    (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a stale list after return,
->    a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link by HLC is shown nowhere —
->    ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check, so ADR-0078's path waits for an unrelated
->    change or a sweep) · **#756** (worklist/banner type tidy-up: a `Band` enum, one `EntryFlags`) · **#757** (the
->    banner fails whole on one unreadable record; one failed flags read fails the whole tray) · from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no DB-gated
->    tests for its live branches; R5b's tray added two) · **#739** (an unheld member's "not yet run" line) · **#740**
->    ("Different people" failure wording — the stutter, the commit-unknown sentence and the reload remain) · **#744**
->    (an unrecognised status hides a proposal) · **#745** (a missing or stale banner after a failure) · **#746**
->    (Different people with an unreadable drug list — a decision) · **#747** (the banner query's index) · #708 (CARNLK
->    re-check comment), #722 (no proposal fixture) · from R4 **#726** (every-connect DDL takes ACCESS EXCLUSIVE) ·
->    **#727** (bulk mode has no poison isolation) · **#729** (mode chosen once per round) · **#730** (the 101–1000
->    skipped-block band — a decision) · **#731** (no "charts failing" signal) · **#732** (the conftest leaves
->    `patient_chart`) · **#734** (db/046's comment points at `db.py`). Earlier: **#708** · **#709** · **#710** ·
->    **#712** · **#713** · **#714** · **#715** · **#718** · **#719** · **#720** · **#722** · **#699** · **#700** ·
->    **#702** (pinned) · **#703** · **#704** · **#705** · **#706** · from R1: #689 · #690 (a decision) · #691 · #692 ·
->    #693 · #694 · #695 · #696; #333, #220 and #335 gained comments.
+> 0. Check `gh pr list` before trusting this list (house rule 8).
+> 1. **PR #777 (R6)**: the maintainer's review and merge (read `gh pr checks 777` first). Then **#742** (no banner
+>    while catching up — a principle-4 decision) and **#743 part 2** (a soft-vetoed joined pair flagged nowhere).
+>    **#728** (the Pi re-measure; now also the find with the tray OPEN) can run beside. #699 stays open until the
+>    maintainer closes it.
+> 2. **Open repair-path issues:** from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
+>    missed if `lock_state` resolves before `link.js` defines `updateLinkLock`) · **#783** (the bridge remedy should say
+>    the unmarked joining links carry "Review this link…" too) · **#784** (a verdict is not re-checked against identity
+>    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
+>    constructors, a `LinkState` enum, `ShownPair` as an enum) · **#786** (the doubt mark is absent from
+>    `CandidateList`'s wire shape — a non-reference UI shows a disputed set as one person) · **#787** (`standing_link`
+>    panics on a legacy NULL `content_address`) · from R5b **#750** ("Registered more recently" trusts a
+>    UUIDv7 time) · **#751** (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a
+>    stale list after return, a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link
+>    by HLC is shown nowhere — ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check) · **#756**
+>    (worklist/banner type tidy-up) · **#757** (the banner fails whole on one unreadable record; one failed flags read
+>    fails the whole tray) · from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no DB-gated
+>    tests for its live branches; R5b's tray added two, R6 commented its fixture/locked-key arms) · **#739** (an unheld
+>    member's "not yet run" line) · **#740** ("Different people" failure wording) · **#745** (a missing or stale banner
+>    after a failure) · **#746** (Different people with an unreadable drug list — a decision) · **#747** (the banner
+>    query's index) · #722 (no proposal fixture) · from R4 **#730** (the 101–1000 skipped-block band — a decision) ·
+>    **#731** (no "charts failing" signal) · **#732** (the conftest leaves `patient_chart`) · **#734** (db/046's comment
+>    points at `db.py`). Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
+>    **#699** · **#703** · **#705** · **#706** · from R1: #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696;
+>    #333, #220 and #335 gained comments.
 > 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
 >    **runbook §10's unlink** (≤ 15 s), the **live Tauri-IPC + VoiceOver pass on a linked pair** (the #699 (a) third-chart
 >    unlink, a doubted pair's withheld lines, R3's person row), **RUNBOOK §11** (R5a: Review → judgement ≤ 20 s; a chart
 >    open with the banner ≤ the single-chart open; the banner's VoiceOver checks), **RUNBOOK §12** (R5b: tray →
 >    judgement ≤ 25 s, tray closed and open; the find ≤ 5 s with the tray OPEN; the tray's VoiceOver/keyboard checks),
->    and R4's **running a supervised worker** on a real node per the runbook (launchd/systemd; one worker per node; its
->    role's `statement_timeout` ≥ 30 s).
-> 4. **#620**, the only open item that can still change the wire (brainstorm first). Then **#626**, **#652 + #655**,
->    the advisory-tier **#640**, **#641**, and **#682–#686** (#685 needs the maintainer's permission to clear
+>    **RUNBOOK §13** (R6: confirm a doubted link and re-link a bridged separation ≤ 15 s each; the front door's doubted
+>    row; VoiceOver/keyboard — `TEMPLATE.md` has no §13 section yet), and R4's **running a supervised worker** on a real
+>    node per the runbook (launchd/systemd; one worker per node; its role's `statement_timeout` ≥ 30 s).
+> 4. **#620**, the only open item that can still change the wire (brainstorm first). Then **#769**, **#652 + #655**,
+>    the advisory-tier **#640**, **#641**, **#775**, and **#683–#686** (#685 needs the maintainer's permission to clear
 >    `cairn_test`'s fixtures).
 >
-> **⇒ R5b'S DURABLE RULES (PR #749) — do not undo any of these** (pins: `matcher/tests/test_judged.py`,
-> `test_proposal_retraction.py`, `tests/{auto_apply,duplicate_worklist,duplicate_review_flags}.rs`,
-> `duplicate_review/{worklist.rs,tests.rs}`, `cairn-gui-tauri/src/worklist/`):
-> - **The matcher's skip rule IS db/057's**, save the clamp-and-flag case ADR-0078 decision 1 records (`judged.py`;
->   the six-case drift test against the view): one record, or
->   an ATTESTED `patient_link` row. "Judged" is not "a human judged it" — an un-attested link that makes one record is
->   judged; only an UNLINK needs attestation to settle a pair (ADR-0078). `AWAITING_HUMAN` is exactly `pending` +
->   `review`: the matcher never retracts a human's verdict.
-> - **`DISPUTED_SQL` is the ONE spelling of "disputed"** (a standing un-attested unlink): the banner, the worklist's
->   flags and `auto_apply` step 2b all format it in. Never write `state = 'unlink' AND NOT attested` again. Auto-apply
->   never links over a dispute: the proposal goes to `review`, with no event and no `patient_link` row.
-> - **The count and the list share one grouping** (`RECORDS_FROM`, `LOW_RECORD`/`HIGH_RECORD` over db/057's view), so
->   they cannot disagree. **The count never evaluates the veto or the dispute**, and **flags are read only for the
->   shown entries' pairs** (`read_pair_flags`, one statement): an open tray re-reads on every return, over the
->   connection the search shares.
-> - **`candidate_read` is the one display read** (`read_display_facts`, shared by the search and `candidates_by_id`): the window makes ONE
->   batched call per list read, never one per entry or side.
-> - **The tray re-reads its list on every return, because `close_chart` clears `shown`**; the list read admits the
->   charts again. Drop the re-read and a still-shown entry's Review is refused.
-> - **"Different people" refuses an `accepted` pair IN THE BACKEND** (`DifferentPeople::AcceptedAsSame`, before any
->   signature); hiding the button is not the rule (#736).
-> - **A failed record read is worded per side and withholds Review** (newer side failed → no `open_chart`); one failed
->   side never fails the list; a side with no charts is worded, never blank.
-> - **The tray's Review buttons are `data-candidate`**, so `setCandidatesEnabled` disables them while a registration
->   saves. **The status line sits OUTSIDE the collapsed `<details>`** ("(0)" must never read as "checked, none"); the
->   tray is never `role="alert"` and never takes focus.
+> **⇒ R6'S DURABLE RULES (PR #777) — do not undo any of these** (pins: `tests/{link_doubts,confirm_link,unlink_as_shown,
+> search_doubted_row}.rs`, `cairn-gui-tauri/src/link/{confirm_view.rs,record_links.rs,unlink_tests.rs,
+> unlink_view_tests.rs}`, the `unlink.js` field-name drift guards):
+> - **ONE SQL spelling of "doubted": db/054's `cairn_chart_set_doubts`** (`clash` = a `link_veto_flag` row or an
+>   un-attested standing link that trips the hard veto now; `separated` = an attested unlink between two charts the set
+>   still joins). R1b's hold, `cairn_chart_set_has_doubted_link`, is `EXISTS` over it, so the hold and the window's
+>   per-line marks cannot disagree. Never write a second predicate for either.
+> - **Never sign a verdict without the standing address the panel read.** `RecordsShown::pair` is re-checked under
+>   CARNLK for BOTH the confirm (`chart_link::confirm_link_as_shown`) and the panel's Unlink
+>   (`chart_link::unlink_charts_as_shown_from`): a colleague's judgement of the SAME pair landing mid-review, while a
+>   third chart keeps the record joined, leaves the set unchanged — only the pair's address shows it. A changed pair is
+>   refused (`stale_pair`); an empty address is refused (`require_standing`). The CLI's `unlink-charts` (no panel)
+>   keeps `unlink_charts`. **When you guard one verdict, ask the same question of every verdict on that panel.**
+> - **`standing_agrees`: the list's read and the panel's read must agree, or NEITHER verdict is offered** (a standing
+>   read of nothing included — `PAIR_CHANGED_MID_READ`). It checks that two reads agree; it is NOT a second doubt rule.
+> - **The doubt never enters the signed list or a row's JSON**: `displayed_charts()`, `SearchAttestation`, the cap and
+>   the ranking ignore it (`search_doubted_row.rs` compares the attestation's bytes with and without it).
+> - **Both verdicts are disabled in flight and hidden once one lands — Outranked included** (`unlink.js`, and R5a's
+>   `link.js`). `same_verdict` offers nothing for an attested link and needs both charts of the pair known held.
+> - **"Review this link…" / "Review this judgement…" is the ONE door per line**; the panel, not the list, decides which
+>   verdicts apply. The clash mark says "while", never "until" (two doubted links: judging one leaves the hold), names
+>   what CAN be signed ("only lines recorded on this chart alone" — hazard.rs withholds shared lines too), and
+>   `DOUBTED_LINK_INSTRUCTION` names both doors.
+> - **A door carries the attestation its line showed** (`RecordLinkView::attested` → `compare_linked`): a pair judged
+>   since the list was drawn is refused (`line_still_shows`, `LINE_STALE`) before any panel is drawn — otherwise an
+>   attested link opens a silent panel offering only Unlink. The list's two reads (`read_record_links`) share ONE
+>   read-only REPEATABLE READ snapshot, and a clash naming no standing link is said ("reload"), never dropped.
+> - **Any recorded verdict disarms a newer comparison of the same pair**, in both panels (`disarmNewerReview` /
+>   `disarmNewerComparison` — the scripts share one global scope, so never one name for both). Never key it on
+>   `reload`: "Different people" reloads even when every pair was outranked.
+> - **One Rust spelling of the doubt boolean: `patient::edges::record_is_doubted`** — the hold (via the medication
+>   read) and the duplicate-review tray's doubted side (#723 on the tray) both ask it; an unread doubt is a worded
+>   side error, never "not doubted". An empty standing address is refused by the node itself (`judge()`), with the
+>   true reason.
 >
-> **⇒ R5a'S DURABLE RULES (PR #735) — do not undo any of these** (pins: `tests/match_proposal_open.rs`,
-> `tests/duplicate_review.rs`, `cairn-gui-tauri/src/duplicates/{view_tests.rs,mod.rs}`):
-> - **`match_proposal_open` (db/057) is the ONE "still needs a human" predicate** — banner and worklist. A pair
->   leaves it only when both charts read as one record or an **ATTESTED** unlink stands; **never count an un-attested
->   unlink** (any unreviewed writer could clear a banner). Its statuses are pinned to `OPEN_PROPOSAL_STATUSES`.
-> - **An absent banner means only "checked, none open"**: every failed read is a worded line (`duplicates/view.rs`).
->   A Current node never appends "up to date" after a member's "not yet run" line (an unheld member is pending forever).
-> - **`AppState::shown` is NOT widened**: Review's other chart is admitted by `duplicates::admit_other` re-reading the
->   view at that moment (after `ALREADY_IN_RECORD`). **`duplicate_section` reads in two phases** — never hold
->   `state.db` (a non-re-entrant tokio Mutex) across `read_chart_of` / `chart_set_of`.
+> **⇒ R5b'S DURABLE RULES (PR #749) — do not undo any of these** (pins: `matcher/tests/test_{judged,proposal_retraction}.py`,
+> `tests/{auto_apply,duplicate_worklist,duplicate_review_flags}.rs`, `duplicate_review/{worklist.rs,tests.rs}`,
+> `cairn-gui-tauri/src/worklist/`):
+> - **The matcher's skip rule IS db/057's** (save ADR-0078 decision 1's clamp-and-flag case; `judged.py`, the six-case
+>   drift test): one record, or an ATTESTED `patient_link` row. "Judged" is not "a human judged it" — only an UNLINK needs
+>   attestation to settle a pair (ADR-0078). `AWAITING_HUMAN` is exactly `pending` + `review`: the matcher never
+>   retracts a human's verdict.
+> - **`DISPUTED_SQL` is the ONE spelling of "disputed"** (a standing un-attested unlink): the banner, the worklist's flags
+>   and `auto_apply` step 2b format it in — never write `state = 'unlink' AND NOT attested` again. Auto-apply never links
+>   over a dispute: the proposal goes to `review`, with no event and no `patient_link` row.
+> - **The count and the list share one grouping** (`RECORDS_FROM`, `LOW_RECORD`/`HIGH_RECORD`), so they cannot
+>   disagree. **The count never evaluates the veto or the dispute; flags are read only for the shown pairs**
+>   (`read_pair_flags`, one statement); **`candidate_read`'s `read_display_facts` is the one display read** — ONE batched
+>   call per list read. An open tray re-reads on every return, over the connection the search shares.
+> - **The tray re-reads on every return because `close_chart` clears `shown`** (drop it and Review is refused).
+>   **"Different people" refuses an `accepted` pair IN THE BACKEND** (`DifferentPeople::AcceptedAsSame`, #736). **A
+>   failed record read is worded per side and withholds Review** when the newer side failed; it never fails the list.
+> - **The tray's Review buttons are `data-candidate`** (disabled while a registration saves); **the status line sits
+>   OUTSIDE the collapsed `<details>`** ("(0)" must never read as "checked, none"); never `role="alert"` or focus-taking.
+>
+> **⇒ R5a'S DURABLE RULES (PR #735)** (pins: `tests/{match_proposal_open,duplicate_review}.rs`,
+> `cairn-gui-tauri/src/duplicates/{view_tests.rs,mod.rs}`):
+> - **`match_proposal_open` (db/057) is the ONE "still needs a human" predicate**: a pair leaves it only when it reads as
+>   one record or an **ATTESTED** unlink stands — **never count an un-attested unlink** (any unreviewed writer could
+>   clear a banner). Its statuses are pinned to `OPEN_PROPOSAL_STATUSES`.
+> - **An absent banner means only "checked, none open"**: every failed read is a worded line (`duplicates/view.rs`); a
+>   Current node never appends "up to date" after an unheld member's "not yet run" line.
+> - **`AppState::shown` is NOT widened**: Review's other chart is admitted by `duplicates::admit_other` re-reading the view
+>   (after `ALREADY_IN_RECORD`). **`duplicate_section` reads in two phases** — never hold `state.db` (a non-re-entrant
+>   tokio Mutex) across `read_chart_of` / `chart_set_of`.
 > - **"Different people" = an attested unlink on every pair STILL open between the two records, read fresh**; a pair's
->   failure is carried, never `?` (pinned); a failed pair reads "Not confirmed", never "not recorded" (a commit may be
->   outcome-unknown); all-failed → one ErrorView naming every pair. **The veto note is computed fresh**
->   (`cairn_match_veto`), never from the stored propose-time `veto_findings`.
+>   failure is carried, never `?`; a failed pair reads "Not confirmed", never "not recorded"; all-failed → one ErrorView
+>   naming every pair. **The veto note is computed fresh** (`cairn_match_veto`), never from stored `veto_findings`.
 > - **Webview:** `duplicates.js` loads after `main.js` and BEFORE `funnel.js` (whose last line boots) — never a `typeof`
->   guard on `render`; BOTH judgement buttons are disabled in flight and hidden on a verdict (one human must never
->   sign Link and Different people ms apart); "Different people" shows only on the banner's own comparison token; the
->   banner is never `role="alert"` and never takes focus.
+>   guard on `render`; "Different people" shows only on the banner's own comparison token.
 >
-> **⇒ #725'S DURABLE RULES — do not undo** (pins: `matcher/tests/test_blocking_sql_shape.py`,
-> `test_targeted_blocking.py`, `test_pure_modules_import_without_psycopg.py`):
-> - **No range arm joins a sex scan.** A chart's set of blocking sexes rides on its birth-window row (`sexed_window`,
->   one join by `patient_id`); the `+sex` arm is a FILTER (`anchor_sexes && member_sexes`). A CTE scan has no
->   statistics, so an equi-join of two sex scans on a ~2-valued column is a planner cross-product (14.7 M rows) —
->   in the #725 prototype even two scans of per-patient ARRAYS were cross-joined first.
+> **⇒ #725'S DURABLE RULES** (pins: `matcher/tests/test_{blocking_sql_shape,targeted_blocking,pure_modules_import_without_psycopg}.py`):
+> - **No range arm joins a sex scan.** A chart's blocking sexes ride on its birth-window row (`sexed_window`, one join by
+>   `patient_id`); the `+sex` arm is a FILTER (`anchor_sexes && member_sexes`). A CTE scan has no statistics, so an
+>   equi-join of two sex scans on a ~2-valued column is a planner cross-product (14.7 M rows).
 > - **The anchored per-chart range statement is the sweep's plus `relevant_anchor` and `_ANCHOR_CLAUSE`, nothing
->   else**; the clause restricts the ANCHOR, never the member (a kept window is computed in full — its size is the
->   cap's verdict). Add a range arm to `_RANGE_ARMS` and both statements get it.
-> - **`pipeline/db.py` is the ONLY module that imports psycopg at import time** (plus `eval/measure_check`, a DB tool).
->   Every local run uses `--extra pipeline`, so only the import guard catches a CI-only collection failure; blocking
->   SQL text lives in the pure `pipeline/blocking_sql.py` (`db.py` imports the sweep statements from it). A
->   psycopg-needing TEST imports it inside the test or `importorskip`s it; a guard collects the whole suite without
->   psycopg. **The canary runs capped too** (10, 6): uncapped it cannot see targeted.py's outer filter. Reproduce CI's pure job with `CAIRN_ALLOW_DB_SKIP=1 uv run --isolated pytest`.
+>   else**; the clause restricts the ANCHOR, never the member. Add a range arm to `_RANGE_ARMS` and both statements get it.
+> - **`pipeline/db.py` is the ONLY module that imports psycopg at import time** (plus `eval/measure_check`); blocking SQL
+>   lives in the pure `pipeline/blocking_sql.py`; a psycopg-needing test imports inside or `importorskip`s; a guard
+>   collects the suite without psycopg. **The canary runs capped too** (10, 6). Reproduce CI's pure job with
+>   `CAIRN_ALLOW_DB_SKIP=1 uv run --isolated pytest`.
 >
-> **⇒ R4'S DURABLE RULES (PR #724) — do not undo any of these** (pins in `tests/match_pending.rs`,
-> `tests/duplicate_check.rs`, `matcher/tests/test_{check_chart,worker_drain,watch_backoff,targeted_blocking,judged}.py`):
-> - **The hook never raises and never waits** (`the_hook_has_no_raising_path`, the `lock_timeout` test): a plain INSERT
->   of a fresh bigserial, a null guard, no RAISE/EXCEPTION/ON CONFLICT. **Never "fix" it with `EXCEPTION WHEN OTHERS`** —
->   a swallowed failure is a silently skipped check. `patient_chart`'s hook is **INSERT-only**; the catalogue test pins
->   the whole `tgtype` and that each argument names a `uuid` column.
+> **⇒ R4'S DURABLE RULES (PR #724)** (pins: `tests/{match_pending,duplicate_check}.rs`,
+> `matcher/tests/test_{check_chart,worker_drain,watch_backoff,targeted_blocking,judged}.py`):
+> - **The hook never raises and never waits** (`the_hook_has_no_raising_path`, the `lock_timeout` test): a plain INSERT,
+>   a null guard, no RAISE/EXCEPTION/ON CONFLICT. **Never "fix" it with `EXCEPTION WHEN OTHERS`** — a swallowed failure
+>   is a silently skipped check. `patient_chart`'s hook is INSERT-only; the catalogue test pins `tgtype` and the `uuid`
+>   arguments.
 > - **Delete exactly the notice ids READ, captured before the projection reads — never `id <= max`** (a bigserial is
->   assigned at INSERT, not commit; `test_a_slow_transaction_with_a_lower_id_is_not_deleted_by_the_check`). Bulk mode
->   captures the id set before the sweep.
-> - **No read transaction across slow work**: `check_chart` rolls back after its read-prep and after every assess (the
->   NOWAIT probe test); writes commit in one short transaction. A no-op DDL replay WAITS behind any open reader (#726).
-> - **"Behind" = charts waiting AND no completed work AND the OLDEST notice older than 5 min** (`quiet_age_s`;
->   `a_stopped_worker_on_a_busy_node_reads_stalled`, `a_backlog_queued_at_once_reads_running_while_the_worker_progresses`).
->   **Progress is stamped ONLY by completed work** — a checked chart, a successfully scored sweep pair (≤ 1/30 s), a sweep
->   with something scored or nothing to score, an empty round. Never before work, never for a failed pair: either masks
->   a crash-loop as "running" (`test_a_sweep_whose_blocking_raises_stamps_no_progress`, `…every_pair_fails…`).
+>   assigned at INSERT, not commit); bulk mode captures before the sweep. **No read transaction across slow work**
+>   (`check_chart` rolls back after its read-prep and after every assess); a no-op DDL replay waits behind any reader (#726).
+> - **"Behind" = charts waiting AND no completed work AND the OLDEST notice older than 5 min** (`quiet_age_s`).
+>   **Progress is stamped ONLY by completed work** — never before work, never for a failed pair: either masks a
+>   crash-loop as "running" (`test_a_sweep_whose_blocking_raises_stamps_no_progress`, `…every_pair_fails…`).
 > - **`cairn_chart_check_pending` is TRUE until a worker has run, while a notice waits, and for a chart not held here**
->   (definer; never a false "checked"). **The worker never links** (it writes only via `persist`; the auto-band test
->   pins `patient_link` and `event_log` unchanged) and **never proposes a judged pair, in either mode or in
->   reconciliation**. **`me` is canonicalised once** (`str(uuid.UUID(...))`) — `.lower()` silently dropped pairs.
-> - **`cairn-node duplicate-check` uses `db::connect`, never the schema replay** (it is cron-able; the replay is #726).
->   Status wording lives only in `duplicate_check.rs` (goldens); the runbook quotes it verbatim.
+>   (never a false "checked"). **The worker never links** (it writes only via `persist`) and **never proposes a judged
+>   pair**, in either mode or in reconciliation. **`me` is canonicalised once** (`str(uuid.UUID(...))`).
+> - **`cairn-node duplicate-check` uses `db::connect`, never the schema replay** (it is cron-able). Status wording lives
+>   only in `duplicate_check.rs` (goldens); the runbook quotes it verbatim.
 >
-> **⇒ R3'S DURABLE RULES (ADR-0076 decision 6, PR #721) — do not undo any of these** (pins: `person.rs`'s tests,
-> `tests/search_by_person.rs`, `attestation.rs`, `candidate_text.rs`, `prompt.rs`, `search_person.rs`, `commands.rs`,
-> the byte-identical goldens in `view.rs` / `candidate_text.rs` / `link/search.rs` — each test named after its rule):
-> - **Rows are built ONLY by `group_by_person`** (pure, shared): a row sits at its best-ranked member; matched members
->   first in rank order, then unmatched oldest first; every chart exactly once; the seven ADR-0075 keys rank CHARTS.
-> - **The signed list is ONLY `CandidateList::displayed_charts()`** (every member of every row shown, row order);
->   whatever signs or prints candidates follows it. **The cap counts ROWS and never splits one** (`withheld` counts
->   people; `shown_charts` is signed).
-> - **A chart not held here reads `Unknown` and never sets `incomplete`** (a deliberate change to a SIGNED flag); **a
->   HELD chart with no readable name does.** **A missing component fails the search — never a row of one.**
-> - **Every member of every row shown can be opened, and nothing else** (`AppState::shown`); the window never picks the
->   chart for the clerk. **Over single-chart rows every sentence is byte-identical to before R3**; people-vs-charts
->   wording lives in `funnel/rows.rs`. **The linked-row label reaches a screen reader via `aria-describedby`** on every
->   member button — no test pins it (#332); the live VoiceOver pass checks it.
+> **⇒ R3'S DURABLE RULES (ADR-0076 decision 6, PR #721)** (pins: `person.rs`, `tests/search_by_person.rs`,
+> `attestation.rs`, `candidate_text.rs`, `prompt.rs`, `search_person.rs`, `commands.rs`, the byte-identical goldens):
+> - **Rows are built ONLY by `group_by_person`** (pure): a row sits at its best-ranked member; matched members first in
+>   rank order, then unmatched oldest first; every chart exactly once; the seven ADR-0075 keys rank CHARTS.
+> - **The signed list is ONLY `CandidateList::displayed_charts()`**; **the cap counts ROWS and never splits one**
+>   (`withheld` counts people; `shown_charts` is signed).
+> - **A chart not held here reads `Unknown` and never sets `incomplete`; a HELD chart with no readable name does. A
+>   missing component fails the search — never a row of one.**
+> - **Every member of every shown row can be opened, and nothing else** (`AppState::shown`); the window never picks the
+>   chart for the clerk. Single-chart rows are byte-identical to before R3; people-vs-charts wording lives in
+>   `funnel/rows.rs`. The row label reaches a screen reader via `aria-describedby` — unpinned (#332).
 >
-> **⇒ R1b'S DURABLE RULES (#697 (b), #701, PR #717) — do not undo any of these:**
+> **⇒ R1b'S DURABLE RULES (#697 (b), #701, PR #717):**
 > - **A doubted set withholds every line not recorded ONLY on the opened chart** (`medication::hazard::wrong_chart_reasons`,
->   pure, given the opened chart; an EMPTY chart list is not "only on the opened chart"). The opened chart's own lines
->   stay signable; the line stays on screen. Pinned by `hazard.rs`'s tests and `tests/doubted_link_withholds.rs`
->   (incl. the mirror test opened from the OTHER chart — the only test that proves `opened` is used).
-> - **`cross_patient` is KEPT and set from the same reasons map as `wrong_chart`**; every production reader goes
->   through `MedicationRow::is_wrong_chart_hazard()` (either signal withholds) or `hazard_reasons()` (a reasonless
->   hazard is worded as the outside case). Never read either field alone in new code (#720).
-> - **`hazard_reasons()` is STATUS-BLIND; `withheld_reasons()` / `withheld_rows()` say what THIS gesture withholds.**
->   Anything that says a line "cannot be signed until …" or points at the withheld report asks `withheld_reasons()`.
+>   pure; an EMPTY chart list is not "only on the opened chart"); the opened chart's own lines stay signable and every
+>   line stays on screen. Pins: `hazard.rs`, `tests/doubted_link_withholds.rs` (its mirror test, opened from the OTHER
+>   chart, is the only one proving `opened` is used).
+> - **`cross_patient` is KEPT, set from the same reasons map as `wrong_chart`**; readers go through
+>   `is_wrong_chart_hazard()` or `hazard_reasons()`, never either field alone (#720). **`hazard_reasons()` is
+>   STATUS-BLIND; `withheld_reasons()` / `withheld_rows()` say what THIS gesture withholds** — anything saying a line
+>   "cannot be signed until …" asks them.
 > - **The rule judges every chart a group touches, INCLUDING each member thread's own chart** (`read.rs`
->   `touched_charts`) — the chart sign-off writes to. A row missing from the reasons map is a hazard (`row_reasons`).
-> - **"Doubted" has THREE cases in db/054 `cairn_chart_set_has_doubted_link`:** a `link_veto_flag` row; an UN-attested
->   standing link that trips the hard veto now (#220's path); an ATTESTED unlink between two charts still in the set
->   (the A–C–X bridge). It reads the STORED `pl.attested` (#701) — never re-derive attestation through `event_log` —
->   and must be handed one record's charts (`person_charts`).
-> - **The doubted remedy is a judgement of the LINKS, never thread separation, and never promises "either judgement
->   lifts this hold"** (`DOUBTED_LINK_INSTRUCTION`). Each sentence must stay true in every case shown.
-> - **The CLI prints the long remedy ONCE below the list** (`list_text::doubted_link_note`, decided by `withheld_rows`);
->   the outside-set row lines stay byte-identical (golden in `list_text.rs`).
-> - **An UN-attested unlink inside the set is deliberately NOT a doubt** (db/054, `hazard.rs`, a DB test): counting an
->   agent's unlink would let any unreviewed writer freeze sign-off.
+>   `touched_charts`); a row missing from the reasons map is a hazard (`row_reasons`).
+> - **"Doubted" has three cases** — a `link_veto_flag` row; an UN-attested standing link tripping the hard veto now
+>   (#220's path); an ATTESTED unlink between two charts still in the set (the A–C–X bridge) — spelled once, since R6, in
+>   `cairn_chart_set_doubts`. It reads the STORED `pl.attested` (#701), never re-derives it, and takes one record's
+>   charts (`person_charts`). **An UN-attested unlink inside the set is deliberately NOT a doubt** (any unreviewed writer
+>   could freeze sign-off).
+> - **The remedy is a judgement of the LINKS, never thread separation, and never promises "either judgement lifts this
+>   hold"** (`DOUBTED_LINK_INSTRUCTION`); each sentence must stay true in every case shown. The CLI prints it ONCE below
+>   the list (`list_text::doubted_link_note`); the outside-set row lines stay byte-identical.
 >
-> **⇒ THE LINK PRECEDENCE FLOOR'S DURABLE RULES (R2a, ADR-0076 decision 5) — do not undo any of these:**
-> - **`patient_link`'s winner order is ATTESTED FIRST, then HLC** (`cairn_link_overlay_wins`, db/018), a total order.
->   "Attested" is ONE definition (`attester_key IS NOT NULL AND cairn_attestation_vouched(event_id)`), evaluated ONCE
->   per applied event and STORED with the winner; a new reader reads `pl.attested`, never a second spelling.
+> **⇒ THE LINK PRECEDENCE FLOOR'S DURABLE RULES (R2a, ADR-0076 decision 5):**
+> - **`patient_link`'s winner order is ATTESTED FIRST, then HLC** (`cairn_link_overlay_wins`, db/018). "Attested" is ONE
+>   definition (`attester_key IS NOT NULL AND cairn_attestation_vouched(event_id)`), evaluated once per applied event and
+>   STORED with the winner; a new reader reads `pl.attested`, never a second spelling.
 > - **`db/055`'s EXISTENCE is load-bearing** (generation 55; the loader's heal re-decides winners the old order chose).
->   **Never fold it into db/018, and never delete its re-fold block** — cairn-sync heals with the OLD applier, so a
->   cairn-sync-first load would use up the heal (#703). A peer on an older binary ranks the old way (identity.md §5.2).
+>   **Never fold it into db/018, and never delete its re-fold block** — cairn-sync heals with the OLD applier (#703). A
+>   peer on an older binary ranks the old way (identity.md §5.2).
 > - **Recorded is not took effect**: every judgement path reads back, in its own transaction, what now stands
 >   (`chart_link::standing_link`, `LinkEffect`); auto-apply rolls back a matcher link that is not itself the winner.
 > - **One lock order: the `match_proposal` row, then db/018's CARNLK** (reversed, a same-pair race deadlocks, 40P01;
->   a `pg_stat_activity` Lock-wait test in `tests/chart_link.rs`).
+>   pinned in `tests/chart_link.rs`).
 > - **A judgement is a human's** (`Reviewer`: the human key signs AND attests; no node-key fallback). `link` needs BOTH
 >   charts held; `unlink` also admits a displayed member not held here, filed under the HELD chart (db/005 step 8b).
 >   Only OPEN proposals move.
 >
-> **⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707) — do not undo any of these** (pins: `chart_compare.rs`,
-> `link/mod.rs`, `link/view_tests.rs`, `chart_link.rs`, each named after its rule):
-> - **The comparison is SET against SET** — `cross_vetoes` over every left×right pair of BOTH sets, or a B–C clash goes
->   unseen. **Link names BOTH COMPARED sets** (`left_charts`/`other_charts` sent back verbatim; `link_impl` refuses a
->   changed set as `THIS_CHANGED` / `OTHER_CHANGED`).
+> **⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707)** (pins: `chart_compare.rs`, `link/mod.rs`,
+> `link/view_tests.rs`, `chart_link.rs`):
+> - **The comparison is SET against SET** (`cross_vetoes` over every left×right pair, or a B–C clash goes unseen).
+>   **Link names BOTH COMPARED sets**, sent back verbatim; a changed set is `THIS_CHANGED` / `OTHER_CHANGED`.
 > - **Every panel message goes through `setMessage`, never a bare `.textContent`** (an empty status line is `hidden`).
->   No JS harness pins it (#332): a headless walk must assert `getComputedStyle(el).display !== "none"`.
-> - **A partially-read comparison offers no Link.** **Absence and precision wording lives in `link/view.rs`** (on a
->   chart not held here every ABSENT fact reads "unknown — registration not yet received here"; arrived struck names
->   are listed; a coarse DOB names its precision). **An identifier finding is never "verified"**; only a dob/sex-at-
->   birth hard veto (both provenance-rank ≥ 60) is "Verified facts differ". **A locked key is not a verdict**
->   (`Retry::Now`).
-> - **Code selects by a typed field, never a display label** (`MedListRowView::current`); **the panel's search counts
->   what it shows**. **`chart_link`'s pre-check refusals are marked verdicts — never a bare `anyhow::bail!`** (same
->   chart → `RefusalScope::Input`; not held or a non-human key → `NodeState`, #702).
+>   No JS harness pins it (#332): a headless walk asserts `getComputedStyle(el).display !== "none"`.
+> - **A partially-read comparison offers no Link. Absence and precision wording lives in `link/view.rs`** (an absent fact
+>   on a chart not held here reads "unknown — registration not yet received here"; struck names are listed; a coarse DOB
+>   names its precision). **An identifier finding is never "verified"**; only a dob/sex-at-birth hard veto (both
+>   provenance-rank ≥ 60) is "Verified facts differ". **A locked key is not a verdict** (`Retry::Now`).
+> - **Code selects by a typed field, never a display label** (`MedListRowView::current`); the panel's search counts what
+>   it shows. **`chart_link`'s pre-check refusals are marked verdicts — never a bare `anyhow::bail!`** (same chart →
+>   `RefusalScope::Input`; not held or a non-human key → `NodeState`, #702).
 >
-> **⇒ R2b-2'S DURABLE RULES ("Not the same person…", ADR-0077, PR #711) — do not undo any of these** (pins:
-> `admit_tests.rs`, `tests/unlink_from_record.rs`, `tests/chart_link.rs`, `tests/record_edges.rs`, `unlink_view_tests.rs`):
+> **⇒ R2b-2'S DURABLE RULES ("Not the same person…", ADR-0077, PR #711)** (pins: `admit_tests.rs`,
+> `tests/{unlink_from_record,chart_link,record_edges}.rs`, `unlink_view_tests.rs`):
 > - **`FiledUnder::RecordOf` is UNLINK-ONLY, re-checked UNDER CARNLK in `assert_link_in_tx`** (after the proposal-row
->   lock), then `person_charts(opened)` is re-read — a re-read merely inside READ COMMITTED raced a sync-door unlink.
->   It lives in the signing core because `assert_link_in_tx` is `pub`
->   (`a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed` parks on the advisory lock).
-> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under or open chart
->   (`a_split_reads_took_effect_whichever_way_round_the_pair_is_named`); the record REPORTED is the open chart's.
-> - **An opened chart / `--from` unrelated to the pair is REFUSED**, even when a held subject alone would admit it.
->   **The list is per LINK, never per member**; `record_edges` keeps `state = 'link'`
->   (`an_unlinked_pair_is_not_a_link` queries a set holding BOTH charts).
-> - **The unlink panel is its OWN `<section>`; the two panels are mutually exclusive**; after an unlink focus goes to
->   the patient heading (walked headless, #332). **`Outranked` never says a retry "changes nothing"** (the sync merge
->   is bounded at 24 h of drift). A locked key names its own button; `standing_edge`'s unread list is `Retry::Now`.
+>   lock), then `person_charts(opened)` is re-read; it lives in the signing core because `assert_link_in_tx` is `pub`
+>   (`a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed`).
+> - **"Still joined?" asks the SUBJECTS** (`high ∈ person_charts(low)`), never the filed-under or open chart; the record
+>   REPORTED is the open chart's. **An opened chart / `--from` unrelated to the pair is REFUSED.**
+> - **The list is per LINK, never per member**; `record_edges` keeps `state = 'link'`. **The unlink panel is its OWN
+>   `<section>`, mutually exclusive with the link panel**; after an unlink focus goes to the patient heading.
+>   **`Outranked` never says a retry "changes nothing"** (the merge is bounded at 24 h of drift). A locked key names its
+>   own button; `standing_edge`'s unread list is `Retry::Now`.
 > - **An open chart's refusal scope follows the FACT** (`AdmitRefusal`): not held → `NodeState`; held but its record
 >   lacks the pair → `Input`, "reload the chart and judge again".
-> - **The webview-fields guards scan `main.js`, `funnel.js` and `unlink.js`**; `link.js` has only its search read
->   guarded (R3) — the rest is #715. `renderLinks` stays in `main.js`
->   (`commands.rs::the_webview_reads_no_field_the_backend_does_not_send`). Never say "by the matcher" for an
->   un-attested link ("without a clinician's confirmation on record here").
+> - **The webview-field guards scan `main.js`, `funnel.js` and `unlink.js`**; `link.js` has only its search read guarded
+>   (the rest is #715). `renderLinks` stays in `main.js`. Never say "by the matcher" for an un-attested link ("without a
+>   clinician's confirmation on record here").
 >
-> **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076) — do not undo any of these:**
+> **⇒ THE COMBINED READ'S DURABLE RULES (R1, ADR-0076):**
 > - **A combined list's duplicate flag is db/054's `cairn_medication_duplicate_groups` over the SET**, never the
->   per-patient `patient_medication_reconciliation_flag` (it groups by `patient_id`, so one drug on two LINKED charts
->   is never flagged — a double-dose reading hazard). Its dup_key stays db/033's (`medication_dup_key_drift.rs`).
-> - **The medication read selects groups by MEMBERSHIP over the chart set** (filtering by `patient_id` is the #334
->   defect returning); `list_chart_set_medications` is PRIVATE. **A cease on a wrong-chart-hazard line stops only the
->   opened chart's threads** and names the rest (`chart_set::cease_plan`).
-> - **`MedicationRow::display_chart`** (serialized `patient_id`) is where the group DISPLAYS, never a write target —
->   use `source_charts` / `MemberVouch::patient_id`. **Sign-off and cease act on each thread's OWN chart**; the floor
->   does not yet enforce it (**#689**).
-> - **A linked chart not held here reads trust `unknown`** (`person::trust_of`) — the search shares it since R3. **A
->   missing group** uses `MISSING_GROUP_INSTRUCTION`, never the separation remedy.
-> - **EVERY CHART COMMAND NAMES THE DISPLAYED CHART SET** (ADR-0076 decision 3): `displayed_patient` FIRST, then the set
->   (`cairn-gui-tauri/src/chart_set.rs`); `sign_off_medication_list(…, displayed: Option<&ChartSet>)` refuses a changed
->   set; `None` is the CLI. **A failed member-identity read keeps the list and warns** (`ChartPane::members_error`).
+>   per-patient `patient_medication_reconciliation_flag` (one drug on two LINKED charts would go unflagged — a
+>   double-dose reading hazard). Its dup_key stays db/033's (`medication_dup_key_drift.rs`).
+> - **The read selects groups by MEMBERSHIP over the set** (filtering by `patient_id` is #334 returning);
+>   `list_chart_set_medications` is PRIVATE. **A cease on a wrong-chart-hazard line stops only the opened chart's
+>   threads** and names the rest (`chart_set::cease_plan`).
+> - **`MedicationRow::display_chart`** (serialized `patient_id`) is where the group DISPLAYS, never a write target — use
+>   `source_charts` / `MemberVouch::patient_id`. **Sign-off and cease act on each thread's OWN chart** (the strict door
+>   refuses a misfiled attestation since #689's fix).
+> - **A linked chart not held here reads trust `unknown`** (`person::trust_of`). **A missing group** uses
+>   `MISSING_GROUP_INSTRUCTION`, never the separation remedy.
+> - **EVERY CHART COMMAND NAMES THE DISPLAYED CHART SET** (decision 3): `displayed_patient` FIRST, then the set
+>   (`chart_set.rs`); `sign_off_medication_list(…, displayed: Option<&ChartSet>)` refuses a changed set; `None` is the
+>   CLI. A failed member-identity read keeps the list and warns (`ChartPane::members_error`).
 > - **A never-linked chart gains no header, label or line** (golden
 >   `combined_read.rs::a_never_linked_chart_reads_exactly_as_before`). Sign-off over a non-empty
 >   `groups_missing_from_chart` has no DB coverage (same class as #333).
@@ -295,7 +299,8 @@
 > **Open from the funnel run:** #355 · #645 · #647 · #649 · #650 · #652 · #655 · #656 · #657 (multi-event rollback
 > untested in both trees) · #658 · #662 · #663 · #664 · #665 · #666 · #667 · #668 · #669 · #670 · #672 (identifier
 > entry) · #673 (the header shows age, not DOB) · #676 (the clerk reads `operator_chain` text) · #682 (an NFD trailing
-> accent is lost) · #683 · #684 (`1980-3-7` misses `1980-03-07` in db/046's DOB pass — a SET gap) · #685 · #686.
+> accent is lost — fixed in PR #776) · #683 · #684 (`1980-3-7` misses `1980-03-07` in db/046's DOB pass — a SET gap) ·
+> #685 · #686.
 >
 > **⇒ THE NODE PLANE AND DR ARE CLOSED OUT; NO DECIDED-AND-UNBUILT ITEM REMAINS THERE.** Newest first:
 > #621 ([ADR-0074](spec/decisions/0074-a-deterministic-door-failure-is-a-refusal-not-a-fault.md)), #619
@@ -310,16 +315,16 @@
 > - **The pen-release rule (#578):** a pen row carrying a wrapped DEK is released only when custody for its event is
 >   SETTLED (`cairn_release_pen_row`, db/052; `pen_rows_leave_through_one_door.rs`). #585: nothing reads Postgres
 >   notices. **`verify-backup` (#567)** fails `backup SHORT` only on evidence; operators run it AFTER `backup`.
->   Residuals #551 · #553 · #589 · #590 · #591 · #592.
+>   Residuals #551 · #589 · #590 · #591 · #592 (#553 fixed in PR #774).
 > - **#527/#562's triage note is false**; the real fix is **#575** (the minted recovery code reaches stderr). A retry
 >   after a crashed restore must move the installed `<key>.unwrap` aside first (#596).
-> - **Open decisions (none a patch):** #575 · #602 (any client can set `cairn.remote_apply`) · #611 · #613 · #620.
->   **Restore residuals:** #616 · #617 · #596–#599. **Races (reasoned, not reproduced):** #603 · #604. **PR #601's
->   wave:** #605 · #606 · #607 · #608 · #609 · #610. **Node plane:** #268 · #301 (both `loop:needs-human`) · #569.
->   **From #619/#621:** #622 · #624 · #625 · #626 · #628 · #629 · #631 · #632 · #633 · #634. **Search:** #636 · #637
+> - **Open decisions (none a patch):** #575 · #611 · #613 · #620. **Restore residuals:** #617 · #596–#599. **PR #601's
+>   wave:** #605 · #606 · #607 · #609 · #610. **Node plane:** #268 · #301 (both `loop:needs-human`). **From
+>   #619/#621:** #622 · #624 · #625 · #628 · #629 · #631 · #632 · #633 · #634. (Fixed by the 2026-10-12/13 cloud passes:
+>   #602 · #603 · #604 · #608 · #616 · #569 · #626.) **Search:** #636 · #637
 >   (the materialised token table — the right fix for the ~860 ms Pi floor, its own slice) · #639 · #640 · #641 · #643.
-> - **Still broken, named rather than assumed away:** #549 · #552 · #536 · #502 item 4 · #101 items 2–3 ·
->   #583 · #586 · #587 · #556–#563.
+> - **Still broken, named rather than assumed away:** #549 · #552 · #502 item 4 · #101 items 2–3 · #583 · #586 ·
+>   #587 · #556–#563 (ranges absorb issues that leave them; #536 is closed).
 
 > [!WARNING]
 > **⇒ CODEQL: ZERO OPEN ALERTS (measured 2026-09-12), KEPT THAT WAY BY A MODEL PACK — AND ONE HUMAN
@@ -485,15 +490,16 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-08/09 (**R5b — the possible-duplicate worklist**, draft PR **[#749](https://github.com/cairn-ehr/cairn-ehr/pull/749)**, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-14/15 (R6, #716 + #723, draft PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
-ROADMAP. · **Spec:** **v0.80** (newest ADR-0078; [ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md)
-supersedes ADR-0026 decision 2's implementation wording only) · **`SCHEMA_GENERATION`:** **57** (`db/057`) ·
-**Phase:** architecture complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window:
-the funnel front door (one row per person) onto a medication chart that reads linked charts as one; a per-node matcher
-worker proposes duplicates, a banner on the chart shows each one for a human to judge, and a tray at the front door
-lists them all.
+ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
+[ADR-0067](spec/decisions/0067-a-restore-reads-the-clinical-plane.md) supersedes ADR-0026 decision 2's implementation
+wording only) · **`SCHEMA_GENERATION`:** **58** (`db/058`; R6 edits db/054 in place) · **Phase:** architecture
+complete; **first production clinical surface RUNNING** — `cairn-node` plus a Tauri 2 window: the funnel front door (one
+row per person) onto a medication chart that reads linked charts as one; a per-node matcher worker proposes duplicates,
+a banner on the chart shows each one for a human to judge, a tray at the front door lists them all, and (on PR #777) a
+doubted link can be confirmed from the window.
 
 **Built so far** (orientation only; ROADMAP + ADR log + git carry the detail): demographics 1–5 · §5.2 advisory Python
 matcher · §5.7 identity core C1–C5 (C5+ `reattribute` waits on a clinical-note surface) · §5.4 John-Doe (§5.12
@@ -501,13 +507,14 @@ push-alert open) · §5.3/§5.8 funnel (ADR-0061; precedence #345 at db/005 step
 PERSON since R3, PR #721) · `clinical.medication` 1–6b under born-sealed bodies (ADR-0052) + per-write human authorship
 (ADR-0053 — grading half-live until #245) · §5.9 stream through its read surface · med-list node tier (read + whole-list
 sign-off over a linked set, R1) · human link/unlink judgements (`chart_link`, attested-first `patient_link`, R2a) · the
-compare-and-link panel (R2b-1, PR #707) + "Not the same person" / unlink from a record (R2b-2, PR #711) + a doubted set
-withholds every line not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher
-watch`, `cairn-node duplicate-check`; R4, PR #724; per-chart range blocking anchored, #725) · the possible-duplicate
-banner + "Different people" (`db/057`; R5a, PR #735) + the front door's possible-duplicate tray (R5b, PR #749 — not yet
-merged) · generic reprojection (ADR-0057; ADR-0070) · ADR-0056 admit-uninterpreted floor · **the L3 reference UI**
-`cairn-gui/` (standalone workspace, one-way GUI → crates; `cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004;
-plain JS, no npm); pane/routing/freshness state machine tested but **not wired**.
+compare-and-link panel (R2b-1, PR #707) + unlink from a record (R2b-2, PR #711) + a doubted set withholds every line
+not on the opened chart (R1b, PR #717) · the commit-time duplicate check (`db/056`, `cairn-matcher watch`, `cairn-node
+duplicate-check`; R4, PR #724; per-chart range blocking anchored, #725) · the possible-duplicate banner + "Different
+people" (`db/057`; R5a, PR #735) + the front door's possible-duplicate tray (R5b, PR #749) · confirming a doubted link
+from the window and a doubted row at the front door (R6, draft PR #777) · generic reprojection (ADR-0057; ADR-0070) ·
+ADR-0056 admit-uninterpreted floor · **the L3 reference UI** `cairn-gui/` (standalone workspace, one-way GUI → crates;
+`cairn-gui-tauri`, the iced shell FAILED a11y, spike 0004; plain JS, no npm); pane/routing/freshness state machine
+tested but **not wired**.
 
 ---
 
@@ -611,53 +618,89 @@ One branch, one commit per issue. **Strict door:** `submit_event` pins `cairn.re
 thread's is refused there (#689). **Auto-apply** never links while `match_pending` holds a re-check for either chart
 (#763). **Sync door:** db/020's raw `::uuid` casts and db/037's shred-target cast go through `cairn_uuid_or_raise`, so a
 malformed peer id is penned, not a permanent pull freeze (#626; `do_pull`'s generic non-P0001 arm is still open there).
+### 2026-10-14/15 — R6: confirm a doubted link; name the doubt at the front door (draft PR #777)
+
+Brainstorm (maintainer: one door per line, "Review this link…"; every un-attested link offers Confirm; the bridge is
+listed and re-linkable; #723 is a reworded label, never split rows) → design → plan (nine tasks) → SDD → opus final
+review → one fix wave → docs. No ADR, no schema generation change. Filed #781 · #782 · #783 · #784; commented #738.
+- **⇒ A pinned-count guard can go red where no per-task review looks.** Task 1 gave `edges.rs` a second wrapped call;
+  `db_errors_stay_legible.rs`' pinned count (1) went red, and no per-task review ran it — only the full suite did. A
+  task that adds a DB call, an event type or a helper re-runs the guards that count them (memory: pinned-count guards).
+- **⇒ When you guard one verdict, ask the same question of every verdict on that panel.** The design made the confirm
+  re-check the pair under CARNLK; the final review (I1) found the panel's Unlink had the identical mid-judgement gap
+  (a colleague's confirm landing meanwhile, overruled by our later unlink). Same for R5a's twin: an Outranked verdict
+  had to hide BOTH buttons in `unlink.js` AND `link.js`.
+- **⇒ A prefix inside a fixed-width cell can eat the very name it qualifies.** The designed "↳ linked, in doubt: "
+  (20 chars) left a doubted member's name at ~8 chars of the CLI's 28-char cell ("Mary SM…"); "↳ in doubt: " keeps it
+  legible. Check a label against the width it renders in, not the sentence it reads as.
+- **2026-10-15, a /pr-review-toolkit pass on the PR and a /fixall round (eight commits).** Fixed: the pre-click race
+  (a colleague's confirm between drawing the list and "Review…"), the two-snapshot links read, the tray's "One person"
+  on a doubted side, the Outranked disarm (then widened: any recorded answer), a node-side empty-address refusal,
+  pins for the window's routing to the `_as_shown` doors and the Compare's guard, an isolated #220 clash test, and
+  rustls 0.23.46 (four RUSTSEC advisories failed cargo-deny on every PR). Filed #785 · #786 · #787.
+  **⇒ A fix wave gets its own review.** The fixes' own review found a hole in one of them: the disarm keyed on
+  `reload`, which "Different people" sets even when outranked. **⇒ Two classic `<script>`s share one global scope**:
+  a helper added to both under one name silently becomes the later file's.
+
+### 2026-10-12 → 10-13 — four cloud tech-debt passes (PRs #770–#776)
+
+Picked by blast radius each time. **10-12:** #602 (the strict door pins `cairn.remote_apply` off), #763 (auto-apply
+never links while a re-check is pending), #689 (a misfiled medication attestation refused), #626 (db half: the sync
+door's raw casts go through `cairn_uuid_or_raise`; `do_pull`'s generic non-P0001 arm still open), #726. **10-13:**
+#604, #608, #431, #464, #768 · then #773, #603, #346, #553, #616, #744, #704 · then #708, #713, #569, #560, #682, #509.
 - **⇒ #726: A CONNECT REPLAYS THE SCHEMA ONLY WHEN IT CHANGED ([ADR-0080](spec/decisions/0080-a-connect-replays-the-schema-only-when-it-changed.md)).**
-  Measured first: a no-op every-connect replay took 97 strong locks (ACCESS EXCLUSIVE on `event_log`, the identity tables
-  and 34 views). Maintainer's rule: the matcher reads committed data and must never block anything, so the fix is in the
-  loader. `node_schema` now records loader + a sha2-256 of the exact file texts (db/058); a matching connect skips the
-  replay. **Do not "simplify" the gate to the generation number** (strands in-place fixes) **or drop the loader check**
-  (cairn-sync's subset stamp would vouch for files it never replayed). `test_serial_guard` clears the stamp so every DB
-  test still starts from a full replay; a test reconnecting within itself to repair the schema calls
-  `db::force_schema_replay`. Pinned by `tests/schema_replay_gate.rs` (red with the gate disabled: 55P03).
-- **⇒ A cloud container can run the FULL DB gate.** PGDG apt is blocked, but conda-forge is not: micromamba →
-  `postgresql=18` → `cargo pgrx init --pg18 <conda pg_config>`; the conda headers need an `xlocale.h` shim
-  (`#include <locale.h>`) passed via both `CFLAGS` and `BINDGEN_EXTRA_CLANG_ARGS`.
+  A no-op replay took 97 strong locks; `node_schema` now records the loader + a sha2-256 of the exact file texts (db/058).
+  **Do not "simplify" the gate to the generation number** (strands in-place fixes — R6's db/054 edit relies on it) **or
+  drop the loader check** (cairn-sync's subset stamp would vouch for files it never replayed). `test_serial_guard`
+  clears the stamp; a test reconnecting to repair the schema calls `db::force_schema_replay`
+  (`tests/schema_replay_gate.rs`).
+- **⇒ A judgement made from a comparison carries what was compared** (#708): `RecordsShown`, re-read under CARNLK after
+  the proposal-row lock. **An unknown outcome is its own marker** (#713): only an UNANSWERED commit gets it; the marker
+  is the ROOT error with the cause as `source()` (anyhow's `.context(marker)` is invisible to a `chain()` downcast).
+- **⇒ A race "found by reasoning" can be made deterministic:** hold transaction 1 open, run 2 on another connection
+  until it has FINISHED (the bug) or is PARKED (`pg_stat_activity.wait_event_type = 'Lock'`), then commit 1 — no sleeps
+  (`tests/shred_custody_race.rs`; R2b-2 and R6 use it).
+- **⇒ A per-row lock cannot guard a whole-log scan** (#773: one lock in two modes, every shred SHARED, the heal
+  EXCLUSIVE; order erasure-heal, then custody). **An issue's proposed fix can be wrong about MVCC** (#560: an in-flight
+  lower seq is invisible inside one snapshot too; the export waits out `RowExclusiveLock` holders on `event_log`, read
+  after `MAX(seq)`, CACHE 1 pinned) **or predate a guard** (#608's `USING ERRCODE` vs #633's file-granular guard).
+- **⇒ A "belt and braces" re-check with no test is not braces** (mutate it; one changed nothing and was removed). **A
+  count is not a set** (#553: name, never count). **A "silent" lenient arm can be worse than silent** (#768: a misfiled
+  vouch displayed as a current signature; the predicate also feeds `stale`, #606). **A per-row `BEGIN … EXCEPTION`
+  that WRITES costs a subtransaction XID per row** (`pg_stat_get_backend_subxact`).
+- **⇒ The gate catches house rules:** a new db/tests mirror needs `\ir _scratch_database_guard.sql`; `cargo test` stops
+  at the first failing binary; parallel output hides FAILED lines — read the `failures:` block. A fixture passing a
+  "record" no window could show hides behind a new check.
+- **⇒ Cloud rig** (runs the FULL DB gate): fetch micromamba from `github.com/mamba-org/micromamba-releases`
+  (`micro.mamba.pm` is blocked), conda-forge `postgresql=18`, `cargo install cargo-pgrx --version =0.18.1 --locked`,
+  `cargo pgrx init --pg18 <conda pg_config>` with an `xlocale.h` shim (`#include <locale.h>`) in both `CFLAGS` and
+  `BINDGEN_EXTRA_CLANG_ARGS`, `initdb` as `postgres`, `CREATE ROLE root SUPERUSER`, export `PGHOST/PGPORT/PGUSER`. Do
+  NOT pre-create `cairn_pgx` in `template1`. `apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev` builds
+  `cairn-gui-tauri`. `target/` reaches ~23 GB — delete `target/debug/incremental` before a second target dir. Never
+  edit tracked files while the gate compiles.
+- Left for a decision: **#775** (signed tokens' case vs the cluster's `lower()`), **#556** (whether `attestation` /
+  `attester_key` join `segment_commitment` — before the first release shipping a CAIRNB3 writer), #649 (caller-minted
+  patient id vs a cancellation contract), #613 (is INCOMPLETE about records or the recovery?), #628 (the NUL fix needs a
+  `cairn_pgx` bump). #427 is lower than it reads (`safety` is a clear field of `signed_bytes`, which `cairn_agent` reads
+  anyway, #424; ADR-0080 made replays rare).
 
-### 2026-10-08/09 — R5b: the possible-duplicate worklist (draft PR #749)
+### 2026-10-04 → 10-09 — R4 (PR #724), #725 (PR #733), R5a (PR #735), R5b (PR #749)
 
-Brainstorm (maintainer: #741 first; #736 worded by status; #743 part 1 in; Review opens the NEWER record; a collapsed
-tray with its count) → design → plan (ten tasks) → SDD → opus final review → one fix wave → docs.
-- **⇒ A title is a claim too.** ADR-0078's first title ("judged only by a human") was false for an un-attested link
-  that makes one record; the final review caught it a commit before it became immutable. Fact-check the title and the
-  Consequences, not only the body; the drift test's sixth case now pins the counter-example.
-- **⇒ "The front door never waits" must hold in every UI state.** Per-entry reads plus a flag per OPEN row were cheap
-  with the tray closed, and ran on every return once it was open, over the search's connection (I5). Cost a read by
-  what is SHOWN, never by the backlog.
-- **⇒ A test whose two orientations coincide pins neither.** Every worklist test had the newer chart on the HIGH side,
-  so a mutation that always opened `high` passed (I3). Seed the asymmetric case and mutate to prove it.
-- **⇒ Count the steps against the as-built window, not the plan.** The plan's 4 omitted the banner's own
-  Review: as built (UI) it is 5 with the tray closed, 4 open, against paper's 4. The architecture forces only the chart and judgement (M ≤ N); the tray's unintended extra Review press is [#754](https://github.com/cairn-ehr/cairn-ehr/issues/754). RUNBOOK §12 records the real count.
-- Filed #750–#753; commented #738 #332 #728. The PR's own five-agent review then found one Critical: a matcher
-  auto-link an agent's un-attested unlink overruled stayed `auto_applied` — not open in db/057 — so the pair reached
-  no human. Fixed in `upsert_proposal` (reopened as `pending`, `applied_event_id` cleared); filed #755–#757.
-- **⇒ Widening "who may be proposed" must check every CLOSED status, not just the skip rule.** #741 stopped counting
-  an un-attested unlink as judged, but a row the matcher itself had closed (`auto_applied`) never re-opened; the
-  ADR's Consequence ("reaches a human") was false for it until the review.
-
-### 2026-10-04 → 10-07 — R4 (PR #724), #725 (PR #733), R5a (PR #735)
-
-- **⇒ Read the design's own filter rule against the issue that asked for it** (the R5 bullets' "any `patient_link`
-  row" vs #700's *attested*). **⇒ A second button over one shared state doubles every guard** (R5a I1: no per-task
-  review saw it, each task held one button). **⇒ "Not recorded" is a claim** an outcome-unknown commit makes false.
-  **⇒ A stored, propose-time fact goes stale in exactly the case it exists for** — compute it fresh with the floor's
-  predicate. **⇒ Script load order is a correctness property.**
-- **⇒ A health signal must be walked through every way its input fills** (R4's "behind"; a bigserial is assigned at
-  INSERT, not commit). **⇒ A CI job with a different dependency set cannot be gated locally — turn the difference into a
-  test** (`test_pure_modules_import_without_psycopg.py`); read `gh pr checks` before calling a PR ready. **⇒ Diagnose
-  before choosing an issue's candidate fix** (#725 was one arm's planner cross-product; `EXPLAIN ANALYZE` it).
-- **Mechanics:** a callee's `rollback()` undoes a test's `SET ROLE` (assert `current_user` in the code under test); an
-  interrupted subagent's uncommitted edits are evidence; a subagent's commit trailer names the model that wrote it;
-  editing an `include_str!`'d `db/*.sql` relinks every cairn-node test binary; HTTPS push:
+- **⇒ A title is a claim too** (ADR-0078's first title was false; fact-check titles and Consequences, not only bodies).
+  **⇒ "The front door never waits" must hold in every UI state** — cost a read by what is SHOWN, never by the backlog.
+  **⇒ A test whose two orientations coincide pins neither** (seed the asymmetric case and mutate). **⇒ Count steps
+  against the as-built window, not the plan** (#754). **⇒ Widening "who may be proposed" must check every CLOSED status**
+  (an `auto_applied` row overruled by an agent's unlink reached no human until `upsert_proposal` reopened it; filed
+  #755–#757).
+- **⇒ Read the design's own filter rule against the issue that asked for it** (#700's *attested*). **⇒ A second button
+  over one shared state doubles every guard** (R5a I1). **⇒ "Not recorded" is a claim** an outcome-unknown commit makes
+  false. **⇒ A stored, propose-time fact goes stale in exactly the case it exists for.** **⇒ Script load order is a
+  correctness property.**
+- **⇒ A health signal must be walked through every way its input fills** (R4's "behind"). **⇒ A CI job with a different
+  dependency set cannot be gated locally — turn the difference into a test**; read `gh pr checks` before calling a PR
+  ready. **⇒ Diagnose before choosing an issue's candidate fix** (#725: `EXPLAIN ANALYZE` it).
+- **Mechanics:** a callee's `rollback()` undoes a test's `SET ROLE`; an interrupted subagent's uncommitted edits are
+  evidence; editing an `include_str!`'d `db/*.sql` relinks every cairn-node test binary; HTTPS push:
   `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push`.
 
 ### 2026-08-20 → 10-03 — restore, node plane, doors, search, funnel UI 2a–2c, #671, repair path R1–R3
@@ -680,8 +723,7 @@ Narrative: ROADMAP; durable rules: traps 7–18 and the per-slice blocks above; 
   atomicity probe that never reaches the server is decoration (#657); a new DB suite in a non-root tree runs nowhere
   until wired (#656); a derived truncate list is only its predicate (#658); a red gate can be a predecessor's (#583); a
   new definer writes `SET search_path = public, pg_temp`; `nohup … &` and `cmd; echo exit=$?` lie; a new ADR needs its
-  `mkdocs.yml` nav line. Filed: #712 · #716 · #718 · #719 · #720 · #722 · #723; #335 comments. Still open: **#569**,
-  **#598**, #624.
+  `mkdocs.yml` nav line. Filed: #712 · #718 · #719 · #720 · #722; #335 comments. Still open: **#569**, **#598**, #624.
 
 **⇒ OPEN ISSUES OLDER SESSIONS OPENED, INDEXED** (never drop an open number while condensing):
 
@@ -714,7 +756,7 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ The repair path: R5b's merge, then the small slice (#716 + #723)** — see ⇒ NEXT.
+- **⇒ The repair path: PR #777 (R6)'s review and merge, then #742 + #743 part 2** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
   restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain, beyond ⇒ NEXT's node-plane list: #525 ·

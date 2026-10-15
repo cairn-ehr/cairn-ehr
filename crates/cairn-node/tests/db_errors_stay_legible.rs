@@ -276,8 +276,9 @@ fn every_postgres_call_in_the_comparison_names_what_it_was_doing() {
     );
 }
 
-/// `patient/edges.rs` has ONE postgres call — the standing-links read.
-const EDGES_LOCAL_DB_FAULT_SITES: usize = 1;
+/// `patient/edges.rs` has THREE postgres calls — the standing-links read (`record_edges`),
+/// db/054's per-link doubts read (`record_doubts`, R6) and its boolean (`record_is_doubted`).
+const EDGES_LOCAL_DB_FAULT_SITES: usize = 3;
 
 /// The link read names what it was doing (R2b-2).
 #[test]
@@ -672,4 +673,28 @@ fn the_predicate_catches_the_shape_that_filed_the_issue_and_spares_the_fix() {
     assert!(interpolates_a_raw_error(
         r#"eprintln!("failed: {e}"); // TODO: make legible"#
     ));
+}
+
+/// `patient/search_person.rs` has ONE postgres call — the components read, which since R6
+/// (#723) also runs db/054's doubt check (and through it the hard veto) for every linked
+/// component a search matched. A failure there blocks every search and registration at the front
+/// door, so it must name its step (PR #777 review).
+const SEARCH_PERSON_LOCAL_DB_FAULT_SITES: usize = 1;
+
+/// The front door's component read names what it was doing.
+#[test]
+fn every_postgres_call_in_the_component_read_names_what_it_was_doing() {
+    let root = sources::repo_root();
+    let text = flattened_code(
+        &std::fs::read_to_string(root.join("crates/cairn-node/src/patient/search_person.rs"))
+            .expect("search_person.rs is in the tree"),
+    );
+    let found = text.matches("LocalDbFault::new(").count();
+    assert_eq!(
+        found, SEARCH_PERSON_LOCAL_DB_FAULT_SITES,
+        "search_person.rs builds {found} `LocalDbFault`s, expected \
+         {SEARCH_PERSON_LOCAL_DB_FAULT_SITES}. If you ADDED a postgres call, wrap it and bump the \
+         constant. If this DROPPED, the call was reverted to a bare `?` — an operator would learn \
+         the SQLSTATE of a failed search but not that the doubt check is what failed."
+    );
 }

@@ -103,6 +103,7 @@ fn main() -> anyhow::Result<()> {
             link::link_records,
             link::unlink::compare_linked,
             link::unlink::unlink_records,
+            link::confirm::confirm_link,
             link::search::link_search,
             duplicates::record_different_people,
             worklist::duplicate_tray_count,

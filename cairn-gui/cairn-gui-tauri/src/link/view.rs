@@ -400,6 +400,20 @@ pub fn link_report(effect: LinkEffect, charts: &ChartSet, compared: &ChartSet) -
     view
 }
 
+/// A "same person" judgement that was recorded but lost the overlay to a later "different
+/// people" on the pair. Shared by the link's outcome line and the confirm's (`confirm_view.rs`):
+/// a confirm IS a link judgement, so it lands, and is worded, exactly as one.
+pub(super) const LINK_OUTRANKED: &str = "Recorded, but NOT in effect: a later judgement on this \
+     pair says these are different people. The two judgements disagree — settle it with the \
+     person who made the other one. Linking again would normally record a newer judgement that \
+     overrules theirs — it would not settle the disagreement.";
+
+/// A "same person" judgement that took effect yet left the record unchanged. R2a never returns
+/// this for a link; worded honestly in case it ever does — and true wherever it lands (an answer
+/// arriving with another chart open re-reads nothing). Shared with the confirm, as above.
+pub(super) const LINK_STILL_JOINED: &str = "Recorded, but the record did not change the way a \
+     link should — check what the chart now combines.";
+
 /// The outcome sentence for each [`LinkEffect`], before [`link_report`] adds anything about
 /// charts the comparison did not show.
 fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
@@ -412,19 +426,12 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
             reload: true,
         },
         LinkEffect::Outranked => LinkReportView {
-            sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
-                       are different people. The two judgements disagree — settle it with \
-                       the person who made the other one. Linking again would normally record a newer \
-                       judgement that overrules theirs — it would not settle the disagreement."
-                .into(),
+            sentence: LINK_OUTRANKED.into(),
             reload: false,
         },
-        // R2a never returns this for a link; worded honestly in case it ever does — and true
-        // wherever it lands (an answer arriving with another chart open re-reads nothing).
+        // See LINK_STILL_JOINED: R2a never returns this for a link.
         LinkEffect::StillJoined => LinkReportView {
-            sentence: "Recorded, but the record did not change the way a link should — check \
-                       what the chart now combines."
-                .into(),
+            sentence: LINK_STILL_JOINED.into(),
             reload: true,
         },
     }

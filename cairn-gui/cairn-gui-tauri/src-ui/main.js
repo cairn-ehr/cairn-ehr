@@ -86,9 +86,11 @@ function renderMembers(members) {
 }
 
 /**
- * The links joining this record's charts, one line each, each with its own "Not the same
- * person…" (R2b-2). The button's accessible name carries the link's own text, so a screen
- * reader hears WHICH link it undoes, not ten identical buttons.
+ * The links joining this record's charts, one line each, each with ONE door into the review
+ * panel (R2b-2, R6). The button's label comes from Rust (`recordLink.button`: "Review this
+ * link…" or "Review this judgement…"); `recordLink.kind` says which line it is, and the panel
+ * offers the verdicts that fit. The accessible name carries the link's own text, so a screen
+ * reader hears WHICH line it opens, not ten identical buttons.
  */
 function renderLinks(links) {
   const list = el("record-links");
@@ -97,13 +99,14 @@ function renderLinks(links) {
       const li = cell("li", recordLink.text + " ");
       const b = document.createElement("button");
       b.type = "button";
-      b.textContent = "Not the same person…";
-      b.setAttribute("aria-label", "Not the same person: " + recordLink.text);
+      b.textContent = recordLink.button;
+      b.setAttribute("aria-label", recordLink.button + " " + recordLink.text);
       b.dataset.low = recordLink.low;
       b.dataset.high = recordLink.high;
+      b.dataset.kind = recordLink.kind;
       // unlink.js loads after this file and may not be present (fixture-only builds).
       b.addEventListener("click", () => {
-        if (typeof compareLinked === "function") compareLinked(recordLink.low, recordLink.high);
+        if (typeof compareLinked === "function") compareLinked(recordLink.low, recordLink.high, recordLink.kind, recordLink.attested);
       });
       li.append(b);
       return li;

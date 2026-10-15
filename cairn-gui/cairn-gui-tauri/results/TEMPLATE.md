@@ -109,11 +109,11 @@ prompt? **yes / no**
 | Every panel outcome (refusal, fixture refusal, failed Compare, Outranked) shown AND announced | | |
 | Close returns focus to "Same person as…"; a chart switch closes the panel without moving focus | | |
 
-## Unlink one link — "Not the same person…" (R2b-2, runbook §10)
+## Unlink one link — "Review this link…" (R2b-2, runbook §10)
 
 | Gesture | Mode | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|---|
-| "Not the same person…" → read → Unlink → outcome line | live | | | | ≤ 15 s | |
+| "Review this link…" → read → Unlink → outcome line | live | | | | ≤ 15 s | |
 
 | Run | Findings shown | Key already unlocked? |
 |---|---|---|

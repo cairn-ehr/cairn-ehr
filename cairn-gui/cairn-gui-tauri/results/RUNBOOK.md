@@ -325,7 +325,7 @@ Record in the template's *Compare and link* section. **A figure outside the ≤ 
 finding to file, never a budget to adjust** (§1.2's own rule, echoed here because this is the
 slice that first measures it).
 
-## 10. Unlink one link: "Not the same person…" (R2b-2, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) · [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699))
+## 10. Unlink one link: "Review this link…" (formerly "Not the same person…"; R2b-2, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) · [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699))
 
 The repair path's second §1.2 figure. **Live only** — fixture charts are never linked, so a `--mock`
 chart has no "How these charts are linked" list and nothing to unlink; there is no `--mock` variant to
@@ -356,13 +356,26 @@ Tauri-IPC pass). To try a cycle instead, also `link-charts "$A" "$C"` in the set
 single-link run, register only A and B and link them.) `/tmp/dr-a.key` is the human key enrolled
 earlier in this runbook; substitute your own.
 
-Start the stopwatch at the press of **"Not the same person…"** on a link's line, not before — choosing
+> [!NOTE]
+> Since R6 ([#716](https://github.com/cairn-ehr/cairn-ehr/issues/716)) the line's button reads
+> **"Review this link…"** — one door per line, opening the same side-by-side panel, which now offers
+> every verdict that applies. The panel's **Unlink — not the same person** is unchanged, but it is now
+> signed only over the pair the panel read: if another judgement about the pair was recorded while you
+> were reading, it is refused ("what stands between charts … changed while you were judging it … —
+> nothing was done; review it again") and you compare again. An un-attested link also shows **Same
+> person — confirm** beside it when both charts are held on this node; that verdict is timed in
+> section 13, not here. If the pair's attestation changed after the list was drawn (a colleague
+> confirmed it, say), the panel opens with no comparison and no verdict, only "this pair has been
+> judged since the list was drawn — reload the chart…". A change that leaves the attestation as it
+> was is caught later instead: each verdict is signed only over the judgement the panel read.
+
+Start the stopwatch at the press of **"Review this link…"** on a link's line, not before — choosing
 WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then
 lays the two charts side by side. Stop it when the outcome line reads "Unlinked — chart(s) … are no
 longer part of this record" (or "Recorded that charts … are different people — but they still read as
 one record through other links …" for a cycle (A–B, B–C, A–C: unlinking one edge leaves the other two joining the charts), a legitimate outcome that also stops the clock).
 
-1. Press **"Not the same person…"** on the wrong link's line.
+1. Press **"Review this link…"** on the wrong link's line.
 2. Read the panel: findings (if any), then the two-column comparison of the two charts.
 3. Press **Unlink — not the same person**.
 
@@ -374,7 +387,7 @@ never "no conflicts"); whether the key was already unlocked. Repeat at least fiv
 
 - [ ] Each link's button is announced with its **own** text — which two charts, how the link was made
       (a clinician's judgement, or without one on record here), and when — never a bare
-      "Not the same person…" repeated down the list.
+      "Review this link…" repeated down the list.
 - [ ] Pressing the button announces the findings **before** the table.
 - [ ] An absent fact reads as a word, never silence.
 - [ ] Opening the unlink panel closes the link panel and vice versa — the two are never on screen
@@ -535,3 +548,111 @@ separately from the live figure; never merge the two.
 Record in the template's *Clear the possible-duplicate tray* section. **A figure outside its budget,
 an open-tray find slower than the hidden one, or a step count above paper's is a finding to file,
 never a budget to adjust.**
+
+## 13. Confirm a doubted link (R6, [#716](https://github.com/cairn-ehr/cairn-ehr/issues/716) · [#723](https://github.com/cairn-ehr/cairn-ehr/issues/723))
+
+The repair path's fifth §1.2 figure: the clinician vouches for a link the record holds but nobody has
+judged, so the sign-off hold (R1b) lifts. **Live only** — fixture charts are never linked (#722), so a
+`--mock` chart has no "How these charts are linked" list and no front-door doubted row.
+
+**Setup A — a doubted machine link.** Two charts joined by an **un-attested** link (the matcher's)
+that this node's hard identity check now finds a clash on (db/054's `clash`). Make the link with
+section 11's pair: one drain of the duplicate-check worker, then `cairn-node --conn <owner conn> --key
+$NODE_KEY apply-auto-candidates` — an OWNER role, not `$CONN`'s (the command's own help says why). Its
+summary line must read `auto-apply: applied 1 …`; a pair the worker scored for human review is not
+linked. The clash itself needs a **verified** (provenance rank ≥ 60) date of birth or sex at birth that
+differs between the two charts, or disjoint normalized identifiers in one system (db/016's hard veto) —
+a vetoed pair is never auto-linked, so the clash must arrive AFTER the link. There is no one-line recipe
+for that here; whatever you use, **check the setup before timing it**:
+
+```bash
+psql "$CONN" -Atc "SELECT low, high, kind FROM cairn_chart_set_doubts(ARRAY['$A','$B']::uuid[])"
+```
+
+It must print one `clash` row for the pair. If you cannot produce a clash, time the same gesture on an
+**undoubted** machine link (every un-attested link offers the confirm) and record the run as
+"no clash" — the side-by-side read of the clash is the load this budget is about, so never merge
+those figures with the doubted ones.
+
+**Setup B — a bridged separation.** Three charts linked by a clinician A–B, B–C and A–C, then a
+clinician's "different people" on A–C: the record still joins A and C through B (StillJoined).
+
+```bash
+reg() { $NODE patient-register --name "Bench Patient" --birth-date 1980-01-01 \
+    --confirm-new | sed -n 's/^registered patient //p'; }
+A=$(reg); B=$(reg); C=$(reg)
+[ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ] || { echo "registration failed" >&2; exit 1; }
+$NODE link-charts "$A" "$B" --attester-key /tmp/dr-a.key
+$NODE link-charts "$B" "$C" --attester-key /tmp/dr-a.key
+$NODE link-charts "$A" "$C" --attester-key /tmp/dr-a.key
+$NODE unlink-charts "$A" "$C" --attester-key /tmp/dr-a.key
+cd cairn-gui
+cargo run --release -p cairn-gui-tauri -- \
+    --patient "$A" --conn "$CONN" \
+    --key "$NODE_KEY" --attester-key /tmp/dr-a.key
+```
+
+`cairn_chart_set_doubts` over the three charts must print one `separated` row for A–C.
+
+**Measurement 1 — confirm a doubted link (Setup A).** Open one chart of the pair. Its "How these
+charts are linked" line ends "— in doubt: this node's identity check finds a clash between these two
+charts; while this link is in doubt, only lines recorded on this chart alone can be signed off". Start
+the stopwatch at the press of **"Review this link…"** on that line — reading the mark is part of
+opening the chart; choosing to act on it starts the gesture. Stop it at the outcome line
+"Confirmed — charts … and … are recorded as the same person by your judgement."
+
+1. Press **"Review this link…"** on the doubted line.
+2. Read the panel: the findings (on Setup A the clash is one of them), then the two-column comparison.
+3. Press **Same person — confirm**.
+
+After the chart re-reads, the line has lost its mark and reads "linked by a clinician's judgement";
+the medication list's doubted-link note is gone when no other link of the record is in doubt.
+
+**Measurement 2 — re-link a bridged separation (Setup B).** The list carries a line "{A} and {C} — a
+clinician recorded on {date} (UTC) that these are different people, but other links still join them".
+Start at the press of **"Review this judgement…"** on it; stop at "Linked — your judgement that charts
+… and … are the same person now stands over the earlier judgement that they were different people;
+both stay on record."
+
+1. Press **"Review this judgement…"**.
+2. Read the panel: the comparison, and the note naming the earlier judgement and its date.
+3. Press **Same person — link them**.
+
+**The locked key.** Run one pass with the key locked: both verdicts read "… (unlock your signing key
+first)", and a press signs nothing (the panel's status line names the unlock; the button stays). Unlock (the existing session act, not one this
+slice adds) and the suffix goes. Do not time the locked pass.
+
+Budget **review-and-confirm ≤ 15 s** for both measurements (§1.2 in the design page's R6 section; the
+same budget as section 10's unlink). Steps: confirm paper 2 → 2 acts; bridge paper 3 → 2 acts. Record,
+per run: the wall time from step 1 to the outcome line; which measurement; the number of findings shown
+(0 is legitimate on an undoubted link, never on Setup A); whether the key was already unlocked. Repeat
+at least five times with fresh pairs. An outcome of "Recorded, but NOT in effect: …" (Outranked)
+means a colleague's judgement landed meanwhile — record it, and both verdicts must then be gone from
+the panel.
+
+**Measurement 3 — the front door (#723).** With a Setup A pair still doubted, re-run section 8's
+find (≤ 5 s) for "Bench Patient". The person row reads **"Linked charts — a link between them is in
+doubt (N charts)"**, never "One person — N linked charts"; after Measurement 1 confirms the link, the
+same find reads "One person — 2 linked charts". The label adds no act, so the budget is section 8's.
+In the CLI's `patient-search`, a doubted row's further charts are prefixed "↳ in doubt: " (an
+undoubted row keeps "↳ linked: ").
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The doubted row's label is read aloud as "Linked charts — a link between them is in doubt
+      (N charts)".
+- [ ] The doubted line's button is announced with its own line text (which two charts, how linked,
+      and the doubt), never a bare "Review this link…" repeated.
+- [ ] From the panel, **Tab reaches both verdicts** (Same person — confirm, and Unlink — not the same
+      person) with no mouse; on a separated line, Tab reaches **Same person — link them**.
+- [ ] While a verdict is in flight both verdicts are disabled; once one lands both are gone
+      (Outranked included).
+- [ ] **Escape closes the panel** and returns focus to the "Review…" button that opened it; after a
+      confirm, focus lands on the patient's heading.
+- [ ] Every outcome (Confirmed, Linked, Outranked, a refusal, "changed while you were judging it") is
+      shown AND announced; the panel is never an alert and never takes focus on its own.
+
+There is no *Confirm a doubted link* section in `TEMPLATE.md` yet; record this run in its own block
+after the *Unlink one link* section, under the same headings. **A figure outside the ≤ 15 s budget, a
+step count above paper's, or a doubted row read as "One person" is a finding to file, never a budget to
+adjust.**
