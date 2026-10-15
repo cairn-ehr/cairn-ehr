@@ -3,7 +3,7 @@
 //! Paper counterpart: the paper clips holding two folders together — one per pair the clerk
 //! clipped. A combined record is joined by LINKS, not by members: in A–C–B the wrong clip may
 //! be A–C or C–B, and only a human can say which (principle 2). So the window lists every
-//! standing link, each with its own "Not the same person…", and this is the read behind it.
+//! standing link, each with its own "Review this link…", and this is the read behind it.
 //!
 //! Reads `patient_link` (db/018): one row per pair ever asserted, holding the STANDING
 //! assertion. Only `state = 'link'` rows join anything; an `unlink` row is a pair a judgement
@@ -11,7 +11,9 @@
 //! every standing link touching it, and the double test keeps a stale set from listing a link
 //! half outside it.
 //!
-//! `record_doubts` reads which of a record's pairs db/054 doubts — the marks beside the links, R6.
+//! `record_doubts` reads which of a record's pairs db/054 doubts — the marks beside the links, R6
+//! — and `record_is_doubted` whether any is: the R1b hold's boolean and the doubted person row's
+//! mark (#723). Neither re-derives db/054's rule.
 use crate::db_diagnosis::LocalDbFault;
 use cairn_medication_view::ChartSet;
 use tokio_postgres::GenericClient;
@@ -90,7 +92,7 @@ const DOUBTS_SQL: &str = "SELECT low::text AS low, high::text AS high, kind, \
      to_char(to_timestamp(hlc_wall / 1000.0) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS recorded_on \
      FROM cairn_chart_set_doubts($1::text[]::uuid[]) ORDER BY low, high";
 
-/// Every pair of `charts` db/054 doubts, ordered by pair. The ONE Rust read of the doubt rule:
+/// Every pair of `charts` db/054 doubts, ordered by pair. The per-link read of the doubt rule:
 /// it asks db/054 and never re-derives the flag, veto or attestation tests.
 pub async fn record_doubts<C: GenericClient + Sync>(
     client: &C,
@@ -116,4 +118,34 @@ pub async fn record_doubts<C: GenericClient + Sync>(
             })
         })
         .collect()
+}
+
+const HAS_DOUBT_SQL: &str =
+    "SELECT cairn_chart_set_has_doubted_link($1::text[]::uuid[]) AS doubted";
+
+/// Whether db/054 doubts any link among `charts` — `cairn_chart_set_has_doubted_link`, which is
+/// `EXISTS` over the rows [`record_doubts`] reads, so the boolean and the marks cannot disagree.
+/// The R1b sign-off hold reads it through the medication read; the duplicate-review tray marks a
+/// doubted side with it (#723).
+///
+/// A set of one cannot hold a link, so it is answered without a query: a never-linked chart
+/// costs exactly the statements it cost before.
+pub async fn record_is_doubted<C: GenericClient + Sync>(
+    client: &C,
+    charts: &ChartSet,
+) -> anyhow::Result<bool> {
+    if !charts.is_linked() {
+        return Ok(false);
+    }
+    let ids: Vec<String> = charts.members().iter().map(Uuid::to_string).collect();
+    let row = client
+        .query_one(HAS_DOUBT_SQL, &[&ids])
+        .await
+        .map_err(|e| {
+            LocalDbFault::new(
+                "reading whether a link among this record's charts is in doubt",
+                e,
+            )
+        })?;
+    Ok(row.get("doubted"))
 }

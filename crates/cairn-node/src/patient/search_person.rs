@@ -8,6 +8,7 @@
 //!
 //! WHY A NEW FILE. `search.rs` was at its size ceiling, and these helpers answer a distinct
 //! question ("who else is this person?") from the ones it already owns ("who matched?").
+use crate::db_diagnosis::LocalDbFault;
 use cairn_patient_search::TrustState;
 use std::collections::{HashMap, HashSet};
 use tokio_postgres::GenericClient;
@@ -16,18 +17,16 @@ use uuid::Uuid;
 use super::person::trust_of;
 
 /// Read the link component of every chart in `ids`: for each chart, every chart of the same
-/// person (itself included), sorted ascending (UUIDv7, so oldest first).
-///
-/// Still ONE statement and one snapshot, now also carrying whether db/054 doubts a link in
-/// the component (R6, #723). A never-linked chart (a component of one) is not asked about
-/// doubt at all (the `CASE`): a lone chart has no link to doubt.
+/// person (itself included), sorted ascending (UUIDv7, so oldest first), and whether db/054
+/// doubts a link in that component (R6, #723).
 ///
 /// ONE statement, not one call per candidate. `cairn_person_charts` is `LANGUAGE sql STABLE`
-/// (db/054), so a single query reads every component from one snapshot: two members of the
-/// same person can never be seen with different link states half-way through a search, and
-/// the search pays one round trip however many charts it matched. A chart that was never
-/// linked comes back as its own set of one, so the caller never needs a fallback for a
-/// missing entry - and must not invent one: [`assemble_components`] refuses an answer that
+/// (db/054), so a single query reads every component, and its doubt, from one snapshot: two
+/// members of the same person can never be seen with different link states half-way through a
+/// search, and the search pays one round trip however many charts it matched. A never-linked
+/// chart (a component of one) is not asked about doubt at all (the `CASE`): a lone chart has no
+/// link to doubt. It comes back as its own set of one, so the caller never needs a fallback for
+/// a missing entry - and must not invent one: [`assemble_components`] refuses an answer that
 /// does not contain the chart it was asked about.
 pub(super) async fn read_components<C: GenericClient + Sync>(
     client: &C,
@@ -45,7 +44,14 @@ pub(super) async fn read_components<C: GenericClient + Sync>(
              CROSS JOIN LATERAL unnest(s.charts) AS c",
             &[&id_strs],
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            LocalDbFault::new(
+                "reading each matched chart's linked charts and whether a link among them is in \
+                 doubt",
+                e,
+            )
+        })?;
     let triples: Vec<(Uuid, Uuid, bool)> = rows
         .iter()
         .map(|r| {
@@ -70,8 +76,8 @@ pub(super) struct Components {
 }
 
 /// Group `(chart, member-of-its-component, doubted)` triples into one sorted member list per
-/// chart, and
-/// REFUSE any list that does not contain the chart it belongs to.
+/// chart, collect the charts whose component is doubted, and REFUSE any list that does not
+/// contain the chart it belongs to.
 ///
 /// `group_by_person` trusts that precondition: a component missing its own anchor would be
 /// placed in a row without it, and the chart would vanish from every row - the silent

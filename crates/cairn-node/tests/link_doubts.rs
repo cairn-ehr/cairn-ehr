@@ -12,10 +12,10 @@ mod common;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::{link_charts, unlink_charts, LinkVerb, Reviewer};
 use cairn_node::db;
-use cairn_node::patient::edges::{record_doubts, DoubtKind};
+use cairn_node::patient::edges::{record_doubts, record_is_doubted, DoubtKind};
 use common::{
-    apply_remote_raw, cs, link_assertion_event, medication_setup as setup, register_pair,
-    vetoed_pair,
+    apply_remote_raw, assert_clashing_dobs, cs, link_assertion_event, medication_setup as setup,
+    register_pair, vetoed_pair,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -65,7 +65,9 @@ fn pair(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
     (a.min(b), a.max(b))
 }
 
-/// (b): a peer machine's un-attested link of a vetoed pair is a `clash` on exactly that pair.
+/// (a)+(b): a peer machine's un-attested link of an already-vetoed pair is a `clash` on exactly
+/// that pair. db/018 raises a flag as the link arrives, so this reaches BOTH clash arms at once —
+/// the next test isolates (b).
 #[tokio::test]
 async fn an_unattested_link_that_trips_the_veto_is_a_clash_on_that_pair() {
     let Some(base) = cs() else {
@@ -85,6 +87,44 @@ async fn an_unattested_link_that_trips_the_veto_is_a_clash_on_that_pair() {
         vec![(lo, hi, "clash".to_string())]
     );
     assert!(has_doubt(&c, &[a, b]).await);
+}
+
+/// (b) alone, issue #220's path: the link arrives while nothing clashes, so db/018 raises no
+/// flag, and the clashing dates come after. The pair is still a `clash`, because db/054
+/// re-evaluates the veto at read time. Deleting the veto-now branch of the clash arm fails this.
+#[tokio::test]
+async fn a_link_the_veto_trips_only_later_is_still_a_clash() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let c = db::connect_and_load_schema(&base).await.unwrap();
+    clean(&c).await;
+    let (sk, kid, _hsk, _hkid) = setup(&c).await;
+    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, a, b).await;
+    let ev = link_assertion_event(&kid, a, b, LinkVerb::Link, 40, 0, "peer-matcher", false);
+    apply_remote_raw(&c, &sk, ev).await.unwrap();
+    assert!(
+        doubts(&c, &[a, b]).await.is_empty(),
+        "positive control: nothing clashes yet"
+    );
+    assert_clashing_dobs(&c, &sk, &kid, a, b, (50, 51)).await;
+    let flags: i64 = c
+        .query_one("SELECT count(*) FROM link_veto_flag", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        flags, 0,
+        "precondition: #220 — the late clash raised no flag"
+    );
+    let (lo, hi) = pair(a, b);
+    assert_eq!(
+        doubts(&c, &[a, b]).await,
+        vec![(lo, hi, "clash".to_string())]
+    );
 }
 
 /// A human's attested link of the same vetoed pair is the decision the veto forces: no doubt.
@@ -185,8 +225,13 @@ async fn an_unattested_unlink_inside_the_set_is_no_doubt() {
 }
 
 /// The equivalence, over the case matrix: the boolean is EXACTLY "a doubt row exists" — the
-/// sign-off hold and the window's per-link marks can never disagree. Each fixture above leaves
-/// its state; this test rebuilds four states in one database and asks both functions of each.
+/// sign-off hold and the window's per-link marks can never disagree — and the Rust boolean
+/// (`record_is_doubted`, the front door's and the tray's mark) is that same boolean.
+///
+/// db/054 spells the boolean as `EXISTS` over the rows, so this is a DEFINITIONAL pin: it fails
+/// the day someone re-spells the boolean independently. That is why the matrix holds every kind
+/// (none, clash, confirmed, single chart, separated) and an array carrying two doubts — the cases
+/// where an independent spelling would drift first.
 #[tokio::test]
 async fn the_hold_is_exactly_some_doubt_row() {
     let Some(base) = cs() else {
@@ -224,15 +269,48 @@ async fn the_hold_is_exactly_some_doubt_row() {
     let (d, e) = vetoed_pair(&c, &sk, &kid).await;
     link_charts(&mut c, d, e, &who, ORIGIN).await.unwrap();
     // 4. a single chart: no doubt.
-    for set in [vec![p, q], vec![a, b], vec![d, e], vec![p]] {
+    // 5. the bridge: a clinician separated f–x while f–g and g–x still join them: separated.
+    let (f, x) = (Uuid::now_v7(), Uuid::now_v7());
+    register_pair(&c, &sk, &kid, f, x).await;
+    let g = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, g, 1).await;
+    for (l, r, wall) in [(f, g, 32), (g, x, 33)] {
+        let ev = link_assertion_event(&kid, l, r, LinkVerb::Link, wall, 0, "m", false);
+        apply_remote_raw(&c, &sk, ev).await.unwrap();
+    }
+    unlink_charts(&mut c, f, x, None, &who, ORIGIN)
+        .await
+        .unwrap();
+    // 6. one array carrying two doubts (case 2's clash and case 5's separation).
+    let matrix = [
+        vec![p, q],
+        vec![a, b],
+        vec![d, e],
+        vec![p],
+        vec![f, g, x],
+        vec![a, b, f, g, x],
+    ];
+    for set in matrix {
+        let held = has_doubt(&c, &set).await;
         assert_eq!(
-            has_doubt(&c, &set).await,
+            held,
             !doubts(&c, &set).await.is_empty(),
             "the hold and the rows disagree over {set:?}"
         );
+        let charts = ChartSet::new(set.iter().copied()).unwrap();
+        assert_eq!(
+            record_is_doubted(&c, &charts).await.unwrap(),
+            held,
+            "the Rust boolean and db/054 disagree over {set:?}"
+        );
     }
     assert!(
-        has_doubt(&c, &[a, b]).await,
-        "case 2 must be doubted, or the matrix proves nothing"
+        has_doubt(&c, &[a, b]).await && has_doubt(&c, &[f, g, x]).await,
+        "cases 2 and 5 must be doubted, or the matrix proves nothing"
+    );
+    assert_eq!(
+        doubts(&c, &[a, b, f, g, x]).await.len(),
+        2,
+        "case 6 must carry two doubts"
     );
 }

@@ -13,7 +13,9 @@
 //! the node's list read and flags read (one statement each), two record reads per shown entry
 //! (at most `2 × MAX_SHOWN`), then ONE candidate read (`read_display_facts`, a fixed handful of
 //! statements) for every chart of every shown entry (`charts_of`), split per side afterwards
-//! (`entry_of_item`, pure) — never a read per side.
+//! (`entry_of_item`, pure) — never a candidate read per side. The one per-side read is db/054's
+//! doubt boolean (`doubted_sides`), asked only of a LINKED side (also at most `2 × MAX_SHOWN`):
+//! a side whose links are in doubt never reads "One person" (#723, PR #777 review).
 pub mod view;
 
 use crate::duplicates::view::EntryFlags;
@@ -34,6 +36,11 @@ use view::{
 
 /// The ONE candidate read's result, by chart id — or why it failed (worded, operator chain).
 type Found = Result<HashMap<Uuid, Candidate>, String>;
+
+/// Whether db/054 doubts a link among each LINKED side's charts, keyed by that side's member
+/// charts (sorted, as `ChartSet` holds them) — or why it could not be read. A single-chart side
+/// has no entry: it holds no link.
+type Doubted = HashMap<Vec<Uuid>, Result<bool, String>>;
 
 /// The tray's `<summary>` count and the duplicate check's status line, in one hold of `state.db`.
 /// `--mock` (no database) counts the fixture's one entry and says the check never ran, so the
@@ -74,21 +81,22 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
     let read = async {
         let today: String = db.query_one("SELECT current_date::text", &[]).await?.get(0);
         let list = worklist(&*db, MAX_SHOWN).await?;
+        let doubted = doubted_sides(&*db, &list.items).await;
         let found: Found = candidates_by_id(&*db, &charts_of(&list.items), &today)
             .await
             .map(|cands| cands.into_iter().map(|c| (c.patient_id, c)).collect())
             .map_err(|e| operator_chain(&e));
-        Ok::<_, anyhow::Error>((list, found))
+        Ok::<_, anyhow::Error>((list, found, doubted))
     }
     .await;
     drop(db);
     match read {
         Err(e) => worklist_view(Err(operator_chain(&e))),
-        Ok((list, found)) => {
+        Ok((list, found, doubted)) => {
             let mut entries = vec![];
             let mut admitted: Vec<Candidate> = vec![];
             for item in &list.items {
-                let (entry, cands) = entry_of_item(item, &found);
+                let (entry, cands) = entry_of_item(item, &found, &doubted);
                 entries.push(entry);
                 admitted.extend(cands);
             }
@@ -112,36 +120,74 @@ fn charts_of(items: &[WorklistItem]) -> Vec<Uuid> {
     ids
 }
 
-/// One side's candidates, taken from the shared read: the record's error if the node could not
-/// read it, else the candidate read's error, else every member chart found. **Pure.**
+/// db/054's doubt boolean for every linked read side of `items`, once per distinct record. A
+/// failed read is kept per side, worded (operator chain), so it becomes that side's error —
+/// never "not doubted".
+async fn doubted_sides(client: &tokio_postgres::Client, items: &[WorklistItem]) -> Doubted {
+    let mut doubted = Doubted::new();
+    let linked = items
+        .iter()
+        .flat_map(|i| [&i.newer, &i.older])
+        .filter_map(|side| side.as_ref().ok())
+        .filter(|set| set.is_linked());
+    for set in linked {
+        if doubted.contains_key(set.members()) {
+            continue;
+        }
+        let read = cairn_node::patient::edges::record_is_doubted(client, set)
+            .await
+            .map_err(|e| operator_chain(&e));
+        doubted.insert(set.members().to_vec(), read);
+    }
+    doubted
+}
+
+/// One side's candidates, taken from the shared read, and whether its links are in doubt: the
+/// record's error if the node could not read it, else the candidate read's error, else the doubt
+/// read's error (a linked side whose doubt is unread is an error, never "not doubted"), else
+/// every member chart found. **Pure.**
 fn side_candidates(
     side: &Result<ChartSet, String>,
     found: &Found,
-) -> Result<Vec<Candidate>, String> {
+    doubted: &Doubted,
+) -> Result<(Vec<Candidate>, bool), String> {
     let set = side.as_ref().map_err(Clone::clone)?;
     let found = found.as_ref().map_err(Clone::clone)?;
-    Ok(set
+    let in_doubt = if set.is_linked() {
+        match doubted.get(set.members()) {
+            Some(read) => read.clone()?,
+            None => return Err("whether a link among its charts is in doubt was not read".into()),
+        }
+    } else {
+        false
+    };
+    let cands = set
         .members()
         .iter()
         .filter_map(|id| found.get(id).cloned())
-        .collect())
+        .collect();
+    Ok((cands, in_doubt))
 }
 
 /// One entry's view and the charts it puts on screen (to admit). **Pure.** `open_chart` is `Some`
 /// only when that chart is among the newer side's candidates — i.e. it will be in
 /// `AppState::shown` — so Review is never offered for a chart `open_chart` would refuse.
-fn entry_of_item(item: &WorklistItem, found: &Found) -> (WorklistEntryView, Vec<Candidate>) {
-    let newer = side_candidates(&item.newer, found);
-    let older = side_candidates(&item.older, found);
+fn entry_of_item(
+    item: &WorklistItem,
+    found: &Found,
+    doubted: &Doubted,
+) -> (WorklistEntryView, Vec<Candidate>) {
+    let newer = side_candidates(&item.newer, found, doubted);
+    let older = side_candidates(&item.older, found, doubted);
     let open = item.entry.open_chart;
     let open_chart = newer
         .as_ref()
-        .is_ok_and(|c| c.iter().any(|c| c.patient_id == open))
+        .is_ok_and(|(c, _)| c.iter().any(|c| c.patient_id == open))
         .then(|| open.to_string());
     let admitted: Vec<Candidate> = [&newer, &older]
         .into_iter()
         .flatten()
-        .flatten()
+        .flat_map(|(c, _)| c)
         .cloned()
         .collect();
     let flags = EntryFlags {
@@ -149,7 +195,9 @@ fn entry_of_item(item: &WorklistItem, found: &Found) -> (WorklistEntryView, Vec<
         accepted: item.entry.accepted,
         disputed: item.entry.disputed,
     };
-    let row = |c: Vec<Candidate>| PersonRow::new(c).map(|r| person_row_view(&r));
+    let row = |(c, in_doubt): (Vec<Candidate>, bool)| {
+        PersonRow::new(c).map(|r| person_row_view(&r.with_doubt(in_doubt)))
+    };
     let view = entry_view(
         flags,
         &item.entry.band,
@@ -271,7 +319,8 @@ mod tests {
         let (n, o) = (newer[0].patient_id, older[0].patient_id);
         let found: Found = Ok(older.iter().map(|c| (c.patient_id, c.clone())).collect());
         let why = format!("reading the record of chart {n}: boom");
-        let (view, admitted) = entry_of_item(&item_of(Err(why.clone()), o, n), &found);
+        let (view, admitted) =
+            entry_of_item(&item_of(Err(why.clone()), o, n), &found, &Doubted::new());
         assert_eq!(view.newer.row, None);
         assert_eq!(
             view.newer.error,
@@ -302,18 +351,73 @@ mod tests {
             .chain(older.iter())
             .map(|c| (c.patient_id, c.clone()))
             .collect());
-        let (view, admitted) = entry_of_item(&item, &found);
+        let (view, admitted) = entry_of_item(&item, &found, &Doubted::new());
         assert_eq!(view.open_chart, Some(n.to_string()));
         assert!(view.newer.row.is_some() && view.older.row.is_some());
         assert_eq!(admitted.len(), 2);
         // A failed candidate read words BOTH sides and withholds Review.
-        let (failed, none) = entry_of_item(&item, &Err("down".into()));
+        let (failed, none) = entry_of_item(&item, &Err("down".into()), &Doubted::new());
         assert_eq!(
             failed.newer.error.as_deref(),
             Some("This record could not be read here: down")
         );
         assert_eq!(failed.open_chart, None);
         assert!(none.is_empty());
+    }
+
+    /// A side of two linked charts, both found: the newer record `n`+`o` (Review opens `n`),
+    /// against an older record `x` the candidate read did not return (so its row is empty —
+    /// these tests are about the newer side).
+    fn linked_newer() -> (WorklistItem, Found, Vec<Uuid>) {
+        let (newer, older) = fixture_pair();
+        let (n, o) = (newer[0].patient_id, older[0].patient_id);
+        let x = Uuid::from_u128(77);
+        let set = cairn_medication_view::ChartSet::new([n, o]).unwrap();
+        let members = set.members().to_vec();
+        let found: Found = Ok(newer
+            .iter()
+            .chain(older.iter())
+            .map(|c| (c.patient_id, c.clone()))
+            .collect());
+        (item_of(Ok(set), x, n), found, members)
+    }
+
+    /// #723 on the duplicate-review tray (PR #777 review): a side whose links db/054 doubts never
+    /// reads "One person — N linked charts". A reviewer deciding whether two records are the same
+    /// person must not be told, as fact, that a disputed set already is one.
+    #[test]
+    fn a_doubted_linked_side_never_says_one_person() {
+        let (item, found, members) = linked_newer();
+        let doubted: Doubted = [(members.clone(), Ok(true))].into_iter().collect();
+        let (view, _) = entry_of_item(&item, &found, &doubted);
+        let label = view.newer.row.expect("read").label;
+        assert_eq!(label, Some(crate::funnel::rows::doubted_row_label(2)));
+
+        let undoubted: Doubted = [(members, Ok(false))].into_iter().collect();
+        let (view, _) = entry_of_item(&item, &found, &undoubted);
+        let label = view.newer.row.expect("read").label;
+        assert_eq!(label, Some(crate::funnel::rows::linked_row_label(2)));
+    }
+
+    /// An unread doubt is the side's worded error — never "not doubted", which would put "One
+    /// person" back on a disputed set — and Review is withheld with it.
+    #[test]
+    fn an_unread_doubt_is_worded_never_assumed_absent() {
+        let (item, found, members) = linked_newer();
+        let failed: Doubted = [(members, Err("doubt read: boom".into()))]
+            .into_iter()
+            .collect();
+        let (view, _) = entry_of_item(&item, &found, &failed);
+        assert_eq!(view.newer.row, None);
+        assert_eq!(
+            view.newer.error.as_deref(),
+            Some("This record could not be read here: doubt read: boom")
+        );
+        assert_eq!(view.open_chart, None);
+
+        let (view, _) = entry_of_item(&item, &found, &Doubted::new());
+        assert_eq!(view.newer.row, None, "a linked side nobody asked about");
+        assert!(view.newer.error.is_some());
     }
 
     /// worklist.js is untyped: a Rust field rename would draw an empty tray, not break the build.
