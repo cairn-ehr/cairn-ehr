@@ -3,9 +3,10 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ IN FLIGHT (2026-10-16): R6's four residuals — #787 (`standing_link` panics on a NULL address), #786 (the doubt
-> mark on `CandidateList`'s wire shape), #782 (the lock hint's script-order race), #783 (the bridge remedy's wording) —
-> on branch `fix/786-787-782-783-r6-residuals`.** The whole repair path (#679 · #680 · #681) is MERGED through R7
+> **⇒ R6'S FOUR RESIDUALS ARE BUILT ON PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792) (branch
+> `fix/786-787-782-783-r6-residuals`, 2026-10-16): #787 (`standing_link` panicked on a NULL address), #786 (the doubt
+> mark on `CandidateList`'s wire), #783 (the bridge remedy's door), #782 (the lock hint's script-order race).
+> AWAITING THE MAINTAINER'S REVIEW AND MERGE.** The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
@@ -19,17 +20,13 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **This branch's PR** (#786 · #787 · #782 · #783): review and merge. **#728** (the Pi re-measure; now also the
+> 1. **PR #792** (#786 · #787 · #782 · #783): read `gh pr checks 792`, then review and merge. **#728** (the Pi re-measure; now also the
 >    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** from R7 **#789** (`duplicates/view_tests.rs` over 500 lines) · **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
->    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#782** (the lock hint can be
->    missed if `lock_state` resolves before `link.js` defines `updateLinkLock`) · **#783** (the bridge remedy should say
->    the unmarked joining links carry "Review this link…" too) · **#784** (a verdict is not re-checked against identity
+>    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#784** (a verdict is not re-checked against identity
 >    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
->    constructors, a `LinkState` enum, `ShownPair` as an enum) · **#786** (the doubt mark is absent from
->    `CandidateList`'s wire shape — a non-reference UI shows a disputed set as one person) · **#787** (`standing_link`
->    panics on a legacy NULL `content_address`) · from R5b **#750** ("Registered more recently" trusts a
+>    constructors, a `LinkState` enum, `ShownPair` as an enum) · from R5b **#750** ("Registered more recently" trusts a
 >    UUIDv7 time) · **#751** (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a
 >    stale list after return, a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link
 >    by HLC is shown nowhere — ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check) · **#756**
@@ -157,7 +154,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -189,6 +186,21 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-16 — R6's residuals #787 · #786 · #783 · #782 (PR #792)
+
+HANDOVER was stale on arrival again (PR #788 had merged); a bundle of four specified, decision-free fixes, TDD each.
+- **⇒ A remedy that names a command is a claim: run it, and name the LIGHTEST one that works.** #787's first draft
+  named `reproject --prefix identity. --rebuild` (refused by `cairn_reproject`); the second named a whole-log
+  `--rebuild`, which works but truncates every projection and holds chart reads (availability). The review found a
+  plain heal (`--prefix identity.`) refills the address; it is now named first, the rebuild as the fallback, and the
+  test runs both. I had misread a refusal guarded by `IF p_rebuild` as the whole command's.
+- **⇒ Keep one in-memory truth and project it at the boundary.** #786's suggested sibling field would have been a second
+  source of the doubt; serde `try_from`/`into` through a private wire struct carries it without touching the 41 struct
+  literals.
+- **⇒ A first-load race is reproducible headlessly:** an `async` stub `invoke` resolves at the microtask checkpoint after
+  `main.js`, before `link.js` runs. Old `main.js`: `keyUnlocked` false under an unlocked key; new: true.
+- **zsh does not word-split `$var`** — a `for n in $names` loop silently ran once; wrap such loops in `bash -c`.
 
 ### 2026-10-15 — R7: #742 and #743 part 2, as decided (PR #788)
 
