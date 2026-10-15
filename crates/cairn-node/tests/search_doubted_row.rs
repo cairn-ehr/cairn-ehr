@@ -104,8 +104,21 @@ async fn a_set_with_a_doubted_link_is_one_doubted_row_and_signs_the_same_charts(
         "a linked pair with no doubt is not marked"
     );
 
-    // The attestation is built from the charts alone: the mark cannot reach it.
+    // The mark cannot reach what a registration signs: the attestation built from this list is
+    // BYTE-IDENTICAL to the one built from the same list with every mark taken off. (Comparing
+    // `displayed` with `displayed_charts()` would be a tautology — that is how it is built.)
     let query = SearchQuery::new("DOUBTWELL", None, &[]);
-    let signed = SearchAttestation::from_displayed(&query, &doubted);
-    assert_eq!(signed.displayed, doubted.displayed_charts());
+    let mut unmarked = doubted.clone();
+    unmarked.people = unmarked
+        .people
+        .into_iter()
+        .map(|r| r.with_doubt(false))
+        .collect();
+    assert!(
+        !unmarked.people.iter().any(|r| r.is_doubted()),
+        "precondition: the unmarked list carries no mark, so the comparison is not vacuous"
+    );
+    let signed = serde_json::to_vec(&SearchAttestation::from_displayed(&query, &doubted)).unwrap();
+    let plain = serde_json::to_vec(&SearchAttestation::from_displayed(&query, &unmarked)).unwrap();
+    assert_eq!(signed, plain, "the doubt mark never enters the attestation");
 }

@@ -1580,8 +1580,9 @@ a human has disputed (principle 4, #723).
 
 **B. "How these charts are linked" (the window, #716).**
 - **A standing link line** keeps today's text. A `clash` adds: *"— in doubt: this node's identity
-  check finds a clash between these two charts; sign-off on lines from other charts is held until a
-  clinician judges this link."* Its button is **"Review this link…"**.
+  check finds a clash between these two charts; lines from other charts of this record cannot be
+  signed off while this link is in doubt"* — "while", never "until": with two doubted links, judging
+  one leaves the hold. Its button is **"Review this link…"**.
 - **A `separated` line** (new): *"{A} and {X} — a clinician recorded on {D} (UTC) that these are
   different people, but other links still join them"*, with **"Review this judgement…"**.
 - **The review panel** is R2b-2's comparison (both charts' facts and the cross-veto findings, read
@@ -1616,6 +1617,13 @@ a human has disputed (principle 4, #723).
   assertion is refused as stale input ("the link changed while you were judging it — nothing was
   done; review it again"). The test uses the 2026-10-13 parked-on-lock harness: hold the colleague's
   transaction open, park the confirm on CARNLK, commit, and assert the refusal.
+- **The panel's Unlink carries the same pair check** (final-review finding I1). Its mirror race is a
+  colleague's attested LINK (their confirm) of the same pair landing while C still joins the record:
+  our later-stamped attested unlink would overrule it. So `unlink_records` also sends the standing
+  address back, and the node's `unlink_charts_as_shown_from` re-checks it under CARNLK exactly as the
+  confirm does. The panel offers Unlink only with that address read; a pair whose standing
+  judgement vanished between the list read and the panel read offers neither verdict. The CLI's
+  `unlink-charts` (no panel) keeps `unlink_charts`.
 - **R5a's and R2b's webview rules apply.** Both verdict buttons are disabled while either is in
   flight and hidden once a verdict lands. Every message goes through `setMessage`. The panel is never
   `role="alert"` and never takes focus. The field-name drift guard covers whichever JS file carries
@@ -1624,8 +1632,10 @@ a human has disputed (principle 4, #723).
   "retry"), and `CommitOutcomeUnknown` → `Retry::AfterReread` (#713).
 
 **C. The remedy wording.** `DOUBTED_LINK_INSTRUCTION` names **"Review this link…"** for both halves
-(confirm or unlink) and drops *"(the window cannot confirm a link that already stands yet)"*. The CLI
-sentences stay. Its pinned test changes with it.
+(confirm or unlink) and drops *"(the window cannot confirm a link that already stands yet)"*. It also
+names **"Review this judgement…"** beside the bridge's "different people" line — in the A–C–X bridge no
+link line is marked, so the first door alone would point at nothing. The CLI sentences stay. Its
+pinned tests change with it.
 
 **D. The front door (#723).**
 - `read_components`' single statement also returns, per anchor chart, whether its component is

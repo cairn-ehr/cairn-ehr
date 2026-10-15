@@ -276,8 +276,9 @@ fn every_postgres_call_in_the_comparison_names_what_it_was_doing() {
     );
 }
 
-/// `patient/edges.rs` has ONE postgres call — the standing-links read.
-const EDGES_LOCAL_DB_FAULT_SITES: usize = 1;
+/// `patient/edges.rs` has TWO postgres calls — the standing-links read (`record_edges`) and
+/// db/054's per-link doubts read (`record_doubts`, R6).
+const EDGES_LOCAL_DB_FAULT_SITES: usize = 2;
 
 /// The link read names what it was doing (R2b-2).
 #[test]

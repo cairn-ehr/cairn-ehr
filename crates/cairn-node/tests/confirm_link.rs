@@ -9,7 +9,7 @@
 //! pair: an ordinary `identity.link.asserted` through `chart_link`'s judgement path
 //! (`confirm_link_as_shown`), which lifts the record's sign-off hold once no pair is doubted.
 //!
-//! # The defect it must not have (Review Focus 1)
+//! # The defect it must not have
 //!
 //! #708's `RecordsShown` re-reads each subject's RECORD under the link lock before signing. A
 //! confirm is made inside one record, and a third chart C can still join A and B: a colleague's
@@ -94,7 +94,9 @@ async fn standing(c: &Client, x: Uuid, y: Uuid) -> Option<(String, bool)> {
     .map(|r| (r.get(0), r.get(1)))
 }
 
-/// How many LOCAL attested judgements of `event_type` were signed with `kid_h`.
+/// How many ATTESTED judgements of `event_type` the log holds — every attester's, a colleague's
+/// included (the query does not filter by key), so "nothing signed by us" is "the count did not
+/// move".
 async fn judgements_signed(c: &Client, event_type: &str) -> i64 {
     c.query_one(
         "SELECT count(*) FROM event_log WHERE event_type = $1 AND attestation IS NOT NULL",
@@ -287,8 +289,8 @@ async fn a_confirm_records_an_attested_link_over_the_machines_and_took_effect() 
     assert_eq!(out.charts, set, "a confirm changes no membership");
 }
 
-/// Review Focus 3: the panel read the machine link; a colleague confirmed it since. The pair's
-/// winner changed, so ours is refused rather than recorded over a picture that no longer holds.
+/// The panel read the machine link; a colleague confirmed it since. The pair's winner changed, so
+/// ours is refused rather than recorded over a picture that no longer holds.
 #[tokio::test]
 async fn a_confirm_is_refused_when_the_pair_changed_since_the_panel_read_it() {
     let Some(base) = cs() else {
@@ -319,7 +321,7 @@ async fn a_confirm_is_refused_when_the_pair_changed_since_the_panel_read_it() {
     );
 }
 
-/// Review Focus 1, deterministic. The confirm parks on CARNLK; meanwhile a colleague's ATTESTED
+/// THE RACE, deterministic. The confirm parks on CARNLK; meanwhile a colleague's ATTESTED
 /// UNLINK of A–B lands. C still joins A and B, so the record's SET is unchanged and the set check
 /// alone would pass. The colleague's wall is LOW (43): without the pair check our confirm, stamped
 /// later by this node's clock, would win the attested-vs-attested HLC tie-break and silently

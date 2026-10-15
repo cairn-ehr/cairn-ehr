@@ -184,9 +184,9 @@ async fn an_unattested_unlink_inside_the_set_is_no_doubt() {
     assert!(!has_doubt(&c, &[a, cc, x]).await);
 }
 
-/// The equivalence, over the case matrix: the boolean is EXACTLY "a doubt row exists".
-/// (Review Focus 4.) Each fixture above leaves its state; this test rebuilds four states in one
-/// database and asks both functions of each.
+/// The equivalence, over the case matrix: the boolean is EXACTLY "a doubt row exists" — the
+/// sign-off hold and the window's per-link marks can never disagree. Each fixture above leaves
+/// its state; this test rebuilds four states in one database and asks both functions of each.
 #[tokio::test]
 async fn the_hold_is_exactly_some_doubt_row() {
     let Some(base) = cs() else {

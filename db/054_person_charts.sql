@@ -120,13 +120,16 @@ GRANT EXECUTE ON FUNCTION cairn_medication_duplicate_groups(uuid[]) TO cairn_age
 --    unreviewed writer freeze sign-off on a record (ADR-0030). An under-warn, so stated here
 --    and pinned by cairn-node tests/doubted_link_withholds.rs.
 --
---    SECURITY DEFINER is no longer strictly required: the old reasons
+--    SECURITY DEFINER is no longer strictly required by either function below: the old reasons
 --    (cairn_attestation_vouched locked away by db/001; event_log attester columns under the
---    #405 column floor) no longer apply to this body, which reads neither, and everything it
---    reads (link_veto_flag, patient_link, cairn_has_hard_veto) is granted directly to
+--    #405 column floor) no longer apply to these bodies, which read neither, and everything
+--    they read (link_veto_flag, patient_link, cairn_has_hard_veto) is granted directly to
 --    cairn_agent. It is kept so this slice makes no privilege change (issue #718 decides
---    whether to drop it); the answer is one boolean about a set the caller already holds,
---    and search_path is pinned.
+--    whether to drop it). Neither escalates: cairn_chart_set_doubts returns rows of
+--    patient_link that cairn_agent may already SELECT (as it may link_veto_flag), the boolean
+--    is EXISTS over those rows, both are about a set the caller already holds, and both pin
+--    search_path.
+--
 --    R6 (#716, #723): the three cases are now ONE per-link read, cairn_chart_set_doubts, and
 --    the boolean is EXISTS over it — so the sign-off hold (R1b) and the window's per-link marks
 --    cannot disagree. kind 'clash' = (a)+(b) (the link a clinician may confirm or unlink);
@@ -139,11 +142,15 @@ LANGUAGE sql STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+    -- pl.state = 'link' guards BOTH arms: db/018 keeps a flag only beside a standing un-attested
+    -- link (it deletes it whenever the winner is anything else), so on the flag arm this is
+    -- free hardening — a clash is a property of a link, never of an unlink.
     SELECT pl.low, pl.high, 'clash'::text, pl.hlc_wall
     FROM patient_link pl
-    WHERE pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
+    WHERE pl.state = 'link'
+      AND pl.low = ANY(p_charts) AND pl.high = ANY(p_charts)
       AND (EXISTS (SELECT 1 FROM link_veto_flag f WHERE f.low = pl.low AND f.high = pl.high)
-           OR (pl.state = 'link' AND NOT pl.attested AND cairn_has_hard_veto(pl.low, pl.high)))
+           OR (NOT pl.attested AND cairn_has_hard_veto(pl.low, pl.high)))
     UNION ALL
     SELECT pl.low, pl.high, 'separated'::text, pl.hlc_wall
     FROM patient_link pl

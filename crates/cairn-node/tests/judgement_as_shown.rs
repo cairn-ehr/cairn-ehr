@@ -90,7 +90,8 @@ async fn standing(c: &Client, x: Uuid, y: Uuid) -> Option<(String, bool)> {
     .map(|r| (r.get(0), r.get(1)))
 }
 
-/// How many LOCAL attested judgements of `event_type` were signed with `kid_h`.
+/// How many ATTESTED judgements of `event_type` the log holds — every attester's, a peer's
+/// included (the query does not filter by key).
 async fn judgements_signed(c: &Client, event_type: &str) -> i64 {
     c.query_one(
         "SELECT count(*) FROM event_log WHERE event_type = $1 AND attestation IS NOT NULL",
