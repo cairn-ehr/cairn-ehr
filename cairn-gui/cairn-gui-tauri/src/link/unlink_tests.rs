@@ -295,8 +295,14 @@ fn a_line_drawn_before_the_pair_was_judged_is_stale() {
     };
     assert!(line_still_shows(&pair(false), false));
     assert!(line_still_shows(&pair(true), true));
-    assert!(!line_still_shows(&pair(true), false), "a colleague confirmed it");
-    assert!(!line_still_shows(&pair(false), true), "an attested link no longer stands");
+    assert!(
+        !line_still_shows(&pair(true), false),
+        "a colleague confirmed it"
+    );
+    assert!(
+        !line_still_shows(&pair(false), true),
+        "an attested link no longer stands"
+    );
 }
 
 /// The webview half of the pre-click check: each line's door sends the attestation the line
@@ -365,6 +371,40 @@ fn an_outranked_verdict_disarms_a_newer_comparison_of_the_same_pair() {
     // both files under one name would silently become the later file's.
     assert!(!js.contains("function disarmNewerComparison("));
     assert!(!link.contains("function disarmNewerReview("));
+}
+
+/// The body of Rust function `name` in `src`, to the first line that is a lone `}` (rustfmt
+/// closes every top-level fn that way).
+fn rust_fn<'a>(src: &'a str, name: &str) -> &'a str {
+    let start = src
+        .find(&format!("fn {name}("))
+        .unwrap_or_else(|| panic!("{name} is declared"));
+    let len = src[start..]
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("{name} closes"));
+    &src[start..start + len]
+}
+
+/// The window's half of the stale-pair guarantee (PR #777 review): the node's pair re-check
+/// under the chart-link lock runs only inside the `_as_shown` entry points. The window has no
+/// DB-backed tests (#738), so no GUI test reaches the node call, and the node's own tests
+/// (`confirm_link.rs`, `unlink_as_shown.rs`) call the node directly. Reverting either verdict
+/// to the plain `unlink_charts` / `link_charts` would silently bring back the overrule of a
+/// colleague's mid-review judgement with every test green — so this reads the source.
+#[test]
+fn both_verdicts_sign_only_through_the_node_s_as_shown_checks() {
+    let unlink = rust_fn(include_str!("unlink.rs"), "unlink_impl");
+    assert!(
+        unlink.contains("cairn_node::chart_link::unlink_charts_as_shown_from("),
+        "{unlink}"
+    );
+    assert!(!unlink.contains("chart_link::unlink_charts("), "{unlink}");
+    let confirm = rust_fn(include_str!("confirm.rs"), "confirm_link_impl");
+    assert!(
+        confirm.contains("cairn_node::chart_link::confirm_link_as_shown("),
+        "{confirm}"
+    );
+    assert!(!confirm.contains("chart_link::link_charts("), "{confirm}");
 }
 
 /// A Confirm read failure is worded like an Unlink's: it is about to write.

@@ -1580,9 +1580,10 @@ a human has disputed (principle 4, #723).
 
 **B. "How these charts are linked" (the window, #716).**
 - **A standing link line** keeps today's text. A `clash` adds: *"— in doubt: this node's identity
-  check finds a clash between these two charts; lines from other charts of this record cannot be
-  signed off while this link is in doubt"* — "while", never "until": with two doubted links, judging
-  one leaves the hold. Its button is **"Review this link…"**.
+  check finds a clash between these two charts; while this link is in doubt, only lines recorded on
+  this chart alone can be signed off"* — "while", never "until": with two doubted links, judging one
+  leaves the hold; and it names what CAN be signed, because the hold withholds a line shared with
+  another chart too (PR #777 review). Its button is **"Review this link…"**.
 - **A `separated` line** (new): *"{A} and {X} — a clinician recorded on {D} (UTC) that these are
   different people, but other links still join them"*, with **"Review this judgement…"**.
 - **The review panel** is R2b-2's comparison (both charts' facts and the cross-veto findings, read

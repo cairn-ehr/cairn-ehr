@@ -21,10 +21,11 @@ pub const REVIEW_LINK: &str = "Review this link…";
 pub const REVIEW_JUDGEMENT: &str = "Review this judgement…";
 
 /// Appended to a standing link db/054 doubts (case (a)/(b)). Says what is held, and by what. It
-/// says "while", never "until": with two doubted links, judging this one leaves the hold.
+/// says "while", never "until": with two doubted links, judging this one leaves the hold. And it
+/// names what CAN be signed (a line recorded on this chart alone, hazard.rs's one exception)
+/// rather than what cannot, which a line shared with another chart would make untrue.
 const CLASH_NOTE: &str = " — in doubt: this node's identity check finds a clash between these two \
-     charts; lines from other charts of this record cannot be signed off while this link is in \
-     doubt";
+     charts; while this link is in doubt, only lines recorded on this chart alone can be signed off";
 
 /// What a line's pair IS, which decides the verdicts its review panel can offer. It travels to
 /// the webview and comes back with "Review…", so the panel reviews the pair the line showed —
@@ -148,7 +149,12 @@ fn has_orphan_clash(links: &RecordLinks) -> bool {
         .doubts
         .iter()
         .filter(|d| d.kind == DoubtKind::Clash)
-        .any(|d| !links.edges.iter().any(|e| (e.low, e.high) == (d.low, d.high)))
+        .any(|d| {
+            !links
+                .edges
+                .iter()
+                .any(|e| (e.low, e.high) == (d.low, d.high))
+        })
 }
 
 /// Read the record's standing links and db/054's doubts about them. Both empty for a single
@@ -357,16 +363,17 @@ mod tests {
     }
 
     /// With two doubted links, judging this one leaves the hold: the note may say only what is
-    /// always true — lines from the record's other charts are held WHILE this link is in doubt —
-    /// never that a judgement of this link lifts the hold ("until").
+    /// always true — WHILE this link is in doubt, only a line recorded on this chart alone can be
+    /// signed off (hazard.rs withholds a line shared with another chart too, so "lines from other
+    /// charts" would undersell it) — never that a judgement of this link lifts the hold ("until").
     #[test]
     fn a_clash_note_never_promises_that_judging_this_link_lifts_the_hold() {
         assert!(!CLASH_NOTE.contains("until"), "{CLASH_NOTE}");
         assert_eq!(
             CLASH_NOTE,
             " — in doubt: this node's identity check finds a clash between these two charts; \
-             lines from other charts of this record cannot be signed off while this link is in \
-             doubt"
+             while this link is in doubt, only lines recorded on this chart alone can be signed \
+             off"
         );
     }
 

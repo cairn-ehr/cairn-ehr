@@ -6,8 +6,8 @@
 //! module decides the "same person" one — [`same_verdict`] says whether it is offered, under
 //! which label, and what the clinician must know before clicking — and words what it did
 //! ([`confirm_report`]). Both outcomes are an ordinary attested `identity.link.asserted`:
-//! - on a doubted LINK it is "Same person — confirm": the link already stands, the clinician's
-//!   judgement now vouches for it, so db/054 stops doubting it;
+//! - on an UN-ATTESTED link it is "Same person — confirm": the link already stands, the
+//!   clinician's judgement now vouches for it, so db/054 stops doubting it (if it did);
 //! - on a SEPARATED pair it is "Same person — link them": it overlays an earlier clinician's
 //!   "different people", and the panel says so before the click, not after.
 
@@ -17,7 +17,7 @@ use super::view::{LinkReportView, LINK_OUTRANKED, LINK_STILL_JOINED};
 use cairn_node::chart_link::{LinkEffect, StandingLink};
 use uuid::Uuid;
 
-/// The verdict button on a doubted standing link.
+/// The verdict button on an un-attested standing link (doubted by db/054 or not).
 pub const CONFIRM_SAME: &str = "Same person — confirm";
 /// The verdict button on a bridged separation.
 pub const LINK_THEM: &str = "Same person — link them";

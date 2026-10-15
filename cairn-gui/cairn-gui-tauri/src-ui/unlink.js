@@ -76,7 +76,7 @@ async function compareLinked(low, high, kind, attested) {
   // Captured NOW, synchronously: the chart this comparison is about.
   const patientId = renderedPatient;
   const charts = renderedCharts;
-  unlinkCompared_ = null; // until a whole answer lands, there is nothing an Unlink could be signed over
+  unlinkCompared_ = null; // until a whole answer lands, there is nothing a verdict could be signed over
   unlinkOpener = { low, high, kind };
   // The two panels are mutually exclusive: never one verb's button over the other's comparison.
   if (typeof closeLinkPanel === "function" && !el("link-panel").hidden) closeLinkPanel(false);
@@ -296,9 +296,9 @@ async function showUnlinkReport(sent, token, report) {
 async function showUnlinkFailure(sent, token, failure) {
   const place = unlinkAnswerPlace(sent, token);
   const text = failureText(failure);
-  // #713: an interrupted commit may have recorded the unlink. A second press over a chart that
-  // still looks unchanged (the unlink landed as Outranked) would record a second judgement over a
-  // colleague's: the button goes and the chart is re-read, never a live retry.
+  // #713: an interrupted commit may have recorded the verdict. A second press over a chart that
+  // still looks unchanged (the verdict landed as Outranked) would record a second judgement over a
+  // colleague's: both verdicts go and the chart is re-read, never a live retry.
   const reread = Boolean(failure && failure.retry === "after_reread");
   if (place === "elsewhere") {
     sayAnywhere("For chart " + sent.patientId + ": " + text);
@@ -307,8 +307,8 @@ async function showUnlinkFailure(sent, token, failure) {
   } else {
     setMessage(el("unlink-status"), text);
     // A verdict, or a node whose state must change first, will refuse the same comparison
-    // again: take the button away. So does an unknown outcome (above). A bare IPC failure or a
-    // locked key keeps it.
+    // again: take both verdicts away. So does an unknown outcome (above). A bare IPC failure or a
+    // locked key keeps them.
     if (
       failure &&
       (failure.retry === "never" || failure.retry === "after_operator" || reread)

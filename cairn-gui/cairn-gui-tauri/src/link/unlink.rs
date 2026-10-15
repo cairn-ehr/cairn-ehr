@@ -15,8 +15,9 @@
 //! standing separation (`shown_pair`). A verdict then checks fixture mode, then that it carries
 //! the standing address the panel read (`require_standing`), then the key; the Compare, which
 //! writes nothing, needs none of them (with no database it refuses). The pair is named by its two
-//! charts; the node is told which chart it is judged FROM, so a judgement on charts not held here
-//! is filed under the open chart (#699 (a)).
+//! charts; the node is told which chart an Unlink is judged FROM, so an unlink of charts not held
+//! here is filed under the open chart (#699 (a)). The "same person" verdict needs both charts
+//! held (`confirm_view::same_verdict`).
 //!
 //! Why the Unlink carries `standing` too: inside one record a third chart can keep the pair
 //! joined, so a colleague's confirm of the pair landing while this clinician reads leaves the

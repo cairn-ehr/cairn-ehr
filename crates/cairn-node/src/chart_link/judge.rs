@@ -305,11 +305,12 @@ fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
     }
 }
 
-/// The shared body of both entry points: pre-checks (legible refusals before anything is
+/// The shared body of every entry point above: pre-checks (legible refusals before anything is
 /// signed), then ONE transaction that writes the judgement AND reads back what it did — so
 /// once the commit succeeds there is nothing left that can fail. `opened`: the chart the
-/// judgement is made from, if the caller named one (see [`unlink_charts`]). `shown`: the two
-/// records the judgement was made over, if the caller compared them (see [`RecordsShown`]).
+/// judgement is made from, if the caller named one (see [`unlink_charts`]). `shown`: the
+/// records the judgement was made over, if the caller compared them, and — for a verdict inside
+/// one record — the pair's standing assertion as the panel read it (see [`RecordsShown`]).
 #[allow(clippy::too_many_arguments)]
 async fn judge(
     client: &mut tokio_postgres::Client,
@@ -326,6 +327,16 @@ async fn judge(
         return Err(deliberate_refusal(format!(
             "{a} and {b} are the same chart — a chart cannot be linked to itself"
         )));
+    }
+    if shown.and_then(|s| s.pair).is_some_and(<[u8]>::is_empty) {
+        // Also about the INPUT: a panel that read no standing judgement has nothing to sign
+        // over. Without this the pair check would refuse it anyway (no real address is empty),
+        // but as "changed while you were judging" — untrue; the window's `require_standing`
+        // says the same sentence, so a non-window caller gets the true reason too.
+        return Err(deliberate_refusal(
+            "the comparison did not read which judgement stands on this pair — nothing was \
+             done; review it again",
+        ));
     }
     let (a_held, b_held) = (is_held(client, a).await?, is_held(client, b).await?);
     // Only asked when it can change the answer: an unlink with exactly one chart unheld.

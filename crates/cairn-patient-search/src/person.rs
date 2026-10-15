@@ -32,7 +32,14 @@ pub struct PersonRow {
     members: Vec<Candidate>,
     /// Whether db/054 doubts a link among this person's charts (R6, #723). A display property
     /// read at search time: it is NOT part of the row's wire shape (the serde conversion is the
-    /// member array) and never part of what a registration signs.
+    /// member array) and never part of what a registration signs. So `false` means "not marked",
+    /// never "verified undoubted": every constructor but `with_doubt`, and deserialisation,
+    /// leave it false.
+    ///
+    /// The derived `PartialEq` DOES compare it, deliberately: two rows that render differently
+    /// are not equal. The consequence is that a doubted row is not equal to its own serde round
+    /// trip — compare `members()` when the question is "the same charts?", and never strip the
+    /// mark to make two rows compare equal.
     doubted: bool,
 }
 

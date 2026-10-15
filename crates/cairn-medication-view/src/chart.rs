@@ -330,6 +330,7 @@ mod tests {
         // R6 (#716): the window's one gesture for a doubted link both confirms and unlinks, so
         // the remedy names it by its label; the old "Not the same person…" wording is gone.
         assert!(DOUBTED_LINK_INSTRUCTION.contains("\"Review this link…\""));
+        assert!(!DOUBTED_LINK_INSTRUCTION.contains("Not the same person"));
         assert!(
             !DOUBTED_LINK_INSTRUCTION.contains("cannot confirm"),
             "the window confirms a standing link since R6 (#716)"

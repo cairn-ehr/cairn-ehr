@@ -325,7 +325,7 @@ Record in the template's *Compare and link* section. **A figure outside the ≤ 
 finding to file, never a budget to adjust** (§1.2's own rule, echoed here because this is the
 slice that first measures it).
 
-## 10. Unlink one link: "Not the same person…" (R2b-2, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) · [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699))
+## 10. Unlink one link: "Review this link…" (formerly "Not the same person…"; R2b-2, [#681](https://github.com/cairn-ehr/cairn-ehr/issues/681) · [#699](https://github.com/cairn-ehr/cairn-ehr/issues/699))
 
 The repair path's second §1.2 figure. **Live only** — fixture charts are never linked, so a `--mock`
 chart has no "How these charts are linked" list and nothing to unlink; there is no `--mock` variant to
@@ -363,7 +363,9 @@ earlier in this runbook; substitute your own.
 > signed only over the pair the panel read: if another judgement about the pair was recorded while you
 > were reading, it is refused ("what stands between charts … changed while you were judging it … —
 > nothing was done; review it again") and you compare again. An un-attested link also shows **Same
-> person — confirm** beside it; that verdict is timed in section 13, not here.
+> person — confirm** beside it when both charts are held on this node; that verdict is timed in
+> section 13, not here. A line drawn before a colleague judged the pair opens no panel: it says the
+> pair "has been judged since the list was drawn" — reload the chart.
 
 Start the stopwatch at the press of **"Review this link…"** on a link's line, not before — choosing
 WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then
@@ -592,7 +594,7 @@ cargo run --release -p cairn-gui-tauri -- \
 
 **Measurement 1 — confirm a doubted link (Setup A).** Open one chart of the pair. Its "How these
 charts are linked" line ends "— in doubt: this node's identity check finds a clash between these two
-charts; lines from other charts of this record cannot be signed off while this link is in doubt". Start
+charts; while this link is in doubt, only lines recorded on this chart alone can be signed off". Start
 the stopwatch at the press of **"Review this link…"** on that line — reading the mark is part of
 opening the chart; choosing to act on it starts the gesture. Stop it at the outcome line
 "Confirmed — charts … and … are recorded as the same person by your judgement."

@@ -367,3 +367,73 @@ async fn an_unlink_over_the_pair_as_shown_splits_a_two_chart_record() {
     assert_eq!(out.charts, ChartSet::single(a));
     assert_eq!(standing(&c, a, b).await, Some(("unlink".into(), true)));
 }
+
+/// The node half of `require_standing` (PR #777 review): an empty address is refused for what it
+/// is — the panel never read which judgement stands — not as a pair that changed.
+#[tokio::test]
+async fn an_unlink_without_the_address_the_panel_read_is_refused_for_that_reason() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b, _cc, set) = bridged_record(&c, &sk_a, &kid_a).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let err = unlink_charts_as_shown_from(&mut c, a, b, a, &set, &[], &who, ORIGIN)
+        .await
+        .unwrap_err();
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Input), "{err:#}");
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("did not read which judgement stands"),
+        "{text}"
+    );
+    assert_eq!(attested_unlinks(&c).await, 0, "nothing signed");
+}
+
+/// #699 (a) through the review panel's door (PR #777 review): the window now unlinks through
+/// `unlink_charts_as_shown_from`, which adds the record AND pair re-checks to `unlink_charts`'s
+/// path — but `unlink_from_record.rs`'s far-link suite still calls `unlink_charts`. Here the far
+/// link B–C of an A–B–C record is unlinked from A on a node that holds ONLY A (B and C were never
+/// registered here; a peer's machine linked them, filing both links under A). It must still take
+/// effect, filed under A — the re-checks must not refuse a subject this node does not hold.
+#[tokio::test]
+async fn the_far_link_of_a_record_holding_only_the_opened_chart_unlinks_as_shown() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b, cc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    common::submit_registration(&c, &sk_a, &kid_a, a, 1).await;
+    for (x, y, wall) in [(a, b, 50), (b, cc, 51)] {
+        let mut ev = link_assertion_event(&kid_a, x, y, LinkVerb::Link, wall, 0, "peer", false);
+        ev.patient_id = a.to_string();
+        common::apply_remote_raw(&c, &sk_a, ev).await.unwrap();
+    }
+    let set = ChartSet::new([a, b, cc]).unwrap();
+    let shown = panel_read(&c, b, cc).await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let out = unlink_charts_as_shown_from(&mut c, b, cc, a, &set, &shown, &who, ORIGIN)
+        .await
+        .expect("the far link of A–B–C unlinks as shown when judged from A");
+    assert_eq!(out.effect, LinkEffect::TookEffect);
+    assert_eq!(out.filed_under, a, "filed under the chart judged from");
+    assert_eq!(out.record_of, a);
+    assert_eq!(
+        out.charts,
+        ChartSet::new([a, b]).unwrap(),
+        "A's record is A and B"
+    );
+    assert_eq!(standing(&c, b, cc).await, Some(("unlink".into(), true)));
+}

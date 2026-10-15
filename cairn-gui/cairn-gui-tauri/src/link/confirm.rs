@@ -1,9 +1,9 @@
 //! The review panel's "same person" verdict — record a clinician's attested judgement that the
 //! two charts of ONE pair inside the open record are the same person (repair path R6, #716).
 //!
-//! Two cases, one act. On a DOUBTED link ("Same person — confirm") the link already stands but
-//! no clinician vouches for it — a machine made it, or a veto or a clinician's "different people"
-//! elsewhere in the record casts doubt on it — and the clinician's judgement now does. On a
+//! Two cases, one act. On an UN-ATTESTED link ("Same person — confirm") the link already stands
+//! but no clinician's confirmation of it is on record here — it may be one db/054 doubts for a
+//! clash, or a link nothing doubts — and the clinician's judgement now vouches for it. On a
 //! BRIDGED separation ("Same person — link them") a clinician once recorded "different people"
 //! but other links still join the two charts; the new judgement overlays theirs, both stay on
 //! record. Either way the node writes an ordinary attested `identity.link.asserted` through the
@@ -18,13 +18,15 @@
 //! (a changed one makes the comparison stale), the pair still being what the line showed; then
 //! fixture mode; then the standing address is present ([`require_standing`]); then the key (a
 //! locked key is not a verdict: the button stays for after the unlock). The screen rules are
-//! pinned by this file's tests (and `resolve_edge`'s own in `unlink_tests.rs`); the write-side
-//! arms — fixture, key, the node call — are pinned by the node's DB tests
-//! (`cairn-node/tests/confirm_link.rs`), since the window has no DB-backed tests yet (#738).
+//! pinned by this file's tests (and `resolve_edge`'s own in `unlink_tests.rs`). Of the write-side
+//! arms, the node call is pinned by the node's DB tests (`cairn-node/tests/confirm_link.rs`) and
+//! the routing to it by `unlink_tests.rs`'s source read; the fixture and locked-key arms are not
+//! yet pinned, since the window has no DB-backed tests (#738).
 //!
 //! Why `standing` travels: the panel read the content address of the judgement standing on the
 //! pair when it was drawn (`compare_linked`). The node re-reads the record AND the pair under
-//! the chart-link lock before signing (`confirm_link_as_shown`, #708) and refuses if the pair's
+//! the chart-link lock before signing (`confirm_link_as_shown`: the record check is #708's, the
+//! pair check R6's) and refuses if the pair's
 //! standing judgement is no longer that one — so neither a colleague's unlink nor a colleague's
 //! confirm that landed while this clinician was reading is ever signed over.
 
@@ -59,19 +61,21 @@ pub async fn confirm_link_impl(
     kind: &str,
     standing: Vec<u8>,
 ) -> Result<LinkReportView, ErrorView> {
+    // 1: the kind must be one we sent; an unknown one names no pair.
     let kind = PairKind::parse(kind).ok_or_else(|| refused(LINK_GONE))?;
-    // 1–3: the chart on screen, the displayed set, the pair still what the panel showed — as
+    // 2–4: the chart on screen, the displayed set, the pair still what the panel showed — as
     // the kind the panel sent, so a confirm on a link is never applied to a separation.
     let edge = resolve_edge(state, Act::Confirm, patient_id, &charts, low, high, kind).await?;
-    // 4: fixture mode (unreachable in practice: fixture charts are never linked — as unlink).
+    // 5: fixture mode (unreachable in practice: fixture charts are never linked — as unlink).
     if state.is_mock() {
         return Err(refused(
             "fixture mode: this window is showing mock data and cannot write",
         ));
     }
-    // An empty address means the panel never read which judgement stands: nothing to sign over.
+    // 6: an empty address means the panel never read which judgement stands: nothing to sign
+    // over.
     require_standing(&standing)?;
-    // 5: the key. A confirm is a clinical act, so taking the key counts as activity.
+    // 7: the key. A confirm is a clinical act, so taking the key counts as activity.
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await

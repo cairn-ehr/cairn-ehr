@@ -15,9 +15,10 @@ use anyhow::Context;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 
-/// The two records a human judgement was made over, as the clinician was SHOWN them (#708):
+/// The records a human judgement was made over, as the clinician was SHOWN them (#708):
 /// `this` is the record on screen, `other` the record compared with it. Each subject of the
-/// judgement must be in one of them.
+/// judgement must be in one of them. For a verdict about a pair INSIDE one record (R6's review
+/// panel) both are that record, and [`pair`](Self::pair) carries what the panel read.
 #[derive(Debug, Clone, Copy)]
 pub struct RecordsShown<'a> {
     pub this: &'a ChartSet,

@@ -470,3 +470,39 @@ async fn a_confirm_lifts_the_sign_off_hold_on_a_vetoed_machine_link() {
         .get(0);
     assert!(!held);
 }
+
+/// An EMPTY standing address means the panel never read which judgement stands — not that the
+/// pair changed. It is refused before anything else, as stale input, with the reason that is
+/// true (PR #777 review): before this guard it fell through to the pair check, which no real
+/// address ever matches, and was worded "changed while you were judging it".
+#[tokio::test]
+async fn a_confirm_without_the_address_the_panel_read_is_refused_for_that_reason() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _g = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
+    let (a, b, _cc, set, _ca) = bridged_record(&c, &sk_a, &kid_a).await;
+    let before = judgements_signed(&c, "identity.link.asserted").await;
+    let who = Reviewer {
+        human_sk: &sk_h,
+        human_kid: &kid_h,
+    };
+    let err = confirm_link_as_shown(&mut c, a, b, &set, &[], &who, ORIGIN)
+        .await
+        .unwrap_err();
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Input), "{err:#}");
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("did not read which judgement stands"),
+        "{text}"
+    );
+    assert!(!text.contains("changed while"), "{text}");
+    assert_eq!(
+        judgements_signed(&c, "identity.link.asserted").await,
+        before,
+        "nothing signed"
+    );
+}
