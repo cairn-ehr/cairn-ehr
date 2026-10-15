@@ -1769,6 +1769,74 @@ verdict is not re-checked against facts or vetoes that changed since the compari
 #738 (the window's fixture and locked-key arms are unpinned in the mock; no DB test of
 `unlink_charts_as_shown_from` in the #699 (a) neither-held case).
 
+### R7 — an honest banner while the node catches up, and a note on an unverified link (#742, #743 part 2), designed 2026-10-15
+
+Two gaps left by R5a's review, each a place where the window says less than the node knows. The
+maintainer decided both on 2026-10-15.
+
+**#742 — "no banner" must not mean "not yet known".** A pair is proposed when the NEWER of its two
+charts is checked. So while the node is catching up, a chart that is itself already checked shows
+no banner, though a duplicate registered minutes later and still waiting in the queue could yet
+propose against it (ED: the same unconscious patient registered twice). `check_lines` appended the
+node's status line for `CatchingUp` only when the record already had a pending line.
+
+- **Decision (option "change notices only").** On a `CatchingUp` node, the status line ("Duplicate
+  check running — N waiting.") is also shown when a **`change`** notice waits for any chart. A
+  `change` notice for a chart INSIDE the record already shows that chart's own pending line, so a
+  node-wide "is any change notice waiting" is exactly "outside this record or already explained".
+  It is one more column on the status read the banner already makes, not a new statement.
+- **`config` notices alone never trigger it.** A whole-population re-check (a matcher update, the
+  first run) queues every chart at once, before this chart's own check ran, so that check already
+  scored this chart against every waiting chart's current evidence. Showing the line for hours on
+  every checked chart during a re-check would train staff to ignore it, which would blunt the ED
+  case the line exists for.
+- **Known over-warn, on the safe side:** a `change` notice queued before this chart's check (and so
+  already seen by it) still shows the line until the worker drains it, typically for seconds (p95
+  1.4 s a chart, #725). It never under-warns. The precise alternative, a per-chart "checked" stamp,
+  was declined: it needs a schema generation, and an MVCC-correct comparison (a notice inserted
+  before the check but committed after it was NOT seen by the check, so comparing `queued_at` fails
+  open).
+- **Unchanged:** `Current` never appends the line (#739's contradiction); `Stalled` always does;
+  `NeverRun` already has a pending line on every chart; the wording of `status_line`.
+- **Built as:** db/056's `cairn_duplicate_check_status()` gains `OUT charts_changing bigint`
+  (distinct charts with a `change` notice). The DO-block heal now drops any shape lacking that column,
+  which also covers the older `newest_age_s` shape. `QueueSnapshot::charts_changing`;
+  `CheckState::CatchingUp { change_waiting }`; `check_lines` explains `CatchingUp` when
+  `change_waiting` or a line is already shown. Edited in place (ADR-0080's hash gate replays it);
+  `SCHEMA_GENERATION` stays 58.
+
+**#743 part 2 — a soft-vetoed pair joined by an un-attested link is flagged nowhere.** db/016 has
+two severities: `hard_veto` (a trustworthy clash) and `degrade_hold` (identifiers in one system
+differ, but at least one side has no format profile, so this node cannot tell a real mismatch from
+formatting). Only `hard_veto` makes a link a db/054 *clash* (R1b's sign-off hold, R6's "in doubt"
+mark). A peer's un-attested matcher link over a `degrade_hold` pair makes the two charts one record,
+so db/057 drops the pair from the banner and the tray, and nothing on the window says the link is
+unverified.
+
+- **Decision (a non-holding note).** db/016 says a `degrade_hold` "must NOT demote an existing
+  link", so it must not become a doubt or a hold. Instead, the links list ("How these charts are
+  linked") appends a note to that link's line, and the line keeps its one door, "Review this link…",
+  whose panel already shows the identifier finding and offers Confirm and Unlink (R6).
+- **Computed fresh, never from the stored proposal** (R5a: a stored propose-time fact goes stale in
+  exactly the case it exists for): db/054's new `cairn_chart_set_unverified_links(uuid[])` returns
+  `(low, high, system)` for every **un-attested** standing link in the set whose pair has a
+  `degrade_hold` identifier finding *now*. It does not depend on this node having proposed the
+  pair, so it also covers a link that arrived before any local check.
+- **It is deliberately NOT part of `cairn_chart_set_doubts`.** The hold is `EXISTS` over the doubts,
+  so a third kind there would freeze sign-off on a soft veto. A pin asserts the hold stays false for
+  a set whose only finding is a `degrade_hold`.
+- **An attested link carries no note** (a clinician made the decision the veto exists to force). **A
+  clash line carries only its clash note** (it already says "in doubt"; a second note adds noise).
+- **Wording** (`record_links.rs`): ` — unverified here: the two charts hold different <system>
+  identifiers, and this node cannot tell a real mismatch from a difference in formatting`. It
+  claims nothing about holds, so it stays true when another link in the record is in doubt.
+- **A note naming a pair that is not a standing edge** cannot come from the one snapshot both reads
+  share. Unlike an orphan clash (which the R1b hold would point at), it is dropped silently: no hold
+  depends on it, and refusing the whole list over an informational note would hide every door.
+
+**Out of R7:** the CLI's links listing (it has no per-link note yet), #786 (the doubt mark on the
+wire shape), #784 (a verdict not re-checked against changed facts).
+
 ## Error handling
 
 - Worker down or behind → the honest-lag line; writes are never affected (the trigger cannot raise).

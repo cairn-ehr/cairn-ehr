@@ -145,16 +145,25 @@ $$;
 -- STOPPED worker — "running" forever while nothing is checked.
 -- VOLATILE (the default): it reads clock_timestamp().
 --
--- The OUT columns changed (newest_age_s -> quiet_age_s), and CREATE OR REPLACE cannot change a
--- function's return type. This heals a database that loaded this file's pre-merge shape; it is a
--- no-op everywhere else (the old column name is the guard).
--- to_regprocedure resolves the name exactly as the DROP below will (same search_path, no
--- arguments) and is NULL when no such function exists, so the guard inspects the very function it
--- would drop, never a same-named one in another schema.
+-- charts_changing (R7, #742): how many distinct charts have a waiting CHANGE notice. The banner
+-- of a chart that is itself already checked shows the "running" line while one waits, because a
+-- duplicate registered after this chart's check is proposed only when IT is checked — until then
+-- "no banner" would mean "not yet known". A 'config' notice never counts: a whole-population
+-- re-check queues every chart at once, before this chart's own check ran, so that check already
+-- scored this chart against them (and the line on every chart for hours would train staff to
+-- ignore it).
+--
+-- The OUT columns have changed twice (newest_age_s -> quiet_age_s; then + charts_changing), and
+-- CREATE OR REPLACE cannot change a function's return type. This heals a database that loaded ANY
+-- older shape: the guard is the NEWEST column's absence, so one check covers every earlier shape.
+-- It is a no-op on a current database. to_regprocedure resolves the name exactly as the DROP below
+-- will (same search_path, no arguments) and is NULL when no such function exists, so the guard
+-- inspects the very function it would drop, never a same-named one in another schema. The GRANT
+-- at the end of this file restores EXECUTE after a DROP.
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM pg_proc
                WHERE oid = to_regprocedure('cairn_duplicate_check_status()')
-                 AND 'newest_age_s' = ANY (proargnames)) THEN
+                 AND NOT ('charts_changing' = ANY (proargnames))) THEN
         DROP FUNCTION cairn_duplicate_check_status();
     END IF;
 END $$;
@@ -163,7 +172,8 @@ CREATE OR REPLACE FUNCTION cairn_duplicate_check_status(
     OUT quiet_age_s       bigint,
     OUT config_recheck    boolean,
     OUT worker_seen       boolean,
-    OUT last_drained_hhmm text)
+    OUT last_drained_hhmm text,
+    OUT charts_changing   bigint)
 LANGUAGE sql
 SET search_path = public, pg_temp
 AS $$
@@ -183,7 +193,8 @@ AS $$
         (SELECT to_char(last_drained_at,
                         CASE WHEN last_drained_at::date = current_date
                              THEN 'HH24:MI' ELSE 'YYYY-MM-DD HH24:MI' END)
-           FROM match_worker_state)
+           FROM match_worker_state),
+        (SELECT count(DISTINCT patient_id) FROM match_pending WHERE reason = 'change')
 $$;
 
 -- The worker (cairn_agent) reads and clears notices, queues a 'config' re-check, and keeps its

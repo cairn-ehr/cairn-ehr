@@ -234,6 +234,13 @@ pub fn section_view(
 /// node reads pending forever (`cairn_chart_check_pending` is TRUE for a chart not held here), and
 /// "not yet run" followed by "up to date" would contradict itself on every healthy node. An
 /// unreadable status is always shown.
+///
+/// `CatchingUp` also shows it on a fully checked record while a CHANGE notice waits (#742, R7):
+/// a pair is proposed when its NEWER chart is checked, so a duplicate registered after this
+/// record's check cannot have been proposed yet, and without the line "no banner" would mean
+/// "not yet known". A change notice for one of THIS record's charts already shows that chart's
+/// pending line, so the node-wide flag adds the line only for changes elsewhere. A config-only
+/// re-check does not: it was queued before this record's check ran, so that check saw it.
 pub fn check_lines(
     opened: Uuid,
     checks: &[ChartCheck],
@@ -271,7 +278,8 @@ pub fn check_lines(
             let explains = match state {
                 CheckState::Stalled { .. } => true,
                 CheckState::Current { .. } => false,
-                _ => !lines.is_empty(),
+                CheckState::CatchingUp { change_waiting, .. } => change_waiting || !lines.is_empty(),
+                CheckState::NeverRun { .. } => !lines.is_empty(),
             };
             if explains {
                 lines.push(status_line(&state));

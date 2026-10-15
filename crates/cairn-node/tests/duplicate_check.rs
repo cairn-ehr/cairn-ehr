@@ -79,7 +79,8 @@ async fn a_backlog_queued_at_once_reads_running_while_the_worker_progresses() {
         classify_seeded(&c, "10 minutes", "1 minute").await,
         CheckState::CatchingUp {
             waiting: 1,
-            config_recheck: false
+            config_recheck: false,
+            change_waiting: true
         }
     );
 }

@@ -169,9 +169,11 @@ fn a_pending_member_is_named_and_the_node_status_explains_it() {
         id(1),
         &checks,
         &[member(2, "Ann LEE")],
+        // No change waits elsewhere: the pending lines alone bring the status line, as before R7.
         Ok(CheckState::CatchingUp {
             waiting: 2,
             config_recheck: false,
+            change_waiting: false,
         }),
     );
     assert_eq!(
@@ -183,6 +185,54 @@ fn a_pending_member_is_named_and_the_node_status_explains_it() {
             "Duplicate check running — 2 charts waiting.".to_string(),
         ]
     );
+}
+
+/// #742 (R7): a duplicate registered after this chart was checked is proposed only when IT is
+/// checked. Until then, "no banner" would mean "not yet known" (ED: the same unconscious patient
+/// registered twice minutes apart), so a waiting change brings the node's line onto a checked
+/// chart.
+#[test]
+fn a_checked_record_names_a_change_still_waiting_elsewhere() {
+    let checks = [ChartCheck {
+        chart: id(1),
+        pending: Ok(false),
+    }];
+    let lines = check_lines(
+        id(1),
+        &checks,
+        &[],
+        Ok(CheckState::CatchingUp {
+            waiting: 1,
+            config_recheck: false,
+            change_waiting: true,
+        }),
+    );
+    assert_eq!(
+        lines,
+        vec!["Duplicate check running — 1 chart waiting.".to_string()]
+    );
+}
+
+/// #742 (R7): a whole-population re-check alone was queued before this chart's own check ran, so
+/// that check already saw every waiting chart. A checked record stays quiet through it: the line
+/// on every chart for hours would train staff to ignore it.
+#[test]
+fn a_checked_record_stays_quiet_through_a_config_only_recheck() {
+    let checks = [ChartCheck {
+        chart: id(1),
+        pending: Ok(false),
+    }];
+    let lines = check_lines(
+        id(1),
+        &checks,
+        &[],
+        Ok(CheckState::CatchingUp {
+            waiting: 4000,
+            config_recheck: true,
+            change_waiting: false,
+        }),
+    );
+    assert!(lines.is_empty(), "{lines:?}");
 }
 
 #[test]
