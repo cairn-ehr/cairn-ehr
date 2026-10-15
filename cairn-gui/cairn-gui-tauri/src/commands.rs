@@ -52,8 +52,9 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
     // NOT `?`: a failed read of the member identities must never hide the medication list
     // itself (availability over consistency). `chart_pane` turns it into a warning instead.
     let members = linked_members(state, &list.charts).await;
-    // Likewise the links: an unread list is worded in the pane, never a failed open.
-    let edges = crate::link::record_links::read_record_edges(state, &list.charts).await;
+    // Likewise the links and their doubts: an unread list is worded in the pane, never a
+    // failed open. (`read_record_links` takes the db lock itself; nothing here holds it.)
+    let links = crate::link::record_links::read_record_links(state, &list.charts).await;
     // The possible-duplicate banner (R5a); every failure inside it is a worded line.
     let dups = crate::duplicates::duplicate_section(
         state,
@@ -62,7 +63,7 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
         members.as_deref().unwrap_or(&[]),
     )
     .await;
-    Ok(chart_pane(&list, members, edges, dups))
+    Ok(chart_pane(&list, members, links, dups))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -505,6 +506,8 @@ pub(crate) mod tests {
             low: String::new(),
             high: String::new(),
             text: String::new(),
+            kind: crate::link::record_links::PairKind::Link,
+            button: String::new(),
         };
         let member = MemberLine {
             patient_id: String::new(),

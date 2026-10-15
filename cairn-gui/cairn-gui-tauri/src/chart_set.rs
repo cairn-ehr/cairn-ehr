@@ -198,8 +198,8 @@ pub struct ChartPane {
     /// clinician trusting the combination, and its line is gone. Without this warning a combined
     /// list would read as a single chart.
     pub members_error: Option<String>,
-    /// The standing links joining the record's charts, one line each (R2b-2) — empty for a
-    /// chart linked to nothing.
+    /// The standing links joining the record's charts, one line each (R2b-2), then one line per
+    /// bridged "different people" judgement (R6) — empty for a chart linked to nothing.
     pub links: Vec<crate::link::record_links::RecordLinkView>,
     /// Set when those links could not be read; the list and the member lines still show.
     pub links_error: Option<String>,
@@ -216,7 +216,7 @@ pub struct ChartPane {
 pub fn chart_pane(
     list: &PatientMedicationList,
     members: Result<Vec<MemberLine>, String>,
-    edges: Result<Vec<cairn_node::patient::edges::RecordEdge>, String>,
+    links: Result<crate::link::record_links::RecordLinks, String>,
     duplicates: crate::duplicates::view::DuplicateSection,
 ) -> ChartPane {
     let (members, members_error) = match members {
@@ -232,7 +232,7 @@ pub fn chart_pane(
         ),
     };
     let (links, links_error) =
-        crate::link::record_links::links_section(edges, &members, list.charts.is_linked());
+        crate::link::record_links::links_section(links, &members, list.charts.is_linked());
     ChartPane {
         list: build_view(list),
         members,
@@ -273,6 +273,7 @@ pub async fn linked_members(
 mod tests {
     use super::*;
     use crate::duplicates::view::DuplicateSection;
+    use crate::link::record_links::RecordLinks;
     use cairn_medication_view::ChartSet;
     use uuid::Uuid;
 
@@ -435,7 +436,7 @@ mod tests {
         let pane = chart_pane(
             &list,
             Err("connection reset".into()),
-            Ok(vec![]),
+            Ok(RecordLinks::default()),
             DuplicateSection::checked_none_open(),
         );
         assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
@@ -457,7 +458,7 @@ mod tests {
         let pane = chart_pane(
             &cairn_medication_view::fixtures::sample_chart(),
             Ok(vec![]),
-            Ok(vec![]),
+            Ok(RecordLinks::default()),
             DuplicateSection::checked_none_open(),
         );
         assert!(pane.members_error.is_none());

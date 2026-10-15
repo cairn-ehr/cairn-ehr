@@ -1,6 +1,15 @@
-//! Every sentence the "Not the same person" panel shows, as pure functions (R2b-2). The same
-//! rule as `view.rs`: on this panel the wording IS the safety content.
+//! Every sentence the review panel shows, as pure functions (R2b-2, R6). The same rule as
+//! `view.rs`: on this panel the wording IS the safety content.
+//!
+//! The panel is R2b-2's side-by-side comparison, opened from a line's one door on "How these
+//! charts are linked" ("Review this link…" / "Review this judgement…"). Since R6 it is a REVIEW
+//! panel: [`link_review_view`] decides which verdicts it offers on the pair the line showed —
+//! "Not the same person — unlink" (worded here) and the "same person" verdict
+//! (`confirm_view.rs`'s [`same_verdict`]).
 
+use super::confirm_view::same_verdict;
+use super::record_links::PairKind;
+use super::unlink::ShownPair;
 use super::view::{fact_rows, finding_line, heading, ColumnView, FactRowView, LinkReportView};
 use crate::funnel::view::ErrorView;
 use cairn_medication_view::ChartSet;
@@ -11,12 +20,13 @@ use uuid::Uuid;
 
 /// Refused because the link is no longer one of the record's standing links — a peer's unlink
 /// landed, or this clinician already undid it — so there is nothing left to judge. Also the
-/// answer, by design, to a link id that does not parse and to a Compare with no database: in each
-/// case there is no standing link to act on, and nothing is guessed.
+/// answer, by design, to a link id that does not parse, to a pair kind the window did not send
+/// it, to a separation that no longer stands, and to a Compare with no database: in each case
+/// there is no standing pair to act on, and nothing is guessed.
 pub const LINK_GONE: &str =
     "that link is no longer part of this record — nothing was done; reload the chart";
 
-/// The three reads an unlink comparison is built from, each of which may have failed alone.
+/// The reads a review panel is built from, each of which may have failed alone.
 pub struct UnlinkParts {
     /// The lower chart's identity facts.
     pub low: Result<Vec<ChartFacts>, String>,
@@ -24,38 +34,62 @@ pub struct UnlinkParts {
     pub high: Result<Vec<ChartFacts>, String>,
     /// The veto findings between the two charts.
     pub findings: Result<Vec<VetoFinding>, String>,
+    /// The content address of the judgement standing on the pair (`standing_link`), which a
+    /// "same person" verdict sends back so the node can refuse it if the pair changed since this
+    /// read. `Ok(None)`: no assertion stands on the pair (it vanished since the list was read).
+    pub standing: Result<Option<Vec<u8>>, String>,
 }
 
-/// What the unlink comparison hands the webview.
+/// What the review panel hands the webview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UnlinkComparisonView {
+pub struct LinkReviewView {
     /// Veto findings, worded; hard ones first. Empty means render nothing (never "no conflicts").
     pub findings: Vec<String>,
     /// The low chart's column, then the high chart's.
     pub columns: Vec<ColumnView>,
     /// The fact rows, a cell per column.
     pub rows: Vec<FactRowView>,
-    /// The record's chart set this comparison was made FROM — sent back with the unlink,
+    /// The record's chart set this comparison was made FROM — sent back with either verdict,
     /// which refuses a changed one.
     pub charts: Vec<String>,
-    /// The link's lower chart id, sent back with the unlink.
+    /// The pair's lower chart id, sent back with either verdict.
     pub low: String,
-    /// The link's higher chart id, sent back with the unlink.
+    /// The pair's higher chart id, sent back with either verdict.
     pub high: String,
-    /// What could NOT be read. Non-empty means `can_unlink` is false.
+    /// What the pair is (a standing link, or a bridged separation), sent back with the verdict.
+    pub kind: PairKind,
+    /// What could NOT be read. Non-empty means neither verdict is offered.
     pub problems: Vec<String>,
-    /// True only when everything was read: never offer a judgement on a partial comparison.
+    /// True only when everything was read AND the pair is a standing link: never offer a
+    /// judgement on a partial comparison, and a separated pair is already unlinked.
     pub can_unlink: bool,
+    /// The "same person" button's text ([`super::confirm_view::CONFIRM_SAME`] /
+    /// [`super::confirm_view::LINK_THEM`]), or `None` when that verdict does not apply or the
+    /// panel is partial.
+    pub same_label: Option<String>,
+    /// A sentence beside the verdicts: why "same person" is not offered, or what it overrides.
+    pub same_note: Option<String>,
+    /// True only when everything was read, a "same person" verdict applies, and the standing
+    /// judgement's address was read (the verdict cannot be sent without it).
+    pub can_confirm: bool,
+    /// The standing judgement's content address — empty when unread. Sent back with the "same
+    /// person" verdict. A content address, not key material: it serializes as a number array.
+    pub standing: Vec<u8>,
 }
 
 /// Assemble the panel from whatever was read; the availability rule is `comparison_view`'s:
-/// show what was read, name what was not, offer no unlink unless everything was read.
-pub fn unlink_comparison_view(
+/// show what was read, name what was not, offer no verdict unless everything was read.
+///
+/// `shown` is the pair as the list line showed it (`unlink.rs`'s `shown_pair`): its kind decides
+/// whether Unlink applies, and with the two charts' held flags it decides the "same person"
+/// verdict ([`same_verdict`]).
+pub fn link_review_view(
     parts: UnlinkParts,
     charts: &ChartSet,
     low: Uuid,
     high: Uuid,
-) -> UnlinkComparisonView {
+    shown: &ShownPair,
+) -> LinkReviewView {
     let mut problems = vec![];
     let mut take = |r: Result<Vec<ChartFacts>, String>, chart: Uuid| match r {
         Ok(v) => v,
@@ -77,8 +111,27 @@ pub fn unlink_comparison_view(
             vec![]
         }
     };
+    let standing = match parts.standing {
+        Ok(Some(address)) => address,
+        Ok(None) => vec![],
+        Err(e) => {
+            problems.push(format!(
+                "Which judgement stands on this link could not be read: {e}"
+            ));
+            vec![]
+        }
+    };
     let both: Vec<ChartFacts> = low_facts.into_iter().chain(high_facts).collect();
-    UnlinkComparisonView {
+    // Empty when a facts read failed — which already put a problem on the panel, so no verdict
+    // is offered whatever `same_verdict` makes of it.
+    let held: Vec<(Uuid, bool)> = both.iter().map(|f| (f.patient_id, f.held)).collect();
+    let same = same_verdict(shown, &held);
+    let whole = problems.is_empty();
+    // A partial read offers NO verdict (Review Focus 5): the label goes too, so the webview
+    // never draws a "same person" button that cannot be pressed. The note stays — it is about
+    // the pair, true whatever else failed to read.
+    let same_label = if whole { same.label } else { None };
+    LinkReviewView {
         findings,
         columns: both
             .iter()
@@ -91,7 +144,12 @@ pub fn unlink_comparison_view(
         charts: charts.members().iter().map(Uuid::to_string).collect(),
         low: low.to_string(),
         high: high.to_string(),
-        can_unlink: problems.is_empty(),
+        kind: shown.kind,
+        can_unlink: whole && shown.kind == PairKind::Link,
+        can_confirm: same_label.is_some() && !standing.is_empty(),
+        same_label,
+        same_note: same.note,
+        standing,
         problems,
     }
 }
