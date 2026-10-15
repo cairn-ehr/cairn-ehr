@@ -123,7 +123,10 @@ fn charts_of(items: &[WorklistItem]) -> Vec<Uuid> {
 /// db/054's doubt boolean for every linked read side of `items`, once per distinct record. A
 /// failed read is kept per side, worded (operator chain), so it becomes that side's error —
 /// never "not doubted".
-async fn doubted_sides(client: &tokio_postgres::Client, items: &[WorklistItem]) -> Doubted {
+async fn doubted_sides<C: tokio_postgres::GenericClient + Sync>(
+    client: &C,
+    items: &[WorklistItem],
+) -> Doubted {
     let mut doubted = Doubted::new();
     let linked = items
         .iter()
