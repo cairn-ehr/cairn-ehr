@@ -56,8 +56,11 @@ pub const SEPARATION_INSTRUCTION: &str =
 /// link outranks the machine's (ADR-0076 decision 5); an attested unlink splits the record, or
 /// is recorded but leaves it joined through another link. The window judges both from its review
 /// panel (R6, #716): "Review this link…" on a doubted link, "Review this judgement…" on the
-/// bridge's "different people" line — in the bridge no link line is marked, so naming only the
-/// first door would point at nothing. The CLI verbs are named too, for a node run without the
+/// bridge's "different people" line — in the bridge no link line need be marked, so naming only
+/// the first door would point at nothing. The bridge's unlink half names "Review this link…" too,
+/// and says every link line carries it (#783): the links still joining the two charts may be
+/// unmarked, and the sentence had introduced that door as a MARKED link's only. It never calls
+/// them unmarked — one may also trip the hard check, and then it is marked. The CLI verbs are named too, for a node run without the
 /// window, with their required `--attester-key` (both refuse to run without one). Each verb's
 /// holding rule is named because the record can list a member whose registration has not
 /// reached this node: an unlink needs `--from` only when NEITHER chart is held, but a link needs
@@ -78,8 +81,9 @@ pub const DOUBTED_LINK_INSTRUCTION: &str =
      compares the two charts and either confirms the link (both charts must be held on this \
      node) or unlinks it; \"Review this judgement…\" beside a line saying a clinician recorded \
      two charts as different people compares them and can link them (both charts must be held \
-     on this node) — if they are different people, unlink one of the links still joining them \
-     instead. In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key \
+     on this node) — if they are different people, open \"Review this link…\" on one of the \
+     links still joining them (every link line carries it, marked in doubt or not) and unlink \
+     it instead. In the CLI, `unlink-charts <chart_a> <chart_b> --attester-key \
      <key-file>` unlinks (add `--from <open_chart>` when neither chart is held on this node), and \
      `link-charts <chart_a> <chart_b> --attester-key <key-file>` confirms a link — both charts \
      must be held on this node to link them. The hold \
@@ -369,7 +373,15 @@ mod tests {
         // second is the instruction's own, never claimed of the panel (which shows a not-held
         // note instead when a chart is not held here).
         assert!(DOUBTED_LINK_INSTRUCTION.contains("can link them"));
-        assert!(DOUBTED_LINK_INSTRUCTION
-            .contains("if they are different people, unlink one of the links still joining them"));
+        // #783: the unlink half names its door. In the bridge the links still joining the two
+        // charts may carry no doubt mark, and the sentence had introduced "Review this link…" as
+        // the door of a MARKED link only — so it says every link line carries it. It must not
+        // say the joining links are unmarked: one can ALSO trip the hard check (a clash), and
+        // then it is marked.
+        assert!(DOUBTED_LINK_INSTRUCTION.contains(
+            "if they are different people, open \"Review this link…\" on one of the links still \
+             joining them (every link line carries it, marked in doubt or not) and unlink it"
+        ));
+        assert!(!DOUBTED_LINK_INSTRUCTION.contains("unmarked"));
     }
 }
