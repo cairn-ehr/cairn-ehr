@@ -66,9 +66,10 @@ function hideVerdicts() {
 /**
  * Open the panel for the link between charts `low` and `high`, read both charts and draw the
  * comparison: problems, then findings, then the table (DOM order is clinical, already right in
- * the markup). Focus goes to the heading so a screen reader is told what appeared.
+ * the markup). Focus goes to the heading so a screen reader is told what appeared. `kind` and
+ * `attested` are the line's own: Rust refuses a pair judged since the line was drawn.
  */
-async function compareLinked(low, high, kind) {
+async function compareLinked(low, high, kind, attested) {
   const token = ++unlinkToken;
   // Captured NOW, synchronously: the chart this comparison is about.
   const patientId = renderedPatient;
@@ -81,7 +82,7 @@ async function compareLinked(low, high, kind) {
   el("unlink-panel").hidden = false;
   el("unlink-heading").focus();
   try {
-    const view = await invoke("compare_linked", { patientId, charts, low, high, kind });
+    const view = await invoke("compare_linked", { patientId, charts, low, high, kind, attested });
     if (token !== unlinkToken) return; // a newer click, or a close, came after this one
     renderUnlinkComparison(view);
     unlinkCompared_ =

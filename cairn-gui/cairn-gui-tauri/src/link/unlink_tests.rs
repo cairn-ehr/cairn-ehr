@@ -23,6 +23,7 @@ async fn compare_linked_is_bound_to_the_chart_on_screen() {
         "1",
         "2",
         "link",
+        false,
     )
     .await
     .unwrap_err();
@@ -79,6 +80,7 @@ async fn compare_linked_refuses_a_changed_record_in_the_lists_wording() {
         &Uuid::from_u128(1).to_string(),
         &Uuid::from_u128(2).to_string(),
         "link",
+        false,
     )
     .await
     .unwrap_err();
@@ -117,6 +119,7 @@ async fn compare_linked_refuses_a_link_the_record_no_longer_has() {
         &p,
         &Uuid::from_u128(2).to_string(),
         "link",
+        false,
     )
     .await
     .unwrap_err();
@@ -258,6 +261,7 @@ async fn compare_refuses_an_unknown_pair_kind() {
         &Uuid::from_u128(1).to_string(),
         &Uuid::from_u128(2).to_string(),
         "merged",
+        false,
     )
     .await
     .unwrap_err();
@@ -275,6 +279,43 @@ fn unlink_js_sends_the_standing_address_with_the_unlink() {
         .expect("unlink.js invokes unlink_records");
     let call = &js[start..start + js[start..].find("});").expect("the call's object closes")];
     assert!(call.contains("standing: sent.standing"), "{call}");
+}
+
+/// The pre-click race (PR #777 review): the list line says "linked without a clinician's
+/// confirmation", a colleague's attested confirm then lands while a third chart keeps the set
+/// unchanged, and the clinician clicks "Review this link…". The panel must not open over a pair
+/// that no longer reads the way the line did — it would offer only Unlink, silently, over a
+/// colleague's judgement the clinician never saw.
+#[test]
+fn a_line_drawn_before_the_pair_was_judged_is_stale() {
+    let pair = |attested| ShownPair {
+        kind: PairKind::Link,
+        attested,
+        recorded_on: "2026-10-01".into(),
+    };
+    assert!(line_still_shows(&pair(false), false));
+    assert!(line_still_shows(&pair(true), true));
+    assert!(!line_still_shows(&pair(true), false), "a colleague confirmed it");
+    assert!(!line_still_shows(&pair(false), true), "an attested link no longer stands");
+}
+
+/// The webview half of the pre-click check: each line's door sends the attestation the line
+/// showed, and the Compare carries it. `main.js`/`unlink.js` are untyped, so this reads them.
+#[test]
+fn the_door_sends_the_attestation_its_line_showed() {
+    let main = include_str!("../../src-ui/main.js");
+    assert!(
+        main.contains(
+            "compareLinked(recordLink.low, recordLink.high, recordLink.kind, recordLink.attested)"
+        ),
+        "main.js passes the line's attestation to compareLinked"
+    );
+    let js = include_str!("../../src-ui/unlink.js");
+    let start = js
+        .find("invoke(\"compare_linked\"")
+        .expect("unlink.js invokes compare_linked");
+    let call = &js[start..start + js[start..].find("});").expect("the call's object closes")];
+    assert!(call.contains("attested"), "{call}");
 }
 
 /// A Confirm read failure is worded like an Unlink's: it is about to write.

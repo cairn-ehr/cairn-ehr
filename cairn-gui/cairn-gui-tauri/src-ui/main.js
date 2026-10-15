@@ -106,7 +106,7 @@ function renderLinks(links) {
       b.dataset.kind = recordLink.kind;
       // unlink.js loads after this file and may not be present (fixture-only builds).
       b.addEventListener("click", () => {
-        if (typeof compareLinked === "function") compareLinked(recordLink.low, recordLink.high, recordLink.kind);
+        if (typeof compareLinked === "function") compareLinked(recordLink.low, recordLink.high, recordLink.kind, recordLink.attested);
       });
       li.append(b);
       return li;

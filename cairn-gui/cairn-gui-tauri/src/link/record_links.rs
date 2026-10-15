@@ -51,8 +51,8 @@ impl PairKind {
     }
 }
 
-/// The two reads the list is built from, made under one database lock: the standing links,
-/// and db/054's doubts about the record's pairs.
+/// The two reads the list is built from, made in one snapshot ([`read_record_links`]): the
+/// standing links, and db/054's doubts about the record's pairs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RecordLinks {
     /// The record's standing links (`record_edges`).
@@ -72,6 +72,11 @@ pub struct RecordLinkView {
     pub text: String,
     /// What the pair is: a standing link, or a bridged separation.
     pub kind: PairKind,
+    /// Whether the line showed the pair's standing judgement as a clinician's. It travels back
+    /// with the door, so the review panel can tell a line drawn before a colleague's confirm
+    /// from the pair as it stands now (`unlink::line_still_shows`). Always true for a separation:
+    /// db/054 reports only a clinician's "different people".
+    pub attested: bool,
     /// The line's one door ([`REVIEW_LINK`] or [`REVIEW_JUDGEMENT`]).
     pub button: String,
 }
@@ -105,6 +110,7 @@ pub fn record_link_line(edge: &RecordEdge, members: &[MemberLine]) -> RecordLink
             edge.recorded_on
         ),
         kind: PairKind::Link,
+        attested: edge.attested,
         button: REVIEW_LINK.into(),
     }
 }
@@ -122,6 +128,7 @@ fn separated_line(d: &LinkDoubt, members: &[MemberLine]) -> RecordLinkView {
             d.recorded_on
         ),
         kind: PairKind::Separated,
+        attested: true,
         button: REVIEW_JUDGEMENT.into(),
     }
 }
@@ -134,11 +141,25 @@ fn has_clash(edge: &RecordEdge, doubts: &[LinkDoubt]) -> bool {
         .any(|d| d.kind == DoubtKind::Clash && (d.low, d.high) == (edge.low, edge.high))
 }
 
+/// Does db/054 report a clash on a pair that is not among the standing links? Unreachable from
+/// one consistent read; [`links_section`] refuses to draw the list when it happens.
+fn has_orphan_clash(links: &RecordLinks) -> bool {
+    links
+        .doubts
+        .iter()
+        .filter(|d| d.kind == DoubtKind::Clash)
+        .any(|d| !links.edges.iter().any(|e| (e.low, e.high) == (d.low, d.high)))
+}
+
 /// Read the record's standing links and db/054's doubts about them. Both empty for a single
 /// chart (nothing joins it); an error, never an empty list, when a linked set cannot be read —
-/// see [`links_section`]. Takes `state.db`'s lock ONCE for both reads (so the two describe the
-/// same moment), which means the caller must not already hold it: `tokio::sync::Mutex` is not
-/// re-entrant.
+/// see [`links_section`]. Takes `state.db`'s lock, which means the caller must not already hold
+/// it: `tokio::sync::Mutex` is not re-entrant.
+///
+/// Both reads run in ONE read-only REPEATABLE READ transaction, so they describe the same moment.
+/// The lock alone would not do that: it keeps out only this window's other commands, while the
+/// sync door commits peer links through its own connection, and each autocommit statement takes
+/// its own snapshot. Two snapshots could mark a clash on a link the edge read had not yet seen.
 pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<RecordLinks, String> {
     if !charts.is_linked() {
         return Ok(RecordLinks::default());
@@ -146,14 +167,26 @@ pub async fn read_record_links(state: &AppState, charts: &ChartSet) -> Result<Re
     let Some(db) = state.db.as_ref() else {
         return Err("there is no database to read the links from".into());
     };
-    let db = db.lock().await;
+    let mut db = db.lock().await;
+    let snapshot = db
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|e| format!("could not open a read of the links: {e}"))?;
     let diagnose = |e: anyhow::Error| cairn_node::db_diagnosis::operator_chain(&e);
-    let edges = cairn_node::patient::edges::record_edges(&*db, charts)
+    let edges = cairn_node::patient::edges::record_edges(&snapshot, charts)
         .await
         .map_err(diagnose)?;
-    let doubts = cairn_node::patient::edges::record_doubts(&*db, charts)
+    let doubts = cairn_node::patient::edges::record_doubts(&snapshot, charts)
         .await
         .map_err(diagnose)?;
+    // Read-only: dropping would roll back just as well; committing says the read is finished.
+    snapshot
+        .commit()
+        .await
+        .map_err(|e| format!("could not finish the read of the links: {e}"))?;
     Ok(RecordLinks { edges, doubts })
 }
 
@@ -181,6 +214,17 @@ pub fn links_section(
                     .to_string(),
             ),
         ),
+        // A clash is a property of a standing link (db/054), so one naming no standing link
+        // means the two reads disagree. Drawn anyway, the doubt would vanish while the R1b hold
+        // still points at a marked line nobody can find: said, never dropped.
+        Ok(links) if has_orphan_clash(&links) => (
+            vec![],
+            Some(
+                "Which of these links is in doubt could not be read consistently — reload the \
+                 chart before judging any."
+                    .to_string(),
+            ),
+        ),
         Ok(links) => {
             let link_lines = links.edges.iter().map(|e| {
                 let mut line = record_link_line(e, members);
@@ -199,8 +243,8 @@ pub fn links_section(
         Err(e) => (
             vec![],
             Some(format!(
-                "The links joining these charts could not be read, so none can be undone from \
-                 here until the chart is reloaded: {e}"
+                "The links joining these charts could not be read, so none can be judged from \
+                 here — reload the chart; if this persists, the node needs its operator: {e}"
             )),
         ),
     }
@@ -360,10 +404,12 @@ mod tests {
         ));
     }
 
-    /// A clash doubt naming a pair that is NOT a standing edge marks nothing and adds no line:
-    /// only a standing link carries the clash note, and a Clash is never its own line.
+    /// A clash doubt naming a pair that is NOT a standing edge cannot come from one snapshot
+    /// (db/054's clash arm is a property of a standing link), so the two reads disagree. Dropping
+    /// the doubt would leave the R1b hold pointing at a line nobody can find; the list is said
+    /// unread instead, never drawn without the mark (PR #777 review).
     #[test]
-    fn a_clash_on_a_pair_with_no_line_marks_nothing() {
+    fn a_clash_on_a_pair_with_no_line_is_said_never_dropped() {
         let links = RecordLinks {
             edges: vec![edge(true)],
             doubts: vec![LinkDoubt {
@@ -371,9 +417,19 @@ mod tests {
                 ..doubt(DoubtKind::Clash)
             }],
         };
-        let (lines, _) = links_section(Ok(links), &[], true);
-        assert_eq!(lines.len(), 1);
-        assert!(!lines[0].text.contains("in doubt"));
+        let (lines, error) = links_section(Ok(links), &[], true);
+        assert!(lines.is_empty(), "no line drawn without its mark");
+        assert!(error.expect("never silent").contains("reload the chart"));
+    }
+
+    /// Each line carries the attestation it SHOWS, so the review panel can tell a line drawn
+    /// before a colleague's confirm from the pair as it now stands (`unlink::line_still_shows`).
+    /// A separation is always a clinician's judgement (db/054 reports only attested ones).
+    #[test]
+    fn a_line_carries_the_attestation_it_shows() {
+        assert!(record_link_line(&edge(true), &[]).attested);
+        assert!(!record_link_line(&edge(false), &[]).attested);
+        assert!(separated_line(&doubt(DoubtKind::Separated), &[]).attested);
     }
 
     /// db/018 makes it unreachable, but a pair reported as BOTH kinds must still render: the

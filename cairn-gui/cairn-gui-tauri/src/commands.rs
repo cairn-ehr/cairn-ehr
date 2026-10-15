@@ -507,6 +507,7 @@ pub(crate) mod tests {
             high: String::new(),
             text: String::new(),
             kind: crate::link::record_links::PairKind::Link,
+            attested: false,
             button: String::new(),
         };
         let member = MemberLine {

@@ -69,6 +69,24 @@ pub struct ShownPair {
     pub recorded_on: String,
 }
 
+/// Refused when the pair no longer reads the way its list line did: the line was drawn before a
+/// colleague's judgement landed on it (see [`line_still_shows`]). Nothing was opened.
+pub const LINE_STALE: &str =
+    "this pair has been judged since the list was drawn — reload the chart to see the judgement \
+     that stands, then review it again";
+
+/// Does the pair, as re-read for the review panel, still read the way its list line did?
+///
+/// Why it matters (safety, PR #777 review): the line says "linked without a clinician's
+/// confirmation"; a colleague's attested confirm then lands while a third chart keeps the
+/// record's chart set unchanged, so no set check notices. The panel would find an attested link,
+/// say nothing (a clinician already vouches for it) and offer only Unlink — an attested judgement
+/// over a colleague's that this clinician never saw. The line's attestation is what its wording
+/// showed, so a mismatch means the clinician read a line that is no longer true.
+pub(super) fn line_still_shows(shown: &ShownPair, line_attested: bool) -> bool {
+    shown.attested == line_attested
+}
+
 /// What [`resolve_edge`] establishes: every field named, because three chart ids of one type
 /// side by side is a swap that compiles — and at the node call a swap would sign an attested
 /// judgement about the wrong pair (PR #711 review).
@@ -174,7 +192,8 @@ pub(super) fn shown_pair(
 /// with the verdicts that apply. Read-only.
 ///
 /// `kind` is the line's own kind, as the webview got it; an unknown one is refused before
-/// anything is read (it cannot name a pair). The facts, the findings and which judgement stands
+/// anything is read (it cannot name a pair). `attested` is what the line showed; a pair judged
+/// since the line was drawn is refused ([`line_still_shows`]) rather than opened silently. The facts, the findings and which judgement stands
 /// are read under ONE lock, after [`resolve_edge`] has released its own — so the line (`shown`)
 /// and the standing judgement come from two reads; `link_review_view` offers no verdict when
 /// they disagree (`confirm_view::standing_agrees`).
@@ -185,11 +204,15 @@ pub async fn compare_linked_impl(
     low: &str,
     high: &str,
     kind: &str,
+    attested: bool,
 ) -> Result<LinkReviewView, ErrorView> {
     let Some(kind) = PairKind::parse(kind) else {
         return Err(refused(LINK_GONE));
     };
     let edge = resolve_edge(state, Act::Compare, patient_id, &charts, low, high, kind).await?;
+    if !line_still_shows(&edge.shown, attested) {
+        return Err(refused(LINE_STALE));
+    }
     // Fixture charts are never linked, so `resolve_edge` cannot pass without a database;
     // refuse defensively rather than invent a comparison.
     let Some(db) = state.db.as_ref() else {
@@ -286,6 +309,8 @@ pub async fn unlink_impl(
 
 // ---- Tauri forwarders (camelCase JS keys → snake_case parameters). ----
 
+/// JS keys: `patientId, charts, low, high, kind, attested` — the last two exactly as the list
+/// line carried them.
 #[tauri::command]
 pub async fn compare_linked(
     state: tauri::State<'_, AppState>,
@@ -294,8 +319,9 @@ pub async fn compare_linked(
     low: String,
     high: String,
     kind: String,
+    attested: bool,
 ) -> Result<LinkReviewView, ErrorView> {
-    compare_linked_impl(&state, &patient_id, charts, &low, &high, &kind).await
+    compare_linked_impl(&state, &patient_id, charts, &low, &high, &kind, attested).await
 }
 
 /// JS keys: `patientId, charts, low, high, standing`.
