@@ -365,7 +365,14 @@ el("unlock-form").addEventListener("submit", async (event) => {
 // No `refresh()` here: whether a chart is showing at all is the front door's decision
 // (funnel.js), which calls `refresh()` when it opens one. `refresh` and `say` stay globals —
 // both files are classic scripts sharing one scope, loaded main.js first.
-void pollLock();
+//
+// The FIRST lock poll waits for DOMContentLoaded (#782). Started here, while this file is still
+// loading, its answer could land before link.js (loaded after this file) defines
+// `updateLinkLock`: `renderLockState` then skipped it, and the verdict buttons showed link.js's
+// default "locked" state until the next poll, up to LOCK_POLL_MS later. DOMContentLoaded fires
+// only after every classic, synchronous script has run, so every reader of the lock exists by
+// then (pinned in `link/lock_hint_tests.rs`, which also pins that no script tag is deferred).
+document.addEventListener("DOMContentLoaded", () => void pollLock());
 // The key re-locks on a timer in the backend; the window must not learn about it only when
 // a signature is refused (state is ambient, never modal).
 //
