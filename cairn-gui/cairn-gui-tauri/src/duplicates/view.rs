@@ -202,7 +202,13 @@ fn entry_heading(review_chart: Uuid, lines: &[MemberLine]) -> String {
         "{} · {} · chart {}",
         first.name, first.born, first.patient_id
     );
-    match lines.len() - 1 {
+    with_linked_count(who, lines.len())
+}
+
+/// `who` (a record's first chart), then how many more charts the record holds. **Pure.** Shared
+/// by the banner's heading and the tray's (`worklist/view.rs`), so both count the same way.
+pub(crate) fn with_linked_count(who: String, charts: usize) -> String {
+    match charts.saturating_sub(1) {
         0 => who,
         1 => format!("{who} · and 1 linked chart"),
         n => format!("{who} · and {n} linked charts"),

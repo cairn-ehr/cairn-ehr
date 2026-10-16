@@ -555,6 +555,9 @@ separately from the live figure; never merge the two.
       mouse.
 - [ ] Each **Review** announces the newer record's first identity line, so two entries are told
       apart by name, never a bare "Review" repeated.
+- [ ] The rotor's **heading list** names each entry by BOTH its records ("Mary SMYTHE · 74 y · chart …
+      — and Mary SMITH · 75 y · chart …"; "Chart <id>" for a side that could not be read), never N
+      identical headings (#796); the entry's status is the line read right after it.
 - [ ] Nothing in the tray takes focus by itself or is announced as an alert, on boot or on a return.
 - [ ] On a non-Current node the status line is read before the tray, so "(0)" is never heard as
       "checked, none".

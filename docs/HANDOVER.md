@@ -6,9 +6,9 @@
 > **⇒ BUILT ON PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795) (2026-10-16, branch
 > `refactor/793-gui-file-splits-737-headings`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** #793 + #712 item 3 (the
 > last four `cairn-gui-tauri` files over 500 lines lose their inline tests — pure moves, the same 307 test leaves) and
-> **#737** (each banner entry's `<h3>` names whose record it is — name · born · chart id; the status is the line under it). Filed **#796** (the
-> tray's identical headings — the maintainer chose "file it": a tray entry pairs two records and carries ages, not
-> DOBs, so its wording is a decision). Merged before it: PR #794 (#781 · #789 · #732) and PR #792 (R6's residuals
+> **#737** (each banner entry's `<h3>` names whose record it is — name · born · chart id; the status is the line under it). **#796** (the
+> tray's identical headings, filed and then — at the maintainer's ask — fixed the same way in this PR: both records,
+> each as name · age · chart id, the status under it). Merged before it: PR #794 (#781 · #789 · #732) and PR #792 (R6's residuals
 > #787 · #786 · #783 · #782). The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
@@ -25,7 +25,7 @@
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795)** (#793 · #712 item 3 · #737, above): read `gh pr checks`, then review and merge. **#728** (the Pi re-measure; now also the
 >    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** from PR #795 **#796** (the tray's identical headings — a wording decision) · #712's
+> 2. **Open repair-path issues:** #712's
 >    items 1, 2, 4, 5 (item 3 done) · from R7 **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
 >    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#784** (a verdict is not re-checked against identity
@@ -203,8 +203,9 @@ HANDOVER was stale on arrival a fourth time (it called #794 awaiting merge; it h
 - **⇒ A heading's job is to tell entries apart in a heading list — so test it on the input the list EXISTS for.**
   My first heading was name · born; the review saw that an exact name-and-DOB match is the matcher's STRONGEST
   proposal, so a thrice-registered patient's banner had identical headings again. The heading now ends with the whole
-  chart id (as `member_line` does), pinned by `exact_namesakes_are_told_apart_by_their_charts`. The tray pairs two
-  records, so its heading is a wording decision (#796), not a copy.
+  chart id (as `member_line` does), pinned by `exact_namesakes_are_told_apart_by_their_charts`. The tray (#796)
+  names BOTH records: one record sits in several entries (A–B, A–C), so one side alone would repeat; its rows carry
+  an age, not a DOB. Both headings share `with_linked_count`.
 
 ### 2026-10-16 (second) — #781 · #789 split; #732 (PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794))
 

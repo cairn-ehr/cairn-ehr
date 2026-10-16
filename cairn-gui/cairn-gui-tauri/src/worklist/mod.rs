@@ -75,7 +75,8 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
             EntryFlags::default(),
             "review",
             Ok(PersonRow::new(newer.clone()).map(|r| person_row_view(&r))),
-            Ok(PersonRow::new(older).map(|r| person_row_view(&r))),
+            Ok(PersonRow::new(older.clone()).map(|r| person_row_view(&r))),
+            (newer[0].patient_id, older[0].patient_id),
             Some(newer[0].patient_id.to_string()),
         );
         return worklist_view(Ok((vec![entry], 1)));
@@ -209,6 +210,7 @@ fn entry_of_item(
         &item.entry.band,
         newer.map(row),
         older.map(row),
+        (item.entry.open_chart, item.entry.older_chart),
         open_chart,
     );
     (view, admitted)
@@ -440,7 +442,8 @@ mod tests {
             EntryFlags::default(),
             "review",
             Ok(Some(row.clone())),
-            Ok(PersonRow::new(older).map(|r| person_row_view(&r))),
+            Ok(PersonRow::new(older.clone()).map(|r| person_row_view(&r))),
+            (newer[0].patient_id, older[0].patient_id),
             None,
         );
         let counted = tray_count_view(Ok(1), Ok(CheckState::NeverRun { waiting: 0 }));
@@ -466,5 +469,8 @@ mod tests {
                 );
             }
         }
+        // #796: losing either read draws a nameless heading or hides the entry's status.
+        let entry_reads = fields_read_in(js, "entry");
+        assert!(entry_reads.contains("heading") && entry_reads.contains("status"));
     }
 }

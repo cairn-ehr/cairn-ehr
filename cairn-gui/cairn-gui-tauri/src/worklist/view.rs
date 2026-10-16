@@ -5,11 +5,12 @@
 //! counts the open pairs of records. It may be HIDDEN only when that is the truth — none open on a
 //! node whose check is current; every failed read is a worded line (R5a's rule, one tray over).
 use crate::duplicates::view::{
-    EntryFlags, ACCEPTED_NOT_LINKED, DISPUTED_NOTE, NOT_YET_REVIEWED, VETO_NOTE,
+    with_linked_count, EntryFlags, ACCEPTED_NOT_LINKED, DISPUTED_NOTE, NOT_YET_REVIEWED, VETO_NOTE,
 };
 use crate::funnel::rows::PersonRowView;
 use cairn_node::duplicate_check::{status_line, CheckState};
 use serde::Serialize;
+use uuid::Uuid;
 
 /// At most this many entries are drawn (each costs two record reads); the rest are counted.
 pub const MAX_SHOWN: usize = 20;
@@ -35,7 +36,10 @@ pub struct SideView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorklistEntryView {
+    /// Both records, for the entry's `<h3>` — see `tray_heading` (#796).
     pub heading: String,
+    /// "Not yet reviewed", or accepted as the same person (#736); the line under the heading.
+    pub status: String,
     pub newer_label: String,
     pub newer: SideView,
     pub older_label: String,
@@ -115,6 +119,9 @@ pub fn entry_view(
     band: &str,
     newer: Result<Option<PersonRowView>, String>,
     older: Result<Option<PersonRowView>, String>,
+    // The entry's proposal's two charts, (newer side's, older side's): what a side whose
+    // read failed is headed by.
+    charts: (Uuid, Uuid),
     open_chart: Option<String>,
 ) -> WorklistEntryView {
     let mut notes = vec![];
@@ -127,8 +134,15 @@ pub fn entry_view(
     if flags.disputed {
         notes.push(DISPUTED_NOTE.into());
     }
+    let (newer_chart, older_chart) = charts;
+    let heading = tray_heading(
+        side_heading(newer.as_ref(), newer_chart),
+        side_heading(older.as_ref(), older_chart),
+    );
     WorklistEntryView {
-        heading: if flags.accepted {
+        heading,
+        // An accepted pair is worded by its status, not as unreviewed (#736).
+        status: if flags.accepted {
             ACCEPTED_NOT_LINKED
         } else {
             NOT_YET_REVIEWED
@@ -141,6 +155,35 @@ pub fn entry_view(
         notes,
         open_chart,
     }
+}
+
+/// One side of an entry's heading. **Pure.** The side's first chart as the row shows it — name,
+/// age (the funnel's rows carry an age, not a date of birth) and WHOLE chart id — then how many
+/// more charts the record holds. A side with no row (unread, or no chart found) is headed by
+/// the proposal's own chart on that side, `fallback`; its error line below says why.
+fn side_heading(read: Result<&Option<PersonRowView>, &String>, fallback: Uuid) -> String {
+    match read {
+        Ok(Some(row)) if !row.members.is_empty() => {
+            let first = &row.members[0];
+            let who = format!(
+                "{} · {} · chart {}",
+                first.name, first.age, first.patient_id
+            );
+            with_linked_count(who, row.members.len())
+        }
+        _ => format!("Chart {fallback}"),
+    }
+}
+
+/// A tray entry's `<h3>`: both records, newer first. **Pure.**
+///
+/// The heading exists to tell entries apart in a screen reader's heading list (#796, the tray's
+/// half of #737). One record can sit in several entries (A with B, A with C), and an exact
+/// namesake pair is the matcher's strongest case, so a heading naming one side, or names
+/// alone, would repeat. Both sides' chart ids make it unique. The status ("not yet reviewed",
+/// or accepted) is the line under it, as on the banner.
+fn tray_heading(newer: String, older: String) -> String {
+    format!("{newer} — and {older}")
 }
 
 /// The list, or why it could not be read. **Pure.** `Ok` carries `(entries, total)`.

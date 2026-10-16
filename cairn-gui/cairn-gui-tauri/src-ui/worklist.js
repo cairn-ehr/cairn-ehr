@@ -56,8 +56,8 @@ let trayLineCount = 0; // makes each side's first-line id unique
 /**
  * One side of an entry: its label, then each chart as text. It is NOT an open target (the
  * maintainer's decision: Review opens the newer record). Returns the block and the id of its first
- * chart line, which describes Review: every entry's heading is the same sentence, so a heading
- * label would not tell entries apart (R5a's lesson, R3's person-row pattern).
+ * chart line, which describes Review: the heading names BOTH records (#796), but Review opens only
+ * the newer one, so its own description names exactly that (R5a's lesson, R3's person-row pattern).
  */
 function traySide(label, side) {
   const div = document.createElement("div");
@@ -86,7 +86,9 @@ function trayItem(entry) {
   const li = document.createElement("li");
   const newer = traySide(entry.newer_label, entry.newer);
   const older = traySide(entry.older_label, entry.older);
-  li.append(cell("h3", entry.heading), newer.div, older.div);
+  // The heading names both records, so a screen reader's heading list tells the entries apart
+  // (#796); the status ("not yet reviewed", or accepted) is the first line under it.
+  li.append(cell("h3", entry.heading), cell("p", entry.status), newer.div, older.div);
   for (const note of entry.notes) li.append(cell("p", note));
   if (entry.open_chart) {
     const review = document.createElement("button");

@@ -184,6 +184,7 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | Summary announced with its count | | |
 | Expands and collapses by keyboard alone | | |
 | Each Review announces the newer record's first identity line | | |
+| Heading list names each entry by both its records, never N identical headings (#796) | | |
 | Nothing in the tray takes focus or is announced as an alert | | |
 | On a non-Current node the status line is read before the tray | | |
 

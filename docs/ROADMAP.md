@@ -437,7 +437,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 | **R1b** (#717) — a doubted set withholds every line not on the opened chart | `WrongChartReasons`, the A–C–X bridge as a doubt, per-reason wording | — | #716 · #718 · #719 · #720; commented #335 |
 | **R3** (#721) — the front door collapses by person | `group_by_person`, `displayed_charts()` (the ONE signed list), rows capped by person, one open per member | — | #722 · #723 |
 | **R4** (#724) + **#725** (#733) — the commit-time duplicate check | db/056's notice log + non-raising hook, `cairn-matcher watch`, `cairn-node duplicate-check`; anchored range blocking, per-chart p95 **9 651 → 1 398 ms** at 10 000 charts | db/056, gen **56** | #725 (Pi figure #728) · #726 · #727 · #728 · #729 · #730 · #731 · #732 (fixed, PR #794) · #734 |
-| **R5a** (#735) — the possible-duplicate banner | db/057 `match_proposal_open`, `duplicate_review`, "Different people", a fresh veto note | db/057, gen **57** | #736 (built in R5b) · #737 (PR #795) · #738 · #739 · #740 · #741 (fixed in R5b) · #742 · #743 · #744 · #745 · #746 · #747; commented #708, #722 |
+| **R5a** (#735) — the possible-duplicate banner | db/057 `match_proposal_open`, `duplicate_review`, "Different people", a fresh veto note | db/057, gen **57** | #736 (built in R5b) · #737 + #796 (PR #795) · #738 · #739 · #740 · #741 (fixed in R5b) · #742 · #743 · #744 · #745 · #746 · #747; commented #708, #722 |
 | **R5b** (#749) — the possible-duplicate tray | the matcher skips what db/057 holds closed (#741), re-assesses `review` rows (#743 part 1), `DISPUTED_SQL`, the tray | [ADR-0078](spec/decisions/0078-a-machine-unlink-does-not-settle-a-possible-duplicate.md), **v0.80** | #750 · #751 · #752 · #753 · #754 · #755 · #756 · #757; commented #738, #332, #728 |
 | **DOB near miss** (#758) | a DOB one keying error away grades `NEAR`, never auto-links; `name+monthday` blocking; missed duplicates 351 → 266 of 2 000 | [ADR-0079](spec/decisions/0079-a-dob-one-keying-error-away-is-not-a-contradiction.md), **v0.81** | #759 · #760 · #762 · #763 · #764 · #765 · #766 |
 | **R6** (#777) — confirm a doubted link; name the doubt at the front door | `cairn_chart_set_doubts` (one per-link spelling of "doubted"), one door per line, both verdicts signed only over the pair shown, the doubted person row (#723) | db/054 in place, gen 58 | #781 (fixed, PR #794) · #782 (fixed, PR #792) · #783 (fixed, #792) · #784 · #785 · #786 (fixed, #792) · #787 (fixed, #792); commented #738 |
@@ -450,7 +450,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   R7's two lines 0 → 0 → 0. Every figure is a human act still owed.
 - **Tech debt, 2026-10-16:** PR #794 merged (#781 · #789 · #732). PR #795 (draft until reviewed): #793 + #712 item 3
   (every `cairn-gui-tauri` file under 500 lines, pure moves) and #737 (each banner entry headed by whose record it
-  is); filed #796 (the tray's identical headings, a wording decision).
+  is) and #796 (each tray entry headed by both of its records).
 - **Next:** review and merge PR #795; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
