@@ -164,10 +164,9 @@ pub(crate) async fn admit_other(
 /// (`NOT_ON_SCREEN`, a window fault); the other chart is not already in this record
 /// (`ALREADY_IN_RECORD` — never "already judged", which would claim a colleague's act); the other
 /// record's set is the one compared (`OTHER_CHANGED` — the rule that keeps the signature to the
-/// charts compared);
-/// fixture mode; the key. Then the node judges every pair still open between the two records,
-/// read fresh — `NothingOpen` means a colleague got there first and nothing was signed. Unlike
-/// Link there is no Review admission: that fresh open-pair read stands in for it.
+/// charts compared); fixture mode; the key. Then the node judges every pair still open between
+/// the two records, read fresh — `NothingOpen` means a colleague got there first and nothing was
+/// signed. Unlike Link there is no Review admission: that fresh open-pair read stands in for it.
 ///
 /// Pinned by the tests below: every rule up to and including fixture mode (fixture mode is
 /// where they can be reached). The locked key and `admit_other`'s live proposal branch sit past
@@ -340,8 +339,8 @@ mod tests {
     }
 
     /// Final review M4c: a malformed other chart id is a window fault ("not on screen", as
-    /// `link_impl` words it) — never "already judged", which would tell the clinician a colleague
-    /// resolved something nobody touched.
+    /// `link::same_person::link_impl` words it) — never "already judged", which would tell the
+    /// clinician a colleague resolved something nobody touched.
     #[tokio::test]
     async fn a_malformed_other_chart_is_not_on_screen() {
         let state = AppState::mock(Some(fixture()));
@@ -391,7 +390,8 @@ mod tests {
 
     /// Test review gap 1: the other record changed between the comparison and the press. This is
     /// the one rule that keeps the signature to the charts the clinician compared — so it comes
-    /// BEFORE fixture mode, as in `link_impl`, where a fixture-mode test can reach it.
+    /// BEFORE fixture mode, as in `link::same_person::link_impl`, where a fixture-mode test can
+    /// reach it.
     #[tokio::test]
     async fn different_people_refuses_when_the_other_record_changed() {
         let state = AppState::mock(Some(fixture()));

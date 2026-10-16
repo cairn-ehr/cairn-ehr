@@ -264,9 +264,9 @@ fn effect_report(
             let left = ids_not_in(before, after);
             let sentence = if left.is_empty() {
                 // An unlink that took effect but split nothing contradicts itself; say so
-                // rather than claim a split (mirrors `view.rs`'s `effect_report`, its link
-                // StillJoined arm). Worded to be true wherever it lands: when the answer arrives
-                // with another chart open, nothing is re-read for it.
+                // rather than claim a split (mirrors `judgement_view.rs`'s `effect_report`, its
+                // link StillJoined arm). Worded to be true wherever it lands: when the answer
+                // arrives with another chart open, nothing is re-read for it.
                 format!(
                     "Recorded that charts {low} and {high} are different people, but this record \
                      did not change the way an unlink should — check what the chart now combines."

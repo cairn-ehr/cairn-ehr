@@ -1,5 +1,7 @@
-//! Tests for `link/unlink_view.rs`, in a sibling file like `view_tests.rs`. Which verdicts the
-//! panel offers is pinned in `unlink_offer_tests.rs` (#781), which shares these fixtures.
+//! Tests for `link/unlink_view.rs`, in a sibling file like `view_tests.rs`. R6's offer rules
+//! (which verdicts appear, the standing address, a pair changed mid-read) are pinned in
+//! `unlink_offer_tests.rs` (#781), which shares these fixtures; R2b-2's "cannot unlink" cases on
+//! a partial or unread comparison stay here.
 use super::*;
 use crate::link::record_links::PairKind;
 use crate::link::unlink::ShownPair;

@@ -12,8 +12,8 @@
 //! link — the OTHER record is still the set the clinician compared (decision 3 widened to the
 //! right-hand side). Only then fixture mode, then the key.
 //!
-//! Split out of `link/mod.rs` (#781), which keeps the module map and the two reads every
-//! gesture shares (`as_text`, `chart_set_of`).
+//! Split out of `link/mod.rs` (#781), which keeps the module map and the two helpers the
+//! gestures share (`chart_set_of`, the live chart-set read; `as_text`, a read's error as text).
 use super::judgement_view::{key_locked, link_error_view, link_report, refused, LinkReportView};
 use super::view::{
     comparison_view, fixture_facts, ComparisonParts, ComparisonView, ALREADY_IN_RECORD,

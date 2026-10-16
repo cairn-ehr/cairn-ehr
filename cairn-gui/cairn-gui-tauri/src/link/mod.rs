@@ -8,7 +8,10 @@
 //! own: `view.rs` (the comparison), `judgement_view.rs` (what a judgement did, or why it failed),
 //! `unlink_view.rs` / `confirm_view.rs` (the review panel). `search.rs` is the in-chart search.
 //!
-//! This file is the module map plus the two reads every gesture shares.
+//! `lock_hint_tests.rs` pins the verdict buttons' lock hint against script load order (#782).
+//!
+//! This file is the module map plus two helpers the gestures share: `chart_set_of` (which charts
+//! a record combines, read live) and `as_text` (a read's error as legible text).
 pub mod confirm;
 pub mod confirm_view;
 pub mod judgement_view;
@@ -28,7 +31,7 @@ use cairn_medication_view::ChartSet;
 use uuid::Uuid;
 
 /// A read's error as the text a comparison part carries (the operator chain, legible).
-/// A plain generic fn, not a closure: it is used at two different `T`s.
+/// A plain generic fn, not a closure: it is used at several different `T`s.
 pub(crate) fn as_text<T>(r: anyhow::Result<T>) -> Result<T, String> {
     r.map_err(|e| cairn_node::db_diagnosis::operator_chain(&e))
 }

@@ -136,7 +136,8 @@ fn known_held(held: &[(Uuid, bool)], chart: Uuid) -> bool {
 /// "linked N charts": a confirm on a standing link changes no membership, and a "link them" on
 /// a bridged pair joins charts that were already one record through other links.
 ///
-/// The non-effect arms are the link's own (`view.rs`): a confirm IS a link judgement.
+/// The non-effect arms are the link's own (`judgement_view.rs`'s `LINK_OUTRANKED` /
+/// `LINK_STILL_JOINED`): a confirm IS a link judgement.
 pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid) -> LinkReportView {
     match (effect, kind) {
         (LinkEffect::TookEffect, PairKind::Link) => LinkReportView {

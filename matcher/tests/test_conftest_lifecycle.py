@@ -65,6 +65,8 @@ def test_managed_pg_conn_starts_with_no_stray_patient_chart_row():
             "INSERT INTO patient_chart (patient_id) VALUES (%s) ON CONFLICT DO NOTHING",
             ("22222222-2222-2222-2222-222222222222",),
         )
+        # The stray row really landed, so the check below cannot pass for want of it.
+        assert other.execute("SELECT count(*) FROM patient_chart").fetchone()[0] >= 1
     with managed_pg_conn(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM patient_chart")
         assert cur.fetchone()[0] == 0

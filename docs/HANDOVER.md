@@ -24,7 +24,7 @@
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)** (#781 · #789 · #732, above): read `gh pr checks`, then review and merge. **#728** (the Pi re-measure; now also the
-> find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
+>    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** from PR #794 **#793** (three more `cairn-gui-tauri` files over 500 lines) · from R7 **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
 >    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#784** (a verdict is not re-checked against identity

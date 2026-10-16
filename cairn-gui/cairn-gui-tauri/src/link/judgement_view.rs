@@ -12,7 +12,8 @@ use cairn_node::chart_link::LinkEffect;
 use serde::Serialize;
 use uuid::Uuid;
 
-/// What `link_records` hands back: the sentence for the outcome line, and whether the chart
+/// What every judgement command hands back (`link_records`, `unlink_records`, `confirm_link`,
+/// `record_different_people`): the sentence for the outcome line, and whether the chart
 /// should be re-read (it should whenever the record may have changed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LinkReportView {
@@ -134,11 +135,12 @@ pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
 }
 
 /// A failed judgement worded for its act — the one entry point every judgement surface (Link,
-/// Unlink, "Different people") goes through, so the commit-unknown case below cannot be
+/// Unlink, Confirm, "Different people") goes through, so the commit-unknown case below cannot be
 /// handled in one and missed in another.
 ///
 /// It asks ONE question before the shared classification: was the failure an interrupted
-/// COMMIT (`cairn_node::db_diagnosis::commit_outcome_unknown`)? That judgement may have been
+/// COMMIT (marked by `cairn_node::db_diagnosis::commit_outcome_unknown`, read back here by
+/// `commit_outcome_unknown_event`)? That judgement may have been
 /// recorded, and `data_error_from` would otherwise read it as an outage and keep a live retry —
 /// the #713 hazard: a judgement that landed as Outranked leaves the record looking unchanged,
 /// so a second press records a second judgement stamped above the colleague's it lost to. It
