@@ -152,6 +152,7 @@ prompt? **yes / no**
 | Banner announced as a region, never an alert; no re-announcement | | |
 | Focus does not jump on chart open | | |
 | Each Review announces whose record it opens | | |
+| Heading list names each entry by its record, never N identical headings (#737) | | |
 | Other record's medications announced under their own heading; a failed read is spoken | | |
 | Review shows both verdict buttons only for a complete comparison; a refusal that cannot change hides both | | |
 | Every outcome shown AND announced (Recorded/Linked on the chart line, refusals in the panel) | | |
@@ -183,6 +184,7 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | Summary announced with its count | | |
 | Expands and collapses by keyboard alone | | |
 | Each Review announces the newer record's first identity line | | |
+| Heading list names each entry by both its records, never N identical headings (#796) | | |
 | Nothing in the tray takes focus or is announced as an alert | | |
 | On a non-Current node the status line is read before the tray | | |
 

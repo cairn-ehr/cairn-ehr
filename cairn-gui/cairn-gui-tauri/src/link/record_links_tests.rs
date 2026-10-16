@@ -24,6 +24,7 @@ fn member(n: u128, name: &str) -> MemberLine {
     MemberLine {
         patient_id: Uuid::from_u128(n).to_string(),
         name: name.into(),
+        born: String::new(),
         text: String::new(),
     }
 }
