@@ -46,10 +46,60 @@ fn a_partly_failed_judgement_names_the_pair_not_confirmed() {
     ])
     .unwrap();
     assert!(r.sentence.ends_with(&format!(
-        "Not confirmed for charts {} and {}: held elsewhere.",
+        "For charts {} and {}, held elsewhere.",
         id(2),
         id(9)
     )));
+}
+
+/// #740: a failed pair's sentence is led by its charts and CONTINUES the error's own sentence —
+/// never "Not confirmed for charts …: The … was not confirmed: …" (a stutter, with a capital
+/// after the colon), and never "Not confirmed" in front of a refusal, which is decided.
+#[test]
+fn a_failed_pair_continues_its_own_sentence_without_a_stutter() {
+    let outage = |text: &str| ErrorView {
+        text: text.into(),
+        retry: Retry::Now,
+    };
+    let r = different_people_report(vec![
+        PairResult {
+            low: id(1),
+            high: id(8),
+            outcome: Ok(LinkEffect::TookEffect),
+        },
+        PairResult {
+            low: id(2),
+            high: id(9),
+            outcome: Err(outage(
+                "The \"different people\" judgement was not confirmed: connection reset",
+            )),
+        },
+    ])
+    .unwrap();
+    assert!(
+        r.sentence.ends_with(&format!(
+            "For charts {} and {}, the \"different people\" judgement was not confirmed: \
+             connection reset.",
+            id(2),
+            id(9)
+        )),
+        "{}",
+        r.sentence
+    );
+    assert!(!r.sentence.contains("Not confirmed for"), "{}", r.sentence);
+}
+
+/// The continuation lowers only a capitalised first WORD: an all-capitals word ("NOT", an
+/// acronym) and a text already lower-case are left exactly as they are. **Pure.**
+#[test]
+fn only_a_capitalised_first_word_is_lowered() {
+    assert_eq!(continuation("The node refused"), "the node refused");
+    assert_eq!(continuation("Whether it was"), "whether it was");
+    assert_eq!(continuation("NOT known"), "NOT known");
+    assert_eq!(continuation("RLS refused"), "RLS refused");
+    assert_eq!(continuation("held elsewhere"), "held elsewhere");
+    assert_eq!(continuation("A"), "A");
+    assert_eq!(continuation(""), "");
 }
 
 /// What `unlink_charts` returns when the connection drops DURING the commit, built the way the
@@ -87,11 +137,11 @@ fn a_lone_commit_unknown_pair_is_its_own_error_unchanged() {
     assert_eq!(err.text, commit_unknown_text());
 }
 
-/// Final review I2: a commit-unknown pair beside a recorded one is "Not confirmed" — never
-/// "NOT recorded", and never "it stays on the banner": it may have been recorded, and only the
-/// banner's re-read (`reload`) says which.
+/// Final review I2: a commit-unknown pair beside a recorded one says its outcome is NOT known —
+/// never "NOT recorded", and never "it stays on the banner": it may have been recorded, and only
+/// the banner's re-read (`reload`) says which.
 #[test]
-fn a_commit_unknown_pair_beside_a_recorded_one_is_not_confirmed_never_not_recorded() {
+fn a_commit_unknown_pair_beside_a_recorded_one_is_never_called_not_recorded() {
     let r = different_people_report(vec![
         PairResult {
             low: id(1),
@@ -113,14 +163,15 @@ fn a_commit_unknown_pair_beside_a_recorded_one_is_not_confirmed_never_not_record
         r.sentence,
         format!(
             "Recorded: charts {} and {} are different people. This pair is closed on this node, \
-             and on every node once the judgement syncs. Not confirmed for charts {} and {}: {}",
+             and on every node once the judgement syncs. For charts {} and {}, {}",
             id(1),
             id(8),
             id(2),
             id(9),
-            commit_unknown_text()
+            continuation(&commit_unknown_text())
         )
     );
+    assert!(!r.sentence.contains("not recorded"), "{}", r.sentence);
 }
 
 /// Final review I2 (the #713 hazard): when EVERY pair failed, a refused first pair must not
@@ -148,13 +199,13 @@ fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verd
     assert_eq!(
         err.text,
         format!(
-            "Not confirmed for charts {} and {}: The \"different people\" judgement was refused: \
-             held elsewhere. Not confirmed for charts {} and {}: {}",
+            "For charts {} and {}, the \"different people\" judgement was refused: held \
+             elsewhere. For charts {} and {}, {}",
             id(1),
             id(8),
             id(2),
             id(9),
-            commit_unknown_text()
+            continuation(&commit_unknown_text())
         )
     );
 }

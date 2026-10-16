@@ -432,9 +432,27 @@ fn full_stop(text: &str) -> String {
     }
 }
 
-/// One pair's sentence. A failed pair is "Not confirmed" — never "NOT recorded" and never "it
-/// stays on the banner": a commit-unknown error may have recorded it, and only the banner's
-/// re-read says whether the pair is still open.
+/// `text` as the continuation of a sentence that something else began: its first word lowered
+/// when it is merely capitalised ("The" → "the"), left alone when it is all capitals ("NOT", an
+/// acronym) or already lower-case. **Pure.**
+pub(crate) fn continuation(text: &str) -> String {
+    let mut chars = text.chars();
+    let (Some(first), Some(second)) = (chars.next(), chars.next()) else {
+        return text.to_string();
+    };
+    if first.is_uppercase() && second.is_lowercase() {
+        first.to_lowercase().chain(text[first.len_utf8()..].chars()).collect()
+    } else {
+        text.to_string()
+    }
+}
+
+/// One pair's sentence. A failed pair is led by its charts and then CONTINUES its own error's
+/// sentence (#740) — "For charts A and B, the … was not confirmed: …" — so an outage reads "not
+/// confirmed" once, a refusal reads "refused" (decided, never "not confirmed"), and a
+/// commit-unknown reads "NOT known". Never "NOT recorded" and never "it stays on the banner": a
+/// commit-unknown error may have recorded it, and only the banner's re-read says whether the
+/// pair is still open.
 fn pair_sentence(r: &PairResult) -> String {
     let (low, high) = (r.low, r.high);
     match &r.outcome {
@@ -452,8 +470,8 @@ fn pair_sentence(r: &PairResult) -> String {
              standing for that pair outranks it; the charts stay as that judgement left them."
         ),
         Err(e) => full_stop(&format!(
-            "Not confirmed for charts {low} and {high}: {}",
-            e.text
+            "For charts {low} and {high}, {}",
+            continuation(&e.text)
         )),
     }
 }
