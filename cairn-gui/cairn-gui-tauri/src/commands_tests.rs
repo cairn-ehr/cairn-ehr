@@ -84,6 +84,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
     let member = MemberLine {
         patient_id: String::new(),
         name: String::new(),
+        born: String::new(),
         text: String::new(),
     };
     let pane_json = serde_json::to_value(ChartPane {

@@ -68,6 +68,7 @@ fn a_member_line_names_every_fact_and_the_chart() {
         line.text,
         format!("SMYTHE, Jo · born 1970-03-04 · identity confirmed · chart {id}")
     );
+    assert_eq!(line.born, "born 1970-03-04");
 }
 
 /// Principle 4: absence is named, never a blank that reads like a rendering fault.
@@ -88,6 +89,7 @@ fn a_member_line_names_what_was_never_recorded() {
              · chart {id}"
         )
     );
+    assert_eq!(line.born, "date of birth not recorded");
 }
 
 /// `MemberLine::name` carries the absence word, so a link line never names a chart blank.
@@ -123,6 +125,10 @@ fn a_member_line_says_when_the_chart_is_not_held_here() {
             "(name unknown) · date of birth unknown · identity unknown \
              · registration not yet received on this node · chart {id}"
         )
+    );
+    assert_eq!(
+        (line.name.as_str(), line.born.as_str()),
+        ("(name unknown)", "date of birth unknown")
     );
     // Static messages, never the line itself: a member line carries a chart's name and
     // date of birth BY DESIGN, and CodeQL's cleartext-logging rule rightly treats echoing

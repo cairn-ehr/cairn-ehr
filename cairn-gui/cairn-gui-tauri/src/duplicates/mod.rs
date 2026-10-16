@@ -459,6 +459,9 @@ mod tests {
                 );
             }
         }
+        // #737: losing either read draws a nameless heading or hides the entry's status.
+        let entry_reads = fields_read_in(js, "entry");
+        assert!(entry_reads.contains("heading") && entry_reads.contains("status"));
     }
 
     /// #736: "Different people" on an accepted pair is refused, wording and `Retry::Never`.

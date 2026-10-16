@@ -95,7 +95,7 @@ fn an_accepted_entry_uses_the_banners_heading() {
         ..Default::default()
     };
     let v = entry_view(flags, "review", Ok(None), Ok(None), None);
-    assert_eq!(v.heading, crate::duplicates::view::ACCEPTED_HEADING);
+    assert_eq!(v.heading, crate::duplicates::view::ACCEPTED_NOT_LINKED);
 }
 
 /// Accepted AND disputed is a real state — a clinician said "same person" here while another
@@ -109,7 +109,7 @@ fn an_accepted_and_disputed_entry_shows_both() {
         ..Default::default()
     };
     let v = entry_view(flags, "review", Ok(None), Ok(None), None);
-    assert_eq!(v.heading, crate::duplicates::view::ACCEPTED_HEADING);
+    assert_eq!(v.heading, crate::duplicates::view::ACCEPTED_NOT_LINKED);
     assert_eq!(
         v.notes,
         vec![crate::duplicates::view::DISPUTED_NOTE.to_string()]

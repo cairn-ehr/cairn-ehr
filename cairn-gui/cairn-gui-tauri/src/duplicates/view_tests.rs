@@ -13,6 +13,7 @@ fn member(n: u128, name: &str) -> MemberLine {
     MemberLine {
         patient_id: id(n).to_string(),
         name: name.into(),
+        born: "born 1950-01-07".into(),
         text: format!(
             "{name} · born 1950-01-07 · identity confirmed · chart {}",
             id(n)
@@ -77,7 +78,8 @@ fn an_entry_names_the_other_chart_and_its_current_medications() {
         Ok(vec![member(9, "Mary SMYTHE")]),
         Ok(meds),
     );
-    assert_eq!(e.heading, "Possible duplicate — not yet reviewed");
+    assert_eq!(e.heading, "Mary SMYTHE · born 1950-01-07");
+    assert_eq!(e.status, "Possible duplicate — not yet reviewed");
     assert_eq!(
         e.identity_lines,
         vec![format!(
@@ -298,7 +300,7 @@ fn an_accepted_entry_is_worded_by_its_status_and_offers_no_different_people() {
         ..Default::default()
     };
     let v = entry_view(Uuid::from_u128(9), flags, Ok(vec![]), Err("x".into()));
-    assert_eq!(v.heading, "Accepted as the same person — not yet linked");
+    assert_eq!(v.status, "Accepted as the same person — not yet linked");
     assert!(!v.offers_different_people);
 }
 
@@ -310,10 +312,65 @@ fn a_disputed_entry_says_so_and_still_offers_both_judgements() {
         ..Default::default()
     };
     let v = entry_view(Uuid::from_u128(9), flags, Ok(vec![]), Err("x".into()));
-    assert_eq!(v.heading, "Possible duplicate — not yet reviewed");
+    assert_eq!(v.status, "Possible duplicate — not yet reviewed");
     assert!(v.notes.contains(
         &"Recorded as not the same person, without a clinician's confirmation on record here."
             .to_string()
     ));
     assert!(v.offers_different_people);
+}
+
+/// #737: a screen reader's heading list must tell the entries apart, so each heading names
+/// whose record it is — two namesakes differ by their dates of birth.
+#[test]
+fn each_entry_is_headed_by_whose_record_it_is() {
+    let mut namesake = member(8, "Mary SMYTHE");
+    namesake.born = "born 1951-02-03".into();
+    let heading = |n: u128, line: MemberLine| {
+        entry_view(
+            id(n),
+            EntryFlags::default(),
+            Ok(vec![line]),
+            Err("x".into()),
+        )
+        .heading
+    };
+    assert_eq!(
+        heading(9, member(9, "Mary SMYTHE")),
+        "Mary SMYTHE · born 1950-01-07"
+    );
+    assert_eq!(heading(8, namesake), "Mary SMYTHE · born 1951-02-03");
+}
+
+/// A linked other record is headed by its first chart and says how many more it holds; every
+/// chart still has its own identity line below.
+#[test]
+fn a_linked_other_records_heading_counts_its_other_charts() {
+    let heading = |lines: Vec<MemberLine>| {
+        entry_view(id(9), EntryFlags::default(), Ok(lines), Err("x".into())).heading
+    };
+    assert_eq!(
+        heading(vec![member(9, "Mary SMYTHE"), member(10, "Mary SMITH")]),
+        "Mary SMYTHE · born 1950-01-07 · and 1 linked chart"
+    );
+    assert_eq!(
+        heading(vec![member(9, "A"), member(10, "B"), member(11, "C")]),
+        "A · born 1950-01-07 · and 2 linked charts"
+    );
+}
+
+/// No name to head an entry with (unread, or never recorded): the chart id still tells the
+/// entries apart, and the note below says why there is no name.
+#[test]
+fn an_entry_with_no_identity_is_headed_by_its_chart() {
+    let unread = entry_view(
+        id(9),
+        EntryFlags::default(),
+        Err("gone".into()),
+        Err("x".into()),
+    );
+    let empty = entry_view(id(8), EntryFlags::default(), Ok(vec![]), Err("x".into()));
+    assert_eq!(unread.heading, format!("Chart {}", id(9)));
+    assert_eq!(empty.heading, format!("Chart {}", id(8)));
+    assert_eq!(unread.status, "Possible duplicate — not yet reviewed");
 }

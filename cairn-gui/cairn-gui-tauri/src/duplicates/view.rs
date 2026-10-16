@@ -19,7 +19,9 @@ use uuid::Uuid;
 /// At most this many entries are drawn (each costs a medication read at chart open); the rest
 /// are counted in `DuplicateSection::more`, never dropped silently.
 pub const MAX_SHOWN: usize = 3;
-pub const HEADING: &str = "Possible duplicate — not yet reviewed";
+/// An entry's status line: its heading names whose record it is (#737), so this sits in the
+/// body. The tray (`worklist/view.rs`) still heads its entries with it.
+pub const NOT_YET_REVIEWED: &str = "Possible duplicate — not yet reviewed";
 /// Above the other record's lines — read over EVERY chart of that record, so "record", not
 /// "chart": they are someone else's until a human links the two. The compare panel's own
 /// heading, word for word (index.html `#link-other-meds-heading`).
@@ -29,9 +31,9 @@ pub const OTHER_CHART_LABEL: &str = "On the other record — not part of this on
 /// (R2b-1's rule), read fresh; never worded here from stored JSON.
 pub const VETO_NOTE: &str =
     "Some recorded facts disagree between these charts — Review shows which.";
-/// An accepted pair's heading (#736): a human already said "same person" through C2, and the
+/// An accepted pair's status (#736): a human already said "same person" through C2, and the
 /// link has not been applied yet. "Not yet reviewed" would be false.
-pub const ACCEPTED_HEADING: &str = "Accepted as the same person — not yet linked";
+pub const ACCEPTED_NOT_LINKED: &str = "Accepted as the same person — not yet linked";
 /// Another writer's un-attested unlink stands for the pair (ADR-0078). Shown, never hidden: the
 /// disagreement is exactly what the human should see (principle 4).
 pub const DISPUTED_NOTE: &str =
@@ -94,6 +96,7 @@ pub struct DuplicateEntryView {
     /// The chart Review compares against.
     pub review_chart: String,
     pub heading: String,
+    pub status: String,
     /// One line per chart of the other record (`member_line`'s text).
     pub identity_lines: Vec<String>,
     /// Unread identity, veto note, dispute note (an un-attested unlink stands, ADR-0078).
@@ -133,6 +136,7 @@ pub fn entry_view(
     meds: Result<MedListView, String>,
 ) -> DuplicateEntryView {
     let mut notes = vec![];
+    let heading = entry_heading(review_chart, identities.as_deref().unwrap_or_default());
     let identity_lines = match identities {
         Ok(lines) if !lines.is_empty() => lines.into_iter().map(|l| l.text).collect(),
         Ok(_) => {
@@ -161,11 +165,12 @@ pub fn entry_view(
     };
     DuplicateEntryView {
         review_chart: review_chart.to_string(),
+        heading,
         // An accepted pair is worded by its status, not as unreviewed (#736).
-        heading: if flags.accepted {
-            ACCEPTED_HEADING
+        status: if flags.accepted {
+            ACCEPTED_NOT_LINKED
         } else {
-            HEADING
+            NOT_YET_REVIEWED
         }
         .into(),
         identity_lines,
@@ -174,6 +179,24 @@ pub fn entry_view(
         medications_heading: OTHER_CHART_LABEL.into(),
         medications,
         medication_notes,
+    }
+}
+
+/// Whose record an entry is about, for its `<h3>`. **Pure.**
+///
+/// The heading exists to tell entries apart in a screen reader's heading list (#737), so it is
+/// the first chart's name and date of birth — the two facts a namesake differs by — plus how
+/// many more charts the record holds (each still has its own identity line). With no identity
+/// to name (unread, or none recorded) it is the chart id; the entry's note says why.
+fn entry_heading(review_chart: Uuid, lines: &[MemberLine]) -> String {
+    let Some(first) = lines.first() else {
+        return format!("Chart {review_chart}");
+    };
+    let who = format!("{} · {}", first.name, first.born);
+    match lines.len() - 1 {
+        0 => who,
+        1 => format!("{who} · and 1 linked chart"),
+        n => format!("{who} · and {n} linked charts"),
     }
 }
 

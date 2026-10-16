@@ -4,7 +4,9 @@
 //! The tray is the records clerk's possible-duplicate tray: a collapsed `<details>` whose summary
 //! counts the open pairs of records. It may be HIDDEN only when that is the truth — none open on a
 //! node whose check is current; every failed read is a worded line (R5a's rule, one tray over).
-use crate::duplicates::view::{EntryFlags, ACCEPTED_HEADING, DISPUTED_NOTE, HEADING, VETO_NOTE};
+use crate::duplicates::view::{
+    EntryFlags, ACCEPTED_NOT_LINKED, DISPUTED_NOTE, NOT_YET_REVIEWED, VETO_NOTE,
+};
 use crate::funnel::rows::PersonRowView;
 use cairn_node::duplicate_check::{status_line, CheckState};
 use serde::Serialize;
@@ -127,9 +129,9 @@ pub fn entry_view(
     }
     WorklistEntryView {
         heading: if flags.accepted {
-            ACCEPTED_HEADING
+            ACCEPTED_NOT_LINKED
         } else {
-            HEADING
+            NOT_YET_REVIEWED
         }
         .into(),
         newer_label: NEWER_LABEL.into(),

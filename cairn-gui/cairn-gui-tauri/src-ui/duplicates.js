@@ -34,7 +34,9 @@ function clearDuplicates() {
 /** One possible duplicate: who, why to look, their current drugs, and Review. */
 function duplicateItem(entry) {
   const li = document.createElement("li");
-  li.append(cell("h3", entry.heading));
+  // The heading names whose record this is, so a screen reader's heading list tells the entries
+  // apart (#737); the status ("not yet reviewed", or accepted) is the first line under it.
+  li.append(cell("h3", entry.heading), cell("p", entry.status));
   // The first identity line names whose record this is; Review is described by it, so a screen
   // reader announces "Review, <who>" rather than a bare "Review" repeated per entry.
   const who = entry.identity_lines.map((line) => cell("p", line));

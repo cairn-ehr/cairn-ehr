@@ -152,6 +152,7 @@ prompt? **yes / no**
 | Banner announced as a region, never an alert; no re-announcement | | |
 | Focus does not jump on chart open | | |
 | Each Review announces whose record it opens | | |
+| Heading list names each entry by its record, never N identical headings (#737) | | |
 | Other record's medications announced under their own heading; a failed read is spoken | | |
 | Review shows both verdict buttons only for a complete comparison; a refusal that cannot change hides both | | |
 | Every outcome shown AND announced (Recorded/Linked on the chart line, refusals in the panel) | | |
