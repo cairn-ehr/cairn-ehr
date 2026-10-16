@@ -1,5 +1,6 @@
 // "Same person as…" (repair path R2b-1). Renders and decides nothing: every sentence comes
-// from Rust (`link/view.rs`), every check from the backend (`link/mod.rs`). Classic script,
+// from Rust (`link/view.rs`, `link/judgement_view.rs`), every check from the backend
+// (`link/same_person.rs`). Classic script,
 // loaded after main.js and funnel.js, sharing their scope: `el`, `cell`, `setMessage`, `say`,
 // `refresh`, `displayedPatient`, `renderedPatient`, `renderedCharts` (main.js) and
 // `failureText`, `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC
