@@ -335,6 +335,15 @@ mod tests {
             Some(format!("This record could not be read here: {why}"))
         );
         assert_eq!(view.open_chart, None);
+        // The unread side is headed by ITS OWN chart, the newer one: a swapped
+        // `(open_chart, older_chart)` at the call would name the other patient's chart here.
+        assert!(
+            view.heading
+                .starts_with(&format!("Chart {n} — possibly the same person as "))
+                && view.heading.ends_with(&format!("chart {o}")),
+            "{}",
+            view.heading
+        );
         assert!(view.older.row.is_some(), "the other side still stands");
         assert_eq!(
             admitted.iter().map(|c| c.patient_id).collect::<Vec<_>>(),

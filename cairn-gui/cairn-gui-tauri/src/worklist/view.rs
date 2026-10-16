@@ -5,7 +5,8 @@
 //! counts the open pairs of records. It may be HIDDEN only when that is the truth — none open on a
 //! node whose check is current; every failed read is a worded line (R5a's rule, one tray over).
 use crate::duplicates::view::{
-    with_linked_count, EntryFlags, ACCEPTED_NOT_LINKED, DISPUTED_NOTE, NOT_YET_REVIEWED, VETO_NOTE,
+    chart_who, with_linked_count, EntryFlags, ACCEPTED_NOT_LINKED, DISPUTED_NOTE, NOT_YET_REVIEWED,
+    VETO_NOTE,
 };
 use crate::funnel::rows::PersonRowView;
 use cairn_node::duplicate_check::{status_line, CheckState};
@@ -120,7 +121,7 @@ pub fn entry_view(
     newer: Result<Option<PersonRowView>, String>,
     older: Result<Option<PersonRowView>, String>,
     // The entry's proposal's two charts, (newer side's, older side's): what a side whose
-    // read failed is headed by.
+    // read failed, or found no chart, is headed by.
     charts: (Uuid, Uuid),
     open_chart: Option<String>,
 ) -> WorklistEntryView {
@@ -165,10 +166,7 @@ fn side_heading(read: Result<&Option<PersonRowView>, &String>, fallback: Uuid) -
     match read {
         Ok(Some(row)) if !row.members.is_empty() => {
             let first = &row.members[0];
-            let who = format!(
-                "{} · {} · chart {}",
-                first.name, first.age, first.patient_id
-            );
+            let who = chart_who(&first.name, &first.age, &first.patient_id);
             with_linked_count(who, row.members.len())
         }
         _ => format!("Chart {fallback}"),
@@ -182,8 +180,15 @@ fn side_heading(read: Result<&Option<PersonRowView>, &String>, fallback: Uuid) -
 /// namesake pair is the matcher's strongest case, so a heading naming one side, or names
 /// alone, would repeat. Both sides' chart ids make it unique. The status ("not yet reviewed",
 /// or accepted) is the line under it, as on the banner.
+///
+/// The two sides are joined by WORDS, "possibly the same person as", never by punctuation alone:
+/// a screen reader often speaks "·" and "—" as a pause or not at all, and a side's own
+/// `· and 1 linked chart` followed by `— and <other>` was heard as "…and one linked chart, and
+/// chart Y" — the proposed duplicate taken for an already-linked chart, the very distinction this
+/// tray exists to protect. "Possibly" stays true of an accepted pair too (accepted, not linked;
+/// the status line says which).
 fn tray_heading(newer: String, older: String) -> String {
-    format!("{newer} — and {older}")
+    format!("{newer} — possibly the same person as {older}")
 }
 
 /// The list, or why it could not be read. **Pure.** `Ok` carries `(entries, total)`.

@@ -5,10 +5,10 @@
 > [!NOTE]
 > **⇒ BUILT ON PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795) (2026-10-16, branch
 > `refactor/793-gui-file-splits-737-headings`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** #793 + #712 item 3 (the
-> last four `cairn-gui-tauri` files over 500 lines lose their inline tests — pure moves, the same 307 test leaves) and
+> last four `cairn-gui-tauri` files over 500 lines lose their inline tests — pure moves, the same 307 test leaves across the move) and
 > **#737** (each banner entry's `<h3>` names whose record it is — name · born · chart id; the status is the line under it). **#796** (the
 > tray's identical headings, filed and then — at the maintainer's ask — fixed the same way in this PR: both records,
-> each as name · age · chart id, the status under it). Merged before it: PR #794 (#781 · #789 · #732) and PR #792 (R6's residuals
+> each as name · age · chart id, joined by "possibly the same person as", the status under it). Merged before it: PR #794 (#781 · #789 · #732) and PR #792 (R6's residuals
 > #787 · #786 · #783 · #782). The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
@@ -205,7 +205,11 @@ HANDOVER was stale on arrival a fourth time (it called #794 awaiting merge; it h
   proposal, so a thrice-registered patient's banner had identical headings again. The heading now ends with the whole
   chart id (as `member_line` does), pinned by `exact_namesakes_are_told_apart_by_their_charts`. The tray (#796)
   names BOTH records: one record sits in several entries (A–B, A–C), so one side alone would repeat; its rows carry
-  an age, not a DOB. Both headings share `with_linked_count`.
+  an age, not a DOB. Both headings share `with_linked_count` and `chart_who`.
+- **⇒ Punctuation is not speech.** The second review heard the tray's "A · … · and 1 linked chart — and Chart Y" the
+  way VoiceOver says it: "·" and "—" are a pause or nothing, so Y sounded LINKED to A — the opposite of a proposal. The
+  two sides are now joined by words ("A … — possibly the same person as B …"). The same round pinned the tray's
+  `(open_chart, older_chart)` order at its real call site (a swap was green before; checked by mutating it).
 
 ### 2026-10-16 (second) — #781 · #789 split; #732 (PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794))
 

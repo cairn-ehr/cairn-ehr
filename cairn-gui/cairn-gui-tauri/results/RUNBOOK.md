@@ -467,7 +467,7 @@ never brings this line onto a checked chart.
       entry's first identity line), so two entries are told apart by name and date of birth, never a
       bare "Review" repeated.
 - [ ] The rotor's **heading list** names each entry by whose record it is ("Mary SMYTHE · born … · chart …",
-      or "Chart <id>" when no name could be read), never N identical headings (#737); the entry's
+      or "Chart <id>" when the record's identity could not be read), never N identical headings (#737); the entry's
       status ("Possible duplicate — not yet reviewed", or accepted) is the line read right after it.
 - [ ] The other record's medications are announced under "On the other record — not part of this
       one until linked", never read as lines of the open chart; a failed read is a spoken line, not
@@ -556,8 +556,9 @@ separately from the live figure; never merge the two.
 - [ ] Each **Review** announces the newer record's first identity line, so two entries are told
       apart by name, never a bare "Review" repeated.
 - [ ] The rotor's **heading list** names each entry by BOTH its records ("Mary SMYTHE · 74 y · chart …
-      — and Mary SMITH · 75 y · chart …"; "Chart <id>" for a side that could not be read), never N
-      identical headings (#796); the entry's status is the line read right after it.
+      — possibly the same person as Mary SMITH · 75 y · chart …"; "Chart <id>" for a side that could
+      not be read), never N identical headings (#796); the entry's status is the line read right after
+      it. A side with linked charts ("· and 1 linked chart") is never heard as linked to the OTHER side.
 - [ ] Nothing in the tray takes focus by itself or is announced as an alert, on boot or on a return.
 - [ ] On a non-Current node the status line is read before the tray, so "(0)" is never heard as
       "checked, none".

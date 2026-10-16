@@ -282,10 +282,10 @@ mod tests;
 
 /// Every chart command actually CALLS the set check (ADR-0076 decision 3).
 ///
-/// Kept beside the check rather than in `commands.rs`, which is long already: these pin that the
-/// two writing commands refuse a changed set and that the read hands the webview the set to send
-/// back. A refactor that dropped the check from one command would otherwise stay green while
-/// signing a list nobody reviewed.
+/// Declared beside the check (not in `commands.rs`) so a reader of `check_displayed_set` finds
+/// the pins that every command calls it: the two writing commands refuse a changed set and the
+/// read hands the webview the set to send back. A refactor that dropped the check from one
+/// command would otherwise stay green while signing a list nobody reviewed.
 #[cfg(test)]
 #[path = "chart_set_command_tests.rs"]
 mod command_tests;

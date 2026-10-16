@@ -348,6 +348,26 @@ fn each_entry_is_headed_by_whose_record_it_is() {
     );
 }
 
+/// Review compares against the PROPOSAL's chart, which on a linked record need not be its lowest.
+/// The heading still names the record's first chart, so it agrees with the first identity line
+/// right under it, never with a chart that line does not start with.
+#[test]
+fn the_heading_names_the_records_first_chart_not_the_review_chart() {
+    let v = entry_view(
+        id(5),
+        EntryFlags::default(),
+        Ok(vec![member(3, "Mary SMYTHE"), member(5, "Mary SMYTHE")]),
+        Err("x".into()),
+    );
+    assert_eq!(
+        v.heading,
+        format!(
+            "Mary SMYTHE · born 1950-01-07 · chart {} · and 1 linked chart",
+            id(3)
+        )
+    );
+}
+
 /// The matcher's STRONGEST case: one patient registered three times, so the open chart's banner
 /// shows two other records with the same name and date of birth. Their headings must still
 /// differ, or the heading list is N identical lines again (PR #795 review).

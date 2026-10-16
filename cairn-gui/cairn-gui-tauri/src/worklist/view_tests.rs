@@ -209,7 +209,7 @@ fn each_tray_entry_is_headed_by_both_of_its_records() {
     assert_eq!(
         heading(2),
         format!(
-            "Mary SMYTHE · 74 y · chart {} — and Mary SMYTHE · 74 y · chart {}",
+            "Mary SMYTHE · 74 y · chart {} — possibly the same person as Mary SMYTHE · 74 y · chart {}",
             id(1),
             id(2)
         )
@@ -232,7 +232,7 @@ fn a_tray_heading_counts_linked_charts_and_names_an_unread_side_by_its_chart() {
     assert_eq!(
         v.heading,
         format!(
-            "A · age not recorded · chart {} · and 1 linked chart — and Chart {}",
+            "A · age not recorded · chart {} · and 1 linked chart — possibly the same person as Chart {}",
             id(1),
             id(2)
         )
@@ -247,6 +247,10 @@ fn a_tray_heading_counts_linked_charts_and_names_an_unread_side_by_its_chart() {
     );
     assert_eq!(
         unread_both.heading,
-        format!("Chart {} — and Chart {}", id(1), id(2))
+        format!(
+            "Chart {} — possibly the same person as Chart {}",
+            id(1),
+            id(2)
+        )
     );
 }

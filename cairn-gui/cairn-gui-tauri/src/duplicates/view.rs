@@ -19,8 +19,8 @@ use uuid::Uuid;
 /// At most this many entries are drawn (each costs a medication read at chart open); the rest
 /// are counted in `DuplicateSection::more`, never dropped silently.
 pub const MAX_SHOWN: usize = 3;
-/// An entry's status line: its heading names whose record it is (#737), so this sits in the
-/// body. The tray (`worklist/view.rs`) still heads its entries with it.
+/// An entry's status line, drawn under its heading — on the banner and in the tray
+/// (`worklist/view.rs`) alike; each heading names whose record(s) it is (#737, #796).
 pub const NOT_YET_REVIEWED: &str = "Possible duplicate — not yet reviewed";
 /// Above the other record's lines — read over EVERY chart of that record, so "record", not
 /// "chart": they are someone else's until a human links the two. The compare panel's own
@@ -198,11 +198,17 @@ fn entry_heading(review_chart: Uuid, lines: &[MemberLine]) -> String {
     let Some(first) = lines.first() else {
         return format!("Chart {review_chart}");
     };
-    let who = format!(
-        "{} · {} · chart {}",
-        first.name, first.born, first.patient_id
-    );
-    with_linked_count(who, lines.len())
+    with_linked_count(
+        chart_who(&first.name, &first.born, &first.patient_id),
+        lines.len(),
+    )
+}
+
+/// One chart as a heading names it: name, a second fact (the banner's date of birth, the tray's
+/// age), and the WHOLE chart id. **Pure.** Shared by the banner's heading and the tray's
+/// (`worklist/view.rs`), so the two cannot drift into different shapes.
+pub(crate) fn chart_who(name: &str, fact: &str, chart: &str) -> String {
+    format!("{name} · {fact} · chart {chart}")
 }
 
 /// `who` (a record's first chart), then how many more charts the record holds. **Pure.** Shared

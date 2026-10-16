@@ -17,8 +17,9 @@ fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
     fields_read_in(include_str!("../src-ui/main.js"), binding)
 }
 
-/// Every field `js` reads off `binding` — the scanner itself, shared with the front
-/// door's drift guard in `funnel::commands`, which scans `funnel.js`.
+/// Every field `js` reads off `binding` — the scanner itself, shared by every webview file's
+/// drift guard (`crate::commands::tests::fields_read_in`: the front door, link, duplicates and
+/// worklist each scan their own `.js`).
 pub(crate) fn fields_read_in(js: &str, binding: &str) -> BTreeSet<String> {
     let needle = format!("{binding}.");
     let mut found = BTreeSet::new();
