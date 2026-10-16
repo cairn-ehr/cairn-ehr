@@ -105,9 +105,19 @@ function salvagedBanner(section, fault) {
  * pair up with a live Review), and link.js's `compare` and `sendJudgement` after a decided
  * refusal (#745 point 3 — the banner may be stale, and only it is re-read, so a half-typed stop
  * reason survives, #799). If even this read fails, the banner says so in place of the old
- * entries. A read for a chart the clinician has since left is dropped.
+ * entries.
+ *
+ * An answer is dropped once the clinician has left the chart OR a newer whole-chart read has
+ * started (#800, main.js's `isCurrentRead`): that read draws a fresher banner of its own. This
+ * function notes the revision but never bumps it — bumping would outdate a whole-chart read
+ * already in flight and leave its medication list undrawn. So a banner read started while a
+ * chart read is in flight is kept, and the two banners are drawn in the order they land. Both
+ * read the duplicates as their LAST steps, taking the backend's database lock (first-come,
+ * first-served) step by step, so neither is older than the other by more than those steps' gap;
+ * and a Review drawn from a banner gone stale is refused, which re-reads the banner (#745).
  */
 async function redrawBannerAlone(patient) {
+  const revision = chartReadRevision;
   let section;
   try {
     section = await invoke("duplicate_banner", { patientId: patient });
@@ -116,7 +126,7 @@ async function redrawBannerAlone(patient) {
     // string) is worded "could not reach its backend" by `failureText`.
     section = emptyBanner("Could not check for possible duplicates: " + failureText(failure));
   }
-  if (patient !== displayedPatient) return;
+  if (!isCurrentRead(patient, revision)) return;
   drawDuplicates(section);
 }
 

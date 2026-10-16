@@ -194,6 +194,9 @@
              warning that fires on every chart is a warning nobody reads. -->
         <section id="chart-warnings" aria-labelledby="warnings-heading" hidden>
           <h2 id="warnings-heading">Warnings about this chart</h2>
+          <!-- A list that was read but could not be drawn (#801, main.js's showUnshownList):
+               first, because nothing of the list is on screen while it shows. -->
+          <p id="chart-unshown" hidden></p>
           <p id="chart-incomplete" hidden></p>
           <p id="chart-withheld" hidden></p>
         </section>

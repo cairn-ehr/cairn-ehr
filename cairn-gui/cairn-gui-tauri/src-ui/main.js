@@ -40,6 +40,32 @@ let renderedPatient = null;
  */
 let renderedCharts = null;
 
+/**
+ * The generation of the newest chart read (#800): `refresh` bumps it before it sends a read, and
+ * `clearChart` whenever the chart changes, outdating every answer still in flight. "Is it for the
+ * chart on screen?" alone was not enough: two re-reads of the SAME chart can overlap, and a
+ * clinician can go A → front door → A, so an older answer could land over a newer one. The
+ * pattern of funnel.js's `browseRevision` and worklist.js's `trayListRevision`.
+ */
+let chartReadRevision = 0;
+
+/**
+ * May the answer to the read that took `revision` for `patient` be drawn? Only while that chart is
+ * on screen AND no newer read has started. `refresh` and duplicates.js's `redrawBannerAlone` both
+ * ask this, so the rule has one spelling.
+ */
+function isCurrentRead(patient, revision) {
+  return patient === displayedPatient && revision === chartReadRevision;
+}
+
+/**
+ * Said in the chart's warnings when a list was READ but could not be DRAWN (#801): a fault in this
+ * window (a payload it does not understand), not a failed read. Nothing of the list stays up.
+ */
+const LIST_NOT_SHOWN =
+  "The medication list was read but could not be shown, so none of it is on screen and " +
+  "nothing on this list can be signed off or stopped here. This is a fault in this window: ";
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -181,23 +207,75 @@ function renderRow(row) {
   return rows;
 }
 
-/** Draw a `med_list` answer: the pane carries the list itself and the linked charts' lines. */
+/**
+ * The stop reasons typed but not yet sent (#799), read just before a re-read rebuilds the rows:
+ * each non-empty `#reason-<group_id>` field's id and text, and the one being typed in, with its
+ * caret. A re-read (after a link, a sign-off, a judgement, another drug's cease) used to wipe them.
+ */
+function typedReasons() {
+  const fields = [...el("med-rows").querySelectorAll('input[id^="reason-"]')];
+  const active = document.activeElement;
+  const focused = fields.includes(active)
+    ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
+    : null;
+  const values = fields
+    .filter((field) => field.value !== "")
+    .map((field) => ({ id: field.id, value: field.value }));
+  return { values, focused };
+}
+
+/**
+ * Put `typedReasons()`'s answer back into the rebuilt rows. A reason goes back only where its
+ * line survived the re-read (its `group_id` still has a stop field); a drug that is now stopped,
+ * or no longer on the list, has no field, so its reason goes with it.
+ */
+function restoreReasons(typed) {
+  for (const { id, value } of typed.values) {
+    const field = document.getElementById(id);
+    if (field) field.value = value;
+  }
+  const focused = typed.focused && document.getElementById(typed.focused.id);
+  if (focused) {
+    focused.focus();
+    focused.setSelectionRange(typed.focused.start, typed.focused.end);
+  }
+}
+
+/**
+ * Draw a `med_list` answer in two parts, each under its own guard, so a fault drawing one never
+ * leaves the other partial nor is misreported by `refresh` as a failed READ: the banner
+ * (`drawDuplicates` says its fault on the banner), then the rest (`drawList`; #801). `renderedPatient`
+ * is set first — the banner reads it — and stays set on a fault: the chart WAS read.
+ */
 function render(pane, patient) {
   const view = pane.list;
   renderedPatient = patient;
   renderedCharts = view.charts;
+  drawDuplicates(pane.duplicates); // a fault drawing it is said on the banner, never thrown here
+  try {
+    drawList(pane);
+  } catch (failure) {
+    showUnshownList(failure);
+  }
+}
+
+/** The list half of `render`: the linked charts, the links, the warnings, the rows, sign-off. */
+function drawList(pane) {
+  const view = pane.list;
+  setMessage(el("chart-unshown"), ""); // a list that draws takes down a previous fault's warning
   renderMembers(pane.members);
   setMessage(el("linked-charts-error"), pane.members_error);
   renderLinks(pane.links);
   setMessage(el("record-links-error"), pane.links_error);
-  drawDuplicates(pane.duplicates); // a fault drawing it is said on the banner, never thrown here
   renderWarnings(view);
 
   const body = el("med-rows");
+  const typed = typedReasons();
   body.replaceChildren();
   for (const row of view.rows) {
     body.append(...renderRow(row));
   }
+  restoreReasons(typed);
 
   const button = el("sign-off");
   button.disabled = !view.sign_off_enabled;
@@ -211,23 +289,50 @@ function render(pane, patient) {
 }
 
 /**
- * Empty the chart view: no rows, no warnings, and a sign-off button that cannot fire. Called
- * whenever the chart changes, so one patient's list is never on screen under another patient's
- * header — not even for the moment a read is in flight, and not after a read that failed.
+ * A list that was read but could not be drawn (#801). What `drawList` drew before the fault may
+ * be only part of the list, so ALL of it is taken down: a partial list under a live "Sign off N"
+ * would be an imprecise untruth (principle 4). The clinician is told in the chart's warnings,
+ * above the table — never on the outcome line, which may be saying how a signed act went.
  */
-function clearChart() {
-  renderedPatient = null;
-  renderedCharts = null;
+function showUnshownList(failure) {
+  console.error(failure); // the stack, for whoever debugs it; the warning says the rest
+  clearDrawnList();
+  setMessage(el("chart-unshown"), LIST_NOT_SHOWN + String(failure));
+  el("chart-warnings").hidden = false;
+  const button = el("sign-off");
+  button.disabled = true;
+  button.textContent = "Nothing to sign off — the list could not be shown";
+}
+
+/**
+ * Take down everything `drawList` draws but sign-off, which is left to the caller. Shared by
+ * `clearChart` and `showUnshownList`: one list of what a chart draws, not two to drift apart.
+ */
+function clearDrawnList() {
   renderMembers([]);
   setMessage(el("linked-charts-error"), "");
   renderLinks([]);
   setMessage(el("record-links-error"), "");
-  clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   el("med-rows").replaceChildren();
+  setMessage(el("chart-unshown"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
   el("chart-warnings").hidden = true;
   setMessage(el("empty-message"), "");
+}
+
+/**
+ * Empty the chart view: no rows, no warnings, and a sign-off button that cannot fire. Called
+ * whenever the chart changes, so one patient's list is never on screen under another patient's
+ * header — not even for the moment a read is in flight, and not after a read that failed. Every
+ * read still in flight is outdated too (#800), so none of it can be drawn after this.
+ */
+function clearChart() {
+  chartReadRevision += 1;
+  renderedPatient = null;
+  renderedCharts = null;
+  clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
+  clearDrawnList();
   const button = el("sign-off");
   button.disabled = true;
   button.textContent = "Loading…";
@@ -244,13 +349,18 @@ function clearChart() {
 async function refresh(lead) {
   const patient = displayedPatient;
   if (patient === null) return;
+  // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
+  const revision = ++chartReadRevision;
   try {
     const answer = await invoke("med_list", { patientId: patient });
-    // A read for a chart the clinician has since left is dropped, never rendered.
-    if (patient !== displayedPatient) return;
+    // A read for a chart the clinician has since left, or one a newer read has overtaken, is
+    // dropped, never rendered (#800).
+    if (!isCurrentRead(patient, revision)) return;
     render(answer, patient);
   } catch (e) {
-    if (patient !== displayedPatient) return;
+    // An overtaken read's failure is dropped too: the newer read speaks for the chart now, and
+    // "Could not read the chart" must not land over a list it has drawn.
+    if (!isCurrentRead(patient, revision)) return;
     say((lead ? lead + " " : "") + "Could not read the chart: " + e);
     // A failed FIRST read (`clearChart` left no list drawn): sign-off must stop saying "Loading…",
     // or the clinician waits for a read that is not happening (PR #798 review). It stays disabled.

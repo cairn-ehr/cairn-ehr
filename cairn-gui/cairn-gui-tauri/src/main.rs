@@ -22,6 +22,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod chart_set;
+#[cfg(test)]
+mod chart_view_webview_tests;
 mod commands;
 mod duplicates;
 mod funnel;
