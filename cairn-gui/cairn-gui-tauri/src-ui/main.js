@@ -190,7 +190,7 @@ function render(pane, patient) {
   setMessage(el("linked-charts-error"), pane.members_error);
   renderLinks(pane.links);
   setMessage(el("record-links-error"), pane.links_error);
-  renderDuplicates(pane.duplicates);
+  drawDuplicates(pane.duplicates); // a fault drawing it is said on the banner, never thrown here
   renderWarnings(view);
 
   const body = el("med-rows");
@@ -252,6 +252,13 @@ async function refresh(lead) {
   } catch (e) {
     if (patient !== displayedPatient) return;
     say((lead ? lead + " " : "") + "Could not read the chart: " + e);
+    // A failed FIRST read (`clearChart` left no list drawn): sign-off must stop saying "Loading…",
+    // or the clinician waits for a read that is not happening (PR #798 review). It stays disabled.
+    // A failed RE-read keeps the list it already drew, and that list's own button.
+    if (renderedPatient === null) el("sign-off").textContent = "Nothing to sign off — no list read";
+    // The banner needs only the chart set, so it is read on its own (#745): a failed list read
+    // must not take the duplicate warning down, nor leave a just-judged pair up with a live Review.
+    await redrawBannerAlone(patient); // duplicates.js, loaded after this file
   }
 }
 

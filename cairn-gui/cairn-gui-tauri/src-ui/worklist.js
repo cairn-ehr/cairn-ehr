@@ -8,17 +8,40 @@
 // The tray is a native <details>: closed by default, its <summary> the count. It stays open across
 // visits to a chart (the element is never rebuilt), and an open tray re-reads its list on every
 // return to the front door — `close_chart` cleared the backend's list of openable charts, and the
-// list read admits them again.
+// list read admits them again. Until that read lands the list is EMPTY, never the old entries.
 "use strict";
+
+/**
+ * One counter per KIND of read (the count, the list), bumped when a read starts: an answer whose
+ * read is no longer the newest is dropped, never drawn over a newer one (#752 point 1). Two list
+ * reads can be in flight at once — the <details> toggle and a return to the front door both read
+ * it — and two count reads too, after quick returns to the front door; a slower, older answer
+ * must not win. `trayListRevision` is also bumped where the list is emptied without a read
+ * (`refreshTray`), so an older answer cannot redraw what was just emptied. The same pattern as
+ * funnel.js's `browseRevision`.
+ */
+let trayCountRevision = 0;
+let trayListRevision = 0;
 
 /** Re-read the count (front-door show, and every return to it); re-read the list if open. */
 async function refreshTray() {
+  const revision = ++trayCountRevision;
+  // A return to the front door: `close_chart` has emptied the backend's list of openable charts,
+  // so entries still on screen would have their Review refused with advice that does not fit the
+  // tray ("search again"). They go now, not when the re-read lands (#752 point 2) — and a list
+  // read still in flight is made stale first, or it would land during the count's await below and
+  // draw them straight back (PR #798 review). `loadTray`, after the count, reads them afresh.
+  if (el("duplicate-tray").open) {
+    trayListRevision += 1;
+    clearTrayList();
+  }
   let counted;
   try {
     counted = await invoke("duplicate_tray_count");
   } catch (failure) {
     counted = { summary: failureText(failure), status_line: null };
   }
+  if (revision !== trayCountRevision) return; // a newer count is on its way
   const tray = el("duplicate-tray");
   tray.hidden = !counted.summary;
   el("duplicate-tray-summary").textContent = counted.summary || "";
@@ -27,28 +50,44 @@ async function refreshTray() {
 }
 
 /**
- * Read and draw the list. The new entries are built BEFORE anything on screen changes, and a
- * failure to build them clears the list and says so: otherwise the previous list — entries since
- * resolved, still carrying Review — would stay up under a blank error line, and the failure would
- * reach only the console (both callers discard this promise).
+ * Read and draw the list. The list is emptied when the read STARTS (#752): until the answer
+ * lands, nothing stale is offered. A failure to build the new entries leaves it empty and says
+ * so: otherwise the failure would reach only the console (both callers discard this promise).
  */
 async function loadTray() {
+  const revision = ++trayListRevision;
+  // A closed tray keeps its last entries, and opening it shows them: they may be stale (and their
+  // Review refused, as above) until this read lands, so they go first.
+  clearTrayList();
   let list;
   try {
     list = await invoke("duplicate_worklist");
   } catch (failure) {
     list = { entries: [], more: null, error: failureText(failure) };
   }
+  if (revision !== trayListRevision) return; // a newer read is on its way
   let items;
   try {
     items = list.entries.map(trayItem);
   } catch (failure) {
+    console.error(failure); // the stack, for whoever debugs it; the tray says the rest
     items = [];
-    list = { entries: [], more: null, error: "The possible duplicates could not be shown: " + String(failure) };
+    list = {
+      entries: [],
+      more: null,
+      error: "The possible duplicates could not be shown: " + String(failure),
+    };
   }
   setMessage(el("duplicate-tray-error"), list.error || "");
   el("duplicate-tray-list").replaceChildren(...items);
   setMessage(el("duplicate-tray-more"), list.more || "");
+}
+
+/** Empty the list and its two lines; the count and the status line stay. */
+function clearTrayList() {
+  el("duplicate-tray-list").replaceChildren();
+  setMessage(el("duplicate-tray-error"), "");
+  setMessage(el("duplicate-tray-more"), "");
 }
 
 let trayLineCount = 0; // makes each side's first-line id unique

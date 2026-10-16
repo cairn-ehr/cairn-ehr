@@ -6,12 +6,9 @@
 //! ever mean "checked, none open". So every failed read below becomes a worded line, and
 //! [`check_lines`] says when this record's check has not run, reusing R4's own sentences.
 use crate::chart_set::MemberLine;
-use crate::funnel::view::{ErrorView, Retry};
-use crate::link::judgement_view::{judgement_error_view, refused, LinkReportView};
 use crate::link::view::medication_lines;
 use cairn_gui_tab_medications::view::MedListView;
 use cairn_medication_view::{ChartSet, PatientMedicationList};
-use cairn_node::chart_link::LinkEffect;
 use cairn_node::duplicate_check::{chart_line, status_line, CheckState};
 use serde::Serialize;
 use uuid::Uuid;
@@ -52,13 +49,16 @@ pub struct EntryFlags {
 }
 
 /// "Different people" after every pair between the two records was already judged or resolved
-/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead).
+/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead). No "reload
+/// the chart": the window has no reload control, and re-reads the BANNER itself after a decided
+/// refusal (#745 point 3; link.js's `sendJudgement` and `compare`, via `redrawBannerAlone`) — never
+/// the whole chart, whose redraw would wipe a half-typed stop reason (#799).
 pub const NOTHING_OPEN: &str = "this possible duplicate has already been judged or resolved — \
-     nothing was done; reload the chart";
+     nothing was done";
 /// Review — or Link over a banner comparison — of a chart no list showed and no open proposal
-/// joins to this record (any more).
+/// joins to this record (any more). The window re-reads the banner itself, as for [`NOTHING_OPEN`].
 pub const NOT_SHOWN_OR_RESOLVED: &str = "that chart is not in a list on screen, and is not an \
-     open possible duplicate of this record — reload the chart, or search again";
+     open possible duplicate of this record — nothing was done; to compare it, search for it";
 /// The button's label; `key_locked_for` names it (a locked key names the button pressed).
 pub const DIFFERENT_PEOPLE_BUTTON: &str = "Different people — not the same person";
 
@@ -66,7 +66,10 @@ pub const DIFFERENT_PEOPLE_BUTTON: &str = "Different people — not the same per
 ///
 /// Deliberately NO `Default`: the all-empty section is not a neutral placeholder, it is the
 /// claim "checked, none open" — so it is built only by name, [`DuplicateSection::checked_none_open`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// Serialized by hand (below) so that it also sends `silent` — [`DuplicateSection::is_silent`] —
+/// and the webview hides the banner on that one flag rather than re-deriving it (#745).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateSection {
     pub entries: Vec<DuplicateEntryView>,
     /// "N more …" when entries beyond [`MAX_SHOWN`] exist.
@@ -78,6 +81,20 @@ pub struct DuplicateSection {
 }
 
 impl DuplicateSection {
+    /// True only when the section says nothing at all — the one case the webview hides it, which
+    /// means "checked, none open". The destructuring is EXHAUSTIVE on purpose: a field added to
+    /// this struct does not compile here until someone decides whether it un-silences the banner
+    /// (#745 point 5 — the rule used to be a hand-written conjunction in duplicates.js).
+    pub fn is_silent(&self) -> bool {
+        let DuplicateSection {
+            entries,
+            more,
+            error,
+            check_lines,
+        } = self;
+        entries.is_empty() && more.is_none() && error.is_none() && check_lines.is_empty()
+    }
+
     /// The section that says nothing, which the webview hides: "this record was checked, and no
     /// possible duplicate of it is open". Only ever returned when that is what was read.
     pub fn checked_none_open() -> Self {
@@ -87,6 +104,27 @@ impl DuplicateSection {
             error: None,
             check_lines: vec![],
         }
+    }
+}
+
+impl Serialize for DuplicateSection {
+    /// The four fields as they are, plus `silent`. Exhaustive like `is_silent`, so a new field
+    /// cannot be left off the wire unnoticed.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let DuplicateSection {
+            entries,
+            more,
+            error,
+            check_lines,
+        } = self;
+        let mut wire = serializer.serialize_struct("DuplicateSection", 5)?;
+        wire.serialize_field("entries", entries)?;
+        wire.serialize_field("more", more)?;
+        wire.serialize_field("error", error)?;
+        wire.serialize_field("check_lines", check_lines)?;
+        wire.serialize_field("silent", &self.is_silent())?;
+        wire.end()
     }
 }
 
@@ -117,13 +155,6 @@ pub struct DuplicateEntryView {
 pub struct ChartCheck {
     pub chart: Uuid,
     pub pending: Result<bool, String>,
-}
-
-/// One pair of a "Different people" judgement, as the window saw its outcome.
-pub struct PairResult {
-    pub low: Uuid,
-    pub high: Uuid,
-    pub outcome: Result<LinkEffect, ErrorView>,
 }
 
 /// One banner entry from what was read about the other record: its identity lines (one per
@@ -270,6 +301,31 @@ pub fn section_view(
     }
 }
 
+/// The banner when even the record's chart set could not be read (the banner-alone read, #745):
+/// its error line, never a silent section — hidden, it would claim "checked, none open". **Pure.**
+pub fn unread_set_section(error: String) -> DuplicateSection {
+    section_view(
+        Err(format!(
+            "which charts this record combines could not be read: {error}"
+        )),
+        vec![],
+    )
+}
+
+/// A banner read on its own (#745) while the record's member names could not be read. A check
+/// line then names a linked chart only by its number, so one more line says why; with no check
+/// line there is nothing to explain, and a silent section stays silent. (A chart open shows the
+/// same failure as the pane's own linked-charts warning; the banner alone has no pane.) **Pure.**
+pub fn note_unread_names(mut section: DuplicateSection, error: &str) -> DuplicateSection {
+    if !section.check_lines.is_empty() {
+        section.check_lines.push(format!(
+            "The linked charts' names could not be read, so a linked chart above may be named \
+             only by its number: {error}"
+        ));
+    }
+    section
+}
+
 /// The record's check lines. A checked record has none, unless the node is `Stalled`, or is
 /// `CatchingUp` while a change notice waits (#742, below).
 ///
@@ -348,116 +404,6 @@ pub fn fixture_section() -> DuplicateSection {
     }
 }
 
-/// A failed "Different people" pair, classified exactly as a failed link or unlink is — but
-/// named for what was pressed. Never "The unlink was …": the two charts were never linked, and
-/// that wording would send the clinician looking for a link to undo.
-pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
-    judgement_error_view("\"different people\" judgement", e)
-}
-
-/// The outcome line for "Different people".
-///
-/// - Nothing judged → [`NOTHING_OPEN`].
-/// - ONE pair, and it failed → that pair's own error, unchanged (so the webview applies its
-///   retry advice: an outage — "not confirmed" — keeps the button, a verdict takes it).
-/// - SEVERAL pairs, all failed → ONE error naming every pair's failure — never just the first,
-///   which could hide a later pair's "commit outcome unknown" behind a refusal (the #713
-///   hazard) — carrying the most retryable class among them (`combined_retry`).
-/// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
-///   a pair that was not confirmed may or may not still be open.
-///
-/// The `reload` is `true` even when every recorded pair was `Outranked` (see
-/// [`LinkReportView::reload`]): whatever was recorded, the banner must be re-read.
-pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportView, ErrorView> {
-    match results.as_slice() {
-        // `record_different_people` says "nothing open" as `NothingOpen`, never as an empty
-        // list; this arm only keeps the function total, with the same honest sentence.
-        [] => return Err(refused(NOTHING_OPEN)),
-        [PairResult {
-            outcome: Err(e), ..
-        }] => return Err(e.clone()),
-        _ => {}
-    }
-    if results.iter().all(|r| r.outcome.is_err()) {
-        return Err(ErrorView {
-            text: report_sentence(&results),
-            retry: combined_retry(results.iter().filter_map(|r| r.outcome.as_ref().err())),
-        });
-    }
-    Ok(LinkReportView {
-        sentence: report_sentence(&results),
-        reload: true,
-    })
-}
-
-/// Every pair's sentence, in order, as one line.
-fn report_sentence(results: &[PairResult]) -> String {
-    results
-        .iter()
-        .map(pair_sentence)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// The retry advice for several failed pairs. **Pure.**
-///
-/// [`Retry::AfterReread`] first (#713): if ANY pair's commit was interrupted, that pair may have
-/// been recorded, and the window must re-read before anything is offered again — whatever the
-/// other pairs said. Otherwise the MOST retryable among them — `Now` over `AfterOperator` over
-/// `Never` — because a `Never` beside an outage would tell the webview the outcome was DECIDED
-/// and take the button away, claiming a verdict that does not exist. Keeping the button for an
-/// outage cannot re-sign blindly: "Different people" re-reads the open pairs fresh on every
-/// press, and a refused pair is refused again, before anything is signed.
-fn combined_retry<'a>(errors: impl Iterator<Item = &'a ErrorView>) -> Retry {
-    let rank = |r: Retry| match r {
-        Retry::Never => 0,
-        Retry::AfterOperator => 1,
-        Retry::Now => 2,
-        Retry::AfterReread => 3,
-    };
-    // Never empty (only called with two or more failures); were it ever, nothing was decided,
-    // so the fallback keeps the button rather than claim a verdict.
-    errors
-        .map(|e| e.retry)
-        .max_by_key(|r| rank(*r))
-        .unwrap_or(Retry::Now)
-}
-
-/// `text` ending in a full stop, so pair sentences joined by a space read as sentences.
-fn full_stop(text: &str) -> String {
-    if text.ends_with('.') {
-        text.to_string()
-    } else {
-        format!("{text}.")
-    }
-}
-
-/// One pair's sentence. A failed pair is "Not confirmed" — never "NOT recorded" and never "it
-/// stays on the banner": a commit-unknown error may have recorded it, and only the banner's
-/// re-read says whether the pair is still open.
-fn pair_sentence(r: &PairResult) -> String {
-    let (low, high) = (r.low, r.high);
-    match &r.outcome {
-        Ok(LinkEffect::TookEffect) => format!(
-            "Recorded: charts {low} and {high} are different people. This pair is \
-             closed on this node, and on every node once the judgement syncs."
-        ),
-        Ok(LinkEffect::StillJoined) => format!(
-            "Recorded that charts {low} and {high} are different people — but they read as one \
-             record through other links, so nothing was split. The links joining them are listed \
-             under \"How these charts are linked\"."
-        ),
-        Ok(LinkEffect::Outranked) => format!(
-            "Recorded that charts {low} and {high} are different people, but a judgement already \
-             standing for that pair outranks it; the charts stay as that judgement left them."
-        ),
-        Err(e) => full_stop(&format!(
-            "Not confirmed for charts {low} and {high}: {}",
-            e.text
-        )),
-    }
-}
-
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
@@ -465,7 +411,3 @@ mod tests;
 #[cfg(test)]
 #[path = "view_catchup_tests.rs"]
 mod catchup_tests;
-
-#[cfg(test)]
-#[path = "view_judgement_tests.rs"]
-mod judgement_tests;

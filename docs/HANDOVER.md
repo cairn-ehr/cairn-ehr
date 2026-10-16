@@ -3,45 +3,35 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ BUILT ON PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795) (2026-10-16, branch
-> `refactor/793-gui-file-splits-737-headings`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** #793 + #712 item 3 (the
-> last four `cairn-gui-tauri` files over 500 lines lose their inline tests — pure moves, the same 307 test leaves across the move) and
-> **#737** (each banner entry's `<h3>` names whose record it is — name · born · chart id; the status is the line under it). **#796** (the
-> tray's identical headings, filed and then — at the maintainer's ask — fixed the same way in this PR: both records,
-> each as name · age · chart id, joined by "possibly the same person as", the status under it). Merged before it: PR #794 (#781 · #789 · #732) and PR #792 (R6's residuals
-> #787 · #786 · #783 · #782). The whole repair path (#679 · #680 · #681) is MERGED through R7
-> (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
-> maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
-> waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
-> identifier finding (computed now) carries a NON-holding note on its links-list line (db/016: a soft veto never demotes
-> a link, so it is deliberately outside `cairn_chart_set_doubts`). No ADR, no schema generation (db/054 and db/056 in
-> place). Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md` (every slice designed +
-> as built); R4's worker runbook `docs/developers/running-the-duplicate-check.md`; the human passes are
-> `cairn-gui-tauri`'s RUNBOOK §11 (banner; R7's check 3), §12 (tray) and §13 (R6's confirm; R7's check 4). spec
-> **v0.82** (newest ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking
-> key can generate a pair an older test asserts absent — fix the fixture date, never the assertion.
+> **⇒ BUILT ON PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798) (2026-10-16, branch
+> `fix/752-745-740-banner-tray-failure-states`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** the possible-duplicate
+> banner's and tray's failure states — **#745** (a failed chart read redraws the banner ALONE via `duplicate_banner`;
+> a drawing fault is said on the banner; it hides only on Rust's `silent`; a decided refusal re-reads the BANNER, no
+> "reload"), **#752** (the tray's count and list carry revisions; its stale list is emptied when a re-read starts) and
+> the rest of **#740** (a failed "Different people" pair continues its own sentence). GUI-only; no schema, no ADR. A
+> second review round (2026-10-17) fixed its findings in place and pinned every JS half by source guards.
+> Merged before it: PR #795 (#793 · #712 item 3 · #737 · #796), PR #794 (#781 · #789 · #732), PR #792 (R6's
+> residuals). The whole repair path (#679 · #680 · #681) is MERGED through R7 (PR #788). Design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's worker runbook
+> `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11 (banner),
+> §12 (tray) and §13 (R6's confirm). spec **v0.82** (newest ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 ·
+> #764 · #765 · #766. Trap: a new blocking key can generate a pair an older test asserts absent — fix the fixture
+> date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795)** (#793 · #712 item 3 · #737, above): read `gh pr checks`, then review and merge. **#728** (the Pi re-measure; now also the
->    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** #712's
->    items 1, 2, 4, 5 (item 3 done) · from R7 **#790** (the
->    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
->    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#784** (a verdict is not re-checked against identity
->    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
->    constructors, a `LinkState` enum, `ShownPair` as an enum) · from R5b **#750** ("Registered more recently" trusts a
->    UUIDv7 time) · **#751** (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a
->    stale list after return, a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link
->    by HLC is shown nowhere — ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check) · **#756**
->    (worklist/banner type tidy-up) · **#757** (the banner fails whole on one unreadable record; one failed flags read
->    fails the whole tray) · from R5a **#738** (`cairn-gui-tauri` has no DB-gated
->    tests for its live branches; R5b's tray added two, R6 commented its fixture/locked-key arms) · **#739** (an unheld
->    member's "not yet run" line) · **#740** ("Different people" failure wording) · **#745** (a missing or stale banner
->    after a failure) · **#746** (Different people with an unreadable drug list — a decision) · **#747** (the banner
->    query's index) · #722 (no proposal fixture) · from R4 **#730** (the 101–1000 skipped-block band — a decision) ·
->    **#731** (no "charts failing" signal) · **#734** (db/046's comment
->    points at `db.py`). Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
+> 1. **PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)** (above): read `gh pr checks` (CodeQL included —
+>    PR #795's aggregate `CodeQL` check FAILED on a test assert echoing a name-bearing heading; #798 fixes it, and
+>    main's own scan may open it as an alert until #798 merges), then review and merge. **#728** (the Pi re-measure;
+>    also the find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
+> 2. **Open repair-path issues:** from PR #798 **#797** (the window's other ~12 "reload the chart" sentences with no
+>    reload control — a wording decision; its comment adds the set-changed refusals, which want a whole-chart re-read,
+>    and asks whether to broaden `Retry::AfterReread`) · **#799** (a chart re-read wipes a half-typed stop reason) ·
+>    **#800** (`refresh()` has no generation token) · **#801** (a fault drawing the medication rows leaves a partial
+>    list under a live sign-off) · #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
+>    from R6 **#784** · **#785** · from R5b **#750** · **#751** · **#753** · **#755** · **#756** · **#757** · from R5a
+>    **#738** · **#739** · **#746** (a decision) · **#747** · #722 · from R4 **#730** (a decision) · **#731** ·
+>    **#734**. Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
 >    **#699** · **#703** · **#705** · **#706** · from R1: #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696;
 >    #333, #220 and #335 gained comments.
 > 3. **Human acts still owed** — see *Four things still owed* below; the repair path adds a **linked chart's open**,
@@ -57,7 +47,7 @@
 >    `cairn_test`'s fixtures).
 >
 > **⇒ DURABLE RULES — READ BEFORE TOUCHING THE CODE THEY NAME:**
-> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (R7, R6, R5b,
+> [`developers/durable-rules.md`](developers/durable-rules.md) carries every slice's "do not undo" block (#745·#752·#740, R7, R6, R5b,
 > R5a, #725, R4, R3, R1b, R2a, R2b-1, R2b-2, R1, the funnel) and the **eighteen traps**, each with its pin and its
 > tempting wrong fix. A slice that adds rules adds its block there, not here.
 >
@@ -158,7 +148,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-16 (#793 · #737, PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795)) · 10-16 (#781 · #789 · #732, PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -191,37 +181,48 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
 
-### 2026-10-16 (third) — #793 + #712 item 3 split; #737 banner headings (PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795))
+### 2026-10-17 — PR #798's second review round (fixed in place; filed #801, widened #797)
 
-HANDOVER was stale on arrival a fourth time (it called #794 awaiting merge; it had merged at 03:33Z).
-- **⇒ A `#[path]` test file keeps its module PATH:** `#[cfg(test)] #[path = "x_tests.rs"] pub(crate) mod tests;` left
-  `crate::commands::tests::fields_read_in` resolving for four importers with no edit. The path is relative to the
-  declaring file's directory. A boundary-asserting move script (`expect(line, text)` before slicing) caught nothing
-  this time, but it makes a wrong range fail loudly instead of moving the wrong code.
-- **⇒ `cargo doc -D warnings` reads `<date>` in a doc comment as an unclosed HTML tag**; backtick it. Clippy and test
-  were green; only the full gate's doc step saw it (the memory's cairn-gui gate, ~2 min, five steps).
-- **⇒ A heading's job is to tell entries apart in a heading list — so test it on the input the list EXISTS for.**
-  My first heading was name · born; the review saw that an exact name-and-DOB match is the matcher's STRONGEST
-  proposal, so a thrice-registered patient's banner had identical headings again. The heading now ends with the whole
-  chart id (as `member_line` does), pinned by `exact_namesakes_are_told_apart_by_their_charts`. The tray (#796)
-  names BOTH records: one record sits in several entries (A–B, A–C), so one side alone would repeat; its rows carry
-  an age, not a DOB. Both headings share `with_linked_count` and `chart_who`.
-- **⇒ Punctuation is not speech.** The second review heard the tray's "A · … · and 1 linked chart — and Chart Y" the
-  way VoiceOver says it: "·" and "—" are a pause or nothing, so Y sounded LINKED to A — the opposite of a proposal. The
-  two sides are now joined by words ("A … — possibly the same person as B …"). The same round pinned the tray's
-  `(open_chart, older_chart)` order at its real call site (a swap was green before; checked by mutating it).
+- **⇒ The webview's JS CAN be pinned without a JS runner:** `source_guard::js_fn` / `js_const` read a function or a
+  sentence out of the script, and `duplicates/webview_tests.rs` pins the ORDER or CHOICE each fix is. Mutation-check
+  every guard (break the fix, see red, restore with `cp`) — a guard written after its code proves nothing until then.
+- **⇒ A sentence the window words itself must be true of EVERY state that reaches it.** `renderedPatient === null`
+  is both "the first read failed" and "it is still in flight"; "could not be read" was false for the second.
+- **⇒ Emptying a list is not cancelling its read.** A clear that does not bump the revision lets an older answer,
+  still in flight, draw the cleared entries straight back.
+- **⇒ Re-reading the narrowest stale thing is right only when THAT is the stale thing.** On a set-changed refusal the
+  list is stale, not the banner, and a fresh banner over it makes a stale screen look current (#797's comment).
 
-### 2026-10-16 (second) — #781 · #789 split; #732 (PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794))
+### 2026-10-16 (fourth) — #745 · #752 · the rest of #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798))
 
-HANDOVER was stale on arrival a third time (it called #792 awaiting merge; it had merged). Picked a decision-free bundle
-whose gate stays cheap: no `db/*.sql` edit, so no relink of every cairn-node test binary.
-- **⇒ Prove a pure move by the test LIST, not by a green run.** Capture `cargo test -p X -- --list` before, diff the
-  sorted LEAF names after (module paths legitimately change). Same count + same leaves = nothing dropped or duplicated.
-- **⇒ Move code by slicing exact line ranges with a script, never by retyping;** let the compiler name the stale
-  imports (three, each used only by the moved tests). Two test modules can share fixtures as `pub(super) fn` in one
-  and `use super::tests::{…}` in the other.
-- **⇒ A fixture-gap RED can show the bug is already live:** #732's new test found 3 rows, not the 1 it wrote — two
-  nameless charts a Rust suite had left in the shared `cairn_test`.
+#795 merged mid-session (the maintainer said to presume it); this branch was cut on it and rebased onto main after.
+- **⇒ An issue's points can already be absorbed by a later fix — read the code before planning them.** #740's
+  points 2 and 3 ("may be recorded twice", no reload on an all-failed press) were both done by #713's
+  `judgement_error_view` + `combined_retry`; only the stutter was left.
+- **⇒ A fix that SHOWS something in a new state reaches code that state never reached.** The banner drawn alone
+  after a failed FIRST read offered Review, which sends `renderedPatient` — null, since no list ever rendered (the
+  review's I1). Walk every button the newly-visible thing carries.
+- **⇒ A re-read is not free: `refresh()` rebuilds the rows and wipes a half-typed stop reason.** Re-read the
+  narrowest thing that is stale (the banner), never the chart, on a refusal that changed nothing (review I2; the
+  general case is #799).
+- **⇒ A headless walk's stub must pick its answer at CALL time, before any delay,** or an ordering test passes or
+  fails for the stub's reasons. Mutate the guard in the copy to prove the walk sees the defect. Dump the stub's
+  payloads from Rust (a throwaway `#[test]` serializing the fixture-mode `*_impl` answers), never hand-write them.
+- **⇒ A test assert must never echo identity-built text** (`"{}", view.heading`): CodeQL's rust/cleartext-logging
+  failed PR #795's check on one, after it merged. **zsh does not word-split `$step`** (again): run multi-step gates
+  under `bash -c`.
+
+### 2026-10-16 (second, third) — #781 · #789 · #732 (PR #794); #793 + #712 item 3 · #737 · #796 (PR #795)
+
+HANDOVER was stale on arrival both times (a merged PR still called "awaiting merge").
+- **⇒ Prove a pure move by the test LIST, not a green run:** diff the sorted leaf names of `cargo test -- --list`
+  before and after. Move code by slicing exact line ranges with a script (`expect(line, text)` first), never by
+  retyping. A `#[cfg(test)] #[path = "x_tests.rs"] mod tests;` keeps the module PATH, so importers need no edit.
+- **⇒ `cargo doc -D warnings` reads `<date>` in a doc comment as an unclosed HTML tag** (backtick it).
+- **⇒ A heading exists to tell entries apart — test it on the input the list exists for** (exact namesakes: the
+  matcher's strongest proposal; the heading ends with the chart id). **Punctuation is not speech:** VoiceOver reads
+  "·"/"—" as a pause, so two records joined by "—" sounded linked; join them by words.
+- **⇒ A fixture-gap RED can show the bug is already live** (#732 found 3 stray rows, not 1).
 
 ### 2026-10-16 — R6's residuals #787 · #786 · #783 · #782 (PR #792)
 
@@ -432,7 +433,7 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ The repair path: PR #795's review and merge, then the open repair-path issues** — see ⇒ NEXT.
+- **⇒ The repair path: PR #798's review and merge, then the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
   restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain, beyond ⇒ NEXT's node-plane list: #525 ·

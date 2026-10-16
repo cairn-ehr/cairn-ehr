@@ -23,7 +23,7 @@ pub struct LinkReportView {
     /// and `unlink.js` keep the panel open and show the sentence there once, instead of closing it
     /// and re-reading. A new `false` case must be worded for that panel.
     ///
-    /// "Different people" (R5a, `duplicates::view::different_people_report`) is the second
+    /// "Different people" (R5a, `duplicates::verdict::different_people_report`) is the second
     /// producer: it is `true` whenever ANY pair was recorded — even an all-`Outranked` one —
     /// because the banner must be re-read whatever the record did.
     pub reload: bool,

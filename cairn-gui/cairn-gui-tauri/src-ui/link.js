@@ -1,11 +1,14 @@
-// "Same person as…" (repair path R2b-1). Renders and decides nothing: every sentence comes
-// from Rust (`link/view.rs`, `link/judgement_view.rs`; R5a's "Different people" from
-// `duplicates/view.rs`), every check from the backend (`link/same_person.rs`, `link/search.rs`,
-// `duplicates/mod.rs`). Classic script, loaded after main.js and funnel.js, sharing their
-// scope: `el`, `cell`, `setMessage`, `say`, `refresh`, `displayedPatient`, `renderedPatient`,
-// `renderedCharts` (main.js) and
-// `failureText`, `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC
-// failure needs its own wording, not just Rust's).
+// "Same person as…" (repair path R2b-1). Decides nothing about the record: every check comes
+// from the backend (`link/same_person.rs`, `link/search.rs`, `duplicates/mod.rs`), and every
+// sentence from Rust (`link/view.rs`, `link/judgement_view.rs`; R5a's "Different people" from
+// `duplicates/verdict.rs`) — except duplicates.js's `NO_LIST_TO_COMPARE`, said when no list is on
+// screen to compare with. What it does decide is the window's own: which buttons are live, and
+// what to re-read after an answer (the chart, or after a decided refusal only the banner).
+// Classic script, loaded after main.js and funnel.js, sharing their scope: `el`, `cell`,
+// `setMessage`, `say`, `refresh`, `displayedPatient`, `renderedPatient`, `renderedCharts`
+// (main.js), `redrawBannerAlone`, `NO_LIST_TO_COMPARE` (duplicates.js) and `failureText`,
+// `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC failure needs its
+// own wording, not just Rust's).
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`. `#link-status` is hidden whenever it is empty
 // (`clearComparison`), and style.css makes `[hidden]` win over everything: a bare
@@ -163,6 +166,12 @@ async function compare(otherId) {
   // Captured NOW, synchronously: the chart this comparison is about. Nothing read later
   // (`renderedPatient` after a re-read, or after a switch) may stand in for it.
   const patientId = renderedPatient;
+  if (patientId === null) {
+    // No list is drawn (the chart's read failed, or is still in flight): there is no record on
+    // screen to compare against, and the backend would be sent no chart at all (PR #798 review).
+    setMessage(el("link-status"), NO_LIST_TO_COMPARE);
+    return;
+  }
   clearComparison();
   compared = null; // until this answer lands, there is nothing a Link could be signed over
   try {
@@ -181,6 +190,16 @@ async function compare(otherId) {
   } catch (failure) {
     if (token !== compareToken) return;
     setMessage(el("link-status"), failureText(failure));
+    // A decided refusal ("never") may mean the banner is stale — e.g. its pair was judged or
+    // resolved meanwhile. The window has no reload control, so it re-reads the banner itself
+    // rather than leave the clinician to close and reopen the chart (#745 point 3). A search
+    // result's refusal ("already part of this record") says nothing about the banner, but the
+    // re-read is one cheap read, so it is not told apart.
+    if (failure && failure.retry === "never" && patientId === displayedPatient) {
+      // Only the BANNER is re-read: a whole-chart refresh rebuilds the medication rows and would
+      // wipe a half-typed stop reason over a refusal that changed nothing (PR #798 review).
+      await redrawBannerAlone(patientId);
+    }
   }
 }
 
@@ -389,6 +408,10 @@ async function sendJudgement(command) {
     // second judgement over the colleague's it lost to — so never a live button over it: the
     // buttons go (below) and the chart is re-read (at the end), wherever the answer lands.
     const reread = Boolean(failure && failure.retry === "after_reread");
+    // A decided refusal ("never") changed nothing, but says the banner is stale (e.g. "Different
+    // people" on a pair a colleague just judged): the BANNER is re-read below (#745 point 3) —
+    // never the whole chart, whose redraw would wipe a half-typed stop reason.
+    const decided = Boolean(failure && failure.retry === "never");
     if (place === "elsewhere") {
       sayAnywhere("For chart " + sent.patientId + ": " + text);
     } else if (place === "chart") {
@@ -424,6 +447,7 @@ async function sendJudgement(command) {
       displayedPatient !== null &&
       (sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient));
     if (reread && touched) await refresh(text);
+    else if (decided && touched) await redrawBannerAlone(displayedPatient);
   } finally {
     for (const b of buttons) b.disabled = false;
   }

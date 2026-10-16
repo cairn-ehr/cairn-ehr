@@ -10,6 +10,33 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ THE BANNER'S AND TRAY'S FAILURE STATES (#745 · #752 · #740) — do not undo any of these** (pins:
+`cairn-gui-tauri/src/duplicates/{tests.rs,view_tests.rs,verdict_tests.rs}`, `worklist/tests.rs`,
+`commands_tests.rs::every_command_the_webview_calls_is_registered`; the JS halves by SOURCE guards —
+`duplicates/webview_tests.rs` and `worklist/tests.rs`, each mutation-checked — since there is no JS runner):
+- **The banner hides ONLY on Rust's `silent`** (`DuplicateSection::is_silent`, sent by a hand-written `Serialize`).
+  Both destructure EXHAUSTIVELY: a new field must not compile until someone decides whether it un-silences the banner.
+  **Tempting wrong fix:** `#[derive(Serialize)]` back, or a JS-side conjunction over the fields.
+- **A failed `med_list` read redraws the banner ALONE** (`duplicate_banner` → `banner_alone_impl`; `main.js`'s `refresh`
+  catch → `redrawBannerAlone`): the warning needs only the chart set. An unread set is a worded banner, never a hidden
+  one; unread member names are said (`note_unread_names`), never dropped; a refusal of the read is an `ErrorView`
+  (a bare string would be worded "could not reach its backend"). **`render` draws the banner through
+  `drawDuplicates`** — a drawing fault is said ON the banner, keeping its own error and check lines, never thrown into
+  `refresh`'s "Could not read the chart". **duplicates.js builds ONE section itself (`emptyBanner`)**, its keys pinned
+  to what Rust sends — a second hand-built literal is a second copy of the shape to drift.
+- **A decided (`"never"`) refusal of a comparison or a judgement re-reads the BANNER** (`redrawBannerAlone` from
+  `link.js`'s `compare` and `sendJudgement`; #713's `after_reread` still re-reads the whole chart). **Tempting wrong
+  fix:** `refresh()` — it rebuilds the rows and wipes a half-typed stop reason over a refusal that changed nothing.
+  The window has no reload control, so `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload" (the rest: #797).
+- **No comparison without a drawn list:** `compare` refuses while `renderedPatient` is null (`NO_LIST_TO_COMPARE`),
+  and a banner drawn alone after a failed FIRST read shows `REVIEW_WAITS_FOR_LIST` in place of Review. Both sentences
+  must be true of a read still in flight as well as a failed one, and name the way out (close and reopen the chart —
+  nothing re-reads a failed first read until #797 adds a control).
+- **The tray's count and list each carry a revision** (`trayCountRevision`, `trayListRevision`): an older answer is
+  dropped. **The list is emptied when a re-read starts** — never the old entries, whose Review `close_chart` made
+  unopenable. **Wherever the list is emptied, `trayListRevision` is bumped too** (`refreshTray`'s clear): an older
+  list answer still in flight would otherwise land during the count's await and draw the entries straight back.
+
 **⇒ R6'S RESIDUALS (PR #792: #787 · #786 · #783 · #782) — do not undo any of these** (pins:
 `tests/standing_link_legacy_address.rs`, `cairn-patient-search/src/list_wire.rs`, `cairn-medication-view`'s
 `the_doubted_link_remedy_names_the_bridge_lines_door_too`, `cairn-gui-tauri/src/link/{lock_hint_tests.rs,confirm_view.rs}`):
@@ -105,7 +132,7 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
   OUTSIDE the collapsed `<details>`** ("(0)" must never read as "checked, none"); never `role="alert"` or focus-taking.
 
 **⇒ R5a'S DURABLE RULES (PR #735)** (pins: `tests/{match_proposal_open,duplicate_review}.rs`,
-`cairn-gui-tauri/src/duplicates/{view_tests.rs,view_judgement_tests.rs,mod.rs}`):
+`cairn-gui-tauri/src/duplicates/{view_tests.rs,verdict_tests.rs,tests.rs}`):
 - **`match_proposal_open` (db/057) is the ONE "still needs a human" predicate**: a pair leaves it only when it reads as
   one record or an **ATTESTED** unlink stands — **never count an un-attested unlink** (any unreviewed writer could
   clear a banner). Its statuses are pinned to `OPEN_PROPOSAL_STATUSES`.
@@ -115,8 +142,9 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
   (after `ALREADY_IN_RECORD`). **`duplicate_section` reads in two phases** — never hold `state.db` (a non-re-entrant
   tokio Mutex) across `read_chart_of` / `chart_set_of`.
 - **"Different people" = an attested unlink on every pair STILL open between the two records, read fresh**; a pair's
-  failure is carried, never `?`; a failed pair reads "Not confirmed", never "not recorded"; all-failed → one ErrorView
-  naming every pair. **The veto note is computed fresh** (`cairn_match_veto`), never from stored `veto_findings`.
+  failure is carried, never `?`; a failed pair reads "For charts A and B, <its own sentence continued>" (#740 — never
+  "not recorded", never a stutter); all-failed → one ErrorView naming every pair. **The veto note is computed fresh**
+  (`cairn_match_veto`), never from stored `veto_findings`.
 - **Webview:** `duplicates.js` loads after `main.js` and BEFORE `funnel.js` (whose last line boots) — never a `typeof`
   guard on `render`; "Different people" shows only on the banner's own comparison token.
 
