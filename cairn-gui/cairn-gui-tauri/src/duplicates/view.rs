@@ -50,12 +50,13 @@ pub struct EntryFlags {
 
 /// "Different people" after every pair between the two records was already judged or resolved
 /// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead). No "reload
-/// the chart": the window has no reload control, and re-reads the chart itself after a decided
-/// refusal (#745 point 3; link.js's `sendJudgement` and `compare`).
+/// the chart": the window has no reload control, and re-reads the BANNER itself after a decided
+/// refusal (#745 point 3; link.js's `sendJudgement` and `compare`, via `redrawBannerAlone`) — never
+/// the whole chart, whose redraw would wipe a half-typed stop reason (#799).
 pub const NOTHING_OPEN: &str = "this possible duplicate has already been judged or resolved — \
      nothing was done";
 /// Review — or Link over a banner comparison — of a chart no list showed and no open proposal
-/// joins to this record (any more). The window re-reads the chart itself, as for [`NOTHING_OPEN`].
+/// joins to this record (any more). The window re-reads the banner itself, as for [`NOTHING_OPEN`].
 pub const NOT_SHOWN_OR_RESOLVED: &str = "that chart is not in a list on screen, and is not an \
      open possible duplicate of this record — nothing was done; to compare it, search for it";
 /// The button's label; `key_locked_for` names it (a locked key names the button pressed).
@@ -309,6 +310,20 @@ pub fn unread_set_section(error: String) -> DuplicateSection {
         )),
         vec![],
     )
+}
+
+/// A banner read on its own (#745) while the record's member names could not be read. A check
+/// line then names a linked chart only by its number, so one more line says why; with no check
+/// line there is nothing to explain, and a silent section stays silent. (A chart open shows the
+/// same failure as the pane's own linked-charts warning; the banner alone has no pane.) **Pure.**
+pub fn note_unread_names(mut section: DuplicateSection, error: &str) -> DuplicateSection {
+    if !section.check_lines.is_empty() {
+        section.check_lines.push(format!(
+            "The linked charts' names could not be read, so a linked chart above may be named \
+             only by its number: {error}"
+        ));
+    }
+    section
 }
 
 /// The record's check lines. A checked record has none, unless the node is `Stalled`, or is

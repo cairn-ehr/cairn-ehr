@@ -478,6 +478,14 @@ never brings this line onto a checked chart.
 - [ ] Every outcome is shown AND announced, never silent: **Recorded** and **Linked** on the chart's
       outcome line (the panel closes and the chart, banner included, is re-read); a refusal or "already
       been judged or resolved" in the panel's status line.
+- [ ] **A pair judged elsewhere meanwhile** (#745 point 3): launch a second window on the same chart
+      (the launch command above again, in a second terminal), record "Different people" there, then press **Different people** in the first. The refusal says
+      "nothing was done" and **never "reload the chart"**, and the banner redraws itself without the
+      pair; a stop reason you had half-typed beside a drug is still there.
+- [ ] **A chart that cannot be read** (#745 points 1–2): with a chart open, stop the node's Postgres and
+      press **Sign off**. The outcome line says "Could not read the chart"; the banner does **not**
+      vanish and offers no **Review** on a stale pair — it says "Could not check for possible
+      duplicates: …". Restart Postgres, close the chart and reopen it: the banner is back as before.
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to the **Review** that opened it
       (to "Same person as…" if the banner has been redrawn since).
 

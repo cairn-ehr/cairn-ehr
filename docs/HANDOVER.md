@@ -8,7 +8,8 @@
 > banner's and tray's failure states — **#745** (a failed chart read redraws the banner ALONE via `duplicate_banner`;
 > a drawing fault is said on the banner; it hides only on Rust's `silent`; a decided refusal re-reads the BANNER, no
 > "reload"), **#752** (the tray's count and list carry revisions; its stale list is emptied when a re-read starts) and
-> the rest of **#740** (a failed "Different people" pair continues its own sentence). GUI-only; no schema, no ADR.
+> the rest of **#740** (a failed "Different people" pair continues its own sentence). GUI-only; no schema, no ADR. A
+> second review round (2026-10-17) fixed its findings in place and pinned every JS half by source guards.
 > Merged before it: PR #795 (#793 · #712 item 3 · #737 · #796), PR #794 (#781 · #789 · #732), PR #792 (R6's
 > residuals). The whole repair path (#679 · #680 · #681) is MERGED through R7 (PR #788). Design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's worker runbook
@@ -24,8 +25,10 @@
 >    main's own scan may open it as an alert until #798 merges), then review and merge. **#728** (the Pi re-measure;
 >    also the find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** from PR #798 **#797** (the window's other ~12 "reload the chart" sentences with no
->    reload control — a wording decision) · **#799** (a chart re-read wipes a half-typed stop reason) · **#800**
->    (`refresh()` has no generation token) · #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
+>    reload control — a wording decision; its comment adds the set-changed refusals, which want a whole-chart re-read,
+>    and asks whether to broaden `Retry::AfterReread`) · **#799** (a chart re-read wipes a half-typed stop reason) ·
+>    **#800** (`refresh()` has no generation token) · **#801** (a fault drawing the medication rows leaves a partial
+>    list under a live sign-off) · #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
 >    from R6 **#784** · **#785** · from R5b **#750** · **#751** · **#753** · **#755** · **#756** · **#757** · from R5a
 >    **#738** · **#739** · **#746** (a decision) · **#747** · #722 · from R4 **#730** (a decision) · **#731** ·
 >    **#734**. Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
@@ -145,7 +148,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -177,6 +180,18 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-17 — PR #798's second review round (fixed in place; filed #801, widened #797)
+
+- **⇒ The webview's JS CAN be pinned without a JS runner:** `source_guard::js_fn` / `js_const` read a function or a
+  sentence out of the script, and `duplicates/webview_tests.rs` pins the ORDER or CHOICE each fix is. Mutation-check
+  every guard (break the fix, see red, restore with `cp`) — a guard written after its code proves nothing until then.
+- **⇒ A sentence the window words itself must be true of EVERY state that reaches it.** `renderedPatient === null`
+  is both "the first read failed" and "it is still in flight"; "could not be read" was false for the second.
+- **⇒ Emptying a list is not cancelling its read.** A clear that does not bump the revision lets an older answer,
+  still in flight, draw the cleared entries straight back.
+- **⇒ Re-reading the narrowest stale thing is right only when THAT is the stale thing.** On a set-changed refusal the
+  list is stale, not the banner, and a fresh banner over it makes a stale screen look current (#797's comment).
 
 ### 2026-10-16 (fourth) — #745 · #752 · the rest of #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798))
 

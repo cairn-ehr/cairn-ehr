@@ -146,6 +146,7 @@ fn pair_sentence(r: &PairResult) -> String {
         )),
     }
 }
+
 #[cfg(test)]
 #[path = "verdict_tests.rs"]
 mod tests;

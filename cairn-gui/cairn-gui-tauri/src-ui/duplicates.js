@@ -1,9 +1,10 @@
 // The possible-duplicate banner (repair path R5a, #680). Decides nothing but whether "Different
-// people" and Review are visible, and words nothing but what Rust cannot see — the banner failing
-// to DRAW, its own read failing to reach the backend (`failedBanner`, #745), and no medication
-// list being on screen to compare against (`NO_LIST_TO_COMPARE`, `REVIEW_WAITS_FOR_LIST`): every other
-// sentence comes from Rust (`duplicates/view.rs`), every check from the backend
-// (`duplicates/mod.rs`), and whether the banner hides is Rust's `silent`. Classic script, loaded after main.js and
+// people" and Review are visible, and words nothing but what Rust cannot see: the banner failing
+// to DRAW, its own read failing (#745 — the lead-in to the backend's refusal, or the whole of an
+// IPC failure, via funnel.js's `failureText`), and no medication list being on screen
+// to compare against (`NO_LIST_TO_COMPARE`, `REVIEW_WAITS_FOR_LIST`). Every other sentence comes
+// from Rust (`duplicates/view.rs`), every check from the backend (`duplicates/mod.rs`), and
+// whether the banner hides is Rust's `silent`. Classic script, loaded after main.js and
 // BEFORE funnel.js (whose last line starts `boot()`, whose first render calls `renderDuplicates`:
 // an absent banner must never be possible, so this is guaranteed by load order, not by a typeof
 // guard). It shares the global scope; link.js's `sendJudgement`, `compare`, `compared`,
@@ -17,16 +18,22 @@
 "use strict";
 
 /**
- * Said when Review — or any comparison (link.js's `compare`) — has no drawn medication list to
- * compare against: the chart's own read failed (or is still in flight), so `renderedPatient` is
- * null and the backend would be sent no chart. Only the window knows this, so it words it.
+ * Said when a comparison (link.js's `compare`, reached from the panel's search) has no drawn
+ * medication list to compare against: `renderedPatient` is null, so the backend would be sent no
+ * chart. That is so in two cases the window cannot tell apart here — the chart's FIRST read failed
+ * (`clearChart` nulled it and nothing re-read), or that read is still in flight — so the sentence
+ * is true of both (PR #798 review). Only the window knows this, so it words it.
  */
 const NO_LIST_TO_COMPARE =
-  "This chart's medication list could not be read, so there is no record on screen to compare " +
-  "with — nothing was done.";
-/** Under each entry of a banner drawn without its chart's list, in place of Review. */
+  "This chart's medication list is not on screen — it could not be read, or is still being " +
+  "read — so there is nothing to compare it with; nothing was done.";
+/**
+ * Under each entry of a banner drawn while no list is on screen, in place of Review. Nothing
+ * re-reads a failed first read by itself (#797 tracks a reload control), so it names the way out.
+ */
 const REVIEW_WAITS_FOR_LIST =
-  "Review opens once this chart's medication list can be read — the banner was read on its own.";
+  "Review needs this chart's medication list on screen, and it could not be read or is still " +
+  "being read. If it could not be read, close the chart and open it again.";
 
 /**
  * Draw a `DuplicateSection`. Hidden only when Rust says it has nothing to say (`silent`, which is
@@ -46,12 +53,17 @@ function renderDuplicates(section) {
 
 /** Empty the banner (a chart change; never one patient's banner under another's header). */
 function clearDuplicates() {
-  renderDuplicates({ entries: [], more: null, error: null, check_lines: [], silent: true });
+  renderDuplicates(emptyBanner(null));
 }
 
-/** A banner saying only `text`, as its error line: never silent, so never hidden. */
-function failedBanner(text) {
-  return { entries: [], more: null, error: text, check_lines: [], silent: false };
+/**
+ * A banner with no entries, saying only `error` (or nothing). The ONE section this file builds
+ * itself, so its shape is written once and pinned against what Rust sends
+ * (`duplicates/webview_tests.rs`). `silent` is Rust's rule (`DuplicateSection::is_silent`) for a
+ * section with no entries, `more` or check lines: hidden only when there is no error to say.
+ */
+function emptyBanner(error) {
+  return { entries: [], more: null, error, check_lines: [], silent: !error };
 }
 
 /**
@@ -64,23 +76,45 @@ function drawDuplicates(section) {
   try {
     renderDuplicates(section);
   } catch (failure) {
-    renderDuplicates(failedBanner("The possible duplicates could not be shown: " + String(failure)));
+    console.error(failure); // the stack, for whoever debugs it; the banner says the rest
+    renderDuplicates(
+      salvagedBanner(section, "The possible duplicates could not be shown: " + String(failure)),
+    );
   }
 }
 
 /**
- * The banner ALONE, for the open chart whose medication list could not be read (#745 points 1
- * and 2). The duplicate warning needs only the chart set, so a failed list read must not take it
- * down; and after a judgement, a failed re-read must not leave the judged pair up with a live
- * Review — the banner is re-read on its own, and if even that fails it says so in place of the
- * old entries. A read for a chart the clinician has since left is dropped.
+ * What a section that failed to draw can still say: the fault, then its own error line, and its
+ * own check lines ("Duplicate check status unknown" is a safety line, not decoration). Only plain
+ * strings are kept — the fault may be in any field — and the entries are dropped, since one of
+ * them may be what failed. Never silent: `fault` is always said.
+ */
+function salvagedBanner(section, fault) {
+  const own = section && typeof section.error === "string" ? " " + section.error : "";
+  const lines = section && Array.isArray(section.check_lines) ? section.check_lines : [];
+  return {
+    ...emptyBanner(fault + own),
+    check_lines: lines.filter((line) => typeof line === "string"),
+  };
+}
+
+/**
+ * Re-read and draw the banner ALONE, without the medication list. Three callers: main.js's
+ * `refresh` when the chart's list could not be read (#745 points 1 and 2 — the duplicate warning
+ * needs only the chart set, so a failed list read must not take it down, nor leave a just-judged
+ * pair up with a live Review), and link.js's `compare` and `sendJudgement` after a decided
+ * refusal (#745 point 3 — the banner may be stale, and only it is re-read, so a half-typed stop
+ * reason survives, #799). If even this read fails, the banner says so in place of the old
+ * entries. A read for a chart the clinician has since left is dropped.
  */
 async function redrawBannerAlone(patient) {
   let section;
   try {
     section = await invoke("duplicate_banner", { patientId: patient });
   } catch (failure) {
-    section = failedBanner("Could not check for possible duplicates: " + failureText(failure));
+    // A backend refusal is an `ErrorView` and keeps its own words; only an IPC failure (a bare
+    // string) is worded "could not reach its backend" by `failureText`.
+    section = emptyBanner("Could not check for possible duplicates: " + failureText(failure));
   }
   if (patient !== displayedPatient) return;
   drawDuplicates(section);

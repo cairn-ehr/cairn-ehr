@@ -17,6 +17,31 @@ pub fn rust_fn<'a>(src: &'a str, name: &str) -> &'a str {
     &src[start..start + len]
 }
 
+/// The body of top-level JS function `name` in `src`: from its declaration to the first line
+/// that is a lone `}` (the house formatting closes every top-level function that way). The
+/// webview's half of a guard: its scripts have no test rig of their own (no npm, by design), so
+/// a property that lives in the ORDER of a function's steps is pinned by reading it.
+pub fn js_fn<'a>(src: &'a str, name: &str) -> &'a str {
+    let start = src
+        .find(&format!("function {name}("))
+        .unwrap_or_else(|| panic!("{name} is declared"));
+    let len = src[start..]
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("{name} closes"));
+    &src[start..start + len]
+}
+
+/// The text of top-level JS `const name = …;` in `src` — every string piece of a sentence the
+/// window words itself, concatenated, so a guard can read the sentence a clinician sees.
+pub fn js_const(src: &str, name: &str) -> String {
+    let start = src
+        .find(&format!("const {name} ="))
+        .unwrap_or_else(|| panic!("{name} is declared"));
+    let declaration = &src[start..start + src[start..].find(";\n").expect("the const closes")];
+    // The odd-numbered pieces between double quotes are the string literals.
+    declaration.split('"').skip(1).step_by(2).collect()
+}
+
 /// Where `needle` first appears in `body`, or a panic naming what was looked for.
 pub fn position(body: &str, needle: &str) -> usize {
     body.find(needle)

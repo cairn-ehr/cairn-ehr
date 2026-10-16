@@ -1,14 +1,16 @@
 //! The possible-duplicate banner (repair path R5a, #680; design page "R5a — the banner,
 //! designed 2026-10-06"): the section `med_list` carries, Review's admission, and the
-//! "Different people" command. The banner's sentences are in `view.rs`, the judgement's in
-//! `verdict.rs` (both golden-tested); only the commands' own read-failure and fixture-mode
-//! refusals are worded here. Every DB rule is in `cairn_node::duplicate_review` (DB-tested there). This module only
-//! orders the reads and applies the chart-command rules.
+//! "Different people" command. The banner's sentences — its refusals and button label included —
+//! are in `view.rs`; the judgement's outcome and failure sentences are in `verdict.rs` (both
+//! golden-tested). Only the commands' own read-failure and fixture-mode refusals are worded here.
+//! Every DB rule is in `cairn_node::duplicate_review` (DB-tested there). This module only orders
+//! the reads and applies the chart-command rules.
 //!
-//! LOCKING: `state.db` is a `tokio::sync::Mutex`, which is NOT re-entrant, and
-//! `read_chart_of` / `chart_set_of` take it themselves. So [`duplicate_section`] reads in two
-//! phases — everything else under one lock, then each entry's medications after releasing it —
-//! and nothing here calls either helper while holding the lock (that would deadlock the window).
+//! LOCKING: `state.db` is a `tokio::sync::Mutex`, which is NOT re-entrant, and `read_chart_of`,
+//! `chart_set_of`, `record_charts` and `linked_members` each take it themselves. So
+//! [`duplicate_section`] reads in two phases — everything else under one lock, then each entry's
+//! medications after releasing it — and nothing here calls any of them while holding the lock
+//! (that would deadlock the window).
 pub mod verdict;
 pub mod view;
 
@@ -28,9 +30,9 @@ use cairn_node::duplicate_review::{self, DifferentPeople};
 use uuid::Uuid;
 use verdict::{different_people_error_view, PairResult};
 use view::{
-    check_lines, entry_view, fixture_section, medications_of, section_view, unread_set_section,
-    ChartCheck, DuplicateSection, EntryFlags, ACCEPTED_NOT_OVERRULED, DIFFERENT_PEOPLE_BUTTON,
-    MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
+    check_lines, entry_view, fixture_section, medications_of, note_unread_names, section_view,
+    unread_set_section, ChartCheck, DuplicateSection, EntryFlags, ACCEPTED_NOT_OVERRULED,
+    DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
 };
 
 /// The banner for the displayed record. Never fails: every failure is a worded line (an absent
@@ -117,31 +119,46 @@ pub async fn duplicate_section(
     section_view(entries, check_lines(opened, &checks, members, status))
 }
 
-/// The banner ALONE, for the open chart whose medication list could not be read (#745 points 1
-/// and 2; the webview's `redrawBannerAlone`, called from `main.js`'s `refresh` on a failed read).
+/// The banner ALONE, read without the medication list (the webview's `redrawBannerAlone`). Three
+/// callers: `main.js`'s `refresh` when the chart's list could not be read (#745 points 1 and 2),
+/// and link.js's `compare` and `sendJudgement` after a decided refusal (#745 point 3), which
+/// re-read only the banner so a half-typed stop reason survives (#799).
 ///
 /// The banner needs only the record's chart set, never its medication list, so a failed list
 /// read must not take the duplicate warning down with it — and after a judgement, a failed
 /// re-read must not leave the judged pair on screen with a live Review. This resolves the set
-/// itself and then draws exactly what a chart open draws ([`duplicate_section`]); a set that
-/// cannot be read is a worded banner ([`view::unread_set_section`]), never a hidden one.
-/// Bound to the chart on screen (`AppState::displayed_patient`) like every chart command.
+/// itself and then draws through the chart open's own section builder ([`duplicate_section`]);
+/// a set that cannot be read is a worded banner ([`view::unread_set_section`]), never a hidden
+/// one, and member names that cannot be read are said ([`view::note_unread_names`]). Bound to the
+/// chart on screen (`AppState::displayed_patient`) like every chart command; that refusal is an
+/// `ErrorView`, so the window words it as the decided refusal it is, never as an outage.
 pub async fn banner_alone_impl(
     state: &AppState,
     patient_id: &str,
-) -> Result<DuplicateSection, String> {
-    let patient = state.displayed_patient(patient_id).await?;
+) -> Result<DuplicateSection, ErrorView> {
+    let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let charts = match record_charts(state, patient).await {
         Ok(charts) => charts,
         Err(e) => return Ok(unread_set_section(e)),
     };
-    // As `med_list_impl` does: an unread member list only loses the pending member's name.
+    // An unread member list costs only the names of linked charts in the check lines — as it does
+    // for `med_list_impl`, which shows the error as the pane's linked-charts warning. There is no
+    // pane here, so the banner says it itself.
     let members = linked_members(state, &charts).await;
-    Ok(duplicate_section(state, patient, &charts, members.as_deref().unwrap_or(&[])).await)
+    let section =
+        duplicate_section(state, patient, &charts, members.as_deref().unwrap_or(&[])).await;
+    Ok(match members {
+        Ok(_) => section,
+        Err(e) => note_unread_names(section, &e),
+    })
 }
 
 /// The chart set `patient` reads over, or why it could not be read (operator chain). Fixture mode
 /// has no links, so a fixture chart is a record of one. Takes `state.db` itself — not held here.
+///
+/// Deliberately NOT `link::chart_set_of`, which reads the same set: that one fails with an
+/// `ErrorView` worded for a refused ACT ("… nothing was done"), wrong on a banner that only reads.
+/// Here the failure is a bare operator chain, which [`view::unread_set_section`] words.
 async fn record_charts(state: &AppState, patient: Uuid) -> Result<ChartSet, String> {
     let Some(db) = state.db.as_ref() else {
         return Ok(ChartSet::single(patient));
@@ -156,7 +173,7 @@ async fn record_charts(state: &AppState, patient: Uuid) -> Result<ChartSet, Stri
 pub async fn duplicate_banner(
     state: tauri::State<'_, AppState>,
     patient_id: String,
-) -> Result<DuplicateSection, String> {
+) -> Result<DuplicateSection, ErrorView> {
     banner_alone_impl(&state, &patient_id).await
 }
 
@@ -322,3 +339,6 @@ mod read_order_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod webview_tests;

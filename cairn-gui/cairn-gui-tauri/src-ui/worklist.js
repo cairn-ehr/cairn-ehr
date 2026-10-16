@@ -12,10 +12,13 @@
 "use strict";
 
 /**
- * One counter per read, bumped when a read starts: an answer whose read is no longer the newest
- * is dropped, never drawn over a newer one (#752 point 1). Two reads can be in flight at once —
- * the <details> toggle and a return to the front door both read the list — and a slower, older
- * answer must not win. The same pattern as funnel.js's `browseRevision`.
+ * One counter per KIND of read (the count, the list), bumped when a read starts: an answer whose
+ * read is no longer the newest is dropped, never drawn over a newer one (#752 point 1). Two list
+ * reads can be in flight at once — the <details> toggle and a return to the front door both read
+ * it — and two count reads too, after quick returns to the front door; a slower, older answer
+ * must not win. `trayListRevision` is also bumped where the list is emptied without a read
+ * (`refreshTray`), so an older answer cannot redraw what was just emptied. The same pattern as
+ * funnel.js's `browseRevision`.
  */
 let trayCountRevision = 0;
 let trayListRevision = 0;
@@ -25,8 +28,13 @@ async function refreshTray() {
   const revision = ++trayCountRevision;
   // A return to the front door: `close_chart` has emptied the backend's list of openable charts,
   // so entries still on screen would have their Review refused with advice that does not fit the
-  // tray ("search again"). They go now, not when the re-read lands (#752 point 2).
-  if (el("duplicate-tray").open) clearTrayList();
+  // tray ("search again"). They go now, not when the re-read lands (#752 point 2) — and a list
+  // read still in flight is made stale first, or it would land during the count's await below and
+  // draw them straight back (PR #798 review). `loadTray`, after the count, reads them afresh.
+  if (el("duplicate-tray").open) {
+    trayListRevision += 1;
+    clearTrayList();
+  }
   let counted;
   try {
     counted = await invoke("duplicate_tray_count");
@@ -62,8 +70,13 @@ async function loadTray() {
   try {
     items = list.entries.map(trayItem);
   } catch (failure) {
+    console.error(failure); // the stack, for whoever debugs it; the tray says the rest
     items = [];
-    list = { entries: [], more: null, error: "The possible duplicates could not be shown: " + String(failure) };
+    list = {
+      entries: [],
+      more: null,
+      error: "The possible duplicates could not be shown: " + String(failure),
+    };
   }
   setMessage(el("duplicate-tray-error"), list.error || "");
   el("duplicate-tray-list").replaceChildren(...items);

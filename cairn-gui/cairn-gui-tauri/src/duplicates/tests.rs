@@ -198,15 +198,19 @@ fn accepted_as_same_maps_to_the_not_overruled_refusal() {
 }
 
 /// #745 points 1–2: the banner ALONE, which the window reads when the chart's medication list
-/// could not be. Bound to the chart on screen like every chart command: a late answer for a
-/// chart the clinician has left must never be drawn under the next one's header.
+/// could not be (and after a decided refusal). Bound to the chart on screen like every chart
+/// command: a request naming a chart no longer on screen is refused. The refusal is a worded
+/// `ErrorView` (a decided `Retry::Never`), never a bare string — the window words a bare string
+/// as "could not reach its backend", which would send the clinician chasing an outage that is
+/// not there (PR #798 review).
 #[tokio::test]
 async fn the_banner_alone_is_bound_to_the_chart_on_screen() {
     let state = AppState::mock(Some(fixture()));
     let err = banner_alone_impl(&state, &Uuid::from_u128(9).to_string())
         .await
         .unwrap_err();
-    assert!(err.contains("not the chart"), "{err}");
+    assert!(err.text.contains("not the chart"), "{}", err.text);
+    assert_eq!(err.retry, Retry::Never);
 }
 
 /// It is the SAME banner a chart open draws — the same reads, the same sentences — so a failed
@@ -228,4 +232,47 @@ fn an_unread_chart_set_is_a_worded_banner_never_a_silent_one() {
     assert!(!section.is_silent());
     let error = section.error.expect("worded");
     assert!(error.contains("connection reset"), "{error}");
+}
+
+/// The banner alone is drawn through the chart open's OWN reads — the same section builder, the
+/// same member names — so it cannot drift into a second banner. In fixture mode both sides are the
+/// fixture section (the test above), so only the source can show it. A failed member-name read is
+/// said (`note_unread_names`), never dropped (PR #798 review).
+#[test]
+fn the_banner_alone_draws_through_the_chart_opens_own_reads() {
+    let body = crate::source_guard::rust_fn(include_str!("mod.rs"), "banner_alone_impl");
+    for call in [
+        "record_charts(state, patient)",
+        "linked_members(state, &charts)",
+        "duplicate_section(state, patient, &charts,",
+        "note_unread_names(",
+    ] {
+        crate::source_guard::position(body, call);
+    }
+}
+
+/// A banner read on its own while the record's member names could not be read: a check line may
+/// then name a linked chart only by its number, so the banner says why — and with no check line
+/// there is nothing to explain, and a silent section stays silent. **Pure.**
+#[test]
+fn unread_member_names_are_said_only_where_a_check_line_needs_them() {
+    let with_line = DuplicateSection {
+        check_lines: vec!["Linked chart 9: duplicate check not yet run".into()],
+        ..DuplicateSection::checked_none_open()
+    };
+    let noted = view::note_unread_names(with_line, "connection reset");
+    assert_eq!(noted.check_lines.len(), 2);
+    assert!(
+        noted.check_lines[1].contains("connection reset"),
+        "{:?}",
+        noted.check_lines
+    );
+    assert!(
+        noted.check_lines[1].contains("names"),
+        "{:?}",
+        noted.check_lines
+    );
+
+    let quiet = view::note_unread_names(DuplicateSection::checked_none_open(), "connection reset");
+    assert!(quiet.is_silent());
 }

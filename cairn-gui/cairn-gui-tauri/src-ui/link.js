@@ -1,11 +1,14 @@
-// "Same person as…" (repair path R2b-1). Renders and decides nothing: every sentence comes
-// from Rust (`link/view.rs`, `link/judgement_view.rs`; R5a's "Different people" from
-// `duplicates/verdict.rs`) — save duplicates.js's `NO_LIST_TO_COMPARE` — every check from the backend (`link/same_person.rs`, `link/search.rs`,
-// `duplicates/mod.rs`). Classic script, loaded after main.js and funnel.js, sharing their
-// scope: `el`, `cell`, `setMessage`, `say`, `refresh`, `displayedPatient`, `renderedPatient`,
-// `renderedCharts` (main.js) and
-// `failureText`, `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC
-// failure needs its own wording, not just Rust's).
+// "Same person as…" (repair path R2b-1). Decides nothing about the record: every check comes
+// from the backend (`link/same_person.rs`, `link/search.rs`, `duplicates/mod.rs`), and every
+// sentence from Rust (`link/view.rs`, `link/judgement_view.rs`; R5a's "Different people" from
+// `duplicates/verdict.rs`) — except duplicates.js's `NO_LIST_TO_COMPARE`, said when no list is on
+// screen to compare with. What it does decide is the window's own: which buttons are live, and
+// what to re-read after an answer (the chart, or after a decided refusal only the banner).
+// Classic script, loaded after main.js and funnel.js, sharing their scope: `el`, `cell`,
+// `setMessage`, `say`, `refresh`, `displayedPatient`, `renderedPatient`, `renderedCharts`
+// (main.js), `redrawBannerAlone`, `NO_LIST_TO_COMPARE` (duplicates.js) and `failureText`,
+// `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC failure needs its
+// own wording, not just Rust's).
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`. `#link-status` is hidden whenever it is empty
 // (`clearComparison`), and style.css makes `[hidden]` win over everything: a bare
@@ -187,9 +190,11 @@ async function compare(otherId) {
   } catch (failure) {
     if (token !== compareToken) return;
     setMessage(el("link-status"), failureText(failure));
-    // A decided refusal ("never" — e.g. the banner's pair was judged or resolved meanwhile) means
-    // the banner is stale. The window has no reload control, so it re-reads the banner itself
-    // rather than leave the clinician to close and reopen the chart (#745 point 3).
+    // A decided refusal ("never") may mean the banner is stale — e.g. its pair was judged or
+    // resolved meanwhile. The window has no reload control, so it re-reads the banner itself
+    // rather than leave the clinician to close and reopen the chart (#745 point 3). A search
+    // result's refusal ("already part of this record") says nothing about the banner, but the
+    // re-read is one cheap read, so it is not told apart.
     if (failure && failure.retry === "never" && patientId === displayedPatient) {
       // Only the BANNER is re-read: a whole-chart refresh rebuilds the medication rows and would
       // wipe a half-typed stop reason over a refusal that changed nothing (PR #798 review).

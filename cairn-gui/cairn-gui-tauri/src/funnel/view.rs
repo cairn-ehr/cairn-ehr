@@ -39,7 +39,9 @@ pub enum Retry {
     /// is missing (a link over a chart not held here yet) — and then the same act succeeds.
     AfterOperator,
     /// A verdict, or nothing left to retry with. The way forward is to change the form or wait
-    /// for the next search, never to press the same button again.
+    /// for the next search, never to press the same button again. The judgement surfaces also
+    /// read it as "the banner may be stale": link.js's `compare` and `sendJudgement` re-read the
+    /// possible-duplicate banner on it (#745 point 3) — a new `Never` producer gets that re-read.
     Never,
     /// A write whose COMMIT was interrupted: it may or may not have been recorded (#713). The
     /// webview re-reads the chart and takes the button away — never a live retry, because a

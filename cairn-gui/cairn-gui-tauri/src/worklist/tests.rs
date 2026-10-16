@@ -240,3 +240,49 @@ fn a_failed_names_read_says_what_was_being_read() {
     );
     assert!(text.ends_with("connection reset"), "{text}");
 }
+
+/// …and the shared read actually goes through it: reverting the call site to a bare
+/// `operator_chain` passes the test above, so the source is read (the window has no DB-backed
+/// tests, #738).
+#[test]
+fn the_names_read_is_worded_through_names_read_error() {
+    let body = crate::source_guard::rust_fn(include_str!("mod.rs"), "worklist_impl");
+    crate::source_guard::position(body, ".map_err(names_read_error)");
+}
+
+/// #752 points 1 and 2, the webview's half. The tray's two reads are ordered by their own
+/// counters, an answer that is no longer the newest is dropped BEFORE anything is drawn, and the
+/// stale list goes as soon as a read starts. A return to the front door empties an open tray's
+/// list while the count is read — and must also make any list read still in flight stale, or that
+/// older answer lands during the count's await and redraws the entries the clear just removed,
+/// with Reviews `close_chart` has made unopenable (PR #798 review). Reading worklist.js is the
+/// only way to pin this: the webview has no test rig (no npm, by design).
+#[test]
+fn the_trays_reads_are_ordered_and_its_stale_list_never_returns() {
+    use crate::source_guard::{js_fn, position};
+    let js = include_str!("../../src-ui/worklist.js");
+
+    let refresh = js_fn(js, "refreshTray");
+    let count = position(refresh, "await invoke(\"duplicate_tray_count\")");
+    let open = &refresh[..count];
+    let open = &open[position(open, "if (el(\"duplicate-tray\").open)")..];
+    assert!(
+        position(open, "trayListRevision += 1;") < position(open, "clearTrayList();"),
+        "{refresh}"
+    );
+    assert!(
+        position(refresh, "if (revision !== trayCountRevision) return;") > count,
+        "{refresh}"
+    );
+
+    let load = js_fn(js, "loadTray");
+    let read = position(load, "await invoke(\"duplicate_worklist\")");
+    assert!(position(load, "clearTrayList();") < read, "{load}");
+    let dropped = position(load, "if (revision !== trayListRevision) return;");
+    assert!(
+        dropped > read && dropped < position(load, ".map(trayItem)"),
+        "{load}"
+    );
+    // The tray's drawing fault reaches the console too, with its stack.
+    assert!(load.contains("console.error(failure)"), "{load}");
+}

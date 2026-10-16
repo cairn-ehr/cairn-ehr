@@ -475,9 +475,10 @@ fn the_banner_is_silent_only_when_it_says_nothing() {
     );
 }
 
-/// #745 point 3: after either refusal the window re-reads the chart itself (link.js's `compare`
-/// and `sendJudgement`, on a decided `"never"`), and it has no reload control — so neither may
-/// send the clinician looking for one, and both say that nothing was done.
+/// #745 point 3: after either refusal the window re-reads the banner itself (link.js's `compare`
+/// and `sendJudgement`, on a decided `"never"` — pinned by `webview_tests.rs`), and it has no
+/// reload control — so neither may send the clinician looking for one, and both say that nothing
+/// was done.
 #[test]
 fn the_banners_refusals_never_ask_for_a_reload_the_window_lacks() {
     for text in [NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED] {

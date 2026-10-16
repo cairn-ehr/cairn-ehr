@@ -1,6 +1,6 @@
 //! Tests for `link/unlink.rs`, in a sibling file like `unlink_view_tests.rs`.
 use super::*;
-use crate::source_guard::rust_fn;
+use crate::source_guard::{js_fn, rust_fn};
 use crate::state::AppState;
 use cairn_node::patient::edges::{LinkDoubt, RecordEdge};
 use uuid::Uuid;
@@ -341,18 +341,6 @@ fn the_door_sends_the_attestation_its_line_showed() {
     assert!(call.contains("attested"), "{call}");
 }
 
-/// The body of top-level JS function `name` in `src`: from its declaration to the first line
-/// that is a lone `}` (the house formatting closes every top-level function that way).
-fn js_function<'a>(src: &'a str, name: &str) -> &'a str {
-    let start = src
-        .find(&format!("function {name}("))
-        .unwrap_or_else(|| panic!("{name} is declared"));
-    let len = src[start..]
-        .find("\n}\n")
-        .unwrap_or_else(|| panic!("{name} closes"));
-    &src[start..start + len]
-}
-
 /// The Outranked race (PR #777 review): a verdict is in flight, the clinician presses the SAME
 /// pair's "Review…" again, and the first answer lands Outranked on the chart line ("chart"), not
 /// on the panel. Outranked leaves the pair's standing judgement unchanged, so the node's
@@ -365,9 +353,9 @@ fn js_function<'a>(src: &'a str, name: &str) -> &'a str {
 #[test]
 fn a_recorded_verdict_disarms_a_newer_comparison_of_the_same_pair() {
     let js = include_str!("../../src-ui/unlink.js");
-    let report = js_function(js, "showUnlinkReport");
+    let report = js_fn(js, "showUnlinkReport");
     assert!(report.contains("\n  disarmNewerReview(sent);"), "{report}");
-    let failure = js_function(js, "showUnlinkFailure");
+    let failure = js_fn(js, "showUnlinkFailure");
     assert!(
         failure.contains("if (reread) disarmNewerReview(sent);"),
         "{failure}"
@@ -375,7 +363,7 @@ fn a_recorded_verdict_disarms_a_newer_comparison_of_the_same_pair() {
 
     // R5a's banner panel has the same race, over both of its verdicts.
     let link = include_str!("../../src-ui/link.js");
-    let send = js_function(link, "sendJudgement");
+    let send = js_fn(link, "sendJudgement");
     assert!(
         send.contains("\n    disarmNewerComparison(sent);\n"),
         "{send}"

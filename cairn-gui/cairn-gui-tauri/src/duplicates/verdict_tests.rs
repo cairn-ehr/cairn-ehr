@@ -31,7 +31,7 @@ fn different_people_reports_each_pair_and_reloads() {
 }
 
 #[test]
-fn a_partly_failed_judgement_names_the_pair_not_confirmed() {
+fn a_partly_failed_judgement_names_the_failed_pair() {
     let r = different_people_report(vec![
         PairResult {
             low: id(1),

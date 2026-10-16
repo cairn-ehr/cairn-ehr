@@ -243,7 +243,7 @@ fn the_webview_reads_both_partial_completion_reports() {
 /// `generate_handler!` compiles, passes every `*_impl` test, and fails only in the running window
 /// — where the call rejects and its surface says it "could not reach its backend". (Found adding
 /// `duplicate_banner`, #745: nothing pinned its registration.) Both call shapes are read: a
-/// literal `invoke("name"`, and the judgement commands link.js passes by name to `sendJudgement`.
+/// literal `invoke("name"`, and the commands passed by name to link.js's `sendJudgement`.
 #[test]
 fn every_command_the_webview_calls_is_registered() {
     let main = include_str!("main.rs");
@@ -257,16 +257,32 @@ fn every_command_the_webview_calls_is_registered() {
         .filter_map(|line| line.trim().strip_suffix(','))
         .map(|path| path.rsplit("::").next().unwrap_or(path))
         .collect();
+    // `include_str!` needs literal paths, so the list is written out — and checked against the
+    // scripts index.html actually loads, so a new script cannot go unscanned (PR #798 review).
     let webview = [
-        include_str!("../src-ui/main.js"),
-        include_str!("../src-ui/duplicates.js"),
-        include_str!("../src-ui/worklist.js"),
-        include_str!("../src-ui/funnel.js"),
-        include_str!("../src-ui/link.js"),
-        include_str!("../src-ui/unlink.js"),
+        ("main.js", include_str!("../src-ui/main.js")),
+        ("duplicates.js", include_str!("../src-ui/duplicates.js")),
+        ("worklist.js", include_str!("../src-ui/worklist.js")),
+        ("funnel.js", include_str!("../src-ui/funnel.js")),
+        ("link.js", include_str!("../src-ui/link.js")),
+        ("unlink.js", include_str!("../src-ui/unlink.js")),
     ];
+    let html = include_str!("../src-ui/index.html");
+    let opener = "<script src=\"";
+    let loaded: BTreeSet<&str> = html
+        .match_indices(opener)
+        .map(|(at, _)| {
+            let rest = &html[at + opener.len()..];
+            &rest[..rest.find('"').expect("the src closes")]
+        })
+        .collect();
+    assert_eq!(
+        loaded,
+        webview.iter().map(|(name, _)| *name).collect(),
+        "index.html loads a script this guard does not scan (or no longer loads one it does)"
+    );
     let mut called = BTreeSet::new();
-    for js in webview {
+    for (_, js) in webview {
         for opener in ["invoke(\"", "sendJudgement(\""] {
             for (at, _) in js.match_indices(opener) {
                 let rest = &js[at + opener.len()..];
