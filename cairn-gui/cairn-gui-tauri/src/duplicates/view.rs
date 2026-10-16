@@ -49,13 +49,15 @@ pub struct EntryFlags {
 }
 
 /// "Different people" after every pair between the two records was already judged or resolved
-/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead).
+/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead). No "reload
+/// the chart": the window has no reload control, and re-reads the chart itself after a decided
+/// refusal (#745 point 3; link.js's `sendJudgement` and `compare`).
 pub const NOTHING_OPEN: &str = "this possible duplicate has already been judged or resolved — \
-     nothing was done; reload the chart";
+     nothing was done";
 /// Review — or Link over a banner comparison — of a chart no list showed and no open proposal
-/// joins to this record (any more).
+/// joins to this record (any more). The window re-reads the chart itself, as for [`NOTHING_OPEN`].
 pub const NOT_SHOWN_OR_RESOLVED: &str = "that chart is not in a list on screen, and is not an \
-     open possible duplicate of this record — reload the chart, or search again";
+     open possible duplicate of this record — nothing was done; to compare it, search for it";
 /// The button's label; `key_locked_for` names it (a locked key names the button pressed).
 pub const DIFFERENT_PEOPLE_BUTTON: &str = "Different people — not the same person";
 

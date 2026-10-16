@@ -181,6 +181,10 @@ async function compare(otherId) {
   } catch (failure) {
     if (token !== compareToken) return;
     setMessage(el("link-status"), failureText(failure));
+    // A decided refusal ("never" — e.g. the banner's pair was judged or resolved meanwhile) means
+    // what the chart shows is stale. The window has no reload control, so it re-reads the chart
+    // itself rather than leave the clinician to close and reopen it (#745 point 3).
+    if (failure && failure.retry === "never" && patientId === displayedPatient) await refresh();
   }
 }
 
@@ -389,6 +393,9 @@ async function sendJudgement(command) {
     // second judgement over the colleague's it lost to — so never a live button over it: the
     // buttons go (below) and the chart is re-read (at the end), wherever the answer lands.
     const reread = Boolean(failure && failure.retry === "after_reread");
+    // A decided refusal ("never") changed nothing, but says what is on screen is stale (e.g.
+    // "Different people" on a pair a colleague just judged): re-read too, below (#745 point 3).
+    const decided = Boolean(failure && failure.retry === "never");
     if (place === "elsewhere") {
       sayAnywhere("For chart " + sent.patientId + ": " + text);
     } else if (place === "chart") {
@@ -423,7 +430,7 @@ async function sendJudgement(command) {
     const touched =
       displayedPatient !== null &&
       (sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient));
-    if (reread && touched) await refresh(text);
+    if ((reread || decided) && touched) await refresh(text);
   } finally {
     for (const b of buttons) b.disabled = false;
   }
