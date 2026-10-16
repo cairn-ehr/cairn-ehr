@@ -457,7 +457,10 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   chart" sentences, now including the set-changed refusals), #799 (a chart re-read wipes a half-typed stop reason),
   #800 (no generation token on `refresh`), #801 (a fault drawing the medication rows reads "Could not read the
   chart").
-- **Next:** #799 · #800 · #801 in flight on `fix/799-800-801-chart-reread`; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open
+- **2026-10-17:** PR #802 (#799 · #800 · #801): a chart re-read keeps typed stop reasons, drops an overtaken
+  answer or failure (`chartReadRevision`, `isCurrentRead`), and a list that cannot be drawn leaves nothing partial
+  under a live sign-off (`drawList` under one guard, `#chart-unshown` above the table).
+- **Next:** review and merge PR #802; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open
   until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

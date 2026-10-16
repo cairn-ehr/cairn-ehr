@@ -3,7 +3,8 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ IN FLIGHT ON BRANCH `fix/799-800-801-chart-reread` (2026-10-17):** the chart re-read's robustness —
+> **⇒ BUILT ON PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802) (2026-10-17, branch
+> `fix/799-800-801-chart-reread`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** the chart re-read's robustness —
 > **#799** (a re-read keeps a half-typed stop reason), **#800** (`refresh` and the banner-alone read carry a
 > generation token), **#801** (a fault drawing the medication rows leaves nothing partial under a live sign-off).
 > GUI-only; no schema, no ADR. **Merged before it:** PR #798 (#745 · #752 · #740, 2026-10-16), PR #795, PR #794,
@@ -16,7 +17,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **The branch above**: finish, review, PR. **#728** (the Pi re-measure; also the find with the tray OPEN) can
+> 1. **PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)** (above): read `gh pr checks`, review, merge.
+>    **#728** (the Pi re-measure; also the find with the tray OPEN) can
 >    run beside. #699 stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** from PR #798 **#797** (a DECISION — the window's other ~12 "reload the chart" sentences with no
 >    reload control; its comment adds the set-changed refusals, which want a whole-chart re-read,
@@ -140,7 +142,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -172,6 +174,28 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-17 (second) — #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
+
+HANDOVER was stale on arrival again (PR #798 had merged). Three decision-free issues in one file pair, TDD by source
+guards (7 RED → green, 9 mutations → 9 reds), then a headless walk run against BOTH this branch and `main`.
+- **⇒ Walk the old code with the same script.** A walk that only passes on the fix proves the rig, not the fix; on
+  `main` the same script showed every defect (reason wiped, `OLD` over `NEW`, a one-row partial list under a live
+  "Sign off 1"), which is what makes the green on the branch evidence.
+- **⇒ A fix can falsify OTHER files' rationale.** After #799, six comments (and a durable rule) still said a
+  whole-chart `refresh()` "wipes a half-typed stop reason"; grep the issue number and the claim, not just the diff.
+- **⇒ A per-step lock is not a per-read lock.** `med_list_impl` and `banner_alone_impl` take `state.db` per step,
+  so "a later read is served after an earlier one" is false; say what the interleaving actually guarantees.
+- **⇒ An existing payload guard caught a rename:** `fields_read_by_the_webview("view")` scans for `view.charts`;
+  `pane.list.charts` hid it. Keep the `view` binding the guard reads.
+- **Review (two agents: correctness + comment fact-check), all fixed on the PR.** ⇒ **"Newest STARTED" is the wrong
+  rule for drawing**: the older of two overlapping reads usually lands first, and dropping it left a list older than
+  both if the newer failed. Draw unless something newer is DRAWN; say a failure only if newest STARTED — two
+  predicates. ⇒ **A guard that looks for both halves of `a && b` passes `a || b`**: pin the exact expression.
+  ⇒ **Keeping a pointer set "because the data was read" re-opened a door a rule had closed** (Review over an
+  undrawable list); the reviewer was right to hold the established rule. ⇒ A rule change can turn a "belt and
+  braces" line LOAD-BEARING (`clearChart`'s floor) — re-ask which lines are essential after changing a predicate.
+  `stop_reasons.js` split out to keep `main.js` under 500.
 
 ### 2026-10-17 — PR #798's second review round (fixed in place; filed #801, widened #797)
 
