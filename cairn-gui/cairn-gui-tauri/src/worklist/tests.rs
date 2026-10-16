@@ -86,8 +86,9 @@ fn an_unreadable_newer_record_is_worded_and_review_is_withheld() {
         view.heading
             .starts_with(&format!("Chart {n} — possibly the same person as "))
             && view.heading.ends_with(&format!("chart {o}")),
-        "{}",
-        view.heading
+        // Never echo the heading: it carries patient names, and CodeQL's rust/cleartext-logging
+        // flags a test message that prints one (PR #795's alert).
+        "the unread side's heading names the wrong chart"
     );
     assert!(view.older.row.is_some(), "the other side still stands");
     assert_eq!(
