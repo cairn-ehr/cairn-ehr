@@ -3,11 +3,11 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R6'S FOUR RESIDUALS ARE BUILT ON PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792) (branch
-> `fix/786-787-782-783-r6-residuals`, 2026-10-16): #787 (`standing_link` panicked on a NULL address), #786 (the doubt
-> mark on `CandidateList`'s wire), #783 (the bridge remedy's door), #782 (the lock hint's script-order race).
-> Its second review (2026-10-16) found no blocker; its five suggestions are fixed on the PR. AWAITING THE
-> MAINTAINER'S REVIEW AND MERGE.** The whole repair path (#679 · #680 · #681) is MERGED through R7
+> **⇒ R6'S FOUR RESIDUALS ARE MERGED (PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792), 2026-10-15/16):
+> #787 (`standing_link` panicked on a NULL address), #786 (the doubt mark on `CandidateList`'s wire), #783 (the bridge
+> remedy's door), #782 (the lock hint's script-order race). IN FLIGHT (2026-10-16, branch
+> `refactor/789-781-732-file-splits`): #789 + #781 (split the five `cairn-gui-tauri` files over 500 lines, pure moves)
+> and #732 (the matcher fixture leaves `patient_chart`).** The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
@@ -21,8 +21,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR #792** (#786 · #787 · #782 · #783): read `gh pr checks 792`, then review and merge. **#728** (the Pi re-measure; now also the
->    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
+> 1. **The in-flight PR for #789 · #781 · #732** (above): review and merge. **#728** (the Pi re-measure; now also the
+> find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Open repair-path issues:** from R7 **#789** (`duplicates/view_tests.rs` over 500 lines) · **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
 >    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#784** (a verdict is not re-checked against identity

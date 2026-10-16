@@ -448,8 +448,8 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   §11); unlink 2 → 1 → 2, ≤ 15 s (§10); the tray: paper 4 → 5 closed / 4 open (#754), ≤ 25 s per entry, the find ≤ 5 s
   with the tray open (§12); confirm 2 → 2 → 2 and bridge re-link 3 → 2 → 2, ≤ 15 s (§13); the commit-time check and
   R7's two lines 0 → 0 → 0. Every figure is a human act still owed.
-- **Next:** review and merge PR #792 (R6's residuals #782 · #783 · #786 · #787, 2026-10-16); then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until
-  the maintainer closes it.
+- **Next:** PR #792 (R6's residuals #782 · #783 · #786 · #787) MERGED 2026-10-15; #789 · #781 · #732 in flight
+  (2026-10-16); then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
 
