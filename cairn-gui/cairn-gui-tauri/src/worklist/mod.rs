@@ -89,7 +89,7 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
         let found: Found = candidates_by_id(&*db, &charts_of(&list.items), &today)
             .await
             .map(|cands| cands.into_iter().map(|c| (c.patient_id, c)).collect())
-            .map_err(|e| operator_chain(&e));
+            .map_err(names_read_error);
         Ok::<_, anyhow::Error>((list, found, doubted))
     }
     .await;
@@ -108,6 +108,13 @@ pub async fn worklist_impl(state: &AppState) -> WorklistView {
             worklist_view(Ok((entries, list.total)))
         }
     }
+}
+
+/// The ONE candidate read's failure, as every side will show it (#752 point 3): it serves all the
+/// shown charts at once, so a bare operator chain on each side would not say what was being read.
+/// **Pure.**
+fn names_read_error(e: anyhow::Error) -> String {
+    operator_chain(&e.context("reading the names of the shown charts"))
 }
 
 /// Every chart of every READ side of `items`, sorted, once each — the ids of the ONE candidate

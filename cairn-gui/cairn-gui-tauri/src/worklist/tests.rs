@@ -227,3 +227,15 @@ fn worklist_js_reads_no_field_the_backend_does_not_send() {
     let entry_reads = fields_read_in(js, "entry");
     assert!(entry_reads.contains("heading") && entry_reads.contains("status"));
 }
+
+/// #752 point 3: the ONE candidate read serves every shown chart, so when it fails every side
+/// shows its error — which must say what was being read, not only the operator chain. **Pure.**
+#[test]
+fn a_failed_names_read_says_what_was_being_read() {
+    let text = names_read_error(anyhow::anyhow!("connection reset"));
+    assert!(
+        text.starts_with("reading the names of the shown charts"),
+        "{text}"
+    );
+    assert!(text.ends_with("connection reset"), "{text}");
+}
