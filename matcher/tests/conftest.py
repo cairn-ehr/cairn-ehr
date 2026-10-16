@@ -82,6 +82,11 @@ _PROJECTION_TABLES = [
     "match_proposal", "patient_identifier", "patient_demographic", "patient_name",
     "name_repudiation", "chart_identity_state",
     "match_pending", "match_worker_state", "patient_link", "person_member",
+    # #732: the chart projection (db/002). The matcher never seeds it, but the Rust DB suites
+    # sharing cairn_test do, and `queue_db.ensure_version` queues every chart it lists — a
+    # stray row would leak into any test that counts what was queued. No FK references it,
+    # and its one trigger (db/056's `match_enqueue`) is AFTER INSERT, which TRUNCATE never fires.
+    "patient_chart",
 ]
 
 
