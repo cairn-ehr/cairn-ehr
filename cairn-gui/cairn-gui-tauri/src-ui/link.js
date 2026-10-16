@@ -196,8 +196,8 @@ async function compare(otherId) {
     // result's refusal ("already part of this record") says nothing about the banner, but the
     // re-read is one cheap read, so it is not told apart.
     if (failure && failure.retry === "never" && patientId === displayedPatient) {
-      // Only the BANNER is re-read: a whole-chart refresh rebuilds the medication rows and would
-      // wipe a half-typed stop reason over a refusal that changed nothing (PR #798 review).
+      // Only the BANNER is re-read: the refusal changed nothing else, and a whole-chart refresh is
+      // a heavier read that rebuilds every medication row under the clinician (PR #798 review).
       await redrawBannerAlone(patientId);
     }
   }
@@ -410,7 +410,7 @@ async function sendJudgement(command) {
     const reread = Boolean(failure && failure.retry === "after_reread");
     // A decided refusal ("never") changed nothing, but says the banner is stale (e.g. "Different
     // people" on a pair a colleague just judged): the BANNER is re-read below (#745 point 3) —
-    // never the whole chart, whose redraw would wipe a half-typed stop reason.
+    // never the whole chart, which the refusal does not say is stale.
     const decided = Boolean(failure && failure.retry === "never");
     if (place === "elsewhere") {
       sayAnywhere("For chart " + sent.patientId + ": " + text);

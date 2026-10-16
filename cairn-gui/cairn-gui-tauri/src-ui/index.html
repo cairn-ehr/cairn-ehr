@@ -190,12 +190,14 @@
           <ul id="duplicates-checks" aria-label="Duplicate check for this record" hidden></ul>
         </section>
 
-        <!-- The two ADR-0060 reports. Empty and hidden when there is nothing to say: a
-             warning that fires on every chart is a warning nobody reads. -->
+        <!-- The two ADR-0060 reports, and #801's could-not-be-shown warning. Empty and hidden
+             when there is nothing to say: a warning that fires on every chart is a warning nobody
+             reads. -->
         <section id="chart-warnings" aria-labelledby="warnings-heading" hidden>
           <h2 id="warnings-heading">Warnings about this chart</h2>
-          <!-- A list that was read but could not be drawn (#801, main.js's showUnshownList):
-               first, because nothing of the list is on screen while it shows. -->
+          <!-- A list that was read but could not be drawn (#801, main.js's showUnshownList). Never
+               shown beside the two reports below (the fault clears them); what matters is that it
+               sits in this section, above the table. -->
           <p id="chart-unshown" hidden></p>
           <p id="chart-incomplete" hidden></p>
           <p id="chart-withheld" hidden></p>
@@ -227,6 +229,7 @@
       </section>
     </main>
     <script src="main.js"></script>
+    <script src="stop_reasons.js"></script>
     <script src="duplicates.js"></script>
     <script src="worklist.js"></script>
     <script src="funnel.js"></script>
