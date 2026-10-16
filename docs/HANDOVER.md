@@ -3,13 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R6'S FOUR RESIDUALS ARE MERGED (PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792), 2026-10-15/16):
-> #787 (`standing_link` panicked on a NULL address), #786 (the doubt mark on `CandidateList`'s wire), #783 (the bridge
-> remedy's door), #782 (the lock hint's script-order race). **BUILT ON PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794) (2026-10-16, branch
-> `refactor/789-781-732-file-splits`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** #781 + #789 (every `link/` and
-> `duplicates/` file in `cairn-gui-tauri` under 500 lines, pure moves — the same 307 test names before and after) and
-> #732 (the matcher fixture truncates `patient_chart`; the version re-queue test asserts equality). Filed **#793** (three
-> more files over 500 lines).** The whole repair path (#679 · #680 · #681) is MERGED through R7
+> **⇒ BUILT ON PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795) (2026-10-16, branch
+> `refactor/793-gui-file-splits-737-headings`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** #793 + #712 item 3 (the
+> last four `cairn-gui-tauri` files over 500 lines lose their inline tests — pure moves, the same 307 test leaves) and
+> **#737** (each banner entry's `<h3>` names whose record it is — name · born · chart id; the status is the line under it). Filed **#796** (the
+> tray's identical headings — the maintainer chose "file it": a tray entry pairs two records and carries ages, not
+> DOBs, so its wording is a decision). Merged before it: PR #794 (#781 · #789 · #732) and PR #792 (R6's residuals
+> #787 · #786 · #783 · #782). The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
@@ -23,9 +23,10 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)** (#781 · #789 · #732, above): read `gh pr checks`, then review and merge. **#728** (the Pi re-measure; now also the
+> 1. **PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795)** (#793 · #712 item 3 · #737, above): read `gh pr checks`, then review and merge. **#728** (the Pi re-measure; now also the
 >    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** from PR #794 **#793** (three more `cairn-gui-tauri` files over 500 lines) · from R7 **#790** (the
+> 2. **Open repair-path issues:** from PR #795 **#796** (the tray's identical headings — a wording decision) · #712's
+>    items 1, 2, 4, 5 (item 3 done) · from R7 **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
 >    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#784** (a verdict is not re-checked against identity
 >    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
@@ -34,7 +35,7 @@
 >    stale list after return, a context-free read error) · **#753** (an un-attested unlink that loses to a matcher link
 >    by HLC is shown nowhere — ADR-0078 vs R1b) · **#755** (a link/unlink queues no duplicate re-check) · **#756**
 >    (worklist/banner type tidy-up) · **#757** (the banner fails whole on one unreadable record; one failed flags read
->    fails the whole tray) · from R5a **#737** (identical entry headings) · **#738** (`cairn-gui-tauri` has no DB-gated
+>    fails the whole tray) · from R5a **#738** (`cairn-gui-tauri` has no DB-gated
 >    tests for its live branches; R5b's tray added two, R6 commented its fixture/locked-key arms) · **#739** (an unheld
 >    member's "not yet run" line) · **#740** ("Different people" failure wording) · **#745** (a missing or stale banner
 >    after a failure) · **#746** (Different people with an unreadable drug list — a decision) · **#747** (the banner
@@ -157,7 +158,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-16 (#781 · #789 · #732, PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-16 (#793 · #737, PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795)) · 10-16 (#781 · #789 · #732, PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -189,6 +190,21 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-16 (third) — #793 + #712 item 3 split; #737 banner headings (PR [#795](https://github.com/cairn-ehr/cairn-ehr/pull/795))
+
+HANDOVER was stale on arrival a fourth time (it called #794 awaiting merge; it had merged at 03:33Z).
+- **⇒ A `#[path]` test file keeps its module PATH:** `#[cfg(test)] #[path = "x_tests.rs"] pub(crate) mod tests;` left
+  `crate::commands::tests::fields_read_in` resolving for four importers with no edit. The path is relative to the
+  declaring file's directory. A boundary-asserting move script (`expect(line, text)` before slicing) caught nothing
+  this time, but it makes a wrong range fail loudly instead of moving the wrong code.
+- **⇒ `cargo doc -D warnings` reads `<date>` in a doc comment as an unclosed HTML tag**; backtick it. Clippy and test
+  were green; only the full gate's doc step saw it (the memory's cairn-gui gate, ~2 min, five steps).
+- **⇒ A heading's job is to tell entries apart in a heading list — so test it on the input the list EXISTS for.**
+  My first heading was name · born; the review saw that an exact name-and-DOB match is the matcher's STRONGEST
+  proposal, so a thrice-registered patient's banner had identical headings again. The heading now ends with the whole
+  chart id (as `member_line` does), pinned by `exact_namesakes_are_told_apart_by_their_charts`. The tray pairs two
+  records, so its heading is a wording decision (#796), not a copy.
 
 ### 2026-10-16 (second) — #781 · #789 split; #732 (PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794))
 
@@ -411,7 +427,7 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ The repair path: R7 (PR #788)'s review and merge, then the open repair-path issues** — see ⇒ NEXT.
+- **⇒ The repair path: PR #795's review and merge, then the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
   restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain, beyond ⇒ NEXT's node-plane list: #525 ·

@@ -89,7 +89,7 @@ fn an_entry_names_both_sides_and_its_notes() {
 }
 
 #[test]
-fn an_accepted_entry_uses_the_banners_heading() {
+fn an_accepted_entry_uses_the_banners_accepted_wording() {
     let flags = crate::duplicates::view::EntryFlags {
         accepted: true,
         ..Default::default()

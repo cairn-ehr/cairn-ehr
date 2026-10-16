@@ -466,7 +466,7 @@ never brings this line onto a checked chart.
 - [ ] Each **Review** button announces **whose record** it opens (its `aria-describedby` points at the
       entry's first identity line), so two entries are told apart by name and date of birth, never a
       bare "Review" repeated.
-- [ ] The rotor's **heading list** names each entry by whose record it is ("Mary SMYTHE · born …",
+- [ ] The rotor's **heading list** names each entry by whose record it is ("Mary SMYTHE · born … · chart …",
       or "Chart <id>" when no name could be read), never N identical headings (#737); the entry's
       status ("Possible duplicate — not yet reviewed", or accepted) is the line read right after it.
 - [ ] The other record's medications are announced under "On the other record — not part of this

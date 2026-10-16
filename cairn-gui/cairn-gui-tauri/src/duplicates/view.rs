@@ -95,7 +95,9 @@ impl DuplicateSection {
 pub struct DuplicateEntryView {
     /// The chart Review compares against.
     pub review_chart: String,
+    /// Whose record this entry is about, for its `<h3>` — see `entry_heading` (#737).
     pub heading: String,
+    /// "Not yet reviewed", or accepted as the same person (#736); the line under the heading.
     pub status: String,
     /// One line per chart of the other record (`member_line`'s text).
     pub identity_lines: Vec<String>,
@@ -126,7 +128,7 @@ pub struct PairResult {
 
 /// One banner entry from what was read about the other record: its identity lines (one per
 /// chart), its `flags` — the veto floor finds a disagreement now (a note), an un-attested unlink
-/// stands (the dispute note), a human already accepted the pair (the accepted heading, and no
+/// stands (the dispute note), a human already accepted the pair (the accepted status, and no
 /// "Different people") — and its current medications. A failed read is a note, never a missing
 /// entry; an entry always names at least a chart id.
 pub fn entry_view(
@@ -184,15 +186,22 @@ pub fn entry_view(
 
 /// Whose record an entry is about, for its `<h3>`. **Pure.**
 ///
-/// The heading exists to tell entries apart in a screen reader's heading list (#737), so it is
-/// the first chart's name and date of birth — the two facts a namesake differs by — plus how
-/// many more charts the record holds (each still has its own identity line). With no identity
-/// to name (unread, or none recorded) it is the chart id; the entry's note says why.
+/// The heading exists to tell entries apart in a screen reader's heading list (#737). It is the
+/// first chart's name and date of birth (what the clinician reads) and its WHOLE chart id, then
+/// how many more charts the record holds (each still has its own identity line). The id is not
+/// decoration: an exact name-and-birth-date match is the matcher's strongest proposal, so two
+/// entries on one banner can share both, and only the chart tells them apart — as `member_line`
+/// always ends with it. "First" is the lowest id (`ChartSet` sorts), so a re-render of the same
+/// record gives the same heading. With no identity to name (unread, or none recorded) it is the
+/// chart id alone; the entry's note says why.
 fn entry_heading(review_chart: Uuid, lines: &[MemberLine]) -> String {
     let Some(first) = lines.first() else {
         return format!("Chart {review_chart}");
     };
-    let who = format!("{} · {}", first.name, first.born);
+    let who = format!(
+        "{} · {} · chart {}",
+        first.name, first.born, first.patient_id
+    );
     match lines.len() - 1 {
         0 => who,
         1 => format!("{who} · and 1 linked chart"),

@@ -78,7 +78,10 @@ fn an_entry_names_the_other_chart_and_its_current_medications() {
         Ok(vec![member(9, "Mary SMYTHE")]),
         Ok(meds),
     );
-    assert_eq!(e.heading, "Mary SMYTHE · born 1950-01-07");
+    assert_eq!(
+        e.heading,
+        format!("Mary SMYTHE · born 1950-01-07 · chart {}", id(9))
+    );
     assert_eq!(e.status, "Possible duplicate — not yet reviewed");
     assert_eq!(
         e.identity_lines,
@@ -321,7 +324,7 @@ fn a_disputed_entry_says_so_and_still_offers_both_judgements() {
 }
 
 /// #737: a screen reader's heading list must tell the entries apart, so each heading names
-/// whose record it is — two namesakes differ by their dates of birth.
+/// whose record it is — the name and date of birth a clinician reads, and the chart id.
 #[test]
 fn each_entry_is_headed_by_whose_record_it_is() {
     let mut namesake = member(8, "Mary SMYTHE");
@@ -337,9 +340,52 @@ fn each_entry_is_headed_by_whose_record_it_is() {
     };
     assert_eq!(
         heading(9, member(9, "Mary SMYTHE")),
-        "Mary SMYTHE · born 1950-01-07"
+        format!("Mary SMYTHE · born 1950-01-07 · chart {}", id(9))
     );
-    assert_eq!(heading(8, namesake), "Mary SMYTHE · born 1951-02-03");
+    assert_eq!(
+        heading(8, namesake),
+        format!("Mary SMYTHE · born 1951-02-03 · chart {}", id(8))
+    );
+}
+
+/// The matcher's STRONGEST case: one patient registered three times, so the open chart's banner
+/// shows two other records with the same name and date of birth. Their headings must still
+/// differ, or the heading list is N identical lines again (PR #795 review).
+#[test]
+fn exact_namesakes_are_told_apart_by_their_charts() {
+    let heading = |n: u128| {
+        entry_view(
+            id(n),
+            EntryFlags::default(),
+            Ok(vec![member(n, "Mary SMYTHE")]),
+            Err("x".into()),
+        )
+        .heading
+    };
+    assert_ne!(heading(8), heading(9));
+}
+
+/// A chart this node does not hold heads its entry with its worded absences — never a blank —
+/// and its id, so two such entries still differ.
+#[test]
+fn a_not_held_chart_heads_its_entry_with_its_absences_and_its_id() {
+    let line = crate::chart_set::member_line(&cairn_node::patient::person::ChartIdentity {
+        patient_id: id(9),
+        held: false,
+        name: None,
+        birth_date: None,
+        trust: "unknown".into(),
+    });
+    let e = entry_view(
+        id(9),
+        EntryFlags::default(),
+        Ok(vec![line]),
+        Err("x".into()),
+    );
+    assert_eq!(
+        e.heading,
+        format!("(name unknown) · date of birth unknown · chart {}", id(9))
+    );
 }
 
 /// A linked other record is headed by its first chart and says how many more it holds; every
@@ -351,11 +397,17 @@ fn a_linked_other_records_heading_counts_its_other_charts() {
     };
     assert_eq!(
         heading(vec![member(9, "Mary SMYTHE"), member(10, "Mary SMITH")]),
-        "Mary SMYTHE · born 1950-01-07 · and 1 linked chart"
+        format!(
+            "Mary SMYTHE · born 1950-01-07 · chart {} · and 1 linked chart",
+            id(9)
+        )
     );
     assert_eq!(
         heading(vec![member(9, "A"), member(10, "B"), member(11, "C")]),
-        "A · born 1950-01-07 · and 2 linked charts"
+        format!(
+            "A · born 1950-01-07 · chart {} · and 2 linked charts",
+            id(9)
+        )
     );
 }
 
