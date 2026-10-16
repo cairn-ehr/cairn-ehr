@@ -1,8 +1,8 @@
 //! The possible-duplicate banner (repair path R5a, #680; design page "R5a — the banner,
 //! designed 2026-10-06"): the section `med_list` carries, Review's admission, and the
-//! "Different people" command. The banner's and the judgement's sentences are in `view.rs`
-//! (golden-tested); only the commands' own read-failure and fixture-mode refusals are worded
-//! here. Every DB rule is in `cairn_node::duplicate_review` (DB-tested there). This module only
+//! "Different people" command. The banner's sentences are in `view.rs`, the judgement's in
+//! `verdict.rs` (both golden-tested); only the commands' own read-failure and fixture-mode
+//! refusals are worded here. Every DB rule is in `cairn_node::duplicate_review` (DB-tested there). This module only
 //! orders the reads and applies the chart-command rules.
 //!
 //! LOCKING: `state.db` is a `tokio::sync::Mutex`, which is NOT re-entrant, and

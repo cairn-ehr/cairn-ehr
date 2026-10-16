@@ -11,7 +11,7 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 ## Per-slice rules (the repair path, the funnel)
 
 **⇒ THE BANNER'S AND TRAY'S FAILURE STATES (#745 · #752 · #740) — do not undo any of these** (pins:
-`cairn-gui-tauri/src/duplicates/{tests.rs,view_tests.rs,view_judgement_tests.rs}`, `worklist/tests.rs`,
+`cairn-gui-tauri/src/duplicates/{tests.rs,view_tests.rs,verdict_tests.rs}`, `worklist/tests.rs`,
 `commands_tests.rs::every_command_the_webview_calls_is_registered`; the JS halves were walked headlessly, no JS runner):
 - **The banner hides ONLY on Rust's `silent`** (`DuplicateSection::is_silent`, sent by a hand-written `Serialize`).
   Both destructure EXHAUSTIVELY: a new field must not compile until someone decides whether it un-silences the banner.
@@ -20,9 +20,12 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   catch → `redrawBannerAlone`): the warning needs only the chart set. An unread set is a worded banner, never a hidden
   one. **`render` draws the banner through `drawDuplicates`** — a drawing fault is said ON the banner, never thrown
   into `refresh`'s "Could not read the chart".
-- **A decided (`"never"`) refusal of a comparison or a judgement re-reads the chart** (`link.js` `compare` and
-  `sendJudgement`, beside #713's `after_reread`); the window has no reload control, so `NOTHING_OPEN` /
-  `NOT_SHOWN_OR_RESOLVED` never say "reload". The other "reload the chart" sentences are #797.
+- **A decided (`"never"`) refusal of a comparison or a judgement re-reads the BANNER** (`redrawBannerAlone` from
+  `link.js`'s `compare` and `sendJudgement`; #713's `after_reread` still re-reads the whole chart). **Tempting wrong
+  fix:** `refresh()` — it rebuilds the rows and wipes a half-typed stop reason over a refusal that changed nothing.
+  The window has no reload control, so `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload" (the rest: #797).
+- **No comparison without a drawn list:** `compare` refuses while `renderedPatient` is null (`NO_LIST_TO_COMPARE`),
+  and a banner drawn alone after a failed FIRST read shows `REVIEW_WAITS_FOR_LIST` in place of Review.
 - **The tray's count and list each carry a revision** (`trayCountRevision`, `trayListRevision`): an older answer is
   dropped. **The list is emptied when a re-read starts** — never the old entries, whose Review `close_chart` made
   unopenable.
@@ -122,7 +125,7 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
   OUTSIDE the collapsed `<details>`** ("(0)" must never read as "checked, none"); never `role="alert"` or focus-taking.
 
 **⇒ R5a'S DURABLE RULES (PR #735)** (pins: `tests/{match_proposal_open,duplicate_review}.rs`,
-`cairn-gui-tauri/src/duplicates/{view_tests.rs,view_judgement_tests.rs,mod.rs}`):
+`cairn-gui-tauri/src/duplicates/{view_tests.rs,verdict_tests.rs,tests.rs}`):
 - **`match_proposal_open` (db/057) is the ONE "still needs a human" predicate**: a pair leaves it only when it reads as
   one record or an **ATTESTED** unlink stands — **never count an un-attested unlink** (any unreviewed writer could
   clear a banner). Its statuses are pinned to `OPEN_PROPOSAL_STATUSES`.

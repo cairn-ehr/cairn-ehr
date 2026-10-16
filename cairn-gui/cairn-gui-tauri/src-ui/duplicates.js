@@ -1,6 +1,7 @@
 // The possible-duplicate banner (repair path R5a, #680). Decides nothing but whether "Different
-// people" is visible, and words nothing but the two failures Rust cannot see — the banner failing
-// to DRAW, and its own read failing to reach the backend (`failedBanner`, #745): every other
+// people" and Review are visible, and words nothing but what Rust cannot see — the banner failing
+// to DRAW, its own read failing to reach the backend (`failedBanner`, #745), and no medication
+// list being on screen to compare against (`NO_LIST_TO_COMPARE`, `REVIEW_WAITS_FOR_LIST`): every other
 // sentence comes from Rust (`duplicates/view.rs`), every check from the backend
 // (`duplicates/mod.rs`), and whether the banner hides is Rust's `silent`. Classic script, loaded after main.js and
 // BEFORE funnel.js (whose last line starts `boot()`, whose first render calls `renderDuplicates`:
@@ -14,6 +15,18 @@
 // panel (link.js) pre-filled with the banner's chart; only a comparison opened HERE shows
 // "Different people" — `clearComparison` hides it again for any other comparison.
 "use strict";
+
+/**
+ * Said when Review — or any comparison (link.js's `compare`) — has no drawn medication list to
+ * compare against: the chart's own read failed (or is still in flight), so `renderedPatient` is
+ * null and the backend would be sent no chart. Only the window knows this, so it words it.
+ */
+const NO_LIST_TO_COMPARE =
+  "This chart's medication list could not be read, so there is no record on screen to compare " +
+  "with — nothing was done.";
+/** Under each entry of a banner drawn without its chart's list, in place of Review. */
+const REVIEW_WAITS_FOR_LIST =
+  "Review opens once this chart's medication list can be read — the banner was read on its own.";
 
 /**
  * Draw a `DuplicateSection`. Hidden only when Rust says it has nothing to say (`silent`, which is
@@ -92,6 +105,14 @@ function duplicateItem(entry) {
   meds.append(...entry.medication_notes.map((t) => cell("li", t)));
   meds.append(...entry.medications.map((t) => cell("li", t)));
   li.append(meds);
+  // A banner drawn ALONE after the chart's first read failed (`redrawBannerAlone`) has no list
+  // on screen to compare with (PR #798 review): Review would send no chart. Say why it is absent
+  // rather than offer a button that can only fail. Read at draw time: `render` sets
+  // `renderedPatient` before it draws the banner.
+  if (renderedPatient === null) {
+    li.append(cell("p", REVIEW_WAITS_FOR_LIST));
+    return li;
+  }
   const review = document.createElement("button");
   review.type = "button";
   review.textContent = "Review";

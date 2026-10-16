@@ -42,10 +42,9 @@ async function refreshTray() {
 }
 
 /**
- * Read and draw the list. The new entries are built BEFORE anything on screen changes, and a
- * failure to build them clears the list and says so: otherwise the previous list — entries since
- * resolved, still carrying Review — would stay up under a blank error line, and the failure would
- * reach only the console (both callers discard this promise).
+ * Read and draw the list. The list is emptied when the read STARTS (#752): until the answer
+ * lands, nothing stale is offered. A failure to build the new entries leaves it empty and says
+ * so: otherwise the failure would reach only the console (both callers discard this promise).
  */
 async function loadTray() {
   const revision = ++trayListRevision;

@@ -147,5 +147,5 @@ fn pair_sentence(r: &PairResult) -> String {
     }
 }
 #[cfg(test)]
-#[path = "view_judgement_tests.rs"]
+#[path = "verdict_tests.rs"]
 mod tests;

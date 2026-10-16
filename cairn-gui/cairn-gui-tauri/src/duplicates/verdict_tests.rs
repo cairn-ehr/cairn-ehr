@@ -1,6 +1,6 @@
 //! Goldens for the "Different people" outcome and failure sentences (R5a): one line per pair,
 //! a failed pair named, never hidden behind another's verdict, and a commit whose outcome is
-//! unknown never retried live (#713). Split from `view_tests.rs` (#789).
+//! unknown never retried live (#713). Split from `view_tests.rs` (#789); tests `verdict.rs` (#745).
 use super::*;
 use crate::funnel::view::{ErrorView, Retry};
 use cairn_node::chart_link::LinkEffect;
