@@ -3,15 +3,11 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ BUILT ON PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798) (2026-10-16, branch
-> `fix/752-745-740-banner-tray-failure-states`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** the possible-duplicate
-> banner's and tray's failure states — **#745** (a failed chart read redraws the banner ALONE via `duplicate_banner`;
-> a drawing fault is said on the banner; it hides only on Rust's `silent`; a decided refusal re-reads the BANNER, no
-> "reload"), **#752** (the tray's count and list carry revisions; its stale list is emptied when a re-read starts) and
-> the rest of **#740** (a failed "Different people" pair continues its own sentence). GUI-only; no schema, no ADR. A
-> second review round (2026-10-17) fixed its findings in place and pinned every JS half by source guards.
-> Merged before it: PR #795 (#793 · #712 item 3 · #737 · #796), PR #794 (#781 · #789 · #732), PR #792 (R6's
-> residuals). The whole repair path (#679 · #680 · #681) is MERGED through R7 (PR #788). Design
+> **⇒ IN FLIGHT ON BRANCH `fix/799-800-801-chart-reread` (2026-10-17):** the chart re-read's robustness —
+> **#799** (a re-read keeps a half-typed stop reason), **#800** (`refresh` and the banner-alone read carry a
+> generation token), **#801** (a fault drawing the medication rows leaves nothing partial under a live sign-off).
+> GUI-only; no schema, no ADR. **Merged before it:** PR #798 (#745 · #752 · #740, 2026-10-16), PR #795, PR #794,
+> PR #792. The whole repair path (#679 · #680 · #681) is MERGED through R7 (PR #788). Design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's worker runbook
 > `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11 (banner),
 > §12 (tray) and §13 (R6's confirm). spec **v0.82** (newest ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 ·
@@ -20,15 +16,11 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)** (above): read `gh pr checks` (CodeQL included —
->    PR #795's aggregate `CodeQL` check FAILED on a test assert echoing a name-bearing heading; #798 fixes it, and
->    main's own scan may open it as an alert until #798 merges), then review and merge. **#728** (the Pi re-measure;
->    also the find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** from PR #798 **#797** (the window's other ~12 "reload the chart" sentences with no
->    reload control — a wording decision; its comment adds the set-changed refusals, which want a whole-chart re-read,
->    and asks whether to broaden `Retry::AfterReread`) · **#799** (a chart re-read wipes a half-typed stop reason) ·
->    **#800** (`refresh()` has no generation token) · **#801** (a fault drawing the medication rows leaves a partial
->    list under a live sign-off) · #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
+> 1. **The branch above**: finish, review, PR. **#728** (the Pi re-measure; also the find with the tray OPEN) can
+>    run beside. #699 stays open until the maintainer closes it.
+> 2. **Open repair-path issues:** from PR #798 **#797** (a DECISION — the window's other ~12 "reload the chart" sentences with no
+>    reload control; its comment adds the set-changed refusals, which want a whole-chart re-read,
+>    and asks whether to broaden `Retry::AfterReread`) · #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
 >    from R6 **#784** · **#785** · from R5b **#750** · **#751** · **#753** · **#755** · **#756** · **#757** · from R5a
 >    **#738** · **#739** · **#746** (a decision) · **#747** · #722 · from R4 **#730** (a decision) · **#731** ·
 >    **#734**. Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
@@ -433,7 +425,7 @@ Code workspace: `/crates` (`cairn-event`, `cairn-keystore`, `cairn-medium`, `cai
 ## Open threads — pick one (today's-work menu)
 
 **Desk-doable now (no external dependency):**
-- **⇒ The repair path: PR #798's review and merge, then the open repair-path issues** — see ⇒ NEXT.
+- **⇒ The repair path: the open repair-path issues** — see ⇒ NEXT.
 - **⇒ DR — closed and rehearsable end to end.** Not there, though a reader expects it: **2d does NOT drive
   `cairn-sync`'s puller through `MediumTransport`**; **the per-peer quarantine quota does not apply to a
   restore-originated pen** (`restore_pen_is_uncapped.rs`). Filed by the chain, beyond ⇒ NEXT's node-plane list: #525 ·
