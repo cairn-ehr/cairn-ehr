@@ -45,7 +45,7 @@ pub enum Retry {
     /// webview re-reads the chart and takes the button away — never a live retry, because a
     /// judgement that DID land (as Outranked, say) leaves the screen looking unchanged, and a
     /// second press would record a second judgement over a colleague's. Only the judgement
-    /// views produce it (`link::view::judgement_error_view`).
+    /// views produce it (`link::judgement_view::judgement_error_view`).
     AfterReread,
 }
 

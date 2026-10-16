@@ -3,11 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ R6'S FOUR RESIDUALS ARE BUILT ON PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792) (branch
-> `fix/786-787-782-783-r6-residuals`, 2026-10-16): #787 (`standing_link` panicked on a NULL address), #786 (the doubt
-> mark on `CandidateList`'s wire), #783 (the bridge remedy's door), #782 (the lock hint's script-order race).
-> Its second review (2026-10-16) found no blocker; its five suggestions are fixed on the PR. AWAITING THE
-> MAINTAINER'S REVIEW AND MERGE.** The whole repair path (#679 · #680 · #681) is MERGED through R7
+> **⇒ R6'S FOUR RESIDUALS ARE MERGED (PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792), 2026-10-15/16):
+> #787 (`standing_link` panicked on a NULL address), #786 (the doubt mark on `CandidateList`'s wire), #783 (the bridge
+> remedy's door), #782 (the lock hint's script-order race). **BUILT ON PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794) (2026-10-16, branch
+> `refactor/789-781-732-file-splits`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** #781 + #789 (every `link/` and
+> `duplicates/` file in `cairn-gui-tauri` under 500 lines, pure moves — the same 307 test names before and after) and
+> #732 (the matcher fixture truncates `patient_chart`; the version re-queue test asserts equality). Filed **#793** (three
+> more files over 500 lines).** The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`
@@ -21,11 +23,11 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR #792** (#786 · #787 · #782 · #783): read `gh pr checks 792`, then review and merge. **#728** (the Pi re-measure; now also the
+> 1. **PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)** (#781 · #789 · #732, above): read `gh pr checks`, then review and merge. **#728** (the Pi re-measure; now also the
 >    find with the tray OPEN) can run beside. #699 stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** from R7 **#789** (`duplicates/view_tests.rs` over 500 lines) · **#790** (the
+> 2. **Open repair-path issues:** from PR #794 **#793** (three more `cairn-gui-tauri` files over 500 lines) · from R7 **#790** (the
 >    "running" line on every checked chart through a rebuild/restore backlog — a decision) · **#791** (a chart whose
->    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#781** (four `link/` files over 500 lines) · **#784** (a verdict is not re-checked against identity
+>    check keeps failing keeps that line on every checked record of a BUSY node, never reaching "behind" — a decision) · from R6 **#784** (a verdict is not re-checked against identity
 >    facts or vetoes that changed while the panel was open) · from R6's review **#785** (type tightening: `RecordsShown`
 >    constructors, a `LinkState` enum, `ShownPair` as an enum) · from R5b **#750** ("Registered more recently" trusts a
 >    UUIDv7 time) · **#751** (accepted pairs read in a second statement, a TOCTOU) · **#752** (unordered tray reads, a
@@ -37,7 +39,7 @@
 >    member's "not yet run" line) · **#740** ("Different people" failure wording) · **#745** (a missing or stale banner
 >    after a failure) · **#746** (Different people with an unreadable drug list — a decision) · **#747** (the banner
 >    query's index) · #722 (no proposal fixture) · from R4 **#730** (the 101–1000 skipped-block band — a decision) ·
->    **#731** (no "charts failing" signal) · **#732** (the conftest leaves `patient_chart`) · **#734** (db/046's comment
+>    **#731** (no "charts failing" signal) · **#734** (db/046's comment
 >    points at `db.py`). Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
 >    **#699** · **#703** · **#705** · **#706** · from R1: #690 (a decision) · #691 · #692 · #693 · #694 · #695 · #696;
 >    #333, #220 and #335 gained comments.
@@ -155,7 +157,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-16 (#781 · #789 · #732, PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794)) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -187,6 +189,18 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-16 (second) — #781 · #789 split; #732 (PR [#794](https://github.com/cairn-ehr/cairn-ehr/pull/794))
+
+HANDOVER was stale on arrival a third time (it called #792 awaiting merge; it had merged). Picked a decision-free bundle
+whose gate stays cheap: no `db/*.sql` edit, so no relink of every cairn-node test binary.
+- **⇒ Prove a pure move by the test LIST, not by a green run.** Capture `cargo test -p X -- --list` before, diff the
+  sorted LEAF names after (module paths legitimately change). Same count + same leaves = nothing dropped or duplicated.
+- **⇒ Move code by slicing exact line ranges with a script, never by retyping;** let the compiler name the stale
+  imports (three, each used only by the moved tests). Two test modules can share fixtures as `pub(super) fn` in one
+  and `use super::tests::{…}` in the other.
+- **⇒ A fixture-gap RED can show the bug is already live:** #732's new test found 3 rows, not the 1 it wrote — two
+  nameless charts a Rust suite had left in the shared `cairn_test`.
 
 ### 2026-10-16 — R6's residuals #787 · #786 · #783 · #782 (PR #792)
 

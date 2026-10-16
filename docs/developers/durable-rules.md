@@ -51,7 +51,7 @@ duplicate_check_status}.rs`, `cairn-gui-tauri/src/duplicates/{read_order_tests,v
 
 **⇒ R6'S DURABLE RULES (PR #777) — do not undo any of these** (pins: `tests/{link_doubts,confirm_link,unlink_as_shown,
 search_doubted_row}.rs`, `cairn-gui-tauri/src/link/{confirm_view.rs,record_links.rs,unlink_tests.rs,
-unlink_view_tests.rs}`, the `unlink.js` field-name drift guards):
+unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift guards):
 - **ONE SQL spelling of "doubted": db/054's `cairn_chart_set_doubts`** (`clash` = a `link_veto_flag` row or an
   un-attested standing link that trips the hard veto now; `separated` = an attested unlink between two charts the set
   still joins). R1b's hold, `cairn_chart_set_has_doubted_link`, is `EXISTS` over it, so the hold and the window's
@@ -105,7 +105,7 @@ unlink_view_tests.rs}`, the `unlink.js` field-name drift guards):
   OUTSIDE the collapsed `<details>`** ("(0)" must never read as "checked, none"); never `role="alert"` or focus-taking.
 
 **⇒ R5a'S DURABLE RULES (PR #735)** (pins: `tests/{match_proposal_open,duplicate_review}.rs`,
-`cairn-gui-tauri/src/duplicates/{view_tests.rs,mod.rs}`):
+`cairn-gui-tauri/src/duplicates/{view_tests.rs,view_judgement_tests.rs,mod.rs}`):
 - **`match_proposal_open` (db/057) is the ONE "still needs a human" predicate**: a pair leaves it only when it reads as
   one record or an **ATTESTED** unlink stands — **never count an un-attested unlink** (any unreviewed writer could
   clear a banner). Its statuses are pinned to `OPEN_PROPOSAL_STATUSES`.
@@ -196,8 +196,8 @@ unlink_view_tests.rs}`, the `unlink.js` field-name drift guards):
   charts held; `unlink` also admits a displayed member not held here, filed under the HELD chart (db/005 step 8b).
   Only OPEN proposals move.
 
-**⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707)** (pins: `chart_compare.rs`, `link/mod.rs`,
-`link/view_tests.rs`, `chart_link.rs`):
+**⇒ R2b-1'S DURABLE RULES ("Same person as…", PR #707)** (pins: `chart_compare.rs`, `link/same_person_tests.rs`,
+`link/{view_tests,judgement_view_tests}.rs`, `chart_link.rs`):
 - **The comparison is SET against SET** (`cross_vetoes` over every left×right pair, or a B–C clash goes unseen).
   **Link names BOTH COMPARED sets**, sent back verbatim; a changed set is `THIS_CHANGED` / `OTHER_CHANGED`.
 - **Every panel message goes through `setMessage`, never a bare `.textContent`** (an empty status line is `hidden`).

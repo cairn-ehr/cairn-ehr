@@ -10,11 +10,10 @@
 //! node signs neither if that judgement has changed since.
 
 use super::confirm_view::{same_verdict, standing_agrees, PAIR_CHANGED_MID_READ};
+use super::judgement_view::{refused, LinkReportView};
 use super::record_links::PairKind;
 use super::unlink::ShownPair;
-use super::view::{
-    fact_rows, finding_line, heading, refused, ColumnView, FactRowView, LinkReportView,
-};
+use super::view::{fact_rows, finding_line, heading, ColumnView, FactRowView};
 use crate::funnel::view::ErrorView;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::{LinkEffect, StandingLink};
@@ -265,9 +264,9 @@ fn effect_report(
             let left = ids_not_in(before, after);
             let sentence = if left.is_empty() {
                 // An unlink that took effect but split nothing contradicts itself; say so
-                // rather than claim a split (mirrors `view.rs`'s `effect_report`, its link
-                // StillJoined arm). Worded to be true wherever it lands: when the answer arrives
-                // with another chart open, nothing is re-read for it.
+                // rather than claim a split (mirrors `judgement_view.rs`'s `effect_report`, its
+                // link StillJoined arm). Worded to be true wherever it lands: when the answer
+                // arrives with another chart open, nothing is re-read for it.
                 format!(
                     "Recorded that charts {low} and {high} are different people, but this record \
                      did not change the way an unlink should — check what the chart now combines."
@@ -304,9 +303,13 @@ fn effect_report(
 
 /// A failed unlink, classified exactly as a failed link is.
 pub fn unlink_error_view(e: &anyhow::Error) -> ErrorView {
-    crate::link::view::judgement_error_view("unlink", e)
+    crate::link::judgement_view::judgement_error_view("unlink", e)
 }
 
 #[cfg(test)]
 #[path = "unlink_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "unlink_offer_tests.rs"]
+mod offer_tests;

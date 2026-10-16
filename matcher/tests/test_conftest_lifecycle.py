@@ -45,6 +45,34 @@ def test_managed_pg_conn_truncates_committed_rows_on_exit():
     assert _row_counts(dsn) == dict.fromkeys(_PROJECTION_TABLES, 0)
 
 
+def test_managed_pg_conn_starts_with_no_stray_patient_chart_row():
+    """#732: a `patient_chart` row another suite left on the shared `cairn_test` is gone on entry.
+
+    The Rust DB suites share this database and seed `patient_chart` (the chart projection,
+    db/002). The matcher reads it: `queue_db.ensure_version` queues EVERY chart it lists, so a
+    stray row leaks into any test that counts what was queued. Entry truncation must cover it.
+    """
+    dsn = cairn_test_dsn()
+    if not dsn:
+        pytest.skip("CAIRN_TEST_PG not set — skipping DB-gated integration test")
+    # Imported only past the skip: CI's pure job runs this file without psycopg installed.
+    import psycopg
+
+    with managed_pg_conn(dsn):
+        pass  # applies the schema, so the table exists before the stray row is written
+    # Committed on an independent connection, exactly as another suite would leave it.
+    with psycopg.connect(dsn, autocommit=True) as other:
+        other.execute(
+            "INSERT INTO patient_chart (patient_id) VALUES (%s) ON CONFLICT DO NOTHING",
+            ("22222222-2222-2222-2222-222222222222",),
+        )
+        # The stray row really landed, so the check below cannot pass for want of it.
+        assert other.execute("SELECT count(*) FROM patient_chart").fetchone()[0] >= 1
+    with managed_pg_conn(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM patient_chart")
+        assert cur.fetchone()[0] == 0
+
+
 class _FakeConn:
     """Minimal stand-in for a psycopg connection: records that close() ran."""
 

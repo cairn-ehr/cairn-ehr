@@ -11,6 +11,8 @@ so a chart's proposals and the delete of its notices land together or not at all
 # the matcher's 'auto_applied' are never revised here (#743 part 1).
 AWAITING_HUMAN = ("pending", "review")
 
+# Every table named here must also be in matcher/tests/conftest.py's `_PROJECTION_TABLES`:
+# a row another suite left in one leaks into every test that counts what was queued (#732).
 _ALL_CHARTS_SQL = (
     "SELECT patient_id FROM patient_chart UNION SELECT patient_id FROM patient_name "
     "UNION SELECT patient_id FROM patient_demographic "

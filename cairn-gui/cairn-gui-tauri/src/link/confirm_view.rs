@@ -11,9 +11,9 @@
 //! - on a SEPARATED pair it is "Same person — link them": it overlays an earlier clinician's
 //!   "different people", and the panel says so before the click, not after.
 
+use super::judgement_view::{LinkReportView, LINK_OUTRANKED, LINK_STILL_JOINED};
 use super::record_links::PairKind;
 use super::unlink::ShownPair;
-use super::view::{LinkReportView, LINK_OUTRANKED, LINK_STILL_JOINED};
 use cairn_node::chart_link::{LinkEffect, StandingLink};
 use uuid::Uuid;
 
@@ -136,7 +136,8 @@ fn known_held(held: &[(Uuid, bool)], chart: Uuid) -> bool {
 /// "linked N charts": a confirm on a standing link changes no membership, and a "link them" on
 /// a bridged pair joins charts that were already one record through other links.
 ///
-/// The non-effect arms are the link's own (`view.rs`): a confirm IS a link judgement.
+/// The non-effect arms are the link's own (`judgement_view.rs`'s `LINK_OUTRANKED` /
+/// `LINK_STILL_JOINED`): a confirm IS a link judgement.
 pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid) -> LinkReportView {
     match (effect, kind) {
         (LinkEffect::TookEffect, PairKind::Link) => LinkReportView {
@@ -344,9 +345,9 @@ mod tests {
     fn a_confirm_lands_like_a_link_when_it_does_not_take_effect() {
         let (lo, hi) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let r = confirm_report(LinkEffect::Outranked, PairKind::Separated, lo, hi);
-        assert_eq!(r.sentence, crate::link::view::LINK_OUTRANKED);
+        assert_eq!(r.sentence, crate::link::judgement_view::LINK_OUTRANKED);
         let set = ChartSet::single(lo);
-        let link = crate::link::view::link_report(LinkEffect::StillJoined, &set, &set);
+        let link = crate::link::judgement_view::link_report(LinkEffect::StillJoined, &set, &set);
         let r = confirm_report(LinkEffect::StillJoined, PairKind::Link, lo, hi);
         assert_eq!(r.sentence, link.sentence);
         assert!(r.reload);

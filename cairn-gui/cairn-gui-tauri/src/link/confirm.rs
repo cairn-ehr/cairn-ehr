@@ -31,10 +31,10 @@
 //! confirm that landed while this clinician was reading is ever signed over.
 
 use super::confirm_view::{confirm_report, CONFIRM_SAME, LINK_THEM};
+use super::judgement_view::{judgement_error_view, key_locked_for, refused, LinkReportView};
 use super::record_links::PairKind;
 use super::unlink::{resolve_edge, Act};
 use super::unlink_view::{require_standing, LINK_GONE};
-use super::view::{judgement_error_view, key_locked_for, refused, LinkReportView};
 use crate::funnel::view::ErrorView;
 use crate::state::{AppState, Now};
 

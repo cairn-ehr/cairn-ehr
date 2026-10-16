@@ -153,9 +153,9 @@ def test_a_new_version_or_a_first_run_queues_every_chart(pg_conn):
     pg_conn.commit()
     v = matcher_version()
     assert queue_db.ensure_version(pg_conn, v) is True
-    # Containment, not equality: a shared dev DB may hold a stray patient_chart row.
+    # Equality: the fixture truncates patient_chart too (#732), so no other suite's chart is queued.
     queued = _queued(pg_conn)
-    assert {A, B} <= queued
+    assert queued == {A, B}
     assert queue_db.ensure_version(pg_conn, v) is False
     assert _queued(pg_conn) == queued
 
