@@ -25,12 +25,13 @@
 //! chart-link lock (`unlink_charts_as_shown_from`) and refuses a changed one, so this attested
 //! unlink — stamped later — never silently overrules the colleague's.
 
+use super::judgement_view::{key_locked_for, refused, LinkReportView};
 use super::record_links::{read_record_links, PairKind, RecordLinks};
 use super::unlink_view::{
     link_review_view, require_standing, unlink_error_view, unlink_report, LinkReviewView,
     UnlinkParts, LINK_GONE,
 };
-use super::view::{key_locked_for, refused, LinkReportView, THIS_CHANGED};
+use super::view::THIS_CHANGED;
 use super::{as_text, chart_set_of};
 use crate::chart_set::{check_displayed_set, CHANGED};
 use crate::funnel::view::{ErrorView, Retry};

@@ -15,10 +15,8 @@ use crate::chart_set::{check_displayed_set, member_line, MemberLine, CHANGED};
 use crate::commands::read_chart_of;
 use crate::funnel::view::{ErrorView, Retry};
 use crate::link::chart_set_of;
-use crate::link::view::{
-    key_locked_for, refused, LinkReportView, ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED,
-    THIS_CHANGED,
-};
+use crate::link::judgement_view::{key_locked_for, refused, LinkReportView};
+use crate::link::view::{ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED};
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
 use cairn_node::db_diagnosis::operator_chain;
@@ -117,12 +115,12 @@ pub async fn duplicate_section(
     section_view(entries, check_lines(opened, &checks, members, status))
 }
 
-/// Review's admission for the compare panel (`link::resolve_pair`): a chart a list on screen
-/// showed (`AppState::shown`, unchanged), OR one an open proposal joins to `left`'s record at
-/// this moment — the banner showed it. `shown` is deliberately NOT widened (design "R5a"): a
-/// pair a colleague resolved a second ago is refused here, never silently compared. Returns the
-/// name the list showed, or `None` for a banner admission (no list showed a name; only fixture
-/// mode reads it, and fixture mode has no proposals to admit by).
+/// Review's admission for the compare panel (`link::same_person::resolve_pair`): a chart a list
+/// on screen showed (`AppState::shown`, unchanged), OR one an open proposal joins to `left`'s
+/// record at this moment — the banner showed it. `shown` is deliberately NOT widened (design
+/// "R5a"): a pair a colleague resolved a second ago is refused here, never silently compared.
+/// Returns the name the list showed, or `None` for a banner admission (no list showed a name;
+/// only fixture mode reads it, and fixture mode has no proposals to admit by).
 pub(crate) async fn admit_other(
     state: &AppState,
     left: &ChartSet,
@@ -161,11 +159,12 @@ pub(crate) async fn admit_other(
 
 /// "Different people — not the same person" (R5a; offered only on a banner's comparison).
 ///
-/// The rules, IN THIS ORDER (as `link::link_impl`'s): the chart on screen; this record's set is
-/// the one compared (`THIS_CHANGED`); the other chart id is well-formed (`NOT_ON_SCREEN`, a
-/// window fault); the other chart is not already in this record (`ALREADY_IN_RECORD` — never
-/// "already judged", which would claim a colleague's act); the other record's set is the one
-/// compared (`OTHER_CHANGED` — the rule that keeps the signature to the charts compared);
+/// The rules, IN THIS ORDER (as `link::same_person::link_impl`'s): the chart on screen; this
+/// record's set is the one compared (`THIS_CHANGED`); the other chart id is well-formed
+/// (`NOT_ON_SCREEN`, a window fault); the other chart is not already in this record
+/// (`ALREADY_IN_RECORD` — never "already judged", which would claim a colleague's act); the other
+/// record's set is the one compared (`OTHER_CHANGED` — the rule that keeps the signature to the
+/// charts compared);
 /// fixture mode; the key. Then the node judges every pair still open between the two records,
 /// read fresh — `NothingOpen` means a colleague got there first and nothing was signed. Unlike
 /// Link there is no Review admission: that fresh open-pair read stands in for it.
@@ -334,7 +333,7 @@ mod tests {
     async fn an_in_record_chart_is_refused_before_any_admission() {
         let state = AppState::mock(Some(fixture()));
         let p = fixture().to_string();
-        let err = crate::link::compare_impl(&state, &p, vec![p.clone()], &p)
+        let err = crate::link::same_person::compare_impl(&state, &p, vec![p.clone()], &p)
             .await
             .unwrap_err();
         assert_eq!(err.text, crate::link::view::ALREADY_IN_RECORD);

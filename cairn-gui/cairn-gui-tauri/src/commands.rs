@@ -397,7 +397,7 @@ pub async fn cease_impl(
 
 /// Read one named chart, from the node or from fixtures. Callers resolve WHICH chart first —
 /// `AppState::displayed_patient` for the open chart, `AppState::shown` for one being compared
-/// (`link::compare_impl`); this only reads.
+/// (`link::same_person::compare_impl`); this only reads.
 pub(crate) async fn read_chart_of(
     state: &AppState,
     patient: Uuid,

@@ -1,16 +1,16 @@
-//! Tests for `link/unlink_view.rs`, in a sibling file like `view_tests.rs`.
+//! Tests for `link/unlink_view.rs`, in a sibling file like `view_tests.rs`. Which verdicts the
+//! panel offers is pinned in `unlink_offer_tests.rs` (#781), which shares these fixtures.
 use super::*;
-use crate::link::confirm_view::{LINK_THEM, PAIR_CHANGED_MID_READ};
 use crate::link::record_links::PairKind;
 use crate::link::unlink::ShownPair;
 use cairn_node::chart_link::StandingLink;
 use cairn_node::patient::compare::{FieldFact, NameFact};
 
-fn id(n: u128) -> Uuid {
+pub(super) fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
 
-fn held(n: u128) -> ChartFacts {
+pub(super) fn held(n: u128) -> ChartFacts {
     ChartFacts {
         patient_id: id(n),
         held: true,
@@ -29,11 +29,11 @@ fn held(n: u128) -> ChartFacts {
     }
 }
 
-fn set(v: &[u128]) -> ChartSet {
+pub(super) fn set(v: &[u128]) -> ChartSet {
     ChartSet::new(v.iter().map(|n| Uuid::from_u128(*n))).unwrap()
 }
 
-fn whole_parts() -> UnlinkParts {
+pub(super) fn whole_parts() -> UnlinkParts {
     UnlinkParts {
         low: Ok(vec![held(1)]),
         high: Ok(vec![held(2)]),
@@ -43,7 +43,7 @@ fn whole_parts() -> UnlinkParts {
 }
 
 /// The judgement standing on the pair, as `standing_link` reads it.
-fn standing(state: &str, attested: bool) -> StandingLink {
+pub(super) fn standing(state: &str, attested: bool) -> StandingLink {
     StandingLink {
         // A content address, computed — not key material (house rule 6).
         content_address: vec![7; 34],
@@ -53,7 +53,7 @@ fn standing(state: &str, attested: bool) -> StandingLink {
 }
 
 /// The pair the panel was opened on: a standing link with no clinician's confirmation here.
-fn unattested_link() -> ShownPair {
+pub(super) fn unattested_link() -> ShownPair {
     ShownPair {
         kind: PairKind::Link,
         attested: false,
@@ -62,7 +62,7 @@ fn unattested_link() -> ShownPair {
 }
 
 /// A pair a clinician judged different people that other links still join (db/054 case (c)).
-fn separated() -> ShownPair {
+pub(super) fn separated() -> ShownPair {
     ShownPair {
         kind: PairKind::Separated,
         attested: true,
@@ -159,7 +159,7 @@ fn outranked_is_a_disagreement_to_settle_not_retry() {
 
 #[test]
 fn an_unlink_error_is_worded_as_an_unlink() {
-    let v = crate::link::view::judgement_error_from(
+    let v = crate::link::judgement_view::judgement_error_from(
         "unlink",
         cairn_gui_data::port::DataError::Refused("x".into()),
     );
@@ -291,7 +291,7 @@ fn an_unread_low_chart_is_named_and_cannot_unlink() {
 
 #[test]
 fn every_unlink_error_arm_is_worded_as_an_unlink() {
-    use crate::link::view::judgement_error_from as f;
+    use crate::link::judgement_view::judgement_error_from as f;
     use cairn_gui_data::port::DataError;
     assert!(f("unlink", DataError::NotProvisioned("x".into()))
         .text
@@ -391,161 +391,4 @@ fn unlink_js_reads_no_field_the_backend_does_not_send() {
             "unlink.js no longer reads `view.{field}`"
         );
     }
-}
-
-/// A partial read offers neither verdict: a judgement needs the whole picture.
-#[test]
-fn a_partial_review_offers_no_verdict() {
-    let mut parts = whole_parts();
-    parts.findings = Err("boom".into());
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &unattested_link());
-    assert!(!v.can_unlink && !v.can_confirm);
-    assert_eq!(v.same_label, None);
-}
-
-#[test]
-fn a_separated_review_offers_no_unlink() {
-    let mut parts = whole_parts();
-    parts.standing = Ok(Some(standing("unlink", true)));
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &separated());
-    assert!(!v.can_unlink, "a separated pair is already unlinked");
-    assert!(v.can_confirm && v.same_label.as_deref() == Some(LINK_THEM));
-}
-
-/// The line showed a standing judgement on the pair; the panel's read found none. The pair
-/// changed between the two reads, so NEITHER verdict is offered — and Unlink now needs the
-/// standing address as much as the confirm does (the node re-checks it before signing).
-#[test]
-fn an_unread_standing_assertion_offers_no_verdict() {
-    for shown in [unattested_link(), separated()] {
-        let mut parts = whole_parts();
-        parts.standing = Ok(None);
-        let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &shown);
-        assert!(!v.can_confirm && !v.can_unlink, "{shown:?}");
-        assert_eq!(v.problems, vec![PAIR_CHANGED_MID_READ.to_string()]);
-    }
-}
-
-/// Unlink is offered only with the standing address it must send back: the whole panel on a
-/// standing link carries it, and `can_unlink` is never true beside an empty one.
-#[test]
-fn unlink_is_offered_only_with_the_standing_address() {
-    let v = link_review_view(
-        whole_parts(),
-        &set(&[1, 2]),
-        id(1),
-        id(2),
-        &unattested_link(),
-    );
-    assert!(v.can_unlink && !v.standing.is_empty());
-}
-
-/// An empty standing address is refused by both verdicts with a sentence that says what is
-/// actually wrong — the comparison never read which judgement stands — never [`LINK_GONE`].
-#[test]
-fn an_empty_standing_address_is_refused_truthfully() {
-    let err = require_standing(&[]).unwrap_err();
-    assert_eq!(err.text, STANDING_UNREAD);
-    assert!(
-        !err.text.contains("no longer part of this record"),
-        "{}",
-        err.text
-    );
-    assert!(err.text.contains("nothing was done") && err.text.contains("review it again"));
-    assert!(require_standing(&[7; 34]).is_ok());
-}
-
-/// A failed read of which judgement stands is a named problem — never a silent missing button.
-#[test]
-fn a_failed_standing_read_is_named_and_offers_no_verdict() {
-    let mut parts = whole_parts();
-    parts.standing = Err("reset".into());
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &unattested_link());
-    assert!(!v.can_confirm && !v.can_unlink);
-    assert!(v
-        .problems
-        .iter()
-        .any(|m| m.contains("Which judgement stands on this pair could not be read: reset")));
-}
-
-/// Through the panel: a chart not held here withholds Confirm, says why, and still offers
-/// Unlink. The standing address travels to the webview, which sends it back with either verdict.
-#[test]
-fn a_chart_not_held_here_still_offers_unlink_but_not_confirm() {
-    let mut parts = whole_parts();
-    parts.high = Ok(vec![ChartFacts {
-        held: false,
-        ..held(2)
-    }]);
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &unattested_link());
-    assert!(v.can_unlink && !v.can_confirm);
-    assert!(v.same_note.unwrap().contains(&id(2).to_string()));
-    let whole = link_review_view(
-        whole_parts(),
-        &set(&[1, 2]),
-        id(1),
-        id(2),
-        &unattested_link(),
-    );
-    assert!(whole.can_confirm);
-    assert_eq!(whole.standing, vec![7; 34]);
-    assert_eq!(whole.kind, PairKind::Link);
-}
-
-/// Safety: the line and the pair's standing judgement are read under two lock acquisitions. A
-/// colleague's attested unlink landing between them (a third chart still joining the record)
-/// must not let the panel offer "Same person — confirm" carrying the UNLINK's address — the
-/// node's pair check would accept it. Neither verdict is offered.
-#[test]
-fn a_standing_judgement_that_changed_mid_read_offers_no_verdict() {
-    let mut parts = whole_parts();
-    parts.standing = Ok(Some(standing("unlink", true)));
-    let v = link_review_view(parts, &set(&[1, 2, 3]), id(1), id(2), &unattested_link());
-    assert!(!v.can_confirm && !v.can_unlink);
-    assert_eq!(v.same_label, None);
-    assert!(
-        v.standing.is_empty(),
-        "the unlink's address never reaches the webview"
-    );
-    assert_eq!(v.problems, vec![PAIR_CHANGED_MID_READ.to_string()]);
-    assert_eq!(
-        PAIR_CHANGED_MID_READ,
-        "This pair changed while it was being read — close the comparison and review it again."
-    );
-}
-
-/// The same rule for a separation that was relinked mid-read.
-#[test]
-fn a_separation_relinked_mid_read_offers_no_verdict() {
-    let mut parts = whole_parts();
-    parts.standing = Ok(Some(standing("link", true)));
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &separated());
-    assert!(!v.can_confirm && !v.can_unlink && v.standing.is_empty());
-    assert_eq!(v.problems, vec![PAIR_CHANGED_MID_READ.to_string()]);
-}
-
-/// A partial panel draws no "same person" button, so the note that explains what the button
-/// overrides ("Linking them records your judgement over theirs…") must go with it. The note
-/// that says why there is NO button (a chart not held here) is true whatever failed to read, so
-/// it stays.
-#[test]
-fn a_partial_panel_keeps_only_the_not_held_note() {
-    let mut parts = whole_parts();
-    parts.standing = Ok(Some(standing("unlink", true)));
-    parts.findings = Err("boom".into());
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &separated());
-    assert_eq!((v.same_label, v.same_note), (None, None));
-
-    let mut parts = whole_parts();
-    parts.high = Ok(vec![ChartFacts {
-        held: false,
-        ..held(2)
-    }]);
-    parts.findings = Err("boom".into());
-    let v = link_review_view(parts, &set(&[1, 2]), id(1), id(2), &unattested_link());
-    assert_eq!(v.same_label, None);
-    let note = v
-        .same_note
-        .expect("the not-held note stays on a partial panel");
-    assert!(note.contains("not held on this node"), "{note}");
 }

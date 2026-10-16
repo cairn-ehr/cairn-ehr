@@ -7,7 +7,8 @@
 //! [`check_lines`] says when this record's check has not run, reusing R4's own sentences.
 use crate::chart_set::MemberLine;
 use crate::funnel::view::{ErrorView, Retry};
-use crate::link::view::{judgement_error_view, medication_lines, refused, LinkReportView};
+use crate::link::judgement_view::{judgement_error_view, refused, LinkReportView};
+use crate::link::view::medication_lines;
 use cairn_gui_tab_medications::view::MedListView;
 use cairn_medication_view::{ChartSet, PatientMedicationList};
 use cairn_node::chart_link::LinkEffect;
@@ -420,3 +421,7 @@ mod tests;
 #[cfg(test)]
 #[path = "view_catchup_tests.rs"]
 mod catchup_tests;
+
+#[cfg(test)]
+#[path = "view_judgement_tests.rs"]
+mod judgement_tests;
