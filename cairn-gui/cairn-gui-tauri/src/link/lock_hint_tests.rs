@@ -23,6 +23,16 @@
 //!
 //! `main.js` and `index.html` are untyped, so these tests read their source, like the
 //! field-name drift guards beside them.
+//!
+//! # What the first test can and cannot see
+//!
+//! It is a line heuristic, not a parser. It reads only lines that start in column 0, so it
+//! catches the regression in the shape it had (a bare top-level `void pollLock();`). It does NOT
+//! catch a load-time call nested inside an indented body, such as an immediately-invoked
+//! `(async () => {\n  await pollLock();\n})();`. Those lines look exactly like the calls inside
+//! event handlers, which are fine because they run only after the page has loaded. A reviewer
+//! adding top-level code that runs at load must apply the rule by hand: the lock is first polled
+//! from `DOMContentLoaded`, nowhere else.
 
 const MAIN_JS: &str = include_str!("../../src-ui/main.js");
 const INDEX_HTML: &str = include_str!("../../src-ui/index.html");

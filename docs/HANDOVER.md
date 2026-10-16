@@ -6,7 +6,8 @@
 > **⇒ R6'S FOUR RESIDUALS ARE BUILT ON PR [#792](https://github.com/cairn-ehr/cairn-ehr/pull/792) (branch
 > `fix/786-787-782-783-r6-residuals`, 2026-10-16): #787 (`standing_link` panicked on a NULL address), #786 (the doubt
 > mark on `CandidateList`'s wire), #783 (the bridge remedy's door), #782 (the lock hint's script-order race).
-> AWAITING THE MAINTAINER'S REVIEW AND MERGE.** The whole repair path (#679 · #680 · #681) is MERGED through R7
+> Its second review (2026-10-16) found no blocker; its five suggestions are fixed on the PR. AWAITING THE
+> MAINTAINER'S REVIEW AND MERGE.** The whole repair path (#679 · #680 · #681) is MERGED through R7
 > (PR [#788](https://github.com/cairn-ehr/cairn-ehr/pull/788), 2026-10-15), plus #775/#556 (PR #779). R7, as the
 > maintainer decided it: **#742** — a checked chart's banner shows the node's "running" line while a `change` notice
 > waits (`config` notices alone never trigger it); **#743 part 2** — an un-attested link whose pair has a `degrade_hold`

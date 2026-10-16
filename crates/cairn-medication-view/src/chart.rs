@@ -62,11 +62,10 @@ pub const SEPARATION_INSTRUCTION: &str =
 /// unmarked, and the sentence had introduced that door as a MARKED link's only. It never calls
 /// them unmarked — one may also trip the hard check, and then it is marked. The CLI verbs are
 /// named too, for a node run without the window, with their required `--attester-key` (both
-/// refuse to run without one). Each verb's
-/// holding rule is named because the record can list a member whose registration has not
-/// reached this node: an unlink needs `--from` only when NEITHER chart is held, but a link needs
-/// BOTH held (`cairn-node` `chart_link::admit_judgement`) — a deliberate act from this node must
-/// not attach a chart it has never seen.
+/// refuse to run without one). Each verb's holding rule is named because the record can list a
+/// member whose registration has not reached this node: an unlink needs `--from` only when
+/// NEITHER chart is held, but a link needs BOTH held (`cairn-node` `chart_link::admit_judgement`)
+/// — a deliberate act from this node must not attach a chart it has never seen.
 ///
 /// WHY NOT "EITHER JUDGEMENT LIFTS THIS HOLD". It is false in reachable cases: with two doubted
 /// links, judging one leaves the hold; in the A–C–X bridge, unlinking A–X leaves the record

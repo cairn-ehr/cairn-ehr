@@ -32,6 +32,11 @@ use std::fmt;
 
 /// A [`CandidateList`] as it travels. Private: callers serialise `CandidateList` itself, and
 /// serde routes through this (`#[serde(try_from, into)]` on the list).
+///
+/// `into` makes serde clone the list before converting it. That is accepted: a list is one
+/// screen of rows, and no production path serialises one yet (the window sends its own view
+/// types, and a search token is a bare id). A borrowing hand-written `Serialize` would avoid the
+/// copy at the price of a second wire struct to keep in step with this one.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct CandidateListWire {
     people: Vec<PersonRow>,
@@ -91,10 +96,19 @@ impl TryFrom<CandidateListWire> for CandidateList {
         if let Some(&index) = wire.doubted_rows.iter().find(|&&i| i >= rows) {
             return Err(DoubtedRowOutOfRange { index, rows });
         }
-        let mut people = wire.people;
-        for i in wire.doubted_rows {
-            people[i] = people[i].clone().with_doubt(true);
-        }
+        // Each row is moved, never cloned: a row named once or many times is marked once.
+        let people = wire
+            .people
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| {
+                if wire.doubted_rows.contains(&i) {
+                    row.with_doubt(true)
+                } else {
+                    row
+                }
+            })
+            .collect();
         Ok(CandidateList {
             people,
             incomplete: wire.incomplete,
@@ -193,6 +207,19 @@ mod tests {
         });
         let back: CandidateList = serde_json::from_value(old).unwrap();
         assert!(!back.people[0].is_doubted());
+    }
+
+    /// The field's doc promises a reader accepts any order and repeats: a writer other than this
+    /// one owes no particular order, and marking a row twice changes nothing.
+    #[test]
+    fn doubted_rows_in_any_order_and_with_repeats_mark_exactly_those_rows() {
+        for named in [serde_json::json!([2, 0]), serde_json::json!([0, 2, 0, 2])] {
+            let mut value = serde_json::to_value(list()).unwrap();
+            value["doubted_rows"] = named.clone();
+            let back: CandidateList = serde_json::from_value(value).unwrap();
+            let marks: Vec<bool> = back.people.iter().map(PersonRow::is_doubted).collect();
+            assert_eq!(marks, vec![true, false, true], "doubted_rows = {named}");
+        }
     }
 
     #[test]

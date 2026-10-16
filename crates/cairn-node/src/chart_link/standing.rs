@@ -85,8 +85,9 @@ pub async fn standing_link(
 /// runs both commands named here.
 pub fn legacy_address_refusal(low: Uuid, high: Uuid) -> String {
     format!(
-        "what stands between charts {low} and {high} has no recorded content address (a row \
-         written before #115), so it cannot be compared — nothing was done; an operator must \
+        "what stands between charts {low} and {high} has no recorded content address (the row \
+         was written by an older version of this node, before #115), so it cannot be compared \
+         — nothing was done; an operator must \
          replay the identity projections over an owner-privileged connection: `cairn-node \
          reproject --prefix identity.` (if this refusal persists, `cairn-node reproject \
          --rebuild`, which holds chart reads until it finishes)"

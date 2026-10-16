@@ -132,6 +132,12 @@ fn the_legacy_refusal_names_the_heal_first_and_the_rebuild_as_the_fallback() {
     let (low, high) = (Uuid::from_u128(1), Uuid::from_u128(2));
     let words = legacy_address_refusal(low, high);
     assert!(words.contains("no recorded content address"), "{words}");
+    // The review panel shows this to a clinician, so the cause is said in words; the issue
+    // number stays only as the operator's reference.
+    assert!(
+        words.contains("written by an older version of this node"),
+        "{words}"
+    );
     assert!(words.contains("nothing was done"), "{words}");
     assert!(words.contains("owner-privileged connection"), "{words}");
     let heal = words
