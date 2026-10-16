@@ -52,11 +52,12 @@ def test_managed_pg_conn_starts_with_no_stray_patient_chart_row():
     db/002). The matcher reads it: `queue_db.ensure_version` queues EVERY chart it lists, so a
     stray row leaks into any test that counts what was queued. Entry truncation must cover it.
     """
-    import psycopg
-
     dsn = cairn_test_dsn()
     if not dsn:
         pytest.skip("CAIRN_TEST_PG not set — skipping DB-gated integration test")
+    # Imported only past the skip: CI's pure job runs this file without psycopg installed.
+    import psycopg
+
     with managed_pg_conn(dsn):
         pass  # applies the schema, so the table exists before the stray row is written
     # Committed on an independent connection, exactly as another suite would leave it.
