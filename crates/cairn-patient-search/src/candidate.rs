@@ -145,7 +145,14 @@ pub struct Candidate {
 /// R3: the unit a clerk sees is a PERSON (a [`PersonRow`], one or more linked charts), not a
 /// chart. What a registration attests to is still the flat list of CHART ids, via
 /// [`CandidateList::displayed_charts`].
+///
+/// On the wire, a row's doubt mark travels as the list's additive `doubted_rows` (#786; see
+/// [`crate::list_wire`]). A row's own wire shape stays its bare member array.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "crate::list_wire::CandidateListWire",
+    into = "crate::list_wire::CandidateListWire"
+)]
 pub struct CandidateList {
     pub people: Vec<PersonRow>,
     /// True when the SEARCH was partial: the node could not read something it matched.

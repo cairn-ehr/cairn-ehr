@@ -24,6 +24,9 @@ pub mod unlink;
 pub mod unlink_view;
 pub mod view;
 
+#[cfg(test)]
+mod lock_hint_tests;
+
 use crate::chart_set::{check_displayed_set, CHANGED};
 use crate::commands::read_chart_of;
 use crate::funnel::view::ErrorView;

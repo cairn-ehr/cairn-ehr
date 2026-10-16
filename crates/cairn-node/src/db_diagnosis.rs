@@ -470,7 +470,10 @@ pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
 /// - `chart_link`'s held-chart pre-check (R2b-1) — changed by sync delivering the chart or the
 ///   record joining the pair; no operator is involved and no command is named (PR #707 review);
 /// - `chart_link::admit`'s open-chart `NotHeld` arm (R2b-2) — the chart judged from has no
-///   `patient_chart` row here yet; changed the same way (PR #711 review).
+///   `patient_chart` row here yet; changed the same way (PR #711 review);
+/// - `chart_link::standing_link`'s legacy-address arm (#787) — a pre-#115 `patient_link` row
+///   with no content address; changed by an operator's `cairn-node reproject --prefix identity.`
+///   (a heal; a whole `--rebuild` as the fallback), which the message names.
 pub(crate) fn node_state_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),

@@ -10,6 +10,25 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ R6'S RESIDUALS (PR #792: #787 · #786 · #783 · #782) — do not undo any of these** (pins:
+`tests/standing_link_legacy_address.rs`, `cairn-patient-search/src/list_wire.rs`, `cairn-medication-view`'s
+`the_doubted_link_remedy_names_the_bridge_lines_door_too`, `cairn-gui-tauri/src/link/{lock_hint_tests.rs,confirm_view.rs}`):
+- **`standing_link` reads `content_address` as an `Option`** and refuses a NULL as a NODE-STATE refusal (a pre-#115
+  row; db/018's `ADD COLUMN IF NOT EXISTS` leaves it nullable). **Tempting wrong fix:** back to `r.get(0)` "because
+  the column is NOT NULL" — it is only on a fresh database. The remedy names the HEAL first (`cairn-node reproject
+  --prefix identity.`, no deletes: replaying the winner beats a NULL address, db/002's `COALESCE(cur_addr, '\x')`)
+  and a whole `--rebuild` only as the fallback (it truncates every projection and holds chart reads). Never name
+  `--prefix identity. --rebuild` — `cairn_reproject` refuses it (it would truncate `patient_chart`). The test runs both.
+- **A row's doubt mark crosses the wire only as `CandidateList`'s additive `doubted_rows`** (`list_wire.rs`). The
+  row's own flag is the one in-memory truth; `doubted_rows` exists only on the wire, absent when empty. Never put
+  the mark into `PersonRow`'s serde (its bare member array is what the attested list is built from), and never give
+  `CandidateList` a second in-memory doubt field.
+- **Both bridge remedies name the unlink's door**: `DOUBTED_LINK_INSTRUCTION` and the review panel's `Separated` note
+  (`confirm_view.rs`) say to open "Review this link…" on a link still joining the pair, "marked in doubt or not" —
+  never "unmarked" (a joining link can also clash).
+- **The first lock poll starts on `DOMContentLoaded`**, never at `main.js`'s top level, and **no script tag may be
+  `defer`, `async` or a module**: that ordering is what makes `updateLinkLock` exist when the answer lands.
+
 **⇒ R7'S DURABLE RULES (PR #788) — do not undo any of these** (pins: `tests/{unverified_link_note,
 duplicate_check_status}.rs`, `cairn-gui-tauri/src/duplicates/{read_order_tests,view_catchup_tests}.rs`,
 `cairn-gui-tauri/src/link/record_links_unverified_tests.rs`, `unlink_tests.rs::an_unread_note_list_never_blocks_a_verdict`):

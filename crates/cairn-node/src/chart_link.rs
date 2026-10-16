@@ -36,6 +36,8 @@ pub mod judge;
 pub use judge::*;
 pub mod shown;
 pub use shown::*;
+pub mod standing;
+pub use standing::*;
 
 /// Which judgement the human made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,49 +180,6 @@ pub struct Asserted {
     /// event": a judgement a later AGREEING one outranks has nothing left to do, and must
     /// not be reported as a disagreement.)
     pub agrees: bool,
-}
-
-/// The pair's STANDING `patient_link` row — the assertion that currently wins the overlay
-/// (db/018) — as far as a caller deciding "did my event take effect?" needs it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StandingLink {
-    /// The winning event's content address.
-    pub content_address: Vec<u8>,
-    /// `link` or `unlink`.
-    pub state: String,
-    /// Whether the winner is a human's vouched judgement (db/018's one definition, stored).
-    pub attested: bool,
-}
-
-impl StandingLink {
-    /// Is the event with this content address the one standing? The check both judgement
-    /// paths make right after submitting: db/018 ADMITS an assertion that loses the
-    /// overlay (it is a real event, and replicates), so "submitted" is not "took effect".
-    pub fn is(&self, content_address: &[u8]) -> bool {
-        self.content_address == content_address
-    }
-}
-
-/// Read the standing winner for the canonical pair, inside the caller's transaction (so it
-/// sees the caller's own just-submitted event). `None`: no assertion about the pair exists.
-pub async fn standing_link(
-    client: &(impl tokio_postgres::GenericClient + Sync),
-    low: Uuid,
-    high: Uuid,
-) -> anyhow::Result<Option<StandingLink>> {
-    let row = client
-        .query_opt(
-            "SELECT content_address, state, attested FROM patient_link \
-             WHERE low = $1::text::uuid AND high = $2::text::uuid",
-            &[&low.to_string(), &high.to_string()],
-        )
-        .await
-        .map_err(|e| LocalDbFault::new("reading the pair's standing link", e))?;
-    Ok(row.map(|r| StandingLink {
-        content_address: r.get(0),
-        state: r.get(1),
-        attested: r.get(2),
-    }))
 }
 
 /// The proposal statuses a human judgement resolves. Every other status is CLOSED and a
