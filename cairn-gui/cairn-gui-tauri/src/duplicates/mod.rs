@@ -9,6 +9,7 @@
 //! `read_chart_of` / `chart_set_of` take it themselves. So [`duplicate_section`] reads in two
 //! phases — everything else under one lock, then each entry's medications after releasing it —
 //! and nothing here calls either helper while holding the lock (that would deadlock the window).
+pub mod verdict;
 pub mod view;
 
 use crate::chart_set::{check_displayed_set, member_line, MemberLine, CHANGED};
@@ -25,10 +26,11 @@ use cairn_node::duplicate_check::{
 };
 use cairn_node::duplicate_review::{self, DifferentPeople};
 use uuid::Uuid;
+use verdict::{different_people_error_view, PairResult};
 use view::{
-    check_lines, different_people_error_view, entry_view, fixture_section, medications_of,
-    section_view, ChartCheck, DuplicateSection, EntryFlags, PairResult, ACCEPTED_NOT_OVERRULED,
-    DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
+    check_lines, entry_view, fixture_section, medications_of, section_view, ChartCheck,
+    DuplicateSection, EntryFlags, ACCEPTED_NOT_OVERRULED, DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN,
+    NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
 };
 
 /// The banner for the displayed record. Never fails: every failure is a worded line (an absent
@@ -245,7 +247,7 @@ fn different_people_view(outcome: DifferentPeople) -> Result<LinkReportView, Err
     match outcome {
         DifferentPeople::NothingOpen => Err(refused(NOTHING_OPEN)),
         DifferentPeople::AcceptedAsSame => Err(refused(ACCEPTED_NOT_OVERRULED)),
-        DifferentPeople::Judged(judged) => view::different_people_report(
+        DifferentPeople::Judged(judged) => verdict::different_people_report(
             judged
                 .into_iter()
                 .map(|j| PairResult {
