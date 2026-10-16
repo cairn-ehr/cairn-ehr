@@ -238,3 +238,47 @@ fn the_webview_reads_both_partial_completion_reports() {
     assert!(reported.contains("withheld_message"), "got: {reported:?}");
     assert!(reported.contains("failed"), "got: {reported:?}");
 }
+
+/// Every command the webview calls is one `main.rs` registers. A command missing from
+/// `generate_handler!` compiles, passes every `*_impl` test, and fails only in the running window
+/// — where the call rejects and its surface says it "could not reach its backend". (Found adding
+/// `duplicate_banner`, #745: nothing pinned its registration.) Both call shapes are read: a
+/// literal `invoke("name"`, and the judgement commands link.js passes by name to `sendJudgement`.
+#[test]
+fn every_command_the_webview_calls_is_registered() {
+    let main = include_str!("main.rs");
+    let start = main
+        .find("generate_handler![")
+        .expect("main.rs registers commands");
+    let block = &main[start..start + main[start..].find(']').expect("the list closes")];
+    let registered: BTreeSet<&str> = block
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.trim().strip_suffix(','))
+        .map(|path| path.rsplit("::").next().unwrap_or(path))
+        .collect();
+    let webview = [
+        include_str!("../src-ui/main.js"),
+        include_str!("../src-ui/duplicates.js"),
+        include_str!("../src-ui/worklist.js"),
+        include_str!("../src-ui/funnel.js"),
+        include_str!("../src-ui/link.js"),
+        include_str!("../src-ui/unlink.js"),
+    ];
+    let mut called = BTreeSet::new();
+    for js in webview {
+        for opener in ["invoke(\"", "sendJudgement(\""] {
+            for (at, _) in js.match_indices(opener) {
+                let rest = &js[at + opener.len()..];
+                called.insert(&rest[..rest.find('"').expect("the name closes")]);
+            }
+        }
+    }
+    assert!(called.contains("duplicate_banner") && called.contains("record_different_people"));
+    for name in called {
+        assert!(
+            registered.contains(name),
+            "the webview calls `{name}`, main.rs never registers it"
+        );
+    }
+}

@@ -108,6 +108,7 @@ fn main() -> anyhow::Result<()> {
             link::confirm::confirm_link,
             link::search::link_search,
             duplicates::record_different_people,
+            duplicates::duplicate_banner,
             worklist::duplicate_tray_count,
             worklist::duplicate_worklist,
         ])

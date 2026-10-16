@@ -12,7 +12,7 @@
 pub mod verdict;
 pub mod view;
 
-use crate::chart_set::{check_displayed_set, member_line, MemberLine, CHANGED};
+use crate::chart_set::{check_displayed_set, linked_members, member_line, MemberLine, CHANGED};
 use crate::commands::read_chart_of;
 use crate::funnel::view::{ErrorView, Retry};
 use crate::link::chart_set_of;
@@ -28,9 +28,9 @@ use cairn_node::duplicate_review::{self, DifferentPeople};
 use uuid::Uuid;
 use verdict::{different_people_error_view, PairResult};
 use view::{
-    check_lines, entry_view, fixture_section, medications_of, section_view, ChartCheck,
-    DuplicateSection, EntryFlags, ACCEPTED_NOT_OVERRULED, DIFFERENT_PEOPLE_BUTTON, MAX_SHOWN,
-    NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
+    check_lines, entry_view, fixture_section, medications_of, section_view, unread_set_section,
+    ChartCheck, DuplicateSection, EntryFlags, ACCEPTED_NOT_OVERRULED, DIFFERENT_PEOPLE_BUTTON,
+    MAX_SHOWN, NOTHING_OPEN, NOT_SHOWN_OR_RESOLVED,
 };
 
 /// The banner for the displayed record. Never fails: every failure is a worded line (an absent
@@ -115,6 +115,49 @@ pub async fn duplicate_section(
         }
     };
     section_view(entries, check_lines(opened, &checks, members, status))
+}
+
+/// The banner ALONE, for the open chart whose medication list could not be read (#745 points 1
+/// and 2; the webview's `redrawBannerAlone`, called from `main.js`'s `refresh` on a failed read).
+///
+/// The banner needs only the record's chart set, never its medication list, so a failed list
+/// read must not take the duplicate warning down with it — and after a judgement, a failed
+/// re-read must not leave the judged pair on screen with a live Review. This resolves the set
+/// itself and then draws exactly what a chart open draws ([`duplicate_section`]); a set that
+/// cannot be read is a worded banner ([`view::unread_set_section`]), never a hidden one.
+/// Bound to the chart on screen (`AppState::displayed_patient`) like every chart command.
+pub async fn banner_alone_impl(
+    state: &AppState,
+    patient_id: &str,
+) -> Result<DuplicateSection, String> {
+    let patient = state.displayed_patient(patient_id).await?;
+    let charts = match record_charts(state, patient).await {
+        Ok(charts) => charts,
+        Err(e) => return Ok(unread_set_section(e)),
+    };
+    // As `med_list_impl` does: an unread member list only loses the pending member's name.
+    let members = linked_members(state, &charts).await;
+    Ok(duplicate_section(state, patient, &charts, members.as_deref().unwrap_or(&[])).await)
+}
+
+/// The chart set `patient` reads over, or why it could not be read (operator chain). Fixture mode
+/// has no links, so a fixture chart is a record of one. Takes `state.db` itself — not held here.
+async fn record_charts(state: &AppState, patient: Uuid) -> Result<ChartSet, String> {
+    let Some(db) = state.db.as_ref() else {
+        return Ok(ChartSet::single(patient));
+    };
+    let db = db.lock().await;
+    cairn_node::patient::person::person_charts(&*db, patient)
+        .await
+        .map_err(|e| operator_chain(&e))
+}
+
+#[tauri::command]
+pub async fn duplicate_banner(
+    state: tauri::State<'_, AppState>,
+    patient_id: String,
+) -> Result<DuplicateSection, String> {
+    banner_alone_impl(&state, &patient_id).await
 }
 
 /// Review's admission for the compare panel (`link::same_person::resolve_pair`): a chart a list
@@ -278,199 +321,4 @@ pub async fn record_different_people(
 mod read_order_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use cairn_patient_search::{Candidate, TrustState};
-
-    fn fixture() -> Uuid {
-        cairn_gui_data::mock::fixtures::FIXTURE_UUID
-            .parse()
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn fixture_mode_shows_no_entries_and_says_no_check_ran() {
-        let state = AppState::mock(Some(fixture()));
-        let s = duplicate_section(&state, fixture(), &ChartSet::single(fixture()), &[]).await;
-        assert_eq!(s, view::fixture_section());
-    }
-
-    #[tokio::test]
-    async fn a_shown_chart_is_admitted_by_its_list() {
-        let state = AppState::mock(Some(fixture()));
-        let other = Uuid::from_u128(2);
-        state.shown.lock().await.insert(
-            other,
-            Candidate {
-                patient_id: other,
-                display_name: "Other Person".into(),
-                age: None,
-                trust: TrustState::Confirmed,
-                last_activity: None,
-                locale: None,
-                photo_ref: None,
-            },
-        );
-        let name = admit_other(&state, &ChartSet::single(fixture()), other)
-            .await
-            .unwrap();
-        assert_eq!(name.as_deref(), Some("Other Person"));
-    }
-
-    /// Fixture mode has no proposals, so an unshown chart keeps today's refusal word for word.
-    #[tokio::test]
-    async fn in_fixture_mode_an_unshown_chart_keeps_the_not_on_screen_refusal() {
-        let state = AppState::mock(Some(fixture()));
-        let err = admit_other(&state, &ChartSet::single(fixture()), Uuid::from_u128(2))
-            .await
-            .unwrap_err();
-        assert_eq!(err.text, crate::link::view::NOT_ON_SCREEN);
-    }
-
-    /// Final review M5: a chart already in this record is refused BEFORE Review's admission is
-    /// asked — no list showed it here, so admitting first would refuse it as "not on screen"
-    /// (and, live, spend a proposal read on a chart that can never be compared).
-    #[tokio::test]
-    async fn an_in_record_chart_is_refused_before_any_admission() {
-        let state = AppState::mock(Some(fixture()));
-        let p = fixture().to_string();
-        let err = crate::link::same_person::compare_impl(&state, &p, vec![p.clone()], &p)
-            .await
-            .unwrap_err();
-        assert_eq!(err.text, crate::link::view::ALREADY_IN_RECORD);
-    }
-
-    /// Final review M4c: a malformed other chart id is a window fault ("not on screen", as
-    /// `link::same_person::link_impl` words it) — never "already judged", which would tell the
-    /// clinician a colleague resolved something nobody touched.
-    #[tokio::test]
-    async fn a_malformed_other_chart_is_not_on_screen() {
-        let state = AppState::mock(Some(fixture()));
-        let p = fixture().to_string();
-        let err = different_people_impl(&state, &p, vec![p.clone()], "not-a-uuid", vec![])
-            .await
-            .unwrap_err();
-        assert_eq!(err.text, crate::link::view::NOT_ON_SCREEN);
-    }
-
-    #[tokio::test]
-    async fn different_people_is_bound_to_the_chart_on_screen() {
-        let state = AppState::mock(Some(fixture()));
-        let err =
-            different_people_impl(&state, &Uuid::from_u128(9).to_string(), vec![], "x", vec![])
-                .await
-                .unwrap_err();
-        assert!(err.text.contains("not the chart"), "{}", err.text);
-    }
-
-    #[tokio::test]
-    async fn different_people_refuses_a_changed_set() {
-        let state = AppState::mock(Some(fixture()));
-        let p = fixture().to_string();
-        let err = different_people_impl(
-            &state,
-            &p,
-            vec![p.clone(), Uuid::from_u128(7).to_string()],
-            &Uuid::from_u128(2).to_string(),
-            vec![],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(err.text, crate::link::view::THIS_CHANGED);
-    }
-
-    #[tokio::test]
-    async fn fixture_mode_cannot_record_different_people() {
-        let state = AppState::mock(Some(fixture()));
-        let p = fixture().to_string();
-        let other = Uuid::from_u128(2).to_string();
-        let err = different_people_impl(&state, &p, vec![p.clone()], &other, vec![other.clone()])
-            .await
-            .unwrap_err();
-        assert!(err.text.contains("fixture mode"), "{}", err.text);
-    }
-
-    /// Test review gap 1: the other record changed between the comparison and the press. This is
-    /// the one rule that keeps the signature to the charts the clinician compared — so it comes
-    /// BEFORE fixture mode, as in `link::same_person::link_impl`, where a fixture-mode test can
-    /// reach it.
-    #[tokio::test]
-    async fn different_people_refuses_when_the_other_record_changed() {
-        let state = AppState::mock(Some(fixture()));
-        let p = fixture().to_string();
-        let other = Uuid::from_u128(2);
-        let err = different_people_impl(
-            &state,
-            &p,
-            vec![p.clone()],
-            &other.to_string(),
-            vec![other.to_string(), Uuid::from_u128(4).to_string()],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(err.text, crate::link::view::OTHER_CHANGED);
-    }
-
-    /// Type review finding 3: a chart already in this record is "already in this record", as
-    /// Link says it — never "already judged or resolved", which claims a colleague's act.
-    #[tokio::test]
-    async fn different_people_refuses_a_chart_already_in_this_record() {
-        let state = AppState::mock(Some(fixture()));
-        let p = fixture().to_string();
-        let err = different_people_impl(&state, &p, vec![p.clone()], &p, vec![p.clone()])
-            .await
-            .unwrap_err();
-        assert_eq!(err.text, crate::link::view::ALREADY_IN_RECORD);
-    }
-
-    /// duplicates.js is untyped: a Rust field rename would not break the build, it would draw
-    /// an empty banner. Every field it reads must be one the backend sends.
-    #[test]
-    fn duplicates_js_reads_no_field_the_backend_does_not_send() {
-        use crate::commands::tests::fields_read_in;
-        let js = include_str!("../../src-ui/duplicates.js");
-        let entry = view::entry_view(
-            Uuid::from_u128(9),
-            view::EntryFlags {
-                vetoed: true,
-                accepted: false,
-                disputed: false,
-            },
-            Ok(vec![]),
-            Err("x".into()),
-        );
-        let keys = |v: serde_json::Value| -> std::collections::BTreeSet<String> {
-            v.as_object().unwrap().keys().cloned().collect()
-        };
-        for (binding, available) in [
-            (
-                "section",
-                keys(serde_json::to_value(DuplicateSection::checked_none_open()).unwrap()),
-            ),
-            ("entry", keys(serde_json::to_value(&entry).unwrap())),
-        ] {
-            let read = fields_read_in(js, binding);
-            assert!(
-                !read.is_empty(),
-                "duplicates.js no longer reads `{binding}` — rename it here"
-            );
-            for field in read {
-                assert!(
-                    available.contains(&field),
-                    "duplicates.js reads `{binding}.{field}`, not sent"
-                );
-            }
-        }
-        // #737: losing either read draws a nameless heading or hides the entry's status.
-        let entry_reads = fields_read_in(js, "entry");
-        assert!(entry_reads.contains("heading") && entry_reads.contains("status"));
-    }
-
-    /// #736: "Different people" on an accepted pair is refused, wording and `Retry::Never`.
-    #[test]
-    fn accepted_as_same_maps_to_the_not_overruled_refusal() {
-        let err = different_people_view(DifferentPeople::AcceptedAsSame).unwrap_err();
-        assert_eq!(err.text, view::ACCEPTED_NOT_OVERRULED);
-        assert_eq!(err.retry, Retry::Never);
-    }
-}
+mod tests;

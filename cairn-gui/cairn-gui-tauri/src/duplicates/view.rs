@@ -63,7 +63,10 @@ pub const DIFFERENT_PEOPLE_BUTTON: &str = "Different people — not the same per
 ///
 /// Deliberately NO `Default`: the all-empty section is not a neutral placeholder, it is the
 /// claim "checked, none open" — so it is built only by name, [`DuplicateSection::checked_none_open`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// Serialized by hand (below) so that it also sends `silent` — [`DuplicateSection::is_silent`] —
+/// and the webview hides the banner on that one flag rather than re-deriving it (#745).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateSection {
     pub entries: Vec<DuplicateEntryView>,
     /// "N more …" when entries beyond [`MAX_SHOWN`] exist.
@@ -75,6 +78,20 @@ pub struct DuplicateSection {
 }
 
 impl DuplicateSection {
+    /// True only when the section says nothing at all — the one case the webview hides it, which
+    /// means "checked, none open". The destructuring is EXHAUSTIVE on purpose: a field added to
+    /// this struct does not compile here until someone decides whether it un-silences the banner
+    /// (#745 point 5 — the rule used to be a hand-written conjunction in duplicates.js).
+    pub fn is_silent(&self) -> bool {
+        let DuplicateSection {
+            entries,
+            more,
+            error,
+            check_lines,
+        } = self;
+        entries.is_empty() && more.is_none() && error.is_none() && check_lines.is_empty()
+    }
+
     /// The section that says nothing, which the webview hides: "this record was checked, and no
     /// possible duplicate of it is open". Only ever returned when that is what was read.
     pub fn checked_none_open() -> Self {
@@ -84,6 +101,27 @@ impl DuplicateSection {
             error: None,
             check_lines: vec![],
         }
+    }
+}
+
+impl Serialize for DuplicateSection {
+    /// The four fields as they are, plus `silent`. Exhaustive like `is_silent`, so a new field
+    /// cannot be left off the wire unnoticed.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let DuplicateSection {
+            entries,
+            more,
+            error,
+            check_lines,
+        } = self;
+        let mut wire = serializer.serialize_struct("DuplicateSection", 5)?;
+        wire.serialize_field("entries", entries)?;
+        wire.serialize_field("more", more)?;
+        wire.serialize_field("error", error)?;
+        wire.serialize_field("check_lines", check_lines)?;
+        wire.serialize_field("silent", &self.is_silent())?;
+        wire.end()
     }
 }
 
@@ -258,6 +296,17 @@ pub fn section_view(
             }
         }
     }
+}
+
+/// The banner when even the record's chart set could not be read (the banner-alone read, #745):
+/// its error line, never a silent section — hidden, it would claim "checked, none open". **Pure.**
+pub fn unread_set_section(error: String) -> DuplicateSection {
+    section_view(
+        Err(format!(
+            "which charts this record combines could not be read: {error}"
+        )),
+        vec![],
+    )
 }
 
 /// The record's check lines. A checked record has none, unless the node is `Stalled`, or is

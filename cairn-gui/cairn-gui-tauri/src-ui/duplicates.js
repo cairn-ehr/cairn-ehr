@@ -1,6 +1,8 @@
-// The possible-duplicate banner (repair path R5a, #680). Words nothing and decides nothing but
-// whether "Different people" is visible: every sentence comes from Rust (`duplicates/view.rs`),
-// every check from the backend (`duplicates/mod.rs`). Classic script, loaded after main.js and
+// The possible-duplicate banner (repair path R5a, #680). Decides nothing but whether "Different
+// people" is visible, and words nothing but the two failures Rust cannot see — the banner failing
+// to DRAW, and its own read failing to reach the backend (`failedBanner`, #745): every other
+// sentence comes from Rust (`duplicates/view.rs`), every check from the backend
+// (`duplicates/mod.rs`), and whether the banner hides is Rust's `silent`. Classic script, loaded after main.js and
 // BEFORE funnel.js (whose last line starts `boot()`, whose first render calls `renderDuplicates`:
 // an absent banner must never be possible, so this is guaranteed by load order, not by a typeof
 // guard). It shares the global scope; link.js's `sendJudgement`, `compare`, `compared`,
@@ -13,7 +15,11 @@
 // "Different people" — `clearComparison` hides it again for any other comparison.
 "use strict";
 
-/** Draw `pane.duplicates`. Hidden only when there is truly nothing to say. */
+/**
+ * Draw a `DuplicateSection`. Hidden only when Rust says it has nothing to say (`silent`, which is
+ * "checked, none open"): never re-derived here from the other fields, where a new field would
+ * silently fall outside the rule (#745 point 5).
+ */
 function renderDuplicates(section) {
   setMessage(el("duplicates-error"), section.error || "");
   el("duplicates-entries").replaceChildren(...section.entries.map(duplicateItem));
@@ -22,13 +28,49 @@ function renderDuplicates(section) {
   checks.replaceChildren(...section.check_lines.map((t) => cell("li", t)));
   // An empty LABELLED list is still announced ("Duplicate check for this record, 0 items").
   checks.hidden = section.check_lines.length === 0;
-  el("possible-duplicates").hidden =
-    !section.error && section.entries.length === 0 && section.check_lines.length === 0 && !section.more;
+  el("possible-duplicates").hidden = section.silent;
 }
 
 /** Empty the banner (a chart change; never one patient's banner under another's header). */
 function clearDuplicates() {
-  renderDuplicates({ entries: [], more: null, error: null, check_lines: [] });
+  renderDuplicates({ entries: [], more: null, error: null, check_lines: [], silent: true });
+}
+
+/** A banner saying only `text`, as its error line: never silent, so never hidden. */
+function failedBanner(text) {
+  return { entries: [], more: null, error: text, check_lines: [], silent: false };
+}
+
+/**
+ * Draw the banner, and when DRAWING it fails (a payload drift `fields_read_in` cannot see), say
+ * that on the banner itself (#745 point 4). Without this the throw escaped `render` into
+ * `refresh`'s catch, which reported a drawing fault as "Could not read the chart" and left the
+ * medication rows undrawn. The same shape as worklist.js's `loadTray`.
+ */
+function drawDuplicates(section) {
+  try {
+    renderDuplicates(section);
+  } catch (failure) {
+    renderDuplicates(failedBanner("The possible duplicates could not be shown: " + String(failure)));
+  }
+}
+
+/**
+ * The banner ALONE, for the open chart whose medication list could not be read (#745 points 1
+ * and 2). The duplicate warning needs only the chart set, so a failed list read must not take it
+ * down; and after a judgement, a failed re-read must not leave the judged pair up with a live
+ * Review — the banner is re-read on its own, and if even that fails it says so in place of the
+ * old entries. A read for a chart the clinician has since left is dropped.
+ */
+async function redrawBannerAlone(patient) {
+  let section;
+  try {
+    section = await invoke("duplicate_banner", { patientId: patient });
+  } catch (failure) {
+    section = failedBanner("Could not check for possible duplicates: " + failureText(failure));
+  }
+  if (patient !== displayedPatient) return;
+  drawDuplicates(section);
 }
 
 /** One possible duplicate: who, why to look, their current drugs, and Review. */

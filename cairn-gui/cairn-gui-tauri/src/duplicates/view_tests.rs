@@ -446,3 +446,31 @@ fn an_entry_with_no_identity_is_headed_by_its_chart() {
     assert_eq!(empty.heading, format!("Chart {}", id(8)));
     assert_eq!(unread.status, "Possible duplicate — not yet reviewed");
 }
+
+/// #745 point 5: whether the banner hides is decided HERE and sent as `silent`, never re-derived
+/// by a hand-written conjunction in duplicates.js that a new field would silently fall outside.
+/// Silent only when it says nothing at all; each of the four things it can say un-silences it.
+#[test]
+fn the_banner_is_silent_only_when_it_says_nothing() {
+    let silent = |s: &DuplicateSection| -> bool {
+        let sent = serde_json::to_value(s).unwrap();
+        assert_eq!(
+            sent["silent"].as_bool(),
+            Some(s.is_silent()),
+            "sent as computed"
+        );
+        s.is_silent()
+    };
+    let entry = entry_view(id(9), EntryFlags::default(), Ok(vec![]), Err("x".into()));
+    assert!(silent(&DuplicateSection::checked_none_open()));
+    assert!(!silent(&fixture_section()), "a check line");
+    assert!(!silent(&section_view(Err("x".into()), vec![])), "an error");
+    assert!(
+        !silent(&section_view(Ok((vec![], 4)), vec![])),
+        "a `more` line"
+    );
+    assert!(
+        !silent(&section_view(Ok((vec![entry], 1)), vec![])),
+        "an entry"
+    );
+}
