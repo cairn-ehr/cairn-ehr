@@ -279,6 +279,7 @@ fn effect_report(
             LinkReportView {
                 sentence,
                 reload: true,
+                charts_after: None,
             }
         }
         LinkEffect::StillJoined => LinkReportView {
@@ -288,6 +289,7 @@ fn effect_report(
                  still joining them are listed under \"How these charts are linked\"."
             ),
             reload: true,
+            charts_after: None,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
@@ -296,6 +298,7 @@ fn effect_report(
                        judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,
+            charts_after: None,
         },
     }
 }

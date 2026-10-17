@@ -55,6 +55,7 @@ pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportVie
     Ok(LinkReportView {
         sentence: report_sentence(&results),
         reload: true,
+        charts_after: None,
     })
 }
 

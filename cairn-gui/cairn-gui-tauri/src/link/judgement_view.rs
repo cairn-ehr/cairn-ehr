@@ -27,6 +27,40 @@ pub struct LinkReportView {
     /// producer: it is `true` whenever ANY pair was recorded — even an all-`Outranked` one —
     /// because the banner must be re-read whatever the record did.
     pub reload: bool,
+    /// The chart set the clinician's OWN act left the record on screen as (#797), read by the
+    /// node inside the act's own transaction (`LinkOutcome::charts`) — the set the re-read
+    /// compares against, so the clinician's own change is never announced back to them while a
+    /// colleague's, landing in the same moment, still is. Set by [`LinkReportView::left`] for
+    /// Link, Unlink and Confirm only.
+    ///
+    /// `None` (`null` to the webview, which then compares against the set on screen) when the
+    /// act reported no set — "Different people" changes no record's set — or the set read is not
+    /// the record on screen ([`charts_after`]). Never an empty list: an empty seen set means
+    /// "could not tell" to `med_list`, which would then say nothing at all.
+    pub charts_after: Option<Vec<String>>,
+}
+
+impl LinkReportView {
+    /// This report, carrying the set its act left: `charts` as the node read it inside the act's
+    /// transaction, for `on_screen`, the chart the clinician holds. See [`charts_after`].
+    pub fn left(mut self, charts: &ChartSet, on_screen: Uuid) -> Self {
+        self.charts_after = charts_after(charts, on_screen);
+        self
+    }
+}
+
+/// `charts` as ids, when it is the record of `on_screen` — else `None`.
+///
+/// The node reads the record of the chart the judgement was made from or filed under, which is
+/// not always the chart on screen: a link that LOST the overlay (Outranked) and was filed under
+/// the other subject reads that subject's record, which need not hold the chart on screen. A
+/// chart's record always holds that chart, and two records holding the same chart are the same
+/// record, so "holds `on_screen`" is exactly "is the record the clinician holds". Anything else
+/// is reported as no set, and the re-read falls back to comparing against the screen.
+pub fn charts_after(charts: &ChartSet, on_screen: Uuid) -> Option<Vec<String>> {
+    charts
+        .contains(&on_screen)
+        .then(|| charts.members().iter().map(Uuid::to_string).collect())
 }
 
 /// A refusal the clinician cannot retry as-is.
@@ -123,15 +157,18 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
                 charts.members().len()
             ),
             reload: true,
+            charts_after: None,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
+            charts_after: None,
         },
         // See LINK_STILL_JOINED: R2a never returns this for a link.
         LinkEffect::StillJoined => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
+            charts_after: None,
         },
     }
 }

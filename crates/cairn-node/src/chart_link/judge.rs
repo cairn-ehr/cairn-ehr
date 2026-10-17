@@ -84,7 +84,8 @@ pub struct LinkOutcome {
     /// [`LinkOutcome::filed_under`].
     pub record_of: Uuid,
     /// The chart set of [`LinkOutcome::record_of`], read inside the judgement's own
-    /// transaction: what that chart reads as, now that the judgement is recorded.
+    /// transaction, after its event applied and under the link lock (CARNLK): what that chart
+    /// reads as, now that the judgement is recorded — the set THIS judgement left (#797).
     pub charts: ChartSet,
     /// What the judgement did to the record — see [`LinkEffect`].
     pub effect: LinkEffect,
@@ -415,7 +416,12 @@ async fn judge(
     // The record the clinician judged FROM (the open chart), else the filed-under chart —
     // what the caller shows next. Read BEFORE the commit, in the same transaction, so a
     // failure here rolls the judgement back rather than leaving a committed event behind an
-    // error.
+    // error. And read AFTER the event applied, while this transaction still holds db/018's link
+    // lock (CARNLK, taken by the event's own apply): no other link or unlink can land between
+    // the apply and this read, so this is exactly the set THIS judgement left. The window relies
+    // on that (#797): it re-reads against this set, so the clinician's own change is never
+    // announced back to them while a colleague's, committed after, still is. A read after the
+    // commit could already include the colleague's change and silence it.
     let record_of = opened.unwrap_or(about);
     let charts = crate::patient::person::person_charts(&tx, record_of)
         .await

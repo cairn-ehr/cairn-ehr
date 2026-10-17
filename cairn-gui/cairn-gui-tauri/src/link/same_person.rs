@@ -193,7 +193,9 @@ pub async fn link_impl(
     )
     .await
     .map_err(|e| link_error_view(&e))?;
-    Ok(link_report(outcome.effect, &outcome.charts, &compared))
+    // `left`: the set this link left the record on screen as, so the re-read never announces
+    // the clinician's own link back to them (#797).
+    Ok(link_report(outcome.effect, &outcome.charts, &compared).left(&outcome.charts, patient))
 }
 
 // ---- Tauri forwarders (camelCase JS keys → snake_case parameters). ----

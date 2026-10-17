@@ -300,13 +300,17 @@ pub async fn unlink_impl(
     )
     .await
     .map_err(|e| unlink_error_view(&e))?;
+    // `left`: the set this unlink left the record on screen as — read by the node inside the
+    // act's own transaction — so the window's re-read compares against it and never announces
+    // the clinician's own unlink back to them (#797).
     Ok(unlink_report(
         outcome.effect,
         edge.low,
         edge.high,
         &edge.set,
         &outcome.charts,
-    ))
+    )
+    .left(&outcome.charts, edge.opened))
 }
 
 // ---- Tauri forwarders (camelCase JS keys → snake_case parameters). ----

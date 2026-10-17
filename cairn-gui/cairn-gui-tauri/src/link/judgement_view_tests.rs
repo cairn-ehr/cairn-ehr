@@ -171,3 +171,66 @@ fn stale_re_reads_and_refused_does_not() {
     assert_eq!(stale("x").retry, Retry::AfterReread);
     assert_eq!(refused("x").retry, Retry::Never);
 }
+
+// ---- `charts_after`: the set the clinician's own act left (#797) ----
+
+/// The report carries the record as the act left it (the node's read inside the act's own
+/// transaction), as ids, so the window's re-read compares against it and never announces the
+/// clinician's own change back to them.
+#[test]
+fn a_report_carries_the_set_its_act_left() {
+    let left = ChartSet::new([id(2), id(1)]).unwrap();
+    let report = link_report(LinkEffect::TookEffect, &left, &left).left(&left, id(1));
+    assert_eq!(
+        report.charts_after,
+        Some(vec![id(1).to_string(), id(2).to_string()])
+    );
+}
+
+/// A set that does not hold the chart on screen is ANOTHER chart's record (an outranked link
+/// filed under the other subject reads that subject's record): it is not the record the
+/// clinician holds, so no set is reported and the re-read compares against the screen.
+#[test]
+fn a_set_without_the_chart_on_screen_is_not_reported() {
+    let others = ChartSet::new([id(2), id(3)]).unwrap();
+    assert_eq!(charts_after(&others, id(1)), None);
+    assert_eq!(
+        charts_after(&ChartSet::single(id(1)), id(1)),
+        Some(vec![id(1).to_string()])
+    );
+}
+
+/// Every report starts with no set: only a command that holds the node's outcome says one
+/// ("Different people" never does — it changes no record's set). Serialized as `null`, which
+/// the webview reads as "compare against the screen" (an empty list would read as a set that
+/// could not be told, and say nothing at all).
+#[test]
+fn a_report_says_no_set_until_its_command_gives_one() {
+    let set = ChartSet::single(id(1));
+    let report = link_report(LinkEffect::Outranked, &set, &set);
+    assert_eq!(report.charts_after, None);
+    let json = serde_json::to_value(&report).unwrap();
+    assert!(json["charts_after"].is_null(), "serialized as null");
+}
+
+/// The window has no DB-backed tests (#738), so no GUI test reaches the node call: this reads
+/// the source. Each of the three acts that can change the record the clinician holds — Link,
+/// Unlink, Confirm — reports the set the node read INSIDE its transaction (`outcome.charts`),
+/// for the chart on screen. A command that dropped it would announce the clinician's own link
+/// back to them on the next re-read, with every other test green.
+#[test]
+fn link_unlink_and_confirm_report_the_set_their_act_left() {
+    use crate::source_guard::rust_fn;
+    let link = rust_fn(include_str!("same_person.rs"), "link_impl");
+    assert!(link.contains(".left(&outcome.charts, patient)"), "link");
+    let unlink = rust_fn(include_str!("unlink.rs"), "unlink_impl");
+    assert!(
+        unlink.contains(".left(&outcome.charts, edge.opened)"),
+        "unlink"
+    );
+    let confirm = rust_fn(include_str!("confirm.rs"), "confirm_link_impl");
+    assert!(
+        confirm.contains(".left(&outcome.charts, edge.opened)"),
+        "confirm"
+    );
+}
