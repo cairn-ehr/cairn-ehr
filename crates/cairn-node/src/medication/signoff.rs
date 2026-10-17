@@ -449,12 +449,11 @@ fn ensure_same_charts(before: &ChartSet, now: &ChartSet, window: &str) -> anyhow
     if before == now {
         return Ok(());
     }
-    anyhow::bail!(
-        "the linked charts changed {window} (shown: {}; now: {}); nothing was signed — \
-         reload the chart and sign again",
+    Err(crate::db_diagnosis::stale_picture_refusal(format!(
+        "the linked charts changed {window} (shown: {}; now: {}); nothing was signed",
         format_ids(before.members().iter()),
         format_ids(now.members().iter()),
-    )
+    )))
 }
 
 /// Pure tests for the set rules this module adds. The DB-backed behaviour of the gesture
@@ -534,18 +533,20 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_set_is_refused_naming_both_sets() {
+    fn a_changed_set_is_refused_as_stale_naming_both_sets() {
         let shown = ChartSet::single(uid(1));
         let now = ChartSet::new([uid(1), uid(2)]).unwrap();
-        let msg = format!(
-            "{:#}",
-            ensure_same_charts(&shown, &now, "while this list was on screen").unwrap_err()
+        let err = ensure_same_charts(&shown, &now, "while this list was on screen").unwrap_err();
+        assert_eq!(
+            crate::db_diagnosis::refusal_scope(&err),
+            Some(crate::db_diagnosis::RefusalScope::Stale)
         );
+        let msg = format!("{err:#}");
         assert_eq!(
             msg,
             format!(
                 "the linked charts changed while this list was on screen (shown: {one}; now: \
-                 {one}, {two}); nothing was signed — reload the chart and sign again",
+                 {one}, {two}); nothing was signed",
                 one = uid(1),
                 two = uid(2)
             )

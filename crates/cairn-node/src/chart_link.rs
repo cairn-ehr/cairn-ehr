@@ -22,7 +22,7 @@
 //! attests directly and submits through the 3-argument `submit_event` door — never the
 //! medication seal path.
 
-use crate::db_diagnosis::{deliberate_refusal, LocalDbFault};
+use crate::db_diagnosis::{stale_picture_refusal, LocalDbFault};
 use anyhow::Context;
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
@@ -226,12 +226,12 @@ async fn refuse_unless_record_holds_both(
     if record_holds_both(&record, low, high) {
         return Ok(());
     }
-    // A changed record is stale INPUT (the caller judged from a picture that no longer holds),
-    // not a not-yet node state: the same call refuses the same way until the caller re-reads.
-    Err(deliberate_refusal(format!(
+    // A changed record is a STALE picture (the caller judged from a record that no longer
+    // holds), not bad input and not a not-yet node state: the same call refuses the same way
+    // until the caller re-reads.
+    Err(stale_picture_refusal(format!(
         "chart {opened}'s record no longer reads both {low} and {high} as part of it — the \
-         record changed while you were judging — nothing was done; reload the chart and judge \
-         again"
+         record changed while you were judging — nothing was done"
     )))
 }
 

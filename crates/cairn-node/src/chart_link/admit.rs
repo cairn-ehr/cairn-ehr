@@ -92,7 +92,7 @@ impl Unusable {
     fn scope(self) -> RefusalScope {
         match self {
             Unusable::NotHeld => RefusalScope::NodeState,
-            Unusable::LacksPair => RefusalScope::Input,
+            Unusable::LacksPair => RefusalScope::Stale,
         }
     }
 
@@ -101,7 +101,7 @@ impl Unusable {
     fn remedy(self) -> &'static str {
         match self {
             Unusable::NotHeld => "",
-            Unusable::LacksPair => ". Nothing was done; reload the chart and judge again",
+            Unusable::LacksPair => ". Nothing was done",
         }
     }
 }

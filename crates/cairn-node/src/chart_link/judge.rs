@@ -13,7 +13,9 @@ use super::{
     admit_judgement, assert_link_in_tx, canonical_pair, compose_review_provenance,
     record_holds_both, AdmitRefusal, LinkVerb, OpenedChart, RecordsShown, Reviewer,
 };
-use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault, RefusalScope};
+use crate::db_diagnosis::{
+    deliberate_refusal, node_state_refusal, stale_picture_refusal, LocalDbFault, RefusalScope,
+};
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
@@ -302,6 +304,7 @@ fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
     match refusal.scope {
         RefusalScope::NodeState => node_state_refusal(refusal.text),
         RefusalScope::Input => deliberate_refusal(refusal.text),
+        RefusalScope::Stale => stale_picture_refusal(refusal.text),
     }
 }
 

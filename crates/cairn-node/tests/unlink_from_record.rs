@@ -237,14 +237,14 @@ async fn the_open_chart_must_hold_both_in_its_record() {
     // the same fact, so the clinician is told to reload, never to wait (PR #711 review).
     assert_eq!(
         refusal_scope(&err),
-        Some(RefusalScope::Input),
+        Some(RefusalScope::Stale),
         "a verdict about the picture judged from"
     );
     let text = err.to_string();
     assert!(text.contains(&d.to_string()), "names the open chart");
     assert!(
-        text.contains("does not read both") && text.contains("reload the chart"),
-        "says why, and what to do: {text}"
+        text.contains("does not read both") && text.ends_with(". Nothing was done"),
+        "says why, and that nothing was done: {text}"
     );
     assert_eq!(
         standing(&c, b, cc).await,
@@ -395,7 +395,7 @@ async fn an_open_chart_unrelated_to_the_pair_is_refused_even_when_a_subject_is_h
     let typo = Uuid::now_v7();
     for (opened, scope, why) in [
         (typo, RefusalScope::NodeState, "is not held here"),
-        (d, RefusalScope::Input, "does not read both"),
+        (d, RefusalScope::Stale, "does not read both"),
     ] {
         let err = unlink_charts(&mut c, a, b, Some(opened), &who, ORIGIN)
             .await
@@ -561,7 +561,7 @@ async fn a_third_chart_filing_is_refused_at_the_signing_core_when_its_record_lac
     .await
     .expect_err("D's record does not hold the pair");
     tx.rollback().await.unwrap();
-    assert_eq!(refusal_scope(&err), Some(RefusalScope::Input));
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Stale));
     let text = err.to_string();
     assert!(text.contains(&d.to_string()), "names the chart: {text}");
     assert_eq!(
@@ -656,9 +656,13 @@ async fn a_peer_unlink_landing_mid_judgement_is_seen_before_anything_is_signed()
         .expect("the judgement finished within 5s of CARNLK being released")
         .expect("the spawned task did not panic");
     let err = out.expect_err("A's record no longer holds B and C: nothing may be filed under A");
-    assert_eq!(refusal_scope(&err), Some(RefusalScope::Input));
+    assert_eq!(refusal_scope(&err), Some(RefusalScope::Stale));
     let text = err.to_string();
-    assert!(text.contains("reload the chart"), "{text}");
+    assert!(
+        text.contains("record changed while you were judging")
+            && text.ends_with("nothing was done"),
+        "{text}"
+    );
     assert_eq!(
         standing(&t1, b, cc).await,
         Some(("link".into(), false)),

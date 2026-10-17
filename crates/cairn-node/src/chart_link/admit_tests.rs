@@ -62,8 +62,8 @@ fn each_refusal_says_what_it_is_a_verdict_about() {
         open(true, false),
     )
     .unwrap_err();
-    assert_eq!(r.scope, RefusalScope::Input, "{}", r.text);
-    assert!(r.text.contains("does not read both") && r.text.contains("reload the chart"));
+    assert_eq!(r.scope, RefusalScope::Stale, "{}", r.text);
+    assert!(r.text.contains("does not read both") && r.text.ends_with(". Nothing was done"));
     let r = admit_judgement(
         LinkVerb::Unlink,
         (lo, false),
@@ -83,8 +83,8 @@ fn each_refusal_says_what_it_is_a_verdict_about() {
         open(true, false),
     )
     .unwrap_err();
-    assert_eq!(r.scope, RefusalScope::Input, "{}", r.text);
-    assert!(r.text.contains("does not read both") && r.text.contains("reload the chart"));
+    assert_eq!(r.scope, RefusalScope::Stale, "{}", r.text);
+    assert!(r.text.contains("does not read both") && r.text.ends_with(". Nothing was done"));
     let r = admit_judgement(
         LinkVerb::Unlink,
         (lo, true),
