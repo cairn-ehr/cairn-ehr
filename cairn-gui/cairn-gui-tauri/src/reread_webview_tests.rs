@@ -51,7 +51,7 @@ fn refresh_calls(body: &str) -> Vec<Vec<String>> {
 /// and announce the clinician's own link back to them (fix round 1, Important 1).
 #[test]
 fn every_re_read_sends_the_held_set() {
-    assert!(MAIN_JS.contains("async function refresh(lead, staleIfFails) {"));
+    assert!(MAIN_JS.contains("async function refresh(lead, behind) {"));
     let refresh = js_fn(MAIN_JS, "refresh");
     assert!(
         refresh.contains(
@@ -192,7 +192,7 @@ fn read_again_is_said_only_after_an_accepted_answer() {
     let rendered = position(refresh, "render(answer, patient);");
     let said = position(
         refresh,
-        "if (renderedPatient === patient) sayAfterReread(lead, staleIfFails, answer);",
+        "if (renderedPatient === patient) sayAfterReread(lead, drewRead(revision), answer);",
     );
     let caught = position(refresh, "catch (e)");
     assert!(rendered < said && said < caught, "{refresh}");
@@ -203,7 +203,7 @@ fn read_again_is_said_only_after_an_accepted_answer() {
     );
 
     let after = js_fn(CHART_STALE_JS, "sayAfterReread");
-    let stale = position(after, "if (staleIfFails)");
+    let stale = position(after, "if (readAgain)");
     let again = position(after, "READ_AGAIN, pane.set_change");
     let changed = position(after, "else if (pane.set_change)");
     assert!(stale < again && again < changed, "{after}");
@@ -245,7 +245,7 @@ fn a_failed_stale_re_read_marks_the_list_out_of_date() {
     let caught = &refresh[position(refresh, "catch (e)")..];
     let marked = position(
         caught,
-        "if (staleIfFails && renderedPatient !== null) markListStale();",
+        "if (listKnownBehind() && renderedPatient !== null) markListStale();",
     );
     assert!(
         position(caught, "if (!isLatestRead(patient, revision)) return;") < marked,
@@ -255,6 +255,44 @@ fn a_failed_stale_re_read_marks_the_list_out_of_date() {
         marked < position(caught, "await redrawBannerAlone(patient);"),
         "{refresh}"
     );
+}
+
+/// "The list is behind the record" is WINDOW state, not one read's flag (#797 review). The re-read
+/// a stale refusal sends can be overtaken — by "Read this chart again", or by the draw floor an own
+/// act raises (`holdOwnAct`) — and an overtaken read's failure is never said (`isLatestRead`). So
+/// the refusal is remembered BEFORE its read takes a revision, and whichever read fails last marks
+/// the list. Only a list drawn from a read sent AFTER the refusal ends it (an older read landing
+/// late is the record as it was); taking the list down (`holdCharts(null)`) ends it too.
+#[test]
+fn a_known_stale_list_outlives_the_read_that_learnt_it() {
+    let refresh = js_fn(MAIN_JS, "refresh");
+    let known = position(refresh, "if (behind) knowListBehind();");
+    assert!(
+        position(refresh, "if (patient === null) return;") < known
+            && known < position(refresh, "const revision = ++chartReadRevision;"),
+        "{refresh}"
+    );
+    assert!(
+        js_fn(CHART_STALE_JS, "knowListBehind").contains("behindAfter = chartReadRevision;"),
+        "the newest revision sent BEFORE the refusal"
+    );
+    assert!(
+        js_fn(CHART_STALE_JS, "listKnownBehind").contains("return behindAfter !== null;"),
+        "known behind until a later read draws"
+    );
+    let drew = js_fn(CHART_STALE_JS, "drewRead");
+    assert!(
+        drew.contains("const ended = behindAfter !== null && revision > behindAfter;"),
+        "only a read sent after the refusal ends it: {drew}"
+    );
+    assert!(drew.contains("if (ended) behindAfter = null;"), "{drew}");
+    assert!(
+        js_fn(CHART_STALE_JS, "holdCharts").contains("if (charts === null) behindAfter = null;"),
+        "no list on screen, nothing to be behind"
+    );
+    // The declaration and those three moves, nothing else: an own act (`holdOwnAct`) leaves the
+    // list on screen as old as it was.
+    assert_eq!(CHART_STALE_JS.matches("behindAfter = ").count(), 4);
 }
 
 /// `markListStale` warns in the chart's warnings — ABOVE the table, never on the outcome line —

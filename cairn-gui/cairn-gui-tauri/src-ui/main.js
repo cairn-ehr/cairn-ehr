@@ -330,12 +330,13 @@ function clearChart() {
  * `lead` is the outcome sentence of the act that prompted the re-read (a sign-off, a cease, a
  * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
  * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
- * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `staleIfFails` = a
- * stale refusal prompted it; changes are named against the held set (both: chart_stale.js).
+ * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `behind` = a stale
+ * refusal prompted it; changes are named against the held set (both: chart_stale.js).
  */
-async function refresh(lead, staleIfFails) {
+async function refresh(lead, behind) {
   const patient = displayedPatient;
   if (patient === null) return;
+  if (behind) knowListBehind(); // window state: whichever read fails last marks the list
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;
   try {
@@ -346,7 +347,7 @@ async function refresh(lead, staleIfFails) {
     drawnRevision = revision;
     render(answer, patient);
     // Only over a list that DREW: a drawing fault took it down (`showUnshownList`), nothing to review.
-    if (renderedPatient === patient) sayAfterReread(lead, staleIfFails, answer);
+    if (renderedPatient === patient) sayAfterReread(lead, drewRead(revision), answer);
   } catch (e) {
     // A failure is said only by the newest read started: that read speaks for the chart now.
     if (!isLatestRead(patient, revision)) return;
@@ -357,7 +358,7 @@ async function refresh(lead, staleIfFails) {
     if (renderedPatient === null) el("sign-off").textContent = "Nothing to sign off — no list read";
     // After a stale refusal that list is known out of date: marked BEFORE the await below,
     // after which a newer read may have drawn a fresh list.
-    if (staleIfFails && renderedPatient !== null) markListStale();
+    if (listKnownBehind() && renderedPatient !== null) markListStale();
     // The banner needs only the chart set, so it is read on its own (#745): a failed list read
     // must not take the duplicate warning down, nor leave a just-judged pair up with a live Review.
     await redrawBannerAlone(patient); // duplicates.js, loaded after this file

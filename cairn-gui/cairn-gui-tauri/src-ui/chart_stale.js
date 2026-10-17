@@ -44,15 +44,47 @@ function behindTheRecord(failure) {
 }
 
 /**
- * The outcome line after a re-read was DRAWN (called by main.js's `refresh` only over an answer
- * `mayDraw` accepted, so an overtaken read says nothing). After a stale refusal: the refusal
- * (`lead`), that the chart was read again, and what changed. Otherwise only a change is added to
- * the lead. With none, the line is left alone — it may be saying how a signed act went — unless
- * it still says a read FAILED, which this drawn read has just made untrue: it goes back to its
- * lead (what was said before the failure, possibly nothing).
+ * The newest read revision sent BEFORE the window learnt that the list on screen is behind the
+ * record (a stale refusal), or null when no list is known to be. Window state, not one read's
+ * flag (#797 review): the re-read that refusal sends can be overtaken — by "Read this chart
+ * again", or by the draw floor an own act raises (`holdOwnAct`) — and an overtaken read's failure
+ * is never said (`isLatestRead`), so the read that overtook it must still mark the list if IT
+ * fails. Only a list drawn from a read sent AFTER the refusal ends it: an older read that lands
+ * late is the record as it was. Taking the list down ends it too (`holdCharts`).
  */
-function sayAfterReread(lead, staleIfFails, pane) {
-  if (staleIfFails) say(sentences(lead, READ_AGAIN, pane.set_change));
+let behindAfter = null;
+
+/** A stale refusal arrived: called by main.js's `refresh` before its read takes a revision. */
+function knowListBehind() {
+  behindAfter = chartReadRevision;
+}
+
+/** Whether the list on screen is known to be behind the record (asked by a failed read). */
+function listKnownBehind() {
+  return behindAfter !== null;
+}
+
+/**
+ * The read that took `revision` drew a list. Returns whether that list ends a known-stale state —
+ * it was read after the refusal — so the outcome line says the chart was read again.
+ */
+function drewRead(revision) {
+  const ended = behindAfter !== null && revision > behindAfter;
+  if (ended) behindAfter = null;
+  return ended;
+}
+
+/**
+ * The outcome line after a re-read was DRAWN (called by main.js's `refresh` only over an answer
+ * `mayDraw` accepted, so an overtaken read says nothing). `readAgain`: this list ended a stale
+ * refusal (`drewRead`) — say the refusal (`lead`), that the chart was read again, and what
+ * changed. Otherwise only a change is added to the lead. With none, the line is left alone — it
+ * may be saying how a signed act went — unless it still says a read FAILED, which this drawn read
+ * has just made untrue: it goes back to its lead (what was said before the failure, possibly
+ * nothing).
+ */
+function sayAfterReread(lead, readAgain, pane) {
+  if (readAgain) say(sentences(lead, READ_AGAIN, pane.set_change));
   else if (pane.set_change) say(sentences(lead, pane.set_change));
   else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
 }
@@ -104,9 +136,13 @@ function sentences(...parts) {
   return line.charAt(0).toUpperCase() + line.slice(1);
 }
 
-/** Set the held set to what was just drawn (`charts`), or to null when nothing is drawn. */
+/**
+ * Set the held set to what was just drawn (`charts`), or to null when nothing is drawn — and then
+ * no list is on screen to be behind the record either.
+ */
 function holdCharts(charts) {
   heldCharts = charts;
+  if (charts === null) behindAfter = null;
 }
 
 /**
