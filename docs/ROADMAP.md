@@ -477,7 +477,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge the #811 PR; then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #813 (#811); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
