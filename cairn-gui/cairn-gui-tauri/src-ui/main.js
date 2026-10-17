@@ -350,7 +350,7 @@ async function refresh(lead, staleIfFails) {
   } catch (e) {
     // A failure is said only by the newest read started: that read speaks for the chart now.
     if (!isLatestRead(patient, revision)) return;
-    say(sentences(lead, "Could not read the chart: " + e));
+    sayReadFailed(lead, e); // chart_stale.js: remembered, so "Read this chart again" can retry it
     // A failed FIRST read (`clearChart` left no list drawn): sign-off must stop saying "Loading…",
     // or the clinician waits for a read that is not happening (PR #798 review). It stays disabled.
     // A failed RE-read keeps the list it already drew, and that list's own button.

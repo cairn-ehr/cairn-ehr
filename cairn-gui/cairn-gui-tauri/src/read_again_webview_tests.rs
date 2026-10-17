@@ -5,9 +5,11 @@
 //!
 //! Like that file, the script and markup have no test rig of their own (no npm or bundler:
 //! main.js's header, issue #332), so each guard reads the source (`crate::source_guard`).
-use crate::source_guard::position;
+use crate::source_guard::{js_fn, position};
 
 const CHART_STALE_JS: &str = include_str!("../src-ui/chart_stale.js");
+const MAIN_JS: &str = include_str!("../src-ui/main.js");
+const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
 /// The name of the control, as the clinician reads it. Three sentences quote it; this is the one
@@ -50,7 +52,98 @@ fn the_read_again_control_is_always_there_and_re_reads() {
         }
     }
     assert!(CHART_STALE_JS
-        .contains("el(\"reread\").addEventListener(\"click\", () => void refresh());"));
+        .contains("el(\"reread\").addEventListener(\"click\", () => void refresh(rereadLead()));"));
+}
+
+/// The button's re-read keeps what the outcome line says (#797 final review, M2): its lead is
+/// the line as it stands, so a change it names is ADDED to the line, and a partial sign-off
+/// report ("Signed 2 …; 1 line(s) could NOT be signed …") is never replaced (ADR-0060: partial
+/// completion is reported, never implied). Less a read failure the press is retrying: the lead
+/// is then what that failure was said after, so pressing again never piles one "Could not read
+/// the chart" onto another — and a re-read that draws takes the failure down (it is no longer
+/// true), keeping what came before it.
+#[test]
+fn read_again_keeps_the_outcome_line_but_not_a_failure_it_retries() {
+    let failed = js_fn(CHART_STALE_JS, "sayReadFailed");
+    let line = position(
+        failed,
+        "const line = sentences(lead, \"Could not read the chart: \" + error);",
+    );
+    let said = position(failed, "say(line);");
+    let kept = position(failed, "failedRead = { line, lead };");
+    assert!(line < said && said < kept, "{failed}");
+
+    let shows = js_fn(CHART_STALE_JS, "showsFailedRead");
+    assert!(
+        shows.contains("return failedRead !== null && failedRead.line === line;"),
+        "{shows}"
+    );
+    let lead = js_fn(CHART_STALE_JS, "rereadLead");
+    assert!(
+        lead.contains("const line = el(\"outcome\").textContent;"),
+        "{lead}"
+    );
+    assert!(
+        lead.contains("return showsFailedRead(line) ? failedRead.lead : line;"),
+        "{lead}"
+    );
+
+    // The one place a failed chart read is said, so `failedRead` always knows the line.
+    let refresh = js_fn(MAIN_JS, "refresh");
+    let caught = &refresh[position(refresh, "catch (e)")..];
+    assert!(caught.contains("sayReadFailed(lead, e);"), "{caught}");
+    assert!(!MAIN_JS.contains("\"Could not read the chart: \""));
+
+    // A drawn re-read with nothing else to say takes a standing failure down, to its lead.
+    let after = js_fn(CHART_STALE_JS, "sayAfterReread");
+    let changed = position(after, "else if (pane.set_change)");
+    let cleared = position(
+        after,
+        "else if (showsFailedRead(el(\"outcome\").textContent)) say(sentences(lead));",
+    );
+    assert!(changed < cleared, "{after}");
+}
+
+/// The only re-read sent with NO lead is the first read of a chart (funnel.js's `enterChart`),
+/// right after `clearChart`, which empties the held set: it sends no seen set, so Rust names no
+/// change (`seen_set` is `None`), and there is no outcome line yet to keep. Every other
+/// `refresh` call passes a lead.
+#[test]
+fn the_only_lead_less_re_read_is_a_chart_s_first() {
+    let scripts = [
+        ("main.js", MAIN_JS),
+        ("chart_stale.js", CHART_STALE_JS),
+        ("link.js", include_str!("../src-ui/link.js")),
+        ("unlink.js", include_str!("../src-ui/unlink.js")),
+        ("duplicates.js", include_str!("../src-ui/duplicates.js")),
+        ("worklist.js", include_str!("../src-ui/worklist.js")),
+        ("funnel.js", FUNNEL_JS),
+    ];
+    // Every CALL with nothing between its parentheses, wherever it sits (`void refresh()`,
+    // `await refresh()`, inside an arrow). A comment line naming `refresh()`, a declaration, or
+    // a longer name ending in "refresh" does not count.
+    let is_call = |js: &str, at: usize| {
+        let line_start = js[..at].rfind('\n').map_or(0, |n| n + 1);
+        let before = js[line_start..at].trim_start();
+        let commented = before.starts_with("//") || before.starts_with('*');
+        let named = js[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_');
+        !commented && !named && !js[..at].ends_with("function ")
+    };
+    let bare: Vec<&str> = scripts
+        .iter()
+        .flat_map(|(file, js)| {
+            js.match_indices("refresh()")
+                .filter(move |(at, _)| is_call(js, *at))
+                .map(move |_| *file)
+        })
+        .collect();
+    assert_eq!(bare, ["funnel.js"], "lead-less re-reads");
+    let enter = js_fn(FUNNEL_JS, "enterChart");
+    assert!(
+        position(enter, "clearChart();") < position(enter, "void refresh();"),
+        "{enter}"
+    );
+    assert!(js_fn(MAIN_JS, "clearChart").contains("holdCharts(null);"));
 }
 
 /// Each sentence that sends the clinician to the control quotes its label exactly.

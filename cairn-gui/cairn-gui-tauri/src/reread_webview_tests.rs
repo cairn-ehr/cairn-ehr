@@ -227,9 +227,11 @@ fn the_outcome_line_joins_whole_sentences() {
     );
     let refresh = js_fn(MAIN_JS, "refresh");
     let caught = &refresh[position(refresh, "catch (e)")..];
+    assert!(caught.contains("sayReadFailed(lead, e);"), "{caught}");
     assert!(
-        caught.contains("say(sentences(lead, \"Could not read the chart: \" + e));"),
-        "{caught}"
+        js_fn(CHART_STALE_JS, "sayReadFailed")
+            .contains("sentences(lead, \"Could not read the chart: \" + error)"),
+        "the failed read's line joins through `sentences` too"
     );
 }
 

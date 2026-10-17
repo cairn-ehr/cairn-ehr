@@ -41,7 +41,7 @@ change myself)."*
   (`applyOwnAct`, `holdOwnAct`; every `refresh` sends it as `seenCharts`). Only what the clinician did not do and could
   not see is announced. **Tempting wrong fix:** the "set formula" `(held − (sent − after)) ∪ (after − sent)` — in case
   b′ (a colleague's change AND the clinician's own Link crossing in flight) it announces the clinician's OWN link back
-  to them; the anchored `applyOwnAct` passes the 17 cases enumerated in its review (pinned only by source guard and the headless walk; there is no JS runner, #332) and is the only spelling to use. Do not pass the
+  to them; the anchored `applyOwnAct` passes every case in the table above it in `chart_stale.js` (pinned only by source guard and the headless walk; there is no JS runner, #332) and is the only spelling to use. Do not pass the
   baseline as a one-call argument either: a second re-read starting within one round trip announces the own Link.
 - **`heldCharts` is deliberately SEPARATE from `renderedCharts`.** `renderedCharts` keeps feeding every write's set
   check; `heldCharts` is only the baseline for naming changes. **Tempting wrong fix:** merging them, or sending
@@ -59,6 +59,14 @@ change myself)."*
 - **"Read this chart again" (`#reread`) is always visible in the chart view, and its label is pinned to every sentence
   that quotes it** (`LIST_OUT_OF_DATE`, `REVIEW_WAITS_FOR_LIST`, the record-links sentences). **Tempting wrong fix:**
   showing it only after a failure (the first failed read then has no way out), or relabelling it in one place.
+- **"Read this chart again" re-reads with the outcome line as its lead (`rereadLead`), less a read failure it is
+  retrying** (`sayReadFailed` remembers the failure's line and lead; a drawn re-read with nothing to add takes a
+  standing failure back to its lead). Pins: `read_again_keeps_the_outcome_line_but_not_a_failure_it_retries`,
+  `the_only_lead_less_re_read_is_a_chart_s_first`. **Tempting wrong fixes:** a lead-less `refresh()` — a change it
+  names REPLACES a partial sign-off report (ADR-0060: partial completion is reported, never implied); or the raw
+  outcome text as the lead — each failed press then piles another "Could not read the chart" onto the line, and a
+  recovered read leaves the failure up. The one lead-less re-read is a chart's first (`enterChart`, after `clearChart`
+  empties the held set, so it can name no change).
   Sign-off and cease return an `ErrorView` through `write_failure.rs`: a locked key is `Now`; no node key or no DB is
   `AfterOperator`; never a bare string (it is worded "could not reach its backend").
 - **Accepted limitations (honesty, not safety — do not "discover" them later):** a stale refusal's out-of-date mark is

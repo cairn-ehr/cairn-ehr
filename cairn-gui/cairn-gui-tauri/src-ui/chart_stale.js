@@ -16,8 +16,8 @@
 //
 // Split out of main.js to keep it under 500 lines. Classic script, loaded right after
 // stop_reasons.js and sharing the one global scope (`el`, `say`, `setMessage`, `displayedPatient`,
-// and the read counters `chartReadRevision`/`drawnRevision`, from main.js). Its functions are called only once a chart is read, long after every script has
-// loaded.
+// and the read counters `chartReadRevision`/`drawnRevision`, from main.js). Its functions are
+// called only once a chart is read, long after every script has loaded.
 "use strict";
 
 /** The chart set the clinician holds (see above); null while no list is drawn. */
@@ -47,11 +47,45 @@ function behindTheRecord(failure) {
  * The outcome line after a re-read was DRAWN (called by main.js's `refresh` only over an answer
  * `mayDraw` accepted, so an overtaken read says nothing). After a stale refusal: the refusal
  * (`lead`), that the chart was read again, and what changed. Otherwise only a change is added to
- * the lead; with none, the line is left alone — it may be saying how a signed act went.
+ * the lead. With none, the line is left alone — it may be saying how a signed act went — unless
+ * it still says a read FAILED, which this drawn read has just made untrue: it goes back to its
+ * lead (what was said before the failure, possibly nothing).
  */
 function sayAfterReread(lead, staleIfFails, pane) {
   if (staleIfFails) say(sentences(lead, READ_AGAIN, pane.set_change));
   else if (pane.set_change) say(sentences(lead, pane.set_change));
+  else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
+}
+
+/**
+ * The last failed chart read said on the outcome line: `{ line, lead }`, the line as said and
+ * the lead it was said after. Compared by its TEXT (`showsFailedRead`), so once anything else
+ * is said on the line it no longer applies, and nothing has to remember to clear it.
+ */
+let failedRead = null;
+
+/** A chart read failed: say so after `lead` (main.js's `refresh`), and remember the line. */
+function sayReadFailed(lead, error) {
+  const line = sentences(lead, "Could not read the chart: " + error);
+  say(line);
+  failedRead = { line, lead };
+}
+
+/** Whether `line` is the failed read last said — so the outcome line still says it. */
+function showsFailedRead(line) {
+  return failedRead !== null && failedRead.line === line;
+}
+
+/**
+ * The lead "Read this chart again" re-reads with: the outcome line as it stands, so a change the
+ * re-read names is ADDED to it and a partial sign-off report ("Signed 2 …; 1 line(s) could NOT
+ * be signed …") is never replaced (ADR-0060: partial completion is reported, never implied).
+ * Less a read failure the press is retrying: then the lead is what that failure was said after,
+ * so pressing again never piles one "Could not read the chart" onto another.
+ */
+function rereadLead() {
+  const line = el("outcome").textContent;
+  return showsFailedRead(line) ? failedRead.lead : line;
 }
 
 /**
@@ -119,6 +153,18 @@ function sameCharts(a, b) {
  * Anchored, rather than `(held − (sent − after)) ∪ (after − sent)`: that form cannot tell which
  * side of the act the window is on, so a Link answered while the other chart was already drawn
  * would announce the clinician's own link back to them (fix round 1 report).
+ *
+ * The cases it was walked over (headless, a stubbed `invoke`; there is no JS runner, #332):
+ *   held      touched  after   anchor → result   the case
+ *   null      any      any     any    → null     nothing drawn
+ *   {A}       {A,B}    null    A      → {A}      no recorded set (Different people, or not this record)
+ *   {A}       {A,B}    {A,B}   A      → {A,B}    own Link from A: silent
+ *   {B}       {A,B}    {A,B}   B      → {A,B}    Link answered on B, drawn before its commit: silent
+ *   {A,B,C}   {A,B}    {A,B}   B      → {A,B,C}  Link answered on B, drawn after a colleague's C
+ *   {A,B}     {A,B}    {A}     A      → {A}      own Unlink seen from A: silent
+ *   {A,B}     {A,B}    {A}     B      → {B}      Unlink answered on the other side: silent
+ *   {C}       {A,B}    {A,B}   C      → {C}      act never touched the chart on screen: unchanged
+ * The unanchored formula fails the fourth row: it keeps {B} and names A, the clinician's own link.
  */
 function applyOwnAct(held, touched, after, anchor) {
   if (held === null || !after) return held;
@@ -139,9 +185,9 @@ function ordered(ids) {
 }
 
 // The always-visible "Read this chart again" button (index.html): the way out of any read that
-// failed. It sends the held set like every other re-read. (Wired here, not in main.js, which is
-// at its line budget.)
-el("reread").addEventListener("click", () => void refresh());
+// failed. It sends the held set like every other re-read, and keeps what the outcome line says
+// (`rereadLead`). (Wired here, not in main.js, which is at its line budget.)
+el("reread").addEventListener("click", () => void refresh(rereadLead()));
 
 /**
  * A stale refusal's re-read failed: say so above the table and take sign-off away, with its

@@ -74,7 +74,8 @@ fn a_failed_chart_read_still_draws_the_banner() {
     let refresh = js_fn(MAIN_JS, "refresh");
     let caught = &refresh[position(refresh, "catch (e)")..];
     assert!(
-        position(caught, "say(") < position(caught, "await redrawBannerAlone(patient);"),
+        position(caught, "sayReadFailed(lead, e);")
+            < position(caught, "await redrawBannerAlone(patient);"),
         "{caught}"
     );
     let render = js_fn(MAIN_JS, "render");

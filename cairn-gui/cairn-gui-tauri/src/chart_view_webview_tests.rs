@@ -60,7 +60,7 @@ fn a_chart_read_is_drawn_only_while_nothing_newer_is_on_screen() {
     let caught = &refresh[caught_at..];
     assert!(
         position(caught, "if (!isLatestRead(patient, revision)) return;")
-            < position(caught, "say("),
+            < position(caught, "sayReadFailed(lead, e);"),
         "{refresh}"
     );
     // The patient-only test is gone, not kept beside the new ones as a second spelling.
