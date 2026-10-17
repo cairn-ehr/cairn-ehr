@@ -36,13 +36,31 @@
   - Budget: the automatic re-read and its sentence land within the single-chart open budget (RUNBOOK §8/§11, ≤ the single-chart open). One sentence names what changed, using each chart's own identity line; nothing else to read.
   - Measurement is owed by the human runbook pass (a new RUNBOOK step under §13, Task 7). It cannot be measured headlessly.
 
+## When the "what changed" sentence appears (maintainer rule, 2026-10-17)
+
+**Only for a change that came from ANOTHER source** — never for the clinician's own act. Every write checks the set
+the clinician saw, under the link lock, before it records anything. So a successful act proves nothing foreign
+changed before it; what remains is anything arriving during or after it:
+
+- **The clinician's own Link / Unlink / Confirm.** The act's report carries `charts_after`: the record's set as THIS
+  act left it, read inside the act's own transaction. The re-read compares against `charts_after`, so their own
+  change is silent and a colleague's arriving in the same moment is named.
+- **Sign-off, cease, additions.** These never change the set; the re-read compares against the set on screen.
+- **A stale refusal.** The change came from another source by definition; the re-read compares against the set on
+  screen.
+
+**Scope:** the sentence names charts joining or leaving the record. A colleague's concurrent change to a MEDICATION
+LINE is shown by the re-read but not named; naming it needs a before/after comparison of the list itself, which
+belongs with #804's differences-only view.
+
 ## Review Focus
 
 1. **A re-read that fails after a stale refusal.** The old list must not stay up looking current under a live "Sign off N" (Task 5, `markListStale`).
 2. **A stale refusal with the set UNCHANGED** ("this pair has been judged since the list was drawn"). No "now part of it" sentence may appear (Task 4: `set_change` is `None` when the sets are equal).
 3. **A departed chart whose identity cannot be read.** It is still named, as unread, never dropped (Task 4).
 4. **An unreadable `seenCharts`** (empty or unparseable). No sentence, never a guessed change (Task 4).
-5. **Overlapping re-reads, e.g. a sign-off's and a judgement's.** The `set_change` sentence comes only from an answer `mayDraw` accepts (#800); an overtaken answer says nothing (Task 5).
+5. **The clinician's own Link followed by a re-read.** No "Now part of it" sentence for the chart they just linked; a chart a colleague linked in the same moment IS named (Task 4: `charts_after`; Task 5: the re-read sends it as `seenCharts`).
+6. **Overlapping re-reads, e.g. a sign-off's and a judgement's.** The `set_change` sentence comes only from an answer `mayDraw` accepts (#800); an overtaken answer says nothing (Task 5).
 
 ---
 
@@ -149,6 +167,7 @@
 - Create: `cairn-gui/cairn-gui-tauri/src/chart_set/change_tests.rs`
 - Modify: `src/chart_set.rs` (`ChartPane` gains `set_change: Option<String>`; `chart_pane` takes it; factor an identity reader out of `linked_members`)
 - Modify: `src/commands.rs` (`med_list` / `med_list_impl` gain `seen_charts: Option<Vec<String>>`, IPC name `seenCharts`)
+- Modify: the Link / Unlink / Confirm reports (`link/judgement_view.rs`'s `LinkReportView` and the unlink/confirm report views) gain `charts_after: Vec<String>`, filled from the record set the node read inside the act's transaction. The implementer verifies where `cairn-node`'s judgement already reads `person_charts` under CARNLK (`chart_link.rs` ~223), and returns it through the `Asserted` report instead of re-reading it outside the transaction. A re-read outside the transaction could already include a colleague's change and would silence it.
 - Test: `commands_tests.rs` (`the_webview_reads_…` field guards), `change_tests.rs`
 
 **Interfaces:**
@@ -171,6 +190,7 @@
   - `both_halves_in_one_sentence_joined_first`;
   - `the_sentence_names_only_identity_lines_never_medications` (the sentence equals the expected string exactly; build it from fixture `MemberLine`s, not `{}`-echoed identity text).
   - In `commands_tests.rs`: `med_list_says_nothing_without_a_seen_set` (mock: `seen_charts: None` → `set_change == None`) and `med_list_names_a_change_from_the_seen_set` (mock: seen = fixture + one extra id, read = fixture → `set_change` contains `"No longer part of it: chart "`).
+  - A node DB test (`crates/cairn-node/tests/chart_link.rs`): `a_link_reports_the_set_it_left` — after linking A–B, `charts_after == {A, B}`.
 - [ ] **Step 2: Run** `… cargo test … -p cairn-gui-tauri change`. Expected: FAIL.
 - [ ] **Step 3: Implement** the pure function, the reader factoring and the parameter. `fields_read_by_the_webview("pane")` must come to contain `set_change` in Task 5; add that assert now, so it is RED until then.
 - [ ] **Step 4: Run** the crate. Expected: PASS except the one field guard owned by Task 5.
@@ -188,7 +208,7 @@
 **Interfaces:**
 - Consumes: `ChartPane.set_change` (Task 4); `retry: "after_reread"` (Tasks 2–3).
 - Produces:
-  - `async function refresh(lead, staleIfFails)`. It sends `{ patientId, seenCharts: renderedCharts }`. On an accepted answer, after `render`:
+  - `async function refresh(lead, staleIfFails, seenAfterOwnAct)`. It sends `{ patientId, seenCharts: seen }`, where `seen` is `seenAfterOwnAct` when given (an own judgement's `charts_after`), else `renderedCharts`. On an accepted answer, after `render`:
     - when `staleIfFails` is true, `say(join(lead, READ_AGAIN, pane.set_change))`;
     - otherwise, when `pane.set_change` is set, `say(join(lead, pane.set_change))`;
     - otherwise the outcome line is untouched.
@@ -208,7 +228,8 @@
     - the success path is unchanged (`refresh(outcome)`).
 
 - [ ] **Step 1: Write the failing source guards** (each mutation-checked in Step 4):
-  - `refresh_sends_the_set_on_screen` — `invoke("med_list", { patientId: patient, seenCharts: renderedCharts })`.
+  - `refresh_sends_the_set_on_screen` — `invoke("med_list", { patientId: patient, seenCharts: seen })`, with `seen` defaulting to `renderedCharts`.
+  - `an_own_judgement_re_reads_against_the_set_it_left` — the recorded-verdict paths of `sendJudgement` (link.js) and of unlink.js pass `report.charts_after` as `refresh`'s third argument.
   - `read_again_is_said_only_after_an_accepted_answer` — `READ_AGAIN` appears after `render(answer, patient);` and before `catch`.
   - `a_failed_stale_re_read_marks_the_list_out_of_date` — `markListStale()` in the catch, guarded by `staleIfFails`.
   - `mark_list_stale_disables_sign_off_and_warns_above_the_table` — the HTML order `chart-warnings` < `chart-stale` < `med-table`.
@@ -221,6 +242,7 @@
   - a `CHANGED` sign-off refusal (`retry: "after_reread"`) → the list re-read, outcome = refusal + `READ_AGAIN` + the set-change sentence;
   - the same with the re-read failing → `#chart-stale` visible (computed style + ancestors), sign-off disabled;
   - `LINE_STALE` with an unchanged set → no "Now part of it";
+  - an own Link recorded (`charts_after` = old ∪ other) → no set-change sentence; the same with one extra chart in the re-read (a colleague's concurrent link) → that one chart named;
   - a `Compare` refused stale → the whole chart re-read.
 - [ ] **Step 5: Commit** — `feat(#797): every stale refusal re-reads the whole chart and says what changed; an un-re-readable list is marked out of date`.
 
