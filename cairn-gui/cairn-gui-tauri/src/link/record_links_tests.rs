@@ -177,9 +177,10 @@ fn a_clash_on_a_pair_with_no_line_is_said_never_dropped() {
     };
     let (lines, error) = links_section(Ok(links), &[], true);
     assert!(lines.is_empty(), "no line drawn without its mark");
-    assert!(error
-        .expect("never silent")
-        .contains("press \"Read this chart again\""));
+    let error = error.expect("never silent");
+    assert!(error.contains("press \"Read this chart again\""));
+    // As its siblings say: two reads that keep disagreeing are the node's to look at.
+    assert!(error.contains("if this persists, the node needs its operator"));
 }
 
 /// Each line carries the attestation it SHOWS, so the review panel can tell a line drawn
@@ -224,7 +225,7 @@ fn a_pair_kind_parses_only_its_own_spellings() {
 /// A separation alone is not a standing link: a linked record whose edge read came back
 /// empty is still contradictory, whatever doubts were read beside it.
 #[test]
-fn a_linked_record_with_only_doubts_still_says_reload() {
+fn a_linked_record_with_only_doubts_still_says_read_it_again() {
     let links = RecordLinks {
         unverified: Ok(vec![]),
         edges: vec![],

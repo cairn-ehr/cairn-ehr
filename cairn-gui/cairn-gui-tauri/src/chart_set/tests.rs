@@ -58,6 +58,10 @@ fn an_unparseable_id_is_refused() {
     let err = check_displayed_set(&set(&[1]), &["not-a-uuid".to_string()]).unwrap_err();
     assert_eq!(err, ChartSetError::Unreadable);
     assert!(err.text().contains("could not tell which charts"));
+    // The way out is one press (#797 final review, M7): a re-read redraws the set every command
+    // sends back. Not "reopen the chart", which costs three acts for the same read.
+    assert!(err.text().contains("press \"Read this chart again\""));
+    assert!(!err.text().contains("reopen"));
 }
 
 /// A command that names no chart at all cannot say what it saw, so it must not act.

@@ -26,6 +26,12 @@ use uuid::Uuid;
 /// answer, by design, to a link id that does not parse, to a pair kind the window did not send
 /// it, to a separation that no longer stands, and to a Compare with no database: in each case
 /// there is no standing pair to act on, and nothing is guessed.
+///
+/// It names no remedy. Where the pair really went (`stale(LINK_GONE)`, `Retry::AfterReread`) the
+/// window re-reads the chart by itself, so there is nothing to press. The `Retry::Never` arms — an
+/// id that does not parse, a kind the window was never sent, no database — are faults in what
+/// this window sent or in how it was started: a re-read redraws the same lines from the same
+/// Rust, so "Read this chart again" would not mend them and is deliberately not offered.
 pub const LINK_GONE: &str = "that link is no longer part of this record — nothing was done";
 
 /// Refused because the verdict arrived without the content address of the judgement standing on

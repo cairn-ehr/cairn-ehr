@@ -12,7 +12,8 @@ const MAIN_JS: &str = include_str!("../src-ui/main.js");
 const FUNNEL_JS: &str = include_str!("../src-ui/funnel.js");
 const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 
-/// The name of the control, as the clinician reads it. Three sentences quote it; this is the one
+/// The name of the control, as the clinician reads it. Every sentence that sends the clinician to
+/// it quotes it (`every_sentence_that_names_the_control_quotes_its_label`); this is the one
 /// place the guards below agree on, so renaming the button without them (or the reverse) is red.
 const READ_AGAIN_LABEL: &str = "Read this chart again";
 
@@ -157,18 +158,27 @@ fn every_sentence_that_names_the_control_quotes_its_label() {
     };
     assert!(pieces(CHART_STALE_JS, "LIST_OUT_OF_DATE").contains(&quoted));
     assert!(pieces(DUPLICATES_JS, "REVIEW_WAITS_FOR_LIST").contains(&quoted));
-    // record_links.rs words its four read-failure sentences with `press \"…\"` (an escaped quote).
+    assert!(pieces(DUPLICATES_JS, "NO_LIST_TO_COMPARE").contains(&quoted));
+    // The Rust sentences say `press \"…\"` (an escaped quote).
     let escaped = format!("press \\\"{READ_AGAIN_LABEL}\\\"");
-    assert_eq!(RECORD_LINKS_RS.matches(&escaped).count(), 4);
-    assert!(
-        include_str!("duplicates/view.rs").contains(&format!("press \\\"{READ_AGAIN_LABEL}\\\""))
+    assert_eq!(
+        RECORD_LINKS_RS.matches(&escaped).count(),
+        4,
+        "record_links.rs's read-failure sentences that send the clinician to the button. A new \
+         one that does so legitimately: raise this count AND add its own test of the wording; a \
+         lower count means a sentence lost its way out"
     );
+    assert!(include_str!("duplicates/view.rs").contains(&escaped));
+    let chart_set = include_str!("chart_set/mod.rs");
+    let unreadable = position(chart_set, "const UNREADABLE: &str =");
+    let unreadable = &chart_set[unreadable..unreadable + position(&chart_set[unreadable..], ";\n")];
+    assert!(unreadable.contains(&escaped), "{unreadable}");
 }
 
 /// This window has a control for reading a chart again, and the sentences name it. Neither
 /// "reload the chart" (no such control ever existed) nor "refresh and try again" (the stale case
 /// that now re-reads by itself) may be said to a clinician: not in a Rust sentence, not in a
-/// script. Test files are exempt, since they must quote the phrase to forbid it.
+/// script, not in the page. Test files are exempt, since they must quote the phrase to forbid it.
 #[test]
 fn no_window_sentence_says_reload_the_chart() {
     fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
@@ -179,7 +189,10 @@ fn no_window_sentence_says_reload_the_chart() {
                 continue;
             }
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let is_source = name.ends_with(".js") || name.ends_with(".rs");
+            // `.html` too: the page's own text (a label, a hint) is said to the clinician as well.
+            let is_source = [".js", ".rs", ".html"]
+                .iter()
+                .any(|ext| name.ends_with(ext));
             if !is_source || name.ends_with("_tests.rs") || name == "tests.rs" {
                 continue;
             }

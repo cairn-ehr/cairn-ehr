@@ -287,7 +287,8 @@ pub fn links_section(
             vec![],
             Some(
                 "Which of these links is in doubt could not be read consistently — \
-                 press \"Read this chart again\" before judging any."
+                 press \"Read this chart again\" before judging any; if this persists, the node \
+                 needs its operator."
                     .to_string(),
             ),
         ),

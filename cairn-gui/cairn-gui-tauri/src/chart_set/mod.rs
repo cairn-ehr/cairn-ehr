@@ -38,11 +38,12 @@ use uuid::Uuid;
 pub enum ChartSetError {
     /// The webview's list of displayed charts could not be read (empty or unparseable). Not a
     /// change: nothing about the record moved, the window itself sent something it should not
-    /// have, so the remedy is to reopen the chart.
+    /// have. The way out is "Read this chart again", which redraws the set every command sends
+    /// back — the same read reopening the chart would do, in one act instead of three.
     Unreadable,
     /// The set the record now resolves to differs from the one on screen. The screen is
     /// behind the record, so the right answer is a re-read (`Retry::AfterReread`), which the
-    /// window does for the clinician: it has no reload control.
+    /// window starts by itself: the clinician need not press anything.
     Changed,
 }
 
@@ -65,11 +66,14 @@ impl ChartSetError {
     }
 }
 
-const UNREADABLE: &str = "this window could not tell which charts are on screen — reopen the chart";
+/// The sentence for [`ChartSetError::Unreadable`]: a fault in what the window sent, mended by a
+/// re-read (it redraws the set), so it names the button that does one.
+const UNREADABLE: &str = "this window could not tell which charts are on screen — nothing was \
+     done; press \"Read this chart again\"";
 
 /// The sentence for a set that changed while its list was on screen. It names no remedy: the
-/// window re-reads the chart itself (the clinician has nothing to press), and a sentence that
-/// told them to "reload" would instruct an act the window does not have.
+/// window re-reads the chart itself, so the clinician has nothing to press, and a sentence
+/// sending them to "Read this chart again" would ask for a read already under way.
 pub(crate) const CHANGED: &str =
     "the linked charts changed while this list was on screen — nothing was done";
 

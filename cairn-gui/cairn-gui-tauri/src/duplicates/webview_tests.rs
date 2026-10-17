@@ -6,7 +6,7 @@
 //! script's source (`crate::source_guard`) and pins the ORDER or the CHOICE that the fix is.
 //! Reverting any of these fixes leaves every behavioural test green; these turn red.
 use super::view::DuplicateSection;
-use crate::source_guard::{js_const, js_fn, position};
+use crate::source_guard::{js_fn, position};
 use std::collections::BTreeSet;
 
 const DUPLICATES_JS: &str = include_str!("../../src-ui/duplicates.js");
@@ -100,10 +100,11 @@ fn a_failed_first_read_does_not_leave_sign_off_saying_loading() {
 }
 
 /// #745 point 3 and the I2 fix of PR #798's review. A decided (`"never"`) refusal of a comparison
-/// or a judgement re-reads the BANNER — the window has no reload control — and never the whole
-/// chart: the banner is the only stale thing, and a whole re-read is heavier and rebuilds every
-/// row under the clinician (since #799 a typed stop reason and its caret survive it; focus on
-/// anything else the re-read rebuilds — a Stop or Review button, a link line — does not).
+/// or a judgement re-reads the BANNER by itself — the clinician need not press "Read this chart
+/// again" — and never the whole chart: the banner is the only stale thing, and a whole re-read
+/// is heavier and rebuilds every row under the clinician (since #799 a typed stop reason and its
+/// caret survive it; focus on anything else the re-read rebuilds — a Stop or Review button, a
+/// link line — does not).
 #[test]
 fn a_decided_refusal_re_reads_the_banner_never_the_whole_chart() {
     let compare = js_fn(LINK_JS, "compare");
@@ -156,28 +157,46 @@ fn nothing_is_compared_without_a_drawn_list() {
 
 /// The two sentences the window words itself about a missing list must be TRUE in every case
 /// that reaches them — a read that failed, one still in flight, and a list read but not drawable
-/// (#801, PR #802 review) — and must name the way out where there is one: nothing re-reads a
-/// failed first read by itself (#797 tracks a control); a drawing fault is the window's own.
+/// (#801, PR #802 review) — and must name the way out where there is one: a failed read is
+/// re-read by "Read this chart again" (#797), which both name; a drawing fault is the window's
+/// own, and the chart's warning says so.
 #[test]
 fn the_windows_own_sentences_about_a_missing_list_are_true() {
-    let no_list = js_const(DUPLICATES_JS, "NO_LIST_TO_COMPARE");
-    for part in [
-        "could not be read or shown",
-        "still being read",
-        "nothing was done",
-    ] {
-        assert!(no_list.contains(part), "{no_list}");
+    // The sentence as the clinician reads it: every string literal of the declaration, in order,
+    // joined. Both quote kinds — a piece that quotes the control's name is single-quoted, which
+    // `js_const` (double quotes only) cannot read.
+    let declared = |name: &str| {
+        let at = DUPLICATES_JS
+            .find(&format!("const {name} ="))
+            .expect("declared");
+        let declaration = &DUPLICATES_JS[at..at + DUPLICATES_JS[at..].find(";\n").expect("closes")];
+        let (mut text, mut open, mut escaped) = (String::new(), None, false);
+        for c in declaration.chars() {
+            match open {
+                None if c == '"' || c == '\'' => open = Some(c),
+                None => {}
+                // `\'` inside a single-quoted piece is an apostrophe, not its end.
+                Some(_) if escaped => {
+                    text.push(c);
+                    escaped = false;
+                }
+                Some(_) if c == '\\' => escaped = true,
+                Some(q) if c == q => open = None,
+                Some(_) => text.push(c),
+            }
+        }
+        text
+    };
+    let no_list = declared("NO_LIST_TO_COMPARE");
+    let waits = declared("REVIEW_WAITS_FOR_LIST");
+    for sentence in [&no_list, &waits] {
+        for part in [
+            "could not be read or shown",
+            "still being read",
+            "If it could not be read, press \"Read this chart again\"",
+        ] {
+            assert!(sentence.contains(part), "{sentence}");
+        }
     }
-    // Single-quoted in the script (it quotes the control's name), which `js_const` cannot read.
-    let at = DUPLICATES_JS
-        .find("const REVIEW_WAITS_FOR_LIST =")
-        .expect("declared");
-    let waits = &DUPLICATES_JS[at..at + DUPLICATES_JS[at..].find(";\n").expect("closes")];
-    for part in [
-        "could not be read or shown",
-        "still being read",
-        "If it could not be read, press \"Read this chart again\"",
-    ] {
-        assert!(waits.contains(part), "{waits}");
-    }
+    assert!(no_list.contains("nothing was done"), "{no_list}");
 }
