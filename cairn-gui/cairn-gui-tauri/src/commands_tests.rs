@@ -261,6 +261,7 @@ fn every_command_the_webview_calls_is_registered() {
     // scripts index.html actually loads, so a new script cannot go unscanned (PR #798 review).
     let webview = [
         ("main.js", include_str!("../src-ui/main.js")),
+        ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
         ("duplicates.js", include_str!("../src-ui/duplicates.js")),
         ("worklist.js", include_str!("../src-ui/worklist.js")),
         ("funnel.js", include_str!("../src-ui/funnel.js")),

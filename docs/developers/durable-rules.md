@@ -10,6 +10,29 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ THE CHART RE-READ (#799 · #800 · #801, PR #802) — do not undo any of these** (pins: the JS halves by SOURCE
+guards in `cairn-gui-tauri/src/chart_view_webview_tests.rs`, each mutation-checked; walked headlessly on the PR):
+- **Two questions, two predicates, each pinned as its exact expression.** An ANSWER draws while
+  `mayDraw(patient, revision)` holds — its chart is on screen and nothing NEWER has been DRAWN (`drawnRevision`,
+  recorded just before `render`). A FAILURE is said only while `isLatestRead(patient, revision)` holds — no newer
+  read has STARTED (`chartReadRevision`, taken before the send). **Tempting wrong fix:** one "newest started" rule
+  for both — the older of two overlapping re-reads usually lands first and was dropped, so if the newer failed the
+  screen kept a list older than both (PR #802 review). Or back to `patient !== displayedPatient`, which cannot tell
+  two reads of one chart apart.
+- **`clearChart` sets a floor: `drawnRevision = ++chartReadRevision`.** It is LOAD-BEARING: `mayDraw` asks only
+  about what is drawn, so without the floor a first-visit read could land on the second visit (A → front door → A).
+- **`redrawBannerAlone` notes the revision and never bumps either counter** (a bump would make an in-flight chart
+  read fail `isLatestRead`, so its failure would go unsaid).
+- **A re-read keeps the typed stop reasons** (`stop_reasons.js`: `typedReasons` before the rows are emptied,
+  `restoreReasons` after, focus and caret included). The banner-only re-read after a decided refusal (below) still
+  stands, on its own reason.
+- **`render` = the list (`drawList`, which sets `renderedPatient`/`renderedCharts` and draws EVERYTHING but the
+  banner) under one guard, THEN the banner.** A drawing fault takes the whole list down (`clearDrawnList`, shared
+  with `clearChart`), NULLS `renderedPatient`/`renderedCharts` — so the banner drawn next offers no Review and
+  `compare` refuses, the rule a failed or in-flight read already keeps — disables sign-off with a worded reason, and
+  says `LIST_NOT_SHOWN` in `#chart-unshown`, inside the warnings ABOVE the table, **never on the outcome line** and
+  never as "Could not read the chart". A new drawer goes inside `drawList`; the banner must stay after it.
+
 **⇒ THE BANNER'S AND TRAY'S FAILURE STATES (#745 · #752 · #740) — do not undo any of these** (pins:
 `cairn-gui-tauri/src/duplicates/{tests.rs,view_tests.rs,verdict_tests.rs}`, `worklist/tests.rs`,
 `commands_tests.rs::every_command_the_webview_calls_is_registered`; the JS halves by SOURCE guards —
@@ -26,12 +49,14 @@ here, newest first, and leave a one-line pointer in HANDOVER.
   to what Rust sends — a second hand-built literal is a second copy of the shape to drift.
 - **A decided (`"never"`) refusal of a comparison or a judgement re-reads the BANNER** (`redrawBannerAlone` from
   `link.js`'s `compare` and `sendJudgement`; #713's `after_reread` still re-reads the whole chart). **Tempting wrong
-  fix:** `refresh()` — it rebuilds the rows and wipes a half-typed stop reason over a refusal that changed nothing.
+  fix:** `refresh()` — a heavier read that rebuilds every row over a refusal that changed nothing but the banner
+  (a typed stop reason survives it since #799; the set-changed refusals, which DO stale the list, are #797).
   The window has no reload control, so `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload" (the rest: #797).
 - **No comparison without a drawn list:** `compare` refuses while `renderedPatient` is null (`NO_LIST_TO_COMPARE`),
-  and a banner drawn alone after a failed FIRST read shows `REVIEW_WAITS_FOR_LIST` in place of Review. Both sentences
-  must be true of a read still in flight as well as a failed one, and name the way out (close and reopen the chart —
-  nothing re-reads a failed first read until #797 adds a control).
+  and a banner drawn while no list is on screen (after a failed FIRST read, or a list that could not be DRAWN — #801)
+  shows `REVIEW_WAITS_FOR_LIST` in place of Review. Both sentences must be true of all three cases (failed, in flight,
+  not drawable — "could not be read or shown, or is still being read") and name the way out where there is one (close
+  and reopen the chart — nothing re-reads a failed first read until #797 adds a control).
 - **The tray's count and list each carry a revision** (`trayCountRevision`, `trayListRevision`): an older answer is
   dropped. **The list is emptied when a re-read starts** — never the old entries, whose Review `close_chart` made
   unopenable. **Wherever the list is emptied, `trayListRevision` is bumped too** (`refreshTray`'s clear): an older

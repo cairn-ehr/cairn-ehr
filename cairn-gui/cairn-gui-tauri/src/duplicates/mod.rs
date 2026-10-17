@@ -122,7 +122,7 @@ pub async fn duplicate_section(
 /// The banner ALONE, read without the medication list (the webview's `redrawBannerAlone`). Three
 /// callers: `main.js`'s `refresh` when the chart's list could not be read (#745 points 1 and 2),
 /// and link.js's `compare` and `sendJudgement` after a decided refusal (#745 point 3), which
-/// re-read only the banner so a half-typed stop reason survives (#799).
+/// re-read only the banner: it is the only thing such a refusal says is stale.
 ///
 /// The banner needs only the record's chart set, never its medication list, so a failed list
 /// read must not take the duplicate warning down with it — and after a judgement, a failed

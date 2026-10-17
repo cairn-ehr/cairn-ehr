@@ -20,20 +20,22 @@
 /**
  * Said when a comparison (link.js's `compare`, reached from the panel's search) has no drawn
  * medication list to compare against: `renderedPatient` is null, so the backend would be sent no
- * chart. That is so in two cases the window cannot tell apart here — the chart's FIRST read failed
- * (`clearChart` nulled it and nothing re-read), or that read is still in flight — so the sentence
- * is true of both (PR #798 review). Only the window knows this, so it words it.
+ * chart. That is so in three cases the window cannot tell apart here — the chart's FIRST read
+ * failed (`clearChart` nulled it and nothing re-read), that read is still in flight, or a list was
+ * read but could not be drawn (main.js's `showUnshownList`, #801) — so the sentence is true of all
+ * three (PR #798 and #802 reviews). Only the window knows this, so it words it.
  */
 const NO_LIST_TO_COMPARE =
-  "This chart's medication list is not on screen — it could not be read, or is still being " +
-  "read — so there is nothing to compare it with; nothing was done.";
+  "This chart's medication list is not on screen — it could not be read or shown, or is still " +
+  "being read — so there is nothing to compare it with; nothing was done.";
 /**
  * Under each entry of a banner drawn while no list is on screen, in place of Review. Nothing
- * re-reads a failed first read by itself (#797 tracks a reload control), so it names the way out.
+ * re-reads a failed first read by itself (#797 tracks a reload control), so it names the way out;
+ * a list that could not be DRAWN has none here (the chart's warning says it is this window's fault).
  */
 const REVIEW_WAITS_FOR_LIST =
-  "Review needs this chart's medication list on screen, and it could not be read or is still " +
-  "being read. If it could not be read, close the chart and open it again.";
+  "Review needs this chart's medication list on screen, and it could not be read or shown, or " +
+  "is still being read. If it could not be read, close the chart and open it again.";
 
 /**
  * Draw a `DuplicateSection`. Hidden only when Rust says it has nothing to say (`silent`, which is
@@ -103,11 +105,22 @@ function salvagedBanner(section, fault) {
  * `refresh` when the chart's list could not be read (#745 points 1 and 2 — the duplicate warning
  * needs only the chart set, so a failed list read must not take it down, nor leave a just-judged
  * pair up with a live Review), and link.js's `compare` and `sendJudgement` after a decided
- * refusal (#745 point 3 — the banner may be stale, and only it is re-read, so a half-typed stop
- * reason survives, #799). If even this read fails, the banner says so in place of the old
- * entries. A read for a chart the clinician has since left is dropped.
+ * refusal (#745 point 3 — the banner may be stale, and only it is re-read: the list is not). If
+ * even this read fails, the banner says so in place of the old entries.
+ *
+ * An answer is dropped once the clinician has left the chart OR a whole-chart read that started
+ * after this one's revision was noted has been drawn (#800, main.js's `mayDraw`): that read's
+ * banner is newer. This function notes the revision but never bumps it — bumping would make a
+ * whole-chart read already in flight fail `isLatestRead`, so its failure would go unsaid.
+ * Otherwise the banners are drawn in the order they land. Both reads take the duplicates as
+ * their last database step, and every step takes the backend's one database lock in turn
+ * (tokio's Mutex is FIFO), so the two are only a few interleaved steps apart — whichever lands
+ * last is drawn, even if it read a moment earlier. Review on an entry whose pair has since
+ * closed is refused (unless a list on screen showed that chart), and that refusal re-reads the
+ * banner (#745).
  */
 async function redrawBannerAlone(patient) {
+  const revision = chartReadRevision;
   let section;
   try {
     section = await invoke("duplicate_banner", { patientId: patient });
@@ -116,7 +129,7 @@ async function redrawBannerAlone(patient) {
     // string) is worded "could not reach its backend" by `failureText`.
     section = emptyBanner("Could not check for possible duplicates: " + failureText(failure));
   }
-  if (patient !== displayedPatient) return;
+  if (!mayDraw(patient, revision)) return;
   drawDuplicates(section);
 }
 
@@ -139,10 +152,11 @@ function duplicateItem(entry) {
   meds.append(...entry.medication_notes.map((t) => cell("li", t)));
   meds.append(...entry.medications.map((t) => cell("li", t)));
   li.append(meds);
-  // A banner drawn ALONE after the chart's first read failed (`redrawBannerAlone`) has no list
-  // on screen to compare with (PR #798 review): Review would send no chart. Say why it is absent
-  // rather than offer a button that can only fail. Read at draw time: `render` sets
-  // `renderedPatient` before it draws the banner.
+  // A banner drawn with no list on screen — ALONE after the chart's first read failed
+  // (`redrawBannerAlone`, PR #798 review), or after a list that could not be drawn (#801, PR #802
+  // review) — has nothing to compare with: Review would send no chart. Say why it is absent
+  // rather than offer a button that can only fail. Read at draw time: `render` draws the list
+  // (which sets or, on a fault, nulls `renderedPatient`) before the banner.
   if (renderedPatient === null) {
     li.append(cell("p", REVIEW_WAITS_FOR_LIST));
     return li;

@@ -450,14 +450,17 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   R7's two lines 0 → 0 → 0. Every figure is a human act still owed.
 - **Tech debt, 2026-10-16:** PRs #794 (#781 · #789 · #732) and #795 (#793 + #712 item 3: every `cairn-gui-tauri` file
   under 500 lines; #737 + #796: each banner/tray entry headed by whose record(s) it is) merged. Then, on branch
-  `fix/752-745-740-banner-tray-failure-states`: the banner survives a failed chart read, a failed re-read and a drawing
+  `fix/752-745-740-banner-tray-failure-states` (merged 2026-10-16): the banner survives a failed chart read, a failed re-read and a drawing
   fault (`duplicate_banner`); it hides only on Rust's `silent`; a decided refusal re-reads the BANNER, never the whole
   chart (no "reload"); the tray's reads are ordered and its stale list cleared (#745 · #752 · the rest of #740) — PR
   #798, whose review round also pinned every JS half by source guards. Filed #797 (the window's other "reload the
   chart" sentences, now including the set-changed refusals), #799 (a chart re-read wipes a half-typed stop reason),
   #800 (no generation token on `refresh`), #801 (a fault drawing the medication rows reads "Could not read the
   chart").
-- **Next:** review and merge PR #798; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open
+- **2026-10-17:** PR #802 (#799 · #800 · #801): a chart re-read keeps typed stop reasons, drops an overtaken
+  answer or failure (`chartReadRevision`, `isCurrentRead`), and a list that cannot be drawn leaves nothing partial
+  under a live sign-off (`drawList` under one guard, `#chart-unshown` above the table).
+- **Next:** review and merge PR #802; then the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open
   until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
