@@ -52,7 +52,10 @@ change myself)."*
 - **`charts_after` (the Link / Unlink / Confirm reports' record as the act left it) is read INSIDE the act's
   transaction** (`chart_link/judge.rs`, after the apply, before the commit). **Tempting wrong fix:** reading after the
   commit — a colleague's link landing in that gap is then folded into the clinician's "own" baseline and never
-  announced. (Open, final wave: attach it only when the effect changed the set.)
+  announced. The guard `the_set_left_is_read_after_the_apply_and_before_the_commit` (`chart_link/judge_tests.rs`)
+  pins that order. **And it is attached only when the act changed the record** (`reload` true;
+  `LinkReportView::left`, pinned by the `*_reports_no_set` tests): an Outranked act's set would move the held set
+  and raise the draw floor with no re-read following, dropping a colleague's read already in flight.
 - **"Read this chart again" (`#reread`) is always visible in the chart view, and its label is pinned to every sentence
   that quotes it** (`LIST_OUT_OF_DATE`, `REVIEW_WAITS_FOR_LIST`, the record-links sentences). **Tempting wrong fix:**
   showing it only after a failure (the first failed read then has no way out), or relabelling it in one place.

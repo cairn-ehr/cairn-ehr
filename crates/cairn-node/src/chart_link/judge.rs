@@ -421,7 +421,8 @@ async fn judge(
     // the apply and this read, so this is exactly the set THIS judgement left. The window relies
     // on that (#797): it re-reads against this set, so the clinician's own change is never
     // announced back to them while a colleague's, committed after, still is. A read after the
-    // commit could already include the colleague's change and silence it.
+    // commit could already include the colleague's change and silence it. The order is pinned by
+    // `judge_tests.rs`'s `the_set_left_is_read_after_the_apply_and_before_the_commit`.
     let record_of = opened.unwrap_or(about);
     let charts = crate::patient::person::person_charts(&tx, record_of)
         .await
@@ -466,21 +467,5 @@ async fn judge(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_judgement_says_what_it_did_not_just_that_it_was_recorded() {
-        use LinkEffect::*;
-        // Outranked whenever the standing assertion says the opposite — whatever the rest of
-        // the record reads.
-        for verb in [LinkVerb::Link, LinkVerb::Unlink] {
-            for joined in [false, true] {
-                assert_eq!(link_effect(verb, false, joined), Outranked, "{verb:?}");
-            }
-        }
-        assert_eq!(link_effect(LinkVerb::Link, true, true), TookEffect);
-        assert_eq!(link_effect(LinkVerb::Unlink, true, false), TookEffect);
-        assert_eq!(link_effect(LinkVerb::Unlink, true, true), StillJoined);
-    }
-}
+#[path = "judge_tests.rs"]
+mod tests;
