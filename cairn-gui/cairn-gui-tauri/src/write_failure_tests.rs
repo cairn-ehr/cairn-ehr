@@ -20,8 +20,9 @@ fn an_unclassified_failure_keeps_its_text_and_may_retry() {
     assert_eq!(view.retry, Retry::Now);
 }
 
-/// The node's own authoritative stale refusal (`ensure_same_charts`' producer) reaches sign-off
-/// through `node_failure`; it must come out `AfterReread`, the retry Task 5's re-read acts on.
+/// A real `stale_picture_refusal` (built here through `stale_record`; sign-off's
+/// `ensure_same_charts` and `ensure_same_targets` raise the same scope) reaches the webview through
+/// `node_failure`: it must come out `AfterReread`, the retry `signOff`'s stale re-read acts on.
 #[test]
 fn a_real_stale_refusal_is_after_reread_with_the_nodes_text() {
     use cairn_medication_view::ChartSet;
@@ -78,5 +79,27 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
             body.contains("node_cannot_write(\"no database connection\")"),
             "{f}"
         );
+        // The pre-write chart read failing is an outage, not a verdict (#797 review).
+        assert!(
+            body.contains("read_chart_of(state, patient).await.map_err(chart_read_failed)?"),
+            "{f}"
+        );
     }
+    // The orchestrator's own compare is the only thing that sees a colleague's change landing
+    // after the window's snapshot: its `Stale` refusal must reach the webview classified, never
+    // as a plain string (#797 review — a revert to `refused(format!(…))` reads naturally here).
+    assert!(
+        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&e))?"),
+        "sign_off_impl"
+    );
+}
+
+/// A chart read that failed before anything was written is an OUTAGE: nothing was decided, so
+/// the act may be retried (`Retry::Now`), as `link::chart_set_of` words the same fault. Its text
+/// passes through untouched.
+#[test]
+fn a_failed_chart_read_before_the_write_may_be_retried() {
+    let view = chart_read_failed("connection reset".into());
+    assert_eq!(view.retry, Retry::Now);
+    assert_eq!(view.text, "connection reset");
 }

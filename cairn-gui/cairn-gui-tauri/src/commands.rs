@@ -26,7 +26,7 @@ use crate::chart_set::{
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
-use crate::write_failure::{key_locked, node_cannot_write, node_failure};
+use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
@@ -220,7 +220,7 @@ pub async fn sign_off_impl(
     // (ADR-0076 decision 3). Also ahead of fixture mode's refusal, so a changed set is reported
     // as exactly that everywhere. This is the window's early snapshot; the orchestrator below
     // compares again against its own first read, and that one is authoritative.
-    let read_set = read_chart_of(state, patient).await.map_err(refused)?.charts;
+    let read_set = read_chart_of(state, patient).await.map_err(chart_read_failed)?.charts;
     // A CHANGED set is `Retry::AfterReread` (the screen is behind the record); an unreadable
     // list is a window fault and stays a plain refusal — `ChartSetError::into_view`.
     let shown = check_displayed_set(&read_set, &charts).map_err(ChartSetError::into_view)?;
@@ -343,7 +343,7 @@ pub async fn cease_impl(
     // the webview knows only the group id it was rendered with, and a reconciled group's
     // membership is a clinical fact the node owns. Read BEFORE the other refusals so the set
     // check (ADR-0076 decision 3) comes second, as it does for sign-off.
-    let chart = read_chart_of(state, patient).await.map_err(refused)?;
+    let chart = read_chart_of(state, patient).await.map_err(chart_read_failed)?;
     // The ONLY set check a cease gets: unlike sign-off, `cease_medication` takes one thread
     // and knows nothing of chart sets, so there is no orchestrator-side second compare. What
     // keeps a cease on the right chart regardless is decision 2 below — each thread is

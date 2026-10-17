@@ -184,6 +184,22 @@ fn an_own_act_moves_the_held_set_by_its_own_delta_only() {
     for impure in ["heldCharts", "displayedPatient", "el(", "say("] {
         assert!(!apply.contains(impure), "applyOwnAct reads {impure}");
     }
+    // The two helpers it is built from, whose one-character slips no branch guard above would see
+    // (#797 review): a dropped `!` in `without` keeps every touched chart, so an own Unlink stays
+    // held and is announced back as "No longer part of it"; an `ordered` that stops sorting makes
+    // `sameCharts` call an unmoved set moved, raising the draw floor over a colleague's read.
+    assert!(
+        js_fn(CHART_STALE_JS, "without").contains("return ids.filter((id) => !gone.includes(id));"),
+        "without"
+    );
+    assert!(
+        js_fn(CHART_STALE_JS, "ordered").contains("return [...new Set(ids)].sort();"),
+        "ordered"
+    );
+    assert!(
+        js_fn(CHART_STALE_JS, "sameCharts").contains("return ordered(a).join() === ordered(b).join();"),
+        "sameCharts"
+    );
 }
 
 /// "Read again" and the change sentence are said only over an answer `mayDraw` ACCEPTED AND

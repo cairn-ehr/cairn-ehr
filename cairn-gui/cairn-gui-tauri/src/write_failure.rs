@@ -9,9 +9,8 @@
 use crate::funnel::view::{ErrorView, Retry};
 use cairn_gui_data::port::DataError;
 
-/// The retry a classified failure earns. Pure, so every arm is tested without a database
-/// (the node-side verdict types are `pub(crate)` to `cairn-node`, so this crate cannot build
-/// the real errors).
+/// The retry a classified failure earns. Pure, so every arm is tested on a `DataError` directly;
+/// that real node errors classify into those arms is pinned separately, through `node_failure`.
 pub(crate) fn retry_for(error: &DataError) -> Retry {
     match error {
         // The screen is behind the record: re-read the whole chart, do not offer the button.
@@ -32,6 +31,17 @@ pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
     ErrorView {
         text: format!("{e:#}"),
         retry: retry_for(&cairn_gui_live::error::data_error_from(e)),
+    }
+}
+
+/// The chart read a write starts with failed (sign-off's set check, cease's line lookup): an
+/// OUTAGE — nothing was decided, let alone written — so the act may be retried (`Retry::Now`),
+/// as `link::chart_set_of` words the same fault. Never `refused`, whose `Never` would claim a
+/// verdict that does not exist (#797 review). The read's own text passes through.
+pub(crate) fn chart_read_failed(text: String) -> ErrorView {
+    ErrorView {
+        text,
+        retry: Retry::Now,
     }
 }
 
