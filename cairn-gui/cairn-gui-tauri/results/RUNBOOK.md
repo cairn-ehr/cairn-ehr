@@ -701,3 +701,53 @@ There is no *Confirm a doubted link* section in `TEMPLATE.md` yet; record this r
 after the *Unlink one link* section, under the same headings. **A figure outside the ≤ 15 s budget, a
 step count above paper's, or a doubted row read as "One person" is a finding to file, never a budget to
 adjust.**
+
+---
+
+## 14. A colleague's link lands mid-review (#797)
+
+The "the record changed under you" gesture: the clinician holds chart A, a colleague links A to B, and the
+clinician's next write is refused. The window must re-read the chart itself and say what changed. **Live
+only** (a `--mock` chart never changes under you). Paper counterpart: a colleague slips a note into the
+folder while you hold it; you see it on turning the page, with no extra act.
+
+**Setup.** Two charts A and B (register as in section 13's Setup B), at least one unsigned line on A, the
+window open on A with the key unlocked. A second node, or `cairn-node` on this same node as another
+clinician (`--attester-key` of a different enrolled clinician), is ready to run
+`link-charts "$A" "$B"`. Check the window shows no "How these charts are linked" line before you start.
+
+**Measurement 1 — the refusal and the re-read.** Start the stopwatch at the press of **Sign off** (step 3);
+stop it when the outcome line has finished saying "Now part of it: B.".
+
+1. Open chart A.
+2. From the second node, link A to B as the other clinician.
+3. Press **Sign off** on A.
+4. Read the outcome line: the refusal ("… nothing was signed"), then "The chart has been read again — review it
+   before you act on it.", then "Now part of it: B." The list now shows B's lines and the link line.
+5. Press **Sign off** again; it succeeds.
+
+**Measurement 2 — Read this chart again.** Make a read fail (stop the database or cut the connection) while a
+colleague's link is pending, press Sign off: the list stays visible, marked out of date ("This list is out of
+date … Press "Read this chart again""), and Sign off is disabled. Restore the connection and press **Read this
+chart again**. One act; time it from the press to the list drawn.
+
+**Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
+them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a
+colleague's link landing at the same moment if you can; only the colleague's change may be named.
+
+Budget: **re-read and sentence ≤ the single-chart open time (section 8 / section 11) after the press**;
+**Read this chart again ≤ that same open time, 1 act**. Steps: paper 0 extra acts (you see the note when you
+turn the page) → forced 2 (the refused press, then the second press); a colleague's change costs no search and
+no reload. Record, per run: the wall time from step 3 to the end of the sentence; whether the sentence named
+exactly the colleague's chart; whether Sign off was disabled during the failed pass. Repeat at least five times.
+**A figure above the budget, a sentence naming your own link, a sentence before the list drew, or a list that
+vanished when the read failed is a finding to file, never a budget to adjust.**
+
+**Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
+
+- [ ] The refusal, "The chart has been read again …" and "Now part of it: B." are announced in order.
+- [ ] "Read this chart again" is reachable by Tab at all times (also with no failure), and announced by that label.
+- [ ] The out-of-date notice is read, and the disabled Sign off is announced as unavailable.
+- [ ] Focus stays where the clinician put it; nothing takes focus on its own.
+
+`TEMPLATE.md` carries a matching block (*A colleague's link lands mid-review*).
