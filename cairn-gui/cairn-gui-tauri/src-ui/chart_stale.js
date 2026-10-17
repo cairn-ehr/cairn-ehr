@@ -54,7 +54,11 @@ function behindTheRecord(failure) {
  */
 let behindAfter = null;
 
-/** A stale refusal arrived: called by main.js's `refresh` before its read takes a revision. */
+/**
+ * The window learnt the list is behind the record — a stale refusal, or a recorded "Different
+ * people" with a stale pair (`behind_the_record`): called by main.js's `refresh` before its read
+ * takes a revision.
+ */
 function knowListBehind() {
   behindAfter = chartReadRevision;
 }
@@ -74,8 +78,27 @@ function drewRead(revision) {
   return ended;
 }
 
+/** Whether the list on screen is marked out of date (`markListStale`'s sentence is up). */
+function listMarkedStale() {
+  return el("chart-stale").textContent === LIST_OUT_OF_DATE;
+}
+
 /**
- * The outcome line after a re-read was DRAWN (called by main.js's `refresh` only over an answer
+ * A read that took `revision` drew its list (main.js's `refresh`); `marked`: the list it replaced
+ * was marked out of date. Usually the line is then said (`sayAfterReread`). But an OLDER read can
+ * land after a newer one already failed and marked the list (`mayDraw` accepts it: a failure never
+ * raises the draw floor) — read before the stale refusal, that list is just as behind the record
+ * (#797 fix review). So it is marked again, and the outcome line, still saying the refusal and the
+ * failed read, is left as it is: never a known-stale list under a live "Sign off N".
+ */
+function sayAfterDraw(lead, revision, marked, pane) {
+  const ended = drewRead(revision);
+  if (marked && !ended) markListStale();
+  else sayAfterReread(lead, ended, pane);
+}
+
+/**
+ * The outcome line after a re-read was DRAWN (called through `sayAfterDraw` only over an answer
  * `mayDraw` accepted, so an overtaken read says nothing). `readAgain`: this list ended a stale
  * refusal (`drewRead`) — say the refusal (`lead`), that the chart was read again, and what
  * changed. Otherwise only a change is added to the lead. With none, the line is left alone — it

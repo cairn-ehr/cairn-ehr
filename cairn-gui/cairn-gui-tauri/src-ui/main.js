@@ -330,8 +330,8 @@ function clearChart() {
  * `lead` is the outcome sentence of the act that prompted the re-read (a sign-off, a cease, a
  * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
  * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
- * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `behind` = a stale
- * refusal prompted it; changes are named against the held set (both: chart_stale.js).
+ * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `behind` = the list is
+ * known behind the record (a stale refusal prompted it); changes are named against the held set.
  */
 async function refresh(lead, behind) {
   const patient = displayedPatient;
@@ -345,9 +345,10 @@ async function refresh(lead, behind) {
     // never rendered (#800).
     if (!mayDraw(patient, revision)) return;
     drawnRevision = revision;
+    const marked = listMarkedStale(); // before `render`, whose `drawList` takes the mark down
     render(answer, patient);
     // Only over a list that DREW: a drawing fault took it down (`showUnshownList`), nothing to review.
-    if (renderedPatient === patient) sayAfterReread(lead, drewRead(revision), answer);
+    if (renderedPatient === patient) sayAfterDraw(lead, revision, marked, answer);
   } catch (e) {
     // A failure is said only by the newest read started: that read speaks for the chart now.
     if (!isLatestRead(patient, revision)) return;

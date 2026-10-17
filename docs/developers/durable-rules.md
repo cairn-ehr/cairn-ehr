@@ -38,8 +38,10 @@ change myself)."*
   taken); WHICHEVER read fails last then marks the list (`listKnownBehind`); only a list drawn from a read sent AFTER
   the refusal ends it (`drewRead`), and taking the list down ends it (`holdCharts(null)`). A success report can carry
   it too: a partly-recorded "Different people" whose failed pair was `AfterReread` sets
-  `LinkReportView::behind_the_record`. Pin: `a_known_stale_list_outlives_the_read_that_learnt_it` (walked headlessly:
-  an overtaking "Read this chart again", an older read landing late). **Tempting wrong fixes:** a `staleIfFails`
+  `LinkReportView::behind_the_record`. An OLDER read landing after a newer one already failed and marked the list
+  re-marks it and leaves the outcome line (`sayAfterDraw`; whether it was marked is read BEFORE `render`). Pins:
+  `a_known_stale_list_outlives_the_read_that_learnt_it`, `an_older_read_landing_late_keeps_a_stale_mark` (walked
+  headlessly: an overtaking "Read this chart again", an older read landing late before and after the failure). **Tempting wrong fixes:** a `staleIfFails`
   argument — the re-read it rides is overtaken by "Read this chart again" or an own act's draw floor, its failure is
   never said, and the overtaking read fails unmarked; or a plain boolean cleared by ANY draw — `mayDraw` lets an older
   read, sent before the refusal, draw after it.

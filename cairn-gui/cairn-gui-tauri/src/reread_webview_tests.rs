@@ -19,11 +19,7 @@ const INDEX_HTML: &str = include_str!("../src-ui/index.html");
 /// `el("outcome").textContent` carries its own parentheses).
 fn refresh_calls(body: &str) -> Vec<Vec<String>> {
     let mut calls = Vec::new();
-    for (at, _) in body.match_indices("refresh(") {
-        // `function refresh(` is the declaration, not a call.
-        if body[..at].ends_with("function ") {
-            continue;
-        }
+    for at in refresh_call_starts(body) {
         let mut args = vec![String::new()];
         let mut depth = 0;
         for c in body[at + "refresh(".len()..].chars() {
@@ -214,11 +210,15 @@ fn read_again_is_said_only_after_an_accepted_answer() {
     let rendered = position(refresh, "render(answer, patient);");
     let said = position(
         refresh,
-        "if (renderedPatient === patient) sayAfterReread(lead, drewRead(revision), answer);",
+        "if (renderedPatient === patient) sayAfterDraw(lead, revision, marked, answer);",
     );
     let caught = position(refresh, "catch (e)");
     assert!(rendered < said && said < caught, "{refresh}");
-    assert!(!refresh[caught..].contains("sayAfterReread"), "{refresh}");
+    assert!(!refresh[caught..].contains("sayAfterDraw"), "{refresh}");
+    assert!(
+        !refresh.contains("sayAfterReread"),
+        "said only through sayAfterDraw"
+    );
     assert!(
         !refresh.contains("READ_AGAIN"),
         "said only through sayAfterReread"
@@ -229,6 +229,32 @@ fn read_again_is_said_only_after_an_accepted_answer() {
     let again = position(after, "READ_AGAIN, pane.set_change");
     let changed = position(after, "else if (pane.set_change)");
     assert!(stale < again && again < changed, "{after}");
+}
+
+/// An OLDER read landing after a newer one already FAILED and marked the list (#797 fix review):
+/// `mayDraw` lets it draw (a failure never raises the floor), `drawList` takes the mark down and
+/// re-enables sign-off — yet that list was read before the stale refusal, so it is still behind.
+/// Whether the list was marked is taken BEFORE `render` (which clears it); a draw that does not end
+/// the stale state (`drewRead`) marks the list again and leaves the outcome line — still saying
+/// the refusal and the failed read — alone.
+#[test]
+fn an_older_read_landing_late_keeps_a_stale_mark() {
+    let refresh = js_fn(MAIN_JS, "refresh");
+    let marked = position(refresh, "const marked = listMarkedStale();");
+    assert!(
+        marked < position(refresh, "render(answer, patient);"),
+        "{refresh}"
+    );
+    assert!(
+        js_fn(CHART_STALE_JS, "listMarkedStale")
+            .contains("return el(\"chart-stale\").textContent === LIST_OUT_OF_DATE;"),
+        "the mark is the out-of-date sentence on screen"
+    );
+    let draw = js_fn(CHART_STALE_JS, "sayAfterDraw");
+    let ended = position(draw, "const ended = drewRead(revision);");
+    let remark = position(draw, "if (marked && !ended) markListStale();");
+    let say = position(draw, "else sayAfterReread(lead, ended, pane);");
+    assert!(ended < remark && remark < say, "{draw}");
 }
 
 /// The outcome line is a run of sentences from different places — Rust's refusals end without a
@@ -382,7 +408,10 @@ fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
         };
         let calls = refresh_calls(caught);
         assert!(!calls.is_empty(), "{file} {name} re-reads nothing: {body}");
-        for (args, gate) in calls.iter().zip(refresh_gates(caught)) {
+        let gates = refresh_gates(caught);
+        // One gate per call, or the zip below would silently skip a call (#797 fix review).
+        assert_eq!(calls.len(), gates.len(), "{file} {name}");
+        for (args, gate) in calls.iter().zip(gates) {
             let flag = args.get(1).map(String::as_str);
             // The flag, AND the condition the call sits under (#797 review): `if (!reread && …)`
             // would pass the right flag yet re-read on every OTHER failure and never on a stale one.
@@ -400,14 +429,31 @@ fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
     }
 }
 
-/// For each `await refresh(` in `body`, in order: the condition of the `if` it sits directly
-/// under (`if (c) await refresh(…)`, or `if (c) {` with the call as the block's first statement),
-/// or `None` when the call is a statement of its own. Pure; the condition is what follows `if (`
-/// up to the end of the line.
+/// Where each `refresh(` CALL in `body` starts — every occurrence but the declaration. The one
+/// source of positions for both [`refresh_calls`] and [`refresh_gates`], so the two always describe
+/// the same calls, whatever keyword is in front of them (`await`, `void`, `return`).
+fn refresh_call_starts(body: &str) -> Vec<usize> {
+    body.match_indices("refresh(")
+        .map(|(at, _)| at)
+        // `function refresh(` is the declaration, not a call.
+        .filter(|&at| !body[..at].ends_with("function "))
+        .collect()
+}
+
+/// For each `refresh(` call in `body` ([`refresh_call_starts`]), in order: the condition of the
+/// `if` it sits directly under (`if (c) await refresh(…)`, or `if (c) {` with the call as the
+/// block's first statement), or `None` when the call is a statement of its own. A leading `await`,
+/// `void` or `return` is stepped over. Pure; the condition is what follows `if (` up to the end of
+/// the line.
 fn refresh_gates(body: &str) -> Vec<Option<&str>> {
-    body.match_indices("await refresh(")
-        .map(|(at, _)| {
+    refresh_call_starts(body)
+        .into_iter()
+        .map(|at| {
             let before = body[..at].trim_end();
+            let before = ["await", "void", "return"]
+                .iter()
+                .find_map(|kw| before.strip_suffix(kw))
+                .map_or(before, str::trim_end);
             // `if (c) {` on the line above: step back over the block's opening brace.
             let before = before.strip_suffix('{').map_or(before, str::trim_end);
             let line_start = before.rfind('\n').map_or(0, |n| n + 1);

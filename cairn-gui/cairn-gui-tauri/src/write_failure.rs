@@ -35,9 +35,9 @@ pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
 }
 
 /// The chart read a write starts with failed (sign-off's set check, cease's line lookup): an
-/// OUTAGE — nothing was decided, let alone written — so the act may be retried (`Retry::Now`),
-/// as `link::chart_set_of` words the same fault. Never `refused`, whose `Never` would claim a
-/// verdict that does not exist (#797 review). The read's own text passes through.
+/// OUTAGE — nothing was decided, let alone written — so the act may be retried (`Retry::Now`), the
+/// retry `link::chart_set_of` gives the same fault. Never `refused`, whose `Never` would claim a
+/// verdict that does not exist (#797 review). The read's own text passes through unprefixed.
 pub(crate) fn chart_read_failed(text: String) -> ErrorView {
     ErrorView {
         text,
