@@ -200,6 +200,18 @@ fn a_set_without_the_chart_on_screen_is_not_reported() {
     );
 }
 
+/// An act that changed nothing (`reload` false: an Outranked link) reports NO set, even when
+/// `left` is handed the record it read (#797 final review). Carrying it would move the window's
+/// held set and raise its draw floor with no re-read following — dropping a colleague's read
+/// already in flight, the first news of a real change.
+#[test]
+fn an_outranked_link_reports_no_set() {
+    let set = ChartSet::new([id(1), id(2)]).unwrap();
+    let report = link_report(LinkEffect::Outranked, &set, &set).left(&set, id(1));
+    assert!(!report.reload);
+    assert_eq!(report.charts_after, None);
+}
+
 /// Every report starts with no set: only a command that holds the node's outcome says one
 /// ("Different people" never does — it changes no record's set). Serialized as `null`, which
 /// the webview reads as "compare against the screen" (an empty list would read as a set that

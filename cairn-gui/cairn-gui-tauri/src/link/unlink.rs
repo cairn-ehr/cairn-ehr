@@ -302,7 +302,8 @@ pub async fn unlink_impl(
     .map_err(|e| unlink_error_view(&e))?;
     // `left`: the set this unlink left the record on screen as — read by the node inside the
     // act's own transaction — so the window's re-read compares against it and never announces
-    // the clinician's own unlink back to them (#797).
+    // the clinician's own unlink back to them (#797). Attached only if the unlink changed the
+    // record (`LinkReportView::left`).
     Ok(unlink_report(
         outcome.effect,
         edge.low,

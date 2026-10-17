@@ -102,7 +102,8 @@ pub async fn confirm_link_impl(
     )
     .await
     .map_err(|e| judgement_error_view("confirmation", &e))?;
-    // `left`: the set this confirm left the record on screen as (#797); see `unlink_impl`.
+    // `left`: the set this confirm left the record on screen as (#797), only if it changed the
+    // record; see `unlink_impl`.
     Ok(
         confirm_report(outcome.effect, kind, edge.low, edge.high)
             .left(&outcome.charts, edge.opened),

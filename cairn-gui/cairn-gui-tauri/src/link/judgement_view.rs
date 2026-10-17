@@ -34,8 +34,9 @@ pub struct LinkReportView {
     /// Link, Unlink and Confirm only.
     ///
     /// `None` (`null` to the webview, which then compares against the set on screen) when the
-    /// act reported no set — "Different people" changes no record's set — or the set read is not
-    /// the record on screen ([`charts_after`]). Never an empty list: an empty seen set means
+    /// act reported no set — "Different people" changes no record's set — when the act changed
+    /// nothing (`reload` false: Outranked), or when the set read is not the record on screen
+    /// ([`charts_after`]). Never an empty list: an empty seen set means
     /// "could not tell" to `med_list`, which would then say nothing at all.
     pub charts_after: Option<Vec<String>>,
 }
@@ -43,8 +44,18 @@ pub struct LinkReportView {
 impl LinkReportView {
     /// This report, carrying the set its act left: `charts` as the node read it inside the act's
     /// transaction, for `on_screen`, the chart the clinician holds. See [`charts_after`].
+    ///
+    /// Only for an act that changed the record (`reload`): an Outranked judgement left the record
+    /// as it was, and no re-read follows it. Handed a set anyway, the window would move the set
+    /// the clinician holds and raise its draw floor (`holdOwnAct`) — dropping a colleague's read
+    /// already in flight, which may be the first news of a real change (#797 final review). So
+    /// the gate lives here, once, rather than at each of the three call sites.
     pub fn left(mut self, charts: &ChartSet, on_screen: Uuid) -> Self {
-        self.charts_after = charts_after(charts, on_screen);
+        self.charts_after = if self.reload {
+            charts_after(charts, on_screen)
+        } else {
+            None
+        };
         self
     }
 }

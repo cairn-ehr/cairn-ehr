@@ -194,7 +194,8 @@ pub async fn link_impl(
     .await
     .map_err(|e| link_error_view(&e))?;
     // `left`: the set this link left the record on screen as, so the re-read never announces
-    // the clinician's own link back to them (#797).
+    // the clinician's own link back to them (#797). Attached only if the link changed the
+    // record (`LinkReportView::left`).
     Ok(link_report(outcome.effect, &outcome.charts, &compared).left(&outcome.charts, patient))
 }
 

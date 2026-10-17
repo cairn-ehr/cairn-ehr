@@ -159,6 +159,16 @@ fn outranked_is_a_disagreement_to_settle_not_retry() {
     assert!(!r.reload);
 }
 
+/// An Outranked unlink changed nothing, so it reports no set even when `left` is handed one
+/// (#797 final review; see `judgement_view_tests.rs`'s `an_outranked_link_reports_no_set`).
+#[test]
+fn an_outranked_unlink_reports_no_set() {
+    let after = set(&[1, 2, 3]);
+    let r = unlink_report(LinkEffect::Outranked, id(2), id(3), &after, &after).left(&after, id(1));
+    assert!(!r.reload);
+    assert_eq!(r.charts_after, None);
+}
+
 #[test]
 fn an_unlink_error_is_worded_as_an_unlink() {
     let v = crate::link::judgement_view::judgement_error_from(

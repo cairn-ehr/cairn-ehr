@@ -343,6 +343,16 @@ mod tests {
         assert!(!r.reload && r.sentence.contains("NOT in effect"));
     }
 
+    /// An Outranked confirm changed nothing, so it reports no set even when `left` is handed
+    /// one (#797 final review; see `judgement_view_tests.rs`'s `an_outranked_link_reports_no_set`).
+    #[test]
+    fn an_outranked_confirm_reports_no_set() {
+        let set = ChartSet::new([LOW, HIGH]).unwrap();
+        let r = confirm_report(LinkEffect::Outranked, PairKind::Link, LOW, HIGH).left(&set, LOW);
+        assert!(!r.reload);
+        assert_eq!(r.charts_after, None);
+    }
+
     /// The confirm's Outranked and StillJoined lines are the link's own: a confirm IS a link
     /// judgement (an attested `identity.link.asserted`), so it lands exactly as one does.
     #[test]
