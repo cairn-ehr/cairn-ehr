@@ -97,7 +97,7 @@ fn read_again_keeps_the_outcome_line_but_not_a_failure_it_retries() {
 
     // A drawn re-read with nothing else to say takes a standing failure down, to its lead.
     let after = js_fn(CHART_STALE_JS, "sayAfterReread");
-    let changed = position(after, "else if (pane.set_change)");
+    let changed = position(after, "if (readAgain || pane.set_change)");
     let cleared = position(
         after,
         "else if (showsFailedRead(el(\"outcome\").textContent)) say(sentences(lead));",
@@ -157,6 +157,7 @@ fn every_sentence_that_names_the_control_quotes_its_label() {
         src[start..end].to_string()
     };
     assert!(pieces(CHART_STALE_JS, "LIST_OUT_OF_DATE").contains(&quoted));
+    assert!(pieces(CHART_STALE_JS, "LIST_MAY_BE_OUT_OF_DATE").contains(&quoted));
     assert!(pieces(DUPLICATES_JS, "REVIEW_WAITS_FOR_LIST").contains(&quoted));
     assert!(pieces(DUPLICATES_JS, "NO_LIST_TO_COMPARE").contains(&quoted));
     // The Rust sentences say `press \"…\"` (an escaped quote).

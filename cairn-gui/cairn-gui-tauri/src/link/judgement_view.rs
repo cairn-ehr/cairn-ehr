@@ -5,7 +5,7 @@
 //! The wording IS the safety content (principle 3): an outcome line never calls a judgement
 //! that did not take effect "linked", and a failure never offers a live retry over a commit
 //! whose outcome is unknown (#713).
-use crate::funnel::view::{ErrorView, Retry};
+use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_gui_data::port::DataError;
 use cairn_medication_view::ChartSet;
 use cairn_node::chart_link::LinkEffect;
@@ -42,10 +42,11 @@ pub struct LinkReportView {
     pub charts_after: Option<ChartSet>,
     /// A SUCCESS report that still says the screen is behind the record (#797 review): only a
     /// partly-recorded "Different people", one of whose failed pairs was `Retry::AfterReread`
-    /// (refused because the record changed, or its commit interrupted, #713). The window's re-read
-    /// then treats the list as stale, exactly as for a refusal — marked out of date if that
-    /// re-read fails. `false` for every other report: a recorded act is not a stale picture.
-    pub behind_the_record: bool,
+    /// (refused because the record changed, or its commit interrupted, #713). It carries that
+    /// pair's [`Recorded`] — the worst, if several — so the window's re-read treats the list as
+    /// stale exactly as for a refusal, and words it for the cause (#811). `None` for every other
+    /// report: a recorded act is not a stale picture. On the wire `null`, `"no"` or `"unknown"`.
+    pub behind_the_record: Option<Recorded>,
 }
 
 impl LinkReportView {
@@ -95,7 +96,7 @@ pub fn refused(text: impl Into<String>) -> ErrorView {
 pub fn stale(text: impl Into<String>) -> ErrorView {
     ErrorView {
         text: text.into(),
-        retry: Retry::AfterReread,
+        retry: Retry::AfterReread(Recorded::No),
     }
 }
 
@@ -174,20 +175,20 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
             ),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         // See LINK_STILL_JOINED: R2a never returns this for a link.
         LinkEffect::StillJoined => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
     }
 }
@@ -223,7 +224,7 @@ pub fn judgement_error_view(act: &str, e: &anyhow::Error) -> ErrorView {
                  event {event} was being saved. If it was recorded but a later judgement outranks it, \
                  the chart will look unchanged after it is read again."
             ),
-            retry: Retry::AfterReread,
+            retry: Retry::AfterReread(Recorded::Unknown),
         },
         None => judgement_error_from(act, cairn_gui_live::error::data_error_from(e)),
     }
@@ -251,7 +252,7 @@ pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
         // the whole chart rather than offering a live retry over a picture that is now wrong.
         DataError::Stale(t) => ErrorView {
             text: format!("The {act} was not recorded: {t}"),
-            retry: Retry::AfterReread,
+            retry: Retry::AfterReread(Recorded::No),
         },
         DataError::Unavailable(t) => ErrorView {
             text: format!("The {act} was not confirmed: {t}"),

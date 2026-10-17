@@ -175,7 +175,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::view::THIS_CHANGED);
-        assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+        assert_eq!(
+            err.retry,
+            crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+        );
     }
 
     #[test]
@@ -219,6 +222,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
-        assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+        assert_eq!(
+            err.retry,
+            crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+        );
     }
 }

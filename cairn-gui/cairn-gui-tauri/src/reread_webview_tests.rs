@@ -1,5 +1,5 @@
 //! Guards on the webview's half of #797: every "the screen is behind the record" refusal
-//! (`retry: "after_reread"`) re-reads the WHOLE chart, a re-read says what changed (Rust's
+//! (`retry: { after_reread }`) re-reads the WHOLE chart, a re-read says what changed (Rust's
 //! sentence), and a list that could not be re-read after such a refusal is marked out of date.
 //!
 //! The fixes live in `main.js`, `chart_stale.js`, `link.js`, `unlink.js` and `index.html`, which
@@ -224,11 +224,21 @@ fn read_again_is_said_only_after_an_accepted_answer() {
         "said only through sayAfterReread"
     );
 
+    // A re-read that ended a stale refusal, OR names a change, says "review it before you act
+    // on it" (#811's M5: a colleague's change named after the clinician's own successful act is
+    // as much news as one named after a refusal). After an interrupted commit (`"unknown"`) a
+    // named change may be the clinician's own, and the line says so (#811's M4).
     let after = js_fn(CHART_STALE_JS, "sayAfterReread");
-    let stale = position(after, "if (readAgain)");
-    let again = position(after, "READ_AGAIN, pane.set_change");
-    let changed = position(after, "else if (pane.set_change)");
-    assert!(stale < again && again < changed, "{after}");
+    let either = position(after, "if (readAgain || pane.set_change) {");
+    let mine = position(
+        after,
+        "const mine = readAgain === \"unknown\" && pane.set_change ? MAY_BE_YOURS : null;",
+    );
+    let said = position(
+        after,
+        "say(sentences(lead, READ_AGAIN, pane.set_change, mine));",
+    );
+    assert!(either < mine && mine < said, "{after}");
 }
 
 /// An OLDER read landing after a newer one already FAILED and marked the list (#797 fix review):
@@ -247,8 +257,8 @@ fn an_older_read_landing_late_keeps_a_stale_mark() {
     );
     assert!(
         js_fn(CHART_STALE_JS, "listMarkedStale")
-            .contains("return el(\"chart-stale\").textContent === LIST_OUT_OF_DATE;"),
-        "the mark is the out-of-date sentence on screen"
+            .contains("return mark === LIST_OUT_OF_DATE || mark === LIST_MAY_BE_OUT_OF_DATE;"),
+        "the mark is either out-of-date sentence on screen"
     );
     let draw = js_fn(CHART_STALE_JS, "sayAfterDraw");
     let ended = position(draw, "const ended = drewRead(revision);");
@@ -314,15 +324,20 @@ fn a_failed_stale_re_read_marks_the_list_out_of_date() {
 #[test]
 fn a_known_stale_list_outlives_the_read_that_learnt_it() {
     let refresh = js_fn(MAIN_JS, "refresh");
-    let known = position(refresh, "if (behind) knowListBehind();");
+    let known = position(refresh, "if (behind) knowListBehind(behind);");
     assert!(
         position(refresh, "if (patient === null) return;") < known
             && known < position(refresh, "const revision = ++chartReadRevision;"),
         "{refresh}"
     );
+    let know = js_fn(CHART_STALE_JS, "knowListBehind");
     assert!(
-        js_fn(CHART_STALE_JS, "knowListBehind").contains("behindAfter = chartReadRevision;"),
+        know.contains("behindAfter = chartReadRevision;"),
         "the newest revision sent BEFORE the refusal"
+    );
+    assert!(
+        know.contains("if (behindRecorded !== \"unknown\") behindRecorded = recorded;"),
+        "\"may have been recorded\" is never overwritten by a later \"nothing was\" (#811): {know}"
     );
     assert!(
         js_fn(CHART_STALE_JS, "listKnownBehind").contains("return behindAfter !== null;"),
@@ -333,14 +348,25 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
         drew.contains("const ended = behindAfter !== null && revision > behindAfter;"),
         "only a read sent after the refusal ends it: {drew}"
     );
-    assert!(drew.contains("if (ended) behindAfter = null;"), "{drew}");
+    assert!(drew.contains("if (!ended) return null;"), "{drew}");
     assert!(
-        js_fn(CHART_STALE_JS, "holdCharts").contains("if (charts === null) behindAfter = null;"),
+        position(drew, "const recorded = behindRecorded;") < position(drew, "forgetBehind();"),
+        "the cause is handed on before it is forgotten: {drew}"
+    );
+    assert!(drew.contains("return recorded;"), "{drew}");
+    assert!(
+        js_fn(CHART_STALE_JS, "holdCharts").contains("if (charts === null) forgetBehind();"),
         "no list on screen, nothing to be behind"
     );
-    // The declaration and those three moves, nothing else: an own act (`holdOwnAct`) leaves the
-    // list on screen as old as it was.
-    assert_eq!(CHART_STALE_JS.matches("behindAfter = ").count(), 4);
+    let forget = js_fn(CHART_STALE_JS, "forgetBehind");
+    assert!(
+        forget.contains("behindAfter = null;") && forget.contains("behindRecorded = null;"),
+        "{forget}"
+    );
+    // The declarations and those moves, nothing else: an own act (`holdOwnAct`) leaves the list
+    // on screen as old as it was.
+    assert_eq!(CHART_STALE_JS.matches("behindAfter = ").count(), 3);
+    assert_eq!(CHART_STALE_JS.matches("behindRecorded = ").count(), 3);
 }
 
 /// `markListStale` warns in the chart's warnings — ABOVE the table, never on the outcome line —
@@ -350,7 +376,13 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
 fn mark_list_stale_disables_sign_off_and_warns_above_the_table() {
     let mark = js_fn(CHART_STALE_JS, "markListStale");
     assert!(
-        mark.contains("setMessage(el(\"chart-stale\"), LIST_OUT_OF_DATE);"),
+        mark.contains(
+            "const sentence = behindRecorded === \"unknown\" ? LIST_MAY_BE_OUT_OF_DATE : LIST_OUT_OF_DATE;"
+        ),
+        "after an interrupted commit the list MAY be out of date (#811): {mark}"
+    );
+    assert!(
+        mark.contains("setMessage(el(\"chart-stale\"), sentence);"),
         "{mark}"
     );
     assert!(
@@ -380,13 +412,21 @@ fn mark_list_stale_disables_sign_off_and_warns_above_the_table() {
 /// Every handler a stale refusal reaches re-reads the WHOLE chart, flagged stale (so a failed
 /// re-read marks the list): Compare, the review panel's Compare, a link-panel judgement, a
 /// review-panel verdict, sign-off and cease. The flag is `behindTheRecord(failure)` — directly or
-/// through `reread` — and only that helper spells `"after_reread"`.
+/// through `reread` — and only that helper reads `after_reread`.
 #[test]
 fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
     let behind = js_fn(CHART_STALE_JS, "behindTheRecord");
     assert!(
-        behind.contains("return Boolean(failure && failure.retry === \"after_reread\");"),
+        behind.contains("return (retry && retry.after_reread) || null;"),
         "{behind}"
+    );
+    assert_eq!(
+        [CHART_STALE_JS, LINK_JS, UNLINK_JS, MAIN_JS]
+            .iter()
+            .map(|js| js.matches(".after_reread").count())
+            .sum::<usize>(),
+        1,
+        "only behindTheRecord reads the cause off a failure"
     );
     for (file, js, name) in [
         ("link.js", LINK_JS, "compare"),
@@ -503,5 +543,18 @@ fn the_list_out_of_date_sentence_names_the_control() {
         stale,
         "This list is out of date: the record changed while it was on screen, and reading it \
          again failed. Press \"Read this chart again\"."
+    );
+    // #811: after an interrupted commit, neither "the record changed" nor a colleague is known.
+    let start = position(CHART_STALE_JS, "const LIST_MAY_BE_OUT_OF_DATE =");
+    let declaration = &CHART_STALE_JS[start..start + position(&CHART_STALE_JS[start..], ";\n")];
+    let maybe: String = declaration.split('\'').skip(1).step_by(2).collect();
+    assert_eq!(
+        maybe,
+        "This list may be out of date: whether your last act was recorded is not known, and \
+         reading it again failed. Press \"Read this chart again\"."
+    );
+    assert_eq!(
+        js_const(CHART_STALE_JS, "MAY_BE_YOURS"),
+        "That change may be your own act, if it was recorded."
     );
 }

@@ -1,5 +1,5 @@
 // What the window says when the record changed under the chart on screen (#797). A refusal that
-// says "the screen is behind the record" (`retry: "after_reread"`) re-reads the WHOLE chart, from
+// says "the screen is behind the record" (`retry: { after_reread }`) re-reads the WHOLE chart, from
 // whichever handler it reached (main.js's `signOff`/`cease`, link.js, unlink.js). The re-read then
 // says it was read again and what joined or left the record — Rust's sentence (the pane's
 // `set_change`, from `chart_set::set_change`), never one guessed here. If that re-read fails, the
@@ -35,12 +35,29 @@ const LIST_OUT_OF_DATE =
   'again failed. Press "Read this chart again".';
 
 /**
- * Whether a refusal says the screen is behind the record: the record changed since it was read
- * (nothing was recorded), or a commit was interrupted (#713, so it MAY have been). The one
- * spelling of the test, so every handler that re-reads on it asks the same question.
+ * `LIST_OUT_OF_DATE` after an interrupted commit (#713, `"unknown"`): the clinician's own act may
+ * be all that changed, so "the record changed" — a colleague, by implication — is not known (#811).
+ */
+const LIST_MAY_BE_OUT_OF_DATE =
+  'This list may be out of date: whether your last act was recorded is not known, and ' +
+  'reading it again failed. Press "Read this chart again".';
+
+/**
+ * Said after Rust's change sentence when the re-read follows an interrupted commit (#811): the
+ * held set never moved by that act (no report came back), so the change named may be its own.
+ */
+const MAY_BE_YOURS = "That change may be your own act, if it was recorded.";
+
+/**
+ * Whether a refusal says the screen is behind the record, and what was recorded (Rust's
+ * `Recorded`): `"no"` — the record changed since it was read, nothing was recorded — or
+ * `"unknown"` — a commit was interrupted (#713), so it MAY have been. `null` when it is not
+ * behind. Both values are truthy: every handler re-reads on either. The one spelling of the
+ * test, so every handler that re-reads on it asks the same question.
  */
 function behindTheRecord(failure) {
-  return Boolean(failure && failure.retry === "after_reread");
+  const retry = failure && failure.retry;
+  return (retry && retry.after_reread) || null;
 }
 
 /**
@@ -55,12 +72,26 @@ function behindTheRecord(failure) {
 let behindAfter = null;
 
 /**
+ * What the acts behind `behindAfter` recorded: `"no"`, or `"unknown"` once ANY of them was an
+ * interrupted commit — never moved back to `"no"`, since a later stale refusal does not settle
+ * whether that act landed (#811). Null with `behindAfter`.
+ */
+let behindRecorded = null;
+
+/**
  * The window learnt the list is behind the record — a stale refusal, or a recorded "Different
  * people" with a stale pair (`behind_the_record`): called by main.js's `refresh` before its read
- * takes a revision.
+ * takes a revision. `recorded`: `"no"` or `"unknown"` (`behindTheRecord`).
  */
-function knowListBehind() {
+function knowListBehind(recorded) {
   behindAfter = chartReadRevision;
+  if (behindRecorded !== "unknown") behindRecorded = recorded;
+}
+
+/** The list is no longer known behind the record: a later read drew, or no list is drawn. */
+function forgetBehind() {
+  behindAfter = null;
+  behindRecorded = null;
 }
 
 /** Whether the list on screen is known to be behind the record (asked by a failed read). */
@@ -69,18 +100,22 @@ function listKnownBehind() {
 }
 
 /**
- * The read that took `revision` drew a list. Returns whether that list ends a known-stale state —
- * it was read after the refusal — so the outcome line says the chart was read again.
+ * The read that took `revision` drew a list. If that list ends a known-stale state — it was read
+ * after the refusal — returns what the acts behind it recorded (`"no"` / `"unknown"`), so the
+ * outcome line says the chart was read again, worded for the cause. Otherwise null.
  */
 function drewRead(revision) {
   const ended = behindAfter !== null && revision > behindAfter;
-  if (ended) behindAfter = null;
-  return ended;
+  if (!ended) return null;
+  const recorded = behindRecorded;
+  forgetBehind();
+  return recorded;
 }
 
-/** Whether the list on screen is marked out of date (`markListStale`'s sentence is up). */
+/** Whether the list on screen is marked out of date (either of `markListStale`'s sentences is up). */
 function listMarkedStale() {
-  return el("chart-stale").textContent === LIST_OUT_OF_DATE;
+  const mark = el("chart-stale").textContent;
+  return mark === LIST_OUT_OF_DATE || mark === LIST_MAY_BE_OUT_OF_DATE;
 }
 
 /**
@@ -99,17 +134,20 @@ function sayAfterDraw(lead, revision, marked, pane) {
 
 /**
  * The outcome line after a re-read was DRAWN (called through `sayAfterDraw` only over an answer
- * `mayDraw` accepted, so an overtaken read says nothing). `readAgain`: this list ended a stale
- * refusal (`drewRead`) — say the refusal (`lead`), that the chart was read again, and what
- * changed. Otherwise only a change is added to the lead. With none, the line is left alone — it
- * may be saying how a signed act went — unless it still says a read FAILED, which this drawn read
- * has just made untrue: it goes back to its lead (what was said before the failure, possibly
- * nothing).
+ * `mayDraw` accepted, so an overtaken read says nothing). `readAgain`: null, or what the acts of
+ * the stale refusal this list ended recorded (`drewRead`). If it ended one, OR names a change, say
+ * the lead, that the chart was read again — review it — and what changed: a change is news to
+ * review after the clinician's own act too (#811's M5). After an interrupted commit (`"unknown"`)
+ * a named change may be the clinician's own, and the line says so (#811's M4). Otherwise the line
+ * is left alone — it may be saying how a signed act went — unless it still says a read FAILED,
+ * which this drawn read has just made untrue: it goes back to its lead (what was said before the
+ * failure, possibly nothing).
  */
 function sayAfterReread(lead, readAgain, pane) {
-  if (readAgain) say(sentences(lead, READ_AGAIN, pane.set_change));
-  else if (pane.set_change) say(sentences(lead, pane.set_change));
-  else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
+  if (readAgain || pane.set_change) {
+    const mine = readAgain === "unknown" && pane.set_change ? MAY_BE_YOURS : null;
+    say(sentences(lead, READ_AGAIN, pane.set_change, mine));
+  } else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
 }
 
 /**
@@ -165,7 +203,7 @@ function sentences(...parts) {
  */
 function holdCharts(charts) {
   heldCharts = charts;
-  if (charts === null) behindAfter = null;
+  if (charts === null) forgetBehind();
 }
 
 /**
@@ -255,7 +293,8 @@ el("reread").addEventListener("click", () => void refresh(rereadLead()));
  * list that draws (`drawList`) or is taken down (`clearDrawnList`) clears the warning.
  */
 function markListStale() {
-  setMessage(el("chart-stale"), LIST_OUT_OF_DATE);
+  const sentence = behindRecorded === "unknown" ? LIST_MAY_BE_OUT_OF_DATE : LIST_OUT_OF_DATE;
+  setMessage(el("chart-stale"), sentence);
   el("chart-warnings").hidden = false;
   const button = el("sign-off");
   button.disabled = true;

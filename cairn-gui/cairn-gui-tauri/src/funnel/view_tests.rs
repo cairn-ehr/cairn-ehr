@@ -95,11 +95,17 @@ fn retry_advice_crosses_to_the_webview_as_snake_case() {
         serde_json::to_value(Retry::Never).unwrap(),
         serde_json::json!("never")
     );
-    // ...and against "after_reread" to re-read the chart and take the button away after a
-    // judgement whose commit outcome is unknown (#713) — renamed, the button would stay live.
+    // ...and `chart_stale.js`'s `behindTheRecord` reads `retry.after_reread` to re-read the chart
+    // and take the button away when the screen is behind the record — renamed, the button would
+    // stay live. Its value words the re-read (#811): "no", nothing was recorded (the record
+    // changed); "unknown", a commit was interrupted (#713) and the clinician's act may have landed.
     assert_eq!(
-        serde_json::to_value(Retry::AfterReread).unwrap(),
-        serde_json::json!("after_reread")
+        serde_json::to_value(Retry::AfterReread(Recorded::No)).unwrap(),
+        serde_json::json!({ "after_reread": "no" })
+    );
+    assert_eq!(
+        serde_json::to_value(Retry::AfterReread(Recorded::Unknown)).unwrap(),
+        serde_json::json!({ "after_reread": "unknown" })
     );
 }
 

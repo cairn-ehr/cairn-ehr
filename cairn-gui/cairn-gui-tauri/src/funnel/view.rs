@@ -45,10 +45,25 @@ pub enum Retry {
     Never,
     /// The screen is behind the record: the window re-reads the WHOLE chart and takes the act's
     /// button away — never a live retry. Two causes share it because the window does the same
-    /// for both: the record changed under the clinician (a `Stale` refusal, or the window's own
-    /// set check — nothing was recorded), or a write's COMMIT was interrupted (#713 — it may
-    /// have been). The sentence says which; the class says only what the window does.
-    AfterReread,
+    /// for both, and [`Recorded`] says which, because the window must not word them the same
+    /// (#811): after an interrupted commit, a change the re-read shows may be the clinician's own.
+    AfterReread(Recorded),
+}
+
+/// Whether the act a [`Retry::AfterReread`] answers was recorded. On the wire it is
+/// `{"after_reread": "no"}` / `{"after_reread": "unknown"}`, read by `chart_stale.js`'s
+/// `behindTheRecord`.
+///
+/// Ordered `No < Unknown`, so the worst of several failures is their `max`: "may have been
+/// recorded" must never be hidden behind "nothing was recorded".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Recorded {
+    /// The record changed under the clinician (a `Stale` refusal, or the window's own set
+    /// check): nothing was recorded.
+    No,
+    /// A write's COMMIT was interrupted (#713): it may have been recorded.
+    Unknown,
 }
 
 /// A failure, as the clerk reads it.

@@ -117,7 +117,7 @@ fn an_unknown_commit_outcome_rereads_and_is_never_retried_live() {
         ("link", link_error_view(&e)),
         ("unlink", crate::link::unlink_view::unlink_error_view(&e)),
     ] {
-        assert_eq!(v.retry, Retry::AfterReread, "{act}");
+        assert_eq!(v.retry, Retry::AfterReread(Recorded::Unknown), "{act}");
         assert_eq!(
             v.text,
             format!(
@@ -157,7 +157,7 @@ fn a_locked_key_names_the_button_that_was_pressed() {
 #[test]
 fn a_stale_refusal_is_not_recorded_and_re_reads() {
     let view = judgement_error_from("link", DataError::Stale("the record changed".into()));
-    assert_eq!(view.retry, Retry::AfterReread);
+    assert_eq!(view.retry, Retry::AfterReread(Recorded::No));
     assert!(
         view.text.starts_with("The link was not recorded: "),
         "a stale refusal says nothing was recorded"
@@ -168,7 +168,7 @@ fn a_stale_refusal_is_not_recorded_and_re_reads() {
 /// `stale` is the window's own "the screen is behind the record": a re-read, never a live retry.
 #[test]
 fn stale_re_reads_and_refused_does_not() {
-    assert_eq!(stale("x").retry, Retry::AfterReread);
+    assert_eq!(stale("x").retry, Retry::AfterReread(Recorded::No));
     assert_eq!(refused("x").retry, Retry::Never);
 }
 

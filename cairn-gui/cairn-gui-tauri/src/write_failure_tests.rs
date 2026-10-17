@@ -2,7 +2,10 @@ use super::*;
 
 #[test]
 fn each_class_earns_its_retry() {
-    assert_eq!(retry_for(&DataError::Stale("x".into())), Retry::AfterReread);
+    assert_eq!(
+        retry_for(&DataError::Stale("x".into())),
+        Retry::AfterReread(Recorded::No)
+    );
     assert_eq!(retry_for(&DataError::Refused("x".into())), Retry::Never);
     assert_eq!(retry_for(&DataError::NotFound), Retry::Never);
     assert_eq!(
@@ -41,7 +44,7 @@ fn a_real_stale_refusal_is_after_reread_with_the_nodes_text() {
     };
     let e = stale_record(shown, a, &now).expect("a changed record is refused");
     let view = node_failure(&e);
-    assert_eq!(view.retry, Retry::AfterReread);
+    assert_eq!(view.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(view.text, format!("{e:#}"));
 }
 

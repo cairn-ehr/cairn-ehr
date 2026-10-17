@@ -148,7 +148,7 @@ pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid)
             ),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         (LinkEffect::TookEffect, PairKind::Separated) => LinkReportView {
             sentence: format!(
@@ -158,20 +158,20 @@ pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid)
             ),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         // Recorded but not standing: the panel stays open on the disagreement (no reload).
         (LinkEffect::Outranked, _) => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         (LinkEffect::StillJoined, _) => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
     }
 }

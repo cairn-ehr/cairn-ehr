@@ -2,7 +2,7 @@
 //! a failed pair named, never hidden behind another's verdict, and a commit whose outcome is
 //! unknown never retried live (#713). Split from `view_tests.rs` (#789); tests `verdict.rs` (#745).
 use super::*;
-use crate::funnel::view::{ErrorView, Retry};
+use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_node::chart_link::LinkEffect;
 use uuid::Uuid;
 
@@ -133,7 +133,7 @@ fn a_lone_commit_unknown_pair_is_its_own_error_unchanged() {
     }])
     .unwrap_err();
     assert_eq!(err, commit_unknown());
-    assert_eq!(err.retry, Retry::AfterReread);
+    assert_eq!(err.retry, Retry::AfterReread(Recorded::Unknown));
     assert_eq!(err.text, commit_unknown_text());
 }
 
@@ -195,7 +195,7 @@ fn every_failed_pair_is_named_and_a_commit_unknown_is_never_hidden_behind_a_verd
         },
     ])
     .unwrap_err();
-    assert_eq!(err.retry, Retry::AfterReread);
+    assert_eq!(err.retry, Retry::AfterReread(Recorded::Unknown));
     assert_eq!(
         err.text,
         format!(
@@ -234,16 +234,16 @@ fn the_combined_retry_is_the_most_retryable_among_the_failed_pairs() {
         combined(vec![fail(1, Retry::Never), fail(2, Retry::Never)]),
         Retry::Never
     );
-    // #713: a pair whose outcome is unknown outranks every other class — the window must
+    // #713 / #797: a screen behind the record outranks every other class — the window must
     // re-read before anything is offered again, whatever the other pairs said.
-    assert_eq!(
-        combined(vec![fail(1, Retry::AfterReread), fail(2, Retry::Now)]),
-        Retry::AfterReread
-    );
-    assert_eq!(
-        combined(vec![fail(1, Retry::Never), fail(2, Retry::AfterReread)]),
-        Retry::AfterReread
-    );
+    let stale = Retry::AfterReread(Recorded::No);
+    let unknown = Retry::AfterReread(Recorded::Unknown);
+    assert_eq!(combined(vec![fail(1, stale), fail(2, Retry::Now)]), stale);
+    assert_eq!(combined(vec![fail(1, Retry::Never), fail(2, stale)]), stale);
+    // #811: and "may have been recorded" outranks "nothing was recorded", in either order — the
+    // window must not say the record changed when the clinician's own act may be what changed it.
+    assert_eq!(combined(vec![fail(1, unknown), fail(2, stale)]), unknown);
+    assert_eq!(combined(vec![fail(1, stale), fail(2, unknown)]), unknown);
 }
 
 #[test]
@@ -306,10 +306,10 @@ fn still_joined_and_outranked_sentences_are_pinned() {
 }
 
 /// #797 review: a partly-recorded "Different people" is a SUCCESS report, yet one of its pairs may
-/// have been refused because the record changed under the screen (or its commit was interrupted,
-/// #713) — `Retry::AfterReread`. The report carries that, so the window's re-read knows the list
-/// is behind the record and marks it out of date if that re-read fails. Any other failure, or
-/// none, leaves it false.
+/// have been refused because the record changed under the screen (`Recorded::No`), or its commit
+/// was interrupted (#713, `Recorded::Unknown`). The report carries which, so the window's re-read
+/// knows the list is behind the record, and words it for the cause (#811). Several such pairs give
+/// the worst cause. Any other failure, or none, leaves it `None`.
 #[test]
 fn a_partly_recorded_judgement_says_when_a_failed_pair_was_behind_the_record() {
     let recorded = |n: u128| PairResult {
@@ -325,10 +325,32 @@ fn a_partly_recorded_judgement_says_when_a_failed_pair_was_behind_the_record() {
             retry,
         }),
     };
+    let stale = Retry::AfterReread(Recorded::No);
+    let unknown = Retry::AfterReread(Recorded::Unknown);
     let behind = |rs: Vec<PairResult>| different_people_report(rs).unwrap().behind_the_record;
-    assert!(behind(vec![recorded(1), failed(2, Retry::AfterReread)]));
+    assert_eq!(
+        behind(vec![recorded(1), failed(2, stale)]),
+        Some(Recorded::No)
+    );
+    assert_eq!(
+        behind(vec![recorded(1), failed(2, unknown)]),
+        Some(Recorded::Unknown)
+    );
+    assert_eq!(
+        behind(vec![recorded(1), failed(2, unknown), failed(3, stale)]),
+        Some(Recorded::Unknown),
+        "the worst cause, whatever the order"
+    );
     for other in [Retry::Now, Retry::AfterOperator, Retry::Never] {
-        assert!(!behind(vec![recorded(1), failed(2, other)]), "{other:?}");
+        assert_eq!(
+            behind(vec![recorded(1), failed(2, other)]),
+            None,
+            "{other:?}"
+        );
     }
-    assert!(!behind(vec![recorded(1), recorded(2)]), "nothing failed");
+    assert_eq!(
+        behind(vec![recorded(1), recorded(2)]),
+        None,
+        "nothing failed"
+    );
 }

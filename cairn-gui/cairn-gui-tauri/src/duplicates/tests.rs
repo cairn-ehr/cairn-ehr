@@ -98,7 +98,10 @@ async fn different_people_refuses_a_changed_set() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::view::THIS_CHANGED);
-    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+    assert_eq!(
+        err.retry,
+        crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+    );
 }
 
 #[tokio::test]
