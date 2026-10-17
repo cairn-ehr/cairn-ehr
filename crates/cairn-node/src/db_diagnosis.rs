@@ -484,7 +484,7 @@ pub(crate) fn node_state_refusal(message: impl Into<String>) -> anyhow::Error {
 /// surface can route this scope to "re-read the chart" without matching on the sentence.
 ///
 /// The sentence says only what happened (the CLI shows it too); the remedy is the scope's job.
-pub fn stale_picture_refusal(message: impl Into<String>) -> anyhow::Error {
+pub(crate) fn stale_picture_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),
         scope: RefusalScope::Stale,

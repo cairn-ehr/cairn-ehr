@@ -97,11 +97,12 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
             text: t.clone(),
             retry: Retry::AfterOperator,
         },
-        // Search never raises `Stale` (it carries no picture of the record to go stale), but a
-        // match must not hide a new cause: if one ever arrives, the answer is a re-read.
+        // Search never raises `Stale`, but a match must not hide a new cause. `Never`, not
+        // `AfterReread`: the funnel has no chart on screen to re-read and funnel.js never reads
+        // `after_reread`, so that label would be one the code does not honour.
         DataError::Stale(t) => ErrorView {
             text: t.clone(),
-            retry: Retry::AfterReread,
+            retry: Retry::Never,
         },
         DataError::NotFound => ErrorView {
             text: "No such chart.".to_string(),
@@ -135,9 +136,9 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
             ),
             Retry::AfterOperator,
         ),
-        // Registration never raises `Stale`; if it ever does, nothing was saved and the remedy
-        // is a re-read, never pressing Register again.
-        DataError::Stale(t) => (format!("Nothing was saved: {t}"), Retry::AfterReread),
+        // Registration never raises `Stale`; if it ever does, nothing was saved. `Never`, not
+        // `AfterReread`: no chart is on screen to re-read and funnel.js never reads it.
+        DataError::Stale(t) => (format!("Nothing was saved: {t}"), Retry::Never),
         DataError::NotFound => ("Nothing was saved.".to_string(), Retry::Never),
     };
     match restored {

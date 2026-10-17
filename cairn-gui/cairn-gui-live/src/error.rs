@@ -265,9 +265,24 @@ mod tests {
     /// cause (`Stale`) rather than collapse into `Refused`.
     #[test]
     fn a_stale_scope_is_a_stale_data_error() {
-        let e = cairn_node::db_diagnosis::stale_picture_refusal("the record changed");
+        use cairn_medication_view::ChartSet;
+        use cairn_node::chart_link::shown::{stale_record, RecordsShown};
+        let (a, b, c) = (
+            uuid::Uuid::from_u128(1),
+            uuid::Uuid::from_u128(2),
+            uuid::Uuid::from_u128(3),
+        );
+        // The panel showed chart `a` as a record of two; since then a third chart was linked in.
+        let shown_then = ChartSet::new([a, b]).expect("a non-empty record");
+        let now = ChartSet::new([a, b, c]).expect("a non-empty record");
+        let shown = RecordsShown {
+            this: &shown_then,
+            other: &shown_then,
+            pair: None,
+        };
+        let e = stale_record(shown, a, &now).expect("a changed record is refused");
         match data_error_from(&e) {
-            DataError::Stale(text) => assert!(text.contains("the record changed")),
+            DataError::Stale(text) => assert!(text.contains("changed while you were comparing")),
             other => panic!("a stale-picture refusal must classify as Stale, got {other:?}"),
         }
     }
