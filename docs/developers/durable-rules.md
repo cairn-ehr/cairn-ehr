@@ -41,8 +41,11 @@ change myself)."*
   (`applyOwnAct`, `holdOwnAct`; every `refresh` sends it as `seenCharts`). Only what the clinician did not do and could
   not see is announced. **Tempting wrong fix:** the "set formula" `(held − (sent − after)) ∪ (after − sent)` — in case
   b′ (a colleague's change AND the clinician's own Link crossing in flight) it announces the clinician's OWN link back
-  to them; the anchored `applyOwnAct` passes all 17 enumerated cases and is the only spelling to use. Do not pass the
+  to them; the anchored `applyOwnAct` passes the 17 cases enumerated in its review (pinned only by source guard and the headless walk; there is no JS runner, #332) and is the only spelling to use. Do not pass the
   baseline as a one-call argument either: a second re-read starting within one round trip announces the own Link.
+- **`heldCharts` is deliberately SEPARATE from `renderedCharts`.** `renderedCharts` keeps feeding every write's set
+  check; `heldCharts` is only the baseline for naming changes. **Tempting wrong fix:** merging them, or sending
+  `heldCharts` to writes.
 - **The draw floor is raised (`drawnRevision = ++chartReadRevision`) only when the own act MOVED the held set.**
   **Tempting wrong fix:** raising it unconditionally on every own act — that drops a colleague's in-flight read that
   would have been the first news of a real change.
@@ -55,6 +58,9 @@ change myself)."*
   showing it only after a failure (the first failed read then has no way out), or relabelling it in one place.
   Sign-off and cease return an `ErrorView` through `write_failure.rs`: a locked key is `Now`; no node key or no DB is
   `AfterOperator`; never a bare string (it is worded "could not reach its backend").
+- **Accepted limitations (honesty, not safety — do not "discover" them later):** a stale refusal's out-of-date mark is
+  lost if an own act's re-read outdates it and then fails (the node's set check refuses writes regardless); a foreign
+  change whose re-read hits a DRAWING fault is never named, because `showUnshownList` nulls `heldCharts`.
 - **No window sentence says "reload the chart" or "refresh and try again"** (guard
   `no_window_sentence_says_reload_the_chart`): the window has a named control, so name it.
 
@@ -99,7 +105,7 @@ guards in `cairn-gui-tauri/src/chart_view_webview_tests.rs`, each mutation-check
   `link.js`'s `compare` and `sendJudgement`; #713's `after_reread` still re-reads the whole chart). **Tempting wrong
   fix:** `refresh()` — a heavier read that rebuilds every row over a refusal that changed nothing but the banner
   (a typed stop reason survives it since #799; the set-changed refusals, which DO stale the list, re-read the whole
-  chart since #797 — see that block). `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload": no sentence does, the
+  chart since #797 — see that block). `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload": no sentence says "reload the chart" or "refresh and try again" (`no_window_sentence_says_reload_the_chart`); the
   way out is the "Read this chart again" button (#797).
 - **No comparison without a drawn list:** `compare` refuses while `renderedPatient` is null (`NO_LIST_TO_COMPARE`),
   and a banner drawn while no list is on screen (after a failed FIRST read, or a list that could not be DRAWN — #801)

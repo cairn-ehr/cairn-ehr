@@ -193,21 +193,20 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | Gesture | Mode | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|---|
 | Sign off refused → chart re-read → "Now part of it: B." | live | | | | ≤ single-chart open time | |
-| "Read this chart again" after a failed read (1 act) | live | | | | ≤ single-chart open time | |
+| "Read this chart again" after a failed read (DB stopped, then restored; 1 act) | live | | | | ≤ single-chart open time | |
 
-| Run | Sentence named exactly the colleague's chart? | Own link announced? (must be no) | Sign off disabled while the read failed? |
-|---|---|---|---|
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
-| 4 | | | |
-| 5 | | | |
+| Run | Sentence named exactly the colleague's chart? | Own link announced? (must be no) |
+|---|---|---|
+| 1 | | |
+| 2 | | |
+| 3 | | |
+| 4 | | |
+| 5 | | |
 
 | Accessibility check | Verdict | Notes |
 |---|---|---|
 | Refusal, "read again" and "Now part of it" announced in order | | |
 | "Read this chart again" reachable by Tab at all times | | |
-| Out-of-date notice read; disabled Sign off announced unavailable | | |
 | Nothing takes focus on its own | | |
 
 ## Verdict
