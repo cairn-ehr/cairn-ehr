@@ -508,6 +508,23 @@ pub fn refusal_scope(e: &anyhow::Error) -> Option<RefusalScope> {
         .map(|refusal| refusal.scope)
 }
 
+/// The line the CLI prints after a [`RefusalScope::Stale`] refusal (#797 review).
+///
+/// A stale refusal's sentence says only what happened ("… — nothing was done"): its remedy is the
+/// SCOPE's job, because the window acts on it itself (it re-reads the whole chart). The CLI has no
+/// such reflex, and before #797 it read the remedy out of the sentence — so it now adds one line of
+/// its own, rather than leave an operator at "nothing was signed" with no next step.
+pub const CLI_STALE_REMEDY: &str =
+    "The record changed after this command read it. Read it again, and run the command once more \
+     if it still applies.";
+
+/// The CLI's own remedy line for this failure, if it needs one: [`CLI_STALE_REMEDY`] for a
+/// [`RefusalScope::Stale`] refusal, `None` for everything else (whose sentences already say what
+/// to do, or are accidents with nothing to add). Pure, so `main.rs`'s printer stays one line.
+pub fn cli_remedy(e: &anyhow::Error) -> Option<&'static str> {
+    (refusal_scope(e) == Some(RefusalScope::Stale)).then_some(CLI_STALE_REMEDY)
+}
+
 /// Did this node deliberately refuse, above the database?
 ///
 /// # Named for the DISCRIMINATOR, not the conclusion — and that matters here
@@ -1048,6 +1065,22 @@ mod refusal_scope_tests {
         assert_eq!(refusal_scope(&e), Some(RefusalScope::Stale));
         assert!(carries_refusal_marker(&e));
         assert_eq!(format!("{e:#}"), "x");
+    }
+
+    /// The CLI prints a node sentence as it is, and a stale one names no remedy (the window's
+    /// remedy is its own re-read, #797) — so the CLI adds its own line, for `Stale` alone, wherever
+    /// on the chain the marker sits. Every other scope's sentence already says what to do.
+    #[test]
+    fn only_a_stale_refusal_gets_the_cli_remedy() {
+        let stale = stale_picture_refusal("x").context("signing");
+        assert_eq!(cli_remedy(&stale), Some(CLI_STALE_REMEDY));
+        for e in [
+            crate::actor_enrolment::ambiguous_actor_refusal("9f3c"),
+            crate::patient::register::dob_precision("not a date").unwrap_err(),
+            anyhow::anyhow!("connection reset"),
+        ] {
+            assert_eq!(cli_remedy(&e), None, "{e:#}");
+        }
     }
 
     #[test]
