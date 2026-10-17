@@ -723,8 +723,8 @@ stop it when the outcome line has finished saying "Now part of it: B.".
 2. From the second node, link A to B as the other clinician.
 3. Press **Sign off** on A.
 4. Read the outcome line: the refusal ("Sign-off failed: the linked charts changed while this list was on
-   screen — nothing was done."), then "This record changed while it was on screen.", then "The chart has been
-   read again — review it before you act on it.", then "Now part of it: <B's identity line>." The list now shows B's lines and the link line.
+   screen — nothing was done."), then "The chart has been read again — review it before you act on it.",
+   then "This record changed while it was on screen. Now part of it: <B's identity line>." The list now shows B's lines and the link line.
 5. Press **Sign off** again; it succeeds.
 
 **Measurement 2 — Read this chart again.** (a) Stop the database and press Sign off. Expect "Could not read
@@ -748,7 +748,8 @@ vanished when the read failed is a finding to file, never a budget to adjust.**
 
 **Accessibility, same pass as section 6** (VoiceOver on macOS, keyboard only):
 
-- [ ] The refusal, "The chart has been read again …" and "Now part of it: B." are announced in order.
+- [ ] The refusal, "The chart has been read again …" and "This record changed … Now part of it: B." are announced in
+      that order.
 - [ ] "Read this chart again" is reachable by Tab at all times (also with no failure), and announced by that label.
 - [ ] Focus stays where the clinician put it; nothing takes focus on its own.
 
