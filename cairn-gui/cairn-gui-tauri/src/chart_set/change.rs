@@ -14,9 +14,9 @@
 //!   absent, empty or unparseable list, or one that is not this record's at all
 //!   ([`seen_set`]). A guessed change is worse than none;
 //! - the clinician's OWN Link / Unlink / Confirm is never announced back to them: the webview
-//!   sends the set that act LEFT (the report's `charts_after`, read inside the act's own
-//!   transaction) as the seen set, so only a colleague's change arriving in the same moment
-//!   differs from it.
+//!   sends its HELD set as the seen set — what it last drew, moved on by the clinician's own
+//!   acts using each report's `charts_after`, read inside the act's own transaction
+//!   (`chart_stale.js`'s `applyOwnAct`) — so only a colleague's change differs from it.
 //!
 //! The sentence names charts JOINING or LEAVING the record, by each chart's own identity line
 //! (`MemberLine::text`), and nothing else: it is never handed the medication list, so a drug

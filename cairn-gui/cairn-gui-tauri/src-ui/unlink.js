@@ -18,8 +18,8 @@
 // Renders and decides nothing: every sentence comes from Rust, every check from the backend.
 // Classic script, loaded after main.js, funnel.js and link.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `invoke`, `displayedPatient`, `renderedPatient`,
-// `renderedCharts` (main.js), `behindTheRecord` (chart_stale.js), `failureText` (funnel.js),
-// `sayAnywhere`, `updateLinkLock`, `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's
+// `renderedCharts` (main.js), `behindTheRecord`, `holdOwnAct` (chart_stale.js), `failureText`
+// (funnel.js), `sayAnywhere`, `updateLinkLock`, `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's
 // rules (read its header) and is a panel SEPARATE FROM THE LINK PANEL: the link panel judges
 // "link / different people" over a searched-for chart; this one reviews a link or judgement that
 // already stands. Its two verdicts are guarded together (above), so one human cannot sign both.

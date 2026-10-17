@@ -16,7 +16,7 @@
 //
 // Split out of main.js to keep it under 500 lines. Classic script, loaded right after
 // stop_reasons.js and sharing the one global scope (`el`, `say`, `setMessage`, `displayedPatient`,
-// and the read counters `chartReadRevision`/`drawnRevision`, from main.js). Its functions are
+// `refresh`, and the read counters `chartReadRevision`/`drawnRevision`, from main.js). Its functions are
 // called only once a chart is read, long after every script has loaded.
 "use strict";
 
@@ -178,8 +178,9 @@ function sameCharts(a, b) {
  * chart it was signed on, for a window showing chart `anchor` (always a member of `held` — the held
  * set is the record of the chart on screen). Every result is a sorted, de-duplicated list.
  *
- * - No held set (nothing drawn) or no recorded set (`after` null: "Different people", or a set
- *   that is not the record on screen) → `held` as it is.
+ * - No held set (nothing drawn) or no recorded set (`after` null: "Different people", an act
+ *   that changed nothing — Outranked — or a set that is not the record on screen) → `held` as
+ *   it is.
  * - The anchor ended in `after` (a link; an unlink seen from its own side) → the touched charts
  *   are replaced by `after`; held charts the act never touched stay.
  * - The anchor was touched but ended outside `after` (an unlink answered while the clinician is on

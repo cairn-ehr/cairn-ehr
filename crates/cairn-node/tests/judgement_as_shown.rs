@@ -140,17 +140,18 @@ fn colleague_link(sk_h: &SigningKey, kid_h: &str, x: Uuid, y: Uuid, wall: i64) -
     }
 }
 
-/// Assert `err` is the as-shown refusal: a verdict about a stale picture, worded to compare again.
+/// Assert `err` is the as-shown refusal: a verdict about a stale picture (`Stale`), whose
+/// sentence says only that nothing was done — the re-read is the scope's remedy, not the text's.
 fn assert_compare_again(err: &anyhow::Error) {
     assert_eq!(
         refusal_scope(err),
         Some(RefusalScope::Stale),
-        "a changed record is stale input, not an outage: {err:#}"
+        "a changed record is a stale picture, not an outage: {err:#}"
     );
     let text = format!("{err:#}");
     assert!(
         text.ends_with("nothing was done"),
-        "the refusal must say what to do: {text}"
+        "the refusal must say only that nothing was done: {text}"
     );
 }
 

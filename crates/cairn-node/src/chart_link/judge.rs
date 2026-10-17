@@ -300,7 +300,8 @@ async fn is_held(client: &tokio_postgres::Client, chart: Uuid) -> anyhow::Result
 }
 
 /// Mark an [`admit_judgement`] refusal with the scope it names, so a surface offers the right
-/// way forward: wait for this node (`NodeState`), or re-read and judge again (`Input`).
+/// way forward: wait for this node (`NodeState`), re-read (`Stale`: the record changed since it
+/// was read), or nothing at all (`Input`: no retry, by anyone, changes it).
 fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
     match refusal.scope {
         RefusalScope::NodeState => node_state_refusal(refusal.text),

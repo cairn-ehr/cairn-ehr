@@ -47,9 +47,9 @@ pub async fn med_list(
     med_list_impl(&state, &patient_id, seen_charts).await
 }
 
-/// `seen_charts` (JS key `seenCharts`): on a re-read, the chart set the window had on screen —
-/// or the set the clinician's own Link/Unlink/Confirm left (its report's `charts_after`), so
-/// their own change is never announced back to them. `None` on a first read. The pane's
+/// `seen_charts` (JS key `seenCharts`): on a re-read, the window's HELD set — what it last drew,
+/// moved on by the clinician's own Link/Unlink/Confirm using its report's `charts_after`
+/// (`chart_stale.js`'s `applyOwnAct`) — so their own change is never announced back to them. `None` on a first read. The pane's
 /// `set_change` names what joined or left since (#797, `chart_set::set_change`).
 pub async fn med_list_impl(
     state: &AppState,

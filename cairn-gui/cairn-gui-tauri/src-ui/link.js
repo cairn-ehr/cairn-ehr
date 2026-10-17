@@ -6,9 +6,9 @@
 // what to re-read after an answer (the chart, or after a decided refusal only the banner).
 // Classic script, loaded after main.js and funnel.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `displayedPatient`, `renderedPatient`, `renderedCharts`
-// (main.js), `behindTheRecord` (chart_stale.js), `redrawBannerAlone`, `NO_LIST_TO_COMPARE`
-// (duplicates.js) and `failureText`, `debounce` (funnel.js — `failureText`'s doc comment explains
-// why a bare IPC failure needs its own wording, not just Rust's).
+// (main.js), `behindTheRecord`, `holdOwnAct` (chart_stale.js), `redrawBannerAlone`,
+// `NO_LIST_TO_COMPARE` (duplicates.js) and `failureText`, `debounce` (funnel.js — `failureText`'s
+// doc comment explains why a bare IPC failure needs its own wording, not just Rust's).
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`. `#link-status` is hidden whenever it is empty
 // (`clearComparison`), and style.css makes `[hidden]` win over everything: a bare

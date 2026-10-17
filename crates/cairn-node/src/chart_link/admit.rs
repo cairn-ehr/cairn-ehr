@@ -108,7 +108,7 @@ impl Unusable {
 
 /// A judgement [`admit_judgement`] refused: the sentence, and what it is a verdict ABOUT — so
 /// the caller marks it with the right [`RefusalScope`] and a surface offers the right way
-/// forward (wait for this node, or re-read and judge again).
+/// forward (wait for this node, or re-read: the picture judged from is stale).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmitRefusal {
     /// What the refusal is a verdict about.

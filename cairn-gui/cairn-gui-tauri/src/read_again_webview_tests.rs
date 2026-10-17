@@ -23,7 +23,7 @@ const RECORD_LINKS_RS: &str = include_str!("link/record_links.rs");
 /// The control that reads the chart again is in the page whatever state the chart is in: a plain
 /// button inside `#chart-view`, under the identity header, outside every list that can fail to
 /// draw — so a failed read always leaves a way out. Its label is the name the sentences quote, and
-/// its click is wired to `refresh()` (in chart_stale.js: main.js has no room left, #332).
+/// its click is wired to `refresh()` (in chart_stale.js: main.js is at its 500-line budget).
 #[test]
 fn the_read_again_control_is_always_there_and_re_reads() {
     let view = position(INDEX_HTML, "<section id=\"chart-view\"");

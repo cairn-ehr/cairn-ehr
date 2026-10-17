@@ -13,7 +13,8 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 **⇒ #797 — A CHANGED RECORD RE-READS ITSELF AND SAYS WHAT CHANGED (PR #805) — do not undo any of these** (pins: the Rust
 halves by `crates/cairn-node` tests of `stale_picture_refusal`'s callers, `cairn-gui-live`'s error mapping tests,
 `cairn-gui-tauri`'s `chart_set/change.rs`, `write_failure.rs` and `link/judgement_view.rs` tests; the JS halves by SOURCE
-guards in `cairn-gui-tauri/src/reread_webview_tests.rs`, each mutation-checked, and a headless walk on the PR). The
+guards in `cairn-gui-tauri/src/reread_webview_tests.rs` and `read_again_webview_tests.rs`, each mutation-checked, and
+a headless walk on the PR). The
 maintainer's governing rule, which every item below serves: *"The chart I hold in my hand when I make changes is my
 responsibility — my obligation to know its contents. I need only to be informed of what changed between me taking the
 chart and finishing amends that I cannot know (that is, anything that wasn't in the chart when I took it and I didn't
@@ -35,13 +36,14 @@ change myself)."*
   and the node's set check refuses the write regardless, so the rows were never the danger; the danger is acting on
   them unwarned.
 - **`set_change` (the sentence "Now part of it: B.") is `None` for an equal seen set, an unreadable one, or one that
-  does not hold the opened chart** (`chart_set/change.rs::set_change_sentence`, pure). **Tempting wrong fix:** a
+  does not hold the opened chart** (`chart_set/change.rs`: `seen_set` drops an unreadable or foreign set,
+  `set_change_sentence` says nothing for an equal one; both pure). **Tempting wrong fix:** a
   sentence whenever the sets "differ" in any way — an unreadable or foreign baseline would announce every member as new.
 - **The window HOLDS the chart set it drew (`heldCharts`), moved only by being shown or by the clinician's own act**
   (`applyOwnAct`, `holdOwnAct`; every `refresh` sends it as `seenCharts`). Only what the clinician did not do and could
-  not see is announced. **Tempting wrong fix:** the "set formula" `(held − (sent − after)) ∪ (after − sent)` — in case
-  b′ (a colleague's change AND the clinician's own Link crossing in flight) it announces the clinician's OWN link back
-  to them; the anchored `applyOwnAct` passes every case in the table above it in `chart_stale.js` (pinned only by source guard and the headless walk; there is no JS runner, #332) and is the only spelling to use. Do not pass the
+  not see is announced. **Tempting wrong fix:** the "set formula" `(held − (sent − after)) ∪ (after − sent)` — in the
+  table's fourth row (a Link answered on the OTHER chart, drawn before its commit) it announces the clinician's OWN link
+  back to them; the anchored `applyOwnAct` passes every case in the table above it in `chart_stale.js` (pinned only by source guard and the headless walk; there is no JS runner, #332) and is the only spelling to use. Do not pass the
   baseline as a one-call argument either: a second re-read starting within one round trip announces the own Link.
 - **`heldCharts` is deliberately SEPARATE from `renderedCharts`.** `renderedCharts` keeps feeding every write's set
   check; `heldCharts` is only the baseline for naming changes. **Tempting wrong fix:** merging them, or sending

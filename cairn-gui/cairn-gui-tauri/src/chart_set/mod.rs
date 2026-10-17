@@ -67,7 +67,9 @@ impl ChartSetError {
 }
 
 /// The sentence for [`ChartSetError::Unreadable`]: a fault in what the window sent, mended by a
-/// re-read (it redraws the set), so it names the button that does one.
+/// re-read (it redraws the set), so it names the button that does one. Its view is `refused`
+/// (`Retry::Never`), not `stale`: nothing about the record moved, so the window must not re-read
+/// by itself and say the record changed — the clinician presses the button the sentence names.
 const UNREADABLE: &str = "this window could not tell which charts are on screen — nothing was \
      done; press \"Read this chart again\"";
 

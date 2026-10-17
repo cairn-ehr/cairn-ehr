@@ -255,7 +255,7 @@ async fn refuse_unless_record_holds_both(
 /// apply — the only writer of a record's membership, a peer's unlink arriving through the sync
 /// door included — holds until it commits, so the record read after taking it cannot change
 /// before this judgement commits. A record that no
-/// longer holds both is refused as a verdict about the input (reload and judge again).
+/// longer holds both is refused as a stale picture (`RefusalScope::Stale`: the window re-reads).
 ///
 /// `shown` (#708): when the judgement was made from a comparison, each subject's record must
 /// still read as it was shown, re-read under CARNLK in the same way — see

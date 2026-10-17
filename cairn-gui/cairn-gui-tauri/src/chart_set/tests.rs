@@ -44,8 +44,9 @@ fn a_changed_set_is_a_typed_change() {
     assert_eq!(err.text(), crate::chart_set::CHANGED);
 }
 
-/// The view a change becomes: the screen is behind the record, so the window re-reads. An
-/// unreadable list is a window fault a re-read cannot mend.
+/// The view a change becomes: the screen is behind the record, so the window re-reads by itself.
+/// An unreadable list is a window fault, not a change: the window does NOT re-read by itself
+/// (`Never`) — its sentence names the button that mends it.
 #[test]
 fn a_change_is_an_after_reread_view_and_an_unreadable_list_is_not() {
     use crate::funnel::view::Retry;

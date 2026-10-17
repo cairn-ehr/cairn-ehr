@@ -232,9 +232,9 @@ async fn the_open_chart_must_hold_both_in_its_record() {
     let err = unlink_charts(&mut c, b, cc, Some(d), &who, ORIGIN)
         .await
         .expect_err("D is held, but its record does not hold B and C");
-    // A held chart whose record lacks the pair is a stale or wrong picture (the INPUT), not a
+    // A held chart whose record lacks the pair is a stale picture (`RefusalScope::Stale`), not a
     // node that has yet to receive something: the same class the in-transaction re-check gives
-    // the same fact, so the clinician is told to reload, never to wait (PR #711 review).
+    // the same fact, so the window re-reads, never waits (PR #711 review, #797).
     assert_eq!(
         refusal_scope(&err),
         Some(RefusalScope::Stale),

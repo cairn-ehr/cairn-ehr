@@ -198,8 +198,9 @@ or, commonly, the two charts never meet; so the refused press is not an `M > N` 
 - **⇒ A baseline that must survive overlapping reads is window STATE, not an argument to one call.** The own-act
   baseline passed to one `refresh` let ANOTHER re-read announce the clinician's own link back (task-5 review, I1).
 - **⇒ A reviewer's counter-case beat my formula.** `(held − (sent − after)) ∪ (after − sent)` announces one's own link
-  in case b′; the implementer pushed back with the walk, the re-reviewer reconstructed it over 17 cases. Rule on the
-  evidence, not on who proposed it.
+  (the `applyOwnAct` table's fourth row: a Link answered on the other chart, drawn before its commit); the implementer
+  pushed back with the walk, the re-reviewer reconstructed it over 17 cases. Rule on the evidence, not on who proposed
+  it.
 - **⇒ "After apply, before commit" must be pinned on BOTH sides** — a DB test caught only "after apply"; a source
   guard now pins the commit side (`judge_tests.rs`).
 - **⇒ An operator procedure is a claim too:** RUNBOOK §14 first told testers to stop Postgres and recover with the

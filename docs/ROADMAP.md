@@ -458,7 +458,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   #800 (no generation token on `refresh`), #801 (a fault drawing the medication rows reads "Could not read the
   chart").
 - **2026-10-17:** PR #802 (#799 · #800 · #801): a chart re-read keeps typed stop reasons, drops an overtaken
-  answer or failure (`chartReadRevision`, `isCurrentRead`), and a list that cannot be drawn leaves nothing partial
+  answer or failure (`chartReadRevision`, `mayDraw`/`isLatestRead`), and a list that cannot be drawn leaves nothing partial
   under a live sign-off (`drawList` under one guard, `#chart-unshown` above the table).
 - **2026-10-17 (#797, PR #805, based on #802's branch):** a refusal because the record changed under the clinician
   is typed (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); the window re-reads the whole chart,
