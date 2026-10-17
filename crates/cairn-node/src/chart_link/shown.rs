@@ -10,7 +10,7 @@
 //! parent, so `chart_link::RecordsShown` keeps its path.
 
 use super::StandingLink;
-use crate::db_diagnosis::{deliberate_refusal, LocalDbFault};
+use crate::db_diagnosis::{deliberate_refusal, stale_picture_refusal, LocalDbFault};
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
@@ -67,9 +67,9 @@ pub(super) async fn refuse_unless_records_read_as_shown(
             .await
             .context("re-reading a compared record under the link lock (CARNLK)")?;
         if let Some(stale) = stale_record(shown, subject, &now) {
-            // Stale INPUT, as in `refuse_unless_record_holds_both`: the same call refuses the
-            // same way until the caller re-reads, so it is never worded as an outage to retry.
-            return Err(deliberate_refusal(stale));
+            // `stale_record` already marked it: a changed record is `Stale` (as in
+            // `refuse_unless_record_holds_both`), a subject in neither record is `Input`.
+            return Err(stale);
         }
     }
     // R6: a review-panel verdict (confirm or unlink) happens INSIDE one record, so a colleague's
@@ -78,7 +78,7 @@ pub(super) async fn refuse_unless_records_read_as_shown(
     if let Some(pair) = shown.pair {
         let now = super::standing_link(tx, low, high).await?;
         if let Some(stale) = stale_pair(pair, now.as_ref(), low, high) {
-            return Err(deliberate_refusal(stale));
+            return Err(stale_picture_refusal(stale));
         }
     }
     Ok(())
@@ -88,23 +88,31 @@ pub(super) async fn refuse_unless_records_read_as_shown(
 /// shown, or `None` if it does. **Pure**, so the comparison is unit-tested apart from the
 /// database. A subject in NEITHER shown record is a caller bug — the judgement was not made over
 /// it — and is refused rather than waved through.
-pub fn stale_record(shown: RecordsShown<'_>, subject: Uuid, now: &ChartSet) -> Option<String> {
+///
+/// The refusal comes back already MARKED, because the two reasons differ in kind: a record that
+/// changed since the clinician read it is [`crate::db_diagnosis::RefusalScope::Stale`] (re-reading
+/// is the whole remedy), while a subject in neither shown record is a caller bug and stays
+/// `Input`.
+pub fn stale_record(
+    shown: RecordsShown<'_>,
+    subject: Uuid,
+    now: &ChartSet,
+) -> Option<anyhow::Error> {
     let was = [shown.this, shown.other]
         .into_iter()
         .find(|record| record.contains(&subject));
     match was {
         Some(was) if was == now => None,
-        Some(was) => Some(format!(
+        Some(was) => Some(stale_picture_refusal(format!(
             "the records changed while you were comparing them: chart {subject}'s record was \
              {} chart(s) when you compared it and is {} now (another link or unlink was \
-             recorded meanwhile) — nothing was done; compare again",
+             recorded meanwhile) — nothing was done",
             was.members().len(),
             now.members().len()
-        )),
-        None => Some(format!(
-            "chart {subject} is in neither of the records you compared — nothing was done; \
-             compare again"
-        )),
+        ))),
+        None => Some(deliberate_refusal(format!(
+            "chart {subject} is in neither of the records you compared — nothing was done"
+        ))),
     }
 }
 
@@ -124,8 +132,7 @@ pub fn stale_pair(
         Some(winner) if winner.is(shown) => None,
         _ => Some(format!(
             "what stands between charts {low} and {high} changed while you were judging it \
-             (another judgement about the pair was recorded meanwhile) — nothing was done; review \
-             it again"
+             (another judgement about the pair was recorded meanwhile) — nothing was done"
         )),
     }
 }
@@ -133,6 +140,7 @@ pub fn stale_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db_diagnosis::{refusal_scope, RefusalScope};
 
     #[test]
     fn a_compared_record_is_stale_exactly_when_it_reads_differently_now() {
@@ -144,13 +152,13 @@ mod tests {
             pair: None,
         };
         // As shown, from either record.
-        assert_eq!(stale_record(shown, a, &ChartSet::single(a)), None);
-        assert_eq!(stale_record(shown, b, &ChartSet::single(b)), None);
+        assert!(stale_record(shown, a, &ChartSet::single(a)).is_none());
+        assert!(stale_record(shown, b, &ChartSet::single(b)).is_none());
         // Grown by a peer link, or joined to the other record by a colleague's link.
         let grown = ChartSet::new([a, x]).unwrap();
-        assert!(stale_record(shown, a, &grown)
-            .unwrap()
-            .contains("compare again"));
+        let err = stale_record(shown, a, &grown).unwrap();
+        assert_eq!(refusal_scope(&err), Some(RefusalScope::Stale));
+        assert!(format!("{err:#}").ends_with("nothing was done"));
         let joined = ChartSet::new([a, b]).unwrap();
         assert!(stale_record(shown, b, &joined).is_some());
         // Shrunk: a member was unlinked away.
@@ -162,9 +170,13 @@ mod tests {
         };
         assert!(stale_record(shown_wide, a, &ChartSet::single(a)).is_some());
         // A subject the judgement was not made over.
-        assert!(stale_record(shown, x, &ChartSet::single(x))
-            .unwrap()
-            .contains("neither"));
+        let err = stale_record(shown, x, &ChartSet::single(x)).unwrap();
+        assert_eq!(
+            refusal_scope(&err),
+            Some(RefusalScope::Input),
+            "a caller bug, not a changed record"
+        );
+        assert!(format!("{err:#}").contains("neither"));
     }
 
     #[test]
@@ -183,7 +195,7 @@ mod tests {
             attested: true,
         };
         let text = stale_pair(&shown, Some(&other), lo, hi).expect("a different winner is stale");
-        assert!(text.contains("review it again"), "{text}");
+        assert!(text.ends_with("nothing was done"), "{text}");
         assert!(
             stale_pair(&shown, None, lo, hi).is_some(),
             "no assertion at all is stale too"

@@ -12,7 +12,7 @@
 //! The fix: the judgement carries the two records it was made over (`RecordsShown`), and
 //! `assert_link_in_tx` re-reads each subject's record under db/018's link lock (CARNLK) — which
 //! every link/unlink apply holds until it commits — before anything is signed. A record that no
-//! longer reads as shown refuses the judgement as stale input ("compare again").
+//! longer reads as shown refuses the judgement as a stale picture (`RefusalScope::Stale`).
 //!
 //! The race tests are deterministic, not timing-based (the `unlink_from_record.rs` harness): T1
 //! holds CARNLK, the judgement is observed PARKED on it, and only then does T1 apply the peer's
@@ -140,16 +140,16 @@ fn colleague_link(sk_h: &SigningKey, kid_h: &str, x: Uuid, y: Uuid, wall: i64) -
     }
 }
 
-/// Assert `err` is the as-shown refusal: a verdict about stale input, worded to compare again.
+/// Assert `err` is the as-shown refusal: a verdict about a stale picture, worded to compare again.
 fn assert_compare_again(err: &anyhow::Error) {
     assert_eq!(
         refusal_scope(err),
-        Some(RefusalScope::Input),
+        Some(RefusalScope::Stale),
         "a changed record is stale input, not an outage: {err:#}"
     );
     let text = format!("{err:#}");
     assert!(
-        text.contains("compare again"),
+        text.ends_with("nothing was done"),
         "the refusal must say what to do: {text}"
     );
 }

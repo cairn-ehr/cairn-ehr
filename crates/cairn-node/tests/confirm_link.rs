@@ -17,7 +17,7 @@
 //! the set check alone passes — and our confirm, stamped later by this node's clock, wins the
 //! attested-vs-attested HLC tie-break and silently overrules the colleague. So the confirm also
 //! carries the pair's standing content address as the panel read it (`RecordsShown::pair`), and
-//! the same CARNLK-held re-check refuses it as stale input ("review it again") if the pair's
+//! the same CARNLK-held re-check refuses it as a stale picture (`RefusalScope::Stale`) if the pair's
 //! winner has changed.
 //!
 //! # The harness
@@ -253,16 +253,16 @@ async fn apply(c: &Client, ev: PeerEvent) {
     .expect("the peer's event is admitted");
 }
 
-/// Assert `err` is the pair-changed refusal: a verdict about stale input, worded to review again.
+/// Assert `err` is the pair-changed refusal: a verdict about a stale picture, worded to review again.
 fn assert_review_again(err: &anyhow::Error) {
     assert_eq!(
         refusal_scope(err),
-        Some(RefusalScope::Input),
+        Some(RefusalScope::Stale),
         "stale input, not an outage: {err:#}"
     );
     let text = format!("{err:#}");
     assert!(
-        text.contains("review it again"),
+        text.ends_with("nothing was done"),
         "the refusal must say what to do: {text}"
     );
 }

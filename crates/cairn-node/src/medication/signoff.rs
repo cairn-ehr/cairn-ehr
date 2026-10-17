@@ -532,6 +532,24 @@ mod tests {
         assert!(ensure_same_charts(&shown, &now, "while this list was on screen").is_ok());
     }
 
+    /// The second compare (first read against the second) uses the other window and is `Stale` too.
+    #[test]
+    fn the_second_compare_is_stale_with_its_own_window() {
+        let err = ensure_same_charts(
+            &ChartSet::single(uid(1)),
+            &ChartSet::new([uid(1), uid(2)]).unwrap(),
+            "while it was being signed",
+        )
+        .unwrap_err();
+        assert_eq!(
+            crate::db_diagnosis::refusal_scope(&err),
+            Some(crate::db_diagnosis::RefusalScope::Stale)
+        );
+        assert!(
+            format!("{err:#}").starts_with("the linked charts changed while it was being signed (")
+        );
+    }
+
     #[test]
     fn a_changed_set_is_refused_as_stale_naming_both_sets() {
         let shown = ChartSet::single(uid(1));

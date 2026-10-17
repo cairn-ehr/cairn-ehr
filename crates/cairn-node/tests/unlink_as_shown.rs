@@ -217,16 +217,16 @@ where
         .expect("the spawned task did not panic")
 }
 
-/// Assert `err` is the pair-changed refusal: a verdict about stale input, worded to review again.
+/// Assert `err` is the pair-changed refusal: a verdict about a stale picture, worded to review again.
 fn assert_review_again(err: &anyhow::Error) {
     assert_eq!(
         refusal_scope(err),
-        Some(RefusalScope::Input),
+        Some(RefusalScope::Stale),
         "stale input, not an outage: {err:#}"
     );
     let text = format!("{err:#}");
     assert!(
-        text.contains("review it again"),
+        text.ends_with("nothing was done"),
         "the refusal must say what to do: {text}"
     );
 }
