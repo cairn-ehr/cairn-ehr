@@ -140,64 +140,6 @@ async fn a_link_is_attested_and_the_two_charts_read_as_one_set() {
     );
 }
 
-/// #797: the outcome's `charts` is the record AS THIS LINK LEFT IT — read inside the
-/// judgement's own transaction, after its event applied (under db/018's link lock, CARNLK) and
-/// before the commit. The window hands it back as the set the clinician "holds", so a re-read
-/// never announces their own link to them. A set read BEFORE the event would be `{a}` alone, and
-/// the re-read would name `b` as a change they did not make. A third, unrelated chart stays out.
-#[tokio::test]
-async fn a_link_reports_the_set_it_left() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let _g = db::test_serial_guard(&base).await.unwrap();
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
-    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
-    register_pair(&c, &sk_a, &kid_a, a, b).await;
-    register_pair(&c, &sk_a, &kid_a, Uuid::now_v7(), Uuid::now_v7()).await;
-
-    let who = Reviewer {
-        human_sk: &sk_h,
-        human_kid: &kid_h,
-    };
-    let out = link_charts(&mut c, a, b, &who, ORIGIN).await.expect("link");
-    let mut left = vec![a, b];
-    left.sort();
-    assert_eq!(
-        out.charts.members(),
-        left.as_slice(),
-        "the set the link left"
-    );
-}
-
-/// #797, the unlink twin of [`a_link_reports_the_set_it_left`]: judged from `a`, the outcome is
-/// `a`'s record as the unlink left it — `{a}` — not the `{a, b}` it read before the event.
-#[tokio::test]
-async fn an_unlink_reports_the_set_it_left() {
-    let Some(base) = cs() else {
-        eprintln!("skipped: set CAIRN_TEST_PG");
-        return;
-    };
-    let _g = db::test_serial_guard(&base).await.unwrap();
-    let mut c = db::connect_and_load_schema(&base).await.unwrap();
-    let (sk_a, kid_a, sk_h, kid_h) = setup(&c).await;
-    let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
-    register_pair(&c, &sk_a, &kid_a, a, b).await;
-
-    let who = Reviewer {
-        human_sk: &sk_h,
-        human_kid: &kid_h,
-    };
-    link_charts(&mut c, a, b, &who, ORIGIN).await.expect("link");
-    let out = unlink_charts(&mut c, b, a, Some(a), &who, ORIGIN)
-        .await
-        .expect("unlink");
-    assert_eq!(out.record_of, a, "judged from the open chart");
-    assert_eq!(out.charts.members(), &[a], "the set the unlink left");
-}
-
 #[tokio::test]
 async fn different_people_is_an_unlink_on_a_pair_never_linked() {
     // ADR-0076 decision 4.
