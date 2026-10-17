@@ -267,12 +267,14 @@ function disarmNewerReview(sent) {
 /** A recorded verdict (Unlink or Same person): say what it did, where the clinician is now, and re-read if it changed. */
 async function showUnlinkReport(sent, token, report) {
   const place = unlinkAnswerPlace(sent, token);
-  // Re-read against the set this verdict LEFT (`charts_after`, null when it changed no set): the
-  // clinician's own unlink is never announced back to them (#797).
+  // Recorded: the clinician now holds what their own verdict left (`charts_after`; null when it
+  // changed no set), so no re-read announces it back to them (#797). The pair's two charts count
+  // as touched too: "link them" over a separated pair reaches beyond the set on screen.
+  holdOwnAct(sent.charts.concat([sent.low, sent.high]), report.charts_after);
   if (place === "elsewhere") {
     const text = "For chart " + sent.patientId + ": " + report.sentence;
     sayAnywhere(text);
-    if (unlinkChanged(sent, report)) await refresh(text, false, report.charts_after);
+    if (unlinkChanged(sent, report)) await refresh(text);
   } else if (report.reload) {
     // The record changed under this chart: the outcome goes on the chart's own line, the
     // panel closes, and the list is re-read.
@@ -280,7 +282,7 @@ async function showUnlinkReport(sent, token, report) {
     // `false`: the list is about to be re-drawn, which destroys any button focus would land
     // on. Focus goes to the patient heading once the re-read is done.
     if (!el("unlink-panel").hidden) closeUnlinkPanel(false);
-    await refresh(report.sentence, false, report.charts_after);
+    await refresh(report.sentence);
     if (!el("unlink-panel").hidden || !el("link-panel").hidden || el("chart-view").hidden) return;
     const heading = el("patient-heading");
     heading.tabIndex = -1;

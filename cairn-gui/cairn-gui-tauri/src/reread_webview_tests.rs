@@ -44,57 +44,125 @@ fn refresh_calls(body: &str) -> Vec<Vec<String>> {
     calls
 }
 
-/// The re-read measures the change from the set the window SHOWED (`renderedCharts`, the chart
-/// the clinician holds), or — after their own Link/Unlink/Confirm — from the set that act LEFT
-/// (`seenAfterOwnAct`, the report's `charts_after`), so their own change is never announced back
-/// to them. `??`, never `||`: `charts_after` is null when the act changed no set (fall back), and
-/// an empty array must NOT fall back (the maintainer's rule, 2026-10-17; Task 4's report).
+/// Every re-read measures the change from the HELD set (`heldCharts`, chart_stale.js): the chart
+/// the clinician holds — what the window last DREW, moved on by their own acts and by nothing else
+/// (the maintainer's rule, 2026-10-17). Not a per-call argument: a baseline living in ONE call let
+/// every OTHER re-read (a stale Stop's, "Read this chart again") compare against the pre-act set
+/// and announce the clinician's own link back to them (fix round 1, Important 1).
 #[test]
 fn refresh_sends_the_set_on_screen() {
-    assert!(MAIN_JS.contains("async function refresh(lead, staleIfFails, seenAfterOwnAct) {"));
+    assert!(MAIN_JS.contains("async function refresh(lead, staleIfFails) {"));
     let refresh = js_fn(MAIN_JS, "refresh");
-    let seen = position(refresh, "const seen = seenAfterOwnAct ?? renderedCharts;");
-    let sent = position(
-        refresh,
-        "await invoke(\"med_list\", { patientId: patient, seenCharts: seen });",
+    assert!(
+        refresh.contains(
+            "await invoke(\"med_list\", { patientId: patient, seenCharts: heldCharts });"
+        ),
+        "{refresh}"
     );
-    assert!(seen < sent, "{refresh}");
-    assert!(!refresh.contains("seenAfterOwnAct ||"), "{refresh}");
+    // `renderedCharts` stays what every WRITE's set check sends; it is never the baseline.
+    assert!(!refresh.contains("renderedCharts"), "{refresh}");
 }
 
-/// The clinician's own recorded verdict re-reads against the set it LEFT: every re-read on the
-/// recorded paths of `sendJudgement` (link.js) and `showUnlinkReport` (unlink.js) passes
-/// `report.charts_after` third — so a colleague's link landing in the same moment is named,
-/// their own is not.
+/// The held set follows what is DRAWN: `drawList` sets it beside `renderedCharts`; `clearChart`
+/// (a chart change) and `showUnshownList` (nothing drawn) empty it. Only chart_stale.js assigns it.
+#[test]
+fn the_held_set_is_what_was_drawn() {
+    let draw = js_fn(MAIN_JS, "drawList");
+    assert!(
+        position(draw, "renderedCharts = view.charts;")
+            < position(draw, "holdCharts(view.charts);"),
+        "{draw}"
+    );
+    for name in ["clearChart", "showUnshownList"] {
+        let body = js_fn(MAIN_JS, name);
+        assert!(body.contains("holdCharts(null);"), "{name}: {body}");
+    }
+    assert!(CHART_STALE_JS.contains("let heldCharts = null;"));
+    assert!(js_fn(CHART_STALE_JS, "holdCharts").contains("heldCharts = charts;"));
+    for (file, js) in [
+        ("main.js", MAIN_JS),
+        ("link.js", LINK_JS),
+        ("unlink.js", UNLINK_JS),
+    ] {
+        assert!(
+            !js.contains("heldCharts ="),
+            "{file} assigns the held set itself"
+        );
+    }
+}
+
+/// The clinician's own recorded verdict moves the held set by ITS delta, the moment the report
+/// lands and before any re-read is sent — so their own change is silent in EVERY later re-read,
+/// while a colleague's still differs and is named. Both recorded paths hand over the charts the
+/// act touched and `report.charts_after`; no re-read carries a baseline of its own.
 #[test]
 fn an_own_judgement_re_reads_against_the_set_it_left() {
     let send = js_fn(LINK_JS, "sendJudgement");
     let recorded = &send[..position(send, "catch (failure)")];
     let shown = js_fn(UNLINK_JS, "showUnlinkReport");
-    for body in [recorded, shown] {
+    for (body, held) in [
+        (
+            recorded,
+            "holdOwnAct(sent.charts.concat(sent.otherCharts), report.charts_after);",
+        ),
+        (
+            shown,
+            "holdOwnAct(sent.charts.concat([sent.low, sent.high]), report.charts_after);",
+        ),
+    ] {
+        let moved = position(body, held);
         let calls = refresh_calls(body);
-        assert_eq!(
-            calls.len(),
-            2,
-            "both re-reads of a recorded verdict: {body}"
-        );
+        assert_eq!(calls.len(), 2, "both re-reads of a recorded verdict");
+        assert!(moved < position(body, "await refresh("), "{body}");
         for args in calls {
-            assert_eq!(args.len(), 3, "{args:?}");
-            assert_eq!(args[1], "false", "a recorded verdict is no stale refusal");
-            assert_eq!(args[2], "report.charts_after", "{args:?}");
+            assert_eq!(args.len(), 1, "no per-call baseline: {args:?}");
         }
+    }
+    let own = js_fn(CHART_STALE_JS, "holdOwnAct");
+    assert!(
+        own.contains("heldCharts = applyOwnAct(heldCharts, touched, after, displayedPatient);"),
+        "{own}"
+    );
+}
+
+/// `applyOwnAct` is pure and anchored on the chart on screen: no held set or no recorded set
+/// leaves it as it is; if the anchor ended in the act's result, the touched charts are replaced
+/// by that result; if it ended on the OTHER side of the act (an unlink, answered elsewhere), by
+/// what the act left there; if the act never touched it, the held set is unchanged — a foreign
+/// change is never silenced.
+#[test]
+fn an_own_act_moves_the_held_set_by_its_own_delta_only() {
+    let apply = js_fn(CHART_STALE_JS, "applyOwnAct");
+    let empty = position(apply, "if (held === null || !after) return held;");
+    let untouched = position(apply, "const untouched = without(held, touched);");
+    let joined = position(
+        apply,
+        "if (after.includes(anchor)) return ordered(untouched.concat(after));",
+    );
+    let other = position(
+        apply,
+        "if (touched.includes(anchor)) return ordered(untouched.concat(without(touched, after)));",
+    );
+    let unchanged = position(apply, "\n  return held;");
+    assert!(empty < untouched && untouched < joined && joined < other && other < unchanged);
+    for impure in ["heldCharts", "displayedPatient", "el(", "say("] {
+        assert!(!apply.contains(impure), "applyOwnAct reads {impure}");
     }
 }
 
-/// "Read again" and the change sentence are said only over an answer `mayDraw` ACCEPTED —
-/// after `render`, inside the success path: an overtaken answer says nothing, and a failed one
-/// says "Could not read the chart", never "read again". Not stale and no change: the outcome
-/// line is left alone (it may be saying how a signed act went).
+/// "Read again" and the change sentence are said only over an answer `mayDraw` ACCEPTED AND
+/// drawn — after `render`, inside the success path, and only if the list drew (`render` catches a
+/// drawing fault itself and `showUnshownList` nulls `renderedPatient`: "review it" over a list
+/// that was taken down would be false). A failed read says "Could not read the chart", never
+/// "read again". Not stale and no change: the outcome line is left alone.
 #[test]
 fn read_again_is_said_only_after_an_accepted_answer() {
     let refresh = js_fn(MAIN_JS, "refresh");
     let rendered = position(refresh, "render(answer, patient);");
-    let said = position(refresh, "sayAfterReread(lead, staleIfFails, answer);");
+    let said = position(
+        refresh,
+        "if (renderedPatient === patient) sayAfterReread(lead, staleIfFails, answer);",
+    );
     let caught = position(refresh, "catch (e)");
     assert!(rendered < said && said < caught, "{refresh}");
     assert!(!refresh[caught..].contains("sayAfterReread"), "{refresh}");
@@ -108,6 +176,30 @@ fn read_again_is_said_only_after_an_accepted_answer() {
     let again = position(after, "READ_AGAIN, pane.set_change");
     let changed = position(after, "else if (pane.set_change)");
     assert!(stale < again && again < changed, "{after}");
+}
+
+/// The outcome line is a run of sentences from different places — Rust's refusals end without a
+/// full stop ("… — nothing was done"), and the node's reach the CLI, so they are not edited. The
+/// JOINER closes each part that lacks terminal punctuation and capitalises the line, so it never
+/// reads "…nothing was done The chart has been read again…" (fix round 1, Minor 2). The failed
+/// re-read's line joins through it too.
+#[test]
+fn the_outcome_line_joins_whole_sentences() {
+    let join = js_fn(CHART_STALE_JS, "sentences");
+    assert!(
+        join.contains("/[.!?]$/.test(part) ? part : part + \".\""),
+        "{join}"
+    );
+    assert!(
+        join.contains("line.charAt(0).toUpperCase() + line.slice(1)"),
+        "{join}"
+    );
+    let refresh = js_fn(MAIN_JS, "refresh");
+    let caught = &refresh[position(refresh, "catch (e)")..];
+    assert!(
+        caught.contains("say(sentences(lead, \"Could not read the chart: \" + e));"),
+        "{caught}"
+    );
 }
 
 /// A stale refusal's re-read that FAILS leaves the old list up (an honest near-truth, principle

@@ -237,6 +237,7 @@ function drawList(pane, patient) {
   const view = pane.list;
   renderedPatient = patient;
   renderedCharts = view.charts;
+  holdCharts(view.charts); // what the clinician now holds (chart_stale.js)
   setMessage(el("chart-unshown"), ""); // a list that draws takes down a previous fault's warning
   setMessage(el("chart-stale"), ""); // and an out-of-date list's (chart_stale.js, #797)
   renderMembers(pane.members);
@@ -277,6 +278,7 @@ function showUnshownList(failure) {
   // drawn next, offers no Review, and `compare` refuses — as for a failed or in-flight read.
   renderedPatient = null;
   renderedCharts = null;
+  holdCharts(null);
   clearDrawnList();
   setMessage(el("chart-unshown"), LIST_NOT_SHOWN + String(failure));
   el("chart-warnings").hidden = false;
@@ -314,6 +316,7 @@ function clearChart() {
   drawnRevision = ++chartReadRevision;
   renderedPatient = null;
   renderedCharts = null;
+  holdCharts(null);
   clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   clearDrawnList();
   const button = el("sign-off");
@@ -328,28 +331,26 @@ function clearChart() {
  * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
  * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
  * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `staleIfFails` = a
- * stale refusal prompted it (chart_stale.js); `seenAfterOwnAct` = the set an own act left.
+ * stale refusal prompted it; changes are named against the held set (both: chart_stale.js).
  */
-async function refresh(lead, staleIfFails, seenAfterOwnAct) {
+async function refresh(lead, staleIfFails) {
   const patient = displayedPatient;
   if (patient === null) return;
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;
-  // What a change is named against: the set the chart SHOWED, or the one the clinician's own act
-  // left (their change is never announced back). `??`: a null falls back, an empty array does not.
-  const seen = seenAfterOwnAct ?? renderedCharts;
   try {
-    const answer = await invoke("med_list", { patientId: patient, seenCharts: seen });
+    const answer = await invoke("med_list", { patientId: patient, seenCharts: heldCharts });
     // A read for a chart the clinician has since left, or older than what is drawn, is dropped,
     // never rendered (#800).
     if (!mayDraw(patient, revision)) return;
     drawnRevision = revision;
     render(answer, patient);
-    sayAfterReread(lead, staleIfFails, answer);
+    // Only over a list that DREW: a drawing fault took it down (`showUnshownList`), nothing to review.
+    if (renderedPatient === patient) sayAfterReread(lead, staleIfFails, answer);
   } catch (e) {
     // A failure is said only by the newest read started: that read speaks for the chart now.
     if (!isLatestRead(patient, revision)) return;
-    say((lead ? lead + " " : "") + "Could not read the chart: " + e);
+    say(sentences(lead, "Could not read the chart: " + e));
     // A failed FIRST read (`clearChart` left no list drawn): sign-off must stop saying "Loading…",
     // or the clinician waits for a read that is not happening (PR #798 review). It stays disabled.
     // A failed RE-read keeps the list it already drew, and that list's own button.

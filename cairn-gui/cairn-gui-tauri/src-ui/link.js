@@ -374,12 +374,13 @@ async function sendJudgement(command) {
       otherCharts: sent.otherCharts,
     });
     const place = linkAnswerPlace(sent, token);
-    // Every re-read of a recorded verdict names changes against the set it LEFT (`charts_after`,
-    // null when it changed no set): the clinician's own link is never announced back (#797).
+    // Recorded: the clinician now holds what their own act left (`charts_after`; null when it
+    // changed no set), so no re-read announces their own link back to them (#797).
+    holdOwnAct(sent.charts.concat(sent.otherCharts), report.charts_after);
     if (place === "elsewhere") {
       const text = "For chart " + sent.patientId + ": " + report.sentence;
       sayAnywhere(text);
-      if (linkChanged(sent, report)) await refresh(text, false, report.charts_after);
+      if (linkChanged(sent, report)) await refresh(text);
     } else if (report.reload) {
       // Link's TookEffect / StillJoined: the record just changed under this chart. "Different
       // people" ALWAYS lands here once anything was recorded (`LinkReportView::reload`), since
@@ -389,7 +390,7 @@ async function sendJudgement(command) {
       // Review pressed while this answer was in flight), that one is the clinician's, and stays.
       say(report.sentence);
       if (place === "panel") closeLinkPanel(true);
-      await refresh(report.sentence, false, report.charts_after);
+      await refresh(report.sentence);
     } else if (place === "chart") {
       say(report.sentence);
     } else {
