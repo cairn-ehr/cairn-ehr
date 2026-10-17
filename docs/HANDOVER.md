@@ -21,16 +21,17 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #802, then PR #805** (retarget #805 to `main` first). **Two wording decisions are owed on
->    #805** (asked in its PR body): **M4** — after an interrupted commit (#713) whose link DID land, the re-read names
->    it as "This record changed…", implying a colleague; **M5** — a change named after a SUCCESSFUL act gets no "review
->    it" prompt, while the stale path does. **#728** (the Pi re-measure) can run beside. #699 stays open until the
->    maintainer closes it.
+> 1. **Review and merge PR #802, then PR #805** (retarget #805 to `main` first). #805 was reviewed again on 2026-10-18
+>    (five reviewers) and every finding fixed in place — it now also closes **#806**. **One decision is owed, filed as
+>    #811:** `Retry::AfterReread` lumps "nothing was recorded" with "may have been recorded" (#713), so after an
+>    interrupted commit that DID land the re-read says "This record changed…" (implying a colleague; was **M4**) and a
+>    failed re-read's banner says "the record changed" (also **M5**: no "review it" after a successful act). **#728**
+>    (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
 >    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
 >    existing "withheld" = hidden-lines wording) → **#804** (on link, show only where the two charts' medication
 >    lists DIFFER, with continue / discontinue / withhold per line; needs #803 and **#690**). From #797's reviews:
->    **#806** (node refusals naming window acts; sign-off's target-set mismatch untyped) · **#807** (the window never
+>    **#812** (window type/test tightening) · **#807** (the window never
 >    reconnects after a lost connection) · **#808** (two outcome-line races) · **#809** (window tech debt) · **#810**
 >    (cairn-node files over 500 lines).
 >    **Open repair-path issues:** #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
@@ -153,7 +154,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -185,6 +186,21 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-18 — PR #805's second review: five reviewers, every finding fixed (filed #811, #812)
+
+Code / silent-failure / test / comment / type reviewers in parallel over the stacked diff, each claim verified against
+the code before acting. Fixed in place: sign-off's target-set mismatch still untyped (three reviewers found it alone —
+`ensure_same_targets`), the out-of-date mark lost when its re-read was overtaken (`behindAfter`, walked headlessly), a
+partly-recorded "Different people" dropping its stale pair, the CLI left with no remedy, an outage typed `Never`, three
+guards a one-character slip passed (each mutation-checked), #806 whole, ~15 comments.
+- **⇒ A flag carried by ONE async call dies with that call.** Anything a later, overtaking call must still honour
+  ("this list is stale") is window state with its own end condition — the same lesson as the held set, one layer down.
+- **⇒ "Ends when a newer thing draws" needs a revision, not a boolean**, wherever an OLDER answer may still draw
+  (`mayDraw` is `>=`): a boolean cleared by any draw is cleared by a read sent before the event it records.
+- **⇒ A guard that pins a call's ARGUMENTS but not the `if` in front of it passes the inverted condition.** Pin the gate
+  (`refresh_gates`), and pin small helper BODIES the pinned lines lean on.
+- **⇒ A rustfmt pass can break a source guard that pins one line**: pin the formatting-proof fragment.
 
 ### 2026-10-17 (third) — #797 brainstormed, planned, built SDD (PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805))
 

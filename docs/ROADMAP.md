@@ -465,10 +465,15 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   never retries, and names only changes from ANOTHER source (the maintainer's rule; a held chart set moved only by
   being shown or by the clinician's own act, `charts_after` read inside the act's transaction); an always-visible
   "Read this chart again" replaces every "reload the chart". RUNBOOK §14 owes the human timing. Filed #806–#810.
+  **2026-10-18:** a second five-reviewer pass, every finding fixed on the branch — sign-off's target-set mismatch
+  typed `Stale` (`ensure_same_targets`), "the list is behind the record" made window state (`behindAfter`), a
+  partly-recorded "Different people" carries its stale pair (`behind_the_record`), the CLI prints a remedy line after
+  a stale refusal, a node-side guard against sentences naming window acts — closing **#806** too. Filed #811 (a
+  decision: `AfterReread` lumps "not recorded" with "may have been", #713) and #812 (type/test tightening).
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #802, then PR #805 (two wording decisions owed: M4, M5 in its PR body); then #803; then
+- **Next:** review and merge PR #802, then PR #805 (one decision owed, #811 — was M4/M5); then #803; then
   the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open
   until the maintainer closes it.
 

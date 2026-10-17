@@ -21,16 +21,28 @@ chart and finishing amends that I cannot know (that is, anything that wasn't in 
 change myself)."*
 - **A "the record changed under you" refusal is routed by TYPE, never by text.** `RefusalScope::Stale` (cairn-node,
   raised by the record check in `chart_link.rs`, `admit.rs`'s `LacksPair`, `shown.rs`'s `stale_record`/`stale_pair`,
-  `medication/signoff.rs`'s `ensure_same_charts`) → `DataError::Stale` → `Retry::AfterReread` (the funnel maps it to
+  `medication/signoff.rs`'s `ensure_same_charts` and `ensure_same_targets`) → `DataError::Stale` → `Retry::AfterReread` (the funnel maps it to
   `Never`: it has no chart to re-read); on the Rust side `ChartSetError { Unreadable, Changed }`. **Tempting wrong
   fix:** matching `e == CHANGED` (or any sentence) again — a reworded node sentence then silently stops re-reading. The
   neither-record arm of `shown.rs` stays `Input` (nothing is stale; the input is wrong).
 - **Node sentences name no window control.** They say only what happened ("— nothing was done" / "nothing was
-  signed"); the CLI shows them too. The window's `chart_stale.js` adds what to do. **Tempting wrong fix:** putting
+  signed"); the CLI shows them too. The window's `chart_stale.js` adds what to do; the CLI prints
+  `db_diagnosis::cli_remedy`'s line after a `Stale` refusal (`main` wraps `run()`). Pinned by
+  `crates/cairn-node/tests/node_sentences_name_no_window_act.rs` (#806). **Tempting wrong fix:** putting
   "press Read this chart again" into the node sentence — it is nonsense at a terminal.
 - **`READ_AGAIN` ("The chart has been read again — review it before you act on it.") is said only after an ACCEPTED
   answer whose list actually DREW** (`renderedPatient === patient` after `render`). **Tempting wrong fix:** saying it
   when the re-read is sent — a failed or dropped read then claims a chart the screen does not show.
+- **"The list is behind the record" is WINDOW state (`behindAfter`, `chart_stale.js`), not one read's flag.** A
+  stale refusal records the newest read revision sent before it (`knowListBehind`, in `refresh` before its revision is
+  taken); WHICHEVER read fails last then marks the list (`listKnownBehind`); only a list drawn from a read sent AFTER
+  the refusal ends it (`drewRead`), and taking the list down ends it (`holdCharts(null)`). A success report can carry
+  it too: a partly-recorded "Different people" whose failed pair was `AfterReread` sets
+  `LinkReportView::behind_the_record`. Pin: `a_known_stale_list_outlives_the_read_that_learnt_it` (walked headlessly:
+  an overtaking "Read this chart again", an older read landing late). **Tempting wrong fixes:** a `staleIfFails`
+  argument — the re-read it rides is overtaken by "Read this chart again" or an own act's draw floor, its failure is
+  never said, and the overtaking read fails unmarked; or a plain boolean cleared by ANY draw — `mayDraw` lets an older
+  read, sent before the refusal, draw after it.
 - **`markListStale` keeps the rows and disables sign-off** (`#chart-stale` says `LIST_OUT_OF_DATE`). **Tempting wrong
   fix:** hiding the rows — the clinician then has no chart at all during a partition (availability over consistency),
   and the node's set check refuses the write regardless, so the rows were never the danger; the danger is acting on
@@ -43,8 +55,10 @@ change myself)."*
   (`applyOwnAct`, `holdOwnAct`; every `refresh` sends it as `seenCharts`). Only what the clinician did not do and could
   not see is announced. **Tempting wrong fix:** the "set formula" `(held − (sent − after)) ∪ (after − sent)` — in the
   table's fourth row (a Link answered on the OTHER chart, drawn before its commit) it announces the clinician's OWN link
-  back to them; the anchored `applyOwnAct` passes every case in the table above it in `chart_stale.js` (pinned only by source guard and the headless walk; there is no JS runner, #332) and is the only spelling to use. Do not pass the
-  baseline as a one-call argument either: a second re-read starting within one round trip announces the own Link.
+  back to them; the anchored `applyOwnAct` passes every case in the table above it in `chart_stale.js` (pinned only
+  by source guard — its helpers `without`/`ordered`/`sameCharts` by body — and the headless walk; there is no JS
+  runner, #332) and is the only spelling to use. Do not pass the baseline as a one-call argument either: a second
+  re-read starting within one round trip announces the own Link.
 - **`heldCharts` is deliberately SEPARATE from `renderedCharts`.** `renderedCharts` keeps feeding every write's set
   check; `heldCharts` is only the baseline for naming changes. **Tempting wrong fix:** merging them, or sending
   `heldCharts` to writes.
@@ -72,7 +86,8 @@ change myself)."*
   recovered read leaves the failure up. The one lead-less re-read is a chart's first (`enterChart`, after `clearChart`
   empties the held set, so it can name no change).
   Sign-off and cease return an `ErrorView` through `write_failure.rs`: a locked key is `Now`; no node key or no DB is
-  `AfterOperator`; never a bare string (it is worded "could not reach its backend").
+  `AfterOperator`; a failed chart read before the write is `Now` (`chart_read_failed` — an outage, never `refused`);
+  never a bare string (it is worded "could not reach its backend").
 - **Accepted limitations (honesty, not safety — do not "discover" them later):** a stale refusal's out-of-date mark is
   lost if an own act's re-read outdates it and then fails (the node's set check refuses writes regardless); a foreign
   change whose re-read hits a DRAWING fault is never named, because `showUnshownList` nulls `heldCharts`.
