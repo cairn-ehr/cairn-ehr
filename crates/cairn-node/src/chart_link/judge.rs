@@ -337,10 +337,11 @@ async fn judge(
         // Also about the INPUT: a panel that read no standing judgement has nothing to sign
         // over. Without this the pair check would refuse it anyway (no real address is empty),
         // but as "changed while you were judging" — untrue; the window's `require_standing`
-        // says the same sentence, so a non-window caller gets the true reason too.
+        // gives the same reason, so a non-window caller gets the true reason too. Only the
+        // window's copy adds a remedy ("review it again" names its own button): a node sentence
+        // names no window act (#806, `tests/node_sentences_name_no_window_act.rs`).
         return Err(deliberate_refusal(
-            "the comparison did not read which judgement stands on this pair — nothing was \
-             done; review it again",
+            "the comparison did not read which judgement stands on this pair — nothing was done",
         ));
     }
     let (a_held, b_held) = (is_held(client, a).await?, is_held(client, b).await?);
