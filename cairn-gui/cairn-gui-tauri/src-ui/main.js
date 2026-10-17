@@ -387,7 +387,8 @@ async function signOff() {
       await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts }),
     );
   } catch (e) {
-    say("Sign-off failed: " + e);
+    // `e` is the backend's ErrorView ({text, retry}), not a string: `failureText` reads its text.
+    say("Sign-off failed: " + failureText(e));
   }
   await refresh(el("outcome").textContent);
 }
@@ -410,7 +411,7 @@ async function cease(groupId, reason) {
     }
     say(text);
   } catch (e) {
-    say("Could not stop this drug: " + e);
+    say("Could not stop this drug: " + failureText(e));
   }
   await refresh(el("outcome").textContent);
 }

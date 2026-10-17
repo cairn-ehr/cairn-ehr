@@ -28,17 +28,48 @@ use cairn_node::patient::person::ChartIdentity;
 use serde::Serialize;
 use uuid::Uuid;
 
-/// Why a command was refused when the webview's list of displayed charts could not be read.
-/// Not the same fault as a changed set: nothing about the record moved — the window itself sent
-/// something it should not have — so the remedy is to reopen, not to reload.
+/// Why [`check_displayed_set`] refused. A TYPE, not two sentences compared as text: callers
+/// (the link commands, the duplicates admit, sign-off, cease) must tell a CHANGED set from an
+/// unreadable one by variant, so rewording a sentence can never silently change which
+/// refusal a command gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartSetError {
+    /// The webview's list of displayed charts could not be read (empty or unparseable). Not a
+    /// change: nothing about the record moved, the window itself sent something it should not
+    /// have, so the remedy is to reopen the chart.
+    Unreadable,
+    /// The set the record now resolves to differs from the one on screen. The screen is
+    /// behind the record, so the right answer is a re-read (`Retry::AfterReread`), which the
+    /// window does for the clinician: it has no reload control.
+    Changed,
+}
+
+impl ChartSetError {
+    /// The sentence for this refusal.
+    pub fn text(&self) -> &'static str {
+        match self {
+            Self::Unreadable => UNREADABLE,
+            Self::Changed => CHANGED,
+        }
+    }
+
+    /// The refusal as the funnel's error view: a change is `Retry::AfterReread` (the window
+    /// re-reads the whole chart), an unreadable list a plain refusal.
+    pub fn into_view(self) -> crate::funnel::view::ErrorView {
+        match self {
+            Self::Unreadable => crate::link::judgement_view::refused(UNREADABLE),
+            Self::Changed => crate::link::judgement_view::stale(CHANGED),
+        }
+    }
+}
+
 const UNREADABLE: &str = "this window could not tell which charts are on screen — reopen the chart";
 
-/// Why a command was refused when the set changed while its list was on screen. Crate-visible
-/// so the link commands (`link::same_person::resolve_pair` for this record,
-/// `link::same_person::link_impl` for the other one) can tell a CHANGED set from an unreadable one
-/// and reword only the former.
+/// The sentence for a set that changed while its list was on screen. It names no remedy: the
+/// window re-reads the chart itself (the clinician has nothing to press), and a sentence that
+/// told them to "reload" would instruct an act the window does not have.
 pub(crate) const CHANGED: &str =
-    "the linked charts changed while this list was on screen — nothing was done; reload the chart";
+    "the linked charts changed while this list was on screen — nothing was done";
 
 /// Refuse unless the charts the webview DISPLAYED are exactly the set just read; on a match,
 /// return the displayed set.
@@ -53,17 +84,20 @@ pub(crate) const CHANGED: &str =
 /// the clinician actually saw, visibly at the call site — equal to `read` here, but the
 /// orchestrator's own compare is then literally against the screen, not against a set a
 /// reviewer has to prove equal to it.
-pub fn check_displayed_set(read: &ChartSet, displayed: &[String]) -> Result<ChartSet, String> {
+pub fn check_displayed_set(
+    read: &ChartSet,
+    displayed: &[String],
+) -> Result<ChartSet, ChartSetError> {
     let parsed: Vec<Uuid> = displayed
         .iter()
         .map(|id| id.parse::<Uuid>())
         .collect::<Result<_, _>>()
-        .map_err(|_| UNREADABLE.to_string())?;
-    let shown = ChartSet::new(parsed).ok_or_else(|| UNREADABLE.to_string())?;
+        .map_err(|_| ChartSetError::Unreadable)?;
+    let shown = ChartSet::new(parsed).ok_or(ChartSetError::Unreadable)?;
     if &shown == read {
         Ok(shown)
     } else {
-        Err(CHANGED.to_string())
+        Err(ChartSetError::Changed)
     }
 }
 

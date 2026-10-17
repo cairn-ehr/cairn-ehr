@@ -14,11 +14,13 @@
 pub mod verdict;
 pub mod view;
 
-use crate::chart_set::{check_displayed_set, linked_members, member_line, MemberLine, CHANGED};
+use crate::chart_set::{
+    check_displayed_set, linked_members, member_line, ChartSetError, MemberLine,
+};
 use crate::commands::read_chart_of;
 use crate::funnel::view::{ErrorView, Retry};
 use crate::link::chart_set_of;
-use crate::link::judgement_view::{key_locked_for, refused, LinkReportView};
+use crate::link::judgement_view::{key_locked_for, refused, stale, LinkReportView};
 use crate::link::view::{ALREADY_IN_RECORD, NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED};
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
@@ -245,10 +247,10 @@ pub async fn different_people_impl(
 ) -> Result<LinkReportView, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let left = check_displayed_set(&chart_set_of(state, patient).await?, &charts).map_err(|e| {
-        if e == CHANGED {
-            refused(THIS_CHANGED)
+        if e == ChartSetError::Changed {
+            stale(THIS_CHANGED)
         } else {
-            refused(e)
+            e.into_view()
         }
     })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
@@ -257,10 +259,10 @@ pub async fn different_people_impl(
     }
     let right =
         check_displayed_set(&chart_set_of(state, other).await?, &other_charts).map_err(|e| {
-            if e == CHANGED {
+            if e == ChartSetError::Changed {
                 refused(OTHER_CHANGED)
             } else {
-                refused(e)
+                e.into_view()
             }
         })?;
     if state.is_mock() {

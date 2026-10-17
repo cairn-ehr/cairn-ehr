@@ -180,7 +180,7 @@ async fn sign_off_refuses_a_chart_that_is_not_on_screen() {
     let err = sign_off_impl(&state, &another_chart(), vec![another_chart()])
         .await
         .unwrap_err();
-    assert!(err.contains("not the chart"), "{err}");
+    assert!(err.text.contains("not the chart"));
 }
 
 #[tokio::test]
@@ -195,7 +195,7 @@ async fn cease_refuses_a_chart_that_is_not_on_screen() {
     )
     .await
     .unwrap_err();
-    assert!(err.contains("not the chart"), "{err}");
+    assert!(err.text.contains("not the chart"));
 }
 
 /// With the right chart, fixture mode's own refusal is what the clinician reads.
@@ -205,7 +205,8 @@ async fn a_write_on_the_chart_on_screen_meets_the_fixture_refusal() {
     let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()])
         .await
         .unwrap_err();
-    assert!(err.contains("fixture mode"), "{err}");
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
+    assert!(err.text.contains("fixture mode"));
 }
 
 /// The other direction for the combined read (ADR-0076). Each of these, dropped by the JS,

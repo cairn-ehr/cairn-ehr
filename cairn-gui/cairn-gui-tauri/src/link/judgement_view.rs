@@ -37,6 +37,18 @@ pub fn refused(text: impl Into<String>) -> ErrorView {
     }
 }
 
+/// A refusal because the screen is behind the record (a chart joined, a pair was judged by a
+/// colleague, a link went). `Retry::AfterReread`: the window re-reads the WHOLE chart and takes
+/// the act's button away, because pressing it again over the same screen would be refused
+/// again. Distinct from [`refused`] (`Retry::Never`), which is for a refusal a re-read cannot
+/// mend (a wrong chart id, fixture mode).
+pub fn stale(text: impl Into<String>) -> ErrorView {
+    ErrorView {
+        text: text.into(),
+        retry: Retry::AfterReread,
+    }
+}
+
 /// Link pressed while the signing key is locked. NOT a verdict: nothing about the comparison
 /// was wrong, and once the clinician unlocks the key the identical Link succeeds — so it keeps
 /// the button (`Retry::Now`). As `Retry::Never` the webview took the comparison away and forced
@@ -152,8 +164,8 @@ pub fn judgement_error_view(act: &str, e: &anyhow::Error) -> ErrorView {
         Some(event) => ErrorView {
             text: format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
-                 event {event} was being saved. Re-read the chart before judging again: if it was \
-                 recorded but a later judgement outranks it, the chart will look unchanged."
+                 event {event} was being saved. If it was recorded but a later judgement outranks it, \
+                 the chart will look unchanged after it is read again."
             ),
             retry: Retry::AfterReread,
         },

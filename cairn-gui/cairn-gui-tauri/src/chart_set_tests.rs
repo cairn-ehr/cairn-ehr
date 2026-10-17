@@ -33,24 +33,38 @@ fn a_combined_sign_off_report_names_the_charts_it_read() {
     assert_eq!(signed_across_message(&set(&[1])), None);
 }
 
+/// A changed set is a TYPE, so callers cannot confuse it with an unreadable list by comparing
+/// sentences, and its sentence names no remedy the window cannot perform.
 #[test]
-fn a_different_set_is_refused_with_a_reload_sentence() {
+fn a_changed_set_is_a_typed_change() {
     let err = check_displayed_set(&set(&[1, 2]), &ids(&[1])).unwrap_err();
-    assert!(err.contains("linked charts changed"), "{err}");
-    assert!(err.contains("reload"), "{err}");
+    assert_eq!(err, ChartSetError::Changed);
+    assert!(err.text().contains("linked charts changed"));
+    assert!(!err.text().contains("reload"));
+    assert_eq!(err.text(), crate::chart_set::CHANGED);
+}
+
+/// The view a change becomes: the screen is behind the record, so the window re-reads. An
+/// unreadable list is a window fault a re-read cannot mend.
+#[test]
+fn a_change_is_an_after_reread_view_and_an_unreadable_list_is_not() {
+    use crate::funnel::view::Retry;
+    assert_eq!(ChartSetError::Changed.into_view().retry, Retry::AfterReread);
+    assert_eq!(ChartSetError::Unreadable.into_view().retry, Retry::Never);
 }
 
 #[test]
 fn an_unparseable_id_is_refused() {
     let err = check_displayed_set(&set(&[1]), &["not-a-uuid".to_string()]).unwrap_err();
-    assert!(err.contains("could not tell which charts"), "{err}");
+    assert_eq!(err, ChartSetError::Unreadable);
+    assert!(err.text().contains("could not tell which charts"));
 }
 
 /// A command that names no chart at all cannot say what it saw, so it must not act.
 #[test]
 fn an_empty_displayed_list_is_refused() {
     let err = check_displayed_set(&set(&[1]), &[]).unwrap_err();
-    assert!(err.contains("could not tell which charts"), "{err}");
+    assert_eq!(err, ChartSetError::Unreadable);
 }
 
 #[test]

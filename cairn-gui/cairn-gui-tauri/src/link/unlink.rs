@@ -25,7 +25,7 @@
 //! chart-link lock (`unlink_charts_as_shown_from`) and refuses a changed one, so this attested
 //! unlink — stamped later — never silently overrules the colleague's.
 
-use super::judgement_view::{key_locked_for, refused, LinkReportView};
+use super::judgement_view::{key_locked_for, refused, stale, LinkReportView};
 use super::record_links::{read_record_links, PairKind, RecordLinks};
 use super::unlink_view::{
     link_review_view, require_standing, unlink_error_view, unlink_report, LinkReviewView,
@@ -33,7 +33,7 @@ use super::unlink_view::{
 };
 use super::view::THIS_CHANGED;
 use super::{as_text, chart_set_of};
-use crate::chart_set::{check_displayed_set, CHANGED};
+use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::funnel::view::{ErrorView, Retry};
 use crate::state::{AppState, Now};
 use cairn_medication_view::ChartSet;
@@ -75,8 +75,7 @@ pub struct ShownPair {
 /// colleague's judgement changed its attestation (see `line_still_shows`). The webview has
 /// already opened the empty panel, so this sentence is all it shows — no comparison, no verdict.
 pub const LINE_STALE: &str =
-    "this pair has been judged since the list was drawn — reload the chart to see the judgement \
-     that stands, then review it again";
+    "this pair has been judged since the list was drawn — nothing was done";
 
 /// Does the pair, as re-read for the review panel, still read the way its list line did?
 ///
@@ -108,7 +107,7 @@ pub(super) struct ResolvedEdge {
 
 /// The screen checks every review command shares, in the order the module doc gives.
 ///
-/// For Compare a changed set keeps the list's own wording ("reload the chart"); for a verdict
+/// For Compare a changed set keeps the list's own wording (`CHANGED`); for a verdict
 /// `charts` is the set the COMPARISON was made from, so a change means the comparison is stale
 /// and reads [`THIS_CHANGED`] (the R2b-1 rule). An unparseable id and a pair the record no
 /// longer shows as `kind` both read [`LINK_GONE`]: nothing is guessed, nothing is signed.
@@ -126,10 +125,10 @@ pub(super) async fn resolve_edge(
 ) -> Result<ResolvedEdge, ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let set = check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(|e| {
-        if act.is_verdict() && e == CHANGED {
-            refused(THIS_CHANGED)
+        if act.is_verdict() && e == ChartSetError::Changed {
+            stale(THIS_CHANGED)
         } else {
-            refused(e)
+            e.into_view()
         }
     })?;
     let (Ok(low), Ok(high)) = (low.parse::<Uuid>(), high.parse::<Uuid>()) else {
@@ -188,7 +187,7 @@ pub(super) fn shown_pair(
                 recorded_on: d.recorded_on.clone(),
             }),
     };
-    found.ok_or_else(|| refused(LINK_GONE))
+    found.ok_or_else(|| stale(LINK_GONE))
 }
 
 /// "Review this link…" / "Review this judgement…" — read the pair's two charts side by side,
@@ -214,7 +213,7 @@ pub async fn compare_linked_impl(
     };
     let edge = resolve_edge(state, Act::Compare, patient_id, &charts, low, high, kind).await?;
     if !line_still_shows(&edge.shown, attested) {
-        return Err(refused(LINE_STALE));
+        return Err(stale(LINE_STALE));
     }
     // Fixture charts are never linked, so `resolve_edge` cannot pass without a database;
     // refuse defensively rather than invent a comparison.

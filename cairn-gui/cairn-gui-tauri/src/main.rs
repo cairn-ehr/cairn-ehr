@@ -32,6 +32,7 @@ mod link;
 mod source_guard;
 mod state;
 mod worklist;
+mod write_failure;
 
 use clap::Parser;
 use state::AppState;

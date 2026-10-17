@@ -122,8 +122,8 @@ fn an_unknown_commit_outcome_rereads_and_is_never_retried_live() {
             v.text,
             format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
-                 event {} was being saved. Re-read the chart before judging again: if it was \
-                 recorded but a later judgement outranks it, the chart will look unchanged.",
+                 event {} was being saved. If it was recorded but a later judgement outranks it, \
+                 the chart will look unchanged after it is read again.",
                 id(77)
             )
         );
@@ -163,4 +163,11 @@ fn a_stale_refusal_is_not_recorded_and_re_reads() {
         "a stale refusal says nothing was recorded"
     );
     assert!(view.text.contains("the record changed"));
+}
+
+/// `stale` is the window's own "the screen is behind the record": a re-read, never a live retry.
+#[test]
+fn stale_re_reads_and_refused_does_not() {
+    assert_eq!(stale("x").retry, Retry::AfterReread);
+    assert_eq!(refused("x").retry, Retry::Never);
 }
