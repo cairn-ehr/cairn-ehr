@@ -95,6 +95,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         links: vec![that_link.clone()],
         links_error: None,
         duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
+        set_change: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();
@@ -165,11 +166,49 @@ fn another_chart() -> String {
 #[tokio::test]
 async fn the_medication_list_reads_only_the_chart_on_screen() {
     let (state, on_screen) = open_on_the_fixture_chart();
-    med_list_impl(&state, &on_screen)
+    med_list_impl(&state, &on_screen, None)
         .await
         .expect("the chart on screen is read");
-    let err = med_list_impl(&state, &another_chart()).await.unwrap_err();
+    let err = med_list_impl(&state, &another_chart(), None)
+        .await
+        .unwrap_err();
     assert!(err.contains("not the chart"), "{err}");
+}
+
+/// The first read of a chart (and any caller that does not compare) sends no seen set, and
+/// a re-read with nothing to compare says nothing (#797): never a guessed change.
+#[tokio::test]
+async fn med_list_says_nothing_without_a_seen_set() {
+    let (state, on_screen) = open_on_the_fixture_chart();
+    let pane = med_list_impl(&state, &on_screen, None).await.unwrap();
+    assert_eq!(pane.set_change, None);
+    let same = med_list_impl(&state, &on_screen, Some(vec![on_screen.clone()]))
+        .await
+        .unwrap();
+    assert_eq!(same.set_change, None, "an unchanged set says nothing");
+}
+
+/// A re-read whose seen set held a chart the record no longer holds names it (#797). The
+/// mock has no database to read the departed chart's identity, so it is named by id — said
+/// unread, never dropped.
+#[tokio::test]
+async fn med_list_names_a_change_from_the_seen_set() {
+    let (state, on_screen) = open_on_the_fixture_chart();
+    let gone = Uuid::from_u128(99);
+    let pane = med_list_impl(
+        &state,
+        &on_screen,
+        Some(vec![on_screen.clone(), gone.to_string()]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pane.set_change,
+        Some(format!(
+            "This record changed while it was on screen. No longer part of it: chart {gone} \
+             (its name could not be read here)."
+        ))
+    );
 }
 
 /// Checked FIRST, before fixture mode or the key: whatever else would refuse, a sign-off

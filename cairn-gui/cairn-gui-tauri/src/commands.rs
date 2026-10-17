@@ -20,8 +20,8 @@
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
 use crate::chart_set::{
-    cease_plan, chart_pane, check_displayed_set, linked_members, signed_across_message, ChartPane,
-    ChartSetError,
+    cease_plan, chart_pane, check_displayed_set, linked_members, set_change, signed_across_message,
+    ChartPane, ChartSetError,
 };
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
@@ -42,11 +42,20 @@ use zeroize::Zeroizing;
 pub async fn med_list(
     state: tauri::State<'_, AppState>,
     patient_id: String,
+    seen_charts: Option<Vec<String>>,
 ) -> Result<ChartPane, String> {
-    med_list_impl(&state, &patient_id).await
+    med_list_impl(&state, &patient_id, seen_charts).await
 }
 
-pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPane, String> {
+/// `seen_charts` (JS key `seenCharts`): on a re-read, the chart set the window had on screen —
+/// or the set the clinician's own Link/Unlink/Confirm left (its report's `charts_after`), so
+/// their own change is never announced back to them. `None` on a first read. The pane's
+/// `set_change` names what joined or left since (#797, `chart_set::set_change`).
+pub async fn med_list_impl(
+    state: &AppState,
+    patient_id: &str,
+    seen_charts: Option<Vec<String>>,
+) -> Result<ChartPane, String> {
     // Bound to the chart the webview is showing (`AppState::displayed_patient`): a read for a
     // chart the clerk has since left must not be rendered under the next one's header.
     let patient = state.displayed_patient(patient_id).await?;
@@ -67,7 +76,17 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
         members.as_deref().unwrap_or(&[]),
     )
     .await;
-    Ok(chart_pane(&list, members, links, dups))
+    // What joined or left the record since the set the window had on screen; never a failed
+    // open (an unread departed chart is named by id).
+    let change = set_change(
+        state,
+        seen_charts.as_deref(),
+        patient,
+        &list.charts,
+        members.as_deref().unwrap_or(&[]),
+    )
+    .await;
+    Ok(chart_pane(&list, members, links, dups, change))
 }
 
 /// Whether a signing key is currently held, and whose.

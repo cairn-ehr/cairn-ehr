@@ -222,7 +222,9 @@ async fn the_banner_alone_is_the_banner_a_chart_open_draws() {
     let state = AppState::mock(Some(fixture()));
     let p = fixture().to_string();
     let alone = banner_alone_impl(&state, &p).await.unwrap();
-    let pane = crate::commands::med_list_impl(&state, &p).await.unwrap();
+    let pane = crate::commands::med_list_impl(&state, &p, None)
+        .await
+        .unwrap();
     assert_eq!(alone, pane.duplicates);
 }
 

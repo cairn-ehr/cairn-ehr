@@ -21,6 +21,8 @@
 //! replaces the other. A CEASE gets only the first: `cease_medication` writes one thread and
 //! has no notion of a chart set, so the window's check is the whole of decision 3 for it (see
 //! `commands::cease_impl`).
+pub mod change;
+
 use crate::state::AppState;
 use cairn_gui_tab_medications::view::{build_view, MedListView};
 use cairn_medication_view::{ChartSet, MedicationRow, PatientMedicationList};
@@ -246,6 +248,10 @@ pub struct ChartPane {
     pub links_error: Option<String>,
     /// The possible-duplicate banner (R5a); empty and hidden when checked and none open.
     pub duplicates: crate::duplicates::view::DuplicateSection,
+    /// On a re-read only: the one sentence naming the charts that joined or left the record
+    /// since the set the window had on screen (#797, [`change::set_change_sentence`]). `None`
+    /// when nothing changed or the window sent no set to compare.
+    pub set_change: Option<String>,
 }
 
 /// Assemble the pane from one chart read and the outcome of reading its member names.
@@ -259,6 +265,7 @@ pub fn chart_pane(
     members: Result<Vec<MemberLine>, String>,
     links: Result<crate::link::record_links::RecordLinks, String>,
     duplicates: crate::duplicates::view::DuplicateSection,
+    set_change: Option<String>,
 ) -> ChartPane {
     let (members, members_error) = match members {
         Ok(members) => (members, None),
@@ -281,6 +288,7 @@ pub fn chart_pane(
         links,
         links_error,
         duplicates,
+        set_change,
     }
 }
 
@@ -300,18 +308,63 @@ pub async fn linked_members(
     if !charts.is_linked() {
         return Ok(vec![]);
     }
+    chart_identities(state, charts.members()).await
+}
+
+/// Each named chart's own identity line, read BY ID — the reader [`linked_members`] uses for
+/// the header, and the re-read uses for the charts that LEFT the record (#797), which are no
+/// longer part of any set this chart reads as.
+///
+/// By id, not by link component: `cairn_node::patient::person::chart_identities` reads each
+/// chart's held state, name, date of birth and trust independently, so a chart that is no
+/// longer linked to anything here — or whose registration never arrived (`held` false) — is
+/// still read, and worded by [`member_line`]. No ids, no read. No database (fixture mode) is an
+/// error: the caller words each chart as unread rather than guessing a line.
+pub async fn chart_identities(state: &AppState, ids: &[Uuid]) -> Result<Vec<MemberLine>, String> {
+    let Some(charts) = ChartSet::new(ids.iter().copied()) else {
+        return Ok(vec![]);
+    };
     let Some(db) = state.db.as_ref() else {
         return Err("there is no database to read the linked charts' identities from".into());
     };
     let db = db.lock().await;
-    let identities = cairn_node::patient::person::chart_identities(&*db, charts)
+    let identities = cairn_node::patient::person::chart_identities(&*db, &charts)
         .await
         .map_err(|e| format!("{e:#}"))?;
     Ok(identities.iter().map(member_line).collect())
 }
 
+/// The re-read's "what changed" sentence (#797): compare the set the window had on screen
+/// (`seen_charts`, as the webview sent it) with the set just read (`now`), and word the
+/// difference with [`change::set_change_sentence`].
+///
+/// `members` are the pane's own member lines (read over `now`), reused for the charts that
+/// JOINED; only the charts that LEFT are read here, by id ([`chart_identities`]), and a failed
+/// read words each of them unread ([`change::DepartedLine::Unread`]) — the change is still
+/// said, never dropped. Nothing is read when there is nothing to compare ([`change::seen_set`])
+/// or nothing left.
+pub async fn set_change(
+    state: &AppState,
+    seen_charts: Option<&[String]>,
+    opened: Uuid,
+    now: &ChartSet,
+    members: &[MemberLine],
+) -> Option<String> {
+    let seen = change::seen_set(seen_charts, opened)?;
+    let gone = change::departed_ids(&seen, now);
+    let departed: Vec<change::DepartedLine> = if gone.is_empty() {
+        vec![]
+    } else {
+        match chart_identities(state, &gone).await {
+            Ok(lines) => lines.into_iter().map(change::DepartedLine::Read).collect(),
+            Err(_) => gone.into_iter().map(change::DepartedLine::Unread).collect(),
+        }
+    };
+    change::set_change_sentence(&seen, now, members, &departed)
+}
+
 #[cfg(test)]
-#[path = "chart_set_tests.rs"]
+#[path = "tests.rs"]
 mod tests;
 
 /// Every chart command actually CALLS the set check (ADR-0076 decision 3).
@@ -321,5 +374,5 @@ mod tests;
 /// read hands the webview the set to send back. A refactor that dropped the check from one
 /// command would otherwise stay green while signing a list nobody reviewed.
 #[cfg(test)]
-#[path = "chart_set_command_tests.rs"]
+#[path = "command_tests.rs"]
 mod command_tests;

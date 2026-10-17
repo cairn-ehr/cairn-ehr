@@ -1,4 +1,4 @@
-//! Tests for `chart_set.rs` (moved out of line, #712 item 3): the set check, the member
+//! Tests for `chart_set/mod.rs` (moved out of line, #712 item 3): the set check, the member
 //! lines and their absence words, a pane that keeps its list when an identity or link read
 //! fails, and which threads a cease from this chart may touch.
 use super::*;
@@ -188,6 +188,7 @@ fn a_failed_identity_read_keeps_the_list_and_says_so() {
         Err("connection reset".into()),
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
+        None,
     );
     assert_eq!(pane.list.rows.len(), list.rows.len(), "the list is kept");
     assert!(pane.members.is_empty());
@@ -210,6 +211,7 @@ fn a_successful_identity_read_carries_no_warning() {
         Ok(vec![]),
         Ok(RecordLinks::default()),
         DuplicateSection::checked_none_open(),
+        None,
     );
     assert!(pane.members_error.is_none());
     assert_eq!(pane.list.charts.len(), 1);
@@ -224,6 +226,7 @@ fn a_failed_link_read_keeps_the_list_and_says_so() {
         Ok(vec![]),
         Err("x".into()),
         DuplicateSection::checked_none_open(),
+        None,
     );
     assert_eq!(pane.list.rows.len(), list.rows.len());
     assert!(pane.links.is_empty());
