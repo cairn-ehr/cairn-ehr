@@ -738,25 +738,32 @@ after a restart every press fails again until the window itself is restarted. **
 READ, not a lost CONNECTION**; a lost connection needs a window restart until reconnection exists. So the
 fault is injected into the read instead. The chart read starts with `cairn_person_charts` (the record's chart
 set; `cairn_node::patient::person::person_charts`), resolved by name on every read. With the chart open and
-its list drawn, in a second terminal:
+its list drawn, in a second terminal.
+
+> [!WARNING]
+> **Only on a throwaway measurement rig — never on a node anyone is charting on.** While the function is
+> renamed, every chart read and write on that node fails.
 
 ```bash
-psql "$CONN" -c "ALTER FUNCTION cairn_person_charts(uuid) RENAME TO cairn_person_charts_paused"
+psql "$CONN" -c "ALTER FUNCTION public.cairn_person_charts(uuid) RENAME TO cairn_person_charts_paused"
 ```
 
 Press **Sign off**. Expect "Sign-off failed: …" then "Could not read the chart: …", both naming the missing
 `cairn_person_charts(uuid)`; the rows stay and nothing is signed. Then:
 
 ```bash
-psql "$CONN" -c "ALTER FUNCTION cairn_person_charts_paused(uuid) RENAME TO cairn_person_charts"
+psql "$CONN" -c "ALTER FUNCTION public.cairn_person_charts_paused(uuid) RENAME TO cairn_person_charts"
 ```
 
 Press **Read this chart again**; time it from the press to the list drawn (1 act). The outcome line drops
 "Could not read the chart: …" and keeps "Sign-off failed: …". (Pressed BEFORE the rename back, it fails
 again and replaces the failure with the new one — it never adds a second.) (Why not `REVOKE`: `$CONN` connects as `$USER`, the cluster's
-superuser on this rig, and a superuser ignores grants. The rename is harmless to undo; never leave it in
-place — every chart read and write on this node fails while it is — and start no other `cairn-node` process
-meanwhile: its schema load would recreate the function, and the rename back would then be refused.)
+superuser on this rig, and a superuser ignores grants.) **Undo it before anything else.** Restarting the
+window or the node does NOT heal a forgotten rename: a connect replays the schema only when its stamp has
+changed (ADR-0080), so normally nothing recreates the function. The rename back is the remedy. If a schema
+replay did run meanwhile (a cleared stamp, a different build, `cairn-sync init`), it recreated
+`cairn_person_charts` and the rename back is refused because the name exists; then drop the copy instead:
+`psql "$CONN" -c "DROP FUNCTION public.cairn_person_charts_paused(uuid)"`.
 
 (b) The "This list is out of date …" notice with Sign off disabled fires only when a stale refusal succeeded and the re-read right after it failed, a one-round-trip
 window: it is observable only with fault injection or the headless mock walk, never by hand. Do not look
