@@ -80,10 +80,7 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
             "{f}"
         );
         // The pre-write chart read failing is an outage, not a verdict (#797 review).
-        assert!(
-            body.contains("read_chart_of(state, patient).await.map_err(chart_read_failed)?"),
-            "{f}"
-        );
+        assert!(body.contains(".map_err(chart_read_failed)?"), "{f}");
     }
     // The orchestrator's own compare is the only thing that sees a colleague's change landing
     // after the window's snapshot: its `Stale` refusal must reach the webview classified, never

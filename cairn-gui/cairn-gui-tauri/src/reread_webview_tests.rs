@@ -197,7 +197,8 @@ fn an_own_act_moves_the_held_set_by_its_own_delta_only() {
         "ordered"
     );
     assert!(
-        js_fn(CHART_STALE_JS, "sameCharts").contains("return ordered(a).join() === ordered(b).join();"),
+        js_fn(CHART_STALE_JS, "sameCharts")
+            .contains("return ordered(a).join() === ordered(b).join();"),
         "sameCharts"
     );
 }
