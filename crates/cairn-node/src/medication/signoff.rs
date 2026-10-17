@@ -265,9 +265,10 @@ pub async fn sign_off_medication_list(
     // either way (issue #335) — and it can no longer share a transaction with the writes,
     // because the writes are now per line (see below).
     //
-    // SAFETY NOTE (untested, issue #333): the mismatch refusal below still has no coverage.
-    // Forcing `actual != expected` needs a second connection writing a medication event for
-    // this patient in the narrow window between the two reads.
+    // SAFETY NOTE (untested, issue #333): the race that triggers the mismatch refusal below has
+    // no DB coverage (the refusal itself — wording and `Stale` scope — is unit-tested on
+    // `ensure_same_targets`). Forcing it needs a second connection writing a medication event
+    // for this patient in the narrow window between the two reads.
     let second_read = list_patient_medications(&*client, patient).await?;
 
     // ADR-0076 decision 3, the between-reads half: a link or unlink landing in the gap
@@ -292,24 +293,11 @@ pub async fn sign_off_medication_list(
         &second_read.groups_missing_from_chart,
     );
 
+    // The target-set half of the whole-gesture refusal (ADR-0060 decision 5; the chart-set
+    // half is `ensure_same_charts`, ADR-0076 decision 3). Raised BEFORE any line commits, so
+    // refusing here writes nothing and needs no rollback.
     let actual = sign_off_targets(&second_read.rows);
-    if actual != expected {
-        // The target-set half of the whole-gesture refusal (ADR-0060 decision 5; the chart-
-        // set half is `ensure_same_charts`, ADR-0076 decision 3). It does not ask
-        // "is this chart perfect?" — that question is now always answered by reporting — but
-        // "is this the same list the human reviewed?". Raised BEFORE any line commits, so
-        // refusing here writes nothing and needs no rollback.
-        //
-        // Report WHAT changed, not just how many — two counts that happen to match (a
-        // thread swapped for another) would otherwise read as a true but useless "3 vs 3".
-        let added = format_ids(actual.iter().filter(|t| !expected.contains(t)));
-        let removed = format_ids(expected.iter().filter(|t| !actual.contains(t)));
-        anyhow::bail!(
-            "the medication list changed while it was being signed (thread(s) added: {added}; \
-             removed: {removed}); nothing was signed — refresh the list and sign again so the \
-             vouch covers what was actually reviewed"
-        );
-    }
+    ensure_same_targets(&expected, &actual)?;
 
     // ONE TRANSACTION PER LINE (ADR-0060, transaction scope must match clinical atomicity).
     //
@@ -456,6 +444,30 @@ fn ensure_same_charts(before: &ChartSet, now: &ChartSet, window: &str) -> anyhow
     )))
 }
 
+/// Refuse the gesture when the lines to sign moved between the two reads (ADR-0060 decision
+/// 5): `Ok` exactly when `expected == actual`, otherwise a refusal naming what was added and
+/// removed. It does not ask "is this chart perfect?" — that is always answered by reporting —
+/// but "is this the same list the human reviewed?".
+///
+/// Both inputs are `sign_off_targets` output (sorted, deduplicated), so equality is by value.
+/// It names WHAT changed, not just how many: two counts that happen to match (a thread swapped
+/// for another) would otherwise read as a true but useless "3 vs 3".
+///
+/// A stale picture (#797), like `ensure_same_charts`: the screen is behind the record, so the
+/// window re-reads by itself. The sentence therefore says only what happened; the remedy is
+/// the scope's job, never a control named in the text.
+fn ensure_same_targets(expected: &[Uuid], actual: &[Uuid]) -> anyhow::Result<()> {
+    if expected == actual {
+        return Ok(());
+    }
+    Err(crate::db_diagnosis::stale_picture_refusal(format!(
+        "the medication list changed while it was being signed (thread(s) added: {}; \
+         removed: {}); nothing was signed",
+        format_ids(actual.iter().filter(|t| !expected.contains(t))),
+        format_ids(expected.iter().filter(|t| !actual.contains(t))),
+    )))
+}
+
 /// Pure tests for the set rules this module adds. The DB-backed behaviour of the gesture
 /// lives in `crates/cairn-node/tests/medication_signoff.rs` (one chart) and
 /// `crates/cairn-node/tests/combined_signoff.rs` (a chart set, ADR-0076).
@@ -530,6 +542,33 @@ mod tests {
         let shown = ChartSet::new([uid(2), uid(1)]).unwrap();
         let now = ChartSet::new([uid(1), uid(2), uid(1)]).unwrap();
         assert!(ensure_same_charts(&shown, &now, "while this list was on screen").is_ok());
+    }
+
+    #[test]
+    fn the_same_targets_pass() {
+        assert!(ensure_same_targets(&[uid(1), uid(2)], &[uid(1), uid(2)]).is_ok());
+    }
+
+    /// The target-set half of the whole-gesture refusal is a stale picture too (#797 review): a
+    /// colleague's line landing between the two reads means the screen is behind the record, so
+    /// the window re-reads — the sentence says only what happened, never a remedy the window
+    /// lacks ("refresh the list").
+    #[test]
+    fn changed_targets_are_refused_as_stale_naming_both_halves() {
+        let err = ensure_same_targets(&[uid(1), uid(2)], &[uid(1), uid(3)]).unwrap_err();
+        assert_eq!(
+            crate::db_diagnosis::refusal_scope(&err),
+            Some(crate::db_diagnosis::RefusalScope::Stale)
+        );
+        assert_eq!(
+            format!("{err:#}"),
+            format!(
+                "the medication list changed while it was being signed (thread(s) added: {}; \
+                 removed: {}); nothing was signed",
+                uid(3),
+                uid(2)
+            )
+        );
     }
 
     /// The second compare (first read against the second) uses the other window and is `Stale` too.
