@@ -195,6 +195,9 @@
              reads. -->
         <section id="chart-warnings" aria-labelledby="warnings-heading" hidden>
           <h2 id="warnings-heading">Warnings about this chart</h2>
+          <!-- A list the record changed under, whose re-read failed (#797, chart_stale.js's
+               markListStale): the rows stay up, flagged; the next list drawn clears it. -->
+          <p id="chart-stale" hidden></p>
           <!-- A list that was read but could not be drawn (#801, main.js's showUnshownList). Never
                shown beside the two reports below (the fault clears them); what matters is that it
                sits in this section, above the table. -->
@@ -230,6 +233,7 @@
     </main>
     <script src="main.js"></script>
     <script src="stop_reasons.js"></script>
+    <script src="chart_stale.js"></script>
     <script src="duplicates.js"></script>
     <script src="worklist.js"></script>
     <script src="funnel.js"></script>

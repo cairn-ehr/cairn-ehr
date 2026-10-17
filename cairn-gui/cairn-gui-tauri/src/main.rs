@@ -29,6 +29,8 @@ mod duplicates;
 mod funnel;
 mod link;
 #[cfg(test)]
+mod reread_webview_tests;
+#[cfg(test)]
 mod source_guard;
 mod state;
 mod worklist;

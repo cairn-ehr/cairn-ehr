@@ -14,7 +14,13 @@ use std::collections::BTreeSet;
 /// Extracted by scanning for `<binding>.<identifier>` rather than by hand, so the guard
 /// below cannot rot into a list nobody updates.
 fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
-    fields_read_in(include_str!("../src-ui/main.js"), binding)
+    // chart_stale.js was split out of main.js (#797) and reads the same `med_list` pane.
+    let mut read = fields_read_in(include_str!("../src-ui/main.js"), binding);
+    read.extend(fields_read_in(
+        include_str!("../src-ui/chart_stale.js"),
+        binding,
+    ));
+    read
 }
 
 /// Every field `js` reads off `binding` — the scanner itself, shared by every webview file's
@@ -260,6 +266,9 @@ fn the_webview_reads_the_linked_set_and_each_rows_source() {
     assert!(fields_read_by_the_webview("pane").contains("members_error"));
     assert!(fields_read_by_the_webview("member").contains("text"));
     assert!(fields_read_by_the_webview("row").contains("source"));
+    // #797: dropped, a colleague's link or unlink landing while the list was on screen would be
+    // redrawn without a word — the record silently grows or shrinks under the clinician.
+    assert!(fields_read_by_the_webview("pane").contains("set_change"));
 }
 
 /// The other direction, for the two fields where silence is the dangerous failure.
@@ -302,6 +311,7 @@ fn every_command_the_webview_calls_is_registered() {
     let webview = [
         ("main.js", include_str!("../src-ui/main.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
+        ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
         ("duplicates.js", include_str!("../src-ui/duplicates.js")),
         ("worklist.js", include_str!("../src-ui/worklist.js")),
         ("funnel.js", include_str!("../src-ui/funnel.js")),

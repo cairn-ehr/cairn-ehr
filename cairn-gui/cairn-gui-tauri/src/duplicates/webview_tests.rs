@@ -106,12 +106,20 @@ fn a_failed_first_read_does_not_leave_sign_off_saying_loading() {
 #[test]
 fn a_decided_refusal_re_reads_the_banner_never_the_whole_chart() {
     let compare = js_fn(LINK_JS, "compare");
-    let decided = &compare[position(compare, "failure.retry === \"never\"")..];
+    // The `"never"` arm alone, up to the `after_reread` arm after it (#797), which DOES re-read
+    // the whole chart: a refusal that says the screen is behind the record.
+    let never_at = position(compare, "failure.retry === \"never\"");
+    let reread_at = position(compare, "} else if (reread");
+    let decided = &compare[never_at..reread_at];
     assert!(
         decided.contains("await redrawBannerAlone(patientId);"),
         "{compare}"
     );
-    assert!(!compare.contains("refresh("), "{compare}");
+    assert!(!decided.contains("refresh("), "{compare}");
+    assert!(
+        never_at < reread_at && reread_at < position(compare, "refresh("),
+        "the only whole-chart re-read is the after_reread arm's: {compare}"
+    );
 
     let send = js_fn(LINK_JS, "sendJudgement");
     assert!(

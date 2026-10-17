@@ -6,9 +6,9 @@
 // what to re-read after an answer (the chart, or after a decided refusal only the banner).
 // Classic script, loaded after main.js and funnel.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `displayedPatient`, `renderedPatient`, `renderedCharts`
-// (main.js), `redrawBannerAlone`, `NO_LIST_TO_COMPARE` (duplicates.js) and `failureText`,
-// `debounce` (funnel.js — `failureText`'s doc comment explains why a bare IPC failure needs its
-// own wording, not just Rust's).
+// (main.js), `behindTheRecord` (chart_stale.js), `redrawBannerAlone`, `NO_LIST_TO_COMPARE`
+// (duplicates.js) and `failureText`, `debounce` (funnel.js — `failureText`'s doc comment explains
+// why a bare IPC failure needs its own wording, not just Rust's).
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`. `#link-status` is hidden whenever it is empty
 // (`clearComparison`), and style.css makes `[hidden]` win over everything: a bare
@@ -189,7 +189,11 @@ async function compare(otherId) {
       : null;
   } catch (failure) {
     if (token !== compareToken) return;
-    setMessage(el("link-status"), failureText(failure));
+    const text = failureText(failure);
+    setMessage(el("link-status"), text);
+    // The screen is behind the record (#797): this record's charts changed since the list was
+    // read. Only that refusal re-reads the WHOLE chart (flagged stale), in the arm below.
+    const reread = behindTheRecord(failure);
     // A decided refusal ("never") may mean the banner is stale — e.g. its pair was judged or
     // resolved meanwhile. The window has no reload control, so it re-reads the banner itself
     // rather than leave the clinician to close and reopen the chart (#745 point 3). A search
@@ -199,6 +203,8 @@ async function compare(otherId) {
       // Only the BANNER is re-read: the refusal changed nothing else, and a whole-chart refresh is
       // a heavier read that rebuilds every medication row under the clinician (PR #798 review).
       await redrawBannerAlone(patientId);
+    } else if (reread && patientId === displayedPatient) {
+      await refresh(text, reread);
     }
   }
 }
@@ -368,10 +374,12 @@ async function sendJudgement(command) {
       otherCharts: sent.otherCharts,
     });
     const place = linkAnswerPlace(sent, token);
+    // Every re-read of a recorded verdict names changes against the set it LEFT (`charts_after`,
+    // null when it changed no set): the clinician's own link is never announced back (#797).
     if (place === "elsewhere") {
       const text = "For chart " + sent.patientId + ": " + report.sentence;
       sayAnywhere(text);
-      if (linkChanged(sent, report)) await refresh(text);
+      if (linkChanged(sent, report)) await refresh(text, false, report.charts_after);
     } else if (report.reload) {
       // Link's TookEffect / StillJoined: the record just changed under this chart. "Different
       // people" ALWAYS lands here once anything was recorded (`LinkReportView::reload`), since
@@ -381,7 +389,7 @@ async function sendJudgement(command) {
       // Review pressed while this answer was in flight), that one is the clinician's, and stays.
       say(report.sentence);
       if (place === "panel") closeLinkPanel(true);
-      await refresh(report.sentence);
+      await refresh(report.sentence, false, report.charts_after);
     } else if (place === "chart") {
       say(report.sentence);
     } else {
@@ -403,18 +411,20 @@ async function sendJudgement(command) {
   } catch (failure) {
     const place = linkAnswerPlace(sent, token);
     const text = failureText(failure);
+    // Said where the clinician is now; also the re-read's lead, so it keeps its "For chart …".
+    const lead = place === "elsewhere" ? "For chart " + sent.patientId + ": " + text : text;
     // `"after_reread"` = the screen is behind the record: the record changed (nothing recorded), or (#713) the
     // judgement's COMMIT was interrupted, so it may have been recorded. A judgement that
     // landed as Outranked leaves the chart looking unchanged, and a second press would record a
     // second judgement over the colleague's it lost to — so never a live button over it: the
     // buttons go (below) and the chart is re-read (at the end), wherever the answer lands.
-    const reread = Boolean(failure && failure.retry === "after_reread");
+    const reread = behindTheRecord(failure);
     // A decided refusal ("never") changed nothing, but says the banner is stale (e.g. "Different
     // people" on a pair a colleague just judged): the BANNER is re-read below (#745 point 3) —
     // never the whole chart, which the refusal does not say is stale.
     const decided = Boolean(failure && failure.retry === "never");
     if (place === "elsewhere") {
-      sayAnywhere("For chart " + sent.patientId + ": " + text);
+      sayAnywhere(lead);
     } else if (place === "chart") {
       say(text);
     } else {
@@ -447,7 +457,7 @@ async function sendJudgement(command) {
     const touched =
       displayedPatient !== null &&
       (sent.charts.includes(displayedPatient) || sent.otherCharts.includes(displayedPatient));
-    if (reread && touched) await refresh(text);
+    if (reread && touched) await refresh(lead, reread);
     else if (decided && touched) await redrawBannerAlone(displayedPatient);
   } finally {
     for (const b of buttons) b.disabled = false;

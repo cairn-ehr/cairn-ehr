@@ -238,6 +238,7 @@ function drawList(pane, patient) {
   renderedPatient = patient;
   renderedCharts = view.charts;
   setMessage(el("chart-unshown"), ""); // a list that draws takes down a previous fault's warning
+  setMessage(el("chart-stale"), ""); // and an out-of-date list's (chart_stale.js, #797)
   renderMembers(pane.members);
   setMessage(el("linked-charts-error"), pane.members_error);
   renderLinks(pane.links);
@@ -295,6 +296,7 @@ function clearDrawnList() {
   setMessage(el("record-links-error"), "");
   el("med-rows").replaceChildren();
   setMessage(el("chart-unshown"), "");
+  setMessage(el("chart-stale"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
   el("chart-warnings").hidden = true;
@@ -325,20 +327,25 @@ function clearChart() {
  * `lead` is the outcome sentence of the act that prompted the re-read (a sign-off, a cease, a
  * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
  * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
- * "Linked — …" sentence was replaced by "Could not read the chart").
+ * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `staleIfFails` = a
+ * stale refusal prompted it (chart_stale.js); `seenAfterOwnAct` = the set an own act left.
  */
-async function refresh(lead) {
+async function refresh(lead, staleIfFails, seenAfterOwnAct) {
   const patient = displayedPatient;
   if (patient === null) return;
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;
+  // What a change is named against: the set the chart SHOWED, or the one the clinician's own act
+  // left (their change is never announced back). `??`: a null falls back, an empty array does not.
+  const seen = seenAfterOwnAct ?? renderedCharts;
   try {
-    const answer = await invoke("med_list", { patientId: patient });
+    const answer = await invoke("med_list", { patientId: patient, seenCharts: seen });
     // A read for a chart the clinician has since left, or older than what is drawn, is dropped,
     // never rendered (#800).
     if (!mayDraw(patient, revision)) return;
     drawnRevision = revision;
     render(answer, patient);
+    sayAfterReread(lead, staleIfFails, answer);
   } catch (e) {
     // A failure is said only by the newest read started: that read speaks for the chart now.
     if (!isLatestRead(patient, revision)) return;
@@ -347,6 +354,9 @@ async function refresh(lead) {
     // or the clinician waits for a read that is not happening (PR #798 review). It stays disabled.
     // A failed RE-read keeps the list it already drew, and that list's own button.
     if (renderedPatient === null) el("sign-off").textContent = "Nothing to sign off — no list read";
+    // After a stale refusal that list is known out of date: marked BEFORE the await below,
+    // after which a newer read may have drawn a fresh list.
+    if (staleIfFails && renderedPatient !== null) markListStale();
     // The banner needs only the chart set, so it is read on its own (#745): a failed list read
     // must not take the duplicate warning down, nor leave a just-judged pair up with a live Review.
     await redrawBannerAlone(patient); // duplicates.js, loaded after this file
@@ -386,9 +396,11 @@ async function signOff() {
     reportSignOff(
       await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts }),
     );
-  } catch (e) {
-    // `e` is the backend's ErrorView ({text, retry}), not a string: `failureText` reads its text.
-    say("Sign-off failed: " + failureText(e));
+  } catch (failure) {
+    // The backend's ErrorView ({text, retry}), not a string: `failureText` reads its text.
+    say("Sign-off failed: " + failureText(failure));
+    await refresh(el("outcome").textContent, behindTheRecord(failure));
+    return;
   }
   await refresh(el("outcome").textContent);
 }
@@ -410,8 +422,10 @@ async function cease(groupId, reason) {
         report.failed.join("; ");
     }
     say(text);
-  } catch (e) {
-    say("Could not stop this drug: " + failureText(e));
+  } catch (failure) {
+    say("Could not stop this drug: " + failureText(failure));
+    await refresh(el("outcome").textContent, behindTheRecord(failure));
+    return;
   }
   await refresh(el("outcome").textContent);
 }
