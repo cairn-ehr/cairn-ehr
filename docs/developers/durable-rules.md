@@ -57,8 +57,10 @@ change myself)."*
   `LinkReportView::left`, pinned by the `*_reports_no_set` tests): an Outranked act's set would move the held set
   and raise the draw floor with no re-read following, dropping a colleague's read already in flight.
 - **"Read this chart again" (`#reread`) is always visible in the chart view, and its label is pinned to every sentence
-  that quotes it** (`LIST_OUT_OF_DATE`, `REVIEW_WAITS_FOR_LIST`, the record-links sentences). **Tempting wrong fix:**
-  showing it only after a failure (the first failed read then has no way out), or relabelling it in one place.
+  that quotes it** (`LIST_OUT_OF_DATE`, `REVIEW_WAITS_FOR_LIST`, `NO_LIST_TO_COMPARE`, `chart_set`'s `UNREADABLE`, the
+  banner's and the record-links' read-failure sentences; `every_sentence_that_names_the_control_quotes_its_label`).
+  `LINK_GONE`'s `Never` arms deliberately name no button: a re-read redraws the same lines, so it cannot mend them.
+  **Tempting wrong fix:** showing it only after a failure (the first failed read then has no way out), or relabelling it in one place.
 - **"Read this chart again" re-reads with the outcome line as its lead (`rereadLead`), less a read failure it is
   retrying** (`sayReadFailed` remembers the failure's line and lead; a drawn re-read with nothing to add takes a
   standing failure back to its lead). Pins: `read_again_keeps_the_outcome_line_but_not_a_failure_it_retries`,
@@ -73,7 +75,8 @@ change myself)."*
   lost if an own act's re-read outdates it and then fails (the node's set check refuses writes regardless); a foreign
   change whose re-read hits a DRAWING fault is never named, because `showUnshownList` nulls `heldCharts`.
 - **No window sentence says "reload the chart" or "refresh and try again"** (guard
-  `no_window_sentence_says_reload_the_chart`): the window has a named control, so name it.
+  `no_window_sentence_says_reload_the_chart`, over every `.rs`, `.js` and `.html` source but tests): the window has a
+  named control, so name it.
 
 **⇒ THE CHART RE-READ (#799 · #800 · #801, PR #802) — do not undo any of these** (pins: the JS halves by SOURCE
 guards in `cairn-gui-tauri/src/chart_view_webview_tests.rs`, each mutation-checked; walked headlessly on the PR):

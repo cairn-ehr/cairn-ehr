@@ -361,13 +361,16 @@ earlier in this runbook; substitute your own.
 > **"Review this link…"** — one door per line, opening the same side-by-side panel, which now offers
 > every verdict that applies. The panel's **Unlink — not the same person** is unchanged, but it is now
 > signed only over the pair the panel read: if another judgement about the pair was recorded while you
-> were reading, it is refused ("what stands between charts … changed while you were judging it … —
-> nothing was done; review it again") and you compare again. An un-attested link also shows **Same
-> person — confirm** beside it when both charts are held on this node; that verdict is timed in
-> section 13, not here. If the pair's attestation changed after the list was drawn (a colleague
-> confirmed it, say), the panel opens with no comparison and no verdict, only "this pair has been
-> judged since the list was drawn — reload the chart…". A change that leaves the attestation as it
-> was is caught later instead: each verdict is signed only over the judgement the panel read.
+> were reading, it is refused ("what stands between charts … changed while you were judging it
+> (another judgement about the pair was recorded meanwhile) — nothing was done"), both verdicts go,
+> and the window re-reads the chart by itself (#797): the outcome line adds "The chart has been read
+> again — review it before you act on it." Review the line again from the re-read list. An
+> un-attested link also shows **Same person — confirm** beside it when both charts are held on this
+> node; that verdict is timed in section 13, not here. If the pair's attestation changed after the
+> list was drawn (a colleague confirmed it, say), the panel opens with no comparison and no verdict,
+> only "this pair has been judged since the list was drawn — nothing was done", and the chart is
+> re-read the same way. A change that leaves the attestation as it was is caught later instead: each
+> verdict is signed only over the judgement the panel read.
 
 Start the stopwatch at the press of **"Review this link…"** on a link's line, not before — choosing
 WHICH link is wrong is the cognitive load and is inside the gesture only from the press; the panel then
@@ -482,10 +485,12 @@ never brings this line onto a checked chart.
       (the launch command above again, in a second terminal), record "Different people" there, then press **Different people** in the first. The refusal says
       "nothing was done" and **never "reload the chart"**, and the banner redraws itself without the
       pair; a stop reason you had half-typed beside a drug is still there.
-- [ ] **A chart that cannot be read** (#745 points 1–2): with a chart open, stop the node's Postgres and
-      press **Sign off**. The outcome line says "Could not read the chart"; the banner does **not**
-      vanish and offers no **Review** on a stale pair — it says "Could not check for possible
-      duplicates: …". Restart Postgres, close the chart and reopen it: the banner is back as before.
+- [ ] **A chart that cannot be read** (#745 points 1–2): with a chart open, pause the chart read as in
+      section 14, Measurement 2 (rename `cairn_person_charts`), and press **Sign off**. The outcome line
+      says "Could not read the chart"; the banner does **not** vanish and offers no **Review** on a
+      stale pair — it says "Could not check for possible duplicates: …". Rename the function back and
+      press **Read this chart again**: the banner is back as before. (Do not stop Postgres for this:
+      the window holds one connection, opened at launch, and does not reconnect — see section 14.)
 - [ ] Closing the panel (Esc or "Close comparison") returns focus to the **Review** that opened it
       (to "Same person as…" if the banner has been redrawn since).
 
@@ -727,10 +732,33 @@ stop it when the outcome line has finished saying "Now part of it: B.".
    then "This record changed while it was on screen. Now part of it: <B's identity line>." The list now shows B's lines and the link line.
 5. Press **Sign off** again; it succeeds.
 
-**Measurement 2 — Read this chart again.** (a) Stop the database and press Sign off. Expect "Could not read
-the chart"; the rows and the Sign off button stay. Restore the database and press **Read this chart again**;
-time it from the press to the list drawn (1 act). (b) The "This list is out of date …" notice with Sign off
-disabled fires only when a stale refusal succeeded and the re-read right after it failed, a one-round-trip
+**Measurement 2 — Read this chart again.** (a) A read that fails and then recovers. The window opens ONE
+database connection at launch and never reconnects, so stopping Postgres cannot be undone from the window:
+after a restart every press fails again until the window itself is restarted. **The button recovers a failed
+READ, not a lost CONNECTION**; a lost connection needs a window restart until reconnection exists. So the
+fault is injected into the read instead. The chart read starts with `cairn_person_charts` (the record's chart
+set; `cairn_node::patient::person::person_charts`), resolved by name on every read. With the chart open and
+its list drawn, in a second terminal:
+
+```bash
+psql "$CONN" -c "ALTER FUNCTION cairn_person_charts(uuid) RENAME TO cairn_person_charts_paused"
+```
+
+Press **Sign off**. Expect "Sign-off failed: …" then "Could not read the chart: …", both naming the missing
+`cairn_person_charts(uuid)`; the rows stay and nothing is signed. Then:
+
+```bash
+psql "$CONN" -c "ALTER FUNCTION cairn_person_charts_paused(uuid) RENAME TO cairn_person_charts"
+```
+
+Press **Read this chart again**; time it from the press to the list drawn (1 act). The outcome line drops
+"Could not read the chart: …" and keeps "Sign-off failed: …". (Pressed BEFORE the rename back, it fails
+again and replaces the failure with the new one — it never adds a second.) (Why not `REVOKE`: `$CONN` connects as `$USER`, the cluster's
+superuser on this rig, and a superuser ignores grants. The rename is harmless to undo; never leave it in
+place — every chart read and write on this node fails while it is — and start no other `cairn-node` process
+meanwhile: its schema load would recreate the function, and the rename back would then be refused.)
+
+(b) The "This list is out of date …" notice with Sign off disabled fires only when a stale refusal succeeded and the re-read right after it failed, a one-round-trip
 window: it is observable only with fault injection or the headless mock walk, never by hand. Do not look
 for it in this pass.
 

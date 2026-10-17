@@ -195,8 +195,8 @@ async function compare(otherId) {
     // read. Only that refusal re-reads the WHOLE chart (flagged stale), in the arm below.
     const reread = behindTheRecord(failure);
     // A decided refusal ("never") may mean the banner is stale — e.g. its pair was judged or
-    // resolved meanwhile. The window has no reload control, so it re-reads the banner itself
-    // rather than leave the clinician to close and reopen the chart (#745 point 3). A search
+    // resolved meanwhile. The window re-reads the banner itself rather than leave the clinician
+    // to press "Read this chart again" for it (#745 point 3, #797). A search
     // result's refusal ("already part of this record") says nothing about the banner, but the
     // re-read is one cheap read, so it is not told apart.
     if (failure && failure.retry === "never" && patientId === displayedPatient) {

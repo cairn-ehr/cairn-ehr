@@ -193,7 +193,7 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | Gesture | Mode | n | median | p95 | Budget | Inside? |
 |---|---|---|---|---|---|---|
 | Sign off refused → chart re-read → "Now part of it: B." | live | | | | ≤ single-chart open time | |
-| "Read this chart again" after a failed read (DB stopped, then restored; 1 act) | live | | | | ≤ single-chart open time | |
+| "Read this chart again" after a failed read (chart read paused by rename, then restored; 1 act) | live | | | | ≤ single-chart open time | |
 
 | Run | Sentence named exactly the colleague's chart? | Own link announced? (must be no) |
 |---|---|---|

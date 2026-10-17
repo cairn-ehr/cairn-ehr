@@ -49,10 +49,10 @@ pub struct EntryFlags {
 }
 
 /// "Different people" after every pair between the two records was already judged or resolved
-/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead). No "reload
-/// the chart": the window has no reload control, and re-reads the BANNER itself after a decided
-/// refusal (#745 point 3; link.js's `sendJudgement` and `compare`, via `redrawBannerAlone`) — never
-/// the whole chart, which the refusal does not say is stale.
+/// (Review, and Link over a banner comparison, get [`NOT_SHOWN_OR_RESOLVED`] instead). It names no
+/// remedy: the window re-reads the BANNER itself after a decided refusal (#745 point 3; link.js's
+/// `sendJudgement` and `compare`, via `redrawBannerAlone`) — never the whole chart, which the
+/// refusal does not say is stale.
 pub const NOTHING_OPEN: &str = "this possible duplicate has already been judged or resolved — \
      nothing was done";
 /// Review — or Link over a banner comparison — of a chart no list showed and no open proposal
