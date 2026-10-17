@@ -7,7 +7,6 @@
 //! vocabulary. The TEXT is untouched: the node's own legible sentence (§9.6) is the one thing
 //! the clinician needs, so it is passed through exactly as the `String` version did.
 use crate::funnel::view::{ErrorView, Retry};
-use crate::link::judgement_view::refused;
 use cairn_gui_data::port::DataError;
 
 /// The retry a classified failure earns. Pure, so every arm is tested without a database
@@ -19,7 +18,9 @@ pub(crate) fn retry_for(error: &DataError) -> Retry {
         DataError::Stale(_) => Retry::AfterReread,
         DataError::Refused(_) | DataError::NotFound => Retry::Never,
         DataError::NotProvisioned(_) => Retry::AfterOperator,
-        // Nothing was confirmed either way, and the act can simply be pressed again.
+        // The outcome is not confirmed (only a judgement's commit is marked as unknown; a
+        // sign-off or cease is not). The window re-reads the chart right after the failure,
+        // which shows whether the write landed.
         DataError::Unavailable(_) => Retry::Now,
     }
 }
@@ -28,13 +29,28 @@ pub(crate) fn retry_for(error: &DataError) -> Retry {
 /// classification earns. A failure that is not a classified node verdict is an outage
 /// (`Retry::Now`), which is what `data_error_from` makes of it.
 pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
-    let class = cairn_gui_live::error::data_error_from(e);
-    match retry_for(&class) {
-        Retry::Never => refused(format!("{e:#}")),
-        retry => ErrorView {
-            text: format!("{e:#}"),
-            retry,
-        },
+    ErrorView {
+        text: format!("{e:#}"),
+        retry: retry_for(&cairn_gui_live::error::data_error_from(e)),
+    }
+}
+
+/// The signing key is locked: not a verdict. The identical act succeeds once the clinician
+/// unlocks it, so it keeps the button (`Retry::Now`) - the vocabulary of
+/// `link::judgement_view::key_locked`.
+pub(crate) fn key_locked(text: &str) -> ErrorView {
+    ErrorView {
+        text: text.into(),
+        retry: Retry::Now,
+    }
+}
+
+/// This node cannot write at all (no node key, no database connection): only the operator can
+/// mend that, so `Retry::AfterOperator`.
+pub(crate) fn node_cannot_write(text: &str) -> ErrorView {
+    ErrorView {
+        text: text.into(),
+        retry: Retry::AfterOperator,
     }
 }
 

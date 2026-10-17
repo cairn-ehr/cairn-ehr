@@ -26,7 +26,7 @@ use crate::chart_set::{
 use crate::funnel::view::ErrorView;
 use crate::link::judgement_view::refused;
 use crate::state::{AppState, Now, SessionKey};
-use crate::write_failure::node_failure;
+use crate::write_failure::{key_locked, node_cannot_write, node_failure};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
@@ -215,11 +215,11 @@ pub async fn sign_off_impl(
         .await
         // Not a failure to hide: the clinician needs to know the key re-locked, not to see
         // a gesture silently do nothing.
-        .ok_or_else(|| refused("your signing key is locked — unlock it to sign off"))?;
+        .ok_or_else(|| key_locked("your signing key is locked — unlock it to sign off"))?;
     let node_sk = state
         .node_sk
         .as_ref()
-        .ok_or_else(|| refused("no node key"))?;
+        .ok_or_else(|| node_cannot_write("no node key"))?;
 
     // Timed around the WRITE only. The clinician's reading time is measured by the operator
     // runbook, not here: capturing it would mean timing how long someone spent thinking.
@@ -228,7 +228,7 @@ pub async fn sign_off_impl(
         let mut db = state
             .db
             .as_ref()
-            .ok_or_else(|| refused("no database connection"))?
+            .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await;
         let params = cairn_node::medication::AttestParams {
@@ -348,11 +348,11 @@ pub async fn cease_impl(
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
-        .ok_or_else(|| refused("your signing key is locked — unlock it to stop a drug"))?;
+        .ok_or_else(|| key_locked("your signing key is locked — unlock it to stop a drug"))?;
     let node_sk = state
         .node_sk
         .as_ref()
-        .ok_or_else(|| refused("no node key"))?;
+        .ok_or_else(|| node_cannot_write("no node key"))?;
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     // Each member thread paired with the chart it LIVES on — a cessation is written to its
@@ -377,7 +377,7 @@ pub async fn cease_impl(
         let mut db = state
             .db
             .as_ref()
-            .ok_or_else(|| refused("no database connection"))?
+            .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await;
         let input = cairn_node::medication::CeaseMedicationInput {
