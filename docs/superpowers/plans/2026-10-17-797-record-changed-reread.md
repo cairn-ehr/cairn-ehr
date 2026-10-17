@@ -1,5 +1,17 @@
 # #797 — "This record changed": re-read, say what changed, and a "Read this chart again" control
 
+> [!NOTE]
+> **As built (PR #805) — this plan is the design as it was before review, not the code.** Where they differ, the code
+> and `docs/developers/durable-rules.md` (the #797 block) win:
+> - The baseline is a separate HELD set (`heldCharts`, `chart_stale.js`), moved by the clinician's own acts through
+>   `applyOwnAct` — not `renderedCharts`, and not a per-call `seenAfterOwnAct` argument.
+> - `charts_after` is `Option<ChartSet>` (`null` when the act changed no set), not `Vec<String>`.
+> - `refresh(lead, behind)` takes two arguments and always sends `heldCharts`; "the list is behind the record" is
+>   WINDOW state (`behindAfter`), not one read's flag, so whichever read fails last marks the list.
+> - The funnel maps `DataError::Stale` to `Retry::Never` (it has no chart to re-read), not `AfterReread`.
+> - The "Read this chart again" button is wired in `chart_stale.js` with `rereadLead()`, not in `main.js`.
+> - The RUNBOOK step is §14, not §13.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** When a refusal says the record changed under the clinician, the window re-reads the whole chart by itself, says what changed (worded in Rust), and never retries the act. A failed read gets an always-visible "Read this chart again" control instead of "reload the chart" or "close the chart and open it again".
