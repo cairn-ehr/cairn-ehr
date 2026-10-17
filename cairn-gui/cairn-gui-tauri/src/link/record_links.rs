@@ -275,7 +275,7 @@ pub fn links_section(
         Ok(links) if links.edges.is_empty() && linked => (
             vec![],
             Some(
-                "No standing link joining these charts could be read here — reload the chart \
+                "No standing link joining these charts could be read here — press \"Read this chart again\" \
                  before undoing any."
                     .to_string(),
             ),
@@ -286,8 +286,8 @@ pub fn links_section(
         Ok(links) if has_orphan_clash(&links) => (
             vec![],
             Some(
-                "Which of these links is in doubt could not be read consistently — reload the \
-                 chart before judging any."
+                "Which of these links is in doubt could not be read consistently — \
+                 press \"Read this chart again\" before judging any."
                     .to_string(),
             ),
         ),
@@ -314,7 +314,7 @@ pub fn links_section(
             let notes_unread = links.unverified.as_ref().err().map(|e| {
                 format!(
                     "Whether this node can verify these links could not be read, so a link may \
-                     lack its \"unverified here\" note — reload the chart; if this persists, the \
+                     lack its \"unverified here\" note — press \"Read this chart again\"; if this persists, the \
                      node needs its operator: {e}"
                 )
             });
@@ -324,7 +324,7 @@ pub fn links_section(
             vec![],
             Some(format!(
                 "The links joining these charts could not be read, so none can be judged from \
-                 here — reload the chart; if this persists, the node needs its operator: {e}"
+                 here — press \"Read this chart again\"; if this persists, the node needs its operator: {e}"
             )),
         ),
     }

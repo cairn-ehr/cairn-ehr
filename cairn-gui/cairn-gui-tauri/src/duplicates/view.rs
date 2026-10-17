@@ -265,7 +265,10 @@ pub fn medications_of(
 ) -> Result<MedListView, String> {
     let list = read?;
     if &list.charts != record {
-        return Err("the other record changed while the banner was read — reload the chart".into());
+        return Err(
+            "the other record changed while the banner was read — press \"Read this chart again\""
+                .into(),
+        );
     }
     Ok(cairn_gui_tab_medications::view::build_view(&list))
 }

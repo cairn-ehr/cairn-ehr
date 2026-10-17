@@ -284,7 +284,7 @@ fn medications_read_over_a_different_record_are_not_drawn() {
     let err = medications_of(&record, Ok(list.clone())).unwrap_err();
     assert_eq!(
         err,
-        "the other record changed while the banner was read — reload the chart"
+        "the other record changed while the banner was read — press \"Read this chart again\""
     );
     list.charts = record.clone();
     assert!(medications_of(&record, Ok(list)).is_ok());

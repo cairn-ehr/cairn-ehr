@@ -24,7 +24,7 @@ use crate::chart_set::{
     ChartPane, ChartSetError,
 };
 use crate::funnel::view::ErrorView;
-use crate::link::judgement_view::refused;
+use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{key_locked, node_cannot_write, node_failure};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
@@ -383,7 +383,7 @@ pub async fn cease_impl(
         .rows
         .iter()
         .find(|row| row.group_id == group)
-        .ok_or_else(|| refused("that drug is no longer on this chart — refresh and try again"))?;
+        .ok_or_else(|| stale("that drug is no longer on this chart — nothing was done"))?;
     let plan = cease_plan(row, patient);
 
     let started = Instant::now();

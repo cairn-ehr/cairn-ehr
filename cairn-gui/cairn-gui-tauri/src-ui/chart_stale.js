@@ -138,6 +138,11 @@ function ordered(ids) {
   return [...new Set(ids)].sort();
 }
 
+// The always-visible "Read this chart again" button (index.html): the way out of any read that
+// failed. It sends the held set like every other re-read. (Wired here, not in main.js, which is
+// at its line budget.)
+el("reread").addEventListener("click", () => void refresh());
+
 /**
  * A stale refusal's re-read failed: say so above the table and take sign-off away, with its
  * reason. The rows stay — the clinician can still read what they last saw, now flagged. The next

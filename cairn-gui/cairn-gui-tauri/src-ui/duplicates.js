@@ -34,8 +34,8 @@ const NO_LIST_TO_COMPARE =
  * a list that could not be DRAWN has none here (the chart's warning says it is this window's fault).
  */
 const REVIEW_WAITS_FOR_LIST =
-  "Review needs this chart's medication list on screen, and it could not be read or shown, or " +
-  "is still being read. If it could not be read, close the chart and open it again.";
+  'Review needs this chart\'s medication list on screen, and it could not be read or shown, or ' +
+  'is still being read. If it could not be read, press "Read this chart again".';
 
 /**
  * Draw a `DuplicateSection`. Hidden only when Rust says it has nothing to say (`silent`, which is

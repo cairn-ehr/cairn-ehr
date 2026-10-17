@@ -113,6 +113,12 @@
           <button id="close-chart" type="button">Find another patient</button>
         </header>
 
+        <!-- Always there, whatever state the list is in: a read that failed (the list, the links,
+             the duplicate banner) names this button as the way out. Paper has no "stale" folder,
+             but it has the clinician's hand to fetch it again — this is that hand (#797). Its
+             click is wired in chart_stale.js. -->
+        <button id="reread" type="button">Read this chart again</button>
+
         <!-- "Same person as…" (R2b-1). An ordinary section, never a dialog: nothing blocks the
              chart, and closing it just hides it. DOM ORDER IS CLINICAL — the disagreeing facts
              come before the table, so a screen reader meets them first. Its safety is what it

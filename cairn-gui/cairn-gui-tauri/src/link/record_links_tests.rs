@@ -60,7 +60,7 @@ fn an_unread_link_list_says_so_and_offers_no_unlink() {
     assert!(links.is_empty());
     let error = error.expect("an unread list is said, never shown empty");
     assert!(error.contains("could not be read"));
-    assert!(error.contains("reload"));
+    assert!(error.contains("Read this chart again"));
 }
 
 #[test]
@@ -82,7 +82,9 @@ fn a_read_list_carries_no_error() {
 fn a_linked_record_with_no_edges_read_says_so() {
     let (links, error) = links_section(Ok(RecordLinks::default()), &[], true);
     assert!(links.is_empty());
-    assert!(error.expect("never blank").contains("reload the chart"));
+    assert!(error
+        .expect("never blank")
+        .contains("press \"Read this chart again\""));
 }
 
 #[test]
@@ -175,7 +177,9 @@ fn a_clash_on_a_pair_with_no_line_is_said_never_dropped() {
     };
     let (lines, error) = links_section(Ok(links), &[], true);
     assert!(lines.is_empty(), "no line drawn without its mark");
-    assert!(error.expect("never silent").contains("reload the chart"));
+    assert!(error
+        .expect("never silent")
+        .contains("press \"Read this chart again\""));
 }
 
 /// Each line carries the attestation it SHOWS, so the review panel can tell a line drawn
@@ -228,5 +232,7 @@ fn a_linked_record_with_only_doubts_still_says_reload() {
     };
     let (lines, error) = links_section(Ok(links), &[], true);
     assert!(lines.is_empty());
-    assert!(error.expect("never blank").contains("reload the chart"));
+    assert!(error
+        .expect("never blank")
+        .contains("press \"Read this chart again\""));
 }

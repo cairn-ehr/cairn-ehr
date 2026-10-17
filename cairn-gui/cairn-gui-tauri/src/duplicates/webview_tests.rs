@@ -167,11 +167,15 @@ fn the_windows_own_sentences_about_a_missing_list_are_true() {
     ] {
         assert!(no_list.contains(part), "{no_list}");
     }
-    let waits = js_const(DUPLICATES_JS, "REVIEW_WAITS_FOR_LIST");
+    // Single-quoted in the script (it quotes the control's name), which `js_const` cannot read.
+    let at = DUPLICATES_JS
+        .find("const REVIEW_WAITS_FOR_LIST =")
+        .expect("declared");
+    let waits = &DUPLICATES_JS[at..at + DUPLICATES_JS[at..].find(";\n").expect("closes")];
     for part in [
         "could not be read or shown",
         "still being read",
-        "If it could not be read, close the chart and open it again",
+        "If it could not be read, press \"Read this chart again\"",
     ] {
         assert!(waits.contains(part), "{waits}");
     }
