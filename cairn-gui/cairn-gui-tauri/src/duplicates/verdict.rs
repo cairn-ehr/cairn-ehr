@@ -32,7 +32,8 @@ pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
 ///   which could hide a later pair's "commit outcome unknown" behind a refusal (the #713
 ///   hazard) — carrying the most retryable class among them (`combined_retry`).
 /// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
-///   a pair that was not confirmed may or may not still be open.
+///   a pair that was not confirmed may or may not still be open. `behind_the_record` when a
+///   failed pair was `Retry::AfterReread`, so that re-read knows the list is stale (#797 review).
 ///
 /// The `reload` is `true` even when every recorded pair was `Outranked` (see
 /// [`LinkReportView::reload`]): whatever was recorded, the banner must be re-read.
@@ -56,6 +57,10 @@ pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportVie
         sentence: report_sentence(&results),
         reload: true,
         charts_after: None,
+        behind_the_record: results
+            .iter()
+            .filter_map(|r| r.outcome.as_ref().err())
+            .any(|e| e.retry == Retry::AfterReread),
     })
 }
 

@@ -304,3 +304,31 @@ fn still_joined_and_outranked_sentences_are_pinned() {
         )
     );
 }
+
+/// #797 review: a partly-recorded "Different people" is a SUCCESS report, yet one of its pairs may
+/// have been refused because the record changed under the screen (or its commit was interrupted,
+/// #713) — `Retry::AfterReread`. The report carries that, so the window's re-read knows the list
+/// is behind the record and marks it out of date if that re-read fails. Any other failure, or
+/// none, leaves it false.
+#[test]
+fn a_partly_recorded_judgement_says_when_a_failed_pair_was_behind_the_record() {
+    let recorded = |n: u128| PairResult {
+        low: id(n),
+        high: id(n + 50),
+        outcome: Ok(LinkEffect::TookEffect),
+    };
+    let failed = |n: u128, retry: Retry| PairResult {
+        low: id(n),
+        high: id(n + 50),
+        outcome: Err(ErrorView {
+            text: "x".into(),
+            retry,
+        }),
+    };
+    let behind = |rs: Vec<PairResult>| different_people_report(rs).unwrap().behind_the_record;
+    assert!(behind(vec![recorded(1), failed(2, Retry::AfterReread)]));
+    for other in [Retry::Now, Retry::AfterOperator, Retry::Never] {
+        assert!(!behind(vec![recorded(1), failed(2, other)]), "{other:?}");
+    }
+    assert!(!behind(vec![recorded(1), recorded(2)]), "nothing failed");
+}

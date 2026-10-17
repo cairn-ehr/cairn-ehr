@@ -380,7 +380,7 @@ async function sendJudgement(command) {
     if (place === "elsewhere") {
       const text = "For chart " + sent.patientId + ": " + report.sentence;
       sayAnywhere(text);
-      if (linkChanged(sent, report)) await refresh(text);
+      if (linkChanged(sent, report)) await refresh(text, report.behind_the_record);
     } else if (report.reload) {
       // Link's TookEffect / StillJoined: the record just changed under this chart. "Different
       // people" ALWAYS lands here once anything was recorded (`LinkReportView::reload`), since
@@ -390,7 +390,9 @@ async function sendJudgement(command) {
       // Review pressed while this answer was in flight), that one is the clinician's, and stays.
       say(report.sentence);
       if (place === "panel") closeLinkPanel(true);
-      await refresh(report.sentence);
+      // A partly-recorded "Different people" whose failed pair was behind the record (#797 review)
+      // re-reads as a stale refusal does: marked out of date if the re-read fails.
+      await refresh(report.sentence, report.behind_the_record);
     } else if (place === "chart") {
       say(report.sentence);
     } else {

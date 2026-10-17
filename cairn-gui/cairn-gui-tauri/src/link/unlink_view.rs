@@ -286,6 +286,7 @@ fn effect_report(
                 sentence,
                 reload: true,
                 charts_after: None,
+                behind_the_record: false,
             }
         }
         LinkEffect::StillJoined => LinkReportView {
@@ -296,6 +297,7 @@ fn effect_report(
             ),
             reload: true,
             charts_after: None,
+            behind_the_record: false,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
@@ -305,6 +307,7 @@ fn effect_report(
                 .into(),
             reload: false,
             charts_after: None,
+            behind_the_record: false,
         },
     }
 }

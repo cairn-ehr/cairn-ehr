@@ -359,6 +359,7 @@ fn unlink_js_reads_no_field_the_backend_does_not_send() {
                 sentence: String::new(),
                 reload: true,
                 charts_after: None,
+                behind_the_record: false,
             })
             .unwrap(),
         ),

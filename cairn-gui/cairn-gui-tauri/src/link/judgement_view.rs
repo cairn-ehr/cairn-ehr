@@ -39,6 +39,12 @@ pub struct LinkReportView {
     /// ([`charts_after`]). Never an empty list: an empty seen set means
     /// "could not tell" to `med_list`, which would then say nothing at all.
     pub charts_after: Option<Vec<String>>,
+    /// A SUCCESS report that still says the screen is behind the record (#797 review): only a
+    /// partly-recorded "Different people", one of whose failed pairs was `Retry::AfterReread`
+    /// (refused because the record changed, or its commit interrupted, #713). The window's re-read
+    /// then treats the list as stale, exactly as for a refusal — marked out of date if that
+    /// re-read fails. `false` for every other report: a recorded act is not a stale picture.
+    pub behind_the_record: bool,
 }
 
 impl LinkReportView {
@@ -169,17 +175,20 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
             ),
             reload: true,
             charts_after: None,
+            behind_the_record: false,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
             charts_after: None,
+            behind_the_record: false,
         },
         // See LINK_STILL_JOINED: R2a never returns this for a link.
         LinkEffect::StillJoined => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
             charts_after: None,
+            behind_the_record: false,
         },
     }
 }

@@ -115,8 +115,13 @@ fn an_own_judgement_re_reads_against_the_set_it_left() {
         for (at, _) in body.match_indices("await refresh(") {
             assert!(moved < at, "{body}");
         }
+        // No per-call baseline: a lead, and at most the report's stale FLAG (never a chart set).
         for args in calls {
-            assert_eq!(args.len(), 1, "no per-call baseline: {args:?}");
+            let flag = args.get(1).map(String::as_str);
+            assert!(
+                args.len() <= 2 && matches!(flag, None | Some("report.behind_the_record")),
+                "no per-call baseline: {args:?}"
+            );
         }
     }
     let own = js_fn(CHART_STALE_JS, "holdOwnAct");
@@ -360,15 +365,60 @@ fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
         };
         let calls = refresh_calls(caught);
         assert!(!calls.is_empty(), "{file} {name} re-reads nothing: {body}");
-        for args in calls {
+        for (args, gate) in calls.iter().zip(refresh_gates(caught)) {
             let flag = args.get(1).map(String::as_str);
+            // The flag, AND the condition the call sits under (#797 review): `if (!reread && …)`
+            // would pass the right flag yet re-read on every OTHER failure and never on a stale one.
             let derived = match flag {
-                Some("behindTheRecord(failure)") => true,
-                Some("reread") => body.contains("const reread = behindTheRecord(failure);"),
+                // Unconditional: the act re-reads whatever failed, flagged by what it was.
+                Some("behindTheRecord(failure)") => gate.is_none(),
+                Some("reread") => {
+                    body.contains("const reread = behindTheRecord(failure);")
+                        && gate.is_some_and(|g| g.starts_with("reread && "))
+                }
                 _ => false,
             };
-            assert!(derived, "{file} {name}: refresh{args:?}");
+            assert!(derived, "{file} {name}: refresh{args:?} under {gate:?}");
         }
+    }
+}
+
+/// For each `await refresh(` in `body`, in order: the condition of the `if` it sits directly
+/// under (`if (c) await refresh(…)`, or `if (c) {` with the call as the block's first statement),
+/// or `None` when the call is a statement of its own. Pure; the condition is what follows `if (`
+/// up to the end of the line.
+fn refresh_gates(body: &str) -> Vec<Option<&str>> {
+    body.match_indices("await refresh(")
+        .map(|(at, _)| {
+            let before = body[..at].trim_end();
+            // `if (c) {` on the line above: step back over the block's opening brace.
+            let before = before.strip_suffix('{').map_or(before, str::trim_end);
+            let line_start = before.rfind('\n').map_or(0, |n| n + 1);
+            let line = before[line_start..].trim_start();
+            let cond = line
+                .strip_prefix("} else if (")
+                .or_else(|| line.strip_prefix("else if ("))
+                .or_else(|| line.strip_prefix("if ("))?;
+            Some(cond)
+        })
+        .collect()
+}
+
+/// A partly-recorded "Different people" is a success report that may still be behind the record
+/// (`LinkReportView::behind_the_record`, #797 review): both success re-reads in `sendJudgement`
+/// pass that flag, so a failed re-read after it marks the list as a stale refusal's would.
+#[test]
+fn a_recorded_judgement_re_reads_flagged_with_its_report() {
+    let send = js_fn(LINK_JS, "sendJudgement");
+    let tried = &send[..position(send, "catch (failure)")];
+    let calls = refresh_calls(tried);
+    assert_eq!(calls.len(), 2, "{tried}");
+    for args in calls {
+        assert_eq!(
+            args.get(1).map(String::as_str),
+            Some("report.behind_the_record"),
+            "{args:?}"
+        );
     }
 }
 
