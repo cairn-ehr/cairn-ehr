@@ -78,7 +78,7 @@ pub(super) async fn refuse_unless_records_read_as_shown(
     if let Some(pair) = shown.pair {
         let now = super::standing_link(tx, low, high).await?;
         if let Some(stale) = stale_pair(pair, now.as_ref(), low, high) {
-            return Err(stale_picture_refusal(stale));
+            return Err(stale); // already marked `Stale`
         }
     }
     Ok(())
@@ -119,6 +119,10 @@ pub fn stale_record(
 /// Why the pair's standing assertion (`now`) is no longer the one the panel showed (`shown`),
 /// or `None` if it is. **Pure.** No assertion at all is stale too: the panel showed one.
 ///
+/// Comes back already MARKED [`crate::db_diagnosis::RefusalScope::Stale`], as [`stale_record`]'s
+/// does: the scope travels with the comparison that decided it, so no caller can wrap the verdict
+/// as `Input` by mistake (#797 review).
+///
 /// "Changed" means a different EVENT now wins the overlay for the pair — whatever it says. A
 /// colleague's confirm (same verb, now attested) is as stale as a colleague's unlink: either way
 /// the clinician judged a picture that no longer holds, and must look again before signing.
@@ -127,13 +131,13 @@ pub fn stale_pair(
     now: Option<&StandingLink>,
     low: Uuid,
     high: Uuid,
-) -> Option<String> {
+) -> Option<anyhow::Error> {
     match now {
         Some(winner) if winner.is(shown) => None,
-        _ => Some(format!(
+        _ => Some(stale_picture_refusal(format!(
             "what stands between charts {low} and {high} changed while you were judging it \
              (another judgement about the pair was recorded meanwhile) — nothing was done"
-        )),
+        ))),
     }
 }
 
@@ -188,13 +192,20 @@ mod tests {
             state: "link".into(),
             attested: false,
         };
-        assert_eq!(stale_pair(&shown, Some(&same), lo, hi), None);
+        assert!(stale_pair(&shown, Some(&same), lo, hi).is_none());
         let other = StandingLink {
             content_address: (1u8..35).collect(),
             state: "unlink".into(),
             attested: true,
         };
-        let text = stale_pair(&shown, Some(&other), lo, hi).expect("a different winner is stale");
+        let err = stale_pair(&shown, Some(&other), lo, hi).expect("a different winner is stale");
+        // Marked where it is decided, as `stale_record` is (#797 review): no caller can wrap the
+        // comparison's verdict in the wrong scope.
+        assert_eq!(
+            crate::db_diagnosis::refusal_scope(&err),
+            Some(crate::db_diagnosis::RefusalScope::Stale)
+        );
+        let text = format!("{err:#}");
         assert!(text.ends_with("nothing was done"), "{text}");
         assert!(
             stale_pair(&shown, None, lo, hi).is_some(),

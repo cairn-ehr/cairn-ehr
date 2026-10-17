@@ -181,9 +181,13 @@ fn stale_re_reads_and_refused_does_not() {
 fn a_report_carries_the_set_its_act_left() {
     let left = ChartSet::new([id(2), id(1)]).unwrap();
     let report = link_report(LinkEffect::TookEffect, &left, &left).left(&left, id(1));
+    assert_eq!(report.charts_after, Some(left));
+    // A `ChartSet` (sorted, de-duplicated, never empty — by type, not by comment), yet on the
+    // wire the same list of ids the webview always read (`#[serde(transparent)]`).
+    let json = serde_json::to_value(&report).unwrap();
     assert_eq!(
-        report.charts_after,
-        Some(vec![id(1).to_string(), id(2).to_string()])
+        json["charts_after"],
+        serde_json::json!([id(1).to_string(), id(2).to_string()])
     );
 }
 
@@ -196,7 +200,7 @@ fn a_set_without_the_chart_on_screen_is_not_reported() {
     assert_eq!(charts_after(&others, id(1)), None);
     assert_eq!(
         charts_after(&ChartSet::single(id(1)), id(1)),
-        Some(vec![id(1).to_string()])
+        Some(ChartSet::single(id(1)))
     );
 }
 

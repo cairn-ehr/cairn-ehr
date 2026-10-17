@@ -36,9 +36,10 @@ pub struct LinkReportView {
     /// `None` (`null` to the webview, which then compares against the set on screen) when the
     /// act reported no set — "Different people" changes no record's set — when the act changed
     /// nothing (`reload` false: Outranked), or when the set read is not the record on screen
-    /// ([`charts_after`]). Never an empty list: an empty seen set means
-    /// "could not tell" to `med_list`, which would then say nothing at all.
-    pub charts_after: Option<Vec<String>>,
+    /// ([`charts_after`]). Never an empty list — a [`ChartSet`] cannot be one (an empty seen set
+    /// means "could not tell" to `med_list`, which would then say nothing at all) — and on the
+    /// wire the plain list of ids it always was (`ChartSet` serializes transparently).
+    pub charts_after: Option<ChartSet>,
     /// A SUCCESS report that still says the screen is behind the record (#797 review): only a
     /// partly-recorded "Different people", one of whose failed pairs was `Retry::AfterReread`
     /// (refused because the record changed, or its commit interrupted, #713). The window's re-read
@@ -74,10 +75,8 @@ impl LinkReportView {
 /// chart's record always holds that chart, and two records holding the same chart are the same
 /// record, so "holds `on_screen`" is exactly "is the record the clinician holds". Anything else
 /// is reported as no set, and the re-read falls back to comparing against the screen.
-pub fn charts_after(charts: &ChartSet, on_screen: Uuid) -> Option<Vec<String>> {
-    charts
-        .contains(&on_screen)
-        .then(|| charts.members().iter().map(Uuid::to_string).collect())
+pub fn charts_after(charts: &ChartSet, on_screen: Uuid) -> Option<ChartSet> {
+    charts.contains(&on_screen).then(|| charts.clone())
 }
 
 /// A refusal the clinician cannot retry as-is.
