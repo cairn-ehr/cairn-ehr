@@ -163,6 +163,9 @@ pub fn data_error_from(e: &anyhow::Error) -> DataError {
     // fall through to `Unavailable` (PR #661 review).
     match cairn_node::db_diagnosis::refusal_scope(e) {
         Some(cairn_node::db_diagnosis::RefusalScope::NodeState) => DataError::NotProvisioned(text),
+        // The record changed under the caller: its own cause, because the remedy (re-read) differs
+        // from both a form edit and an operator command.
+        Some(cairn_node::db_diagnosis::RefusalScope::Stale) => DataError::Stale(text),
         // `Input` scope, or no marker at all — fall through to the SQLSTATE question, which is
         // the only one that can speak for the floor's own refusals.
         Some(cairn_node::db_diagnosis::RefusalScope::Input) => DataError::Refused(text),
@@ -254,6 +257,18 @@ mod tests {
                  no way forward on a form that was correct, and `Unavailable` offers a \
                  retry-now that will fail identically until an operator acts"
             ),
+        }
+    }
+
+    /// A refusal because the record changed under the caller is neither a form to edit nor an
+    /// outage to retry: re-reading is the whole remedy, so it must reach the window as its own
+    /// cause (`Stale`) rather than collapse into `Refused`.
+    #[test]
+    fn a_stale_scope_is_a_stale_data_error() {
+        let e = cairn_node::db_diagnosis::stale_picture_refusal("the record changed");
+        match data_error_from(&e) {
+            DataError::Stale(text) => assert!(text.contains("the record changed")),
+            other => panic!("a stale-picture refusal must classify as Stale, got {other:?}"),
         }
     }
 

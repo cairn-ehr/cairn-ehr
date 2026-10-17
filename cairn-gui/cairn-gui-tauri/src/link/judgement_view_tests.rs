@@ -151,3 +151,16 @@ fn a_locked_key_names_the_button_that_was_pressed() {
     assert!(e.text.contains("Unlink"), "it names the unlink button");
     assert!(!e.text.contains("press \"Link\""), "never the opposite act");
 }
+
+/// A refusal over a changed record: nothing was recorded, and the remedy is a re-read of the
+/// whole chart, never a live retry of the same act.
+#[test]
+fn a_stale_refusal_is_not_recorded_and_re_reads() {
+    let view = judgement_error_from("link", DataError::Stale("the record changed".into()));
+    assert_eq!(view.retry, Retry::AfterReread);
+    assert!(
+        view.text.starts_with("The link was not recorded: "),
+        "a stale refusal says nothing was recorded"
+    );
+    assert!(view.text.contains("the record changed"));
+}

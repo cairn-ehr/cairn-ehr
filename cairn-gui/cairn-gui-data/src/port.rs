@@ -83,6 +83,12 @@ pub enum DataError {
     /// A verdict about this NODE's provisioning state, not about the call. See the enum doc:
     /// never retried *as is*, but the payload names a command that makes the same call succeed.
     NotProvisioned(String),
+    /// A refusal because the record changed since the caller's picture of it was taken
+    /// (`cairn_node::db_diagnosis::RefusalScope::Stale`). Nothing was recorded, and re-reading is
+    /// the whole remedy: not a form to edit (`Refused`), not an operator command
+    /// (`NotProvisioned`), not an outage to retry live (`Unavailable`) — the same act over the
+    /// same stale picture would be refused again.
+    Stale(String),
 }
 
 pub trait ClinicalData {

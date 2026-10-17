@@ -147,7 +147,10 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
             let why = match e {
                 DataError::Unavailable(t)
                 | DataError::Refused(t)
-                | DataError::NotProvisioned(t) => t,
+                | DataError::NotProvisioned(t)
+                // Only the words matter here: a standing probe that reports a changed record
+                // is still "could not check", so `Stale` reads like `Refused`.
+                | DataError::Stale(t) => t,
                 DataError::NotFound => "no answer".to_string(),
             };
             Some(format!(

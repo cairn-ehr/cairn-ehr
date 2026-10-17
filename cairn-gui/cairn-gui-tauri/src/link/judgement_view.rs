@@ -179,6 +179,12 @@ pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
             text: format!("This node cannot record the {act} yet: {t}"),
             retry: Retry::AfterOperator,
         },
+        // The record changed under the clinician: nothing was recorded, and the window re-reads
+        // the whole chart rather than offering a live retry over a picture that is now wrong.
+        DataError::Stale(t) => ErrorView {
+            text: format!("The {act} was not recorded: {t}"),
+            retry: Retry::AfterReread,
+        },
         DataError::Unavailable(t) => ErrorView {
             text: format!("The {act} was not confirmed: {t}"),
             retry: Retry::Now,
