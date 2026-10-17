@@ -38,6 +38,14 @@
 
 ## When the "what changed" sentence appears (maintainer rule, 2026-10-17)
 
+> **The governing rule, in the maintainer's words:** "The chart I hold in my hand when I make changes is my
+> responsibility — my obligation to know its contents. I need only to be informed of what changed between me taking
+> the chart and finishing amends that I cannot know (that is, anything that wasn't in the chart when I took it and I
+> didn't change myself)."
+>
+> "The chart I hold" is what the window last SHOWED (`renderedCharts`): once a re-read has drawn a change and named
+> it, it is part of the chart held. The baseline moves only by being shown.
+
 **Only for a change that came from ANOTHER source** — never for the clinician's own act. Every write checks the set
 the clinician saw, under the link lock, before it records anything. So a successful act proves nothing foreign
 changed before it; what remains is anything arriving during or after it:
