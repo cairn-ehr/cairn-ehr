@@ -240,10 +240,14 @@ fn the_combined_retry_is_the_most_retryable_among_the_failed_pairs() {
     let unknown = Retry::AfterReread(Recorded::Unknown);
     assert_eq!(combined(vec![fail(1, stale), fail(2, Retry::Now)]), stale);
     assert_eq!(combined(vec![fail(1, Retry::Never), fail(2, stale)]), stale);
-    // #811: and "may have been recorded" outranks "nothing was recorded", in either order — the
-    // window must not say the record changed when the clinician's own act may be what changed it.
-    assert_eq!(combined(vec![fail(1, unknown), fail(2, stale)]), unknown);
-    assert_eq!(combined(vec![fail(1, stale), fail(2, unknown)]), unknown);
+    // #811 review: a stale refusal outranks an unknown outcome, in either order. It PROVES the
+    // list is out of date, and the unknown pair's own sentence still says its outcome is unknown.
+    assert_eq!(combined(vec![fail(1, unknown), fail(2, stale)]), stale);
+    assert_eq!(combined(vec![fail(1, stale), fail(2, unknown)]), stale);
+    assert_eq!(
+        combined(vec![fail(1, unknown), fail(2, Retry::Now)]),
+        unknown
+    );
 }
 
 #[test]
@@ -308,8 +312,8 @@ fn still_joined_and_outranked_sentences_are_pinned() {
 /// #797 review: a partly-recorded "Different people" is a SUCCESS report, yet one of its pairs may
 /// have been refused because the record changed under the screen (`Recorded::No`), or its commit
 /// was interrupted (#713, `Recorded::Unknown`). The report carries which, so the window's re-read
-/// knows the list is behind the record, and words it for the cause (#811). Several such pairs give
-/// the worst cause. Any other failure, or none, leaves it `None`.
+/// knows the list is behind the record, and words it for the cause (#811). Of several such pairs,
+/// `No` wins, because it proves the list out of date. Any other failure, or none, leaves it `None`.
 #[test]
 fn a_partly_recorded_judgement_says_when_a_failed_pair_was_behind_the_record() {
     let recorded = |n: u128| PairResult {
@@ -338,8 +342,8 @@ fn a_partly_recorded_judgement_says_when_a_failed_pair_was_behind_the_record() {
     );
     assert_eq!(
         behind(vec![recorded(1), failed(2, unknown), failed(3, stale)]),
-        Some(Recorded::Unknown),
-        "the worst cause, whatever the order"
+        Some(Recorded::No),
+        "a proven stale pair outranks an unknown one"
     );
     for other in [Retry::Now, Retry::AfterOperator, Retry::Never] {
         assert_eq!(

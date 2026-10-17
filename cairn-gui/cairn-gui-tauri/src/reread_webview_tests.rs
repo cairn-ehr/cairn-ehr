@@ -226,19 +226,16 @@ fn read_again_is_said_only_after_an_accepted_answer() {
 
     // A re-read that ended a stale refusal, OR names a change, says "review it before you act
     // on it" (#811's M5: a colleague's change named after the clinician's own successful act is
-    // as much news as one named after a refusal). After an interrupted commit (`"unknown"`) a
-    // named change may be the clinician's own, and the line says so (#811's M4).
+    // as much news as one named after a refusal). That a change may be the clinician's OWN, after
+    // an interrupted Link or Unlink (#811's M4), is said by Rust in the lead
+    // (`judgement_error_view`, `Charts::MayMove`), never guessed here.
     let after = js_fn(CHART_STALE_JS, "sayAfterReread");
-    let either = position(after, "if (readAgain || pane.set_change) {");
-    let mine = position(
-        after,
-        "const mine = readAgain === \"unknown\" && pane.set_change ? MAY_BE_YOURS : null;",
+    assert!(
+        after.contains(
+            "if (readAgain || pane.set_change) say(sentences(lead, READ_AGAIN, pane.set_change));"
+        ),
+        "{after}"
     );
-    let said = position(
-        after,
-        "say(sentences(lead, READ_AGAIN, pane.set_change, mine));",
-    );
-    assert!(either < mine && mine < said, "{after}");
 }
 
 /// An OLDER read landing after a newer one already FAILED and marked the list (#797 fix review):
@@ -336,8 +333,8 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
         "the newest revision sent BEFORE the refusal"
     );
     assert!(
-        know.contains("if (behindRecorded !== \"unknown\") behindRecorded = recorded;"),
-        "\"may have been recorded\" is never overwritten by a later \"nothing was\" (#811): {know}"
+        know.contains("if (behindRecorded !== \"no\") behindRecorded = recorded;"),
+        "a proven stale refusal is never overwritten by a later \"unknown\" (#811 review): {know}"
     );
     assert!(
         js_fn(CHART_STALE_JS, "listKnownBehind").contains("return behindAfter !== null;"),
@@ -348,12 +345,7 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
         drew.contains("const ended = behindAfter !== null && revision > behindAfter;"),
         "only a read sent after the refusal ends it: {drew}"
     );
-    assert!(drew.contains("if (!ended) return null;"), "{drew}");
-    assert!(
-        position(drew, "const recorded = behindRecorded;") < position(drew, "forgetBehind();"),
-        "the cause is handed on before it is forgotten: {drew}"
-    );
-    assert!(drew.contains("return recorded;"), "{drew}");
+    assert!(drew.contains("if (ended) forgetBehind();"), "{drew}");
     assert!(
         js_fn(CHART_STALE_JS, "holdCharts").contains("if (charts === null) forgetBehind();"),
         "no list on screen, nothing to be behind"
@@ -367,6 +359,16 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
     // on screen as old as it was.
     assert_eq!(CHART_STALE_JS.matches("behindAfter = ").count(), 3);
     assert_eq!(CHART_STALE_JS.matches("behindRecorded = ").count(), 3);
+    // ...and `forgetBehind` is called from those two places only (#811 review): one more call,
+    // in `holdOwnAct` say, would end the stale state on an own act with every count above intact.
+    assert_eq!(
+        CHART_STALE_JS.matches("forgetBehind(").count(),
+        3,
+        "its definition, drewRead, holdCharts"
+    );
+    for js in [MAIN_JS, LINK_JS, UNLINK_JS] {
+        assert!(!js.contains("forgetBehind("));
+    }
 }
 
 /// `markListStale` warns in the chart's warnings — ABOVE the table, never on the outcome line —
@@ -553,8 +555,8 @@ fn the_list_out_of_date_sentence_names_the_control() {
         "This list may be out of date: whether your last act was recorded is not known, and \
          reading it again failed. Press \"Read this chart again\"."
     );
-    assert_eq!(
-        js_const(CHART_STALE_JS, "MAY_BE_YOURS"),
-        "That change may be your own act, if it was recorded."
+    assert!(
+        !CHART_STALE_JS.contains("your own"),
+        "Rust words that, per act"
     );
 }

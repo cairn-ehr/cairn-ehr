@@ -54,16 +54,21 @@ pub enum Retry {
 /// `{"after_reread": "no"}` / `{"after_reread": "unknown"}`, read by `chart_stale.js`'s
 /// `behindTheRecord`.
 ///
-/// Ordered `No < Unknown`, so the worst of several failures is their `max`: "may have been
-/// recorded" must never be hidden behind "nothing was recorded".
+/// It words only the out-of-date notice a failed re-read leaves (`markListStale`). What an
+/// interrupted act may have changed is said in that act's own sentence
+/// (`judgement_error_view`), which the window keeps as the re-read's lead.
+///
+/// Ordered `Unknown < No`, so the value for several failures is their `max`, and `No` wins (#811
+/// review): one stale refusal PROVES the list is out of date, which outranks "may be". An
+/// unknown pair's own sentence still says that its outcome is unknown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Recorded {
+    /// A write's COMMIT was interrupted (#713): it may have been recorded.
+    Unknown,
     /// The record changed under the clinician (a `Stale` refusal, or the window's own set
     /// check): nothing was recorded.
     No,
-    /// A write's COMMIT was interrupted (#713): it may have been recorded.
-    Unknown,
 }
 
 /// A failure, as the clerk reads it.

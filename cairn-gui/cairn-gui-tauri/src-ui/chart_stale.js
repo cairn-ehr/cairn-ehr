@@ -35,18 +35,12 @@ const LIST_OUT_OF_DATE =
   'again failed. Press "Read this chart again".';
 
 /**
- * `LIST_OUT_OF_DATE` after an interrupted commit (#713, `"unknown"`): the clinician's own act may
- * be all that changed, so "the record changed" — a colleague, by implication — is not known (#811).
+ * `LIST_OUT_OF_DATE` when only interrupted commits (#713, `"unknown"`) are behind the list: the
+ * clinician's own act may be all that changed, so "the record changed" is not known (#811).
  */
 const LIST_MAY_BE_OUT_OF_DATE =
   'This list may be out of date: whether your last act was recorded is not known, and ' +
   'reading it again failed. Press "Read this chart again".';
-
-/**
- * Said after Rust's change sentence when the re-read follows an interrupted commit (#811): the
- * held set never moved by that act (no report came back), so the change named may be its own.
- */
-const MAY_BE_YOURS = "That change may be your own act, if it was recorded.";
 
 /**
  * Whether a refusal says the screen is behind the record, and what was recorded (Rust's
@@ -72,9 +66,11 @@ function behindTheRecord(failure) {
 let behindAfter = null;
 
 /**
- * What the acts behind `behindAfter` recorded: `"no"`, or `"unknown"` once ANY of them was an
- * interrupted commit — never moved back to `"no"`, since a later stale refusal does not settle
- * whether that act landed (#811). Null with `behindAfter`.
+ * What the acts behind `behindAfter` recorded, for the out-of-date notice only: `"unknown"` while
+ * every one was an interrupted commit, and `"no"` once ANY was a stale refusal — never moved back
+ * to `"unknown"`, because one stale refusal PROVES the list is out of date (#811 review). Null
+ * with `behindAfter`. What an interrupted act may have changed is said in its own sentence, the
+ * re-read's lead (Rust's `judgement_error_view`).
  */
 let behindRecorded = null;
 
@@ -85,7 +81,7 @@ let behindRecorded = null;
  */
 function knowListBehind(recorded) {
   behindAfter = chartReadRevision;
-  if (behindRecorded !== "unknown") behindRecorded = recorded;
+  if (behindRecorded !== "no") behindRecorded = recorded;
 }
 
 /** The list is no longer known behind the record: a later read drew, or no list is drawn. */
@@ -100,16 +96,13 @@ function listKnownBehind() {
 }
 
 /**
- * The read that took `revision` drew a list. If that list ends a known-stale state — it was read
- * after the refusal — returns what the acts behind it recorded (`"no"` / `"unknown"`), so the
- * outcome line says the chart was read again, worded for the cause. Otherwise null.
+ * The read that took `revision` drew a list. Returns whether that list ends a known-stale state —
+ * it was read after the refusal — so the outcome line says the chart was read again.
  */
 function drewRead(revision) {
   const ended = behindAfter !== null && revision > behindAfter;
-  if (!ended) return null;
-  const recorded = behindRecorded;
-  forgetBehind();
-  return recorded;
+  if (ended) forgetBehind();
+  return ended;
 }
 
 /** Whether the list on screen is marked out of date (either of `markListStale`'s sentences is up). */
@@ -134,20 +127,18 @@ function sayAfterDraw(lead, revision, marked, pane) {
 
 /**
  * The outcome line after a re-read was DRAWN (called through `sayAfterDraw` only over an answer
- * `mayDraw` accepted, so an overtaken read says nothing). `readAgain`: null, or what the acts of
- * the stale refusal this list ended recorded (`drewRead`). If it ended one, OR names a change, say
- * the lead, that the chart was read again — review it — and what changed: a change is news to
- * review after the clinician's own act too (#811's M5). After an interrupted commit (`"unknown"`)
- * a named change may be the clinician's own, and the line says so (#811's M4). Otherwise the line
+ * `mayDraw` accepted, so an overtaken read says nothing). `readAgain`: this list ended a stale
+ * refusal (`drewRead`). If it did, OR it names a change, say the lead, that the chart was read
+ * again — review it — and what changed: a change is news to review after the clinician's own act
+ * too (#811's M5). (After an interrupted Link or Unlink, the lead — Rust's sentence — already says
+ * a named change may be the clinician's own, #811's M4.) Otherwise the line
  * is left alone — it may be saying how a signed act went — unless it still says a read FAILED,
  * which this drawn read has just made untrue: it goes back to its lead (what was said before the
  * failure, possibly nothing).
  */
 function sayAfterReread(lead, readAgain, pane) {
-  if (readAgain || pane.set_change) {
-    const mine = readAgain === "unknown" && pane.set_change ? MAY_BE_YOURS : null;
-    say(sentences(lead, READ_AGAIN, pane.set_change, mine));
-  } else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
+  if (readAgain || pane.set_change) say(sentences(lead, READ_AGAIN, pane.set_change));
+  else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
 }
 
 /**

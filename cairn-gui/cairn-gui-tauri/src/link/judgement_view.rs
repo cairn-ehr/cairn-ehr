@@ -43,7 +43,7 @@ pub struct LinkReportView {
     /// A SUCCESS report that still says the screen is behind the record (#797 review): only a
     /// partly-recorded "Different people", one of whose failed pairs was `Retry::AfterReread`
     /// (refused because the record changed, or its commit interrupted, #713). It carries that
-    /// pair's [`Recorded`] — the worst, if several — so the window's re-read treats the list as
+    /// pair's [`Recorded`] — `No` if any pair's was — so the window's re-read treats the list as
     /// stale exactly as for a refusal, and words it for the cause (#811). `None` for every other
     /// report: a recorded act is not a stale picture. On the wire `null`, `"no"` or `"unknown"`.
     pub behind_the_record: Option<Recorded>,
@@ -78,6 +78,16 @@ impl LinkReportView {
 /// is reported as no set, and the re-read falls back to comparing against the screen.
 pub fn charts_after(charts: &ChartSet, on_screen: Uuid) -> Option<ChartSet> {
     charts.contains(&on_screen).then(|| charts.clone())
+}
+
+/// Whether a judgement can move the record's chart set — the one thing a re-read after its
+/// interrupted commit cannot tell apart from a colleague's change (#811 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charts {
+    /// A Link or an Unlink: it may join or part charts.
+    MayMove,
+    /// A confirmation or a "different people" judgement: membership is never changed.
+    Kept,
 }
 
 /// A refusal the clinician cannot retry as-is.
@@ -200,7 +210,7 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
 /// written — a connection lost during the commit — is marked by the node and never reaches that
 /// arm; see [`judgement_error_view`] (#713).
 pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
-    judgement_error_view("link", e)
+    judgement_error_view("link", Charts::MayMove, e)
 }
 
 /// A failed judgement worded for its act — the one entry point every judgement surface (Link,
@@ -216,13 +226,25 @@ pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
 /// gets [`Retry::AfterReread`] instead: the webview takes the button away (from any open
 /// comparison of the same pair) and re-reads the chart when the judgement touched it. The
 /// sentence says what a re-read cannot: an Outranked landing leaves the chart looking unchanged.
-pub fn judgement_error_view(act: &str, e: &anyhow::Error) -> ErrorView {
+///
+/// `charts` says whether the act can move the record's chart set (#811 review). If it can (a
+/// Link, an Unlink), the sentence adds that a change the re-read names may be the clinician's
+/// own: no report came back to tell the window so. If it cannot (a confirmation, a "different
+/// people" judgement), any change the re-read names came from another source, and is not
+/// excused.
+pub fn judgement_error_view(act: &str, charts: Charts, e: &anyhow::Error) -> ErrorView {
     match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
         Some(event) => ErrorView {
             text: format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
                  event {event} was being saved. If it was recorded but a later judgement outranks it, \
-                 the chart will look unchanged after it is read again."
+                 the chart will look unchanged after it is read again.{}",
+                match charts {
+                    Charts::MayMove => format!(
+                        " If it was recorded, a change the re-read names may be your own {act}."
+                    ),
+                    Charts::Kept => String::new(),
+                }
             ),
             retry: Retry::AfterReread(Recorded::Unknown),
         },

@@ -5,6 +5,14 @@ the record changed under the screen (**nothing was recorded**), or a judgement's
 **may have been**). The type says which, and the window's two sentences that were true only of the first case become
 true of both. The maintainer chose option (b) of #811 on 2026-10-18.
 
+> [!NOTE]
+> **As built, after the review on the PR:**
+> - "May be your own" is said in Rust, in the interrupted act's own sentence (`judgement_error_view`'s
+>   `Charts::MayMove`, Link and Unlink only). It is not a JS `MAY_BE_YOURS`: a confirmation or a "different
+>   people" judgement never moves the chart set, so a change named after one is certainly another source's.
+> - `Recorded` is ordered `Unknown < No`, so `No` wins. One stale refusal PROVES the list is out of date, and
+>   the out-of-date notice is the only thing the value words.
+
 **Architecture:**
 - `Retry::AfterReread(Recorded)`, where `Recorded::{No, Unknown}` (`funnel/view.rs`). On the wire it is
   `{"after_reread": "no" | "unknown"}`. `Recorded` is ordered `No < Unknown`, so "the worst of several" is `max`.

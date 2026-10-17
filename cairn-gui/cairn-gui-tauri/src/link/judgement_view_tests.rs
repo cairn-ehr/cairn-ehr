@@ -123,10 +123,21 @@ fn an_unknown_commit_outcome_rereads_and_is_never_retried_live() {
             format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
                  event {} was being saved. If it was recorded but a later judgement outranks it, \
-                 the chart will look unchanged after it is read again.",
+                 the chart will look unchanged after it is read again. If it was recorded, a \
+                 change the re-read names may be your own {act}.",
                 id(77)
             )
         );
+    }
+    // #811 review: a confirmation and a "different people" judgement never move the chart set
+    // (`confirm_view::confirm_report`; "Different people" is refused inside one set), so a change
+    // the re-read names is certainly another source's — never "may be your own".
+    for v in [
+        judgement_error_view("confirmation", Charts::Kept, &e),
+        crate::duplicates::verdict::different_people_error_view(&e),
+    ] {
+        assert_eq!(v.retry, Retry::AfterReread(Recorded::Unknown));
+        assert!(!v.text.contains("your own"), "{}", v.text);
     }
 }
 

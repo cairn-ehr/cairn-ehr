@@ -10,6 +10,27 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #811 — A RE-READ AFTER AN INTERRUPTED COMMIT SAYS ONLY WHAT IT KNOWS — do not undo** (pins: `funnel/view_tests.rs`'s
+wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the source guards in
+`reread_webview_tests.rs` / `read_again_webview_tests.rs`):
+- **`Retry::AfterReread(Recorded)`: `No` = a stale refusal, nothing recorded; `Unknown` = an interrupted commit
+  (#713), it may have been.** It words only the out-of-date notice (`LIST_OUT_OF_DATE` vs `LIST_MAY_BE_OUT_OF_DATE`).
+  **Tempting wrong fix:** collapsing it back to a unit variant because the window "does the same" for both. It does
+  the same, but must not SAY the same.
+- **`No` wins** (`Recorded` is ordered `Unknown < No`; `combined_retry`, `behind_the_record`, and `behindRecorded`
+  in `chart_stale.js`, which never goes from `"no"` back to `"unknown"`): one stale refusal PROVES the list is out of
+  date. **Tempting wrong fix:** letting `Unknown` win "because it is worse". The banner then says "whether your last
+  act was recorded is not known" right after a Stop whose own line said "nothing was done".
+- **"A change the re-read names may be your own" is Rust's, in the interrupted act's OWN sentence, for Link and
+  Unlink only** (`judgement_error_view(act, Charts::MayMove, e)`). A confirmation and a "different people" judgement
+  are `Charts::Kept`: they never move membership, so a change named after one is certainly another source's.
+  **Tempting wrong fix:** a JS sentence keyed on `"unknown"`. It cannot tell the acts apart, so it excuses a
+  colleague's link as the clinician's own.
+- **`forgetBehind` is called only by `drewRead` and `holdCharts`** (counted). One more call in an own-act path would
+  end the stale state silently.
+- **Any re-read that names a change says `READ_AGAIN` ("review it before you act on it")**, including after the
+  clinician's own successful act (M5). A colleague's change is news to review either way.
+
 **⇒ #797 — A CHANGED RECORD RE-READS ITSELF AND SAYS WHAT CHANGED (PR #805) — do not undo any of these** (pins: the Rust
 halves by `crates/cairn-node` tests of `stale_picture_refusal`'s callers, `cairn-gui-live`'s error mapping tests,
 `cairn-gui-tauri`'s `chart_set/change.rs`, `write_failure.rs` and `link/judgement_view.rs` tests; the JS halves by SOURCE

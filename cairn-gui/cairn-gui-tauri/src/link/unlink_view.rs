@@ -314,7 +314,11 @@ fn effect_report(
 
 /// A failed unlink, classified exactly as a failed link is.
 pub fn unlink_error_view(e: &anyhow::Error) -> ErrorView {
-    crate::link::judgement_view::judgement_error_view("unlink", e)
+    crate::link::judgement_view::judgement_error_view(
+        "unlink",
+        crate::link::judgement_view::Charts::MayMove,
+        e,
+    )
 }
 
 #[cfg(test)]
