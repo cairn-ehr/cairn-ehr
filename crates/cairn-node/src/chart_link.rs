@@ -22,7 +22,7 @@
 //! attests directly and submits through the 3-argument `submit_event` door — never the
 //! medication seal path.
 
-use crate::db_diagnosis::{deliberate_refusal, LocalDbFault};
+use crate::db_diagnosis::{stale_picture_refusal, LocalDbFault};
 use anyhow::Context;
 use cairn_event::identity::{
     link_assertion_body, render_link_twin, render_unlink_twin, unlink_assertion_body, LinkAssertion,
@@ -226,12 +226,12 @@ async fn refuse_unless_record_holds_both(
     if record_holds_both(&record, low, high) {
         return Ok(());
     }
-    // A changed record is stale INPUT (the caller judged from a picture that no longer holds),
-    // not a not-yet node state: the same call refuses the same way until the caller re-reads.
-    Err(deliberate_refusal(format!(
+    // A changed record is a STALE picture (the caller judged from a record that no longer
+    // holds), not bad input and not a not-yet node state: the same call refuses the same way
+    // until the caller re-reads.
+    Err(stale_picture_refusal(format!(
         "chart {opened}'s record no longer reads both {low} and {high} as part of it — the \
-         record changed while you were judging — nothing was done; reload the chart and judge \
-         again"
+         record changed while you were judging — nothing was done"
     )))
 }
 
@@ -255,7 +255,7 @@ async fn refuse_unless_record_holds_both(
 /// apply — the only writer of a record's membership, a peer's unlink arriving through the sync
 /// door included — holds until it commits, so the record read after taking it cannot change
 /// before this judgement commits. A record that no
-/// longer holds both is refused as a verdict about the input (reload and judge again).
+/// longer holds both is refused as a stale picture (`RefusalScope::Stale`: the window re-reads).
 ///
 /// `shown` (#708): when the judgement was made from a comparison, each subject's record must
 /// still read as it was shown, re-read under CARNLK in the same way — see

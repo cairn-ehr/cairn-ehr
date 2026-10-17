@@ -43,11 +43,11 @@ pub enum Retry {
     /// read it as "the banner may be stale": link.js's `compare` and `sendJudgement` re-read the
     /// possible-duplicate banner on it (#745 point 3) — a new `Never` producer gets that re-read.
     Never,
-    /// A write whose COMMIT was interrupted: it may or may not have been recorded (#713). The
-    /// webview re-reads the chart and takes the button away — never a live retry, because a
-    /// judgement that DID land (as Outranked, say) leaves the screen looking unchanged, and a
-    /// second press would record a second judgement over a colleague's. Only the judgement
-    /// views produce it (`link::judgement_view::judgement_error_view`).
+    /// The screen is behind the record: the window re-reads the WHOLE chart and takes the act's
+    /// button away — never a live retry. Two causes share it because the window does the same
+    /// for both: the record changed under the clinician (a `Stale` refusal, or the window's own
+    /// set check — nothing was recorded), or a write's COMMIT was interrupted (#713 — it may
+    /// have been). The sentence says which; the class says only what the window does.
     AfterReread,
 }
 
@@ -97,6 +97,13 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
             text: t.clone(),
             retry: Retry::AfterOperator,
         },
+        // Search never raises `Stale`, but a match must not hide a new cause. `Never`, not
+        // `AfterReread`: the funnel has no chart on screen to re-read and funnel.js never reads
+        // `after_reread`, so that label would be one the code does not honour.
+        DataError::Stale(t) => ErrorView {
+            text: t.clone(),
+            retry: Retry::Never,
+        },
         DataError::NotFound => ErrorView {
             text: "No such chart.".to_string(),
             retry: Retry::Never,
@@ -129,6 +136,9 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
             ),
             Retry::AfterOperator,
         ),
+        // Registration never raises `Stale`; if it ever does, nothing was saved. `Never`, not
+        // `AfterReread`: no chart is on screen to re-read and funnel.js never reads it.
+        DataError::Stale(t) => (format!("Nothing was saved: {t}"), Retry::Never),
         DataError::NotFound => ("Nothing was saved.".to_string(), Retry::Never),
     };
     match restored {

@@ -26,8 +26,13 @@ use uuid::Uuid;
 /// answer, by design, to a link id that does not parse, to a pair kind the window did not send
 /// it, to a separation that no longer stands, and to a Compare with no database: in each case
 /// there is no standing pair to act on, and nothing is guessed.
-pub const LINK_GONE: &str =
-    "that link is no longer part of this record — nothing was done; reload the chart";
+///
+/// It names no remedy. Where the pair really went (`stale(LINK_GONE)`, `Retry::AfterReread`) the
+/// window re-reads the chart by itself, so there is nothing to press. The `Retry::Never` arms — an
+/// id that does not parse, a kind the window was never sent, no database — are faults in what
+/// this window sent or in how it was started: a re-read redraws the same lines from the same
+/// Rust, so "Read this chart again" would not mend them and is deliberately not offered.
+pub const LINK_GONE: &str = "that link is no longer part of this record — nothing was done";
 
 /// Refused because the verdict arrived without the content address of the judgement standing on
 /// the pair — the address the review panel read and the node re-checks before signing. The panel
@@ -280,6 +285,8 @@ fn effect_report(
             LinkReportView {
                 sentence,
                 reload: true,
+                charts_after: None,
+                behind_the_record: false,
             }
         }
         LinkEffect::StillJoined => LinkReportView {
@@ -289,6 +296,8 @@ fn effect_report(
                  still joining them are listed under \"How these charts are linked\"."
             ),
             reload: true,
+            charts_after: None,
+            behind_the_record: false,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
@@ -297,6 +306,8 @@ fn effect_report(
                        judgement that overrules theirs — it would not settle the disagreement."
                 .into(),
             reload: false,
+            charts_after: None,
+            behind_the_record: false,
         },
     }
 }

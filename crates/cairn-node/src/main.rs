@@ -2384,8 +2384,25 @@ enum Cmd {
     Deferred,
 }
 
+/// The CLI's entry point: [`run`], with its failure printed exactly as a `Result`-returning
+/// `main` would (`Error: {e:?}`, exit status 1) — plus, for a stale refusal, the one remedy line
+/// the node's sentence leaves to its caller (`db_diagnosis::cli_remedy`, #797 review).
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::process::ExitCode {
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            if let Some(remedy) = cairn_node::db_diagnosis::cli_remedy(&e) {
+                eprintln!("\n{remedy}");
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Every command: parse the arguments, then do what was asked.
+async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Init {

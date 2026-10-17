@@ -102,7 +102,12 @@ pub async fn confirm_link_impl(
     )
     .await
     .map_err(|e| judgement_error_view("confirmation", &e))?;
-    Ok(confirm_report(outcome.effect, kind, edge.low, edge.high))
+    // `left`: the set this confirm left the record on screen as (#797), only if it changed the
+    // record; see `unlink_impl`.
+    Ok(
+        confirm_report(outcome.effect, kind, edge.low, edge.high)
+            .left(&outcome.charts, edge.opened),
+    )
 }
 
 // ---- Tauri forwarder (camelCase JS keys → snake_case parameters). ----
@@ -170,6 +175,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::view::THIS_CHANGED);
+        assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
     }
 
     #[test]
@@ -194,6 +200,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+        assert_eq!(err.retry, crate::funnel::view::Retry::Never);
     }
 
     #[tokio::test]
@@ -212,5 +219,6 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+        assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
     }
 }

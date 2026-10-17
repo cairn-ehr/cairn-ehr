@@ -20,9 +20,13 @@
 //! 2. **Report partial completion, never imply it** (ADR-0060 decision 2). Every report
 //!    type here carries what did NOT happen alongside what did, and the renderer shows it.
 use crate::chart_set::{
-    cease_plan, chart_pane, check_displayed_set, linked_members, signed_across_message, ChartPane,
+    cease_plan, chart_pane, check_displayed_set, linked_members, set_change, signed_across_message,
+    ChartPane, ChartSetError,
 };
+use crate::funnel::view::ErrorView;
+use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
+use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
@@ -38,11 +42,20 @@ use zeroize::Zeroizing;
 pub async fn med_list(
     state: tauri::State<'_, AppState>,
     patient_id: String,
+    seen_charts: Option<Vec<String>>,
 ) -> Result<ChartPane, String> {
-    med_list_impl(&state, &patient_id).await
+    med_list_impl(&state, &patient_id, seen_charts).await
 }
 
-pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPane, String> {
+/// `seen_charts` (JS key `seenCharts`): on a re-read, the window's HELD set — what it last drew,
+/// moved on by the clinician's own Link/Unlink/Confirm using its report's `charts_after`
+/// (`chart_stale.js`'s `applyOwnAct`) — so their own change is never announced back to them. `None` on a first read. The pane's
+/// `set_change` names what joined or left since (#797, `chart_set::set_change`).
+pub async fn med_list_impl(
+    state: &AppState,
+    patient_id: &str,
+    seen_charts: Option<Vec<String>>,
+) -> Result<ChartPane, String> {
     // Bound to the chart the webview is showing (`AppState::displayed_patient`): a read for a
     // chart the clerk has since left must not be rendered under the next one's header.
     let patient = state.displayed_patient(patient_id).await?;
@@ -63,7 +76,17 @@ pub async fn med_list_impl(state: &AppState, patient_id: &str) -> Result<ChartPa
         members.as_deref().unwrap_or(&[]),
     )
     .await;
-    Ok(chart_pane(&list, members, links, dups))
+    // What joined or left the record since the set the window had on screen; never a failed
+    // open (an unread departed chart is named by id).
+    let change = set_change(
+        state,
+        seen_charts.as_deref(),
+        patient,
+        &list.charts,
+        members.as_deref().unwrap_or(&[]),
+    )
+    .await;
+    Ok(chart_pane(&list, members, links, dups, change))
 }
 
 /// Whether a signing key is currently held, and whose.
@@ -178,7 +201,7 @@ pub async fn sign_off(
     state: tauri::State<'_, AppState>,
     patient_id: String,
     charts: Vec<String>,
-) -> Result<SignOffReport, String> {
+) -> Result<SignOffReport, ErrorView> {
     sign_off_impl(&state, &patient_id, charts).await
 }
 
@@ -187,28 +210,38 @@ pub async fn sign_off_impl(
     state: &AppState,
     patient_id: &str,
     charts: Vec<String>,
-) -> Result<SignOffReport, String> {
+) -> Result<SignOffReport, ErrorView> {
     // FIRST: the chart the clinician was LOOKING AT when they pressed the button, and only if
     // it is still the open one — never "whatever is open now" (see
     // `AppState::displayed_patient`). First so that no other refusal can mask this one, and so
     // it is testable in fixture mode.
-    let patient = state.displayed_patient(patient_id).await?;
+    let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     // SECOND: the set that chart reads over must still be the set whose list was on screen
     // (ADR-0076 decision 3). Also ahead of fixture mode's refusal, so a changed set is reported
     // as exactly that everywhere. This is the window's early snapshot; the orchestrator below
     // compares again against its own first read, and that one is authoritative.
-    let read_set = read_chart_of(state, patient).await?.charts;
-    let shown = check_displayed_set(&read_set, &charts)?;
+    let read_set = read_chart_of(state, patient)
+        .await
+        .map_err(chart_read_failed)?
+        .charts;
+    // A CHANGED set is `Retry::AfterReread` (the screen is behind the record); an unreadable
+    // list is a window fault and stays a plain refusal — `ChartSetError::into_view`.
+    let shown = check_displayed_set(&read_set, &charts).map_err(ChartSetError::into_view)?;
     if state.is_mock() {
-        return Err("fixture mode: this window is showing mock data and cannot write".into());
+        return Err(refused(
+            "fixture mode: this window is showing mock data and cannot write",
+        ));
     }
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
         // Not a failure to hide: the clinician needs to know the key re-locked, not to see
         // a gesture silently do nothing.
-        .ok_or("your signing key is locked — unlock it to sign off")?;
-    let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
+        .ok_or_else(|| key_locked("your signing key is locked — unlock it to sign off"))?;
+    let node_sk = state
+        .node_sk
+        .as_ref()
+        .ok_or_else(|| node_cannot_write("no node key"))?;
 
     // Timed around the WRITE only. The clinician's reading time is measured by the operator
     // runbook, not here: capturing it would mean timing how long someone spent thinking.
@@ -217,7 +250,7 @@ pub async fn sign_off_impl(
         let mut db = state
             .db
             .as_ref()
-            .ok_or("no database connection")?
+            .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await;
         let params = cairn_node::medication::AttestParams {
@@ -237,7 +270,7 @@ pub async fn sign_off_impl(
             Some(&shown),
         )
         .await
-        .map_err(|e| format!("{e:#}"))?
+        .map_err(|e| node_failure(&e))?
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
 
@@ -294,7 +327,7 @@ pub async fn cease(
     reason: String,
     patient_id: String,
     charts: Vec<String>,
-) -> Result<CeaseReport, String> {
+) -> Result<CeaseReport, ErrorView> {
     cease_impl(&state, &patient_id, charts, &group_id, &reason).await
 }
 
@@ -305,37 +338,45 @@ pub async fn cease_impl(
     charts: Vec<String>,
     group_id: &str,
     reason: &str,
-) -> Result<CeaseReport, String> {
+) -> Result<CeaseReport, ErrorView> {
     // Asked ONCE, and FIRST, for the whole gesture — and only if it is the chart the clinician
     // was looking at (`AppState::displayed_patient`).
-    let patient = state.displayed_patient(patient_id).await?;
+    let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     // Which threads make up this displayed line. Read rather than trusted from the caller:
     // the webview knows only the group id it was rendered with, and a reconciled group's
     // membership is a clinical fact the node owns. Read BEFORE the other refusals so the set
     // check (ADR-0076 decision 3) comes second, as it does for sign-off.
-    let chart = read_chart_of(state, patient).await?;
+    let chart = read_chart_of(state, patient)
+        .await
+        .map_err(chart_read_failed)?;
     // The ONLY set check a cease gets: unlike sign-off, `cease_medication` takes one thread
     // and knows nothing of chart sets, so there is no orchestrator-side second compare. What
     // keeps a cease on the right chart regardless is decision 2 below — each thread is
     // written on the chart its own statement is on, read from this same `chart`.
-    check_displayed_set(&chart.charts, &charts)?;
+    check_displayed_set(&chart.charts, &charts).map_err(ChartSetError::into_view)?;
     if state.is_mock() {
-        return Err("fixture mode: this window is showing mock data and cannot write".into());
+        return Err(refused(
+            "fixture mode: this window is showing mock data and cannot write",
+        ));
     }
     let reason = reason.trim().to_string();
     if reason.is_empty() {
-        return Err(
+        return Err(refused(
             "stopping a drug needs a reason — the record must say who stopped it \
-                    and why (ADR-0060)"
-                .into(),
-        );
+                    and why (ADR-0060)",
+        ));
     }
-    let group: Uuid = group_id.parse().map_err(|_| "not a medication id")?;
+    let group: Uuid = group_id
+        .parse()
+        .map_err(|_| refused("not a medication id"))?;
     let (human_sk, human_kid) = state
         .live_key(Now::read())
         .await
-        .ok_or("your signing key is locked — unlock it to stop a drug")?;
-    let node_sk = state.node_sk.as_ref().ok_or("no node key")?;
+        .ok_or_else(|| key_locked("your signing key is locked — unlock it to stop a drug"))?;
+    let node_sk = state
+        .node_sk
+        .as_ref()
+        .ok_or_else(|| node_cannot_write("no node key"))?;
     let node_kid = hex::encode(node_sk.verifying_key().to_bytes());
 
     // Each member thread paired with the chart it LIVES on — a cessation is written to its
@@ -347,7 +388,7 @@ pub async fn cease_impl(
         .rows
         .iter()
         .find(|row| row.group_id == group)
-        .ok_or("that drug is no longer on this chart — refresh and try again")?;
+        .ok_or_else(|| stale("that drug is no longer on this chart — nothing was done"))?;
     let plan = cease_plan(row, patient);
 
     let started = Instant::now();
@@ -360,7 +401,7 @@ pub async fn cease_impl(
         let mut db = state
             .db
             .as_ref()
-            .ok_or("no database connection")?
+            .ok_or_else(|| node_cannot_write("no database connection"))?
             .lock()
             .await;
         let input = cairn_node::medication::CeaseMedicationInput {

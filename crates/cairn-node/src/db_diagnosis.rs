@@ -348,16 +348,17 @@ impl std::error::Error for LocalDbFault {
 /// a verdict back into an accident. Pinned by `every_scope_is_still_a_refusal`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalScope {
-    /// A verdict about the **input**: pointless to retry forever, by anybody. That includes the
-    /// PICTURE the caller judged from: a judgement made from a record that no longer holds the
-    /// pair is refused as input — the way forward is to re-read and judge again, never to wait
-    /// (see `deliberate_refusal`).
+    /// A verdict about the **input**: pointless to retry forever, by anybody. A record that
+    /// changed under the caller is NOT this: it is [`RefusalScope::Stale`].
     Input,
     /// A verdict about **this node's state**: pointless to retry unchanged, but the identical call
     /// succeeds once that state changes — by an operator act (the enrolment refusals, which name
     /// the command) or by sync delivering what is missing (`chart_link`'s "not held here"
     /// refusal, which no operator can hasten and which names no command).
     NodeState,
+    /// A verdict about the caller's PICTURE: the record changed since the caller read it. The
+    /// same call is refused until the caller re-reads; re-reading is the whole remedy.
+    Stale,
 }
 
 /// A refusal this node raised **deliberately, in Rust** — almost always before any statement
@@ -442,13 +443,8 @@ impl std::error::Error for DeliberateRefusal {}
 /// so that an operator act makes the identical call succeed — use [`node_state_refusal`]
 /// instead. Both are verdicts; only the way forward differs. See [`RefusalScope`].
 ///
-/// **One argued extension — a stale picture (PR #711 review).** A human judgement made FROM a
-/// record is refused as input when that record, read here, does not hold the pair judged:
-/// `chart_link::admit`'s open-chart `LacksPair` arm (before the transaction) and
-/// `chart_link`'s `refuse_unless_record_holds_both` (inside it, under CARNLK). A read decides
-/// it, so a later sync could make the identical call succeed — but against a DIFFERENT record
-/// from the one the clinician looked at. The honest way forward is to re-read and judge again,
-/// which is what a no-retry refusal tells them; waiting, or retrying as-is, is never right.
+/// A judgement made FROM a record that has since changed is not input: it is
+/// [`stale_picture_refusal`]'s.
 pub(crate) fn deliberate_refusal(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(DeliberateRefusal {
         message: message.into(),
@@ -481,6 +477,20 @@ pub(crate) fn node_state_refusal(message: impl Into<String>) -> anyhow::Error {
     })
 }
 
+/// Build a refusal that is a verdict about the caller's **picture** of the record: what the
+/// caller acted on has since changed (a colleague's link landed), so this call is refused until
+/// they re-read. Unlike [`deliberate_refusal`] the input was not wrong, and unlike
+/// [`node_state_refusal`] no operator act or sync helps: only a fresh read does, which is why a
+/// surface can route this scope to "re-read the chart" without matching on the sentence.
+///
+/// The sentence says only what happened (the CLI shows it too); the remedy is the scope's job.
+pub(crate) fn stale_picture_refusal(message: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(DeliberateRefusal {
+        message: message.into(),
+        scope: RefusalScope::Stale,
+    })
+}
+
 /// What a deliberate refusal on this chain is a verdict **about**, if it is one at all.
 ///
 /// `None` means no marker anywhere on the chain — *"not one of these"*, exactly as
@@ -496,6 +506,23 @@ pub fn refusal_scope(e: &anyhow::Error) -> Option<RefusalScope> {
         .filter_map(|cause| cause.downcast_ref::<DeliberateRefusal>())
         .last()
         .map(|refusal| refusal.scope)
+}
+
+/// The line the CLI prints after a [`RefusalScope::Stale`] refusal (#797 review).
+///
+/// A stale refusal's sentence says only what happened ("… — nothing was done"): its remedy is the
+/// SCOPE's job, because the window acts on it itself (it re-reads the whole chart). The CLI has no
+/// such reflex, and before #797 it read the remedy out of the sentence — so it now adds one line of
+/// its own, rather than leave an operator at "nothing was signed" with no next step.
+pub const CLI_STALE_REMEDY: &str =
+    "The record changed after this command read it. Read it again, and run the command once more \
+     if it still applies.";
+
+/// The CLI's own remedy line for this failure, if it needs one: [`CLI_STALE_REMEDY`] for a
+/// [`RefusalScope::Stale`] refusal, `None` for everything else (whose sentences already say what
+/// to do, or are accidents with nothing to add). Pure, so `main.rs`'s printer stays one line.
+pub fn cli_remedy(e: &anyhow::Error) -> Option<&'static str> {
+    (refusal_scope(e) == Some(RefusalScope::Stale)).then_some(CLI_STALE_REMEDY)
 }
 
 /// Did this node deliberately refuse, above the database?
@@ -1031,11 +1058,37 @@ mod refusal_scope_tests {
         );
     }
 
+    /// A refusal over a changed record is marked `Stale`, and its text is untouched.
+    #[test]
+    fn a_stale_picture_refusal_is_marked_stale() {
+        let e = stale_picture_refusal("x");
+        assert_eq!(refusal_scope(&e), Some(RefusalScope::Stale));
+        assert!(carries_refusal_marker(&e));
+        assert_eq!(format!("{e:#}"), "x");
+    }
+
+    /// The CLI prints a node sentence as it is, and a stale one names no remedy (the window's
+    /// remedy is its own re-read, #797) — so the CLI adds its own line, for `Stale` alone, wherever
+    /// on the chain the marker sits. Every other scope's sentence already says what to do.
+    #[test]
+    fn only_a_stale_refusal_gets_the_cli_remedy() {
+        let stale = stale_picture_refusal("x").context("signing");
+        assert_eq!(cli_remedy(&stale), Some(CLI_STALE_REMEDY));
+        for e in [
+            crate::actor_enrolment::ambiguous_actor_refusal("9f3c"),
+            crate::patient::register::dob_precision("not a date").unwrap_err(),
+            anyhow::anyhow!("connection reset"),
+        ] {
+            assert_eq!(cli_remedy(&e), None, "{e:#}");
+        }
+    }
+
     #[test]
     fn every_scope_is_still_a_refusal() {
         for e in [
             crate::actor_enrolment::ambiguous_actor_refusal("9f3c"),
             crate::patient::register::dob_precision("not a date").unwrap_err(),
+            stale_picture_refusal("x"),
         ] {
             assert!(
                 carries_refusal_marker(&e),

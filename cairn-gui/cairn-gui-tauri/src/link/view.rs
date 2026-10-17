@@ -24,13 +24,13 @@ pub const OTHER_CHANGED: &str =
 /// Refused because THIS record's charts changed between Compare and Link (final review I1).
 /// The Link sends back the left-hand set the comparison was built over, so a chart that joined
 /// this record after Compare (a peer's link, re-read by a sign-off's refresh) is caught here
-/// rather than signed over sight unseen. The remedy is reload THEN compare: a Compare sends the
-/// list on screen (`renderedCharts`), which the same change may have left stale — "compare
-/// again" alone would be refused a second time with the list's own "reload the chart" (PR #711
-/// review). Shared by the unlink panel, whose Unlink sends back its comparison's set the same way.
-pub const THIS_CHANGED: &str =
-    "this record changed while you were comparing — nothing was done; reload the chart and \
-     compare again";
+/// rather than signed over sight unseen. It is a `Retry::AfterReread` refusal (`judgement_view::stale`): the
+/// window re-reads the whole chart for the clinician (a Compare sends the list on screen
+/// (`renderedCharts`), which the same change may have left stale, so "compare again" alone would
+/// be refused a second time — PR #711 review), and the sentence names no remedy because the
+/// clinician has none to perform. Shared by the unlink panel, whose Unlink sends back its
+/// comparison's set the same way.
+pub const THIS_CHANGED: &str = "this record changed while you were comparing — nothing was done";
 
 /// One chart's column heading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

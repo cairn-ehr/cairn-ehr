@@ -147,6 +147,8 @@ pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid)
                  judgement."
             ),
             reload: true,
+            charts_after: None,
+            behind_the_record: false,
         },
         (LinkEffect::TookEffect, PairKind::Separated) => LinkReportView {
             sentence: format!(
@@ -155,15 +157,21 @@ pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid)
                  record."
             ),
             reload: true,
+            charts_after: None,
+            behind_the_record: false,
         },
         // Recorded but not standing: the panel stays open on the disagreement (no reload).
         (LinkEffect::Outranked, _) => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
+            charts_after: None,
+            behind_the_record: false,
         },
         (LinkEffect::StillJoined, _) => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
+            charts_after: None,
+            behind_the_record: false,
         },
     }
 }
@@ -337,6 +345,16 @@ mod tests {
         assert!(r.sentence.contains("now stands over the earlier judgement") && r.reload);
         let r = confirm_report(LinkEffect::Outranked, PairKind::Link, lo, hi);
         assert!(!r.reload && r.sentence.contains("NOT in effect"));
+    }
+
+    /// An Outranked confirm changed nothing, so it reports no set even when `left` is handed
+    /// one (#797 final review; see `judgement_view_tests.rs`'s `an_outranked_link_reports_no_set`).
+    #[test]
+    fn an_outranked_confirm_reports_no_set() {
+        let set = ChartSet::new([LOW, HIGH]).unwrap();
+        let r = confirm_report(LinkEffect::Outranked, PairKind::Link, LOW, HIGH).left(&set, LOW);
+        assert!(!r.reload);
+        assert_eq!(r.charts_after, None);
     }
 
     /// The confirm's Outranked and StillJoined lines are the link's own: a confirm IS a link

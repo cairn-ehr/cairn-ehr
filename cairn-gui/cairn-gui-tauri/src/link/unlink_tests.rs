@@ -68,6 +68,7 @@ async fn unlink_refuses_a_changed_record() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::view::THIS_CHANGED);
+    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
 }
 
 #[tokio::test]
@@ -86,7 +87,8 @@ async fn compare_linked_refuses_a_changed_record_in_the_lists_wording() {
     .await
     .unwrap_err();
     assert_ne!(err.text, crate::link::view::THIS_CHANGED);
-    assert!(err.text.contains("linked charts changed"));
+    assert_eq!(err.text, crate::chart_set::CHANGED);
+    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
 }
 
 /// A link a colleague's unlink (or this clinician's own) already removed: nothing to judge.
@@ -105,6 +107,7 @@ async fn unlink_refuses_a_link_the_record_no_longer_has() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
 }
 
 /// Cannot tell the membership stage from compare's `db None` -> LINK_GONE; the pure
@@ -135,6 +138,8 @@ async fn an_unparseable_link_is_refused_not_guessed() {
         .await
         .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+    // Nothing the record did: a re-read cannot mend an id the window failed to send.
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
 }
 
 fn edge(a: u128, b: u128) -> RecordEdge {
@@ -168,6 +173,7 @@ fn an_absent_link_is_gone() {
     let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(3));
     let err = shown_pair(links(vec![edge(1, 2)]), l, h, PairKind::Link, Act::Unlink).unwrap_err();
     assert_eq!(err.text, LINK_GONE);
+    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
 }
 
 /// A failed read of the "unverified" notes is not a failed read of the links (PR #788 review):
@@ -283,6 +289,7 @@ async fn compare_refuses_an_unknown_pair_kind() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
 }
 
 /// The webview half of the Unlink's stale-pair check: `unlink.js` must send the standing
@@ -424,4 +431,18 @@ fn an_unread_list_before_a_confirm_says_nothing_was_done() {
     let err = shown_pair(Err("boom".into()), l, h, PairKind::Link, Act::Confirm).unwrap_err();
     assert_eq!(err.retry, Retry::Now);
     assert!(err.text.contains("nothing was done"));
+}
+
+/// A pair judged since its list line was drawn is the screen being behind the record: the window
+/// re-reads ([`stale`]), and the sentence names no remedy it cannot perform. The branch needs a
+/// live links read to reach (no DB-gated harness at this layer, issue #738), so the source and
+/// the exact copy are pinned instead.
+#[test]
+fn a_line_judged_since_it_was_drawn_is_stale_not_refused() {
+    let compare = rust_fn(include_str!("unlink.rs"), "compare_linked_impl");
+    assert!(compare.contains("stale(LINE_STALE)"));
+    assert_eq!(
+        LINE_STALE,
+        "this pair has been judged since the list was drawn — nothing was done"
+    );
 }

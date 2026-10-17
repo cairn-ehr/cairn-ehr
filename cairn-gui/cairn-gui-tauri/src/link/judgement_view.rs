@@ -27,6 +27,56 @@ pub struct LinkReportView {
     /// producer: it is `true` whenever ANY pair was recorded — even an all-`Outranked` one —
     /// because the banner must be re-read whatever the record did.
     pub reload: bool,
+    /// The chart set the clinician's OWN act left the record on screen as (#797), read by the
+    /// node inside the act's own transaction (`LinkOutcome::charts`) — the set the re-read
+    /// compares against, so the clinician's own change is never announced back to them while a
+    /// colleague's, landing in the same moment, still is. Set by [`LinkReportView::left`] for
+    /// Link, Unlink and Confirm only.
+    ///
+    /// `None` (`null` to the webview, which then compares against the set on screen) when the
+    /// act reported no set — "Different people" changes no record's set — when the act changed
+    /// nothing (`reload` false: Outranked), or when the set read is not the record on screen
+    /// ([`charts_after`]). Never an empty list — a [`ChartSet`] cannot be one (an empty seen set
+    /// means "could not tell" to `med_list`, which would then say nothing at all) — and on the
+    /// wire the plain list of ids it always was (`ChartSet` serializes transparently).
+    pub charts_after: Option<ChartSet>,
+    /// A SUCCESS report that still says the screen is behind the record (#797 review): only a
+    /// partly-recorded "Different people", one of whose failed pairs was `Retry::AfterReread`
+    /// (refused because the record changed, or its commit interrupted, #713). The window's re-read
+    /// then treats the list as stale, exactly as for a refusal — marked out of date if that
+    /// re-read fails. `false` for every other report: a recorded act is not a stale picture.
+    pub behind_the_record: bool,
+}
+
+impl LinkReportView {
+    /// This report, carrying the set its act left: `charts` as the node read it inside the act's
+    /// transaction, for `on_screen`, the chart the clinician holds. See [`charts_after`].
+    ///
+    /// Only for an act that changed the record (`reload`): an Outranked judgement left the record
+    /// as it was, and no re-read follows it. Handed a set anyway, the window would move the set
+    /// the clinician holds and raise its draw floor (`holdOwnAct`) — dropping a colleague's read
+    /// already in flight, which may be the first news of a real change (#797 final review). So
+    /// the gate lives here, once, rather than at each of the three call sites.
+    pub fn left(mut self, charts: &ChartSet, on_screen: Uuid) -> Self {
+        self.charts_after = if self.reload {
+            charts_after(charts, on_screen)
+        } else {
+            None
+        };
+        self
+    }
+}
+
+/// `charts` as ids, when it is the record of `on_screen` — else `None`.
+///
+/// The node reads the record of the chart the judgement was made from or filed under, which is
+/// not always the chart on screen: a link that LOST the overlay (Outranked) and was filed under
+/// the other subject reads that subject's record, which need not hold the chart on screen. A
+/// chart's record always holds that chart, and two records holding the same chart are the same
+/// record, so "holds `on_screen`" is exactly "is the record the clinician holds". Anything else
+/// is reported as no set, and the re-read falls back to comparing against the screen.
+pub fn charts_after(charts: &ChartSet, on_screen: Uuid) -> Option<ChartSet> {
+    charts.contains(&on_screen).then(|| charts.clone())
 }
 
 /// A refusal the clinician cannot retry as-is.
@@ -34,6 +84,18 @@ pub fn refused(text: impl Into<String>) -> ErrorView {
     ErrorView {
         text: text.into(),
         retry: Retry::Never,
+    }
+}
+
+/// A refusal because the screen is behind the record (a chart joined, a pair was judged by a
+/// colleague, a link went). `Retry::AfterReread`: the window re-reads the WHOLE chart and takes
+/// the act's button away, because pressing it again over the same screen would be refused
+/// again. Distinct from [`refused`] (`Retry::Never`), which is for a refusal a re-read cannot
+/// mend (a wrong chart id, fixture mode).
+pub fn stale(text: impl Into<String>) -> ErrorView {
+    ErrorView {
+        text: text.into(),
+        retry: Retry::AfterReread,
     }
 }
 
@@ -111,15 +173,21 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
                 charts.members().len()
             ),
             reload: true,
+            charts_after: None,
+            behind_the_record: false,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
+            charts_after: None,
+            behind_the_record: false,
         },
         // See LINK_STILL_JOINED: R2a never returns this for a link.
         LinkEffect::StillJoined => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
+            charts_after: None,
+            behind_the_record: false,
         },
     }
 }
@@ -152,8 +220,8 @@ pub fn judgement_error_view(act: &str, e: &anyhow::Error) -> ErrorView {
         Some(event) => ErrorView {
             text: format!(
                 "Whether the {act} was recorded is NOT known — the connection was lost while \
-                 event {event} was being saved. Re-read the chart before judging again: if it was \
-                 recorded but a later judgement outranks it, the chart will look unchanged."
+                 event {event} was being saved. If it was recorded but a later judgement outranks it, \
+                 the chart will look unchanged after it is read again."
             ),
             retry: Retry::AfterReread,
         },
@@ -178,6 +246,12 @@ pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
         DataError::NotProvisioned(t) => ErrorView {
             text: format!("This node cannot record the {act} yet: {t}"),
             retry: Retry::AfterOperator,
+        },
+        // The record changed under the clinician: nothing was recorded, and the window re-reads
+        // the whole chart rather than offering a live retry over a picture that is now wrong.
+        DataError::Stale(t) => ErrorView {
+            text: format!("The {act} was not recorded: {t}"),
+            retry: Retry::AfterReread,
         },
         DataError::Unavailable(t) => ErrorView {
             text: format!("The {act} was not confirmed: {t}"),

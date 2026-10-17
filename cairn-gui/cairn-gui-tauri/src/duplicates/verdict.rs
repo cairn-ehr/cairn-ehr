@@ -32,7 +32,8 @@ pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
 ///   which could hide a later pair's "commit outcome unknown" behind a refusal (the #713
 ///   hazard) — carrying the most retryable class among them (`combined_retry`).
 /// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
-///   a pair that was not confirmed may or may not still be open.
+///   a pair that was not confirmed may or may not still be open. `behind_the_record` when a
+///   failed pair was `Retry::AfterReread`, so that re-read knows the list is stale (#797 review).
 ///
 /// The `reload` is `true` even when every recorded pair was `Outranked` (see
 /// [`LinkReportView::reload`]): whatever was recorded, the banner must be re-read.
@@ -55,6 +56,11 @@ pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportVie
     Ok(LinkReportView {
         sentence: report_sentence(&results),
         reload: true,
+        charts_after: None,
+        behind_the_record: results
+            .iter()
+            .filter_map(|r| r.outcome.as_ref().err())
+            .any(|e| e.retry == Retry::AfterReread),
     })
 }
 
@@ -69,9 +75,10 @@ fn report_sentence(results: &[PairResult]) -> String {
 
 /// The retry advice for several failed pairs. **Pure.**
 ///
-/// [`Retry::AfterReread`] first (#713): if ANY pair's commit was interrupted, that pair may have
-/// been recorded, and the window must re-read before anything is offered again — whatever the
-/// other pairs said. Otherwise the MOST retryable among them — `Now` over `AfterOperator` over
+/// [`Retry::AfterReread`] first: if ANY pair's commit was interrupted (#713), that pair may have
+/// been recorded, and if any pair was refused because the record changed under the screen
+/// (`Stale`, #797), the picture judged from is out of date — either way the window must re-read
+/// before anything is offered again, whatever the other pairs said. Otherwise the MOST retryable among them — `Now` over `AfterOperator` over
 /// `Never` — because a `Never` beside an outage would tell the webview the outcome was DECIDED
 /// and take the button away, claiming a verdict that does not exist. Keeping the button for an
 /// outage cannot re-sign blindly: "Different people" re-reads the open pairs fresh on every

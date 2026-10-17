@@ -163,6 +163,9 @@ pub fn data_error_from(e: &anyhow::Error) -> DataError {
     // fall through to `Unavailable` (PR #661 review).
     match cairn_node::db_diagnosis::refusal_scope(e) {
         Some(cairn_node::db_diagnosis::RefusalScope::NodeState) => DataError::NotProvisioned(text),
+        // The record changed under the caller: its own cause, because the remedy (re-read) differs
+        // from both a form edit and an operator command.
+        Some(cairn_node::db_diagnosis::RefusalScope::Stale) => DataError::Stale(text),
         // `Input` scope, or no marker at all — fall through to the SQLSTATE question, which is
         // the only one that can speak for the floor's own refusals.
         Some(cairn_node::db_diagnosis::RefusalScope::Input) => DataError::Refused(text),
@@ -254,6 +257,33 @@ mod tests {
                  no way forward on a form that was correct, and `Unavailable` offers a \
                  retry-now that will fail identically until an operator acts"
             ),
+        }
+    }
+
+    /// A refusal because the record changed under the caller is neither a form to edit nor an
+    /// outage to retry: re-reading is the whole remedy, so it must reach the window as its own
+    /// cause (`Stale`) rather than collapse into `Refused`.
+    #[test]
+    fn a_stale_scope_is_a_stale_data_error() {
+        use cairn_medication_view::ChartSet;
+        use cairn_node::chart_link::shown::{stale_record, RecordsShown};
+        let (a, b, c) = (
+            uuid::Uuid::from_u128(1),
+            uuid::Uuid::from_u128(2),
+            uuid::Uuid::from_u128(3),
+        );
+        // The panel showed chart `a` as a record of two; since then a third chart was linked in.
+        let shown_then = ChartSet::new([a, b]).expect("a non-empty record");
+        let now = ChartSet::new([a, b, c]).expect("a non-empty record");
+        let shown = RecordsShown {
+            this: &shown_then,
+            other: &shown_then,
+            pair: None,
+        };
+        let e = stale_record(shown, a, &now).expect("a changed record is refused");
+        match data_error_from(&e) {
+            DataError::Stale(text) => assert!(text.contains("changed while you were comparing")),
+            other => panic!("a stale-picture refusal must classify as Stale, got {other:?}"),
         }
     }
 

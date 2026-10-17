@@ -10,6 +10,93 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #797 — A CHANGED RECORD RE-READS ITSELF AND SAYS WHAT CHANGED (PR #805) — do not undo any of these** (pins: the Rust
+halves by `crates/cairn-node` tests of `stale_picture_refusal`'s callers, `cairn-gui-live`'s error mapping tests,
+`cairn-gui-tauri`'s `chart_set/change.rs`, `write_failure.rs` and `link/judgement_view.rs` tests; the JS halves by SOURCE
+guards in `cairn-gui-tauri/src/reread_webview_tests.rs` and `read_again_webview_tests.rs`, each mutation-checked, and
+a headless walk on the PR). The
+maintainer's governing rule, which every item below serves: *"The chart I hold in my hand when I make changes is my
+responsibility — my obligation to know its contents. I need only to be informed of what changed between me taking the
+chart and finishing amends that I cannot know (that is, anything that wasn't in the chart when I took it and I didn't
+change myself)."*
+- **A "the record changed under you" refusal is routed by TYPE, never by text.** `RefusalScope::Stale` (cairn-node,
+  raised by the record check in `chart_link.rs`, `admit.rs`'s `LacksPair`, `shown.rs`'s `stale_record`/`stale_pair`,
+  `medication/signoff.rs`'s `ensure_same_charts` and `ensure_same_targets`) → `DataError::Stale` → `Retry::AfterReread` (the funnel maps it to
+  `Never`: it has no chart to re-read); on the Rust side `ChartSetError { Unreadable, Changed }`. **Tempting wrong
+  fix:** matching `e == CHANGED` (or any sentence) again — a reworded node sentence then silently stops re-reading. The
+  neither-record arm of `shown.rs` stays `Input` (nothing is stale; the input is wrong).
+- **Node sentences name no window control.** They say only what happened ("— nothing was done" / "nothing was
+  signed"); the CLI shows them too. The window's `chart_stale.js` adds what to do; the CLI prints
+  `db_diagnosis::cli_remedy`'s line after a `Stale` refusal (`main` wraps `run()`). Pinned by
+  `crates/cairn-node/tests/node_sentences_name_no_window_act.rs` (#806). **Tempting wrong fix:** putting
+  "press Read this chart again" into the node sentence — it is nonsense at a terminal.
+- **`READ_AGAIN` ("The chart has been read again — review it before you act on it.") is said only after an ACCEPTED
+  answer whose list actually DREW** (`renderedPatient === patient` after `render`). **Tempting wrong fix:** saying it
+  when the re-read is sent — a failed or dropped read then claims a chart the screen does not show.
+- **"The list is behind the record" is WINDOW state (`behindAfter`, `chart_stale.js`), not one read's flag.** A
+  stale refusal records the newest read revision sent before it (`knowListBehind`, in `refresh` before its revision is
+  taken); WHICHEVER read fails last then marks the list (`listKnownBehind`); only a list drawn from a read sent AFTER
+  the refusal ends it (`drewRead`), and taking the list down ends it (`holdCharts(null)`). A success report can carry
+  it too: a partly-recorded "Different people" whose failed pair was `AfterReread` sets
+  `LinkReportView::behind_the_record`. An OLDER read landing after a newer one already failed and marked the list
+  re-marks it and leaves the outcome line (`sayAfterDraw`; whether it was marked is read BEFORE `render`). Pins:
+  `a_known_stale_list_outlives_the_read_that_learnt_it`, `an_older_read_landing_late_keeps_a_stale_mark` (walked
+  headlessly: an overtaking "Read this chart again", an older read landing late before and after the failure). **Tempting wrong fixes:** a `staleIfFails`
+  argument — the re-read it rides is overtaken by "Read this chart again" or an own act's draw floor, its failure is
+  never said, and the overtaking read fails unmarked; or a plain boolean cleared by ANY draw — `mayDraw` lets an older
+  read, sent before the refusal, draw after it.
+- **`markListStale` keeps the rows and disables sign-off** (`#chart-stale` says `LIST_OUT_OF_DATE`). **Tempting wrong
+  fix:** hiding the rows — the clinician then has no chart at all during a partition (availability over consistency),
+  and the node's set check refuses the write regardless, so the rows were never the danger; the danger is acting on
+  them unwarned.
+- **`set_change` (the sentence "Now part of it: B.") is `None` for an equal seen set, an unreadable one, or one that
+  does not hold the opened chart** (`chart_set/change.rs`: `seen_set` drops an unreadable or foreign set,
+  `set_change_sentence` says nothing for an equal one; both pure). **Tempting wrong fix:** a
+  sentence whenever the sets "differ" in any way — an unreadable or foreign baseline would announce every member as new.
+- **The window HOLDS the chart set it drew (`heldCharts`), moved only by being shown or by the clinician's own act**
+  (`applyOwnAct`, `holdOwnAct`; every `refresh` sends it as `seenCharts`). Only what the clinician did not do and could
+  not see is announced. **Tempting wrong fix:** the "set formula" `(held − (sent − after)) ∪ (after − sent)` — in the
+  table's fourth row (a Link answered on the OTHER chart, drawn before its commit) it announces the clinician's OWN link
+  back to them; the anchored `applyOwnAct` passes every case in the table above it in `chart_stale.js` (pinned only
+  by source guard — its helpers `without`/`ordered`/`sameCharts` by body — and the headless walk; there is no JS
+  runner, #332) and is the only spelling to use. Do not pass the baseline as a one-call argument either: a second
+  re-read starting within one round trip announces the own Link.
+- **`heldCharts` is deliberately SEPARATE from `renderedCharts`.** `renderedCharts` keeps feeding every write's set
+  check; `heldCharts` is only the baseline for naming changes. **Tempting wrong fix:** merging them, or sending
+  `heldCharts` to writes.
+- **The draw floor is raised (`drawnRevision = ++chartReadRevision`) only when the own act MOVED the held set.**
+  **Tempting wrong fix:** raising it unconditionally on every own act — that drops a colleague's in-flight read that
+  would have been the first news of a real change.
+- **`charts_after` (the Link / Unlink / Confirm reports' record as the act left it) is read INSIDE the act's
+  transaction** (`chart_link/judge.rs`, after the apply, before the commit). **Tempting wrong fix:** reading after the
+  commit — a colleague's link landing in that gap is then folded into the clinician's "own" baseline and never
+  announced. The guard `the_set_left_is_read_after_the_apply_and_before_the_commit` (`chart_link/judge_tests.rs`)
+  pins that order. **And it is attached only when the act changed the record** (`reload` true;
+  `LinkReportView::left`, pinned by the `*_reports_no_set` tests): an Outranked act's set would move the held set
+  and raise the draw floor with no re-read following, dropping a colleague's read already in flight.
+- **"Read this chart again" (`#reread`) is always visible in the chart view, and its label is pinned to every sentence
+  that quotes it** (`LIST_OUT_OF_DATE`, `REVIEW_WAITS_FOR_LIST`, `NO_LIST_TO_COMPARE`, `chart_set`'s `UNREADABLE`, the
+  banner's and the record-links' read-failure sentences; `every_sentence_that_names_the_control_quotes_its_label`).
+  `LINK_GONE`'s `Never` arms deliberately name no button: a re-read redraws the same lines, so it cannot mend them.
+  **Tempting wrong fix:** showing it only after a failure (the first failed read then has no way out), or relabelling it in one place.
+- **"Read this chart again" re-reads with the outcome line as its lead (`rereadLead`), less a read failure it is
+  retrying** (`sayReadFailed` remembers the failure's line and lead; a drawn re-read with nothing to add takes a
+  standing failure back to its lead). Pins: `read_again_keeps_the_outcome_line_but_not_a_failure_it_retries`,
+  `the_only_lead_less_re_read_is_a_chart_s_first`. **Tempting wrong fixes:** a lead-less `refresh()` — a change it
+  names REPLACES a partial sign-off report (ADR-0060: partial completion is reported, never implied); or the raw
+  outcome text as the lead — each failed press then piles another "Could not read the chart" onto the line, and a
+  recovered read leaves the failure up. The one lead-less re-read is a chart's first (`enterChart`, after `clearChart`
+  empties the held set, so it can name no change).
+  Sign-off and cease return an `ErrorView` through `write_failure.rs`: a locked key is `Now`; no node key or no DB is
+  `AfterOperator`; a failed chart read before the write is `Now` (`chart_read_failed` — an outage, never `refused`);
+  never a bare string (it is worded "could not reach its backend").
+- **Accepted limitations (honesty, not safety — do not "discover" them later):** a stale refusal's out-of-date mark is
+  lost if an own act's re-read outdates it and then fails (the node's set check refuses writes regardless); a foreign
+  change whose re-read hits a DRAWING fault is never named, because `showUnshownList` nulls `heldCharts`.
+- **No window sentence says "reload the chart" or "refresh and try again"** (guard
+  `no_window_sentence_says_reload_the_chart`, over every `.rs`, `.js` and `.html` source but tests): the window has a
+  named control, so name it.
+
 **⇒ THE CHART RE-READ (#799 · #800 · #801, PR #802) — do not undo any of these** (pins: the JS halves by SOURCE
 guards in `cairn-gui-tauri/src/chart_view_webview_tests.rs`, each mutation-checked; walked headlessly on the PR):
 - **Two questions, two predicates, each pinned as its exact expression.** An ANSWER draws while
@@ -50,13 +137,14 @@ guards in `cairn-gui-tauri/src/chart_view_webview_tests.rs`, each mutation-check
 - **A decided (`"never"`) refusal of a comparison or a judgement re-reads the BANNER** (`redrawBannerAlone` from
   `link.js`'s `compare` and `sendJudgement`; #713's `after_reread` still re-reads the whole chart). **Tempting wrong
   fix:** `refresh()` — a heavier read that rebuilds every row over a refusal that changed nothing but the banner
-  (a typed stop reason survives it since #799; the set-changed refusals, which DO stale the list, are #797).
-  The window has no reload control, so `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload" (the rest: #797).
+  (a typed stop reason survives it since #799; the set-changed refusals, which DO stale the list, re-read the whole
+  chart since #797 — see that block). `NOTHING_OPEN` / `NOT_SHOWN_OR_RESOLVED` never say "reload": no sentence says "reload the chart" or "refresh and try again" (`no_window_sentence_says_reload_the_chart`); the
+  way out is the "Read this chart again" button (#797).
 - **No comparison without a drawn list:** `compare` refuses while `renderedPatient` is null (`NO_LIST_TO_COMPARE`),
   and a banner drawn while no list is on screen (after a failed FIRST read, or a list that could not be DRAWN — #801)
   shows `REVIEW_WAITS_FOR_LIST` in place of Review. Both sentences must be true of all three cases (failed, in flight,
-  not drawable — "could not be read or shown, or is still being read") and name the way out where there is one (close
-  and reopen the chart — nothing re-reads a failed first read until #797 adds a control).
+  not drawable — "could not be read or shown, or is still being read") and name the way out ("Read this chart again", the
+  always-visible button #797 added — its label is pinned to the sentences that quote it).
 - **The tray's count and list each carry a revision** (`trayCountRevision`, `trayListRevision`): an older answer is
   dropped. **The list is emptied when a re-read starts** — never the old entries, whose Review `close_chart` made
   unopenable. **Wherever the list is emptied, `trayListRevision` is bumped too** (`refreshTray`'s clear): an older
@@ -127,7 +215,7 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
 - **A door carries the attestation its line showed** (`RecordLinkView::attested` → `compare_linked`): a pair judged
   since the list was drawn is refused (`line_still_shows`, `LINE_STALE`) before any panel is drawn — otherwise an
   attested link opens a silent panel offering only Unlink. The list's two reads (`read_record_links`) share ONE
-  read-only REPEATABLE READ snapshot, and a clash naming no standing link is said ("reload"), never dropped.
+  read-only REPEATABLE READ snapshot, and a clash naming no standing link is said (naming "Read this chart again" since #797), never dropped.
 - **Any recorded verdict disarms a newer comparison of the same pair**, in both panels (`disarmNewerReview` /
   `disarmNewerComparison` — the scripts share one global scope, so never one name for both). Never key it on
   `reload`: "Different people" reloads even when every pair was outranked.
@@ -275,7 +363,7 @@ unlink_view_tests.rs,unlink_offer_tests.rs}`, the `unlink.js` field-name drift g
   **`Outranked` never says a retry "changes nothing"** (the merge is bounded at 24 h of drift). A locked key names its
   own button; `standing_edge`'s unread list is `Retry::Now`.
 - **An open chart's refusal scope follows the FACT** (`AdmitRefusal`): not held → `NodeState`; held but its record
-  lacks the pair → `Input`, "reload the chart and judge again".
+  lacks the pair → `Stale` since #797 (routed by type, see that block; it was `Input` and said "reload the chart").
 - **The webview-field guards scan `main.js`, `funnel.js` and `unlink.js`**; `link.js` has only its search read guarded
   (the rest is #715). `renderLinks` stays in `main.js`. Never say "by the matcher" for an un-attested link ("without a
   clinician's confirmation on record here").

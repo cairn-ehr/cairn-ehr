@@ -44,8 +44,8 @@ let renderedCharts = null;
  * Chart-read generations (#800). "Is it for the chart on screen?" alone let an older answer land
  * over a newer one: two re-reads of the SAME chart can overlap, and a clinician can go A → front
  * door → A. `chartReadRevision` is the newest read STARTED (`refresh` bumps it before it sends);
- * `drawnRevision` the newest DRAWN. `clearChart` sets both to a fresh floor, outdating every read
- * still in flight from before the change.
+ * `drawnRevision` the newest DRAWN. `clearChart` (a chart change) and chart_stale.js's `holdOwnAct`
+ * (an own act that moved the held set) set both to a fresh floor, outdating every read in flight.
  */
 let chartReadRevision = 0;
 let drawnRevision = 0;
@@ -237,7 +237,9 @@ function drawList(pane, patient) {
   const view = pane.list;
   renderedPatient = patient;
   renderedCharts = view.charts;
+  holdCharts(view.charts); // what the clinician now holds (chart_stale.js)
   setMessage(el("chart-unshown"), ""); // a list that draws takes down a previous fault's warning
+  setMessage(el("chart-stale"), ""); // and an out-of-date list's (chart_stale.js, #797)
   renderMembers(pane.members);
   setMessage(el("linked-charts-error"), pane.members_error);
   renderLinks(pane.links);
@@ -276,6 +278,7 @@ function showUnshownList(failure) {
   // drawn next, offers no Review, and `compare` refuses — as for a failed or in-flight read.
   renderedPatient = null;
   renderedCharts = null;
+  holdCharts(null);
   clearDrawnList();
   setMessage(el("chart-unshown"), LIST_NOT_SHOWN + String(failure));
   el("chart-warnings").hidden = false;
@@ -295,6 +298,7 @@ function clearDrawnList() {
   setMessage(el("record-links-error"), "");
   el("med-rows").replaceChildren();
   setMessage(el("chart-unshown"), "");
+  setMessage(el("chart-stale"), "");
   setMessage(el("chart-incomplete"), "");
   setMessage(el("chart-withheld"), "");
   el("chart-warnings").hidden = true;
@@ -312,6 +316,7 @@ function clearChart() {
   drawnRevision = ++chartReadRevision;
   renderedPatient = null;
   renderedCharts = null;
+  holdCharts(null);
   clearDuplicates(); // duplicates.js loads right after this file, before funnel.js's boot
   clearDrawnList();
   const button = el("sign-off");
@@ -325,28 +330,36 @@ function clearChart() {
  * `lead` is the outcome sentence of the act that prompted the re-read (a sign-off, a cease, a
  * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
  * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
- * "Linked — …" sentence was replaced by "Could not read the chart").
+ * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `behind` = the list is
+ * known behind the record (a stale refusal prompted it); changes are named against the held set.
  */
-async function refresh(lead) {
+async function refresh(lead, behind) {
   const patient = displayedPatient;
   if (patient === null) return;
+  if (behind) knowListBehind(); // window state: whichever read fails last marks the list
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;
   try {
-    const answer = await invoke("med_list", { patientId: patient });
+    const answer = await invoke("med_list", { patientId: patient, seenCharts: heldCharts });
     // A read for a chart the clinician has since left, or older than what is drawn, is dropped,
     // never rendered (#800).
     if (!mayDraw(patient, revision)) return;
     drawnRevision = revision;
+    const marked = listMarkedStale(); // before `render`, whose `drawList` takes the mark down
     render(answer, patient);
+    // Only over a list that DREW: a drawing fault took it down (`showUnshownList`), nothing to review.
+    if (renderedPatient === patient) sayAfterDraw(lead, revision, marked, answer);
   } catch (e) {
     // A failure is said only by the newest read started: that read speaks for the chart now.
     if (!isLatestRead(patient, revision)) return;
-    say((lead ? lead + " " : "") + "Could not read the chart: " + e);
+    sayReadFailed(lead, e); // chart_stale.js: remembered, so "Read this chart again" can retry it
     // A failed FIRST read (`clearChart` left no list drawn): sign-off must stop saying "Loading…",
     // or the clinician waits for a read that is not happening (PR #798 review). It stays disabled.
     // A failed RE-read keeps the list it already drew, and that list's own button.
     if (renderedPatient === null) el("sign-off").textContent = "Nothing to sign off — no list read";
+    // After a stale refusal that list is known out of date: marked BEFORE the await below,
+    // after which a newer read may have drawn a fresh list.
+    if (listKnownBehind() && renderedPatient !== null) markListStale();
     // The banner needs only the chart set, so it is read on its own (#745): a failed list read
     // must not take the duplicate warning down, nor leave a just-judged pair up with a live Review.
     await redrawBannerAlone(patient); // duplicates.js, loaded after this file
@@ -386,8 +399,11 @@ async function signOff() {
     reportSignOff(
       await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts }),
     );
-  } catch (e) {
-    say("Sign-off failed: " + e);
+  } catch (failure) {
+    // The backend's ErrorView ({text, retry}), not a string: `failureText` reads its text.
+    say("Sign-off failed: " + failureText(failure));
+    await refresh(el("outcome").textContent, behindTheRecord(failure));
+    return;
   }
   await refresh(el("outcome").textContent);
 }
@@ -409,8 +425,10 @@ async function cease(groupId, reason) {
         report.failed.join("; ");
     }
     say(text);
-  } catch (e) {
-    say("Could not stop this drug: " + e);
+  } catch (failure) {
+    say("Could not stop this drug: " + failureText(failure));
+    await refresh(el("outcome").textContent, behindTheRecord(failure));
+    return;
   }
   await refresh(el("outcome").textContent);
 }

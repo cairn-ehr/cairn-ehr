@@ -60,7 +60,7 @@ fn a_chart_read_is_drawn_only_while_nothing_newer_is_on_screen() {
     let caught = &refresh[caught_at..];
     assert!(
         position(caught, "if (!isLatestRead(patient, revision)) return;")
-            < position(caught, "say("),
+            < position(caught, "sayReadFailed(lead, e);"),
         "{refresh}"
     );
     // The patient-only test is gone, not kept beside the new ones as a second spelling.
@@ -219,6 +219,8 @@ fn a_list_that_fails_to_draw_leaves_nothing_partial_and_no_live_sign_off() {
         "el(\"med-rows\").replaceChildren()",
         "el(\"chart-warnings\").hidden = true",
         "setMessage(el(\"chart-unshown\"), \"\")",
+        // #797: a list taken down takes its out-of-date warning with it.
+        "setMessage(el(\"chart-stale\"), \"\")",
     ] {
         assert!(cleared.contains(part), "{part} in {cleared}");
     }
@@ -241,4 +243,18 @@ fn a_list_that_fails_to_draw_leaves_nothing_partial_and_no_live_sign_off() {
         unshown < position(INDEX_HTML, "<table id=\"med-table\">"),
         "above the list"
     );
+}
+
+/// `sign_off` and `cease` fail with an ErrorView object (`{text, retry}`), not a string.
+/// Concatenating that object into a sentence would show the clinician "[object Object]" in the
+/// one place that says why their act did not happen, so both catches must word it through
+/// `failureText` (`funnel.js`), keeping their own prefixes.
+#[test]
+fn a_failed_sign_off_or_cease_is_worded_from_its_error_view() {
+    let sign_off = js_fn(MAIN_JS, "signOff");
+    assert!(sign_off.contains("\"Sign-off failed: \" + failureText(failure)"));
+    let cease = js_fn(MAIN_JS, "cease");
+    assert!(cease.contains("\"Could not stop this drug: \" + failureText(failure)"));
+    assert!(!sign_off.contains("failed: \" + e)"));
+    assert!(!cease.contains("this drug: \" + e)"));
 }

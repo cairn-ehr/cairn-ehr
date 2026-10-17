@@ -13,7 +13,9 @@ use super::{
     admit_judgement, assert_link_in_tx, canonical_pair, compose_review_provenance,
     record_holds_both, AdmitRefusal, LinkVerb, OpenedChart, RecordsShown, Reviewer,
 };
-use crate::db_diagnosis::{deliberate_refusal, node_state_refusal, LocalDbFault, RefusalScope};
+use crate::db_diagnosis::{
+    deliberate_refusal, node_state_refusal, stale_picture_refusal, LocalDbFault, RefusalScope,
+};
 use anyhow::Context;
 use cairn_medication_view::ChartSet;
 use uuid::Uuid;
@@ -82,7 +84,8 @@ pub struct LinkOutcome {
     /// [`LinkOutcome::filed_under`].
     pub record_of: Uuid,
     /// The chart set of [`LinkOutcome::record_of`], read inside the judgement's own
-    /// transaction: what that chart reads as, now that the judgement is recorded.
+    /// transaction, after its event applied and under the link lock (CARNLK): what that chart
+    /// reads as, now that the judgement is recorded — the set THIS judgement left (#797).
     pub charts: ChartSet,
     /// What the judgement did to the record — see [`LinkEffect`].
     pub effect: LinkEffect,
@@ -297,11 +300,13 @@ async fn is_held(client: &tokio_postgres::Client, chart: Uuid) -> anyhow::Result
 }
 
 /// Mark an [`admit_judgement`] refusal with the scope it names, so a surface offers the right
-/// way forward: wait for this node (`NodeState`), or re-read and judge again (`Input`).
+/// way forward: wait for this node (`NodeState`), re-read (`Stale`: the record changed since it
+/// was read), or nothing at all (`Input`: no retry, by anyone, changes it).
 fn refusal_error(refusal: AdmitRefusal) -> anyhow::Error {
     match refusal.scope {
         RefusalScope::NodeState => node_state_refusal(refusal.text),
         RefusalScope::Input => deliberate_refusal(refusal.text),
+        RefusalScope::Stale => stale_picture_refusal(refusal.text),
     }
 }
 
@@ -332,10 +337,11 @@ async fn judge(
         // Also about the INPUT: a panel that read no standing judgement has nothing to sign
         // over. Without this the pair check would refuse it anyway (no real address is empty),
         // but as "changed while you were judging" — untrue; the window's `require_standing`
-        // says the same sentence, so a non-window caller gets the true reason too.
+        // gives the same reason, so a non-window caller gets the true reason too. Only the
+        // window's copy adds a remedy ("review it again" names its own button): a node sentence
+        // names no window act (#806, `tests/node_sentences_name_no_window_act.rs`).
         return Err(deliberate_refusal(
-            "the comparison did not read which judgement stands on this pair — nothing was \
-             done; review it again",
+            "the comparison did not read which judgement stands on this pair — nothing was done",
         ));
     }
     let (a_held, b_held) = (is_held(client, a).await?, is_held(client, b).await?);
@@ -412,7 +418,13 @@ async fn judge(
     // The record the clinician judged FROM (the open chart), else the filed-under chart —
     // what the caller shows next. Read BEFORE the commit, in the same transaction, so a
     // failure here rolls the judgement back rather than leaving a committed event behind an
-    // error.
+    // error. And read AFTER the event applied, while this transaction still holds db/018's link
+    // lock (CARNLK, taken by the event's own apply): no other link or unlink can land between
+    // the apply and this read, so this is exactly the set THIS judgement left. The window relies
+    // on that (#797): it re-reads against this set, so the clinician's own change is never
+    // announced back to them while a colleague's, committed after, still is. A read after the
+    // commit could already include the colleague's change and silence it. The order is pinned by
+    // `judge_tests.rs`'s `the_set_left_is_read_after_the_apply_and_before_the_commit`.
     let record_of = opened.unwrap_or(about);
     let charts = crate::patient::person::person_charts(&tx, record_of)
         .await
@@ -457,21 +469,5 @@ async fn judge(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_judgement_says_what_it_did_not_just_that_it_was_recorded() {
-        use LinkEffect::*;
-        // Outranked whenever the standing assertion says the opposite — whatever the rest of
-        // the record reads.
-        for verb in [LinkVerb::Link, LinkVerb::Unlink] {
-            for joined in [false, true] {
-                assert_eq!(link_effect(verb, false, joined), Outranked, "{verb:?}");
-            }
-        }
-        assert_eq!(link_effect(LinkVerb::Link, true, true), TookEffect);
-        assert_eq!(link_effect(LinkVerb::Unlink, true, false), TookEffect);
-        assert_eq!(link_effect(LinkVerb::Unlink, true, true), StillJoined);
-    }
-}
+#[path = "judge_tests.rs"]
+mod tests;

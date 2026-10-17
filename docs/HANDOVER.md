@@ -3,26 +3,38 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ BUILT ON PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802) (2026-10-17, branch
-> `fix/799-800-801-chart-reread`), AWAITING THE MAINTAINER'S REVIEW AND MERGE:** the chart re-read's robustness —
-> **#799** (a re-read keeps a half-typed stop reason), **#800** (`refresh` and the banner-alone read carry a
-> generation token), **#801** (a fault drawing the medication rows leaves nothing partial under a live sign-off).
-> GUI-only; no schema, no ADR. **Merged before it:** PR #798 (#745 · #752 · #740, 2026-10-16), PR #795, PR #794,
-> PR #792. The whole repair path (#679 · #680 · #681) is MERGED through R7 (PR #788). Design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's worker runbook
-> `docs/developers/running-the-duplicate-check.md`; the human passes are `cairn-gui-tauri`'s RUNBOOK §11 (banner),
-> §12 (tray) and §13 (R6's confirm). spec **v0.82** (newest ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 ·
-> #764 · #765 · #766. Trap: a new blocking key can generate a pair an older test asserts absent — fix the fixture
-> date, never the assertion.
+> **⇒ TWO PRs AWAIT THE MAINTAINER, MERGE IN THIS ORDER:**
+> **(1) PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)** (branch `fix/799-800-801-chart-reread`): the
+> chart re-read's robustness — #799 (a re-read keeps a half-typed stop reason), #800 (chart reads carry generations:
+> `mayDraw` / `isLatestRead`), #801 (a list that cannot be drawn leaves nothing partial). **(2) PR
+> [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)** (branch `feat/797-record-changed-reread`, BASED ON #802's
+> branch — retarget it to `main` once #802 merges): **#797** — a refusal because the record changed under the clinician
+> is typed (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`), the window re-reads the whole chart by
+> itself, never retries the act, and says what changed **only when it came from another source** (the maintainer's
+> rule, verbatim in `developers/durable-rules.md`'s #797 block); an always-visible **"Read this chart again"** replaces
+> every "reload the chart". Plan `docs/superpowers/plans/2026-10-17-797-record-changed-reread.md`; RUNBOOK §14 is its
+> owed human timing. Merged before them: PR #798, #795, #794, #792; the repair path (#679 · #680 · #681) through R7
+> (PR #788). Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's runbook
+> `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest ADR-0080).
+> DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate a pair an
+> older test asserts absent — fix the fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)** (above): read `gh pr checks`, review, merge.
->    **#728** (the Pi re-measure; also the find with the tray OPEN) can
->    run beside. #699 stays open until the maintainer closes it.
-> 2. **Open repair-path issues:** from PR #798 **#797** (a DECISION — the window's other ~12 "reload the chart" sentences with no
->    reload control; its comment adds the set-changed refusals, which want a whole-chart re-read,
->    and asks whether to broaden `Retry::AfterReread`) · #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
+> 1. **Review and merge PR #802, then PR #805** (retarget #805 to `main` first). #805 was reviewed again on 2026-10-18
+>    (five reviewers) and every finding fixed in place — it now also closes **#806**. **One decision is owed, filed as
+>    #811:** `Retry::AfterReread` lumps "nothing was recorded" with "may have been recorded" (#713), so after an
+>    interrupted commit that DID land the re-read says "This record changed…" (implying a colleague; was **M4**) and a
+>    failed re-read's banner says "the record changed" (also **M5**: no "review it" after a successful act). **#728**
+>    (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
+> 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
+>    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
+>    existing "withheld" = hidden-lines wording) → **#804** (on link, show only where the two charts' medication
+>    lists DIFFER, with continue / discontinue / withhold per line; needs #803 and **#690**). From #797's reviews:
+>    **#812** (window type/test tightening) · **#807** (the window never
+>    reconnects after a lost connection) · **#808** (two outcome-line races) · **#809** (window tech debt) · **#810**
+>    (cairn-node files over 500 lines).
+>    **Open repair-path issues:** #712's items 1, 2, 4, 5 · from R7 **#790** · **#791** (both decisions) ·
 >    from R6 **#784** · **#785** · from R5b **#750** · **#751** · **#753** · **#755** · **#756** · **#757** · from R5a
 >    **#738** · **#739** · **#746** (a decision) · **#747** · #722 · from R4 **#730** (a decision) · **#731** ·
 >    **#734**. Earlier: **#709** · **#710** · **#712** · **#714** · **#715** · **#718** · **#719** · **#720** ·
@@ -142,7 +154,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -174,6 +186,41 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-18 — PR #805's second review: five reviewers, every finding fixed (filed #811, #812)
+
+Code / silent-failure / test / comment / type reviewers in parallel over the stacked diff, each claim verified against
+the code before acting. Fixed in place: sign-off's target-set mismatch still untyped (three reviewers found it alone —
+`ensure_same_targets`), the out-of-date mark lost when its re-read was overtaken (`behindAfter`, walked headlessly), a
+partly-recorded "Different people" dropping its stale pair, the CLI left with no remedy, an outage typed `Never`, three
+guards a one-character slip passed (each mutation-checked), #806 whole, ~15 comments.
+- **⇒ A flag carried by ONE async call dies with that call.** Anything a later, overtaking call must still honour
+  ("this list is stale") is window state with its own end condition — the same lesson as the held set, one layer down.
+- **⇒ "Ends when a newer thing draws" needs a revision, not a boolean**, wherever an OLDER answer may still draw
+  (`mayDraw` is `>=`): a boolean cleared by any draw is cleared by a read sent before the event it records.
+- **⇒ A guard that pins a call's ARGUMENTS but not the `if` in front of it passes the inverted condition.** Pin the gate
+  (`refresh_gates`), and pin small helper BODIES the pinned lines lean on.
+- **⇒ A rustfmt pass can break a source guard that pins one line**: pin the formatting-proof fragment.
+
+### 2026-10-17 (third) — #797 brainstormed, planned, built SDD (PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805))
+
+Brainstorm with the maintainer → plan → subagent-driven (7 tasks, a task review each, 9 fix rounds, an opus final
+review, one fix wave). **The maintainer's rule** (now in durable-rules): *tell the clinician only what changed from
+ANOTHER source since they took the chart; never their own act.* Decided in the same brainstorm: #803 (withhold), #804
+(differences-only view on link). Paper counterpart per the maintainer: you are TOLD after writing and then reconcile —
+or, commonly, the two charts never meet; so the refused press is not an `M > N` defect.
+- **⇒ Route a cause by TYPE end to end** (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); the
+  window had been telling refusals apart by `e == CHANGED`.
+- **⇒ A baseline that must survive overlapping reads is window STATE, not an argument to one call.** The own-act
+  baseline passed to one `refresh` let ANOTHER re-read announce the clinician's own link back (task-5 review, I1).
+- **⇒ A reviewer's counter-case beat my formula.** `(held − (sent − after)) ∪ (after − sent)` announces one's own link
+  (the `applyOwnAct` table's fourth row: a Link answered on the other chart, drawn before its commit); the implementer
+  pushed back with the walk, the re-reviewer reconstructed it over 17 cases. Rule on the evidence, not on who proposed
+  it.
+- **⇒ "After apply, before commit" must be pinned on BOTH sides** — a DB test caught only "after apply"; a source
+  guard now pins the commit side (`judge_tests.rs`).
+- **⇒ An operator procedure is a claim too:** RUNBOOK §14 first told testers to stop Postgres and recover with the
+  button — the window never reconnects (#807); a REVOKE cannot fail a superuser; the fault is a renamed function now.
 
 ### 2026-10-17 (second) — #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
 
@@ -228,67 +275,25 @@ guards (7 RED → green, 9 mutations → 9 reds), then a headless walk run again
   failed PR #795's check on one, after it merged. **zsh does not word-split `$step`** (again): run multi-step gates
   under `bash -c`.
 
-### 2026-10-16 (second, third) — #781 · #789 · #732 (PR #794); #793 + #712 item 3 · #737 · #796 (PR #795)
+### 2026-10-15 → 10-16 — R7 (PR #788), R6's residuals (PR #792), file splits (PRs #794, #795)
 
-HANDOVER was stale on arrival both times (a merged PR still called "awaiting merge").
-- **⇒ Prove a pure move by the test LIST, not a green run:** diff the sorted leaf names of `cargo test -- --list`
-  before and after. Move code by slicing exact line ranges with a script (`expect(line, text)` first), never by
-  retyping. A `#[cfg(test)] #[path = "x_tests.rs"] mod tests;` keeps the module PATH, so importers need no edit.
-- **⇒ `cargo doc -D warnings` reads `<date>` in a doc comment as an unclosed HTML tag** (backtick it).
-- **⇒ A heading exists to tell entries apart — test it on the input the list exists for** (exact namesakes: the
-  matcher's strongest proposal; the heading ends with the chart id). **Punctuation is not speech:** VoiceOver reads
-  "·"/"—" as a pause, so two records joined by "—" sounded linked; join them by words.
-- **⇒ A fixture-gap RED can show the bug is already live** (#732 found 3 stray rows, not 1).
-
-### 2026-10-16 — R6's residuals #787 · #786 · #783 · #782 (PR #792)
-
-HANDOVER was stale on arrival again (PR #788 had merged); a bundle of four specified, decision-free fixes, TDD each.
-- **⇒ A remedy that names a command is a claim: run it, and name the LIGHTEST one that works.** #787's first draft
-  named `reproject --prefix identity. --rebuild` (refused by `cairn_reproject`); the second named a whole-log
-  `--rebuild`, which works but truncates every projection and holds chart reads (availability). The review found a
-  plain heal (`--prefix identity.`) refills the address; it is now named first, the rebuild as the fallback, and the
-  test runs both. I had misread a refusal guarded by `IF p_rebuild` as the whole command's.
-- **⇒ Keep one in-memory truth and project it at the boundary.** #786's suggested sibling field would have been a second
-  source of the doubt; serde `try_from`/`into` through a private wire struct carries it without touching the 41 struct
-  literals.
-- **⇒ A first-load race is reproducible headlessly:** an `async` stub `invoke` resolves at the microtask checkpoint after
-  `main.js`, before `link.js` runs. Old `main.js`: `keyUnlocked` false under an unlocked key; new: true.
-- **zsh does not word-split `$var`** — a `for n in $names` loop silently ran once; wrap such loops in `bash -c`.
-
-### 2026-10-15 — R7: #742 and #743 part 2, as decided (PR #788)
-
-Decisions asked first (both maintainer calls); then design section, plan, TDD inline (small slices), mutation checks.
-- **⇒ HANDOVER WAS STALE ON ARRIVAL:** it called #777 and #779 drafts, but both had merged. A ⇒ NEXT that names a PR goes
-  stale the moment the PR merges; `gh pr list --state all` settled it in one call (house rule 8, the other direction).
-- **⇒ A node-wide flag can answer a per-record question when the record's own half is already on screen.** "A change
-  waits for a chart OUTSIDE this record" needed no per-record query: a change for a chart INSIDE it already shows that
-  chart's pending line. Check what the screen already says before adding a read.
-- **⇒ An OUT-column heal guard keyed on the NEWEST column's absence covers every older shape at once** (db/056; the
-  `newest_age_s` guard it replaced covered one).
-- **⇒ Keep a soft signal out of a predicate a hold is `EXISTS` over.** `cairn_chart_set_unverified_links` is a separate
-  function precisely so the R1b hold cannot see it; the pin asks the hold, not the new function.
-- **⇒ A struct literal gaining a field breaks every test that builds it** (eleven here); field order is free, so insert
-  it after the opening brace. **Moving an inline test module to a `#[path]` file** kept `record_links.rs` under 500.
-- **⇒ ROLLBACK HAZARD (not new):** with `SCHEMA_GENERATION` unchanged, an OLDER binary on a database this branch
-  loaded fails "cannot change return type" on db/056. Before switching the shared `cairn_test` back to an older
-  `main`, run `DROP FUNCTION cairn_duplicate_check_status();`.
-- **Review (one agent pass, nothing safety-critical):** the R7 tests moved out so no file it touched crosses 500;
-  filed **#789** (`duplicates/view_tests.rs` was already 563 lines) and **#790** (a rebuild/restore queues `change`
-  notices in bulk, so the "running" line shows on every checked chart through that backlog — a decision); commented
-  #718 (a fourth definer, `cairn_chart_set_unverified_links`).
-- **Second review (2026-10-16, five agents in parallel), all fixed in the PR:** the banner and tray read the open pairs
-  BEFORE the check state, so a proposal committed between the reads read as "checked, none open" (now status first,
-  pinned by a source-order guard — the GUI has no DB tests, #738); a failed unverified-notes read took down the whole
-  links list and every repair door (now a `Result` of its own); `read_snapshot` panicked on a pre-R7 status shape
-  read without replay (now `try_get`); db/054 negatives (an end outside the set, an unlinked pair — both
-  mutation-checked); comment fixes (a false `check_lines` sentence, db/020's trap cited by number, db/001's
-  `attested`-reader list). Filed **#791** (the poison-chart over-warn). `techdebt-next` Step 8 now routes durable
-  rules to `durable-rules.md`.
-- **⇒ Two autocommit reads racing a separate process that never clears a notice before its proposals commit: read
-  the side that proves completeness FIRST.** "Nothing waiting" read first guarantees the later pairs read sees every proposal.
-- **⇒ The per-slice rules and the eighteen traps moved to [`developers/durable-rules.md`](developers/durable-rules.md)**
-  (HANDOVER 803 → ~400 lines); the four per-pass 10-12/10-13 session entries, duplicated by the combined one, were
-  dropped after a script confirmed no issue number was lost. ROADMAP's R1–R6 entries became one table (581 → ~460).
+R7 = #742 + #743 part 2; residuals #787 · #786 · #783 · #782; splits #781 · #789 · #732 · #793 + #712 item 3 · #737 ·
+#796. Filed #789 · #790 · #791; commented #718. HANDOVER was stale on arrival three times (a merged PR still "awaiting").
+- **⇒ A remedy that names a command is a claim: run it, and name the LIGHTEST that works** (#787: a plain
+  `reproject --prefix identity.` heal first, `--rebuild` only as fallback; `--prefix identity. --rebuild` is refused).
+- **⇒ Keep one in-memory truth and project it at the boundary** (#786: serde `try_from`/`into` via a private wire struct).
+- **⇒ Prove a pure move by the test LIST** (diff sorted `cargo test -- --list` names); move code by slicing exact line
+  ranges with a script; `#[cfg(test)] #[path = "x_tests.rs"] mod tests;` keeps the module path.
+- **⇒ A heading must tell entries apart on the input the list exists for** (exact namesakes); **punctuation is not
+  speech** (VoiceOver reads "—" as a pause — join two records by words).
+- **⇒ Read the side that proves completeness FIRST** when two autocommit reads race a process that clears notices
+  only after its proposals commit (status before pairs). **⇒ Keep a soft signal out of a predicate a hold is
+  `EXISTS` over** (`cairn_chart_set_unverified_links` is separate so the R1b hold cannot see it).
+- **⇒ ROLLBACK HAZARD:** with `SCHEMA_GENERATION` unchanged, an OLDER binary on a database this branch loaded fails
+  "cannot change return type" on db/056 — `DROP FUNCTION cairn_duplicate_check_status();` before switching back.
+- Mechanics: `cargo doc -D warnings` reads `<date>` as an unclosed HTML tag (backtick it); a first-load race is
+  reproducible headlessly (an `async` stub `invoke`); **zsh does not word-split `$var`** — run loops under `bash -c`;
+  a struct literal gaining a field breaks every test that builds it; a fixture-gap RED can show the bug is live.
 
 ### 2026-10-13 (fourth) — #775 option A and #556, as decided (cloud session, PR #779, merged)
 

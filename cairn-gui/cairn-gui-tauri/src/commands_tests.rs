@@ -14,7 +14,13 @@ use std::collections::BTreeSet;
 /// Extracted by scanning for `<binding>.<identifier>` rather than by hand, so the guard
 /// below cannot rot into a list nobody updates.
 fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
-    fields_read_in(include_str!("../src-ui/main.js"), binding)
+    // chart_stale.js was split out of main.js (#797) and reads the same `med_list` pane.
+    let mut read = fields_read_in(include_str!("../src-ui/main.js"), binding);
+    read.extend(fields_read_in(
+        include_str!("../src-ui/chart_stale.js"),
+        binding,
+    ));
+    read
 }
 
 /// Every field `js` reads off `binding` — the scanner itself, shared by every webview file's
@@ -95,6 +101,7 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
         links: vec![that_link.clone()],
         links_error: None,
         duplicates: crate::duplicates::view::DuplicateSection::checked_none_open(),
+        set_change: None,
     })
     .unwrap();
     let member_json = serde_json::to_value(&member).unwrap();
@@ -165,11 +172,49 @@ fn another_chart() -> String {
 #[tokio::test]
 async fn the_medication_list_reads_only_the_chart_on_screen() {
     let (state, on_screen) = open_on_the_fixture_chart();
-    med_list_impl(&state, &on_screen)
+    med_list_impl(&state, &on_screen, None)
         .await
         .expect("the chart on screen is read");
-    let err = med_list_impl(&state, &another_chart()).await.unwrap_err();
+    let err = med_list_impl(&state, &another_chart(), None)
+        .await
+        .unwrap_err();
     assert!(err.contains("not the chart"), "{err}");
+}
+
+/// The first read of a chart (and any caller that does not compare) sends no seen set, and
+/// a re-read with nothing to compare says nothing (#797): never a guessed change.
+#[tokio::test]
+async fn med_list_says_nothing_without_a_seen_set() {
+    let (state, on_screen) = open_on_the_fixture_chart();
+    let pane = med_list_impl(&state, &on_screen, None).await.unwrap();
+    assert_eq!(pane.set_change, None);
+    let same = med_list_impl(&state, &on_screen, Some(vec![on_screen.clone()]))
+        .await
+        .unwrap();
+    assert_eq!(same.set_change, None, "an unchanged set says nothing");
+}
+
+/// A re-read whose seen set held a chart the record no longer holds names it (#797). The
+/// mock has no database to read the departed chart's identity, so it is named by id — said
+/// unread, never dropped.
+#[tokio::test]
+async fn med_list_names_a_change_from_the_seen_set() {
+    let (state, on_screen) = open_on_the_fixture_chart();
+    let gone = Uuid::from_u128(99);
+    let pane = med_list_impl(
+        &state,
+        &on_screen,
+        Some(vec![on_screen.clone(), gone.to_string()]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pane.set_change,
+        Some(format!(
+            "This record changed while it was on screen. No longer part of it: chart {gone} \
+             (its name could not be read here)."
+        ))
+    );
 }
 
 /// Checked FIRST, before fixture mode or the key: whatever else would refuse, a sign-off
@@ -180,7 +225,7 @@ async fn sign_off_refuses_a_chart_that_is_not_on_screen() {
     let err = sign_off_impl(&state, &another_chart(), vec![another_chart()])
         .await
         .unwrap_err();
-    assert!(err.contains("not the chart"), "{err}");
+    assert!(err.text.contains("not the chart"));
 }
 
 #[tokio::test]
@@ -195,7 +240,7 @@ async fn cease_refuses_a_chart_that_is_not_on_screen() {
     )
     .await
     .unwrap_err();
-    assert!(err.contains("not the chart"), "{err}");
+    assert!(err.text.contains("not the chart"));
 }
 
 /// With the right chart, fixture mode's own refusal is what the clinician reads.
@@ -205,7 +250,8 @@ async fn a_write_on_the_chart_on_screen_meets_the_fixture_refusal() {
     let err = sign_off_impl(&state, &on_screen, vec![on_screen.clone()])
         .await
         .unwrap_err();
-    assert!(err.contains("fixture mode"), "{err}");
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
+    assert!(err.text.contains("fixture mode"));
 }
 
 /// The other direction for the combined read (ADR-0076). Each of these, dropped by the JS,
@@ -220,6 +266,9 @@ fn the_webview_reads_the_linked_set_and_each_rows_source() {
     assert!(fields_read_by_the_webview("pane").contains("members_error"));
     assert!(fields_read_by_the_webview("member").contains("text"));
     assert!(fields_read_by_the_webview("row").contains("source"));
+    // #797: dropped, a colleague's link or unlink landing while the list was on screen would be
+    // redrawn without a word — the record silently grows or shrinks under the clinician.
+    assert!(fields_read_by_the_webview("pane").contains("set_change"));
 }
 
 /// The other direction, for the two fields where silence is the dangerous failure.
@@ -262,6 +311,7 @@ fn every_command_the_webview_calls_is_registered() {
     let webview = [
         ("main.js", include_str!("../src-ui/main.js")),
         ("stop_reasons.js", include_str!("../src-ui/stop_reasons.js")),
+        ("chart_stale.js", include_str!("../src-ui/chart_stale.js")),
         ("duplicates.js", include_str!("../src-ui/duplicates.js")),
         ("worklist.js", include_str!("../src-ui/worklist.js")),
         ("funnel.js", include_str!("../src-ui/funnel.js")),

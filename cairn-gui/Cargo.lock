@@ -452,6 +452,7 @@ dependencies = [
  "cairn-event",
  "cairn-gui-data",
  "cairn-gui-funnel",
+ "cairn-medication-view",
  "cairn-node",
  "cairn-patient-search",
  "hex",

@@ -23,19 +23,23 @@
  * chart. That is so in three cases the window cannot tell apart here — the chart's FIRST read
  * failed (`clearChart` nulled it and nothing re-read), that read is still in flight, or a list was
  * read but could not be drawn (main.js's `showUnshownList`, #801) — so the sentence is true of all
- * three (PR #798 and #802 reviews). Only the window knows this, so it words it.
+ * three (PR #798 and #802 reviews). Only the window knows this, so it words it. A failed read is
+ * mended by "Read this chart again" (#797), so the sentence names it; a list that could not be
+ * DRAWN has no way out here (the chart's warning says it is this window's fault).
  */
 const NO_LIST_TO_COMPARE =
   "This chart's medication list is not on screen — it could not be read or shown, or is still " +
-  "being read — so there is nothing to compare it with; nothing was done.";
+  "being read — so there is nothing to compare it with; nothing was done. " +
+  'If it could not be read, press "Read this chart again".';
 /**
  * Under each entry of a banner drawn while no list is on screen, in place of Review. Nothing
- * re-reads a failed first read by itself (#797 tracks a reload control), so it names the way out;
- * a list that could not be DRAWN has none here (the chart's warning says it is this window's fault).
+ * re-reads a failed first read by itself, so it names the way out, "Read this chart again"
+ * (#797); a list that could not be DRAWN has none here (the chart's warning says it is this
+ * window's fault).
  */
 const REVIEW_WAITS_FOR_LIST =
-  "Review needs this chart's medication list on screen, and it could not be read or shown, or " +
-  "is still being read. If it could not be read, close the chart and open it again.";
+  'Review needs this chart\'s medication list on screen, and it could not be read or shown, or ' +
+  'is still being read. If it could not be read, press "Read this chart again".';
 
 /**
  * Draw a `DuplicateSection`. Hidden only when Rust says it has nothing to say (`silent`, which is

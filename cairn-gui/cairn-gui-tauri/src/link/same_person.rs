@@ -14,13 +14,15 @@
 //!
 //! Split out of `link/mod.rs` (#781), which keeps the module map and the two helpers the
 //! gestures share (`chart_set_of`, the live chart-set read; `as_text`, a read's error as text).
-use super::judgement_view::{key_locked, link_error_view, link_report, refused, LinkReportView};
+use super::judgement_view::{
+    key_locked, link_error_view, link_report, refused, stale, LinkReportView,
+};
 use super::view::{
     comparison_view, fixture_facts, ComparisonParts, ComparisonView, ALREADY_IN_RECORD,
     NOT_ON_SCREEN, OTHER_CHANGED, THIS_CHANGED,
 };
 use super::{as_text, chart_set_of};
-use crate::chart_set::{check_displayed_set, CHANGED};
+use crate::chart_set::{check_displayed_set, ChartSetError};
 use crate::commands::read_chart_of;
 use crate::funnel::view::ErrorView;
 use crate::state::{AppState, Now};
@@ -40,10 +42,10 @@ enum Act {
 /// it instead — for fixture mode).
 ///
 /// For Compare, `charts` is the medication list's displayed set, and a changed set keeps the
-/// list's own wording ("reload the chart"). For Link, `charts` is the set the COMPARISON was
+/// list's own wording (`CHANGED`). For Link, `charts` is the set the COMPARISON was
 /// built over (`ComparisonView::left_charts`, sent back by the webview), so a changed set means
-/// the comparison is stale and is worded [`THIS_CHANGED`] ("reload the chart and compare
-/// again") — final review I1.
+/// the comparison is stale and is worded [`THIS_CHANGED`] — final review I1. Both are
+/// `Retry::AfterReread`.
 /// An unreadable set is a window fault, not a change, and keeps its own wording either way.
 async fn resolve_pair(
     state: &AppState,
@@ -54,10 +56,10 @@ async fn resolve_pair(
 ) -> Result<(Uuid, ChartSet, Uuid, Option<String>), ErrorView> {
     let patient = state.displayed_patient(patient_id).await.map_err(refused)?;
     let left = check_displayed_set(&chart_set_of(state, patient).await?, charts).map_err(|e| {
-        if act == Act::Link && e == CHANGED {
-            refused(THIS_CHANGED)
+        if act == Act::Link && e == ChartSetError::Changed {
+            stale(THIS_CHANGED)
         } else {
-            refused(e)
+            e.into_view()
         }
     })?;
     let other: Uuid = other_id.parse().map_err(|_| refused(NOT_ON_SCREEN))?;
@@ -143,10 +145,10 @@ pub async fn link_impl(
     // and keeps its own wording — the right-hand twin of `resolve_pair`'s rule (PR #707 review).
     let right =
         check_displayed_set(&chart_set_of(state, other).await?, &other_charts).map_err(|e| {
-            if e == CHANGED {
+            if e == ChartSetError::Changed {
                 refused(OTHER_CHANGED)
             } else {
-                refused(e)
+                e.into_view()
             }
         })?;
     // Both sets non-empty, so the union always builds; `single` is an unreachable fallback.
@@ -191,7 +193,10 @@ pub async fn link_impl(
     )
     .await
     .map_err(|e| link_error_view(&e))?;
-    Ok(link_report(outcome.effect, &outcome.charts, &compared))
+    // `left`: the set this link left the record on screen as, so the re-read never announces
+    // the clinician's own link back to them (#797). Attached only if the link changed the
+    // record (`LinkReportView::left`).
+    Ok(link_report(outcome.effect, &outcome.charts, &compared).left(&outcome.charts, patient))
 }
 
 // ---- Tauri forwarders (camelCase JS keys → snake_case parameters). ----

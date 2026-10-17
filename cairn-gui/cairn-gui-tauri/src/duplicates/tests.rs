@@ -98,6 +98,7 @@ async fn different_people_refuses_a_changed_set() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::view::THIS_CHANGED);
+    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
 }
 
 #[tokio::test]
@@ -130,6 +131,7 @@ async fn different_people_refuses_when_the_other_record_changed() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::view::OTHER_CHANGED);
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
 }
 
 /// Type review finding 3: a chart already in this record is "already in this record", as
@@ -220,7 +222,9 @@ async fn the_banner_alone_is_the_banner_a_chart_open_draws() {
     let state = AppState::mock(Some(fixture()));
     let p = fixture().to_string();
     let alone = banner_alone_impl(&state, &p).await.unwrap();
-    let pane = crate::commands::med_list_impl(&state, &p).await.unwrap();
+    let pane = crate::commands::med_list_impl(&state, &p, None)
+        .await
+        .unwrap();
     assert_eq!(alone, pane.duplicates);
 }
 

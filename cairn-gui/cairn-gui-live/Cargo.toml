@@ -34,6 +34,8 @@ uuid = { version = "1", features = ["v7"] }
 hex = "0.4"
 
 [dev-dependencies]
+# Builds a `ChartSet` for the stale-record classifier test (a public domain producer).
+cairn-medication-view = { path = "../../crates/cairn-medication-view" }
 # The suites are async and talk to a real node, so they need a runtime with a reactor.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 # The signed body's `search.displayed` array is read back through `::text` + serde_json: this

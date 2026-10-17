@@ -113,6 +113,12 @@
           <button id="close-chart" type="button">Find another patient</button>
         </header>
 
+        <!-- Always there, whatever state the list is in: a read that failed (the list, the links,
+             the duplicate banner) names this button as the way out. Paper has no "stale" folder,
+             but it has the clinician's hand to fetch it again — this is that hand (#797). Its
+             click is wired in chart_stale.js. -->
+        <button id="reread" type="button">Read this chart again</button>
+
         <!-- "Same person as…" (R2b-1). An ordinary section, never a dialog: nothing blocks the
              chart, and closing it just hides it. DOM ORDER IS CLINICAL — the disagreeing facts
              come before the table, so a screen reader meets them first. Its safety is what it
@@ -195,6 +201,9 @@
              reads. -->
         <section id="chart-warnings" aria-labelledby="warnings-heading" hidden>
           <h2 id="warnings-heading">Warnings about this chart</h2>
+          <!-- A list the record changed under, whose re-read failed (#797, chart_stale.js's
+               markListStale): the rows stay up, flagged; the next list drawn clears it. -->
+          <p id="chart-stale" hidden></p>
           <!-- A list that was read but could not be drawn (#801, main.js's showUnshownList). Never
                shown beside the two reports below (the fault clears them); what matters is that it
                sits in this section, above the table. -->
@@ -230,6 +239,7 @@
     </main>
     <script src="main.js"></script>
     <script src="stop_reasons.js"></script>
+    <script src="chart_stale.js"></script>
     <script src="duplicates.js"></script>
     <script src="worklist.js"></script>
     <script src="funnel.js"></script>

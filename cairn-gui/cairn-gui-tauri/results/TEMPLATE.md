@@ -188,6 +188,27 @@ Entries in the tray at the start: \_\_\_\_ · status line shown above it? \_\_\_
 | Nothing in the tray takes focus or is announced as an alert | | |
 | On a non-Current node the status line is read before the tray | | |
 
+## A colleague's link lands mid-review (#797, runbook §14)
+
+| Gesture | Mode | n | median | p95 | Budget | Inside? |
+|---|---|---|---|---|---|---|
+| Sign off refused → chart re-read → "Now part of it: B." | live | | | | ≤ single-chart open time | |
+| "Read this chart again" after a failed read (chart read paused by rename, then restored; 1 act) | live | | | | ≤ single-chart open time | |
+
+| Run | Sentence named exactly the colleague's chart? | Own link announced? (must be no) |
+|---|---|---|
+| 1 | | |
+| 2 | | |
+| 3 | | |
+| 4 | | |
+| 5 | | |
+
+| Accessibility check | Verdict | Notes |
+|---|---|---|
+| Refusal, "read again" and "Now part of it" announced in order | | |
+| "Read this chart again" reachable by Tab at all times | | |
+| Nothing takes focus on its own | | |
+
 ## Verdict
 
 - Observed p95 inside the provisional budget? **yes / no**

@@ -130,6 +130,8 @@ async fn link_refuses_when_the_other_record_changed() {
     .await
     .unwrap_err();
     assert_eq!(err.text, view::OTHER_CHANGED);
+    // Its remedy ("compare again") re-reads the OTHER record, which the window does not do.
+    assert_eq!(err.retry, crate::funnel::view::Retry::Never);
 }
 
 /// Every check runs BEFORE fixture mode's own refusal, so the fixture refusal is proof
@@ -173,6 +175,7 @@ async fn link_refuses_when_this_record_changed() {
     .await
     .unwrap_err();
     assert_eq!(err.text, view::THIS_CHANGED);
+    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
 }
 
 /// Link refuses an unreadable displayed left set with the "could not tell which charts are

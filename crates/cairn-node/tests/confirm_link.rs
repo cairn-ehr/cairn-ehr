@@ -17,7 +17,7 @@
 //! the set check alone passes — and our confirm, stamped later by this node's clock, wins the
 //! attested-vs-attested HLC tie-break and silently overrules the colleague. So the confirm also
 //! carries the pair's standing content address as the panel read it (`RecordsShown::pair`), and
-//! the same CARNLK-held re-check refuses it as stale input ("review it again") if the pair's
+//! the same CARNLK-held re-check refuses it as a stale picture (`RefusalScope::Stale`) if the pair's
 //! winner has changed.
 //!
 //! # The harness
@@ -253,17 +253,18 @@ async fn apply(c: &Client, ev: PeerEvent) {
     .expect("the peer's event is admitted");
 }
 
-/// Assert `err` is the pair-changed refusal: a verdict about stale input, worded to review again.
+/// Assert `err` is the pair-changed refusal: a verdict about a stale picture (`Stale`), whose
+/// sentence says only that nothing was done — the re-read is the scope's remedy, not the text's.
 fn assert_review_again(err: &anyhow::Error) {
     assert_eq!(
         refusal_scope(err),
-        Some(RefusalScope::Input),
-        "stale input, not an outage: {err:#}"
+        Some(RefusalScope::Stale),
+        "a stale picture, not an outage: {err:#}"
     );
     let text = format!("{err:#}");
     assert!(
-        text.contains("review it again"),
-        "the refusal must say what to do: {text}"
+        text.ends_with("nothing was done"),
+        "the refusal must say only that nothing was done: {text}"
     );
 }
 
@@ -472,7 +473,8 @@ async fn a_confirm_lifts_the_sign_off_hold_on_a_vetoed_machine_link() {
 }
 
 /// An EMPTY standing address means the panel never read which judgement stands — not that the
-/// pair changed. It is refused before anything else, as stale input, with the reason that is
+/// pair changed. It is refused before anything else, as a fault in what the window sent (`Input`,
+/// never `Stale`: nothing about the record moved), with the reason that is
 /// true (PR #777 review): before this guard it fell through to the pair check, which no real
 /// address ever matches, and was worded "changed while you were judging it".
 #[tokio::test]

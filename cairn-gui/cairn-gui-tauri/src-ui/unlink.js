@@ -7,8 +7,9 @@
 // Which verdicts appear is Rust's call (`view.can_unlink`, `view.can_confirm`), never ours.
 // THE SHARED IN-FLIGHT RULE (R5a): while EITHER verdict is being sent BOTH buttons are disabled,
 // and once one lands or is refused for good BOTH are hidden — one human must never sign two
-// verdicts milliseconds apart. An `"after_reread"` failure (outcome unknown) disarms and
-// re-reads the chart, never offers a live retry. No confirmation dialog: the click is the act.
+// verdicts milliseconds apart. An `"after_reread"` failure (the screen is behind the record: the
+// record changed, or a commit was interrupted) disarms and re-reads the chart, never offers a
+// live retry. No confirmation dialog: the click is the act.
 // A verdict that LANDS (even as "outranked" by a colleague's) takes BOTH buttons off the panel and
 // forgets the comparison; a fresh "Review…" click re-reads the pair. An Outranked or unknown
 // answer that lands after a newer Review of the SAME pair disarms that one too
@@ -17,11 +18,11 @@
 // Renders and decides nothing: every sentence comes from Rust, every check from the backend.
 // Classic script, loaded after main.js, funnel.js and link.js, sharing their scope: `el`, `cell`,
 // `setMessage`, `say`, `refresh`, `invoke`, `displayedPatient`, `renderedPatient`,
-// `renderedCharts` (main.js), `failureText` (funnel.js), `sayAnywhere`, `updateLinkLock`,
-// `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's rules (read its header) and is
-// a panel SEPARATE FROM THE LINK PANEL: the link panel judges "link / different people" over a
-// searched-for chart; this one reviews a link or judgement that already stands. Its two verdicts
-// are guarded together (above), so one human cannot sign both.
+// `renderedCharts` (main.js), `behindTheRecord`, `holdOwnAct` (chart_stale.js), `failureText`
+// (funnel.js), `sayAnywhere`, `updateLinkLock`, `keyUnlocked`, `closeLinkPanel` (link.js). It mirrors link.js's
+// rules (read its header) and is a panel SEPARATE FROM THE LINK PANEL: the link panel judges
+// "link / different people" over a searched-for chart; this one reviews a link or judgement that
+// already stands. Its two verdicts are guarded together (above), so one human cannot sign both.
 //
 // EVERY MESSAGE GOES THROUGH `setMessage`: `#unlink-status` is hidden whenever empty and
 // `[hidden]` wins over everything, so a bare `.textContent = …` would never reach the screen.
@@ -103,7 +104,13 @@ async function compareLinked(low, high, kind, attested) {
         : null;
   } catch (failure) {
     if (token !== unlinkToken) return;
-    setMessage(el("unlink-status"), failureText(failure));
+    const text = failureText(failure);
+    setMessage(el("unlink-status"), text);
+    // The screen is behind the record (#797): the line changed, its pair was judged since, or
+    // the link is gone. A Review of a line no longer drawn is a dead end, so the WHOLE chart is
+    // re-read, flagged stale — never a retry of the same stale line.
+    const reread = behindTheRecord(failure);
+    if (reread && patientId === displayedPatient) await refresh(text, reread);
   }
 }
 
@@ -260,6 +267,11 @@ function disarmNewerReview(sent) {
 /** A recorded verdict (Unlink or Same person): say what it did, where the clinician is now, and re-read if it changed. */
 async function showUnlinkReport(sent, token, report) {
   const place = unlinkAnswerPlace(sent, token);
+  // Recorded: the clinician now holds what their own verdict left (`charts_after`; null when it
+  // changed no set), so no re-read announces it back to them (#797). `sent.charts` is every chart
+  // the verdict touched: the pair is always one of the record's own (`resolve_edge` finds it among
+  // the set's links), "link them" over a separated pair included.
+  holdOwnAct(sent.charts, report.charts_after);
   if (place === "elsewhere") {
     const text = "For chart " + sent.patientId + ": " + report.sentence;
     sayAnywhere(text);
@@ -294,17 +306,20 @@ async function showUnlinkReport(sent, token, report) {
 
 /**
  * A verdict (Unlink or Same person) that failed: refused or never reached (nothing was
- * recorded) — or, the one exception, interrupted during its commit (`"after_reread"`, #713), when it MAY have been.
+ * recorded) — or the screen is behind the record (`"after_reread"`: the record changed, so
+ * nothing was recorded, or the commit was interrupted, #713, when it MAY have been).
  */
 async function showUnlinkFailure(sent, token, failure) {
   const place = unlinkAnswerPlace(sent, token);
   const text = failureText(failure);
+  // Said where the clinician is now; also the re-read's lead, so it keeps its "For chart …".
+  const lead = place === "elsewhere" ? "For chart " + sent.patientId + ": " + text : text;
   // #713: an interrupted commit may have recorded the verdict. A second press over a chart that
   // still looks unchanged (the verdict landed as Outranked) would record a second judgement over a
   // colleague's: both verdicts go and the chart is re-read, never a live retry.
-  const reread = Boolean(failure && failure.retry === "after_reread");
+  const reread = behindTheRecord(failure);
   if (place === "elsewhere") {
-    sayAnywhere("For chart " + sent.patientId + ": " + text);
+    sayAnywhere(lead);
   } else if (place === "chart") {
     say(text);
   } else {
@@ -324,7 +339,7 @@ async function showUnlinkFailure(sent, token, failure) {
   // "elsewhere" above): pressing it could record a second judgement over one that may have landed.
   if (reread) disarmNewerReview(sent);
   if (reread && displayedPatient !== null && sent.charts.includes(displayedPatient)) {
-    await refresh(text);
+    await refresh(lead, reread);
   }
 }
 
