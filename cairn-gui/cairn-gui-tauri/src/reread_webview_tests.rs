@@ -50,7 +50,7 @@ fn refresh_calls(body: &str) -> Vec<Vec<String>> {
 /// every OTHER re-read (a stale Stop's, "Read this chart again") compare against the pre-act set
 /// and announce the clinician's own link back to them (fix round 1, Important 1).
 #[test]
-fn refresh_sends_the_set_on_screen() {
+fn every_re_read_sends_the_held_set() {
     assert!(MAIN_JS.contains("async function refresh(lead, staleIfFails) {"));
     let refresh = js_fn(MAIN_JS, "refresh");
     assert!(
@@ -105,23 +105,54 @@ fn an_own_judgement_re_reads_against_the_set_it_left() {
             recorded,
             "holdOwnAct(sent.charts.concat(sent.otherCharts), report.charts_after);",
         ),
-        (
-            shown,
-            "holdOwnAct(sent.charts.concat([sent.low, sent.high]), report.charts_after);",
-        ),
+        (shown, "holdOwnAct(sent.charts, report.charts_after);"),
     ] {
         let moved = position(body, held);
         let calls = refresh_calls(body);
         assert_eq!(calls.len(), 2, "both re-reads of a recorded verdict");
-        assert!(moved < position(body, "await refresh("), "{body}");
+        // EVERY re-read is sent after the held set moved, so each is newer than the floor
+        // `holdOwnAct` may raise (`an_own_act_outdates_every_read_sent_before_it`).
+        for (at, _) in body.match_indices("await refresh(") {
+            assert!(moved < at, "{body}");
+        }
         for args in calls {
             assert_eq!(args.len(), 1, "no per-call baseline: {args:?}");
         }
     }
     let own = js_fn(CHART_STALE_JS, "holdOwnAct");
     assert!(
-        own.contains("heldCharts = applyOwnAct(heldCharts, touched, after, displayedPatient);"),
+        own.contains("const moved = applyOwnAct(heldCharts, touched, after, displayedPatient);"),
         "{own}"
+    );
+}
+
+/// A re-read SENT before the clinician's own act landed is answered by Rust against the pre-act
+/// held set, so it would name their own change — and, drawn after the report, overwrite "Linked
+/// —" (fix round 2). So when `holdOwnAct` MOVES the held set it also raises the draw floor
+/// (`drawnRevision = ++chartReadRevision`, as `clearChart` does): no read sent before the act can
+/// draw, and the act's own re-read, sent after, is newer and does. Only inside that branch: an act
+/// that changed nothing must not drop a colleague's read already in flight.
+#[test]
+fn an_own_act_outdates_every_read_sent_before_it() {
+    let own = js_fn(CHART_STALE_JS, "holdOwnAct");
+    let moved_at = position(own, "if (!sameCharts(moved, heldCharts)) {");
+    let branch = &own[moved_at..moved_at + position(&own[moved_at..], "\n  }")];
+    assert!(branch.contains("heldCharts = moved;"), "{own}");
+    assert!(
+        branch.contains("drawnRevision = ++chartReadRevision;"),
+        "{own}"
+    );
+    assert_eq!(own.matches("drawnRevision").count(), 1, "{own}");
+    assert_eq!(own.matches("heldCharts = ").count(), 1, "{own}");
+
+    let same = js_fn(CHART_STALE_JS, "sameCharts");
+    assert!(
+        same.contains("if (a === null || b === null) return a === b;"),
+        "{same}"
+    );
+    assert!(
+        same.contains("ordered(a).join() === ordered(b).join()"),
+        "{same}"
     );
 }
 

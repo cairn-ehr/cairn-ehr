@@ -44,8 +44,8 @@ let renderedCharts = null;
  * Chart-read generations (#800). "Is it for the chart on screen?" alone let an older answer land
  * over a newer one: two re-reads of the SAME chart can overlap, and a clinician can go A → front
  * door → A. `chartReadRevision` is the newest read STARTED (`refresh` bumps it before it sends);
- * `drawnRevision` the newest DRAWN. `clearChart` sets both to a fresh floor, outdating every read
- * still in flight from before the change.
+ * `drawnRevision` the newest DRAWN. `clearChart` (a chart change) and chart_stale.js's `holdOwnAct`
+ * (an own act that moved the held set) set both to a fresh floor, outdating every read in flight.
  */
 let chartReadRevision = 0;
 let drawnRevision = 0;

@@ -268,9 +268,10 @@ function disarmNewerReview(sent) {
 async function showUnlinkReport(sent, token, report) {
   const place = unlinkAnswerPlace(sent, token);
   // Recorded: the clinician now holds what their own verdict left (`charts_after`; null when it
-  // changed no set), so no re-read announces it back to them (#797). The pair's two charts count
-  // as touched too: "link them" over a separated pair reaches beyond the set on screen.
-  holdOwnAct(sent.charts.concat([sent.low, sent.high]), report.charts_after);
+  // changed no set), so no re-read announces it back to them (#797). `sent.charts` is every chart
+  // the verdict touched: the pair is always one of the record's own (`resolve_edge` finds it among
+  // the set's links), "link them" over a separated pair included.
+  holdOwnAct(sent.charts, report.charts_after);
   if (place === "elsewhere") {
     const text = "For chart " + sent.patientId + ": " + report.sentence;
     sayAnywhere(text);

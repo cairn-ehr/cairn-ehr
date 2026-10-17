@@ -15,8 +15,8 @@
 // (main.js) is a different thing — the set every WRITE is checked against — and is untouched.
 //
 // Split out of main.js to keep it under 500 lines. Classic script, loaded right after
-// stop_reasons.js and sharing the one global scope (`el`, `say`, `setMessage`, `displayedPatient`
-// from main.js). Its functions are called only once a chart is read, long after every script has
+// stop_reasons.js and sharing the one global scope (`el`, `say`, `setMessage`, `displayedPatient`,
+// and the read counters `chartReadRevision`/`drawnRevision`, from main.js). Its functions are called only once a chart is read, long after every script has
 // loaded.
 "use strict";
 
@@ -82,9 +82,25 @@ function holdCharts(charts) {
  * colleague's change still differs and is named. `touched`: the charts the act was sent over;
  * `after`: the report's `charts_after`, read inside the act's own transaction under the link lock
  * — after the node checked `touched`, so it is the act's result and nothing foreign.
+ *
+ * When the held set MOVES, the draw floor is raised too, as `clearChart` does (fix round 2): a
+ * re-read sent BEFORE the act (a sign-off's, "Read this chart again") was answered by Rust against
+ * the pre-act set, so drawn now it would name the clinician's own change and overwrite the act's
+ * outcome. The act's own re-read is sent after this and is newer, so it draws. Only when the set
+ * moved: an act that changed nothing must not drop a colleague's read already in flight.
  */
 function holdOwnAct(touched, after) {
-  heldCharts = applyOwnAct(heldCharts, touched, after, displayedPatient);
+  const moved = applyOwnAct(heldCharts, touched, after, displayedPatient);
+  if (!sameCharts(moved, heldCharts)) {
+    heldCharts = moved;
+    drawnRevision = ++chartReadRevision;
+  }
+}
+
+/** Whether two chart sets (or two nulls) hold the same charts, in any order (pure). */
+function sameCharts(a, b) {
+  if (a === null || b === null) return a === b;
+  return ordered(a).join() === ordered(b).join();
 }
 
 /**
