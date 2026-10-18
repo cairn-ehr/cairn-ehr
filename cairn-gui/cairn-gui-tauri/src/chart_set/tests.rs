@@ -49,8 +49,11 @@ fn a_changed_set_is_a_typed_change() {
 /// (`Never`) — its sentence names the button that mends it.
 #[test]
 fn a_change_is_an_after_reread_view_and_an_unreadable_list_is_not() {
-    use crate::funnel::view::Retry;
-    assert_eq!(ChartSetError::Changed.into_view().retry, Retry::AfterReread);
+    use crate::funnel::view::{Recorded, Retry};
+    assert_eq!(
+        ChartSetError::Changed.into_view().retry,
+        Retry::AfterReread(Recorded::No)
+    );
     assert_eq!(ChartSetError::Unreadable.into_view().retry, Retry::Never);
 }
 

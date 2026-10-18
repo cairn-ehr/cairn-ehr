@@ -30,8 +30,8 @@
 //! standing judgement is no longer that one — so neither a colleague's unlink nor a colleague's
 //! confirm that landed while this clinician was reading is ever signed over.
 
-use super::confirm_view::{confirm_report, CONFIRM_SAME, LINK_THEM};
-use super::judgement_view::{judgement_error_view, key_locked_for, refused, LinkReportView};
+use super::confirm_view::{confirm_error_view, confirm_report, CONFIRM_SAME, LINK_THEM};
+use super::judgement_view::{key_locked_for, refused, LinkReportView};
 use super::record_links::PairKind;
 use super::unlink::{resolve_edge, Act};
 use super::unlink_view::{require_standing, LINK_GONE};
@@ -101,7 +101,7 @@ pub async fn confirm_link_impl(
         &state.node_origin,
     )
     .await
-    .map_err(|e| judgement_error_view("confirmation", &e))?;
+    .map_err(|e| confirm_error_view(&e))?;
     // `left`: the set this confirm left the record on screen as (#797), only if it changed the
     // record; see `unlink_impl`.
     Ok(
@@ -175,7 +175,10 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::view::THIS_CHANGED);
-        assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+        assert_eq!(
+            err.retry,
+            crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+        );
     }
 
     #[test]
@@ -219,6 +222,9 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
-        assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+        assert_eq!(
+            err.retry,
+            crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+        );
     }
 }

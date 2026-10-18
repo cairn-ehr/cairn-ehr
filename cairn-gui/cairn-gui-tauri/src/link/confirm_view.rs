@@ -11,9 +11,12 @@
 //! - on a SEPARATED pair it is "Same person — link them": it overlays an earlier clinician's
 //!   "different people", and the panel says so before the click, not after.
 
-use super::judgement_view::{LinkReportView, LINK_OUTRANKED, LINK_STILL_JOINED};
+use super::judgement_view::{
+    judgement_error_view, Charts, LinkReportView, LINK_OUTRANKED, LINK_STILL_JOINED,
+};
 use super::record_links::PairKind;
 use super::unlink::ShownPair;
+use crate::funnel::view::ErrorView;
 use cairn_node::chart_link::{LinkEffect, StandingLink};
 use uuid::Uuid;
 
@@ -148,7 +151,7 @@ pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid)
             ),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         (LinkEffect::TookEffect, PairKind::Separated) => LinkReportView {
             sentence: format!(
@@ -158,22 +161,31 @@ pub fn confirm_report(effect: LinkEffect, kind: PairKind, low: Uuid, high: Uuid)
             ),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         // Recorded but not standing: the panel stays open on the disagreement (no reload).
         (LinkEffect::Outranked, _) => LinkReportView {
             sentence: LINK_OUTRANKED.into(),
             reload: false,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         (LinkEffect::StillJoined, _) => LinkReportView {
             sentence: LINK_STILL_JOINED.into(),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
     }
+}
+
+/// A failed "same person" verdict, worded as "the confirmation". [`Charts::Kept`]: either case
+/// joins two charts that other links ALREADY hold in one record (see the module doc), so the chart
+/// set cannot move, and after an interrupted commit a change the re-read names is another
+/// source's — never excused as "may be your own" (#811 review). Its own function, not a closure at
+/// the call site, so that choice is pinned by a test (`judgement_view_tests.rs`).
+pub fn confirm_error_view(e: &anyhow::Error) -> ErrorView {
+    judgement_error_view("confirmation", Charts::Kept, e)
 }
 
 #[cfg(test)]

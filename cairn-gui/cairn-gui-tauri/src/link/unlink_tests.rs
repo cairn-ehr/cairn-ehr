@@ -68,7 +68,10 @@ async fn unlink_refuses_a_changed_record() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::view::THIS_CHANGED);
-    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+    assert_eq!(
+        err.retry,
+        crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+    );
 }
 
 #[tokio::test]
@@ -88,7 +91,10 @@ async fn compare_linked_refuses_a_changed_record_in_the_lists_wording() {
     .unwrap_err();
     assert_ne!(err.text, crate::link::view::THIS_CHANGED);
     assert_eq!(err.text, crate::chart_set::CHANGED);
-    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+    assert_eq!(
+        err.retry,
+        crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+    );
 }
 
 /// A link a colleague's unlink (or this clinician's own) already removed: nothing to judge.
@@ -107,7 +113,10 @@ async fn unlink_refuses_a_link_the_record_no_longer_has() {
     .await
     .unwrap_err();
     assert_eq!(err.text, crate::link::unlink_view::LINK_GONE);
-    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+    assert_eq!(
+        err.retry,
+        crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+    );
 }
 
 /// Cannot tell the membership stage from compare's `db None` -> LINK_GONE; the pure
@@ -173,7 +182,10 @@ fn an_absent_link_is_gone() {
     let (l, h) = (Uuid::from_u128(1), Uuid::from_u128(3));
     let err = shown_pair(links(vec![edge(1, 2)]), l, h, PairKind::Link, Act::Unlink).unwrap_err();
     assert_eq!(err.text, LINK_GONE);
-    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+    assert_eq!(
+        err.retry,
+        crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+    );
 }
 
 /// A failed read of the "unverified" notes is not a failed read of the links (PR #788 review):

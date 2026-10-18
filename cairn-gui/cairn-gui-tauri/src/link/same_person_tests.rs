@@ -175,7 +175,10 @@ async fn link_refuses_when_this_record_changed() {
     .await
     .unwrap_err();
     assert_eq!(err.text, view::THIS_CHANGED);
-    assert_eq!(err.retry, crate::funnel::view::Retry::AfterReread);
+    assert_eq!(
+        err.retry,
+        crate::funnel::view::Retry::AfterReread(crate::funnel::view::Recorded::No)
+    );
 }
 
 /// Link refuses an unreadable displayed left set with the "could not tell which charts are

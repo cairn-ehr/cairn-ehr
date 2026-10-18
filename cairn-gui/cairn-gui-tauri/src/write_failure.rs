@@ -6,7 +6,7 @@
 //! `data_error_from` classification), so this module only maps it onto the funnel's `Retry`
 //! vocabulary. The TEXT is untouched: the node's own legible sentence (§9.6) is the one thing
 //! the clinician needs, so it is passed through exactly as the `String` version did.
-use crate::funnel::view::{ErrorView, Retry};
+use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_gui_data::port::DataError;
 
 /// The retry a classified failure earns. Pure, so every arm is tested on a `DataError` directly;
@@ -14,7 +14,7 @@ use cairn_gui_data::port::DataError;
 pub(crate) fn retry_for(error: &DataError) -> Retry {
     match error {
         // The screen is behind the record: re-read the whole chart, do not offer the button.
-        DataError::Stale(_) => Retry::AfterReread,
+        DataError::Stale(_) => Retry::AfterReread(Recorded::No),
         DataError::Refused(_) | DataError::NotFound => Retry::Never,
         DataError::NotProvisioned(_) => Retry::AfterOperator,
         // The outcome is not confirmed (only a judgement's commit is marked as unknown; a

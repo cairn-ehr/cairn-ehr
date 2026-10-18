@@ -10,6 +10,40 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #811 — A RE-READ AFTER AN INTERRUPTED COMMIT SAYS ONLY WHAT IT KNOWS — do not undo** (pins: `funnel/view_tests.rs`'s
+wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the source guards in
+`reread_webview_tests.rs` / `read_again_webview_tests.rs`):
+- **`Retry::AfterReread(Recorded)`: `No` = a stale refusal, nothing recorded; `Unknown` = an interrupted commit
+  (#713), it may have been.** It words only the out-of-date notice (`LIST_OUT_OF_DATE` vs `LIST_MAY_BE_OUT_OF_DATE`).
+  **Tempting wrong fix:** collapsing it back to a unit variant because the window "does the same" for both. It does
+  the same, but must not SAY the same.
+- **`No` wins** (`Recorded` is ordered `Unknown < No`; `combined_retry`, `behind_the_record`, and `staleAfter` in
+  `chart_stale.js`, which a later `"unknown"` never clears): one stale refusal PROVES the list is out of date.
+  **Tempting wrong fix:** letting `Unknown` win "because it is worse". The banner then says "whether your last act
+  was recorded is not known" right after a Stop whose own line said "nothing was done".
+- **…but only until a list read AFTER the stale refusal draws** (`drewRead` clears `staleAfter` on its own, before
+  `behindAfter` ends). That list shows the change the refusal was over; if only an interrupted commit is still behind
+  it, a failed read says "may be". **Tempting wrong fix:** one `behindRecorded` value that stays `"no"` until the
+  whole state ends — it then claims "the record changed" over a list that already shows that change.
+- **Only `"no"` words "is out of date"** (`markListStale`'s `proven`): anything else, an unknown future value
+  included, gets the weaker "may be", and the sign-off button says what the notice says.
+- **"A change the re-read names may be your own" is Rust's, in the interrupted act's OWN sentence, for Link and
+  Unlink only** (`judgement_error_view(act, Charts::MayMove, e)`). A confirmation (`confirm_error_view`) and a
+  "different people" judgement are `Charts::Kept`: they never move membership, so a change named after one is
+  certainly another source's. **Tempting wrong fix:** a JS sentence keyed on `"unknown"`. It cannot tell the acts
+  apart, so it excuses a colleague's link as the clinician's own.
+- **That sentence is window state too** (`unknownLeads`, said by `withOwed` from whichever read ends the state). The
+  act's own re-read can be overtaken ("Read this chart again", an own act's draw floor), and the read that draws
+  would otherwise name the clinician's own link as another source's change. **Tempting wrong fix:** relying on the
+  re-read's `lead` argument alone.
+- **No script spells the string `"after_reread"`**, not even in a comment: the retry is an object, and
+  `failure.retry === "after_reread"` is always false (no re-read, a live button). Guarded over every `src-ui/*.js`.
+- **`forgetBehind` is called only by `drewRead` and `holdCharts`** (counted). One more call in an own-act path would
+  end the stale state silently.
+- **Any re-read that names a change says `READ_AGAIN` ("review it before you act on it")**, including after the
+  clinician's own successful act (M5), and once per line: "Read this chart again" keeps the line as its lead. A
+  colleague's change is news to review either way.
+
 **⇒ #797 — A CHANGED RECORD RE-READS ITSELF AND SAYS WHAT CHANGED (PR #805) — do not undo any of these** (pins: the Rust
 halves by `crates/cairn-node` tests of `stale_picture_refusal`'s callers, `cairn-gui-live`'s error mapping tests,
 `cairn-gui-tauri`'s `chart_set/change.rs`, `write_failure.rs` and `link/judgement_view.rs` tests; the JS halves by SOURCE
@@ -45,7 +79,8 @@ change myself)."*
   argument — the re-read it rides is overtaken by "Read this chart again" or an own act's draw floor, its failure is
   never said, and the overtaking read fails unmarked; or a plain boolean cleared by ANY draw — `mayDraw` lets an older
   read, sent before the refusal, draw after it.
-- **`markListStale` keeps the rows and disables sign-off** (`#chart-stale` says `LIST_OUT_OF_DATE`). **Tempting wrong
+- **`markListStale` keeps the rows and disables sign-off** (`#chart-stale` says `LIST_OUT_OF_DATE`, or since #811
+  `LIST_MAY_BE_OUT_OF_DATE`: see that block). **Tempting wrong
   fix:** hiding the rows — the clinician then has no chart at all during a partition (availability over consistency),
   and the node's set check refuses the write regardless, so the rows were never the danger; the danger is acting on
   them unwarned.

@@ -3,30 +3,24 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ TWO PRs AWAIT THE MAINTAINER, MERGE IN THIS ORDER:**
-> **(1) PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)** (branch `fix/799-800-801-chart-reread`): the
-> chart re-read's robustness — #799 (a re-read keeps a half-typed stop reason), #800 (chart reads carry generations:
-> `mayDraw` / `isLatestRead`), #801 (a list that cannot be drawn leaves nothing partial). **(2) PR
-> [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)** (branch `feat/797-record-changed-reread`, BASED ON #802's
-> branch — retarget it to `main` once #802 merges): **#797** — a refusal because the record changed under the clinician
-> is typed (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`), the window re-reads the whole chart by
-> itself, never retries the act, and says what changed **only when it came from another source** (the maintainer's
-> rule, verbatim in `developers/durable-rules.md`'s #797 block); an always-visible **"Read this chart again"** replaces
-> every "reload the chart". Plan `docs/superpowers/plans/2026-10-17-797-record-changed-reread.md`; RUNBOOK §14 is its
-> owed human timing. Merged before them: PR #798, #795, #794, #792; the repair path (#679 · #680 · #681) through R7
-> (PR #788). Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's runbook
-> `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest ADR-0080).
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#813](https://github.com/cairn-ehr/cairn-ehr/pull/813)** (#811) (branch `feat/811-after-reread-unknown`). Option (b), the
+> maintainer's choice: `Retry::AfterReread(Recorded::{No, Unknown})`, so after an interrupted commit (#713) the window
+> no longer says "the record changed" about what may be the clinician's own act. That sentence is Rust's, for Link
+> and Unlink only (M4). Any re-read that names a change says "review it" (M5). Both review rounds are fixed on the
+> branch; the second filed **#814** and added items 7–10 to #812. Plan `docs/superpowers/plans/2026-10-18-811-after-reread-recorded.md`; durable rules
+> in the #811 block. Merged before it (2026-10-18): PR #802 (#799 · #800 · #801) and PR #805 (#797, #806 — the
+> self-re-reading chart, "Read this chart again"; RUNBOOK §14 is its owed human timing). The repair path (#679 · #680
+> · #681) is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`;
+> R4's runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest
+> ADR-0080).
 > DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate a pair an
 > older test asserts absent — fix the fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #802, then PR #805** (retarget #805 to `main` first). #805 was reviewed again on 2026-10-18
->    (five reviewers) and every finding fixed in place — it now also closes **#806**. **One decision is owed, filed as
->    #811:** `Retry::AfterReread` lumps "nothing was recorded" with "may have been recorded" (#713), so after an
->    interrupted commit that DID land the re-read says "This record changed…" (implying a colleague; was **M4**) and a
->    failed re-read's banner says "the record changed" (also **M5**: no "review it" after a successful act). **#728**
->    (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
+> 1. **Review and merge PR #813** (#811), then **#814** (an interrupted sign-off or cease commit is still reported as
+>    "failed": #811's gap on the medication writes). **#728** (the Pi re-measure) can run beside. #699 stays open
+>    until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
 >    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
 >    existing "withheld" = hidden-lines wording) → **#804** (on link, show only where the two charts' medication
@@ -154,7 +148,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -186,6 +180,23 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-18 (second) — #811: the re-read after an interrupted commit (option (b))
+
+HANDOVER was stale on arrival again (#802 and #805 had merged). The maintainer chose (b). TDD: the tests were moved to
+the new type first (44 compile errors), then 8 JS source guards went red before the JS changed; the JS was also run
+in node with stubbed DOM globals (scratch only, no runner, #332).
+- **⇒ A two-cause class needs its cause in the TYPE as soon as the window must WORD the causes differently** — not
+  only when it must act differently.
+- **⇒ Word a sentence where the ACT is known, not where the cause lands** (review, finding 1): a JS "may be your own"
+  keyed on `"unknown"` also fired after a "Different people" that can never move the set, excusing a colleague's link.
+- **⇒ "Worst of several" is not one fact** (finding 2): "proven stale" and "may have landed" are different claims, and
+  `max` must keep the one the sentence states. Here that is `No`.
+- **Second review round (4 reviewers), every finding fixed or filed.** Each cause is now its own window mark: `staleAfter`
+  is cleared when a list read after it draws, and `unknownLeads` keeps the M4 sentence when its re-read is overtaken.
+  The sign-off button says "may be" too. No script spells `"after_reread"`. Filed #814; #812 items 7–10.
+- **⇒ A sentence carried only by one read's argument dies with that read.** Anything a later read must still say
+  (here the M4 sentence) is window state, like `behindAfter`. The node walk caught the pre-fix code on exactly that.
 
 ### 2026-10-18 — PR #805's second review: five reviewers, every finding fixed (filed #811, #812)
 

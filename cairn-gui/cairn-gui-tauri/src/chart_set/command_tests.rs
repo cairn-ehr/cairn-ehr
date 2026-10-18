@@ -2,7 +2,7 @@
 //! in `chart_set/mod.rs` for why these sit beside the check rather than in `commands.rs`.
 use crate::chart_set::CHANGED;
 use crate::commands::{cease_impl, med_list_impl, sign_off_impl};
-use crate::funnel::view::Retry;
+use crate::funnel::view::{Recorded, Retry};
 use crate::state::AppState;
 use uuid::Uuid;
 
@@ -25,7 +25,7 @@ async fn a_changed_set_refuses_sign_off_as_stale() {
     )
     .await
     .unwrap_err();
-    assert_eq!(err.retry, Retry::AfterReread);
+    assert_eq!(err.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(err.text, CHANGED);
 }
 
@@ -43,7 +43,7 @@ async fn a_changed_set_refuses_cease_as_stale() {
     )
     .await
     .unwrap_err();
-    assert_eq!(err.retry, Retry::AfterReread);
+    assert_eq!(err.retry, Retry::AfterReread(Recorded::No));
     assert_eq!(err.text, CHANGED);
 }
 
