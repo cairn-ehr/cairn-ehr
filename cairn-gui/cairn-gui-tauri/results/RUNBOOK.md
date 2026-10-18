@@ -771,7 +771,10 @@ for it in this pass.
 
 **Check 3 — your OWN link is never announced.** Press **Same person as…** on A, compare with B, and link
 them yourself. The outcome line reads "Linked — …" and nothing says "Now part of it". Then repeat with a
-colleague's link landing at the same moment if you can; only the colleague's change may be named.
+colleague's link landing at the same moment if you can; only the colleague's change may be named, and then
+"The chart has been read again — review it before you act on it." comes before it (#811). (The wording after an
+interrupted Link or Unlink, "If it was recorded, a change the re-read names may be your own link.", needs the connection to drop during
+the commit, so it cannot be produced by hand. Do not look for it in this pass.)
 
 Budget: **re-read and sentence ≤ the single-chart open time (section 8 / section 11) after the press**;
 **Read this chart again ≤ that same open time, 1 act**. Steps: paper N = 3 (write the chart, be told by a colleague or nurse, reconcile; commonly

@@ -4,8 +4,8 @@
 //! banner's own sentences) to keep both files under 500 lines; the command that calls these is
 //! `duplicates::different_people_impl`.
 use super::view::NOTHING_OPEN;
-use crate::funnel::view::{ErrorView, Retry};
-use crate::link::judgement_view::{judgement_error_view, refused, LinkReportView};
+use crate::funnel::view::{ErrorView, Recorded, Retry};
+use crate::link::judgement_view::{judgement_error_view, refused, Charts, LinkReportView};
 use cairn_node::chart_link::LinkEffect;
 use uuid::Uuid;
 
@@ -20,7 +20,7 @@ pub struct PairResult {
 /// named for what was pressed. Never "The unlink was …": the two charts were never linked, and
 /// that wording would send the clinician looking for a link to undo.
 pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
-    judgement_error_view("\"different people\" judgement", e)
+    judgement_error_view("\"different people\" judgement", Charts::Kept, e)
 }
 
 /// The outcome line for "Different people".
@@ -32,8 +32,10 @@ pub fn different_people_error_view(e: &anyhow::Error) -> ErrorView {
 ///   which could hide a later pair's "commit outcome unknown" behind a refusal (the #713
 ///   hazard) — carrying the most retryable class among them (`combined_retry`).
 /// - Anything recorded → one sentence per pair, and `reload`: the banner must re-read, since
-///   a pair that was not confirmed may or may not still be open. `behind_the_record` when a
-///   failed pair was `Retry::AfterReread`, so that re-read knows the list is stale (#797 review).
+///   a pair that was not confirmed may or may not still be open. `behind_the_record` carries the
+///   strongest [`Recorded`] (`max`: `No` over `Unknown`) of the failed pairs that were
+///   `Retry::AfterReread`, so that re-read knows the list is stale (#797 review) and words its
+///   out-of-date notice for the cause (#811).
 ///
 /// The `reload` is `true` even when every recorded pair was `Outranked` (see
 /// [`LinkReportView::reload`]): whatever was recorded, the banner must be re-read.
@@ -59,8 +61,11 @@ pub fn different_people_report(results: Vec<PairResult>) -> Result<LinkReportVie
         charts_after: None,
         behind_the_record: results
             .iter()
-            .filter_map(|r| r.outcome.as_ref().err())
-            .any(|e| e.retry == Retry::AfterReread),
+            .filter_map(|r| match r.outcome.as_ref().err()?.retry {
+                Retry::AfterReread(recorded) => Some(recorded),
+                _ => None,
+            })
+            .max(),
     })
 }
 
@@ -78,17 +83,20 @@ fn report_sentence(results: &[PairResult]) -> String {
 /// [`Retry::AfterReread`] first: if ANY pair's commit was interrupted (#713), that pair may have
 /// been recorded, and if any pair was refused because the record changed under the screen
 /// (`Stale`, #797), the picture judged from is out of date — either way the window must re-read
-/// before anything is offered again, whatever the other pairs said. Otherwise the MOST retryable among them — `Now` over `AfterOperator` over
-/// `Never` — because a `Never` beside an outage would tell the webview the outcome was DECIDED
-/// and take the button away, claiming a verdict that does not exist. Keeping the button for an
-/// outage cannot re-sign blindly: "Different people" re-reads the open pairs fresh on every
-/// press, and a refused pair is refused again, before anything is signed.
+/// before anything is offered again, whatever the other pairs said. Of the two, the stale refusal
+/// wins (#811 review): it proves the list is out of date. The unknown pair's own sentence in the
+/// text still says that its outcome is not known. Otherwise the MOST retryable among them — `Now`
+/// over `AfterOperator` over `Never` — because a `Never` beside an outage would tell the webview
+/// the outcome was DECIDED and take the button away, claiming a verdict that does not exist.
+/// Keeping the button for an outage cannot re-sign blindly: "Different people" re-reads the open
+/// pairs fresh on every press, and a refused pair is refused again, before anything is signed.
 fn combined_retry<'a>(errors: impl Iterator<Item = &'a ErrorView>) -> Retry {
     let rank = |r: Retry| match r {
         Retry::Never => 0,
         Retry::AfterOperator => 1,
         Retry::Now => 2,
-        Retry::AfterReread => 3,
+        Retry::AfterReread(Recorded::Unknown) => 3,
+        Retry::AfterReread(Recorded::No) => 4,
     };
     // Never empty (only called with two or more failures); were it ever, nothing was decided,
     // so the fallback keeps the button rather than claim a verdict.

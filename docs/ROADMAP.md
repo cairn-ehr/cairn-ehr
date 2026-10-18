@@ -460,7 +460,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **2026-10-17:** PR #802 (#799 · #800 · #801): a chart re-read keeps typed stop reasons, drops an overtaken
   answer or failure (`chartReadRevision`, `mayDraw`/`isLatestRead`), and a list that cannot be drawn leaves nothing partial
   under a live sign-off (`drawList` under one guard, `#chart-unshown` above the table).
-- **2026-10-17 (#797, PR #805, based on #802's branch):** a refusal because the record changed under the clinician
+- **2026-10-17 (#797, PR #805, merged 2026-10-18):** a refusal because the record changed under the clinician
   is typed (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); the window re-reads the whole chart,
   never retries, and names only changes from ANOTHER source (the maintainer's rule; a held chart set moved only by
   being shown or by the clinician's own act, `charts_after` read inside the act's transaction); an always-visible
@@ -470,12 +470,19 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   partly-recorded "Different people" carries its stale pair (`behind_the_record`), the CLI prints a remedy line after
   a stale refusal, a node-side guard against sentences naming window acts — closing **#806** too. Filed #811 (a
   decision: `AfterReread` lumps "not recorded" with "may have been", #713) and #812 (type/test tightening).
+- **2026-10-18 (#811, option (b), maintainer's choice):** `Retry::AfterReread(Recorded::{No, Unknown})`.
+  - M4: after an interrupted Link or Unlink, its own sentence says a change the re-read names may be the clinician's
+    own. That sentence survives an overtaken re-read.
+  - After any interrupted commit, a failed re-read's banner and sign-off button say the list MAY be out of date,
+    unless a stale refusal still open proves it.
+  - M5: any re-read that names a change says "review it", once per line.
+  - A second review round fixed every finding on the branch. Filed #814 (an interrupted sign-off or cease commit is
+    still reported as "failed"); the smaller tightenings went to #812.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #802, then PR #805 (one decision owed, #811 — was M4/M5); then #803; then
-  the open issues above (HANDOVER's ⇒ NEXT orders them). #699 stays open
-  until the maintainer closes it.
+- **Next:** review and merge PR #813 (#811); then #814 (the same gap on the medication writes); then #803 (brainstorm + ADR first); then the open issues above
+  (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
 

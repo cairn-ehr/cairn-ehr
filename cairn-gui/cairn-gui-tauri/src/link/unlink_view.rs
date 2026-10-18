@@ -286,7 +286,7 @@ fn effect_report(
                 sentence,
                 reload: true,
                 charts_after: None,
-                behind_the_record: false,
+                behind_the_record: None,
             }
         }
         LinkEffect::StillJoined => LinkReportView {
@@ -297,7 +297,7 @@ fn effect_report(
             ),
             reload: true,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
         LinkEffect::Outranked => LinkReportView {
             sentence: "Recorded, but NOT in effect: a later judgement on this pair says these \
@@ -307,14 +307,18 @@ fn effect_report(
                 .into(),
             reload: false,
             charts_after: None,
-            behind_the_record: false,
+            behind_the_record: None,
         },
     }
 }
 
 /// A failed unlink, classified exactly as a failed link is.
 pub fn unlink_error_view(e: &anyhow::Error) -> ErrorView {
-    crate::link::judgement_view::judgement_error_view("unlink", e)
+    crate::link::judgement_view::judgement_error_view(
+        "unlink",
+        crate::link::judgement_view::Charts::MayMove,
+        e,
+    )
 }
 
 #[cfg(test)]

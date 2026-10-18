@@ -7,7 +7,7 @@
 // Which verdicts appear is Rust's call (`view.can_unlink`, `view.can_confirm`), never ours.
 // THE SHARED IN-FLIGHT RULE (R5a): while EITHER verdict is being sent BOTH buttons are disabled,
 // and once one lands or is refused for good BOTH are hidden — one human must never sign two
-// verdicts milliseconds apart. An `"after_reread"` failure (the screen is behind the record: the
+// verdicts milliseconds apart. A failure behind the record (`behindTheRecord`: the
 // record changed, or a commit was interrupted) disarms and re-reads the chart, never offers a
 // live retry. No confirmation dialog: the click is the act.
 // A verdict that LANDS (even as "outranked" by a colleague's) takes BOTH buttons off the panel and
@@ -306,7 +306,7 @@ async function showUnlinkReport(sent, token, report) {
 
 /**
  * A verdict (Unlink or Same person) that failed: refused or never reached (nothing was
- * recorded) — or the screen is behind the record (`"after_reread"`: the record changed, so
+ * recorded) — or the screen is behind the record (`behindTheRecord`: the record changed, so
  * nothing was recorded, or the commit was interrupted, #713, when it MAY have been).
  */
 async function showUnlinkFailure(sent, token, failure) {

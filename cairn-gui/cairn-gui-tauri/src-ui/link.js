@@ -416,8 +416,9 @@ async function sendJudgement(command) {
     const text = failureText(failure);
     // Said where the clinician is now; also the re-read's lead, so it keeps its "For chart …".
     const lead = place === "elsewhere" ? "For chart " + sent.patientId + ": " + text : text;
-    // `"after_reread"` = the screen is behind the record: the record changed (nothing recorded), or (#713) the
-    // judgement's COMMIT was interrupted, so it may have been recorded. A judgement that
+    // `reread` (`behindTheRecord`: the failure's `retry: { after_reread }`) = the screen is behind
+    // the record: the record changed (nothing recorded), or (#713) the judgement's COMMIT was
+    // interrupted, so it may have been recorded. A judgement that
     // landed as Outranked leaves the chart looking unchanged, and a second press would record a
     // second judgement over the colleague's it lost to — so never a live button over it: the
     // buttons go (below) and the chart is re-read (at the end), wherever the answer lands.
@@ -439,7 +440,7 @@ async function sendJudgement(command) {
       // should compare AGAIN, not judge over the old panel. The comparison and the sentence stay
       // on screen — what was refused is still legible. A bare IPC failure (no `retry`), an
       // outage and a locked key (`"now"`) keep it: nothing about the comparison was wrong.
-      // A screen behind the record (`"after_reread"`) takes them too: see `reread` above.
+      // A screen behind the record (`reread`) takes them too: see `reread` above.
       if (
         failure &&
         (failure.retry === "never" || failure.retry === "after_operator" || reread)
