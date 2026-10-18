@@ -89,8 +89,78 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
     // after the window's snapshot: its `Stale` refusal must reach the webview classified, never
     // as a plain string (#797 review — a revert to `refused(format!(…))` reads naturally here).
     assert!(
-        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&e))?"),
+        rust_fn(src, "sign_off_impl").contains(".map_err(|e| sign_off_failure(&e))?"),
         "sign_off_impl"
+    );
+}
+
+/// #814: a sign-off whose line commit was lost mid-flight (the node's marker) is NOT said to
+/// have failed: whether it was recorded is not known, so the window re-reads (`Unknown`) and
+/// the sentence names the event. Every other failure is `node_failure`'s, unchanged.
+#[test]
+fn an_interrupted_sign_off_commit_is_not_known_never_failed() {
+    let event = uuid::Uuid::from_u128(814);
+    let e = cairn_node::db_diagnosis::commit_outcome_unknown(
+        event,
+        anyhow::anyhow!("connection closed"),
+    )
+    .context("signing off the medication list");
+    let view = sign_off_failure(&e);
+    assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
+    assert!(
+        view.text
+            .starts_with("Whether the sign-off was recorded is NOT known"),
+        "{}",
+        view.text
+    );
+    assert!(view.text.contains(&event.to_string()), "names the event");
+    assert!(
+        !view.text.contains("failed"),
+        "never \"failed\": {}",
+        view.text
+    );
+
+    let outage = anyhow::anyhow!("connection refused");
+    assert_eq!(sign_off_failure(&outage), node_failure(&outage));
+}
+
+/// #814: a cease thread whose commit was lost mid-flight is neither stopped nor "NOT stopped and
+/// still active": its own sentence says whether it was stopped is NOT known, naming the thread
+/// and the event. No such thread, no sentence (and no mark on the list).
+#[test]
+fn an_interrupted_cease_commit_names_each_thread_as_not_known() {
+    assert_eq!(cease_unknown_message(&[]), None);
+    let (thread, event) = (uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2));
+    let text = cease_unknown_message(&[(thread, event)]).expect("one unknown thread");
+    assert!(
+        text.starts_with("Whether 1 thread(s) of this drug were stopped is NOT known"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("thread {thread} (event {event})")),
+        "{text}"
+    );
+    assert!(!text.contains("still active:"), "{text}");
+}
+
+/// #814: `cease_impl` sorts each thread's failure by the node's marker — an interrupted commit to
+/// the unknown list (and the report marks the list behind the record), anything else to `failed`.
+/// The branch needs a lost connection mid-commit, so it is pinned by source.
+#[test]
+fn cease_sorts_an_interrupted_commit_from_a_failure() {
+    let body = crate::source_guard::rust_fn(include_str!("commands.rs"), "cease_impl");
+    assert!(body.contains("commit_outcome_unknown_event(&e)"), "{body}");
+    assert!(
+        body.contains("Some(event) => unknown.push((medication_id, event))"),
+        "{body}"
+    );
+    assert!(
+        body.contains("unknown_message: cease_unknown_message(&unknown)"),
+        "{body}"
+    );
+    assert!(
+        body.contains("(!unknown.is_empty()).then_some(Recorded::Unknown)"),
+        "{body}"
     );
 }
 

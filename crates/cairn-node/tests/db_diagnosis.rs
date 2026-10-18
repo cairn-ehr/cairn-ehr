@@ -407,3 +407,76 @@ async fn a_server_error_is_rendered_once_through_the_whole_chain() {
     );
     assert!(!line.contains('\n'), "still one line: {line}");
 }
+
+/// #814: `commit_failure`'s one question — did the server ANSWER the commit? — asked of real
+/// `tokio_postgres` errors, which no unit test can build.
+///
+/// - A server that answered with an error (here a raise, which is what a refused commit looks
+///   like on the wire) rolled the transaction back: nothing was written, so the failure is NOT
+///   marked, and its SQLSTATE stays reachable for the floor-refusal classification.
+/// - A connection that died under the client (here terminated by a second connection, and the
+///   client waited until it saw the close) never answered: the write may have landed, so the
+///   failure IS marked outcome-unknown. This is the arm a COMMIT lost mid-flight takes.
+#[tokio::test]
+async fn an_answered_commit_failure_is_not_marked_and_a_dead_connection_is() {
+    use cairn_node::db_diagnosis::{commit_failure, commit_outcome_unknown_event, LocalDbFault};
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let id = uuid::Uuid::from_u128(814);
+
+    let c = db::connect(&base).await.unwrap();
+    let answered = c
+        .batch_execute("DO $$ BEGIN RAISE EXCEPTION 'refused' USING ERRCODE = 'P0001'; END $$;")
+        .await
+        .expect_err("the DO block always raises");
+    let e = commit_failure(id, LocalDbFault::new("committing", answered).into());
+    assert_eq!(commit_outcome_unknown_event(&e), None, "answered: {e:#}");
+    assert_eq!(
+        sqlstate_on_chain(&e).as_deref(),
+        Some("P0001"),
+        "the SQLSTATE survives"
+    );
+
+    let pid: i32 = c
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let killer = db::connect(&base).await.unwrap();
+    killer
+        .execute("SELECT pg_terminate_backend($1)", &[&pid])
+        .await
+        .unwrap();
+    // Wait for the client to SEE the close, so the next call is refused locally and can never
+    // be answered by the server's FATAL instead (which would be a `DbError`). Bounded.
+    for _ in 0..200 {
+        if c.is_closed() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(c.is_closed(), "the terminated connection closed");
+    let dead = c
+        .batch_execute("SELECT 1")
+        .await
+        .expect_err("a closed connection fails");
+    let e = commit_failure(id, dead.into());
+    assert_eq!(
+        commit_outcome_unknown_event(&e),
+        Some(id),
+        "unanswered: {e:#}"
+    );
+}
+
+/// The SQLSTATE on `e`'s chain, read as `cairn-gui-live`'s `sqlstate_of` reads it (that crate is
+/// not a dependency of this one).
+fn sqlstate_on_chain(e: &anyhow::Error) -> Option<String> {
+    e.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.as_db_error())
+            .map(|db| db.code().code().to_string())
+    })
+}

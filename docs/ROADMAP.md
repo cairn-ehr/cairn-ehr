@@ -477,11 +477,16 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
     unless a stale refusal still open proves it.
   - M5: any re-read that names a change says "review it", once per line.
   - A second review round fixed every finding on the branch. Filed #814 (an interrupted sign-off or cease commit is
-    still reported as "failed"); the smaller tightenings went to #812.
+    still reported as "failed"); the smaller tightenings went to #812. **Merged** (PR #813).
+- **2026-10-18 (#814):** the medication writes' interrupted commits are marked too. Every clinical commit (a
+  judgement, a sign-off line, a medication submit, a reconciliation) goes through one rule,
+  `db_diagnosis::commit_failure`: a commit the server never answered is outcome-unknown. A sign-off says "whether the
+  sign-off was recorded is NOT known", never "failed"; a cease names each unknown thread, and never says "Stopped 0"
+  over one. Filed **#815** (registration's commit is still unmarked, and its retry mints a second chart).
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #813 (#811); then #814 (the same gap on the medication writes); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge the #814 PR; then #815 (registration, needs a decision); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

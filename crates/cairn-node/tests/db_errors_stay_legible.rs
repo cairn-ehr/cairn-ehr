@@ -702,3 +702,36 @@ fn every_postgres_call_in_the_component_read_names_what_it_was_doing() {
          the SQLSTATE of a failed search but not that the doubt check is what failed."
     );
 }
+
+/// The writes whose COMMIT goes through `db_diagnosis::commit_failure` (#713, #814), with how
+/// many sites each has: a judgement's commit; each sign-off line's commit; a medication event's
+/// two submits (the attested arm's COMMIT, and the unattested arm's autocommit statement, which
+/// IS its commit); a reconciliation's attested commit.
+const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
+    ("crates/cairn-node/src/chart_link/judge.rs", 1),
+    ("crates/cairn-node/src/medication/signoff.rs", 1),
+    ("crates/cairn-node/src/medication/sealed_submit.rs", 2),
+    ("crates/cairn-node/src/medication/reconciliation.rs", 1),
+];
+
+/// A clinical write whose commit is lost mid-flight MAY have landed, and the window must say so,
+/// never "failed" (#814). Every such commit marks that through ONE rule (`commit_failure`), so a
+/// bare `tx.commit().await?` — which compiles, and reads as an outage, the #713 hazard — is red.
+#[test]
+fn every_clinical_commit_marks_an_unanswered_one_as_outcome_unknown() {
+    let root = sources::repo_root();
+    for (path, expected) in MARKED_COMMIT_SITES {
+        let text = flattened_code(
+            &std::fs::read_to_string(root.join(path))
+                .unwrap_or_else(|e| panic!("{path} is in the tree: {e}")),
+        );
+        for bare in [".commit().await?", ".commit().await;"] {
+            assert!(!text.contains(bare), "{path} commits with a bare `{bare}`");
+        }
+        let found = text.matches("commit_failure(").count();
+        assert_eq!(
+            found, *expected,
+            "{path} routes {found} commits through `commit_failure`, expected {expected}"
+        );
+    }
+}

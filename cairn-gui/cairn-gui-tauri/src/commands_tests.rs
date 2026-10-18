@@ -14,12 +14,15 @@ use std::collections::BTreeSet;
 /// Extracted by scanning for `<binding>.<identifier>` rather than by hand, so the guard
 /// below cannot rot into a list nobody updates.
 fn fields_read_by_the_webview(binding: &str) -> BTreeSet<String> {
-    // chart_stale.js was split out of main.js (#797) and reads the same `med_list` pane.
+    // chart_stale.js was split out of main.js (#797) and reads the same `med_list` pane;
+    // stop_reasons.js words a cease's `report` (#814).
     let mut read = fields_read_in(include_str!("../src-ui/main.js"), binding);
-    read.extend(fields_read_in(
+    for split_out in [
         include_str!("../src-ui/chart_stale.js"),
-        binding,
-    ));
+        include_str!("../src-ui/stop_reasons.js"),
+    ] {
+        read.extend(fields_read_in(split_out, binding));
+    }
     read
 }
 
@@ -117,6 +120,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
     let cease = serde_json::to_value(CeaseReport {
         ceased: 0,
         failed: vec![],
+        unknown_message: None,
+        behind_the_record: None,
     })
     .unwrap();
     let lock = serde_json::to_value(LockState {

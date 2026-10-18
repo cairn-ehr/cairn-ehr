@@ -400,8 +400,9 @@ async function signOff() {
       await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts }),
     );
   } catch (failure) {
-    // The backend's ErrorView ({text, retry}), not a string: `failureText` reads its text.
-    say("Sign-off failed: " + failureText(failure));
+    // `failureText` reads the ErrorView's text; an interrupted commit (#814) never "failed".
+    const unknown = behindTheRecord(failure) === "unknown";
+    say((unknown ? "" : "Sign-off failed: ") + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     return;
   }
@@ -409,28 +410,21 @@ async function signOff() {
 }
 
 async function cease(groupId, reason) {
+  let report;
   try {
-    const report = await invoke("cease", {
+    report = await invoke("cease", {
       groupId: groupId,
       reason: reason,
       patientId: renderedPatient,
       charts: renderedCharts,
     });
-    let text = "Stopped " + report.ceased + " thread(s) of this drug.";
-    if (report.failed.length > 0) {
-      text +=
-        " " +
-        report.failed.length +
-        " thread(s) were NOT stopped and are still active: " +
-        report.failed.join("; ");
-    }
-    say(text);
   } catch (failure) {
     say("Could not stop this drug: " + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     return;
   }
-  await refresh(el("outcome").textContent);
+  say(ceaseOutcome(report)); // stop_reasons.js
+  await refresh(el("outcome").textContent, report.behind_the_record);
 }
 
 function renderLockState(lock) {

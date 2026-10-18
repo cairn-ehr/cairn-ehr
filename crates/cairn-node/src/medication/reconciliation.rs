@@ -238,6 +238,11 @@ async fn submit_reconcile_like(
                 .await?;
         }
         Some(params) => {
+            // Named by the outcome-unknown marker if the commit below is lost mid-flight (#814).
+            let event_id: Uuid = body
+                .event_id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("the reconciliation's event_id is not a uuid: {e}"))?;
             // Two attestation HLCs (one per subject thread), minted up front.
             let hlc_a = crate::db::next_hlc(client, node_origin).await?;
             let hlc_b = crate::db::next_hlc(client, node_origin).await?;
@@ -270,7 +275,9 @@ async fn submit_reconcile_like(
             let chart_b = thread_chart_in_tx(&tx, subject_b, patient).await?;
             crate::medication::attest_thread_in_tx(&tx, params, chart_a, subject_a, hlc_a).await?;
             crate::medication::attest_thread_in_tx(&tx, params, chart_b, subject_b, hlc_b).await?;
-            tx.commit().await?;
+            tx.commit()
+                .await
+                .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
         }
     }
     Ok(())

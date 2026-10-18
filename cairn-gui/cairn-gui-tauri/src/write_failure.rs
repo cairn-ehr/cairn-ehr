@@ -17,9 +17,9 @@ pub(crate) fn retry_for(error: &DataError) -> Retry {
         DataError::Stale(_) => Retry::AfterReread(Recorded::No),
         DataError::Refused(_) | DataError::NotFound => Retry::Never,
         DataError::NotProvisioned(_) => Retry::AfterOperator,
-        // The outcome is not confirmed (only a judgement's commit is marked as unknown; a
-        // sign-off or cease is not). The window re-reads the chart right after the failure,
-        // which shows whether the write landed.
+        // Nothing was written: an outage. (A commit lost mid-flight, which MAY have written, is
+        // marked by the node and worded before this classification: `sign_off_failure`, and
+        // `cease_impl`'s per-thread sort, #814.)
         DataError::Unavailable(_) => Retry::Now,
     }
 }
@@ -32,6 +32,45 @@ pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
         text: format!("{e:#}"),
         retry: retry_for(&cairn_gui_live::error::data_error_from(e)),
     }
+}
+
+/// A failed sign-off as the view the webview reads (#814). One case comes first: a line's COMMIT
+/// lost mid-flight (the node's `commit_outcome_unknown` marker). That line may be signed, and the
+/// lines before it in the gesture are, so "failed" would be false about the clinician's own act.
+/// It is worded as not known and re-reads (`Recorded::Unknown`); a second press cannot sign a
+/// line twice, because the orchestrator refuses a target set that no longer matches the screen.
+/// Every other failure is [`node_failure`]'s.
+pub(crate) fn sign_off_failure(e: &anyhow::Error) -> ErrorView {
+    match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
+        Some(event) => ErrorView {
+            text: format!(
+                "Whether the sign-off was recorded is NOT known — the connection was lost while \
+                 event {event} was being saved. Lines signed before it in this sign-off are \
+                 recorded; the chart, read again, shows which lines are signed."
+            ),
+            retry: Retry::AfterReread(Recorded::Unknown),
+        },
+        None => node_failure(e),
+    }
+}
+
+/// The cease report's sentence for member threads whose COMMIT was lost mid-flight (#814): each
+/// `(thread, event)` may or may not be stopped, so it is neither "stopped" nor "NOT stopped and
+/// still active". `None` when there are none.
+pub(crate) fn cease_unknown_message(unknown: &[(uuid::Uuid, uuid::Uuid)]) -> Option<String> {
+    if unknown.is_empty() {
+        return None;
+    }
+    let named: Vec<String> = unknown
+        .iter()
+        .map(|(thread, event)| format!("thread {thread} (event {event})"))
+        .collect();
+    Some(format!(
+        "Whether {} thread(s) of this drug were stopped is NOT known — the connection was lost \
+         while saving {}. The chart, read again, shows whether each is still active.",
+        unknown.len(),
+        named.join("; ")
+    ))
 }
 
 /// The chart read a write starts with failed (sign-off's set check, cease's line lookup): an

@@ -23,10 +23,12 @@ use crate::chart_set::{
     cease_plan, chart_pane, check_displayed_set, linked_members, set_change, signed_across_message,
     ChartPane, ChartSetError,
 };
-use crate::funnel::view::ErrorView;
+use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
-use crate::write_failure::{chart_read_failed, key_locked, node_cannot_write, node_failure};
+use crate::write_failure::{
+    cease_unknown_message, chart_read_failed, key_locked, node_cannot_write, sign_off_failure,
+};
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
 use std::time::Instant;
@@ -270,7 +272,7 @@ pub async fn sign_off_impl(
             Some(&shown),
         )
         .await
-        .map_err(|e| node_failure(&e))?
+        .map_err(|e| sign_off_failure(&e))?
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
 
@@ -305,6 +307,12 @@ pub struct CeaseReport {
     /// (`chart_set::cease_plan`). ADR-0060 again: one member failing must not un-stop the
     /// others, and it must never pass in silence.
     pub failed: Vec<String>,
+    /// Member threads whose commit was lost mid-flight, so whether they were stopped is NOT
+    /// known (#814): `write_failure::cease_unknown_message`'s sentence, or `None`.
+    pub unknown_message: Option<String>,
+    /// `Unknown` when any thread's outcome is unknown: the list on screen may be behind the
+    /// record, so the webview's re-read marks it "may be out of date" if it fails (#811).
+    pub behind_the_record: Option<Recorded>,
 }
 
 /// Stop a drug — every member thread of the displayed line (on a wrong-chart hazard line,
@@ -394,6 +402,7 @@ pub async fn cease_impl(
     let started = Instant::now();
     let mut ceased = 0usize;
     let mut failed = plan.held_back;
+    let mut unknown = Vec::new();
     for (medication_id, thread_chart) in plan.write {
         // One member per call, and `cease_medication` opens its own transaction — so a
         // failure on one thread of a reconciled pair leaves the other one stopped rather
@@ -427,13 +436,22 @@ pub async fn cease_impl(
         .await
         {
             Ok(_) => ceased += 1,
-            Err(e) => failed.push(format!("thread {medication_id}: {e:#}")),
+            // A commit lost mid-flight may have stopped it (#814): not a failure, not a success.
+            Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
+                Some(event) => unknown.push((medication_id, event)),
+                None => failed.push(format!("thread {medication_id}: {e:#}")),
+            },
         }
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
     record_timing(state, "cease", 1, elapsed_ms).await;
 
-    Ok(CeaseReport { ceased, failed })
+    Ok(CeaseReport {
+        ceased,
+        failed,
+        unknown_message: cease_unknown_message(&unknown),
+        behind_the_record: (!unknown.is_empty()).then_some(Recorded::Unknown),
+    })
 }
 
 /// Read one named chart, from the node or from fixtures. Callers resolve WHICH chart first —

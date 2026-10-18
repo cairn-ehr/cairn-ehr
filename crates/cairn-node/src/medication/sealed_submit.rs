@@ -326,13 +326,17 @@ pub async fn seal_sign_submit(
     ensure_unwrap_key(client).await?;
 
     match attest {
+        // Either arm's final step can be lost mid-flight with the event already written: the
+        // unattested arm's autocommit statement IS its commit. Both are marked outcome-unknown
+        // when the server never answered (#814), and pass a refusal it DID answer through as is.
         None => {
             client
                 .execute(
                     "SELECT submit_event($1, NULL, NULL, $2)",
                     &[&signed_bytes, &dek.as_bytes().as_slice()],
                 )
-                .await?;
+                .await
+                .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
         }
         Some(params) => {
             let thread = thread.expect("thread id is extracted whenever attest is Some");
@@ -344,7 +348,9 @@ pub async fn seal_sign_submit(
             )
             .await?;
             super::attest_thread_in_tx(&tx, params, patient, thread, attest_hlc).await?;
-            tx.commit().await?;
+            tx.commit()
+                .await
+                .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
         }
     }
     Ok(event_id)

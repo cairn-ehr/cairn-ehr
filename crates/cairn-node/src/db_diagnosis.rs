@@ -585,7 +585,7 @@ impl std::fmt::Display for CommitOutcomeUnknown {
         write!(
             f,
             "commit outcome unknown for event {} — check whether it was recorded before \
-             retrying, or the judgement may be recorded twice",
+             retrying, or it may be recorded twice",
             self.event_id
         )
     }
@@ -605,6 +605,32 @@ impl std::error::Error for CommitOutcomeUnknown {
 /// more cautious (re-read before acting), never hide a remedy behind a false verdict.
 pub fn commit_outcome_unknown(event_id: uuid::Uuid, cause: anyhow::Error) -> anyhow::Error {
     anyhow::Error::new(CommitOutcomeUnknown { event_id, cause })
+}
+
+/// The failure of a write's COMMIT (`fault`, which carries the commit's `tokio_postgres::Error`),
+/// marked [`commit_outcome_unknown`] exactly when the server never ANSWERED it (#713, #814).
+///
+/// A server that answered with an error (a `DbError` somewhere on the chain, so a SQLSTATE)
+/// rolled the transaction back: nothing was written, and `fault` is returned untouched, an
+/// ordinary failure. A commit with no answer — the connection lost mid-flight — may have landed,
+/// so it is marked, and a surface re-reads before offering the act again instead of calling it
+/// "failed". The ONE rule every clinical commit goes through (judgement, sign-off line, medication
+/// submit, reconciliation), so the question is asked the same way everywhere; pinned by
+/// `tests/db_errors_stay_legible.rs`. An autocommit statement counts: it is its own commit.
+///
+/// Errs towards "unknown": a call that failed before it was ever sent (a dead connection) is
+/// also unanswered, and is marked too. That claims LESS than the truth, never more.
+pub fn commit_failure(event_id: uuid::Uuid, fault: anyhow::Error) -> anyhow::Error {
+    let answered = fault.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .is_some_and(|pg| pg.as_db_error().is_some())
+    });
+    if answered {
+        fault
+    } else {
+        commit_outcome_unknown(event_id, fault)
+    }
 }
 
 /// The event whose commit outcome is unknown, if this chain carries the [`CommitOutcomeUnknown`]
@@ -1056,6 +1082,20 @@ mod refusal_scope_tests {
             commit_outcome_unknown_event(&deliberate_refusal("no")),
             None
         );
+    }
+
+    /// #814: a commit failure with no server answer anywhere on its chain (no `DbError`) is
+    /// marked outcome-unknown, naming the event, and keeps the failure as its cause. The
+    /// answered half needs a real `DbError`, so it is pinned in `tests/db_diagnosis.rs`.
+    #[test]
+    fn an_unanswered_commit_failure_is_marked_with_its_event() {
+        let id = uuid::Uuid::from_u128(78);
+        let e = commit_failure(
+            id,
+            anyhow::anyhow!("connection closed").context("committing a line's sign-off"),
+        );
+        assert_eq!(commit_outcome_unknown_event(&e), Some(id));
+        assert!(format!("{e:#}").contains("connection closed"));
     }
 
     /// A refusal over a changed record is marked `Stale`, and its text is untouched.
