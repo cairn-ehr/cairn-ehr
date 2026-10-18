@@ -477,7 +477,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   sign-off was recorded is NOT known", never "failed"; a cease names each unknown thread, and never says "Stopped 0"
   over one. Filed **#815** (registration's commit is still unmarked, and its retry mints a second chart), **#817**
   (the identity-side commits) and **#818** (an interrupted sign-off discards its partial report). **Merged** (PR #816).
-- **2026-10-18 (#815 + #818, this PR):** registration's commit is marked too (maintainer's choice: mark + search
+- **2026-10-18 (#815 + #818, PR #819):** registration's commit is marked too (maintainer's choice: mark + search
   again, not an idempotent re-send). The front door says "whether this registration was recorded is NOT known"
   with no live retry, and the search it attested is spent like a success (`settle_unknown`), so the next Register
   press searches first and finds the chart if it landed. A sign-off cut off mid-gesture now reports the lines signed,
@@ -487,7 +487,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge this PR (#815 + #818); then #817 (the identity-side commits); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #819 (#815 + #818); then #817 (the identity-side commits); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
