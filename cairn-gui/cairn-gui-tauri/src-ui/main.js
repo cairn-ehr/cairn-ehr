@@ -331,12 +331,12 @@ function clearChart() {
  * link), when there was one. A failed re-read is reported AFTER it, never instead of it: the
  * outcome of a signed act is never overwritten by what happened next (PR #707 review — a
  * "Linked — …" sentence was replaced by "Could not read the chart"). #797: `behind` = the list is
- * behind the record (`behindTheRecord`: "no" / "unknown", #811); changes are named against the held set.
+ * behind the record ("no" / "unknown", #811: `knowListBehind`); changes are named against the held set.
  */
 async function refresh(lead, behind) {
   const patient = displayedPatient;
   if (patient === null) return;
-  if (behind) knowListBehind(behind); // window state: whichever read fails last marks the list
+  if (behind) knowListBehind(behind, lead); // window state: whichever read fails last marks the list
   // Taken BEFORE the read is sent: from here on, any older read still in flight is outdated.
   const revision = ++chartReadRevision;
   try {

@@ -85,11 +85,11 @@ fn report_sentence(results: &[PairResult]) -> String {
 /// (`Stale`, #797), the picture judged from is out of date — either way the window must re-read
 /// before anything is offered again, whatever the other pairs said. Of the two, the stale refusal
 /// wins (#811 review): it proves the list is out of date. The unknown pair's own sentence in the
-/// text still says that its outcome is not known. Otherwise the MOST retryable among them — `Now` over `AfterOperator` over
-/// `Never` — because a `Never` beside an outage would tell the webview the outcome was DECIDED
-/// and take the button away, claiming a verdict that does not exist. Keeping the button for an
-/// outage cannot re-sign blindly: "Different people" re-reads the open pairs fresh on every
-/// press, and a refused pair is refused again, before anything is signed.
+/// text still says that its outcome is not known. Otherwise the MOST retryable among them — `Now`
+/// over `AfterOperator` over `Never` — because a `Never` beside an outage would tell the webview
+/// the outcome was DECIDED and take the button away, claiming a verdict that does not exist.
+/// Keeping the button for an outage cannot re-sign blindly: "Different people" re-reads the open
+/// pairs fresh on every press, and a refused pair is refused again, before anything is signed.
 fn combined_retry<'a>(errors: impl Iterator<Item = &'a ErrorView>) -> Retry {
     let rank = |r: Retry| match r {
         Retry::Never => 0,

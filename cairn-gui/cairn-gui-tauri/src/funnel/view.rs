@@ -45,8 +45,9 @@ pub enum Retry {
     Never,
     /// The screen is behind the record: the window re-reads the WHOLE chart and takes the act's
     /// button away — never a live retry. Two causes share it because the window does the same
-    /// for both, and [`Recorded`] says which, because the window must not word them the same
-    /// (#811): after an interrupted commit, a change the re-read shows may be the clinician's own.
+    /// for both, and [`Recorded`] says which, because the window must not word its out-of-date
+    /// notice the same (#811): only a stale refusal proves the list is out of date. What an
+    /// interrupted act may have changed is said in that act's own sentence.
     AfterReread(Recorded),
 }
 

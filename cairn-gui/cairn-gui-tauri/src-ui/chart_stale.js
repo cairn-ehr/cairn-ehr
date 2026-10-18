@@ -23,20 +23,24 @@
 /** The chart set the clinician holds (see above); null while no list is drawn. */
 let heldCharts = null;
 
-/** Said after the refusal when a stale refusal's re-read is drawn. */
+/**
+ * Said when a re-read draws after the list was known behind the record, or names a change (#811's
+ * M5): `sayAfterReread`.
+ */
 const READ_AGAIN = "The chart has been read again — review it before you act on it.";
 
 /**
- * Said in the chart's warnings when a stale refusal's re-read FAILED: the list on screen is the
- * old one. It names the control that is the way out — never "reload", which this window lacks.
+ * Said in the chart's warnings when a re-read FAILED while a stale refusal is still open: the list
+ * on screen is the old one. It names the control that is the way out — never "reload", which this
+ * window lacks.
  */
 const LIST_OUT_OF_DATE =
   'This list is out of date: the record changed while it was on screen, and reading it ' +
   'again failed. Press "Read this chart again".';
 
 /**
- * `LIST_OUT_OF_DATE` when only interrupted commits (#713, `"unknown"`) are behind the list: the
- * clinician's own act may be all that changed, so "the record changed" is not known (#811).
+ * Said instead of `LIST_OUT_OF_DATE` when no stale refusal is open — only interrupted commits
+ * (#713, `"unknown"`) are behind the list: whether anything changed is not known (#811).
  */
 const LIST_MAY_BE_OUT_OF_DATE =
   'This list may be out of date: whether your last act was recorded is not known, and ' +
@@ -66,28 +70,40 @@ function behindTheRecord(failure) {
 let behindAfter = null;
 
 /**
- * What the acts behind `behindAfter` recorded, for the out-of-date notice only: `"unknown"` while
- * every one was an interrupted commit, and `"no"` once ANY was a stale refusal — never moved back
- * to `"unknown"`, because one stale refusal PROVES the list is out of date (#811 review). Null
- * with `behindAfter`. What an interrupted act may have changed is said in its own sentence, the
- * re-read's lead (Rust's `judgement_error_view`).
+ * The newest read revision sent before a STALE refusal (`"no"`), or null: for the out-of-date
+ * notice only. A stale refusal PROVES the list on screen is out of date, so a later interrupted
+ * commit never weakens it (#811 review) — but only until a list read AFTER it draws, which shows
+ * the change it was refused over, even while an interrupted commit is still behind the list. Only
+ * this words the notice "is out of date": anything else — an interrupted commit, or a value this
+ * window does not know — reads as "may be".
  */
-let behindRecorded = null;
+let staleAfter = null;
 
 /**
- * The window learnt the list is behind the record — a stale refusal, or a recorded "Different
- * people" with a stale pair (`behind_the_record`): called by main.js's `refresh` before its read
- * takes a revision. `recorded`: `"no"` or `"unknown"` (`behindTheRecord`).
+ * The sentences of the interrupted acts behind the list (Rust's `judgement_error_view`: whether
+ * the act was recorded is not known, and a change the re-read names may be the clinician's own).
+ * Each is said as its own re-read's lead, but that read can be overtaken and never drawn, so they
+ * are window state too (#811 review): the read that ends the state says them (`withOwed`).
  */
-function knowListBehind(recorded) {
+let unknownLeads = [];
+
+/**
+ * The window learnt the list is behind the record — a refusal (`behindTheRecord`), or a recorded
+ * "Different people" with a failed pair that was (link.js, the report's `behind_the_record`):
+ * called by main.js's `refresh` before its read takes a revision. `recorded`: `"no"` or
+ * `"unknown"`; `lead`: the sentence the re-read is sent after.
+ */
+function knowListBehind(recorded, lead) {
   behindAfter = chartReadRevision;
-  if (behindRecorded !== "no") behindRecorded = recorded;
+  if (recorded === "no") staleAfter = chartReadRevision;
+  else if (lead) unknownLeads.push(lead);
 }
 
 /** The list is no longer known behind the record: a later read drew, or no list is drawn. */
 function forgetBehind() {
   behindAfter = null;
-  behindRecorded = null;
+  staleAfter = null;
+  unknownLeads = [];
 }
 
 /** Whether the list on screen is known to be behind the record (asked by a failed read). */
@@ -100,6 +116,8 @@ function listKnownBehind() {
  * it was read after the refusal — so the outcome line says the chart was read again.
  */
 function drewRead(revision) {
+  // A list read after the stale refusal shows the change it was refused over (#811 review).
+  if (staleAfter !== null && revision > staleAfter) staleAfter = null;
   const ended = behindAfter !== null && revision > behindAfter;
   if (ended) forgetBehind();
   return ended;
@@ -120,9 +138,20 @@ function listMarkedStale() {
  * failed read, is left as it is: never a known-stale list under a live "Sign off N".
  */
 function sayAfterDraw(lead, revision, marked, pane) {
+  const owed = unknownLeads; // read first: `drewRead` forgets them when this list ends the state
   const ended = drewRead(revision);
   if (marked && !ended) markListStale();
-  else sayAfterReread(lead, ended, pane);
+  else sayAfterReread(ended ? withOwed(lead, owed) : lead, ended, pane);
+}
+
+/**
+ * `lead`, then each interrupted act's sentence (`unknownLeads`) it does not already say (pure). The
+ * act's own re-read has its sentence as the lead, so it is said once; a read that overtook it
+ * says it too, so a change the clinician's own act made is never named as another source's.
+ */
+function withOwed(lead, owed) {
+  const line = lead || "";
+  return sentences(line, ...owed.filter((s) => !line.includes(s)));
 }
 
 /**
@@ -131,13 +160,15 @@ function sayAfterDraw(lead, revision, marked, pane) {
  * refusal (`drewRead`). If it did, OR it names a change, say the lead, that the chart was read
  * again — review it — and what changed: a change is news to review after the clinician's own act
  * too (#811's M5). (After an interrupted Link or Unlink, the lead — Rust's sentence — already says
- * a named change may be the clinician's own, #811's M4.) Otherwise the line
- * is left alone — it may be saying how a signed act went — unless it still says a read FAILED,
- * which this drawn read has just made untrue: it goes back to its lead (what was said before the
- * failure, possibly nothing).
+ * a named change may be the clinician's own, #811's M4.) "Read again" is said once per line: the
+ * lead of "Read this chart again" is the line as it stands, which may already say it. Otherwise
+ * the line is left alone — it may be saying how a signed act went — unless it still says a read
+ * FAILED, which this drawn read has just made untrue: it goes back to its lead (what was said
+ * before the failure, possibly nothing).
  */
 function sayAfterReread(lead, readAgain, pane) {
-  if (readAgain || pane.set_change) say(sentences(lead, READ_AGAIN, pane.set_change));
+  const again = lead && lead.includes(READ_AGAIN) ? null : READ_AGAIN;
+  if (readAgain || pane.set_change) say(sentences(lead, again, pane.set_change));
   else if (showsFailedRead(el("outcome").textContent)) say(sentences(lead));
 }
 
@@ -279,15 +310,19 @@ function ordered(ids) {
 el("reread").addEventListener("click", () => void refresh(rereadLead()));
 
 /**
- * A stale refusal's re-read failed: say so above the table and take sign-off away, with its
- * reason. The rows stay — the clinician can still read what they last saw, now flagged. The next
- * list that draws (`drawList`) or is taken down (`clearDrawnList`) clears the warning.
+ * A re-read failed while the list is known behind the record (a stale refusal, or an interrupted
+ * commit): say so above the table and take sign-off away, with its reason — "is" out of date only
+ * while a stale refusal proves it (`staleAfter`), "may be" otherwise, on the notice and the button
+ * alike (#811). The rows stay — the clinician can still read what they last saw, now flagged. The
+ * next list that draws (`drawList`) or is taken down (`clearDrawnList`) clears the warning.
  */
 function markListStale() {
-  const sentence = behindRecorded === "unknown" ? LIST_MAY_BE_OUT_OF_DATE : LIST_OUT_OF_DATE;
-  setMessage(el("chart-stale"), sentence);
+  const proven = staleAfter !== null;
+  setMessage(el("chart-stale"), proven ? LIST_OUT_OF_DATE : LIST_MAY_BE_OUT_OF_DATE);
   el("chart-warnings").hidden = false;
   const button = el("sign-off");
   button.disabled = true;
-  button.textContent = "Nothing to sign off — this list is out of date";
+  button.textContent = proven
+    ? "Nothing to sign off — this list is out of date"
+    : "Nothing to sign off — this list may be out of date";
 }

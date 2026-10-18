@@ -6,8 +6,8 @@
 > **⇒ ONE PR AWAITS THE MAINTAINER: PR [#813](https://github.com/cairn-ehr/cairn-ehr/pull/813)** (#811) (branch `feat/811-after-reread-unknown`). Option (b), the
 > maintainer's choice: `Retry::AfterReread(Recorded::{No, Unknown})`, so after an interrupted commit (#713) the window
 > no longer says "the record changed" about what may be the clinician's own act. That sentence is Rust's, for Link
-> and Unlink only (M4). Any re-read that names a change says "review it" (M5). The review's three findings are fixed
-> on the branch. Plan `docs/superpowers/plans/2026-10-18-811-after-reread-recorded.md`; durable rules
+> and Unlink only (M4). Any re-read that names a change says "review it" (M5). Both review rounds are fixed on the
+> branch; the second filed **#814** and added items 7–10 to #812. Plan `docs/superpowers/plans/2026-10-18-811-after-reread-recorded.md`; durable rules
 > in the #811 block. Merged before it (2026-10-18): PR #802 (#799 · #800 · #801) and PR #805 (#797, #806 — the
 > self-re-reading chart, "Read this chart again"; RUNBOOK §14 is its owed human timing). The repair path (#679 · #680
 > · #681) is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`;
@@ -18,8 +18,9 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #813** (#811). **#728** (the Pi re-measure) can run beside. #699 stays open until the
->    maintainer closes it.
+> 1. **Review and merge PR #813** (#811), then **#814** (an interrupted sign-off or cease commit is still reported as
+>    "failed": #811's gap on the medication writes). **#728** (the Pi re-measure) can run beside. #699 stays open
+>    until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
 >    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
 >    existing "withheld" = hidden-lines wording) → **#804** (on link, show only where the two charts' medication
@@ -191,6 +192,11 @@ in node with stubbed DOM globals (scratch only, no runner, #332).
   keyed on `"unknown"` also fired after a "Different people" that can never move the set, excusing a colleague's link.
 - **⇒ "Worst of several" is not one fact** (finding 2): "proven stale" and "may have landed" are different claims, and
   `max` must keep the one the sentence states. Here that is `No`.
+- **Second review round (4 reviewers), every finding fixed or filed.** Each cause is now its own window mark: `staleAfter`
+  is cleared when a list read after it draws, and `unknownLeads` keeps the M4 sentence when its re-read is overtaken.
+  The sign-off button says "may be" too. No script spells `"after_reread"`. Filed #814; #812 items 7–10.
+- **⇒ A sentence carried only by one read's argument dies with that read.** Anything a later read must still say
+  (here the M4 sentence) is window state, like `behindAfter`. The node walk caught the pre-fix code on exactly that.
 
 ### 2026-10-18 — PR #805's second review: five reviewers, every finding fixed (filed #811, #812)
 

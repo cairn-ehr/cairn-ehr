@@ -228,14 +228,16 @@ fn read_again_is_said_only_after_an_accepted_answer() {
     // on it" (#811's M5: a colleague's change named after the clinician's own successful act is
     // as much news as one named after a refusal). That a change may be the clinician's OWN, after
     // an interrupted Link or Unlink (#811's M4), is said by Rust in the lead
-    // (`judgement_error_view`, `Charts::MayMove`), never guessed here.
+    // (`judgement_error_view`, `Charts::MayMove`), never guessed here. "Read again" is said once
+    // per line: "Read this chart again" keeps the line as its lead, so a second press that names a
+    // second change would otherwise say it twice (#811 review).
     let after = js_fn(CHART_STALE_JS, "sayAfterReread");
-    assert!(
-        after.contains(
-            "if (readAgain || pane.set_change) say(sentences(lead, READ_AGAIN, pane.set_change));"
-        ),
-        "{after}"
-    );
+    for line in [
+        "const again = lead && lead.includes(READ_AGAIN) ? null : READ_AGAIN;",
+        "if (readAgain || pane.set_change) say(sentences(lead, again, pane.set_change));",
+    ] {
+        assert!(after.contains(line), "{line} in {after}");
+    }
 }
 
 /// An OLDER read landing after a newer one already FAILED and marked the list (#797 fix review):
@@ -258,10 +260,39 @@ fn an_older_read_landing_late_keeps_a_stale_mark() {
         "the mark is either out-of-date sentence on screen"
     );
     let draw = js_fn(CHART_STALE_JS, "sayAfterDraw");
+    let owed = position(draw, "const owed = unknownLeads;");
     let ended = position(draw, "const ended = drewRead(revision);");
     let remark = position(draw, "if (marked && !ended) markListStale();");
-    let say = position(draw, "else sayAfterReread(lead, ended, pane);");
-    assert!(ended < remark && remark < say, "{draw}");
+    let say = position(
+        draw,
+        "else sayAfterReread(ended ? withOwed(lead, owed) : lead, ended, pane);",
+    );
+    assert!(owed < ended && ended < remark && remark < say, "{draw}");
+}
+
+/// #811 review: an interrupted act's sentence ("whether the link was recorded is NOT known … a
+/// change the re-read names may be your own link") is its re-read's lead — but that read can be
+/// overtaken ("Read this chart again", an own act's raised floor) and is then never drawn. So the
+/// sentence is WINDOW state, like `behindAfter`: remembered with the act (`knowListBehind`), read
+/// before `drewRead` forgets it, and said by whichever read ends the state, after its own lead
+/// and only if that lead does not already say it — so the act's own read never says it twice.
+/// Otherwise a change the clinician's own link made would be named as another source's.
+#[test]
+fn an_interrupted_act_s_sentence_survives_an_overtaken_re_read() {
+    let owed = js_fn(CHART_STALE_JS, "withOwed");
+    for line in [
+        "const line = lead || \"\";",
+        "return sentences(line, ...owed.filter((s) => !line.includes(s)));",
+    ] {
+        assert!(owed.contains(line), "{line} in {owed}");
+    }
+    // The ONLY places it moves: remembered with an unknown, forgotten with the state.
+    assert_eq!(CHART_STALE_JS.matches("unknownLeads.push(").count(), 1);
+    assert_eq!(
+        CHART_STALE_JS.matches("unknownLeads = ").count(),
+        2,
+        "its declaration and forgetBehind"
+    );
 }
 
 /// The outcome line is a run of sentences from different places — Rust's refusals end without a
@@ -321,7 +352,7 @@ fn a_failed_stale_re_read_marks_the_list_out_of_date() {
 #[test]
 fn a_known_stale_list_outlives_the_read_that_learnt_it() {
     let refresh = js_fn(MAIN_JS, "refresh");
-    let known = position(refresh, "if (behind) knowListBehind(behind);");
+    let known = position(refresh, "if (behind) knowListBehind(behind, lead);");
     assert!(
         position(refresh, "if (patient === null) return;") < known
             && known < position(refresh, "const revision = ++chartReadRevision;"),
@@ -332,17 +363,31 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
         know.contains("behindAfter = chartReadRevision;"),
         "the newest revision sent BEFORE the refusal"
     );
+    // A stale refusal is its own mark (#811 review): a later "unknown" never overwrites it, and
+    // it lasts only until a list read AFTER it draws (below), even while an unknown is still open.
     assert!(
-        know.contains("if (behindRecorded !== \"no\") behindRecorded = recorded;"),
-        "a proven stale refusal is never overwritten by a later \"unknown\" (#811 review): {know}"
+        know.contains("if (recorded === \"no\") staleAfter = chartReadRevision;"),
+        "{know}"
+    );
+    assert!(
+        know.contains("else if (lead) unknownLeads.push(lead);"),
+        "{know}"
     );
     assert!(
         js_fn(CHART_STALE_JS, "listKnownBehind").contains("return behindAfter !== null;"),
         "known behind until a later read draws"
     );
     let drew = js_fn(CHART_STALE_JS, "drewRead");
+    let settled = position(
+        drew,
+        "if (staleAfter !== null && revision > staleAfter) staleAfter = null;",
+    );
+    let ended = position(
+        drew,
+        "const ended = behindAfter !== null && revision > behindAfter;",
+    );
     assert!(
-        drew.contains("const ended = behindAfter !== null && revision > behindAfter;"),
+        settled < ended,
         "only a read sent after the refusal ends it: {drew}"
     );
     assert!(drew.contains("if (ended) forgetBehind();"), "{drew}");
@@ -351,14 +396,21 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
         "no list on screen, nothing to be behind"
     );
     let forget = js_fn(CHART_STALE_JS, "forgetBehind");
-    assert!(
-        forget.contains("behindAfter = null;") && forget.contains("behindRecorded = null;"),
-        "{forget}"
-    );
+    for line in [
+        "behindAfter = null;",
+        "staleAfter = null;",
+        "unknownLeads = [];",
+    ] {
+        assert!(forget.contains(line), "{line} in {forget}");
+    }
     // The declarations and those moves, nothing else: an own act (`holdOwnAct`) leaves the list
     // on screen as old as it was.
     assert_eq!(CHART_STALE_JS.matches("behindAfter = ").count(), 3);
-    assert_eq!(CHART_STALE_JS.matches("behindRecorded = ").count(), 3);
+    assert_eq!(
+        CHART_STALE_JS.matches("staleAfter = ").count(),
+        4,
+        "declaration, knowListBehind, drewRead, forgetBehind"
+    );
     // ...and `forgetBehind` is called from those two places only (#811 review): one more call,
     // in `holdOwnAct` say, would end the stale state on an own act with every count above intact.
     assert_eq!(
@@ -377,25 +429,26 @@ fn a_known_stale_list_outlives_the_read_that_learnt_it() {
 #[test]
 fn mark_list_stale_disables_sign_off_and_warns_above_the_table() {
     let mark = js_fn(CHART_STALE_JS, "markListStale");
-    assert!(
-        mark.contains(
-            "const sentence = behindRecorded === \"unknown\" ? LIST_MAY_BE_OUT_OF_DATE : LIST_OUT_OF_DATE;"
-        ),
-        "after an interrupted commit the list MAY be out of date (#811): {mark}"
-    );
-    assert!(
-        mark.contains("setMessage(el(\"chart-stale\"), sentence);"),
-        "{mark}"
-    );
+    // Only a stale refusal still open PROVES the list out of date (#811); anything else — an
+    // interrupted commit, or a value this window does not know — words the weaker "may be".
+    for line in [
+        "const proven = staleAfter !== null;",
+        "setMessage(el(\"chart-stale\"), proven ? LIST_OUT_OF_DATE : LIST_MAY_BE_OUT_OF_DATE);",
+    ] {
+        assert!(mark.contains(line), "{line} in {mark}");
+    }
     assert!(
         mark.contains("el(\"chart-warnings\").hidden = false;"),
         "{mark}"
     );
     assert!(mark.contains("button.disabled = true;"), "{mark}");
-    assert!(
-        mark.contains("button.textContent = \"Nothing to sign off — this list is out of date\";"),
-        "{mark}"
-    );
+    // The button says what the notice says: never "is" beside "may be" (#811 review).
+    for text in [
+        "\"Nothing to sign off — this list is out of date\"",
+        "\"Nothing to sign off — this list may be out of date\"",
+    ] {
+        assert!(mark.contains(text), "{text} in {mark}");
+    }
     for absent in ["say(", "med-rows", "clearDrawnList", "renderedPatient ="] {
         assert!(!mark.contains(absent), "{absent} in {mark}");
     }
@@ -430,6 +483,21 @@ fn every_after_reread_handler_re_reads_the_whole_chart_stale() {
         1,
         "only behindTheRecord reads the cause off a failure"
     );
+    // #811 review: the retry is an OBJECT now (`{ after_reread: "no" | "unknown" }`). Code
+    // written from a comment that still calls it the string `"after_reread"` would compare
+    // `failure.retry === "after_reread"` — always false, so no re-read and a live button over a
+    // commit that may have landed — and the property count above would not see it. So the string
+    // appears in no script, comment or code. Every script in src-ui, so a new one is covered.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src-ui");
+    for entry in std::fs::read_dir(&dir).expect("src-ui is readable") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|e| e == "js") {
+            let js = std::fs::read_to_string(&path).expect("a readable script");
+            for spelt in ["\"after_reread\"", "'after_reread'"] {
+                assert!(!js.contains(spelt), "{spelt} in {}", path.display());
+            }
+        }
+    }
     for (file, js, name) in [
         ("link.js", LINK_JS, "compare"),
         ("link.js", LINK_JS, "sendJudgement"),
