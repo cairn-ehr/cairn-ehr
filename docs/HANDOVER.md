@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: the #814 PR** (branch `fix/814-medication-commit-unknown`). Every clinical
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#816](https://github.com/cairn-ehr/cairn-ehr/pull/816)** (#814) (branch `fix/814-medication-commit-unknown`). Every clinical
 > commit now goes through one rule, `db_diagnosis::commit_failure`: an UNANSWERED commit is outcome-unknown. So an
 > interrupted sign-off says "whether the sign-off was recorded is NOT known", never "failed", and a cease names each
 > unknown thread and never says "Stopped 0" over one. Filed **#815**: registration is still unmarked, and its retry
@@ -17,7 +17,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge the #814 PR**, then **#815** (registration's interrupted commit; a decision: mark it, or make
+> 1. **Review and merge PR #816** (#814), then **#815** (registration's interrupted commit; a decision: mark it, or make
 >    the retry re-send the same minted ids). **#728** (the Pi re-measure) can run beside. #699 stays open until the
 >    maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
@@ -147,7 +147,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-18 (#814) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
