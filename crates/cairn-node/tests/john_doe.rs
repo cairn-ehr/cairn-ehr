@@ -98,6 +98,69 @@ async fn register_john_doe_creates_an_unconfirmed_chart() {
     assert_eq!(trust_of(&c, pid).await.as_deref(), Some("unconfirmed"));
 }
 
+/// A role that can register a John Doe (tick the clock, submit through the door) but cannot
+/// read `john_doe_local_ordinal`, the display read that runs AFTER the commit. `cairn_test_*`
+/// so a leftover from a crashed run reads as test debris; roles are cluster-wide.
+const NO_ORDINAL_ROLE: &str = "cairn_test_jd_no_ordinal";
+
+/// Drop [`NO_ORDINAL_ROLE`] if it exists, at the start AND end (#583: never trust a
+/// predecessor's cleanup). `DROP OWNED` first, because a role holding grants cannot be dropped.
+async fn drop_no_ordinal_role(c: &Client) {
+    c.batch_execute(&format!(
+        "DO $$ BEGIN
+           IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{NO_ORDINAL_ROLE}') THEN
+             EXECUTE 'DROP OWNED BY {NO_ORDINAL_ROLE}';
+             EXECUTE 'DROP ROLE {NO_ORDINAL_ROLE}';
+           END IF;
+         END $$;"
+    ))
+    .await
+    .expect("dropping the test role must succeed, or the next run inherits it");
+}
+
+/// #817 review: once the registration has COMMITTED, the call never fails. The chart exists,
+/// so an error here would read as "nothing happened", and the natural retry mints a SECOND
+/// chart for the same unconscious patient (the #815 hazard). The ordinal is a display read
+/// after the fact: when it fails, the chart and callsign still come back, and the read's own
+/// error comes back beside them so the CLI can say why the local ref is missing.
+///
+/// The seam is a role lacking exactly one grant (`SELECT` on the ordinal view); the
+/// `SECURITY DEFINER` doors the registration goes through still work for it.
+#[tokio::test]
+async fn a_failed_ordinal_read_after_the_commit_still_returns_the_chart() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
+    drop_no_ordinal_role(&c).await;
+    c.batch_execute(&format!(
+        "CREATE ROLE {NO_ORDINAL_ROLE} NOLOGIN;
+         GRANT EXECUTE ON FUNCTION node_hlc_tick() TO {NO_ORDINAL_ROLE};
+         GRANT EXECUTE ON FUNCTION submit_event(bytea, bytea, bytea, bytea) TO {NO_ORDINAL_ROLE};
+         SET ROLE {NO_ORDINAL_ROLE};"
+    ))
+    .await
+    .unwrap();
+
+    let outcome =
+        john_doe::register_john_doe(&mut c, &sk, &kid, "n", "ED", "s", "2026-10-18", "b").await;
+    c.batch_execute("RESET ROLE").await.unwrap();
+    drop_no_ordinal_role(&c).await;
+
+    let (pid, _call, ordinal) =
+        outcome.expect("a committed registration is reported as done, not as a failure");
+    let read_failure = ordinal.expect_err("the role cannot read the ordinal view");
+    assert!(
+        format!("{read_failure:?}").contains("permission denied"),
+        "the ordinal read's own cause comes back: {read_failure:?}"
+    );
+    assert_eq!(
+        identity_state(&c, pid).await.as_deref(),
+        Some("pending"),
+        "the chart the call returned is the one that was written"
+    );
+}
+
 #[tokio::test]
 async fn a_blank_basis_is_refused_before_anything_is_minted_or_ticked() {
     // Final review (minor). `register-john-doe --basis ""` used to hard-fail at the db/045
@@ -235,8 +298,8 @@ async fn ordinal_numbers_registrations_per_node_origin() {
         john_doe::register_john_doe(&mut c, &sk, &kid, "n", "ED", "s", "2026-07-11", "b")
             .await
             .unwrap();
-    assert_eq!(o1, 1);
-    assert_eq!(o2, 2);
+    assert_eq!(o1.unwrap(), 1);
+    assert_eq!(o2.unwrap(), 2);
 
     // A registration first-recorded on a DIFFERENT node_origin starts its own sequence at
     // 1 and does not shift node "n"'s ordinals.
@@ -244,7 +307,11 @@ async fn ordinal_numbers_registrations_per_node_origin() {
         john_doe::register_john_doe(&mut c, &sk, &kid, "m", "ED", "s", "2026-07-11", "b")
             .await
             .unwrap();
-    assert_eq!(o3, 1, "a different node_origin is a separate partition");
+    assert_eq!(
+        o3.unwrap(),
+        1,
+        "a different node_origin is a separate partition"
+    );
 
     // node "n"'s second John Doe still reads ordinal 2 via the VIEW.
     let n2: i64 = c

@@ -36,10 +36,17 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   act's own re-read can be overtaken ("Read this chart again", an own act's draw floor), and the read that draws
   would otherwise name the clinician's own link as another source's change. **Tempting wrong fix:** relying on the
   re-read's `lead` argument alone.
-- **#814: every `.commit()` in the tree is inventoried** by `db_errors_stay_legible.rs`: in `MARKED_COMMIT_SITES`
+- **#814: every `.commit()` and every autocommit event write in the tree is inventoried** by
+  `db_errors_stay_legible.rs` (autocommits are FOUND, by a door call on a receiver other than `tx`, since the #817
+  review; never declare a count by hand): in `MARKED_COMMIT_SITES`
   (each through `db_diagnosis::commit_failure`, counted per file: judge, each sign-off line, both `seal_sign_submit`
-  arms, the attested reconciliation, the CLI's attestation, a registration since #815) or in `UNMARKED_COMMITS` with
-  its reason (#817 identity writes). An unattested submit's autocommit statement IS its commit, so it is marked too.
+  arms, the attested reconciliation, the CLI's attestation, a registration since #815, and since #817 every identity
+  write: identify, a John-Doe chart, evidence, a proposal's link, an auto-applied link, and the autocommit submits of a
+  sensitivity grade/withdrawal, a shred and a text evidence) or in `UNMARKED_COMMITS` with its reason (a
+  restore's `finalize_identity`, whose landed commit fences the door; the node-plane events and actor enrolments,
+  which a re-run cannot double; a read-only snapshot; the sync harness's load generator). A marked file's
+  commit that writes NO event (auto-apply's two send-to-review commits) is counted in `EVENTLESS_COMMITS` with its
+  reason. An unattested submit's autocommit statement IS its commit, so it is marked too.
   Only an ordinary ERROR answer proves a rollback; no answer, or a FATAL/PANIC (which can follow a landed commit), is
   marked. `data_error_from` classifies a marked error as `DataError::OutcomeUnknown` (#815), so `node_failure`
   re-reads it. **Tempting wrong fix:** a bare `tx.commit().await?` "because

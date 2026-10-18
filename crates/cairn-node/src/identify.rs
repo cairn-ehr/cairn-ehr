@@ -161,7 +161,10 @@ pub async fn identify_patient(
         }
         None => None,
     };
-    tx.commit().await?;
+    // A lost commit may have landed: marked, so a re-run is not offered blind (#817).
+    tx.commit()
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(identify_event_id, e.into()))?;
 
     Ok(IdentifyOutcome {
         identify_event_id,

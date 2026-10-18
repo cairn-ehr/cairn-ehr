@@ -4185,7 +4185,17 @@ async fn run() -> anyhow::Result<()> {
                 &basis,
             )
             .await?;
-            println!("registered John Doe {pid}\ncallsign {call}\nlocal ref: John Doe #{ordinal} (this node)");
+            println!("registered John Doe {pid}\ncallsign {call}");
+            // NOT `?`: the chart is committed; a failed display read must not read as a
+            // failed registration, or the retry mints a second chart (#817 review).
+            match ordinal {
+                Ok(n) => println!("local ref: John Doe #{n} (this node)"),
+                Err(e) => eprintln!(
+                    "local ref unavailable — the chart above IS registered, do not register \
+                     again: {}",
+                    cairn_node::db_diagnosis::operator_chain(&e)
+                ),
+            }
         }
         Cmd::PatientSearch {
             name,

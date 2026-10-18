@@ -334,9 +334,13 @@ pub async fn apply_auto_candidate(
     .await
     .map_err(|e| LocalDbFault::new("marking the proposal auto_applied", e))?;
 
+    // The one commit here that writes an event, so the one that is marked (#817); the two
+    // review commits above only set a status: a re-run after a lost one skips the row (now
+    // `review`) or sends it to review again (still `pending`), both harmless.
     tx.commit()
         .await
-        .map_err(|e| LocalDbFault::new("committing the auto-applied link", e))?;
+        .map_err(|e| LocalDbFault::new("committing the auto-applied link", e))
+        .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
     Ok(AutoOutcome::Applied(event_id))
 }
 

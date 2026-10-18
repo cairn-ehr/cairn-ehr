@@ -164,9 +164,11 @@ pub async fn assert_text_evidence(
     );
     let signed = sign(&body, sk)?;
 
+    // The statement IS the commit; a lost answer may have landed (#817).
     client
         .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
     Ok(event_id)
 }
 

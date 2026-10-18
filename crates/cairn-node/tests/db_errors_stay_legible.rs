@@ -703,32 +703,80 @@ fn every_postgres_call_in_the_component_read_names_what_it_was_doing() {
     );
 }
 
-/// The files whose every COMMIT goes through `db_diagnosis::commit_failure` (#713, #814), with
-/// how many AUTOCOMMIT statements each also routes through it (an autocommit statement IS its
-/// commit, and has no `.commit()` to count): a judgement's commit; each sign-off line's commit;
-/// a medication event's attested COMMIT plus its unattested `submit_event` statement; a
-/// reconciliation's attested commit; the CLI's thread attestation; a registration's one
-/// transaction (#815: a lost commit may have created the chart, so a retry could mint a second).
-const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
-    ("crates/cairn-node/src/chart_link/judge.rs", 0),
-    ("crates/cairn-node/src/patient/register.rs", 0),
-    ("crates/cairn-node/src/medication/signoff.rs", 0),
-    ("crates/cairn-node/src/medication/sealed_submit.rs", 1),
-    ("crates/cairn-node/src/medication/reconciliation.rs", 0),
-    ("crates/cairn-node/src/medication/attestation.rs", 0),
+/// The files whose every event-writing commit goes through `db_diagnosis::commit_failure`
+/// (#713, #814): a judgement's commit; each sign-off line's commit; a medication event's
+/// attested COMMIT plus its unattested `submit_event` statement; a reconciliation's attested
+/// commit; the CLI's thread attestation; a registration's one transaction (#815: a lost commit
+/// may have created the chart, so a retry could mint a second). Since #817 the identity writes
+/// too: a re-run after a lost commit authors a SECOND event (a second John-Doe chart, a second
+/// identify, duplicate evidence), and the autocommit submits of a sensitivity grade or
+/// withdrawal, a shred, and a text evidence. The two link paths (an accepted proposal, an
+/// auto-applied link) are fenced by their proposal's status, so a re-run writes nothing; they
+/// are marked anyway, because the marker only claims less.
+///
+/// An autocommit statement IS its commit and has no `.commit()` to count, so each file's
+/// autocommits are found by [`autocommit_event_writes_in`], never declared by hand: the hand
+/// count is how three such files sat unmarked and unlisted while this guard was green.
+const MARKED_COMMIT_SITES: &[&str] = &[
+    "crates/cairn-node/src/chart_link/judge.rs",
+    "crates/cairn-node/src/patient/register.rs",
+    "crates/cairn-node/src/medication/signoff.rs",
+    "crates/cairn-node/src/medication/sealed_submit.rs",
+    "crates/cairn-node/src/medication/reconciliation.rs",
+    "crates/cairn-node/src/medication/attestation.rs",
+    "crates/cairn-node/src/identify.rs",
+    "crates/cairn-node/src/john_doe.rs",
+    "crates/cairn-node/src/evidence.rs",
+    "crates/cairn-node/src/photo_evidence.rs",
+    "crates/cairn-node/src/apply_proposal.rs",
+    "crates/cairn-node/src/auto_apply.rs",
+    "crates/cairn-node/src/sensitivity/mod.rs",
+    "crates/cairn-node/src/shred.rs",
+    "crates/cairn-node/src/identity_evidence.rs",
 ];
 
-/// Every other file that commits a database transaction, with why it is not (yet) marked. A
-/// file that is in neither list is red, so a new write is classified on purpose, never by
-/// default; moving a file from here to [`MARKED_COMMIT_SITES`] is how #817 is fixed.
+/// Commits inside a MARKED file that write no event, so there is nothing to double: how many,
+/// and why. Each is subtracted from that file's count of commits that need `commit_failure(`.
+/// Kept apart from [`UNMARKED_COMMITS`] because the same file also commits an event, which IS
+/// marked; a new commit in it is still red unless it is marked or listed here on purpose.
+const EVENTLESS_COMMITS: &[(&str, usize, &str)] = &[(
+    "crates/cairn-node/src/auto_apply.rs",
+    2,
+    "sending a disputed or vetoed pair to human review only sets `match_proposal.status`; \
+     a re-run after a lost commit finds the row `review` (skips it) or `pending` (sends it \
+     again), both harmless",
+)];
+
+/// Every other file that commits a database transaction or writes an event in autocommit,
+/// with why it is not marked. A file that is in neither list is red, so a new write is
+/// classified on purpose, never by default.
 const UNMARKED_COMMITS: &[(&str, &str)] = &[
-    ("crates/cairn-node/src/identify.rs", "#817"),
-    ("crates/cairn-node/src/john_doe.rs", "#817"),
-    ("crates/cairn-node/src/evidence.rs", "#817"),
-    ("crates/cairn-node/src/photo_evidence.rs", "#817"),
-    ("crates/cairn-node/src/apply_proposal.rs", "#817"),
-    ("crates/cairn-node/src/restore.rs", "#817"),
-    ("crates/cairn-node/src/auto_apply.rs", "#817"),
+    (
+        "crates/cairn-node/src/restore.rs",
+        "`finalize_identity`'s commit fences the restore door: if it landed, `local_node` is \
+         enrolled and a re-run is refused, so it cannot be written twice (#817)",
+    ),
+    (
+        "crates/cairn-node/src/identity.rs",
+        "node-plane events: `provision` and `author_supersede` run inside `init` (whose \
+         unwrap-key registration refuses a re-run against a provisioned node) or inside \
+         restore's fenced transaction; a duplicate `peer.added`/`peer.revoked` restates the \
+         same trust, because `trust_peer` reads only the latest (#817 review)",
+    ),
+    (
+        "crates/cairn-node/src/enroll.rs",
+        "`enroll_human_actor`'s standing checks refuse a re-run once the key or determinant is \
+         enrolled, so it cannot enrol twice",
+    ),
+    (
+        "crates/cairn-node/src/actor_enrolment.rs",
+        "`enroll_device_actor` answers an already-enrolled key with `Ok(false)` before writing",
+    ),
+    (
+        "crates/cairn-node/src/matcher_actor.rs",
+        "the matcher actor is enrolled only when its epoch has never been, so a re-run finds it \
+         current and writes nothing",
+    ),
     (
         "cairn-gui/cairn-gui-tauri/src/link/record_links.rs",
         "a read-only snapshot: it writes nothing",
@@ -748,18 +796,68 @@ fn db_commits_in(code: &str) -> usize {
     code.matches(".commit().await").count() + code.matches(".commit()?").count()
 }
 
+/// The event-writing doors whose call, sent on its own, is its own commit.
+const EVENT_WRITING_DOORS: [&str; 3] = [
+    "\"SELECTsubmit_event(",
+    "\"SELECTsubmit_node_event(",
+    "\"SELECTenroll_actor(",
+];
+
+/// How many event-writing door calls in flattened code are sent OUTSIDE a transaction, i.e. on
+/// a receiver other than `tx` (`client.execute("SELECT submit_event(…)")` is one,
+/// `tx.execute(…)` is not). Each such statement IS a commit, with no `.commit()` to find.
+///
+/// shortcut: the receiver is judged by its name, so a helper handed a transaction under
+/// another name (`identity::provision(&tx, …)` inside restore) counts as autocommit; such a
+/// file must be listed, never silently skipped, so the error is a false red, not a false green.
+fn autocommit_event_writes_in(code: &str) -> usize {
+    let code = code.replace(' ', "");
+    EVENT_WRITING_DOORS
+        .iter()
+        .flat_map(|door| code.match_indices(door).map(|(at, _)| &code[..at]))
+        .filter(|before| {
+            // `before` ends `<receiver>.<method>(`: drop the `(` and the method, keep the name.
+            let call = before.trim_end_matches('(');
+            let receiver = call.rsplit_once('.').map_or("", |(r, _)| r);
+            let name_start = receiver
+                .rfind(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                .map_or(0, |i| i + 1);
+            &receiver[name_start..] != "tx"
+        })
+        .count()
+}
+
+/// [`autocommit_event_writes_in`] tells a statement sent alone from one inside a transaction,
+/// whatever rustfmt did with the lines.
+#[test]
+fn an_autocommit_event_write_is_told_from_one_inside_a_transaction() {
+    let code = flattened_code(
+        "client\n    .execute(\n        \"SELECT submit_event($1,$2,$3)\",\n    )\n\
+         tx.execute(\"SELECT submit_event($1)\", &[&s])\n\
+         db.execute(\"SELECT submit_node_event($1)\", &[&b])\n\
+         c.query_one(\"SELECT enroll_actor('agent', $1::text::jsonb, $2)\", &[])\n\
+         db.query_one(\"SELECT wall, counter FROM node_hlc_tick()\", &[])",
+    );
+    assert_eq!(autocommit_event_writes_in(&code), 3);
+}
+
 /// A clinical write whose commit is lost mid-flight MAY have landed, and the window must say so,
-/// never "failed" (#814). So every file that commits is listed: marked, or not yet with its
-/// reason. In a marked file each commit (plus each declared autocommit) is one `commit_failure(`
-/// call, so a second commit added as `.commit().await.context("…")?` — which compiles and reads
-/// as an outage, the #713 hazard — is red even though the file already has one marked site.
+/// never "failed" (#814). So every file that commits, or writes an event in autocommit, is
+/// listed: marked, or not with its reason. In a marked file each commit and each autocommit
+/// event write is one `commit_failure(` call (less its eventless commits), so a second commit
+/// added as `.commit().await.context("…")?` — which compiles and reads as an outage, the #713
+/// hazard — is red even though the file already has one marked site.
+///
+/// It counts, it does not place: a marker moved from a commit onto another statement in the
+/// same file keeps the count and stays green, and nothing checks that an eventless commit
+/// stays eventless. Review still owns where the marker sits.
 #[test]
 fn every_commit_is_marked_outcome_unknown_or_listed_with_its_reason() {
     let root = sources::repo_root();
     let listed = |rel: &str| {
-        MARKED_COMMIT_SITES.iter().any(|(p, _)| *p == rel)
-            || UNMARKED_COMMITS.iter().any(|(p, _)| *p == rel)
+        MARKED_COMMIT_SITES.contains(&rel) || UNMARKED_COMMITS.iter().any(|(p, _)| *p == rel)
     };
+    let writes = |code: &str| db_commits_in(code) + autocommit_event_writes_in(code);
     let mut unlisted = Vec::new();
     for path in sources::production_rust_files(&root) {
         let rel = path
@@ -767,15 +865,15 @@ fn every_commit_is_marked_outcome_unknown_or_listed_with_its_reason() {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        if db_commits_in(&flattened_code(&sources::read_source(&path))) > 0 && !listed(&rel) {
+        if writes(&flattened_code(&sources::read_source(&path))) > 0 && !listed(&rel) {
             unlisted.push(rel);
         }
     }
     assert!(
         unlisted.is_empty(),
-        "these files commit a transaction but are in neither MARKED_COMMIT_SITES nor \
-         UNMARKED_COMMITS — route the commit through `db_diagnosis::commit_failure`, or list \
-         the file with its reason: {unlisted:?}"
+        "these files commit a transaction or write an event in autocommit, but are in neither \
+         MARKED_COMMIT_SITES nor UNMARKED_COMMITS — route the commit through \
+         `db_diagnosis::commit_failure`, or list the file with its reason: {unlisted:?}"
     );
 
     let read = |rel: &str| {
@@ -784,22 +882,36 @@ fn every_commit_is_marked_outcome_unknown_or_listed_with_its_reason() {
                 .unwrap_or_else(|e| panic!("{rel} is in the tree: {e}")),
         )
     };
-    for (path, autocommits) in MARKED_COMMIT_SITES {
+    for path in MARKED_COMMIT_SITES {
         let text = read(path);
         let commits = db_commits_in(&text);
+        let autocommits = autocommit_event_writes_in(&text);
         let marked = text.matches("commit_failure(").count();
+        let eventless = EVENTLESS_COMMITS
+            .iter()
+            .find(|(p, _, _)| p == path)
+            .map_or(0, |(_, n, _)| *n);
+        // Added, never subtracted: an eventless count above the commits must fail by name.
         assert_eq!(
-            marked,
+            marked + eventless,
             commits + autocommits,
-            "{path}: {commits} commit(s) + {autocommits} autocommit statement(s), but {marked} \
-             `commit_failure(` call(s) — every commit must be marked"
+            "{path}: {commits} commit(s) + {autocommits} autocommit event write(s), but {marked} \
+             `commit_failure(` call(s) + {eventless} eventless commit(s) — every commit that \
+             writes an event must be marked"
         );
     }
-    // A listed file that no longer commits is a stale entry: the list must stay the inventory.
+    // An eventless entry must name a marked file, or it is a hole in the inventory.
+    for (path, _, _) in EVENTLESS_COMMITS {
+        assert!(
+            MARKED_COMMIT_SITES.contains(path),
+            "{path} is in EVENTLESS_COMMITS but not in MARKED_COMMIT_SITES"
+        );
+    }
+    // A listed file that no longer writes is a stale entry: the list must stay the inventory.
     for (path, _) in UNMARKED_COMMITS {
         assert!(
-            db_commits_in(&read(path)) > 0,
-            "{path} no longer commits: drop its entry"
+            writes(&read(path)) > 0,
+            "{path} no longer writes: drop its entry"
         );
     }
 }
