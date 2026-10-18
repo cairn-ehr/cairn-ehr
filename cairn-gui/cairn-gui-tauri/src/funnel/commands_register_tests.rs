@@ -4,7 +4,7 @@
 //! exactly the rows the prompt showed. Also the window's open/close chart state.
 use super::tests::f;
 use super::*;
-use crate::funnel::view::Retry;
+use crate::funnel::view::{Recorded, Retry};
 use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::TokenError;
 
@@ -126,9 +126,9 @@ async fn a_failed_registration_keeps_the_search_and_the_retry_works() {
         .expect("the Kept search registers on retry");
 }
 
-/// #815: a registration whose commit got no answer may have created the chart. The clerk is
-/// told it is NOT known (never "nothing was saved") and the same search cannot register again:
-/// a second press would mint a second chart for the same person.
+/// #815: a registration whose commit got no ordinary answer may have created the chart. The
+/// clerk is told it is NOT known (never "nothing was saved") and the same search cannot register
+/// again: a second press would mint a second chart for the same person.
 #[tokio::test]
 async fn an_unknown_registration_outcome_withholds_the_retry_and_spends_the_search() {
     let state = AppState::mock(None);
@@ -142,13 +142,28 @@ async fn an_unknown_registration_outcome_withholds_the_retry_and_spends_the_sear
         .unwrap()
         .fail_next(DataError::OutcomeUnknown("connection closed".into()));
     let err = register_impl(&state, t).await.unwrap_err();
-    assert_eq!(err.retry, Retry::Never);
+    // Not a live retry; and the signal funnel.js reads to forget every token it holds.
+    assert_eq!(err.retry, Retry::AfterReread(Recorded::Unknown));
     assert!(err.text.contains("NOT known"), "{}", err.text);
     assert!(!err.text.contains("Nothing was saved"), "{}", err.text);
     assert_eq!(
         register_impl(&state, t).await.unwrap_err(),
         token_error_view(TokenError::Absent)
     );
+}
+
+/// #815 review: after an unknown outcome funnel.js forgets the token it holds even when a newer
+/// search replaced the one sent — `settle` spent that one too. Otherwise the next press is
+/// refused `Absent`, and that refusal overwrites the "NOT known" sentence. The webview has no
+/// test rig of its own (no npm: main.js's header), so this reads the source.
+#[test]
+fn funnel_js_forgets_every_token_after_an_unknown_registration() {
+    let register = crate::source_guard::js_fn(include_str!("../../src-ui/funnel.js"), "onRegister");
+    assert!(
+        register.contains(r#"const spent = behindTheRecord(failure) === "unknown";"#),
+        "{register}"
+    );
+    assert!(register.contains("if (spent || "), "{register}");
 }
 
 #[tokio::test]

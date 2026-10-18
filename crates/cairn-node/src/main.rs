@@ -5394,52 +5394,7 @@ async fn run() -> anyhow::Result<()> {
             .await?;
 
             if out.attested.is_empty() {
-                // FIX 4 (#288 review) + #338 review finding 2: FOUR clinical states all
-                // produce an empty `attested`, and each earns a different sentence. Saying
-                // "everything is signed" for any of the other three is a precise untruth —
-                // exactly what principle 4 forbids — about the one question the clinician
-                // is asking.
-                if out.total_rows == 0 && out.groups_missing_from_chart.is_empty() {
-                    println!(
-                        "no medications are recorded for {patient}; nothing was signed. \
-                         Recording \"nil medications, reviewed\" as an act has no home yet \
-                         (issue #331)."
-                    );
-                } else if out.total_rows == 0 {
-                    // Guarded on the missing set: "no medications are recorded" is a
-                    // straightforward LIE when the node holds content for this patient it
-                    // simply cannot display. The detail follows in the block below.
-                    println!(
-                        "nothing could be signed for {patient}: this chart displays no \
-                         medications, but that is NOT the same as having none — see below."
-                    );
-                } else if out.active_rows == 0 {
-                    // A chart of nothing but struck lines. Those lines may well carry NO
-                    // signature at all — a ceased drug is never re-signed — so the
-                    // "everything already signed" sentence below would be flatly false here.
-                    println!(
-                        "no CURRENT medications for {patient} ({} ceased line(s) on the \
-                         chart); nothing needed a signature. A struck line is never \
-                         re-signed, signed or not.",
-                        out.total_rows
-                    );
-                } else if out.withheld.is_empty()
-                    && out.failed.is_empty()
-                    && out.interrupted.is_none()
-                {
-                    // Also guarded on `failed`/`interrupted` (#818): a gesture whose every line
-                    // failed or was cut off signed nothing, and its lines are NOT signed.
-                    println!(
-                        "nothing to sign off for {patient}: every current drug already \
-                         carries a current signature"
-                    );
-                } else {
-                    // Guard on `withheld`: without it this branch would claim every drug
-                    // is signed while the ONLY outstanding lines were ones the node
-                    // refused to sign — a precise untruth about the one thing the
-                    // clinician is asking about.
-                    println!("nothing was signed off for {patient}.");
-                }
+                println!("{}", nothing_attested_sentence(&out, patient));
             } else {
                 println!(
                     "signed off {} medication thread(s) for {patient}",
@@ -5505,10 +5460,11 @@ async fn run() -> anyhow::Result<()> {
                 // ATTEMPTED WRITE THAT ERRORED, so it is the one outstanding-work category
                 // that also earns a non-zero exit: a script must not read "sign-off
                 // succeeded" from a run where a signature the clinician asked for did not
-                // land. Each line rolled back alone (ADR-0060), so the rest are committed.
+                // land. Each line rolled back alone (ADR-0060), so the lines signed above are
+                // committed; a stop (#818, below) names the lines that were never tried.
                 eprintln!(
                     "! {} medication line(s) could NOT be signed. Each rolled back on its own \
-                     — every other line above is committed and unaffected.",
+                     — every line signed above is committed and unaffected.",
                     out.failed.len()
                 );
                 for line in &out.failed {
@@ -5518,13 +5474,15 @@ async fn run() -> anyhow::Result<()> {
             if let Some(stopped) = &out.interrupted {
                 // #818: the gesture stopped early. Whatever was signed above stays signed; this
                 // names the line it stopped at and the lines it never tried.
-                match stopped.unknown_event {
-                    Some(event) => eprintln!(
-                        "! whether {} was signed is NOT known: no answer came back while event \
-                         {event} was being saved ({}). Check the chart before signing it again.",
+                use cairn_node::medication::signoff::StoppedLine;
+                match stopped.line {
+                    StoppedLine::MayBeSigned { event } => eprintln!(
+                        "! whether {} was signed is NOT known: no ordinary answer came back while \
+                         event {event} was being saved ({}). Check the chart before signing it \
+                         again.",
                         stopped.medication_id, stopped.cause
                     ),
-                    None => eprintln!(
+                    StoppedLine::NotSigned => eprintln!(
                         "! the sign-off stopped at {}, which was NOT signed: {}",
                         stopped.medication_id, stopped.cause
                     ),
@@ -5719,6 +5677,60 @@ fn print_candidates(list: &cairn_patient_search::CandidateList) {
     }
 }
 
+/// The `sign-off` verb's first line when nothing was attested. **Pure.**
+///
+/// FIX 4 (#288 review) + #338 review finding 2: several clinical states all produce an empty
+/// `attested`, and each earns a different sentence. Saying "everything is signed" for any of the
+/// others is a precise untruth — exactly what principle 4 forbids — about the one question the
+/// clinician is asking.
+fn nothing_attested_sentence(
+    out: &cairn_node::medication::signoff::SignOffOutcome,
+    patient: Uuid,
+) -> String {
+    if out.total_rows == 0 && out.groups_missing_from_chart.is_empty() {
+        format!(
+            "no medications are recorded for {patient}; nothing was signed. Recording \
+             \"nil medications, reviewed\" as an act has no home yet (issue #331)."
+        )
+    } else if out.total_rows == 0 {
+        // Guarded on the missing set: "no medications are recorded" is a straightforward LIE
+        // when the node holds content for this patient it simply cannot display. The detail
+        // follows in the block the caller prints below.
+        format!(
+            "nothing could be signed for {patient}: this chart displays no medications, but \
+             that is NOT the same as having none — see below."
+        )
+    } else if out.active_rows == 0 {
+        // A chart of nothing but struck lines. Those lines may well carry NO signature at all —
+        // a ceased drug is never re-signed — so "everything already signed" would be false.
+        format!(
+            "no CURRENT medications for {patient} ({} ceased line(s) on the chart); nothing \
+             needed a signature. A struck line is never re-signed, signed or not.",
+            out.total_rows
+        )
+    } else if out.withheld.is_empty() && out.failed.is_empty() && out.interrupted.is_none() {
+        // Also guarded on `failed`/`interrupted` (#818): a gesture whose lines failed or were
+        // cut off has lines that still need a signature.
+        format!(
+            "nothing to sign off for {patient}: every current drug already carries a current \
+             signature"
+        )
+    } else if out.interrupted.as_ref().is_some_and(|stopped| {
+        matches!(
+            stopped.line,
+            cairn_node::medication::signoff::StoppedLine::MayBeSigned { .. }
+        )
+    }) {
+        // #818: the line it stopped at MAY be signed, so "nothing was signed" would be the false
+        // count the window's "Signed 0" rule drops. The stop itself is named below, on stderr.
+        format!("whether anything was signed off for {patient} is NOT known — see below.")
+    } else {
+        // Guard on `withheld`: without it this would claim every drug is signed while the ONLY
+        // outstanding lines were ones the node refused to sign.
+        format!("nothing was signed off for {patient}.")
+    }
+}
+
 /// Is this custody-load failure a PRESENT file we could not read, and if so what must the
 /// operator be told? **Pure.**
 ///
@@ -5749,6 +5761,43 @@ fn unreadable_custody_notice(
 
 #[cfg(test)]
 mod tests {
+    /// #818 review: a sign-off that signed nothing, stopped at a line whose COMMIT got no
+    /// ordinary answer, must not print "nothing was signed off" — that line MAY be signed, the
+    /// same false count the window's "Signed 0" rule drops (`write_failure::sign_off_outcome`).
+    /// A stop at a line that wrote nothing is still "nothing was signed off": that is true.
+    #[test]
+    fn a_sign_off_whose_only_tried_line_may_be_signed_never_says_nothing_was_signed() {
+        use cairn_node::medication::signoff::{SignOffInterrupted, SignOffOutcome, StoppedLine};
+        let t = uuid::Uuid::from_u128;
+        let stopped = |line| SignOffOutcome {
+            attested: vec![],
+            event_ids: vec![],
+            total_rows: 2,
+            active_rows: 2,
+            withheld: vec![],
+            separation_targets: Default::default(),
+            groups_missing_from_chart: vec![],
+            failed: vec![],
+            interrupted: Some(SignOffInterrupted {
+                medication_id: t(1),
+                line,
+                cause: "connection closed".into(),
+                not_attempted: vec![t(2)],
+            }),
+            charts: cairn_medication_view::ChartSet::single(t(9)),
+        };
+
+        let may_be = super::nothing_attested_sentence(
+            &stopped(StoppedLine::MayBeSigned { event: t(5) }),
+            t(9),
+        );
+        assert!(!may_be.contains("nothing was signed"), "{may_be}");
+        assert!(may_be.contains("NOT known"), "{may_be}");
+
+        let not_signed = super::nothing_attested_sentence(&stopped(StoppedLine::NotSigned), t(9));
+        assert_eq!(not_signed, format!("nothing was signed off for {}.", t(9)));
+    }
+
     /// **ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS** (PR #566 review).
     ///
     /// The restore reads back the custody key it just wrote, and an `.ok()` there collapsed

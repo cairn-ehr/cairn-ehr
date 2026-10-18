@@ -121,14 +121,16 @@ fn node_failure_never_offers_a_retry_for_a_commit_that_may_have_landed() {
 /// interrupted sign-off was an `Err` that discarded the signed lines and the failures' reasons.
 #[test]
 fn a_sign_off_outcome_keeps_signed_failed_unknown_and_untried_apart() {
+    use cairn_node::medication::signoff::{SignOffInterrupted, StoppedLine};
     let t = uuid::Uuid::from_u128;
-    let unknown = cairn_node::medication::signoff::SignOffInterrupted {
+    let unknown = SignOffInterrupted {
         medication_id: t(2),
-        unknown_event: Some(t(9)),
+        line: StoppedLine::MayBeSigned { event: t(9) },
         cause: "connection closed".into(),
         not_attempted: vec![t(3)],
     };
-    let text = sign_off_outcome(1, &[], Some(&unknown), &[]);
+    let (text, behind) = sign_off_outcome(1, &[], Some(&unknown), &[]);
+    assert_eq!(behind, Some(Recorded::Unknown), "the list may be behind");
     assert!(text.starts_with("Signed 1 medication thread(s)."), "{text}");
     assert!(
         text.contains(&format!("Whether thread {} was signed is NOT known", t(2))),
@@ -151,18 +153,23 @@ fn a_sign_off_outcome_keeps_signed_failed_unknown_and_untried_apart() {
     );
     assert!(!text.contains("failed"), "never \"failed\": {text}");
 
-    let text = sign_off_outcome(0, &[], Some(&unknown), &[]);
+    let (text, _) = sign_off_outcome(0, &[], Some(&unknown), &[]);
     assert!(
         !text.contains("Signed 0"),
         "that line may be signed: {text}"
     );
+    assert!(
+        text.starts_with(&format!("Whether thread {} was signed is NOT known", t(2))),
+        "the unknown line is still said: {text}"
+    );
 
-    let wrote_nothing = cairn_node::medication::signoff::SignOffInterrupted {
-        unknown_event: None,
+    let wrote_nothing = SignOffInterrupted {
+        line: StoppedLine::NotSigned,
         not_attempted: vec![],
         ..unknown.clone()
     };
-    let text = sign_off_outcome(0, &[], Some(&wrote_nothing), &[]);
+    let (text, behind) = sign_off_outcome(0, &[], Some(&wrote_nothing), &[]);
+    assert_eq!(behind, None, "nothing may have landed");
     assert!(text.starts_with("Signed 0 medication thread(s)."), "{text}");
     assert!(
         text.contains(&format!(
@@ -173,13 +180,30 @@ fn a_sign_off_outcome_keeps_signed_failed_unknown_and_untried_apart() {
     );
     assert!(!text.contains("not tried"), "{text}");
 
+    // Every part at once, in order: signed, failed, where it stopped, untried, the notes.
+    let (text, _) = sign_off_outcome(
+        1,
+        &["thread x: refused".into()],
+        Some(&unknown),
+        &[Some("Withheld.".into())],
+    );
+    let at = |part: &str| {
+        text.find(part)
+            .unwrap_or_else(|| panic!("{part:?} in {text}"))
+    };
+    assert!(at("Signed 1") < at("could NOT be signed"), "{text}");
+    assert!(at("could NOT be signed") < at("is NOT known"), "{text}");
+    assert!(at("is NOT known") < at("were not tried"), "{text}");
+    assert!(at("were not tried") < at("Withheld."), "{text}");
+
     // Uninterrupted: the sentence the webview used to build, failed lines and notes in order.
-    let text = sign_off_outcome(
+    let (text, behind) = sign_off_outcome(
         2,
         &["thread x: refused".into()],
         None,
         &[Some("Withheld.".into()), None, Some("Across.".into())],
     );
+    assert_eq!(behind, None);
     assert_eq!(
         text,
         "Signed 2 medication thread(s). 1 line(s) could NOT be signed and were left unsigned: \

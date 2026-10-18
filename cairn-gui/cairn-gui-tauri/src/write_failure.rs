@@ -18,8 +18,8 @@ pub(crate) fn retry_for(error: &DataError) -> Retry {
         DataError::Stale(_) => Retry::AfterReread(Recorded::No),
         DataError::Refused(_) | DataError::NotFound => Retry::Never,
         DataError::NotProvisioned(_) => Retry::AfterOperator,
-        // The failing step wrote nothing: an outage. (Earlier lines of a sign-off may be signed,
-        // #818; a commit that MAY have written is `OutcomeUnknown`, below.)
+        // The failing step wrote nothing: an outage. (A commit that MAY have written is
+        // `OutcomeUnknown`, below; a sign-off that signed a line returns no error at all, #818.)
         DataError::Unavailable(_) => Retry::Now,
         // A commit that may have written: re-read, never a live retry (#713, #815).
         DataError::OutcomeUnknown(_) => Retry::AfterReread(Recorded::Unknown),
@@ -45,13 +45,20 @@ pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
 /// left out beside it (the count would claim that line is not signed). `notes` are the chart's
 /// own reports (withheld, missing, linked charts), appended as given. Rust, not the webview, so
 /// every combination is tested.
+///
+/// Returns the sentence AND the report's `behind_the_record` (`Unknown` exactly when the sentence
+/// says a line may be signed), from one match, so the two cannot disagree.
 pub(crate) fn sign_off_outcome(
     signed: usize,
     failed: &[String],
     interrupted: Option<&cairn_node::medication::signoff::SignOffInterrupted>,
     notes: &[Option<String>],
-) -> String {
-    let unknown = interrupted.and_then(|i| i.unknown_event);
+) -> (String, Option<Recorded>) {
+    use cairn_node::medication::signoff::StoppedLine;
+    let unknown = match interrupted.map(|i| i.line) {
+        Some(StoppedLine::MayBeSigned { event }) => Some(event),
+        Some(StoppedLine::NotSigned) | None => None,
+    };
     let mut parts = Vec::new();
     if signed > 0 || unknown.is_none() {
         parts.push(format!("Signed {signed} medication thread(s)."));
@@ -68,9 +75,9 @@ pub(crate) fn sign_off_outcome(
         let cause = &stopped.cause;
         parts.push(match unknown {
             Some(event) => format!(
-                "Whether thread {line} was signed is NOT known — no answer came back while event \
-                 {event} was being saved ({cause}). Once the window can reach the node again, the \
-                 chart shows whether it is signed."
+                "Whether thread {line} was signed is NOT known — no ordinary answer came back \
+                 while event {event} was being saved ({cause}). Once the window can reach the \
+                 node again, the chart shows whether it is signed."
             ),
             None => {
                 format!("The sign-off stopped at thread {line}, which was NOT signed ({cause}).")
@@ -90,7 +97,7 @@ pub(crate) fn sign_off_outcome(
         }
     }
     parts.extend(notes.iter().flatten().cloned());
-    parts.join(" ")
+    (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
 /// What one cease did, as the outcome line says it (ADR-0060: partial completion is reported,
@@ -121,9 +128,9 @@ pub(crate) fn cease_outcome(
             .map(|(thread, event, cause)| format!("thread {thread} (event {event}: {cause})"))
             .collect();
         parts.push(format!(
-            "Whether {} thread(s) of this drug were stopped is NOT known — no answer came back \
-             while saving {}. Once the window can reach the node again, the chart shows whether \
-             each is still active.",
+            "Whether {} thread(s) of this drug were stopped is NOT known — no ordinary answer \
+             came back while saving {}. Once the window can reach the node again, the chart \
+             shows whether each is still active.",
             unknown.len(),
             named.join("; ")
         ));

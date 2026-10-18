@@ -25,7 +25,6 @@ use crate::funnel::view::{
 };
 use crate::funnel::window::OpenChart;
 use crate::state::AppState;
-use cairn_gui_data::port::DataError;
 use cairn_gui_funnel::{
     bound_for_prompt, node_reason, trigger_state, FormSnapshot, Recorded, Restored, SearchToken,
 };
@@ -268,17 +267,10 @@ pub async fn register_impl(
     let name = taken.raw_name().to_string();
     let birth_date = taken.query().birth_date.clone();
     let outcome = state.funnel_backend.register(taken).await;
-    let settled = {
-        let mut funnel = state.funnel.lock().await;
-        match outcome {
-            // #815: the chart may exist, so the search is spent as a success spends it — never
-            // restored, or the next press registers the same person a second time.
-            Err((error @ DataError::OutcomeUnknown(_), attested)) => {
-                Err((error, funnel.settle_unknown(attested)))
-            }
-            other => funnel.settle(other),
-        }
-    };
+    // `settle` itself spends the search when the outcome is unknown (#815,
+    // `RegistrationFailure`): the chart may exist, so a restored search would let the next press
+    // register the same person a second time.
+    let settled = state.funnel.lock().await.settle(outcome);
     match settled {
         Ok(patient) => {
             let header = header_from_registration(patient, &name, birth_date.as_deref());

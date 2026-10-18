@@ -260,8 +260,9 @@ fn a_failed_sign_off_or_cease_is_worded_from_its_error_view() {
 }
 
 /// #814: an interrupted commit is not a failure. Sign-off's catch drops its "failed" prefix for
-/// it (Rust's sentence says whether it was recorded is NOT known); in that one handler the act is
-/// known, so keying the prefix on `"unknown"` cannot excuse another act (the #811 rule). A cease
+/// it (defence only since #818, which reports an interrupted sign-off as `Ok`); in that one
+/// handler the act is known, so keying the prefix on `"unknown"` cannot excuse another act (the
+/// #811 rule). A cease
 /// that ran says Rust's whole outcome line (`write_failure::cease_outcome`, where every
 /// combination is tested) and re-reads with the report's mark, so a failed re-read marks the list
 /// "may be out of date".

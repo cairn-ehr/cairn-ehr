@@ -327,11 +327,16 @@ async function onRegister(event) {
     // A refusal that arrives while a chart is open (the clerk opened one mid-save) must be
     // read ON that chart: the front door and its outcome line are hidden.
     if (displayedPatient !== null) say(text);
-    if (!(failure && failure.retry === "now") && heldToken === sent) {
+    // #815: a registration that MAY have created the chart spent EVERY search, one that landed
+    // during the save included (it ran before the chart could be found). The node says so with
+    // an unknown re-read; the front door's re-read is the next search.
+    const spent = behindTheRecord(failure) === "unknown";
+    if (spent || (!(failure && failure.retry === "now") && heldToken === sent)) {
       // A verdict, a dropped search, or an operator's job: this token cannot help. Forget it
-      // — but only if no newer search replaced it during the save — and leave Register
-      // USABLE: the next click searches again and shows the answer, and the one after that
-      // registers. Never a disabled button with advice the clerk cannot follow.
+      // — but, unless every search is spent, only if no newer search replaced it during the
+      // save — and leave Register USABLE: the next click searches again and shows the answer,
+      // and the one after that registers. Never a disabled button with advice the clerk cannot
+      // follow.
       heldToken = null;
       promptHadRows = false;
     }

@@ -155,18 +155,18 @@ pub fn data_error_from(e: &anyhow::Error) -> DataError {
     // raised in Rust before any statement reached Postgres carries no SQLSTATE at all and is
     // MARKED instead (#651). Either one means the call was decided, not merely unlucky.
     //
-    // The SCOPE question is asked FIRST, and only of the marked ones, because it is narrower:
-    // a marked refusal at `NodeState` scope is still a verdict, but the way forward is an
-    // operator command rather than an edit to the form, and `Refused` is rendered with no way
-    // forward but the form. Asking it first keeps the two questions in the right order — "is
-    // this a verdict" then "a verdict about what" — so a future third scope cannot silently
-    // fall through to `Unavailable` (PR #661 review).
-    // Asked before the verdict questions: an interrupted commit carries no refusal marker and
-    // no SQLSTATE of the floor's, so it would otherwise fall through to `Unavailable` — the
-    // live retry that writes the same act twice (#815).
+    // Before either: an interrupted commit (#815). It carries no refusal marker and no SQLSTATE
+    // of the floor's, so it would otherwise fall through to `Unavailable` — the live retry that
+    // writes the same act twice.
     if cairn_node::db_diagnosis::commit_outcome_unknown_event(e).is_some() {
         return DataError::OutcomeUnknown(text);
     }
+    // Of the verdict questions, the SCOPE question is asked FIRST, and only of the marked ones,
+    // because it is narrower: a marked refusal at `NodeState` scope is still a verdict, but the
+    // way forward is an operator command rather than an edit to the form, and `Refused` is
+    // rendered with no way forward but the form. Asking it first keeps the two questions in the
+    // right order — "is this a verdict" then "a verdict about what" — so a future third scope
+    // cannot silently fall through to `Unavailable` (PR #661 review).
     match cairn_node::db_diagnosis::refusal_scope(e) {
         Some(cairn_node::db_diagnosis::RefusalScope::NodeState) => DataError::NotProvisioned(text),
         // The record changed under the caller: its own cause, because the remedy (re-read) differs

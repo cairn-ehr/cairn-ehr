@@ -479,15 +479,15 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   (the identity-side commits) and **#818** (an interrupted sign-off discards its partial report). **Merged** (PR #816).
 - **2026-10-18 (#815 + #818, PR #819):** registration's commit is marked too (maintainer's choice: mark + search
   again, not an idempotent re-send). The front door says "whether this registration was recorded is NOT known"
-  with no live retry, and the search it attested is spent like a success (`settle_unknown`), so the next Register
-  press searches first and finds the chart if it landed. A sign-off cut off mid-gesture now reports the lines signed,
+  with no live retry, and `TokenStore::settle` spends every search like a success (it asks the error,
+  `RegistrationFailure`), so the next Register press searches first and finds the chart if it landed. A sign-off cut off mid-gesture now reports the lines signed,
   the line it stopped at (NOT known, or NOT signed) and the lines never tried, in one Rust sentence
   (`sign_off_outcome`); the CLI prints the same and exits 1. Re-sending the same signed batch (safe at the floor:
-  `submit_event` is idempotent on `event_id`) stays possible later, after #807, with #649.
+  `submit_event` is idempotent on `event_id`) stays possible later, after #807, with #649. Review follow-ons: **#820**.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #819 (#815 + #818); then #817 (the identity-side commits); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #819 (#815 + #818); then #817 (the identity-side commits) and #820 (#819's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

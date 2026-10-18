@@ -182,11 +182,13 @@ pub async fn lock_state(state: tauri::State<'_, AppState>) -> Result<LockState, 
 /// What one sign-off gesture did — and, just as important, what it did not do.
 #[derive(Debug, serde::Serialize)]
 pub struct SignOffReport {
+    /// Kept on the payload beside `text` (as `CeaseReport` keeps its counts); the webview says
+    /// `text`, which already carries these.
     pub signed: usize,
     /// Lines whose own write failed. ADR-0060 decision 7: each attestation commits in its
-    /// own transaction, so a failure here means THIS line was not signed and every other
-    /// line still was. Naming which and why is what makes that safe rather than merely
-    /// convenient.
+    /// own transaction, so a failure here means THIS line was not signed and the lines signed
+    /// beside it stay signed. Lines a stopped gesture never tried (#818) are not here: `text`
+    /// names them.
     pub failed: Vec<String>,
     /// The outcome line the webview says (`write_failure::sign_off_outcome`): signed, NOT signed,
     /// where the gesture stopped early if it did (#818), and the chart's own reports — lines
@@ -276,7 +278,11 @@ pub async fn sign_off_impl(
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
 
-    record_timing(state, "signoff", outcome.attested.len(), elapsed_ms).await;
+    // A gesture that stopped early (#818) is not a sample of what signing off costs, and its
+    // connection is likely dead, so recording it would only log a false "succeeded".
+    if outcome.interrupted.is_none() {
+        record_timing(state, "signoff", outcome.attested.len(), elapsed_ms).await;
+    }
 
     // Rendered by the SAME two functions the chart itself uses, so the promise made before the
     // gesture and the report made after it cannot word the same fact differently. The ids come
@@ -295,7 +301,7 @@ pub async fn sign_off_impl(
         .iter()
         .map(|f| format!("thread {}: {}", f.medication_id, f.error))
         .collect();
-    let text = sign_off_outcome(
+    let (text, behind_the_record) = sign_off_outcome(
         outcome.attested.len(),
         &failed,
         outcome.interrupted.as_ref(),
@@ -305,10 +311,7 @@ pub async fn sign_off_impl(
         signed: outcome.attested.len(),
         failed,
         text,
-        behind_the_record: outcome
-            .interrupted
-            .and_then(|i| i.unknown_event)
-            .map(|_| Recorded::Unknown),
+        behind_the_record,
     })
 }
 
@@ -458,7 +461,10 @@ pub async fn cease_impl(
         }
     }
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
-    record_timing(state, "cease", 1, elapsed_ms).await;
+    // As for a sign-off: a gesture with an unknown outcome is no timing sample (#818 review).
+    if unknown.is_empty() {
+        record_timing(state, "cease", 1, elapsed_ms).await;
+    }
 
     let text = cease_outcome(ceased, &failed, &unknown);
     Ok(CeaseReport {

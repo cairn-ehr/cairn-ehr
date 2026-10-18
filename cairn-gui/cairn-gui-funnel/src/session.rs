@@ -28,7 +28,9 @@
 //! with a query built from a different one, because both come from the same [`FormSnapshot`].
 
 use crate::prompt::PromptList;
-use crate::token::{AttestedSearch, Restored, SearchToken, TokenError, TokenStore};
+use crate::token::{
+    AttestedSearch, RegistrationFailure, Restored, SearchToken, TokenError, TokenStore,
+};
 use cairn_patient_search::SearchQuery;
 use serde::Deserialize;
 
@@ -165,8 +167,9 @@ impl FunnelSession {
     /// Returned as one [`NamedAttestation`] rather than a `(search, name)` pair, so the binding
     /// between the two survives past this session: a caller cannot hand the port a different
     /// name without first deliberately splitting the value (`into_parts`), which only the port
-    /// call does. Every successful take must reach [`FunnelSession::settle`] — the same
-    /// two-ended contract [`TokenStore::take`] has.
+    /// call does. Every successful take must reach [`FunnelSession::settle`], whatever the
+    /// outcome (an unknown one included, #815) — the same two-ended contract
+    /// [`TokenStore::take`] has.
     pub fn take_for_register(
         &mut self,
         token: SearchToken,
@@ -191,27 +194,22 @@ impl FunnelSession {
     }
 
     /// Settle a registration's outcome — [`TokenStore::settle`], plus forgetting the name once
-    /// a success has consumed the form.
+    /// the form is consumed: by a success, or by an outcome that MAY have written (#815,
+    /// [`Restored::Consumed`]), after which the next registration searches again and that search
+    /// binds its own name.
     ///
-    /// On failure the name is KEPT: a restored search is redeemable again and must still carry
-    /// the name it ran on (the design's *"Register fails. The form keeps its values."*).
-    pub fn settle<T, E>(
+    /// On any other failure the name is KEPT: a restored search is redeemable again and must
+    /// still carry the name it ran on (the design's *"Register fails. The form keeps its
+    /// values."*).
+    pub fn settle<T, E: RegistrationFailure>(
         &mut self,
         outcome: Result<T, (E, AttestedSearch)>,
     ) -> Result<T, (E, Restored)> {
         let settled = self.store.settle(outcome);
-        if settled.is_ok() {
+        if matches!(settled, Ok(_) | Err((_, Restored::Consumed))) {
             self.name_for = None;
         }
         settled
-    }
-
-    /// Settle a registration whose commit got no answer (#815) —
-    /// [`TokenStore::settle_unknown`]. The form is consumed as a success consumes it, so the
-    /// name goes with it: the next registration searches again, and that search binds its own.
-    pub fn settle_unknown(&mut self, attested: AttestedSearch) -> Restored {
-        self.name_for = None;
-        self.store.settle_unknown(attested)
     }
 }
 

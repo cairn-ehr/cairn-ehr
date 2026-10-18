@@ -5,10 +5,12 @@
 > [!NOTE]
 > **⇒ ONE PR AWAITS THE MAINTAINER: PR [#819](https://github.com/cairn-ehr/cairn-ehr/pull/819)** (#815 + #818, branch `fix/815-818-registration-signoff-unknown`).
 > **#815** (maintainer's choice: mark + search again): registration's commit goes through `commit_failure`;
-> `data_error_from` makes the marker `DataError::OutcomeUnknown`; the front door says "NOT known", `Retry::Never`, and
-> the search is SPENT like a success (`settle_unknown` → `Restored::Consumed`), so the next press searches first.
-> **#818**: an interrupted sign-off returns `Ok` with `SignOffOutcome::interrupted`, worded whole in Rust
-> (`sign_off_outcome`); the CLI prints it and exits 1. Merged 2026-10-18: PR #816 (#814: one `commit_failure` rule
+> `data_error_from` makes the marker `DataError::OutcomeUnknown`; the front door says "NOT known" with
+> `Retry::AfterReread(Unknown)`, and `TokenStore::settle` itself SPENDS every search like a success
+> (`RegistrationFailure::may_have_written` → `Restored::Consumed`), so the next press searches first.
+> **#818**: an interrupted sign-off returns `Ok` with `SignOffOutcome::interrupted` (a `StoppedLine`: `MayBeSigned` or
+> `NotSigned`), worded whole in Rust (`sign_off_outcome`); the CLI prints it and exits 1. The review round is in the PR
+> too; its three deferred items are **#820**. Merged 2026-10-18: PR #816 (#814: one `commit_failure` rule
 > for the judgement and the medication writes; a guard inventories every `.commit()`), PR #813 (#811,
 > `Retry::AfterReread(Recorded::{No, Unknown})`), PR #805 (#797, "Read this chart again"; RUNBOOK §14 is its owed
 > human timing), PR #802. Still filed: **#817** (the identity-side commits). The
@@ -20,7 +22,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #819** (#815 + #818), then **#817** (identity commits). An idempotent re-send of a registration
+> 1. **Review and merge PR #819** (#815 + #818), then **#817** (identity commits), then **#820** (#819's review
+>    follow-ons). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
@@ -195,8 +198,21 @@ went red first, then three GUI tests failed to compile, then #818's DB test (a d
   own marker check became redundant and went.
 - **⇒ CI's GUI clippy runs `--tests` only**, so dead code in the non-test binary is invisible to it
   (`ChartSetError::text`, now `#[cfg(test)]`). Run `--all-targets` locally.
-- **⇒ A test-only trigger goes on a projection table, session-gated** (`cairn.test_kill_on`): `event_log` has an
-  "only the dispatcher" trigger pin, and a leaked trigger must be inert for every other connection.
+- **⇒ A test-only trigger goes on a projection table, session-gated** (`cairn.test_kill_thread`): `event_log` has
+  an "only the dispatcher" trigger pin, and a leaked trigger must be inert for every other connection. Name the line
+  it fires on, never count lines: a raised ERROR rolls back a session counter set in the same transaction.
+- **Review round (five reviewers), all fixed in the PR:**
+  - The CLI printed "nothing was signed off" beside a line that may be signed. It is now the pure, tested
+    `nothing_attested_sentence`.
+  - The clinician's sentence carried the marker's own text. `cause` is now the root cause.
+  - A future `settle` caller could restore an unknown outcome's search. `settle` now routes it itself.
+  - funnel.js kept a newer token Rust had spent. It now reads `AfterReread(Unknown)` as "every search is spent".
+  - A timing sample was recorded for an interrupted gesture.
+  - The CLI's registration error did not name the chart.
+  - DB pins added for an ERROR-answered commit and for a backend killed inside a line. The second is
+    mutation-checked: a `?` on its ROLLBACK goes red.
+  - Deferred to #820: exhaustive readers of `SignOffOutcome`, the judgement sentence's "connection was lost", and an
+    end-to-end lost-registration test.
 
 ### 2026-10-18 (third) — #814: the medication writes' interrupted commits
 

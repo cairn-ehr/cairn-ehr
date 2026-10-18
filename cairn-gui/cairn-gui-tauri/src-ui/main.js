@@ -380,7 +380,8 @@ async function signOff() {
   try {
     report = await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts });
   } catch (failure) {
-    // `failureText` reads the ErrorView's text; an interrupted commit (#814) never "failed".
+    // `failureText` reads the ErrorView's text. Since #818 an interrupted commit returns a report,
+    // not this error; the "unknown" check stays as defence, so such an error is never "failed".
     const unknown = behindTheRecord(failure) === "unknown";
     say((unknown ? "" : "Sign-off failed: ") + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));

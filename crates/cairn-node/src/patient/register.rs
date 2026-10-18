@@ -559,9 +559,12 @@ pub async fn register_patient(
     // outage it would invite a retry, and `register_patient` mints a fresh `patient_id` per call,
     // so that retry would register the same person a SECOND time. Marked outcome-unknown, the
     // window drops the search it held and searches again first: the chart is found if it landed.
-    tx.commit()
-        .await
-        .map_err(|e| crate::db_diagnosis::commit_failure(registration_event_id, e.into()))?;
+    // The chart id rides along: it is what an operator searches for (the CLI prints the error
+    // whole), and the marker is found anywhere on the chain, so the context does not hide it.
+    tx.commit().await.map_err(|e| {
+        crate::db_diagnosis::commit_failure(registration_event_id, e.into())
+            .context(format!("registering chart {patient_id}"))
+    })?;
 
     Ok(patient_id)
 }

@@ -220,9 +220,27 @@ impl std::error::Error for TokenError {}
 /// required is that no two `fetch_add`s return the same value.
 static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// What [`TokenStore::restore`] did with the attestation it was handed.
+/// The one thing [`TokenStore::settle`] must know about a failed registration: whether its write
+/// MAY have landed (#815). Asked by `settle` itself, so the short call stays the safe one (#659):
+/// a caller cannot put back a search whose chart may exist by forgetting to special-case it.
+/// `cairn-gui-data` implements it for `DataError` (the edge runs that way, so no cycle).
+pub trait RegistrationFailure {
+    /// True when the commit got no ordinary answer, so the chart may exist.
+    fn may_have_written(&self) -> bool;
+}
+
+/// The crate's own tests settle with plain `&str` errors, none of which may have written.
+#[cfg(test)]
+impl RegistrationFailure for &str {
+    fn may_have_written(&self) -> bool {
+        false
+    }
+}
+
+/// What became of the attestation a registration carried: [`TokenStore::restore`]'s two outcomes,
+/// and [`Restored::Consumed`], which only [`TokenStore::settle`] returns.
 ///
-/// `#[must_use]` because the two outcomes need *different words on screen* — "your
+/// `#[must_use]` because the outcomes need *different words on screen* — "your
 /// registration failed, press Register to try again" versus "a newer search has replaced
 /// yours, answer the prompt on screen" — and a caller that ignores the distinction will
 /// tell the clerk the wrong one. `restore` consumes the attestation either way: handing it
@@ -237,8 +255,8 @@ pub enum Restored {
     /// the clerk edited the form while this registration was in flight.
     SupersededAndDropped,
     /// Spent, as a success spends it, because the write MAY have landed: its commit got no
-    /// answer (#815). Nothing comes back to retry with; the way forward is to search again,
-    /// which finds the chart if it was created. See [`TokenStore::settle_unknown`].
+    /// ordinary answer (#815). Nothing comes back to retry with; the way forward is to search
+    /// again, which finds the chart if it was created. See [`TokenStore::settle`].
     Consumed,
 }
 
@@ -389,8 +407,8 @@ impl TokenStore {
     /// **A caller that forgets this leaves the store refusing every later `take`.** That is
     /// deliberate — it fails closed, costing a window reload rather than minting a duplicate
     /// chart — but it does mean [`TokenStore::commit`] and [`TokenStore::restore`] are the
-    /// two mandatory ends of every [`TokenStore::take`]. There is no third
-    /// ([`TokenStore::settle_unknown`] ends in `commit`).
+    /// two mandatory ends of every [`TokenStore::take`]. There is no third: an outcome that MAY
+    /// have written (#815) is settled by `commit` too, from inside [`TokenStore::settle`].
     ///
     /// # A success INVALIDATES, and that is the load-bearing half
     ///
@@ -466,9 +484,17 @@ impl TokenStore {
     ///
     /// `T` and `E`, not `Uuid` and `DataError`. `DataError` lives in `cairn-gui-data`, which
     /// already depends on this crate, so naming it here would invert that edge into a cycle and
-    /// the tree would not build. It is also the honest signature: a token store has no business
-    /// knowing what a failure *is*, only that one happened.
-    pub fn settle<T, E>(
+    /// the tree would not build. A token store needs to know only one thing about a failure,
+    /// [`RegistrationFailure::may_have_written`], so that is all `E` must say.
+    ///
+    /// # A failure that MAY have written is settled as a success (#815)
+    ///
+    /// Its commit got no ordinary answer, so the chart may exist. The attestation is dropped,
+    /// never restored ([`Restored::Consumed`]): restoring it would let a second press register
+    /// the same person again. And a search that landed mid-flight ran before the chart could be
+    /// found, so it must not license one either: `commit`'s invalidation stops that, exactly as
+    /// for a success.
+    pub fn settle<T, E: RegistrationFailure>(
         &mut self,
         outcome: Result<T, (E, AttestedSearch)>,
     ) -> Result<T, (E, Restored)> {
@@ -477,23 +503,16 @@ impl TokenStore {
                 self.commit();
                 Ok(value)
             }
+            // The chart may exist (#815): settled as a success, the attestation dropped.
+            Err((error, _spent)) if error.may_have_written() => {
+                self.commit();
+                Err((error, Restored::Consumed))
+            }
             // `restore` settles the in-flight registration whether or not it keeps the
             // attestation, which is what makes this arm total: there is no path through
             // `settle` that leaves the store latched.
             Err((error, attested)) => Err((error, self.restore(attested))),
         }
-    }
-
-    /// Settle a registration whose outcome is NOT known (#815): its commit got no answer, so the
-    /// chart may exist. It settles as [`TokenStore::commit`] does — the latch is released and the
-    /// form is consumed — and the attestation is dropped, never restored. Restoring it would let
-    /// a second press register the same person again; and a search that landed mid-flight ran
-    /// before the chart could be found, so it must not license one either (`commit`'s
-    /// invalidation is what stops that, exactly as for a success).
-    pub fn settle_unknown(&mut self, attested: AttestedSearch) -> Restored {
-        drop(attested);
-        self.commit();
-        Restored::Consumed
     }
 
     /// The form was edited: whatever is held no longer describes it.
@@ -513,6 +532,14 @@ mod tests {
     use crate::prompt::bound_for_prompt;
     use cairn_patient_search::{Candidate, PersonRow, TrustState};
     use uuid::Uuid;
+
+    /// A failure whose commit got no ordinary answer (#815), for `settle`'s unknown-outcome arm.
+    struct MayHaveWritten;
+    impl RegistrationFailure for MayHaveWritten {
+        fn may_have_written(&self) -> bool {
+            true
+        }
+    }
 
     fn candidate(n: u128) -> Candidate {
         Candidate {
@@ -1000,7 +1027,7 @@ mod tests {
         );
     }
 
-    /// #815: a registration whose COMMIT got no answer may have created the chart, so it
+    /// #815: a registration whose COMMIT got no ordinary answer may have created the chart, so it
     /// settles as a success does — the form is consumed — and nothing comes back to retry
     /// with. Restoring it would let a second press register the same person again, and so
     /// would a search that landed mid-flight, before the chart existed to be found.
@@ -1011,7 +1038,11 @@ mod tests {
         let attested = store.take(first).expect("the only token");
         let mid_flight = store.record(query("Aabria Iyengar"), list_of(1)).unwrap();
 
-        assert_eq!(store.settle_unknown(attested), Restored::Consumed);
+        // Through the SHORT call (#659): `settle` asks the error itself, so a caller cannot
+        // restore a search whose chart may exist by forgetting to special-case it.
+        let settled: Result<u8, (MayHaveWritten, Restored)> =
+            store.settle(Err((MayHaveWritten, attested)));
+        assert_eq!(settled.unwrap_err().1, Restored::Consumed);
         assert!(
             store.take(first).is_err(),
             "the sent search must not come back"
