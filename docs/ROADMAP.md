@@ -486,8 +486,12 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `submit_event` is idempotent on `event_id`) stays possible later, after #807, with #649. Review follow-ons: **#820**.
 - **2026-10-18 (#817, PR #821):** every identity-side commit is marked too: identify, a John-Doe chart (whose re-run
   would mint a second chart), observed and photo evidence, a proposal's link, an auto-applied link, and the autocommit
-  submits of a sensitivity grade/withdrawal, a shred and a text evidence. The one commit left unmarked is a
-  restore's `finalize_identity`: if it landed, the door is fenced and a re-run is refused.
+  submits of a sensitivity grade/withdrawal, a shred and a text evidence. Left unmarked, each with its reason: a
+  restore's `finalize_identity` (a landed one fences the door), the node-plane events (`trust_peer` is latest-wins)
+  and the actor enrolments (their standing checks refuse a re-run). The inventory now finds autocommit writes
+  itself. A John Doe whose ordinal read fails after the commit still returns its chart. Review follow-ons:
+  **#822** (no CLI command to check an unknown outcome), **#823** (auto-apply ends as a plain outage), and a
+  John-Doe drive-through added to **#820**.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).

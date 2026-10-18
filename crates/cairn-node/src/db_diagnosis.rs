@@ -619,12 +619,14 @@ pub fn commit_outcome_unknown(event_id: uuid::Uuid, cause: anyhow::Error) -> any
 /// connection lost mid-flight), and a FATAL or PANIC answer, which can follow a commit that
 /// landed (a PANIC while flushing the commit's WAL is replayed by crash recovery).
 ///
-/// The rule every event-writing commit goes through (the medication writes, the judgement, a
-/// registration, and since #817 the identity writes: identify, a John-Doe chart, evidence, a
-/// proposal's link, an auto-applied link, a sensitivity grade, a shred), so the question is
-/// asked the same way everywhere; `tests/db_errors_stay_legible.rs` lists every `.commit()` in
-/// the tree as marked or, with its reason, not (a restore's fenced commit, writes with no
-/// event). An autocommit statement counts: it is its own commit.
+/// The rule the clinical and identity writes go through (the medication writes, the judgement,
+/// a registration, and since #817 identify, a John-Doe chart, evidence, a proposal's link, an
+/// auto-applied link, a sensitivity grade, a shred), so the question is asked the same way
+/// everywhere. An autocommit statement counts: it is its own commit.
+/// `tests/db_errors_stay_legible.rs` lists every file that commits, or writes an event in
+/// autocommit, as marked or, with its reason, not: writes a re-run cannot double (a restore's
+/// fenced commit, the node-plane and actor-enrolment events), writes with no event, and the
+/// sync harness's load generator.
 ///
 /// Errs towards "unknown": a call that failed before it was ever sent (a dead connection), or a
 /// FATAL that arrived before the commit began, is marked too. That claims LESS than the truth,

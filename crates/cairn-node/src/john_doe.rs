@@ -176,7 +176,9 @@ pub fn build_pending_body(
 /// Register an unidentified ("John Doe") patient: mint a UUID, derive a callsign, and
 /// author the §5.3 registration act + the callsign name + the identity-pending marker in
 /// ONE transaction (atomic — a chart is never half-registered). Returns the minted
-/// `(patient_id, callsign, node-local ordinal)`.
+/// `(patient_id, callsign, node-local ordinal)`. The ordinal is a display read made AFTER
+/// the commit, so its failure comes back beside the chart rather than failing the call: an
+/// `Err` from a registration that landed would invite a retry that mints a second chart.
 ///
 /// `class` is the care context (`ED`, `ward`, …) — NOT the §5.3 `RegistrationClass`; that
 /// one is hard-pinned to `Unidentified` below, because this function exists for exactly one
@@ -197,7 +199,7 @@ pub async fn register_john_doe(
     site: &str,
     date: &str,
     basis: &str,
-) -> anyhow::Result<(Uuid, String, i64)> {
+) -> anyhow::Result<(Uuid, String, anyhow::Result<i64>)> {
     // Refuse a blank basis with ZERO side effects — before a UUID is minted, before any
     // HLC is ticked. The db/045 floor is still the enforcement point (principle 12: this is
     // a client-side courtesy, not the guarantee); this only stops the wasted mint. Same
@@ -256,10 +258,19 @@ pub async fn register_john_doe(
     tx.execute("SELECT submit_event($1)", &[&pending_signed.signed_bytes])
         .await?;
     // A lost commit may have created the chart, and a re-run mints a SECOND one (the #815
-    // hazard), so it is marked and names the chart the operator should look for (#817).
+    // hazard), so it is marked and names the chart the operator should look for (#817). A
+    // marked failure's headline leads with the safe action; an ERROR answer wrote nothing,
+    // so it keeps the plain one.
     tx.commit().await.map_err(|e| {
-        crate::db_diagnosis::commit_failure(registration_event_id, e.into())
-            .context(format!("registering John Doe chart {patient_id}"))
+        let e = crate::db_diagnosis::commit_failure(registration_event_id, e.into());
+        if crate::db_diagnosis::commit_outcome_unknown_event(&e).is_some() {
+            e.context(format!(
+                "John Doe chart {patient_id} may have been created — search for it before \
+                 registering again"
+            ))
+        } else {
+            e.context(format!("registering John Doe chart {patient_id}"))
+        }
     })?;
 
     // Read the node-local friendly ordinal for this registration (finisher 1). Queried
@@ -275,13 +286,18 @@ pub async fn register_john_doe(
     // two rows and error (loud, not silent — the registration itself has already
     // committed); revisit this read then (add `ORDER BY ordinal LIMIT 1` to pick the
     // registration ordinal) rather than letting a display read fail a real registration.
-    let ordinal: i64 = client
+    //
+    // NOT `?`: the chart is committed, so this read's failure is returned beside it (#817
+    // review). Failing the call here would print an error with no chart named, and the retry
+    // it invites mints a second chart for the same patient.
+    let ordinal = client
         .query_one(
             "SELECT ordinal FROM john_doe_local_ordinal WHERE patient_id = $1::text::uuid",
             &[&patient_id.to_string()],
         )
-        .await?
-        .get("ordinal");
+        .await
+        .map(|row| row.get::<_, i64>("ordinal"))
+        .map_err(|e| anyhow::Error::new(e).context("reading the John Doe's local ordinal"));
 
     Ok((patient_id, call, ordinal))
 }

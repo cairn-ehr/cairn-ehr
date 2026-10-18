@@ -18,7 +18,8 @@
 > too; its three deferred items are **#820**. Merged 2026-10-18: PR #816 (#814: one `commit_failure` rule
 > for the judgement and the medication writes; a guard inventories every `.commit()`), PR #813 (#811,
 > `Retry::AfterReread(Recorded::{No, Unknown})`), PR #805 (#797, "Read this chart again"; RUNBOOK §14 is its owed
-> human timing), PR #802. Still filed: **#817** (the identity-side commits). The
+> human timing), PR #802. #817 (the identity-side commits) is PR #821; its review filed **#822** (the CLI has no
+> command to do the check the marker asks for) and **#823** (auto-apply's run ends as a plain outage). The
 > repair path (#679 · #680 · #681) is built through R7. Design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's runbook
 > `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest ADR-0080).
@@ -193,8 +194,14 @@ slice's own rules are its block in `developers/durable-rules.md`).
 ### 2026-10-18 (fifth) — #817: the identity-side commits
 
 HANDOVER was stale on arrival again (#819 had merged). TDD: the commit inventory went red first (`identify.rs`, 0 of 1
-marked); every site then routed through `commit_failure`. Checked each site for a doubled write: only the restore's
-commit is fenced, so it alone stays unmarked.
+marked); every site then routed through `commit_failure`. Checked each site for a doubled write: the restore's commit
+is fenced, and so are both link paths (a proposal's status), which are marked anyway because the marker only claims
+less. The review found the inventory blind to files that only AUTOCOMMIT (three sat unmarked and unlisted on a green
+guard); autocommits are now detected, which classified `identity.rs` and the three actor-enrolment sites. It also found
+John Doe's post-commit ordinal read could fail a landed registration with no chart named; it now comes back beside the
+chart.
+- **⇒ A hand-declared count in a guard is a hole in the guard.** The autocommit numbers were typed in, so a file the
+  author never thought of was never counted. Derive what the guard counts from the code it guards.
 - **⇒ A count-pinned shape survives a rewrite only if you keep the shape.** Wrapping auto-apply's `LocalDbFault`
   inside `commit_failure(…)` hid it from the #477 guard's `.map_err(|e| LocalDbFault::new(` count. Chaining a second
   `.map_err` kept both guards honest; lowering the pinned count would have hidden a real revert.
