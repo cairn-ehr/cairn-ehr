@@ -59,6 +59,10 @@ pub struct NoteRef {
 ///   again once it is done. Rendering it as `Refused` strands a clerk whose form was correct;
 ///   rendering it as `Unavailable` hides the remedy behind a retry that will keep failing.
 ///   Carried by `cairn_node::db_diagnosis::RefusalScope::NodeState` (PR #661 review).
+/// - `OutcomeUnknown` — **the write's COMMIT got no answer, so it MAY have been recorded**
+///   (`cairn_node::db_diagnosis::commit_outcome_unknown`, #713/#815). Neither a verdict nor an
+///   outage: an outage wrote nothing and earns a retry, but the same registration pressed again
+///   after this one landed mints a SECOND chart. The way forward is to look before acting again.
 ///
 /// # What a refusal does NOT change: the attestation still goes back
 ///
@@ -72,6 +76,10 @@ pub struct NoteRef {
 /// which destroys the doomed attestation on a new generation. A clerk who instead clicks
 /// Register again meets the same legible refusal, which is honest. So both arms restore; only
 /// the sentence on screen differs.
+///
+/// **`OutcomeUnknown` is the one exception, and it does not restore** (#815): `restore` would
+/// make the second chart one press away. It settles as a success does
+/// (`TokenStore::settle_unknown`), so the next Register searches again first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataError {
     NotFound,
@@ -89,6 +97,9 @@ pub enum DataError {
     /// (`NotProvisioned`), not an outage to retry live (`Unavailable`) — the same act over the
     /// same stale picture would be refused again.
     Stale(String),
+    /// A write whose commit got no answer: it may or may not be recorded (#815). See the enum
+    /// doc: never retried live, and never worded as "nothing was saved".
+    OutcomeUnknown(String),
 }
 
 pub trait ClinicalData {

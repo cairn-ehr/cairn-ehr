@@ -281,6 +281,11 @@ pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
             retry: Retry::Now,
         },
         DataError::NotFound => refused(format!("The {act} was not recorded.")),
+        // `judgement_error_view` words an interrupted commit itself, before it gets here.
+        DataError::OutcomeUnknown(t) => ErrorView {
+            text: format!("Whether the {act} was recorded is NOT known: {t}"),
+            retry: Retry::AfterReread(Recorded::Unknown),
+        },
     }
 }
 

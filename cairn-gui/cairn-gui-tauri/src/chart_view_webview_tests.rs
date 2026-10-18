@@ -272,6 +272,13 @@ fn an_interrupted_sign_off_or_cease_is_never_said_to_have_failed() {
         sign_off.contains("const unknown = behindTheRecord(failure) === \"unknown\";"),
         "{sign_off}"
     );
+    // #818: a sign-off that ran says Rust's whole outcome line (`write_failure::sign_off_outcome`)
+    // and re-reads with the report's mark, exactly as a cease does.
+    assert!(sign_off.contains("say(report.text);"), "{sign_off}");
+    assert!(
+        sign_off.contains("await refresh(el(\"outcome\").textContent, report.behind_the_record);"),
+        "{sign_off}"
+    );
     assert!(
         sign_off.contains("say((unknown ? \"\" : \"Sign-off failed: \") + failureText(failure));"),
         "{sign_off}"

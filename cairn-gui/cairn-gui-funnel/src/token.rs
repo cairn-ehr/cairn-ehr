@@ -236,6 +236,10 @@ pub enum Restored {
     /// Dropped, because the form it described no longer exists — a newer search landed, or
     /// the clerk edited the form while this registration was in flight.
     SupersededAndDropped,
+    /// Spent, as a success spends it, because the write MAY have landed: its commit got no
+    /// answer (#815). Nothing comes back to retry with; the way forward is to search again,
+    /// which finds the chart if it was created. See [`TokenStore::settle_unknown`].
+    Consumed,
 }
 
 /// Custody of the one search a registration may currently attest to.
@@ -385,7 +389,8 @@ impl TokenStore {
     /// **A caller that forgets this leaves the store refusing every later `take`.** That is
     /// deliberate — it fails closed, costing a window reload rather than minting a duplicate
     /// chart — but it does mean [`TokenStore::commit`] and [`TokenStore::restore`] are the
-    /// two mandatory ends of every [`TokenStore::take`]. There is no third.
+    /// two mandatory ends of every [`TokenStore::take`]. There is no third
+    /// ([`TokenStore::settle_unknown`] ends in `commit`).
     ///
     /// # A success INVALIDATES, and that is the load-bearing half
     ///
@@ -477,6 +482,18 @@ impl TokenStore {
             // `settle` that leaves the store latched.
             Err((error, attested)) => Err((error, self.restore(attested))),
         }
+    }
+
+    /// Settle a registration whose outcome is NOT known (#815): its commit got no answer, so the
+    /// chart may exist. It settles as [`TokenStore::commit`] does — the latch is released and the
+    /// form is consumed — and the attestation is dropped, never restored. Restoring it would let
+    /// a second press register the same person again; and a search that landed mid-flight ran
+    /// before the chart could be found, so it must not license one either (`commit`'s
+    /// invalidation is what stops that, exactly as for a success).
+    pub fn settle_unknown(&mut self, attested: AttestedSearch) -> Restored {
+        drop(attested);
+        self.commit();
+        Restored::Consumed
     }
 
     /// The form was edited: whatever is held no longer describes it.
@@ -981,6 +998,31 @@ mod tests {
              registration succeeding: redeeming it mints a second chart for the patient who \
              was just registered"
         );
+    }
+
+    /// #815: a registration whose COMMIT got no answer may have created the chart, so it
+    /// settles as a success does — the form is consumed — and nothing comes back to retry
+    /// with. Restoring it would let a second press register the same person again, and so
+    /// would a search that landed mid-flight, before the chart existed to be found.
+    #[test]
+    fn an_unknown_outcome_consumes_the_form_as_a_success_does() {
+        let mut store = TokenStore::new();
+        let first = store.record(query("Aabria Iyengar"), list_of(1)).unwrap();
+        let attested = store.take(first).expect("the only token");
+        let mid_flight = store.record(query("Aabria Iyengar"), list_of(1)).unwrap();
+
+        assert_eq!(store.settle_unknown(attested), Restored::Consumed);
+        assert!(
+            store.take(first).is_err(),
+            "the sent search must not come back"
+        );
+        assert!(
+            matches!(store.take(mid_flight), Err(TokenError::Absent)),
+            "a search run before the chart may have existed must not license a second one"
+        );
+        // Settled, not latched: a search run now (which finds the chart if it landed) works.
+        let fresh = store.record(query("Aabria Iyengar"), list_of(1)).unwrap();
+        assert!(store.take(fresh).is_ok());
     }
 
     /// A failure settles it too, AND puts the attested search back for the retry.

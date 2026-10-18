@@ -489,8 +489,11 @@ pub async fn register_patient(
         h_identifiers.push(crate::db::next_hlc(client, node_origin).await?);
     }
 
+    // Named, not inline: an interrupted commit below reports THIS event as the one whose
+    // outcome is unknown (#815).
+    let registration_event_id = Uuid::now_v7();
     let registration_body = build_registration_body(
-        Uuid::now_v7(),
+        registration_event_id,
         patient_id,
         RegistrationClass::Standard,
         None,
@@ -552,7 +555,13 @@ pub async fn register_patient(
         tx.execute("SELECT submit_event($1)", &[&s.signed_bytes])
             .await?;
     }
-    tx.commit().await?;
+    // A commit that got no ordinary answer MAY have created the chart (#815). Reported as an
+    // outage it would invite a retry, and `register_patient` mints a fresh `patient_id` per call,
+    // so that retry would register the same person a SECOND time. Marked outcome-unknown, the
+    // window drops the search it held and searches again first: the chart is found if it landed.
+    tx.commit()
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(registration_event_id, e.into()))?;
 
     Ok(patient_id)
 }

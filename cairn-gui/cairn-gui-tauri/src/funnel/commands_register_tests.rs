@@ -126,6 +126,31 @@ async fn a_failed_registration_keeps_the_search_and_the_retry_works() {
         .expect("the Kept search registers on retry");
 }
 
+/// #815: a registration whose commit got no answer may have created the chart. The clerk is
+/// told it is NOT known (never "nothing was saved") and the same search cannot register again:
+/// a second press would mint a second chart for the same person.
+#[tokio::test]
+async fn an_unknown_registration_outcome_withholds_the_retry_and_spends_the_search() {
+    let state = AppState::mock(None);
+    let t = prompt_search_impl(&state, f(1, "Ada Byron", "1815"), false)
+        .await
+        .unwrap()
+        .token
+        .unwrap();
+    state
+        .mock_data()
+        .unwrap()
+        .fail_next(DataError::OutcomeUnknown("connection closed".into()));
+    let err = register_impl(&state, t).await.unwrap_err();
+    assert_eq!(err.retry, Retry::Never);
+    assert!(err.text.contains("NOT known"), "{}", err.text);
+    assert!(!err.text.contains("Nothing was saved"), "{}", err.text);
+    assert_eq!(
+        register_impl(&state, t).await.unwrap_err(),
+        token_error_view(TokenError::Absent)
+    );
+}
+
 #[tokio::test]
 async fn a_refused_registration_withholds_the_retry() {
     let state = AppState::mock(None);

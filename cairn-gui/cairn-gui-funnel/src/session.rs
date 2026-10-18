@@ -205,6 +205,14 @@ impl FunnelSession {
         }
         settled
     }
+
+    /// Settle a registration whose commit got no answer (#815) —
+    /// [`TokenStore::settle_unknown`]. The form is consumed as a success consumes it, so the
+    /// name goes with it: the next registration searches again, and that search binds its own.
+    pub fn settle_unknown(&mut self, attested: AttestedSearch) -> Restored {
+        self.name_for = None;
+        self.store.settle_unknown(attested)
+    }
 }
 
 #[cfg(test)]

@@ -121,7 +121,8 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
         // Search never raises `Stale`, but a match must not hide a new cause. `Never`, not
         // `AfterReread`: the funnel has no chart on screen to re-read and funnel.js never reads
         // `after_reread`, so that label would be one the code does not honour.
-        DataError::Stale(t) => ErrorView {
+        // A search commits nothing, so it never raises this either; same reasoning as `Stale`.
+        DataError::Stale(t) | DataError::OutcomeUnknown(t) => ErrorView {
             text: t.clone(),
             retry: Retry::Never,
         },
@@ -161,6 +162,21 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
         // `AfterReread`: no chart is on screen to re-read and funnel.js never reads it.
         DataError::Stale(t) => (format!("Nothing was saved: {t}"), Retry::Never),
         DataError::NotFound => ("Nothing was saved.".to_string(), Retry::Never),
+        // #815: the commit got no answer, so the chart may exist. Never "Nothing was saved",
+        // and no live retry: the search it attested is spent (`Restored::Consumed`), so the next
+        // Register press searches first (funnel.js), and that search shows the chart if it was
+        // created. Returned whole: no `restored` wording applies to it.
+        DataError::OutcomeUnknown(t) => {
+            return ErrorView {
+                text: format!(
+                    "Whether this registration was recorded is NOT known: no answer came back \
+                     while it was being saved ({t}). Do not register this patient again without \
+                     searching. Once the window can reach the node again, press Register: it \
+                     searches first, and if the chart was created it is in the list."
+                ),
+                retry: Retry::Never,
+            }
+        }
     };
     match restored {
         Restored::Kept if retry_if_kept == Retry::Now => ErrorView {
@@ -170,6 +186,12 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
         Restored::Kept => ErrorView {
             text: base,
             retry: retry_if_kept,
+        },
+        // Only an unknown outcome spends the search, and it is answered above; were another
+        // cause ever to, nothing is held to retry with.
+        Restored::Consumed => ErrorView {
+            text: base,
+            retry: Retry::Never,
         },
         Restored::SupersededAndDropped => ErrorView {
             text: format!(

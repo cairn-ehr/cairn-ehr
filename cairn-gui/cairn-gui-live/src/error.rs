@@ -161,6 +161,12 @@ pub fn data_error_from(e: &anyhow::Error) -> DataError {
     // forward but the form. Asking it first keeps the two questions in the right order — "is
     // this a verdict" then "a verdict about what" — so a future third scope cannot silently
     // fall through to `Unavailable` (PR #661 review).
+    // Asked before the verdict questions: an interrupted commit carries no refusal marker and
+    // no SQLSTATE of the floor's, so it would otherwise fall through to `Unavailable` — the
+    // live retry that writes the same act twice (#815).
+    if cairn_node::db_diagnosis::commit_outcome_unknown_event(e).is_some() {
+        return DataError::OutcomeUnknown(text);
+    }
     match cairn_node::db_diagnosis::refusal_scope(e) {
         Some(cairn_node::db_diagnosis::RefusalScope::NodeState) => DataError::NotProvisioned(text),
         // The record changed under the caller: its own cause, because the remedy (re-read) differs
@@ -373,5 +379,24 @@ mod tests {
         };
         assert!(text.contains("registering the patient"), "got: {text}");
         assert!(text.contains("relation does not exist"), "got: {text}");
+    }
+
+    /// #815: a commit the node marked outcome-unknown is its own cause, never an outage. An
+    /// outage wrote nothing, so the window offers the same act again; this one may have written,
+    /// and the same registration pressed again mints a second chart.
+    #[test]
+    fn an_unanswered_commit_is_its_own_cause_not_an_outage() {
+        let e = cairn_node::db_diagnosis::commit_outcome_unknown(
+            uuid::Uuid::from_u128(7),
+            anyhow::anyhow!("connection closed"),
+        );
+        let mapped = data_error_from(&e);
+        let DataError::OutcomeUnknown(text) = &mapped else {
+            panic!("expected an unknown outcome, got {mapped:?}");
+        };
+        assert!(
+            text.contains("connection closed"),
+            "the cause survives: {text}"
+        );
     }
 }

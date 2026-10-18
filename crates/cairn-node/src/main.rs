@@ -5423,7 +5423,12 @@ async fn run() -> anyhow::Result<()> {
                          re-signed, signed or not.",
                         out.total_rows
                     );
-                } else if out.withheld.is_empty() {
+                } else if out.withheld.is_empty()
+                    && out.failed.is_empty()
+                    && out.interrupted.is_none()
+                {
+                    // Also guarded on `failed`/`interrupted` (#818): a gesture whose every line
+                    // failed or was cut off signed nothing, and its lines are NOT signed.
                     println!(
                         "nothing to sign off for {patient}: every current drug already \
                          carries a current signature"
@@ -5509,6 +5514,32 @@ async fn run() -> anyhow::Result<()> {
                 for line in &out.failed {
                     eprintln!("    {} — {}", line.medication_id, line.error);
                 }
+            }
+            if let Some(stopped) = &out.interrupted {
+                // #818: the gesture stopped early. Whatever was signed above stays signed; this
+                // names the line it stopped at and the lines it never tried.
+                match stopped.unknown_event {
+                    Some(event) => eprintln!(
+                        "! whether {} was signed is NOT known: no answer came back while event \
+                         {event} was being saved ({}). Check the chart before signing it again.",
+                        stopped.medication_id, stopped.cause
+                    ),
+                    None => eprintln!(
+                        "! the sign-off stopped at {}, which was NOT signed: {}",
+                        stopped.medication_id, stopped.cause
+                    ),
+                }
+                if !stopped.not_attempted.is_empty() {
+                    eprintln!(
+                        "! {} line(s) after it were not tried and are still unsigned:",
+                        stopped.not_attempted.len()
+                    );
+                    for thread in &stopped.not_attempted {
+                        eprintln!("    {thread}");
+                    }
+                }
+            }
+            if !out.failed.is_empty() || out.interrupted.is_some() {
                 std::process::exit(1);
             }
         }

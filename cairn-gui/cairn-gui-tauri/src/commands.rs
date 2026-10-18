@@ -27,7 +27,7 @@ use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
-    cease_outcome, chart_read_failed, key_locked, node_cannot_write, sign_off_failure,
+    cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure, sign_off_outcome,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -183,18 +183,18 @@ pub async fn lock_state(state: tauri::State<'_, AppState>) -> Result<LockState, 
 #[derive(Debug, serde::Serialize)]
 pub struct SignOffReport {
     pub signed: usize,
-    /// Lines that still need a signature and deliberately did not get one.
-    pub withheld_message: Option<String>,
-    /// Groups this chart could not display at all.
-    pub missing_message: Option<String>,
     /// Lines whose own write failed. ADR-0060 decision 7: each attestation commits in its
     /// own transaction, so a failure here means THIS line was not signed and every other
     /// line still was. Naming which and why is what makes that safe rather than merely
     /// convenient.
     pub failed: Vec<String>,
-    /// On a combined list only: the charts the gesture read across, and that each line was
-    /// signed on the chart it was recorded on (`chart_set::signed_across_message`).
-    pub charts_message: Option<String>,
+    /// The outcome line the webview says (`write_failure::sign_off_outcome`): signed, NOT signed,
+    /// where the gesture stopped early if it did (#818), and the chart's own reports — lines
+    /// withheld, groups it could not display, the linked charts it read across.
+    pub text: String,
+    /// `Unknown` when the line it stopped at may be signed: the list on screen may be behind the
+    /// record, so the webview's re-read marks it "may be out of date" if it fails (#811).
+    pub behind_the_record: Option<Recorded>,
 }
 
 /// Sign off every unsigned or stale drug on the chart — the ONE gesture (#288).
@@ -272,29 +272,43 @@ pub async fn sign_off_impl(
             Some(&shown),
         )
         .await
-        .map_err(|e| sign_off_failure(&e))?
+        .map_err(|e| node_failure(&e))?
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
 
     record_timing(state, "signoff", outcome.attested.len(), elapsed_ms).await;
 
-    Ok(SignOffReport {
-        signed: outcome.attested.len(),
-        // Rendered by the SAME two functions the chart itself uses, so the promise made
-        // before the gesture and the report made after it cannot word the same fact
-        // differently. The ids come from the outcome — what the orchestrator actually did —
-        // not from a fresh read that might already disagree.
-        withheld_message: withheld_report(&outcome.withheld, &outcome.separation_targets),
-        missing_message: missing_report(
+    // Rendered by the SAME two functions the chart itself uses, so the promise made before the
+    // gesture and the report made after it cannot word the same fact differently. The ids come
+    // from the outcome — what the orchestrator actually did — not from a fresh read that might
+    // already disagree.
+    let notes = [
+        withheld_report(&outcome.withheld, &outcome.separation_targets),
+        missing_report(
             &outcome.groups_missing_from_chart,
             &outcome.separation_targets,
         ),
-        failed: outcome
-            .failed
-            .iter()
-            .map(|f| format!("thread {}: {}", f.medication_id, f.error))
-            .collect(),
-        charts_message: signed_across_message(&outcome.charts),
+        signed_across_message(&outcome.charts),
+    ];
+    let failed: Vec<String> = outcome
+        .failed
+        .iter()
+        .map(|f| format!("thread {}: {}", f.medication_id, f.error))
+        .collect();
+    let text = sign_off_outcome(
+        outcome.attested.len(),
+        &failed,
+        outcome.interrupted.as_ref(),
+        &notes,
+    );
+    Ok(SignOffReport {
+        signed: outcome.attested.len(),
+        failed,
+        text,
+        behind_the_record: outcome
+            .interrupted
+            .and_then(|i| i.unknown_event)
+            .map(|_| Recorded::Unknown),
     })
 }
 
