@@ -492,7 +492,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   itself. A John Doe whose ordinal read fails after the commit still returns its chart. Review follow-ons:
   **#822** (no CLI command to check an unknown outcome), **#823** (auto-apply ends as a plain outage), and a
   John-Doe drive-through added to **#820**. **Merged** (PR #821).
-- **2026-10-18 (#820):** #819's review follow-ons. A real lost COMMIT is now driven end to end: a registration's
+- **2026-10-18 (#820, PR #824):** #819's review follow-ons. A real lost COMMIT is now driven end to end: a registration's
   through `LiveData::register` → `OutcomeUnknown` → `settle` (search spent), and in the root tree a John Doe, a standard
   registration and observed evidence, each pinning WHICH event the marker names. `SignOffOutcome`'s two readers
   destructure it with no `..`; cease's unknown tuple is the named `CeaseUnknown`; a judgement's unknown outcome says
@@ -501,7 +501,7 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge the #820 PR; then #822 / #823 (#821's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #824 (#820); then #822 / #823 (#821's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

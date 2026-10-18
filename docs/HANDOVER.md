@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: the #820 PR** (branch `fix/820-signoff-registration-follow-ons`, #819's review
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824)** (#820, branch `fix/820-signoff-registration-follow-ons`, #819's review
 > follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
 > `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
 > standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
@@ -21,7 +21,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge the #820 PR**, then **#822** and **#823** (#821's review follow-ons). An idempotent re-send of a registration
+> 1. **Review and merge PR #824** (#820), then **#822** and **#823** (#821's review follow-ons). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
@@ -235,7 +235,7 @@ went red first, then three GUI tests failed to compile, then #818's DB test (a d
   - The CLI's registration error did not name the chart.
   - DB pins added for an ERROR-answered commit and for a backend killed inside a line. The second is
     mutation-checked: a `?` on its ROLLBACK goes red.
-  - Deferred to #820 (done in the #820 PR): exhaustive readers of `SignOffOutcome`, the judgement sentence's
+  - Deferred to #820 (done in PR #824): exhaustive readers of `SignOffOutcome`, the judgement sentence's
     "connection was lost", and an end-to-end lost-registration test.
 
 ### 2026-10-18 (third) — #814: the medication writes' interrupted commits
