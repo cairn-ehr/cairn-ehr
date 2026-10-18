@@ -55,8 +55,10 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   when one is unknown.
 - **#815: an interrupted REGISTRATION spends its search, exactly as a success does** (`TokenStore::settle` →
   `Restored::Consumed`; pins: `token.rs`'s `an_unknown_outcome_consumes_the_form_as_a_success_does`,
-  `commands_register_tests.rs`'s unknown-outcome walk, mutation-checked). `data_error_from` classifies the marker as
-  `DataError::OutcomeUnknown` FIRST; `settle` itself asks `RegistrationFailure::may_have_written`, so the short call
+  `commands_register_tests.rs`'s unknown-outcome walk, mutation-checked; end to end through a real lost COMMIT,
+  `cairn-gui-live/tests/lost_commit.rs` (#820), and in the root tree `tests/identity_commit_lost.rs`, which pins that
+  the marker names the REGISTRATION event and the error text the chart, John Doe's headline included).
+  `data_error_from` classifies the marker as `DataError::OutcomeUnknown` FIRST; `settle` itself asks `RegistrationFailure::may_have_written`, so the short call
   stays the safe one (#659) and no caller special-cases it; `register_error_view` says "NOT known" with
   `Retry::AfterReread(Unknown)`, which funnel.js reads as "every search is spent": it forgets the token it holds even
   when a newer search replaced the one sent, so the next Register press searches first, and that search finds the
@@ -75,8 +77,13 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   `report.behind_the_record` (returned by `sign_off_outcome` with the text, so they cannot disagree). Pins:
   `tests/signoff_interrupted.rs` — a test-only trigger on one named line answers its COMMIT FATAL, kills the backend
   inside the line (its own reason survives the dead ROLLBACK; mutation-checked), or answers the COMMIT with an ERROR
-  (that line alone fails; the rest are signed). **Tempting wrong fix:** a `?` on `client.transaction()` or `tx.rollback()` in the loop — it
-  compiles, and discards every line already signed and every reason.
+  (that line alone fails; the rest are signed). **Tempting wrong fix:** a `?` on `client.transaction()` or
+  `tx.rollback()` in the loop — it compiles, and discards every line already signed and every reason.
+  **And (#820):** `SignOffOutcome`'s three production readers (the CLI's `sign-off` arm and its
+  `nothing_attested_sentence`, `sign_off_impl`) destructure it naming every field, no `..`, so a new field breaks the
+  build at each reader. **Tempting wrong fix:** a `..` "to shorten it" — Rust never warns on an unread `pub` field,
+  which is how `failed` was once dropped. Pinned by source guards in both trees:
+  `tests/signoff_readers_name_every_field.rs` and `commands_tests.rs`'s `sign_off_impl_names_every_outcome_field`.
 - **No script spells the string `"after_reread"`**, not even in a comment: the retry is an object, and
   `failure.retry === "after_reread"` is always false (no re-read, a live button). Guarded over every `src-ui/*.js`.
 - **`forgetBehind` is called only by `drewRead` and `holdCharts`** (counted). One more call in an own-act path would

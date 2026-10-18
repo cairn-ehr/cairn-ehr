@@ -216,11 +216,11 @@ fn a_sign_off_outcome_keeps_signed_failed_unknown_and_untried_apart() {
 /// may be stopped, so the count would be false), and kept when nothing at all was stopped.
 #[test]
 fn a_cease_outcome_keeps_stopped_not_stopped_and_not_known_apart() {
-    let unknown = [(
-        uuid::Uuid::from_u128(1),
-        uuid::Uuid::from_u128(2),
-        "connection closed".to_string(),
-    )];
+    let unknown = [CeaseUnknown {
+        thread: uuid::Uuid::from_u128(1),
+        event: uuid::Uuid::from_u128(2),
+        cause: "connection closed".to_string(),
+    }];
     let failed = [
         "thread x: refused".to_string(),
         "thread y: held back".to_string(),
@@ -248,7 +248,7 @@ fn a_cease_outcome_keeps_stopped_not_stopped_and_not_known_apart() {
     assert!(
         only_unknown.contains(&format!(
             "thread {} (event {}: connection closed)",
-            unknown[0].0, unknown[0].1
+            unknown[0].thread, unknown[0].event
         )),
         "{only_unknown}"
     );
@@ -265,11 +265,11 @@ fn a_cease_outcome_keeps_stopped_not_stopped_and_not_known_apart() {
 
     let two = [
         unknown[0].clone(),
-        (
-            uuid::Uuid::from_u128(3),
-            uuid::Uuid::from_u128(4),
-            "x".into(),
-        ),
+        CeaseUnknown {
+            thread: uuid::Uuid::from_u128(3),
+            event: uuid::Uuid::from_u128(4),
+            cause: "x".into(),
+        },
     ];
     let both = cease_outcome(0, &failed, &two);
     assert!(both.starts_with("2 thread(s) were NOT stopped"), "{both}");
@@ -293,7 +293,7 @@ fn cease_sorts_an_interrupted_commit_from_a_failure() {
     let flat: String = body.split_whitespace().collect();
     for shape in [
         "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
-        "Some(event)=>unknown.push((medication_id,event,e.root_cause().to_string()))",
+        "Some(event)=>unknown.push(CeaseUnknown{thread:medication_id,event,cause:e.root_cause().to_string(),}),",
         "lettext=cease_outcome(ceased,&failed,&unknown);",
         "(!unknown.is_empty()).then_some(Recorded::Unknown)",
     ] {

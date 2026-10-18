@@ -207,7 +207,7 @@ fn effect_report(effect: LinkEffect, charts: &ChartSet) -> LinkReportView {
 /// `P0001` floor refusal or a marked `cairn-node` verdict is a verdict; anything else an
 /// outage) and the funnel's `Retry` vocabulary (#702). An outage is "not confirmed", never
 /// "nothing changed", and keeps `Retry::Now`: it wrote nothing. The one failure that MAY have
-/// written — a connection lost during the commit — is marked by the node and never reaches that
+/// written — a commit that got no ordinary answer — is marked by the node and never reaches that
 /// arm; see [`judgement_error_view`] (#713).
 pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
     judgement_error_view("link", Charts::MayMove, e)
@@ -237,7 +237,7 @@ pub fn judgement_error_view(act: &str, charts: Charts, e: &anyhow::Error) -> Err
     match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
         Some(event) => ErrorView {
             text: format!(
-                "Whether the {act} was recorded is NOT known — the connection was lost while \
+                "Whether the {act} was recorded is NOT known — no ordinary answer came back while \
                  event {event} was being saved. If it was recorded but a later judgement outranks it, \
                  the chart will look unchanged after it is read again.{}",
                 match charts {

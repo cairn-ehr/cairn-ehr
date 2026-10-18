@@ -5402,30 +5402,45 @@ async fn run() -> anyhow::Result<()> {
                 None,
             )
             .await?;
+            // Every field named, none behind `..` (#820): a field added to the outcome breaks
+            // this build, so a new fact cannot be dropped from the report by default.
+            let cairn_node::medication::signoff::SignOffOutcome {
+                attested,
+                event_ids,
+                // Read by `nothing_attested_sentence`, handed the whole outcome; it names every
+                // field too.
+                total_rows: _,
+                active_rows: _,
+                withheld,
+                separation_targets,
+                groups_missing_from_chart,
+                failed,
+                interrupted,
+                charts,
+            } = &out;
 
-            if out.attested.is_empty() {
+            if attested.is_empty() {
                 println!("{}", nothing_attested_sentence(&out, patient));
             } else {
                 println!(
                     "signed off {} medication thread(s) for {patient}",
-                    out.attested.len()
+                    attested.len()
                 );
-                for (thread, event) in out.attested.iter().zip(&out.event_ids) {
+                for (thread, event) in attested.iter().zip(event_ids) {
                     println!("  {thread} -> attestation {event}");
                 }
             }
-            if out.charts.is_linked() {
+            if charts.is_linked() {
                 // A combined list (ADR-0076): the gesture READ every chart linked to
                 // {patient} regardless of whether anything above ended up attested — a
                 // chart that turned out to need no signature (or whose only outstanding
                 // lines were withheld) was still read as this wider set, and the operator
-                // must be told so even when `out.attested` is empty. Any line signed above
+                // must be told so even when `attested` is empty. Any line signed above
                 // was signed on the chart it was recorded on, not necessarily {patient}, so
                 // the operator does not read "for {patient}" as "recorded on {patient}".
                 // Printed unconditionally on `is_linked()` rather than only when something
                 // was attested.
-                let charts: Vec<String> =
-                    out.charts.members().iter().map(Uuid::to_string).collect();
+                let charts: Vec<String> = charts.members().iter().map(Uuid::to_string).collect();
                 println!(
                     "  this gesture read across {} linked charts ({}); any line signed above \
                      was signed on the chart it was recorded on",
@@ -5439,12 +5454,12 @@ async fn run() -> anyhow::Result<()> {
             // is that the clinician is told precisely which line they still own. Worded
             // per reason, each with its own remedy and the member threads, in `list_text`.
             for line in cairn_node::medication::list_text::withheld_signoff_lines(
-                &out.withheld,
-                &out.separation_targets,
+                withheld,
+                separation_targets,
             ) {
                 println!("{line}");
             }
-            if !out.groups_missing_from_chart.is_empty() {
+            if !groups_missing_from_chart.is_empty() {
                 // Also printed in EVERY outcome, success included (#339). Sign-off no
                 // longer refuses over an incomplete chart — a defect on one line must not
                 // block another — so this report is now the ONLY thing standing between the
@@ -5453,18 +5468,18 @@ async fn run() -> anyhow::Result<()> {
                     "! {} medication group(s) with locally-known content for this patient \
                      could NOT be displayed on this chart and were therefore NOT signed — \
                      whatever was signed above, this list is INCOMPLETE. {}",
-                    out.groups_missing_from_chart.len(),
+                    groups_missing_from_chart.len(),
                     cairn_node::medication::read::MISSING_GROUP_INSTRUCTION
                 );
                 println!(
                     "    {}",
                     cairn_node::medication::read::format_hazard_groups(
-                        &out.groups_missing_from_chart,
-                        &out.separation_targets
+                        groups_missing_from_chart,
+                        separation_targets
                     )
                 );
             }
-            if !out.failed.is_empty() {
+            if !failed.is_empty() {
                 // Distinct from `withheld` and `groups_missing_from_chart`, which are
                 // reported, actionable, normal-operation states. A failed line is an
                 // ATTEMPTED WRITE THAT ERRORED, so it is the one outstanding-work category
@@ -5475,13 +5490,13 @@ async fn run() -> anyhow::Result<()> {
                 eprintln!(
                     "! {} medication line(s) could NOT be signed. Each rolled back on its own \
                      — every line signed above is committed and unaffected.",
-                    out.failed.len()
+                    failed.len()
                 );
-                for line in &out.failed {
+                for line in failed {
                     eprintln!("    {} — {}", line.medication_id, line.error);
                 }
             }
-            if let Some(stopped) = &out.interrupted {
+            if let Some(stopped) = interrupted {
                 // #818: the gesture stopped early. Whatever was signed above stays signed; this
                 // names the line it stopped at and the lines it never tried.
                 use cairn_node::medication::signoff::StoppedLine;
@@ -5507,7 +5522,7 @@ async fn run() -> anyhow::Result<()> {
                     }
                 }
             }
-            if !out.failed.is_empty() || out.interrupted.is_some() {
+            if !failed.is_empty() || interrupted.is_some() {
                 std::process::exit(1);
             }
         }
@@ -5697,12 +5712,27 @@ fn nothing_attested_sentence(
     out: &cairn_node::medication::signoff::SignOffOutcome,
     patient: Uuid,
 ) -> String {
-    if out.total_rows == 0 && out.groups_missing_from_chart.is_empty() {
+    // Every field named, none behind `..` (#820): this is the branch that once ignored `failed`,
+    // so a field added to the outcome must break the build here too.
+    let cairn_node::medication::signoff::SignOffOutcome {
+        attested: _,
+        event_ids: _,
+        total_rows,
+        active_rows,
+        withheld,
+        separation_targets: _,
+        groups_missing_from_chart,
+        failed,
+        interrupted,
+        // Only how many lines needed a signature decides this sentence, not which charts.
+        charts: _,
+    } = out;
+    if *total_rows == 0 && groups_missing_from_chart.is_empty() {
         format!(
             "no medications are recorded for {patient}; nothing was signed. Recording \
              \"nil medications, reviewed\" as an act has no home yet (issue #331)."
         )
-    } else if out.total_rows == 0 {
+    } else if *total_rows == 0 {
         // Guarded on the missing set: "no medications are recorded" is a straightforward LIE
         // when the node holds content for this patient it simply cannot display. The detail
         // follows in the block the caller prints below.
@@ -5710,22 +5740,22 @@ fn nothing_attested_sentence(
             "nothing could be signed for {patient}: this chart displays no medications, but \
              that is NOT the same as having none — see below."
         )
-    } else if out.active_rows == 0 {
+    } else if *active_rows == 0 {
         // A chart of nothing but struck lines. Those lines may well carry NO signature at all —
         // a ceased drug is never re-signed — so "everything already signed" would be false.
         format!(
             "no CURRENT medications for {patient} ({} ceased line(s) on the chart); nothing \
              needed a signature. A struck line is never re-signed, signed or not.",
-            out.total_rows
+            total_rows
         )
-    } else if out.withheld.is_empty() && out.failed.is_empty() && out.interrupted.is_none() {
+    } else if withheld.is_empty() && failed.is_empty() && interrupted.is_none() {
         // Also guarded on `failed`/`interrupted` (#818): a gesture whose lines failed or were
         // cut off has lines that still need a signature.
         format!(
             "nothing to sign off for {patient}: every current drug already carries a current \
              signature"
         )
-    } else if out.interrupted.as_ref().is_some_and(|stopped| {
+    } else if interrupted.as_ref().is_some_and(|stopped| {
         matches!(
             stopped.line,
             cairn_node::medication::signoff::StoppedLine::MayBeSigned { .. }

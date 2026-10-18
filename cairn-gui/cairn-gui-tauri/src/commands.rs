@@ -27,7 +27,8 @@ use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
-    cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure, sign_off_outcome,
+    cease_outcome, chart_read_failed, key_locked, node_cannot_write, node_failure,
+    sign_off_outcome, CeaseUnknown,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -277,11 +278,27 @@ pub async fn sign_off_impl(
         .map_err(|e| node_failure(&e))?
     };
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
+    // Every field named, none behind `..` (#820): a field added to the outcome breaks this
+    // build, so a new fact cannot be dropped from the report by default.
+    let cairn_node::medication::signoff::SignOffOutcome {
+        attested,
+        // The window reports counts and names lines, not attestation ids.
+        event_ids: _,
+        // The window states no "nothing on this chart" sentence; the chart on screen shows it.
+        total_rows: _,
+        active_rows: _,
+        withheld,
+        separation_targets,
+        groups_missing_from_chart,
+        failed,
+        interrupted,
+        charts,
+    } = outcome;
 
     // A gesture that stopped early (#818) is not a sample of what signing off costs, and its
     // connection is likely dead, so recording it would only log a false "succeeded".
-    if outcome.interrupted.is_none() {
-        record_timing(state, "signoff", outcome.attested.len(), elapsed_ms).await;
+    if interrupted.is_none() {
+        record_timing(state, "signoff", attested.len(), elapsed_ms).await;
     }
 
     // Rendered by the SAME two functions the chart itself uses, so the promise made before the
@@ -289,26 +306,18 @@ pub async fn sign_off_impl(
     // from the outcome — what the orchestrator actually did — not from a fresh read that might
     // already disagree.
     let notes = [
-        withheld_report(&outcome.withheld, &outcome.separation_targets),
-        missing_report(
-            &outcome.groups_missing_from_chart,
-            &outcome.separation_targets,
-        ),
-        signed_across_message(&outcome.charts),
+        withheld_report(&withheld, &separation_targets),
+        missing_report(&groups_missing_from_chart, &separation_targets),
+        signed_across_message(&charts),
     ];
-    let failed: Vec<String> = outcome
-        .failed
+    let failed: Vec<String> = failed
         .iter()
         .map(|f| format!("thread {}: {}", f.medication_id, f.error))
         .collect();
-    let (text, behind_the_record) = sign_off_outcome(
-        outcome.attested.len(),
-        &failed,
-        outcome.interrupted.as_ref(),
-        &notes,
-    );
+    let (text, behind_the_record) =
+        sign_off_outcome(attested.len(), &failed, interrupted.as_ref(), &notes);
     Ok(SignOffReport {
-        signed: outcome.attested.len(),
+        signed: attested.len(),
         failed,
         text,
         behind_the_record,
@@ -455,7 +464,11 @@ pub async fn cease_impl(
             Ok(_) => ceased += 1,
             // A commit lost mid-flight may have stopped it (#814): not a failure, not a success.
             Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
-                Some(event) => unknown.push((medication_id, event, e.root_cause().to_string())),
+                Some(event) => unknown.push(CeaseUnknown {
+                    thread: medication_id,
+                    event,
+                    cause: e.root_cause().to_string(),
+                }),
                 None => failed.push(format!("thread {medication_id}: {e:#}")),
             },
         }
@@ -503,7 +516,9 @@ async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i
     let Some(db) = state.db.as_ref() else { return };
     let db = db.lock().await;
     if let Err(e) = cairn_node::ui_timing::record_gesture(&*db, kind, items, elapsed_ms).await {
-        eprintln!("gesture timing not recorded (the clinical act itself succeeded): {e}");
+        // Not "the act succeeded": a gesture whose every line failed is timed too, and its
+        // connection may be the very thing that failed it. The act reports its own outcome.
+        eprintln!("gesture timing not recorded (the act reports its own outcome): {e:#}");
     }
 }
 

@@ -100,17 +100,23 @@ pub(crate) fn sign_off_outcome(
     (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
+/// A thread of a cease whose commit got no ordinary answer (#814): it may or may not be stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CeaseUnknown {
+    /// The member thread being stopped.
+    pub thread: uuid::Uuid,
+    /// The cessation event that may have landed.
+    pub event: uuid::Uuid,
+    /// The error's root cause, as the clinician reads it.
+    pub cause: String,
+}
+
 /// What one cease did, as the outcome line says it (ADR-0060: partial completion is reported,
 /// never implied): the threads stopped, those NOT stopped (`failed`, each already named), and
-/// those whose commit got no ordinary answer (#814) — `(thread, event, cause)`, which may or may
-/// not be stopped, so they are neither. "Stopped 0" is left out when one is unknown: that thread
-/// may be stopped, so the count would be false. Rust, not the webview, so every combination is
-/// tested.
-pub(crate) fn cease_outcome(
-    ceased: usize,
-    failed: &[String],
-    unknown: &[(uuid::Uuid, uuid::Uuid, String)],
-) -> String {
+/// those whose commit got no ordinary answer (#814), which may or may not be stopped, so they
+/// are neither. "Stopped 0" is left out when one is unknown: that thread may be stopped, so the
+/// count would be false. Rust, not the webview, so every combination is tested.
+pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[CeaseUnknown]) -> String {
     let mut parts = Vec::new();
     if ceased > 0 || unknown.is_empty() {
         parts.push(format!("Stopped {ceased} thread(s) of this drug."));
@@ -125,7 +131,7 @@ pub(crate) fn cease_outcome(
     if !unknown.is_empty() {
         let named: Vec<String> = unknown
             .iter()
-            .map(|(thread, event, cause)| format!("thread {thread} (event {event}: {cause})"))
+            .map(|u| format!("thread {} (event {}: {})", u.thread, u.event, u.cause))
             .collect();
         parts.push(format!(
             "Whether {} thread(s) of this drug were stopped is NOT known — no ordinary answer \
