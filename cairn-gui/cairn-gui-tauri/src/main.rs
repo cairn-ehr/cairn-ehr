@@ -155,7 +155,9 @@ async fn build_live_state(cli: &Cli) -> anyhow::Result<AppState> {
                 | DataError::NotProvisioned(t)
                 // Only the words matter here: a standing probe that reports a changed record
                 // is still "could not check", so `Stale` reads like `Refused`.
-                | DataError::Stale(t) => t,
+                | DataError::Stale(t)
+                // A read commits nothing; listed so a new cause is never silently dropped.
+                | DataError::OutcomeUnknown(t) => t,
                 DataError::NotFound => "no answer".to_string(),
             };
             Some(format!(

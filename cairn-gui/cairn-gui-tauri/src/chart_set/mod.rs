@@ -48,7 +48,9 @@ pub enum ChartSetError {
 }
 
 impl ChartSetError {
-    /// The sentence for this refusal.
+    /// The sentence for this refusal. Only the tests read it bare; the window reads
+    /// [`ChartSetError::into_view`].
+    #[cfg(test)]
     pub fn text(&self) -> &'static str {
         match self {
             Self::Unreadable => UNREADABLE,

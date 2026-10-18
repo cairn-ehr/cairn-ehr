@@ -260,8 +260,9 @@ fn a_failed_sign_off_or_cease_is_worded_from_its_error_view() {
 }
 
 /// #814: an interrupted commit is not a failure. Sign-off's catch drops its "failed" prefix for
-/// it (Rust's sentence says whether it was recorded is NOT known); in that one handler the act is
-/// known, so keying the prefix on `"unknown"` cannot excuse another act (the #811 rule). A cease
+/// it (defence only since #818, which reports an interrupted sign-off as `Ok`); in that one
+/// handler the act is known, so keying the prefix on `"unknown"` cannot excuse another act (the
+/// #811 rule). A cease
 /// that ran says Rust's whole outcome line (`write_failure::cease_outcome`, where every
 /// combination is tested) and re-reads with the report's mark, so a failed re-read marks the list
 /// "may be out of date".
@@ -270,6 +271,13 @@ fn an_interrupted_sign_off_or_cease_is_never_said_to_have_failed() {
     let sign_off = js_fn(MAIN_JS, "signOff");
     assert!(
         sign_off.contains("const unknown = behindTheRecord(failure) === \"unknown\";"),
+        "{sign_off}"
+    );
+    // #818: a sign-off that ran says Rust's whole outcome line (`write_failure::sign_off_outcome`)
+    // and re-reads with the report's mark, exactly as a cease does.
+    assert!(sign_off.contains("say(report.text);"), "{sign_off}");
+    assert!(
+        sign_off.contains("await refresh(el(\"outcome\").textContent, report.behind_the_record);"),
         "{sign_off}"
     );
     assert!(

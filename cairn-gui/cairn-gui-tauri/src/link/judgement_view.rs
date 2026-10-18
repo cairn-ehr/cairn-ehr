@@ -220,10 +220,11 @@ pub fn link_error_view(e: &anyhow::Error) -> ErrorView {
 /// It asks ONE question before the shared classification: was the failure an interrupted
 /// COMMIT (marked by `cairn_node::db_diagnosis::commit_outcome_unknown`, read back here by
 /// `commit_outcome_unknown_event`)? That judgement may have been
-/// recorded, and `data_error_from` would otherwise read it as an outage and keep a live retry —
-/// the #713 hazard: a judgement that landed as Outranked leaves the record looking unchanged,
-/// so a second press records a second judgement stamped above the colleague's it lost to. It
-/// gets [`Retry::AfterReread`] instead: the webview takes the button away (from any open
+/// recorded. A live retry is the #713 hazard: a judgement that landed as Outranked leaves the
+/// record looking unchanged, so a second press records a second judgement stamped above the
+/// colleague's it lost to. (`data_error_from` also classifies the marker, as `OutcomeUnknown`,
+/// since #815; asking here first is what words the Outranked case.) It gets
+/// [`Retry::AfterReread`]: the webview takes the button away (from any open
 /// comparison of the same pair) and re-reads the chart when the judgement touched it. The
 /// sentence says what a re-read cannot: an Outranked landing leaves the chart looking unchanged.
 ///
@@ -281,6 +282,11 @@ pub fn judgement_error_from(act: &str, error: DataError) -> ErrorView {
             retry: Retry::Now,
         },
         DataError::NotFound => refused(format!("The {act} was not recorded.")),
+        // `judgement_error_view` words an interrupted commit itself, before it gets here.
+        DataError::OutcomeUnknown(t) => ErrorView {
+            text: format!("Whether the {act} was recorded is NOT known: {t}"),
+            retry: Retry::AfterReread(Recorded::Unknown),
+        },
     }
 }
 

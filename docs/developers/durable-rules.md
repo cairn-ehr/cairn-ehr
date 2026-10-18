@@ -38,13 +38,38 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   re-read's `lead` argument alone.
 - **#814: every `.commit()` in the tree is inventoried** by `db_errors_stay_legible.rs`: in `MARKED_COMMIT_SITES`
   (each through `db_diagnosis::commit_failure`, counted per file: judge, each sign-off line, both `seal_sign_submit`
-  arms, the attested reconciliation, the CLI's attestation) or in `UNMARKED_COMMITS` with its reason (#815
-  registration, #817 identity writes). An unattested submit's autocommit statement IS its commit, so it is marked too.
+  arms, the attested reconciliation, the CLI's attestation, a registration since #815) or in `UNMARKED_COMMITS` with
+  its reason (#817 identity writes). An unattested submit's autocommit statement IS its commit, so it is marked too.
   Only an ordinary ERROR answer proves a rollback; no answer, or a FATAL/PANIC (which can follow a landed commit), is
-  marked. `node_failure` re-reads a marked error itself. **Tempting wrong fix:** a bare `tx.commit().await?` "because
+  marked. `data_error_from` classifies a marked error as `DataError::OutcomeUnknown` (#815), so `node_failure`
+  re-reads it. **Tempting wrong fix:** a bare `tx.commit().await?` "because
   the statements before it already succeeded". It compiles, reads as an outage, and offers the #713 retry. **Also:** a
   cease's unknown threads are neither stopped nor "NOT stopped", and `write_failure::cease_outcome` drops "Stopped 0"
   when one is unknown.
+- **#815: an interrupted REGISTRATION spends its search, exactly as a success does** (`TokenStore::settle` →
+  `Restored::Consumed`; pins: `token.rs`'s `an_unknown_outcome_consumes_the_form_as_a_success_does`,
+  `commands_register_tests.rs`'s unknown-outcome walk, mutation-checked). `data_error_from` classifies the marker as
+  `DataError::OutcomeUnknown` FIRST; `settle` itself asks `RegistrationFailure::may_have_written`, so the short call
+  stays the safe one (#659) and no caller special-cases it; `register_error_view` says "NOT known" with
+  `Retry::AfterReread(Unknown)`, which funnel.js reads as "every search is spent": it forgets the token it holds even
+  when a newer search replaced the one sent, so the next Register press searches first, and that search finds the
+  chart if it landed. **Tempting wrong fix:** restoring the search "so the clerk can press
+  again" — `register_patient` mints a fresh `patient_id` per call, so that press registers the same person twice.
+  Merely dropping the attestation is not enough either: a background search minted mid-flight would still license a
+  second chart, which is why it is `commit()`'s invalidation.
+- **#818: once a sign-off line may have committed, `sign_off_medication_list` never returns `Err`.** A lost commit,
+  or a transaction that will not open, ends the loop with `SignOffOutcome::interrupted` (the line it stopped at, a
+  `StoppedLine` — `MayBeSigned { event }` or `NotSigned`, never an `Option` whose `None` reads as "not known" — and the
+  untried rest); a failed ROLLBACK keeps the line's own reason. Its `cause` is the root cause, not the marker's text.
+  The CLI's empty-`attested` sentence is the pure `nothing_attested_sentence`: never "nothing was signed off" beside a
+  line that may be signed. The window's
+  whole sentence is Rust's `write_failure::sign_off_outcome` (truth-table tested; "Signed 0" is dropped beside an
+  unknown line, as `cease_outcome` drops "Stopped 0") and `signOff` says `report.text` and re-reads with
+  `report.behind_the_record` (returned by `sign_off_outcome` with the text, so they cannot disagree). Pins:
+  `tests/signoff_interrupted.rs` — a test-only trigger on one named line answers its COMMIT FATAL, kills the backend
+  inside the line (its own reason survives the dead ROLLBACK; mutation-checked), or answers the COMMIT with an ERROR
+  (that line alone fails; the rest are signed). **Tempting wrong fix:** a `?` on `client.transaction()` or `tx.rollback()` in the loop — it
+  compiles, and discards every line already signed and every reason.
 - **No script spells the string `"after_reread"`**, not even in a comment: the retry is an object, and
   `failure.retry === "after_reread"` is always false (no re-read, a live button). Guarded over every `src-ui/*.js`.
 - **`forgetBehind` is called only by `drewRead` and `holdCharts`** (counted). One more call in an own-act path would

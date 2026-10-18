@@ -108,10 +108,9 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
 
     let sign_off = serde_json::to_value(SignOffReport {
         signed: 0,
-        withheld_message: None,
-        missing_message: None,
         failed: vec![],
-        charts_message: None,
+        text: String::new(),
+        behind_the_record: None,
     })
     .unwrap();
     let cease = serde_json::to_value(CeaseReport {
@@ -284,10 +283,21 @@ fn the_webview_reads_both_partial_completion_reports() {
     assert!(read.contains("missing_message"), "got: {read:?}");
     assert!(read.contains("withheld_message"), "got: {read:?}");
 
+    // A sign-off's reports reach the clinician inside Rust's outcome line (#818,
+    // `write_failure::sign_off_outcome`, which appends every note it is handed), so the webview
+    // must say `text`, and `sign_off_impl` must hand it the withheld and missing reports.
     let reported = fields_read_by_the_webview("report");
-    assert!(reported.contains("missing_message"), "got: {reported:?}");
-    assert!(reported.contains("withheld_message"), "got: {reported:?}");
-    assert!(reported.contains("failed"), "got: {reported:?}");
+    assert!(reported.contains("text"), "got: {reported:?}");
+    assert!(reported.contains("behind_the_record"), "got: {reported:?}");
+    let sign_off = crate::source_guard::rust_fn(include_str!("commands.rs"), "sign_off_impl");
+    for fed in [
+        "withheld_report(&outcome.withheld,",
+        "missing_report(",
+        "&outcome.groups_missing_from_chart,",
+        "&notes,",
+    ] {
+        assert!(sign_off.contains(fed), "{fed} not in sign_off_impl");
+    }
 }
 
 /// Every command the webview calls is one `main.rs` registers. A command missing from

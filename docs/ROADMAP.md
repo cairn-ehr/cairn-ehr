@@ -448,18 +448,11 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   §11); unlink 2 → 1 → 2, ≤ 15 s (§10); the tray: paper 4 → 5 closed / 4 open (#754), ≤ 25 s per entry, the find ≤ 5 s
   with the tray open (§12); confirm 2 → 2 → 2 and bridge re-link 3 → 2 → 2, ≤ 15 s (§13); the commit-time check and
   R7's two lines 0 → 0 → 0. Every figure is a human act still owed.
-- **Tech debt, 2026-10-16:** PRs #794 (#781 · #789 · #732) and #795 (#793 + #712 item 3: every `cairn-gui-tauri` file
-  under 500 lines; #737 + #796: each banner/tray entry headed by whose record(s) it is) merged. Then, on branch
-  `fix/752-745-740-banner-tray-failure-states` (merged 2026-10-16): the banner survives a failed chart read, a failed re-read and a drawing
-  fault (`duplicate_banner`); it hides only on Rust's `silent`; a decided refusal re-reads the BANNER, never the whole
-  chart (no "reload"); the tray's reads are ordered and its stale list cleared (#745 · #752 · the rest of #740) — PR
-  #798, whose review round also pinned every JS half by source guards. Filed #797 (the window's other "reload the
-  chart" sentences, now including the set-changed refusals), #799 (a chart re-read wipes a half-typed stop reason),
-  #800 (no generation token on `refresh`), #801 (a fault drawing the medication rows reads "Could not read the
-  chart").
-- **2026-10-17:** PR #802 (#799 · #800 · #801): a chart re-read keeps typed stop reasons, drops an overtaken
-  answer or failure (`chartReadRevision`, `mayDraw`/`isLatestRead`), and a list that cannot be drawn leaves nothing partial
-  under a live sign-off (`drawList` under one guard, `#chart-unshown` above the table).
+- **2026-10-16/17, merged:** PRs #794 (#781 · #789 · #732), #795 (#793 + #712 item 3: every `cairn-gui-tauri` file
+  under 500 lines; #737 + #796: entries headed by whose record(s) they are), #798 (#745 · #752 · #740: the banner
+  survives a failed read and hides only on Rust's `silent`; a decided refusal re-reads the banner, not the chart; the
+  tray's reads ordered) and #802 (#799 · #800 · #801: a re-read keeps typed stop reasons, drops overtaken answers, and
+  never leaves a partial list under a live sign-off). Filed #797 from #798.
 - **2026-10-17 (#797, PR #805, merged 2026-10-18):** a refusal because the record changed under the clinician
   is typed (`RefusalScope::Stale` → `DataError::Stale` → `Retry::AfterReread`); the window re-reads the whole chart,
   never retries, and names only changes from ANOTHER source (the maintainer's rule; a held chart set moved only by
@@ -483,11 +476,18 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   rule, `db_diagnosis::commit_failure`: a commit with no ordinary ERROR answer is outcome-unknown. A sign-off says "whether the
   sign-off was recorded is NOT known", never "failed"; a cease names each unknown thread, and never says "Stopped 0"
   over one. Filed **#815** (registration's commit is still unmarked, and its retry mints a second chart), **#817**
-  (the identity-side commits) and **#818** (an interrupted sign-off discards its partial report).
+  (the identity-side commits) and **#818** (an interrupted sign-off discards its partial report). **Merged** (PR #816).
+- **2026-10-18 (#815 + #818, PR #819):** registration's commit is marked too (maintainer's choice: mark + search
+  again, not an idempotent re-send). The front door says "whether this registration was recorded is NOT known"
+  with no live retry, and `TokenStore::settle` spends every search like a success (it asks the error,
+  `RegistrationFailure`), so the next Register press searches first and finds the chart if it landed. A sign-off cut off mid-gesture now reports the lines signed,
+  the line it stopped at (NOT known, or NOT signed) and the lines never tried, in one Rust sentence
+  (`sign_off_outcome`); the CLI prints the same and exits 1. Re-sending the same signed batch (safe at the floor:
+  `submit_event` is idempotent on `event_id`) stays possible later, after #807, with #649. Review follow-ons: **#820**.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #816 (#814); then #815 (registration, needs a decision), #818, #817; then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #819 (#815 + #818); then #817 (the identity-side commits) and #820 (#819's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

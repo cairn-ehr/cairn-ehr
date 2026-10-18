@@ -121,7 +121,8 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
         // Search never raises `Stale`, but a match must not hide a new cause. `Never`, not
         // `AfterReread`: the funnel has no chart on screen to re-read and funnel.js never reads
         // `after_reread`, so that label would be one the code does not honour.
-        DataError::Stale(t) => ErrorView {
+        // A search commits nothing, so it never raises this either; same reasoning as `Stale`.
+        DataError::Stale(t) | DataError::OutcomeUnknown(t) => ErrorView {
             text: t.clone(),
             retry: Retry::Never,
         },
@@ -136,7 +137,9 @@ pub fn search_error_view(e: &DataError) -> ErrorView {
 ///
 /// Two inputs because the advice depends on both: an outage whose search was KEPT can simply
 /// be retried, while any failure whose search was dropped (the form changed while it was
-/// saving) has nothing left to retry with — the clerk waits for the new search.
+/// saving) has nothing left to retry with — the clerk waits for the new search. An outcome
+/// that MAY have written (`DataError::OutcomeUnknown`, #815) is answered first, on its own: its
+/// search was spent (`Restored::Consumed`), and the next press must search again.
 pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
     let (base, retry_if_kept) = match e {
         DataError::Unavailable(t) => (
@@ -158,9 +161,27 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
             Retry::AfterOperator,
         ),
         // Registration never raises `Stale`; if it ever does, nothing was saved. `Never`, not
-        // `AfterReread`: no chart is on screen to re-read and funnel.js never reads it.
+        // `AfterReread`: no chart is on screen to re-read, and funnel.js reads `AfterReread`
+        // only as an unknown outcome's "every search is spent" (below).
         DataError::Stale(t) => (format!("Nothing was saved: {t}"), Retry::Never),
         DataError::NotFound => ("Nothing was saved.".to_string(), Retry::Never),
+        // #815: the commit got no ordinary answer, so the chart may exist. Never "Nothing was
+        // saved", and no live retry: every search is spent (`Restored::Consumed`, a search that
+        // landed mid-save included). `AfterReread(Unknown)` is how funnel.js knows to forget the
+        // token it holds even when it is not the one sent, so the next Register press searches
+        // first — the front door's re-read — and that search shows the chart if it was created.
+        // Returned whole: no `restored` wording applies to it.
+        DataError::OutcomeUnknown(t) => {
+            return ErrorView {
+                text: format!(
+                    "Whether this registration was recorded is NOT known: no ordinary answer \
+                     came back while it was being saved ({t}). Do not register this patient \
+                     again without searching. Once the window can reach the node again, press \
+                     Register: it searches first, and if the chart was created it is in the list."
+                ),
+                retry: Retry::AfterReread(Recorded::Unknown),
+            }
+        }
     };
     match restored {
         Restored::Kept if retry_if_kept == Retry::Now => ErrorView {
@@ -170,6 +191,12 @@ pub fn register_error_view(e: &DataError, restored: Restored) -> ErrorView {
         Restored::Kept => ErrorView {
             text: base,
             retry: retry_if_kept,
+        },
+        // Only an unknown outcome spends the search, and it is answered above; were another
+        // cause ever to, nothing is held to retry with.
+        Restored::Consumed => ErrorView {
+            text: base,
+            retry: Retry::Never,
         },
         Restored::SupersededAndDropped => ErrorView {
             text: format!(

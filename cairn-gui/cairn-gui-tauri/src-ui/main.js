@@ -371,42 +371,26 @@ function say(text) {
   el("outcome").textContent = text;
 }
 
-/**
- * Render a completed act honestly: what happened, and what did not.
- * ADR-0060 decision 2 — partial completion is reported, never implied.
- */
-function reportSignOff(report) {
-  const parts = ["Signed " + report.signed + " medication thread(s)."];
-  if (report.failed.length > 0) {
-    parts.push(
-      report.failed.length +
-        " line(s) could NOT be signed and were left unsigned: " +
-        report.failed.join("; "),
-    );
-  }
-  if (report.withheld_message) parts.push(report.withheld_message);
-  if (report.missing_message) parts.push(report.missing_message);
-  if (report.charts_message) parts.push(report.charts_message);
-  say(parts.join(" "));
-}
-
 async function signOff() {
   if (renderedPatient === null) {
     say("No medication list is on screen to sign off.");
     return;
   }
+  let report;
   try {
-    reportSignOff(
-      await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts }),
-    );
+    report = await invoke("sign_off", { patientId: renderedPatient, charts: renderedCharts });
   } catch (failure) {
-    // `failureText` reads the ErrorView's text; an interrupted commit (#814) never "failed".
+    // `failureText` reads the ErrorView's text. Since #818 an interrupted commit returns a report,
+    // not this error; the "unknown" check stays as defence, so such an error is never "failed".
     const unknown = behindTheRecord(failure) === "unknown";
     say((unknown ? "" : "Sign-off failed: ") + failureText(failure));
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     return;
   }
-  await refresh(el("outcome").textContent);
+  // Worded in Rust, every part of it (ADR-0060: partial completion is reported, never implied):
+  // `write_failure::sign_off_outcome`, which also says where a gesture stopped early (#818).
+  say(report.text);
+  await refresh(el("outcome").textContent, report.behind_the_record);
 }
 
 async function cease(groupId, reason) {

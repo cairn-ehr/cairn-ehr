@@ -707,9 +707,11 @@ fn every_postgres_call_in_the_component_read_names_what_it_was_doing() {
 /// how many AUTOCOMMIT statements each also routes through it (an autocommit statement IS its
 /// commit, and has no `.commit()` to count): a judgement's commit; each sign-off line's commit;
 /// a medication event's attested COMMIT plus its unattested `submit_event` statement; a
-/// reconciliation's attested commit; the CLI's thread attestation.
+/// reconciliation's attested commit; the CLI's thread attestation; a registration's one
+/// transaction (#815: a lost commit may have created the chart, so a retry could mint a second).
 const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
     ("crates/cairn-node/src/chart_link/judge.rs", 0),
+    ("crates/cairn-node/src/patient/register.rs", 0),
     ("crates/cairn-node/src/medication/signoff.rs", 0),
     ("crates/cairn-node/src/medication/sealed_submit.rs", 1),
     ("crates/cairn-node/src/medication/reconciliation.rs", 0),
@@ -718,9 +720,8 @@ const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
 
 /// Every other file that commits a database transaction, with why it is not (yet) marked. A
 /// file that is in neither list is red, so a new write is classified on purpose, never by
-/// default; moving a file from here to [`MARKED_COMMIT_SITES`] is how #815/#817 are fixed.
+/// default; moving a file from here to [`MARKED_COMMIT_SITES`] is how #817 is fixed.
 const UNMARKED_COMMITS: &[(&str, &str)] = &[
-    ("crates/cairn-node/src/patient/register.rs", "#815"),
     ("crates/cairn-node/src/identify.rs", "#817"),
     ("crates/cairn-node/src/john_doe.rs", "#817"),
     ("crates/cairn-node/src/evidence.rs", "#817"),

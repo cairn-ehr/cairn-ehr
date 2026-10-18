@@ -13,6 +13,10 @@ fn each_class_earns_its_retry() {
         Retry::AfterOperator
     );
     assert_eq!(retry_for(&DataError::Unavailable("x".into())), Retry::Now);
+    assert_eq!(
+        retry_for(&DataError::OutcomeUnknown("x".into())),
+        Retry::AfterReread(Recorded::Unknown)
+    );
 }
 
 /// An unclassified failure is an outage: the node's text is kept and the act can be retried.
@@ -89,7 +93,7 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
     // after the window's snapshot: its `Stale` refusal must reach the webview classified, never
     // as a plain string (#797 review — a revert to `refused(format!(…))` reads naturally here).
     assert!(
-        rust_fn(src, "sign_off_impl").contains(".map_err(|e| sign_off_failure(&e))?"),
+        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&e))?"),
         "sign_off_impl"
     );
 }
@@ -111,31 +115,100 @@ fn node_failure_never_offers_a_retry_for_a_commit_that_may_have_landed() {
     assert_eq!(view.text, format!("{e:#}"));
 }
 
-/// #814: a sign-off whose line commit was lost mid-flight is NOT said to have failed: whether it
-/// was recorded is not known, so the window re-reads (`Unknown`). The sentence names the event
-/// and the cause, says the lines after it were never tried, and claims no lost CONNECTION (the
-/// marker also covers a FATAL answer). Every other failure is `node_failure`'s, unchanged.
+/// #818: what one sign-off did, every combination. Signed, NOT signed, NOT known and never tried
+/// are separate facts. "Signed 0" is left out only when the line it stopped at may be signed
+/// (the count would claim it is not), and kept when that line wrote nothing. Before #818 an
+/// interrupted sign-off was an `Err` that discarded the signed lines and the failures' reasons.
 #[test]
-fn an_interrupted_sign_off_commit_is_not_known_never_failed() {
-    let event = uuid::Uuid::from_u128(814);
-    let view = sign_off_failure(&interrupted(event));
-    assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
-    let text = &view.text;
+fn a_sign_off_outcome_keeps_signed_failed_unknown_and_untried_apart() {
+    use cairn_node::medication::signoff::{SignOffInterrupted, StoppedLine};
+    let t = uuid::Uuid::from_u128;
+    let unknown = SignOffInterrupted {
+        medication_id: t(2),
+        line: StoppedLine::MayBeSigned { event: t(9) },
+        cause: "connection closed".into(),
+        not_attempted: vec![t(3)],
+    };
+    let (text, behind) = sign_off_outcome(1, &[], Some(&unknown), &[]);
+    assert_eq!(behind, Some(Recorded::Unknown), "the list may be behind");
+    assert!(text.starts_with("Signed 1 medication thread(s)."), "{text}");
     assert!(
-        text.starts_with("Whether the sign-off was recorded is NOT known"),
+        text.contains(&format!("Whether thread {} was signed is NOT known", t(2))),
         "{text}"
     );
-    assert!(text.contains(&event.to_string()), "names the event: {text}");
+    assert!(
+        text.contains(&format!("event {}", t(9))),
+        "names the event: {text}"
+    );
     assert!(
         text.contains("(connection closed)"),
         "names the cause: {text}"
     );
-    assert!(text.contains("lines after it were not signed"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "1 line(s) after it were not tried and are still unsigned: {}.",
+            t(3)
+        )),
+        "{text}"
+    );
     assert!(!text.contains("failed"), "never \"failed\": {text}");
-    assert!(!text.contains("connection was lost"), "{text}");
 
-    let outage = anyhow::anyhow!("connection refused");
-    assert_eq!(sign_off_failure(&outage), node_failure(&outage));
+    let (text, _) = sign_off_outcome(0, &[], Some(&unknown), &[]);
+    assert!(
+        !text.contains("Signed 0"),
+        "that line may be signed: {text}"
+    );
+    assert!(
+        text.starts_with(&format!("Whether thread {} was signed is NOT known", t(2))),
+        "the unknown line is still said: {text}"
+    );
+
+    let wrote_nothing = SignOffInterrupted {
+        line: StoppedLine::NotSigned,
+        not_attempted: vec![],
+        ..unknown.clone()
+    };
+    let (text, behind) = sign_off_outcome(0, &[], Some(&wrote_nothing), &[]);
+    assert_eq!(behind, None, "nothing may have landed");
+    assert!(text.starts_with("Signed 0 medication thread(s)."), "{text}");
+    assert!(
+        text.contains(&format!(
+            "The sign-off stopped at thread {}, which was NOT signed (connection closed).",
+            t(2)
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("not tried"), "{text}");
+
+    // Every part at once, in order: signed, failed, where it stopped, untried, the notes.
+    let (text, _) = sign_off_outcome(
+        1,
+        &["thread x: refused".into()],
+        Some(&unknown),
+        &[Some("Withheld.".into())],
+    );
+    let at = |part: &str| {
+        text.find(part)
+            .unwrap_or_else(|| panic!("{part:?} in {text}"))
+    };
+    assert!(at("Signed 1") < at("could NOT be signed"), "{text}");
+    assert!(at("could NOT be signed") < at("is NOT known"), "{text}");
+    assert!(at("is NOT known") < at("were not tried"), "{text}");
+    assert!(at("were not tried") < at("Withheld."), "{text}");
+
+    // Uninterrupted: the sentence the webview used to build, failed lines and notes in order.
+    let (text, behind) = sign_off_outcome(
+        2,
+        &["thread x: refused".into()],
+        None,
+        &[Some("Withheld.".into()), None, Some("Across.".into())],
+    );
+    assert_eq!(behind, None);
+    assert_eq!(
+        text,
+        "Signed 2 medication thread(s). 1 line(s) could NOT be signed and were left unsigned: \
+         thread x: refused Withheld. Across."
+    );
 }
 
 /// #814: what one cease did, every combination. Stopped, NOT stopped, and not known are three

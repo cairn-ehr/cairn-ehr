@@ -267,6 +267,9 @@ pub async fn register_impl(
     let name = taken.raw_name().to_string();
     let birth_date = taken.query().birth_date.clone();
     let outcome = state.funnel_backend.register(taken).await;
+    // `settle` itself spends the search when the outcome is unknown (#815,
+    // `RegistrationFailure`): the chart may exist, so a restored search would let the next press
+    // register the same person a second time.
     let settled = state.funnel.lock().await.settle(outcome);
     match settled {
         Ok(patient) => {

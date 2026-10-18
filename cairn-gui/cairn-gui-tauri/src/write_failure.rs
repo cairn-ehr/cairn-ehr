@@ -6,7 +6,7 @@
 //! `data_error_from` classification), so this module only maps it onto the funnel's `Retry`
 //! vocabulary, passing the node's own legible sentence (§9.6) through untouched. One case is
 //! worded here instead: a commit lost mid-flight, which may have written, so it is neither
-//! "failed" nor done (#814: `sign_off_failure`, and a cease's `cease_outcome`).
+//! "failed" nor done (#814, #818: a sign-off's `sign_off_outcome`, a cease's `cease_outcome`).
 use crate::funnel::view::{ErrorView, Recorded, Retry};
 use cairn_gui_data::port::DataError;
 
@@ -18,50 +18,86 @@ pub(crate) fn retry_for(error: &DataError) -> Retry {
         DataError::Stale(_) => Retry::AfterReread(Recorded::No),
         DataError::Refused(_) | DataError::NotFound => Retry::Never,
         DataError::NotProvisioned(_) => Retry::AfterOperator,
-        // The failing step wrote nothing: an outage. (Earlier lines of a sign-off may be signed,
-        // #818; a commit that MAY have written never reaches here: `node_failure` checks first.)
+        // The failing step wrote nothing: an outage. (A commit that MAY have written is
+        // `OutcomeUnknown`, below; a sign-off that signed a line returns no error at all, #818.)
         DataError::Unavailable(_) => Retry::Now,
+        // A commit that may have written: re-read, never a live retry (#713, #815).
+        DataError::OutcomeUnknown(_) => Retry::AfterReread(Recorded::Unknown),
     }
 }
 
 /// A failed node write as the view the webview reads: the node's own text, the retry its
 /// classification earns. A failure that is not a classified node verdict is an outage
 /// (`Retry::Now`), which is what `data_error_from` makes of it — except a commit the node marked
-/// outcome-unknown (#713): it may have landed, so it re-reads (`Unknown`), never `Now`, whether or
-/// not the caller words it first. Fixed here, once, rather than in every surface.
+/// outcome-unknown (#713): `data_error_from` classifies that as `OutcomeUnknown` (#815), so it
+/// re-reads (`Unknown`), never `Now`, whether or not the caller words it first.
 pub(crate) fn node_failure(e: &anyhow::Error) -> ErrorView {
-    let retry = match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
-        Some(_) => Retry::AfterReread(Recorded::Unknown),
-        None => retry_for(&cairn_gui_live::error::data_error_from(e)),
-    };
     ErrorView {
         text: format!("{e:#}"),
-        retry,
+        retry: retry_for(&cairn_gui_live::error::data_error_from(e)),
     }
 }
 
-/// A failed sign-off as the view the webview reads (#814). One case comes first: a line's COMMIT
-/// that got no ordinary answer (the node's `commit_outcome_unknown` marker). That line may be
-/// signed, and the lines committed before it are, so "failed" would be false about the
-/// clinician's own act. It is worded as not known and re-reads (`Recorded::Unknown`). A second
-/// press cannot sign a line twice: the orchestrator targets only lines that still need a signature
-/// (`sign_off_targets`), so a line whose commit did land is no longer a target. The gesture ends at
-/// that line, so the lines after it were never tried (#818 tracks reporting the rest).
-/// Every other failure is [`node_failure`]'s.
-pub(crate) fn sign_off_failure(e: &anyhow::Error) -> ErrorView {
-    match cairn_node::db_diagnosis::commit_outcome_unknown_event(e) {
-        Some(event) => ErrorView {
-            text: format!(
-                "Whether the sign-off was recorded is NOT known — no answer came back while event \
-                 {event} was being saved ({}). Lines signed before it in this sign-off are \
-                 recorded; lines after it were not signed. Once the window can reach the node \
-                 again, the chart shows which lines are signed.",
-                e.root_cause()
-            ),
-            retry: Retry::AfterReread(Recorded::Unknown),
-        },
-        None => node_failure(e),
+/// What one sign-off did, as the outcome line says it (ADR-0060: partial completion is reported,
+/// never implied): the lines signed, those NOT signed (`failed`, each already named), and — when
+/// the gesture stopped early (#818) — the line it stopped at and the lines it never tried. A line
+/// whose commit got no ordinary answer (#814) may be signed, so it is neither, and "Signed 0" is
+/// left out beside it (the count would claim that line is not signed). `notes` are the chart's
+/// own reports (withheld, missing, linked charts), appended as given. Rust, not the webview, so
+/// every combination is tested.
+///
+/// Returns the sentence AND the report's `behind_the_record` (`Unknown` exactly when the sentence
+/// says a line may be signed), from one match, so the two cannot disagree.
+pub(crate) fn sign_off_outcome(
+    signed: usize,
+    failed: &[String],
+    interrupted: Option<&cairn_node::medication::signoff::SignOffInterrupted>,
+    notes: &[Option<String>],
+) -> (String, Option<Recorded>) {
+    use cairn_node::medication::signoff::StoppedLine;
+    let unknown = match interrupted.map(|i| i.line) {
+        Some(StoppedLine::MayBeSigned { event }) => Some(event),
+        Some(StoppedLine::NotSigned) | None => None,
+    };
+    let mut parts = Vec::new();
+    if signed > 0 || unknown.is_none() {
+        parts.push(format!("Signed {signed} medication thread(s)."));
     }
+    if !failed.is_empty() {
+        parts.push(format!(
+            "{} line(s) could NOT be signed and were left unsigned: {}",
+            failed.len(),
+            failed.join("; ")
+        ));
+    }
+    if let Some(stopped) = interrupted {
+        let line = stopped.medication_id;
+        let cause = &stopped.cause;
+        parts.push(match unknown {
+            Some(event) => format!(
+                "Whether thread {line} was signed is NOT known — no ordinary answer came back \
+                 while event {event} was being saved ({cause}). Once the window can reach the \
+                 node again, the chart shows whether it is signed."
+            ),
+            None => {
+                format!("The sign-off stopped at thread {line}, which was NOT signed ({cause}).")
+            }
+        });
+        if !stopped.not_attempted.is_empty() {
+            let untried: Vec<String> = stopped
+                .not_attempted
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+            parts.push(format!(
+                "{} line(s) after it were not tried and are still unsigned: {}.",
+                untried.len(),
+                untried.join(", ")
+            ));
+        }
+    }
+    parts.extend(notes.iter().flatten().cloned());
+    (parts.join(" "), unknown.map(|_| Recorded::Unknown))
 }
 
 /// What one cease did, as the outcome line says it (ADR-0060: partial completion is reported,
@@ -92,9 +128,9 @@ pub(crate) fn cease_outcome(
             .map(|(thread, event, cause)| format!("thread {thread} (event {event}: {cause})"))
             .collect();
         parts.push(format!(
-            "Whether {} thread(s) of this drug were stopped is NOT known — no answer came back \
-             while saving {}. Once the window can reach the node again, the chart shows whether \
-             each is still active.",
+            "Whether {} thread(s) of this drug were stopped is NOT known — no ordinary answer \
+             came back while saving {}. Once the window can reach the node again, the chart \
+             shows whether each is still active.",
             unknown.len(),
             named.join("; ")
         ));

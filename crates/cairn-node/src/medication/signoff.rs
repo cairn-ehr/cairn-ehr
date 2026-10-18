@@ -28,6 +28,38 @@ pub struct FailedLine {
     pub error: String,
 }
 
+/// Where a sign-off stopped early (#818): at a line whose COMMIT got no ordinary answer, or
+/// whose transaction would not open. Either way the connection can no longer be trusted to carry
+/// another line. It may be the last line, and then `not_attempted` is empty.
+///
+/// Lines signed before it stay signed and are reported in `attested`; a line refused for its own
+/// reason stays in `failed`. This names the rest, so partial completion is reported, never
+/// implied (ADR-0060 decision 2): the line the gesture stopped at, and the lines it never tried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignOffInterrupted {
+    /// The line the gesture stopped at.
+    pub medication_id: Uuid,
+    /// Whether that line may be signed.
+    pub line: StoppedLine,
+    /// What ended the gesture: the error's root cause, as the clinician reads it. The marker's
+    /// own text is left out; the sentence names the event itself.
+    pub cause: String,
+    /// The lines after it, never tried: still unsigned, exactly as before the gesture.
+    pub not_attempted: Vec<Uuid>,
+}
+
+/// What became of the line a sign-off stopped at. Not an `Option<event>`: the two cases mean
+/// opposite things to the clinician, and a `None` would read as "not known" when it means "NOT
+/// signed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoppedLine {
+    /// Its COMMIT got no ordinary answer (#814): it MAY be signed, so it is neither signed nor
+    /// failed. `event` is the attestation that may have landed.
+    MayBeSigned { event: Uuid },
+    /// It wrote nothing (its transaction could not be opened): it is NOT signed.
+    NotSigned,
+}
+
 /// What one sign-off gesture did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignOffOutcome {
@@ -88,6 +120,9 @@ pub struct SignOffOutcome {
     /// `groups_missing_from_chart` — which are reported, actionable, normal-operation states
     /// — a failed line is an attempted write that errored. Empty in normal operation.
     pub failed: Vec<FailedLine>,
+    /// Where the gesture stopped early, if it did (#818). Callers MUST surface it with the
+    /// signed and failed lines: before #818 this case was an `Err` that discarded both.
+    pub interrupted: Option<SignOffInterrupted>,
     /// The chart set this gesture read and signed across (ADR-0076): the opened chart plus
     /// every chart linked to it, or just the opened chart when it is linked to nothing.
     ///
@@ -248,6 +283,7 @@ pub async fn sign_off_medication_list(
             separation_targets: first_read.separation_targets,
             groups_missing_from_chart: first_read.groups_missing_from_chart,
             failed: vec![],
+            interrupted: None,
             charts: first_read.charts,
         });
     }
@@ -320,7 +356,16 @@ pub async fn sign_off_medication_list(
     let mut attested = Vec::with_capacity(actual.len());
     let mut event_ids = Vec::with_capacity(actual.len());
     let mut failed = Vec::new();
-    for (thread, hlc) in actual.iter().zip(hlcs) {
+    let mut interrupted = None;
+    // Once a line may have committed, an error no longer returns `Err` (that discarded the
+    // lines already signed, #818): the gesture stops and SAYS where, naming the untried rest.
+    let stop = |at: usize, line: StoppedLine, e: &anyhow::Error| SignOffInterrupted {
+        medication_id: actual[at],
+        line,
+        cause: e.root_cause().to_string(),
+        not_attempted: actual[at + 1..].to_vec(),
+    };
+    for (at, (thread, hlc)) in actual.iter().zip(hlcs).enumerate() {
         let chart = match chart_of_thread(&charts_of, *thread) {
             Ok(chart) => chart,
             Err(line) => {
@@ -332,23 +377,49 @@ pub async fn sign_off_medication_list(
                 continue;
             }
         };
-        let tx = client.transaction().await?;
-        match crate::medication::attest_thread_in_tx(&tx, params, chart, *thread, hlc).await {
-            Ok(event_id) => {
-                // A commit lost mid-flight may have landed (#814): it is marked outcome-unknown
-                // and ends the gesture, so the window says "NOT known", never "failed", and
-                // re-reads. Lines committed before it are signed; the re-read shows them.
-                tx.commit()
-                    .await
-                    .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
-                attested.push(*thread);
-                event_ids.push(event_id);
-            }
+        // A transaction that cannot open wrote nothing for this line, and the connection that
+        // refused it will refuse the rest: stop, and say so.
+        let tx = match client.transaction().await {
+            Ok(tx) => tx,
             Err(e) => {
-                // Roll back THIS line only. The error is kept as text rather than
-                // propagated: propagating it would abort the remaining lines, which is the
-                // behaviour this loop exists to remove.
-                tx.rollback().await?;
+                interrupted = Some(stop(at, StoppedLine::NotSigned, &e.into()));
+                break;
+            }
+        };
+        match crate::medication::attest_thread_in_tx(&tx, params, chart, *thread, hlc).await {
+            Ok(event_id) => match tx.commit().await {
+                Ok(()) => {
+                    attested.push(*thread);
+                    event_ids.push(event_id);
+                }
+                Err(e) => {
+                    let e = crate::db_diagnosis::commit_failure(event_id, e.into());
+                    match crate::db_diagnosis::commit_outcome_unknown_event(&e) {
+                        // No ordinary answer (#814): this line MAY be signed. The connection is
+                        // not to be trusted with the next line, so the gesture ends here.
+                        Some(event) => {
+                            interrupted = Some(stop(at, StoppedLine::MayBeSigned { event }, &e));
+                            break;
+                        }
+                        // An ERROR answer proves the commit rolled back: this line alone failed.
+                        None => failed.push(FailedLine {
+                            medication_id: *thread,
+                            error: format!("{e:#}"),
+                        }),
+                    }
+                }
+            },
+            Err(e) => {
+                // Roll back THIS line only. The error is kept as text rather than propagated:
+                // propagating it would abort the remaining lines, which is the behaviour this
+                // loop exists to remove. A failed ROLLBACK is not reported in its place (#818
+                // item 3): the line did not commit either way, and its real reason is the one
+                // to show. A connection the rollback found dead stops the gesture at the next
+                // line's `transaction()`, above (if there is a next line). The rollback's own
+                // error goes to stderr only, for whoever chases why that next BEGIN failed.
+                if let Err(rollback) = tx.rollback().await {
+                    eprintln!("rollback of thread {thread} failed after its own error: {rollback}");
+                }
                 failed.push(FailedLine {
                     medication_id: *thread,
                     error: format!("{e:#}"),
@@ -373,6 +444,7 @@ pub async fn sign_off_medication_list(
         separation_targets,
         groups_missing_from_chart,
         failed,
+        interrupted,
         charts: first_read.charts,
     })
 }
