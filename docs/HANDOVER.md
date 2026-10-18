@@ -3,11 +3,13 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#816](https://github.com/cairn-ehr/cairn-ehr/pull/816)** (#814) (branch `fix/814-medication-commit-unknown`). Every clinical
-> commit now goes through one rule, `db_diagnosis::commit_failure`: an UNANSWERED commit is outcome-unknown. So an
-> interrupted sign-off says "whether the sign-off was recorded is NOT known", never "failed", and a cease names each
-> unknown thread and never says "Stopped 0" over one. Filed **#815**: registration is still unmarked, and its retry
-> mints a SECOND chart. Merged 2026-10-18: PR #813 (#811, `Retry::AfterReread(Recorded::{No, Unknown})`; durable rules
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#816](https://github.com/cairn-ehr/cairn-ehr/pull/816)** (#814) (branch `fix/814-medication-commit-unknown`). The medication
+> writes and the judgement commit go through one rule, `db_diagnosis::commit_failure`: a commit with no ordinary
+> ERROR answer (none at all, or a FATAL/PANIC) is outcome-unknown. So an interrupted sign-off says "whether the
+> sign-off was recorded is NOT known", never "failed", and a cease names each unknown thread and never says
+> "Stopped 0" over one. A guard inventories every `.commit()` in the tree as marked or not-yet-with-a-reason. Filed
+> **#815** (registration still unmarked; its retry mints a SECOND chart), **#817** (the identity-side commits),
+> **#818** (an interrupted sign-off discards its partial report). Merged 2026-10-18: PR #813 (#811, `Retry::AfterReread(Recorded::{No, Unknown})`; durable rules
 > in the #811 block), PR #805 (#797, "Read this chart again"; RUNBOOK §14 is its owed human timing), PR #802. The
 > repair path (#679 · #680 · #681) is built through R7. Design
 > `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's runbook
@@ -18,7 +20,7 @@
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR #816** (#814), then **#815** (registration's interrupted commit; a decision: mark it, or make
->    the retry re-send the same minted ids). **#728** (the Pi re-measure) can run beside. #699 stays open until the
+>    the retry re-send the same minted ids), **#818** (sign-off's partial report), **#817** (identity commits). **#728** (the Pi re-measure) can run beside. #699 stays open until the
 >    maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
 >    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
@@ -193,6 +195,13 @@ each new pin was mutation-checked, one mutation per run.
   not stopped. Walk the count sentences through the new state, not just the new sentence.
 - **⇒ A real unanswered `tokio_postgres` error is testable:** `pg_terminate_backend` from a second connection, then
   wait for `is_closed()` before the next call, or the server's FATAL (a `DbError`) answers it instead.
+- **⇒ The review (4 agents) found "a `DbError` ⇒ rolled back" false for PANIC/FATAL**: a PANIC while flushing the
+  commit's WAL is sent to the client, yet crash recovery replays the commit. Only an ERROR-severity answer now proves a
+  rollback. A self-`pg_terminate_backend` gives a real FATAL answer to test with. Also fixed: the CLI's
+  `attest_medication_thread` was unmarked; the guard read only its four files (now a tree inventory, which also
+  counts commits per file, so a second `.commit().await.context(…)?` in a marked file is red); the cease sentence moved
+  to Rust (`cease_outcome`, truth-table tested); `node_failure` itself re-reads a marked error. The new sentences
+  say "once the window can reach the node again" because the window never reconnects (#807).
 
 ### 2026-10-18 (second) — #811: the re-read after an interrupted commit (option (b))
 

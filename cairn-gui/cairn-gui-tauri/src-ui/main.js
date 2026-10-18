@@ -423,7 +423,7 @@ async function cease(groupId, reason) {
     await refresh(el("outcome").textContent, behindTheRecord(failure));
     return;
   }
-  say(ceaseOutcome(report)); // stop_reasons.js
+  say(report.text); // worded in Rust: `write_failure::cease_outcome`
   await refresh(el("outcome").textContent, report.behind_the_record);
 }
 

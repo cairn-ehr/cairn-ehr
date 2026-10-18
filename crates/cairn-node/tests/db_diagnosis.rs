@@ -449,9 +449,10 @@ async fn an_answered_commit_failure_is_not_marked_and_a_dead_connection_is() {
         .execute("SELECT pg_terminate_backend($1)", &[&pid])
         .await
         .unwrap();
-    // Wait for the client to SEE the close, so the next call is refused locally and can never
-    // be answered by the server's FATAL instead (which would be a `DbError`). Bounded.
-    for _ in 0..200 {
+    // Wait for the client to SEE the close, so the next call is refused locally — the no-answer
+    // arm, not the FATAL-answer arm `a_fatal_answer_is_marked_outcome_unknown` covers. Bounded
+    // at 10 s (terminate returns once signalled, not once the backend is gone); breaks early.
+    for _ in 0..1000 {
         if c.is_closed() {
             break;
         }
@@ -468,6 +469,33 @@ async fn an_answered_commit_failure_is_not_marked_and_a_dead_connection_is() {
         Some(id),
         "unanswered: {e:#}"
     );
+}
+
+/// #816 review: only an ERROR-severity answer proves a rollback. A FATAL (and a PANIC, which no
+/// test can provoke) is a server answer too, but one that can follow a commit that landed — a
+/// PANIC raised while flushing the commit's WAL is replayed by crash recovery — so it is marked
+/// outcome-unknown, erring towards "unknown" as `commit_failure` always does. A backend that
+/// terminates ITSELF answers its own statement with a real FATAL (57P01): the case under test.
+#[tokio::test]
+async fn a_fatal_answer_is_marked_outcome_unknown() {
+    use cairn_node::db_diagnosis::{commit_failure, commit_outcome_unknown_event};
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let id = uuid::Uuid::from_u128(816);
+    let c = db::connect(&base).await.unwrap();
+    let fatal = c
+        .batch_execute("SELECT pg_terminate_backend(pg_backend_pid())")
+        .await
+        .expect_err("a terminated backend cannot answer its statement normally");
+    assert_eq!(
+        fatal.as_db_error().map(|db| db.severity().to_string()),
+        Some("FATAL".to_string()),
+        "the precondition: the server ANSWERED, with a FATAL: {fatal}"
+    );
+    let e = commit_failure(id, fatal.into());
+    assert_eq!(commit_outcome_unknown_event(&e), Some(id), "FATAL: {e:#}");
 }
 
 /// The SQLSTATE on `e`'s chain, read as `cairn-gui-live`'s `sqlstate_of` reads it (that crate is

@@ -36,14 +36,15 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   act's own re-read can be overtaken ("Read this chart again", an own act's draw floor), and the read that draws
   would otherwise name the clinician's own link as another source's change. **Tempting wrong fix:** relying on the
   re-read's `lead` argument alone.
-- **#814: every clinical commit goes through `db_diagnosis::commit_failure`** (judge, each sign-off line, both
-  `seal_sign_submit` arms, the attested reconciliation; pinned by `db_errors_stay_legible.rs`'s
-  `MARKED_COMMIT_SITES`). An unattested submit's autocommit statement IS its commit, so it is marked too. Only an
-  UNANSWERED failure is marked (no `DbError` on the chain), and an answered refusal passes through untouched.
-  **Tempting wrong fix:** a bare `tx.commit().await?` "because the next line can't fail". It compiles, reads as an
-  outage, and offers the #713 retry. **Also:** a cease's unknown threads are neither stopped nor "NOT stopped"
-  (`unknown_message`), and `ceaseOutcome` drops "Stopped 0" when one is unknown. Registration is still unmarked
-  (#815).
+- **#814: every `.commit()` in the tree is inventoried** by `db_errors_stay_legible.rs`: in `MARKED_COMMIT_SITES`
+  (each through `db_diagnosis::commit_failure`, counted per file: judge, each sign-off line, both `seal_sign_submit`
+  arms, the attested reconciliation, the CLI's attestation) or in `UNMARKED_COMMITS` with its reason (#815
+  registration, #817 identity writes). An unattested submit's autocommit statement IS its commit, so it is marked too.
+  Only an ordinary ERROR answer proves a rollback; no answer, or a FATAL/PANIC (which can follow a landed commit), is
+  marked. `node_failure` re-reads a marked error itself. **Tempting wrong fix:** a bare `tx.commit().await?` "because
+  the statements before it already succeeded". It compiles, reads as an outage, and offers the #713 retry. **Also:** a
+  cease's unknown threads are neither stopped nor "NOT stopped", and `write_failure::cease_outcome` drops "Stopped 0"
+  when one is unknown.
 - **No script spells the string `"after_reread"`**, not even in a comment: the retry is an object, and
   `failure.retry === "after_reread"` is always false (no re-read, a live button). Guarded over every `src-ui/*.js`.
 - **`forgetBehind` is called only by `drewRead` and `holdCharts`** (counted). One more call in an own-act path would

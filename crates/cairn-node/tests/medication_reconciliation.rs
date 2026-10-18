@@ -517,6 +517,13 @@ async fn oversize_group_over_cap_is_refused() {
         msg.contains("exceeds max size") && msg.contains("matcher pathology"),
         "oversize medication group must be refused with a legible reason: {msg}"
     );
+    // #814: the floor ANSWERED this submit (`seal_sign_submit`'s unattested autocommit arm), so
+    // it is a refusal, never "outcome unknown" — which would hide its reason behind a re-read.
+    assert_eq!(
+        cairn_node::db_diagnosis::commit_outcome_unknown_event(&err),
+        None,
+        "{msg}"
+    );
     // The refused edge must not have landed: c/d stay collapsed to themselves and
     // a/b/cc keep their pre-refusal group (proves the RAISE rolled back the whole txn,
     // not just the projection recompute).

@@ -27,7 +27,7 @@ use crate::funnel::view::{ErrorView, Recorded};
 use crate::link::judgement_view::{refused, stale};
 use crate::state::{AppState, Now, SessionKey};
 use crate::write_failure::{
-    cease_unknown_message, chart_read_failed, key_locked, node_cannot_write, sign_off_failure,
+    cease_outcome, chart_read_failed, key_locked, node_cannot_write, sign_off_failure,
 };
 use cairn_gui_tab_medications::view::{missing_report, withheld_report};
 use cairn_medication_view::{short_kid, PatientMedicationList};
@@ -307,9 +307,9 @@ pub struct CeaseReport {
     /// (`chart_set::cease_plan`). ADR-0060 again: one member failing must not un-stop the
     /// others, and it must never pass in silence.
     pub failed: Vec<String>,
-    /// Member threads whose commit was lost mid-flight, so whether they were stopped is NOT
-    /// known (#814): `write_failure::cease_unknown_message`'s sentence, or `None`.
-    pub unknown_message: Option<String>,
+    /// The outcome line the webview says: stopped, NOT stopped, and — for a thread whose commit
+    /// got no ordinary answer (#814) — NOT known (`write_failure::cease_outcome`).
+    pub text: String,
     /// `Unknown` when any thread's outcome is unknown: the list on screen may be behind the
     /// record, so the webview's re-read marks it "may be out of date" if it fails (#811).
     pub behind_the_record: Option<Recorded>,
@@ -438,7 +438,7 @@ pub async fn cease_impl(
             Ok(_) => ceased += 1,
             // A commit lost mid-flight may have stopped it (#814): not a failure, not a success.
             Err(e) => match cairn_node::db_diagnosis::commit_outcome_unknown_event(&e) {
-                Some(event) => unknown.push((medication_id, event)),
+                Some(event) => unknown.push((medication_id, event, e.root_cause().to_string())),
                 None => failed.push(format!("thread {medication_id}: {e:#}")),
             },
         }
@@ -446,10 +446,11 @@ pub async fn cease_impl(
     let elapsed_ms = started.elapsed().as_millis().min(i32::MAX as u128) as i32;
     record_timing(state, "cease", 1, elapsed_ms).await;
 
+    let text = cease_outcome(ceased, &failed, &unknown);
     Ok(CeaseReport {
         ceased,
         failed,
-        unknown_message: cease_unknown_message(&unknown),
+        text,
         behind_the_record: (!unknown.is_empty()).then_some(Recorded::Unknown),
     })
 }

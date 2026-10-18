@@ -561,7 +561,8 @@ pub fn carries_refusal_marker(e: &anyhow::Error) -> bool {
 /// A write whose COMMIT was interrupted, so whether it landed is unknown (#713).
 ///
 /// A connection lost DURING `COMMIT` is the one failure after which the database may or may not
-/// hold the event. It is neither a verdict (nothing was decided about the call) nor an ordinary
+/// hold the event ([`commit_failure`] decides which failures count: also an autocommit statement's,
+/// and a FATAL or PANIC answer). It is neither a verdict (nothing was decided about the call) nor an ordinary
 /// outage (an outage wrote nothing, so the same act may simply be tried again). Treating it as an
 /// outage is the #713 hazard: a judgement that DID commit — say as `Outranked`, so the record
 /// still reads as before — invites a second press, and that second event, stamped above a
@@ -608,23 +609,32 @@ pub fn commit_outcome_unknown(event_id: uuid::Uuid, cause: anyhow::Error) -> any
 }
 
 /// The failure of a write's COMMIT (`fault`, which carries the commit's `tokio_postgres::Error`),
-/// marked [`commit_outcome_unknown`] exactly when the server never ANSWERED it (#713, #814).
+/// marked [`commit_outcome_unknown`] unless the server answered it with an ordinary ERROR
+/// (#713, #814).
 ///
-/// A server that answered with an error (a `DbError` somewhere on the chain, so a SQLSTATE)
-/// rolled the transaction back: nothing was written, and `fault` is returned untouched, an
-/// ordinary failure. A commit with no answer — the connection lost mid-flight — may have landed,
-/// so it is marked, and a surface re-reads before offering the act again instead of calling it
-/// "failed". The ONE rule every clinical commit goes through (judgement, sign-off line, medication
-/// submit, reconciliation), so the question is asked the same way everywhere; pinned by
-/// `tests/db_errors_stay_legible.rs`. An autocommit statement counts: it is its own commit.
+/// A server that answered with an ERROR-severity `DbError` (somewhere on the chain, so a
+/// SQLSTATE) rolled the transaction back: nothing was written, and `fault` is returned untouched,
+/// an ordinary failure. Anything else may have landed, so it is marked, and a surface re-reads
+/// before offering the act again instead of calling it "failed": a commit with no answer (the
+/// connection lost mid-flight), and a FATAL or PANIC answer, which can follow a commit that
+/// landed (a PANIC while flushing the commit's WAL is replayed by crash recovery).
 ///
-/// Errs towards "unknown": a call that failed before it was ever sent (a dead connection) is
-/// also unanswered, and is marked too. That claims LESS than the truth, never more.
+/// The rule the medication writes and the judgement commit go through (each sign-off line, both
+/// `seal_sign_submit` arms, the attested reconciliation, the CLI's thread attestation), so the
+/// question is asked the same way everywhere; `tests/db_errors_stay_legible.rs` lists every
+/// `.commit()` in this crate as marked or, with its reason, not yet (registration #815, the
+/// identity writes #817). An autocommit statement counts: it is its own commit.
+///
+/// Errs towards "unknown": a call that failed before it was ever sent (a dead connection), or a
+/// FATAL that arrived before the commit began, is marked too. That claims LESS than the truth,
+/// never more.
 pub fn commit_failure(event_id: uuid::Uuid, fault: anyhow::Error) -> anyhow::Error {
+    use tokio_postgres::error::Severity;
     let answered = fault.chain().any(|cause| {
         cause
             .downcast_ref::<tokio_postgres::Error>()
-            .is_some_and(|pg| pg.as_db_error().is_some())
+            .and_then(|pg| pg.as_db_error())
+            .is_some_and(|db| db.parsed_severity() == Some(Severity::Error))
     });
     if answered {
         fault

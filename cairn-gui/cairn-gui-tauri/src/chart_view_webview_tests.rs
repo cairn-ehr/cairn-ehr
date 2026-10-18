@@ -262,8 +262,9 @@ fn a_failed_sign_off_or_cease_is_worded_from_its_error_view() {
 /// #814: an interrupted commit is not a failure. Sign-off's catch drops its "failed" prefix for
 /// it (Rust's sentence says whether it was recorded is NOT known); in that one handler the act is
 /// known, so keying the prefix on `"unknown"` cannot excuse another act (the #811 rule). A cease
-/// that ran says Rust's sentence for its unknown threads and re-reads with the report's mark,
-/// so a failed re-read marks the list "may be out of date".
+/// that ran says Rust's whole outcome line (`write_failure::cease_outcome`, where every
+/// combination is tested) and re-reads with the report's mark, so a failed re-read marks the list
+/// "may be out of date".
 #[test]
 fn an_interrupted_sign_off_or_cease_is_never_said_to_have_failed() {
     let sign_off = js_fn(MAIN_JS, "signOff");
@@ -275,18 +276,8 @@ fn an_interrupted_sign_off_or_cease_is_never_said_to_have_failed() {
         sign_off.contains("say((unknown ? \"\" : \"Sign-off failed: \") + failureText(failure));"),
         "{sign_off}"
     );
-    let outcome = js_fn(STOP_REASONS_JS, "ceaseOutcome");
-    assert!(
-        outcome.contains("if (report.unknown_message) parts.push(report.unknown_message);"),
-        "{outcome}"
-    );
-    // "Stopped 0" is false when the one thread's outcome is unknown: it may be stopped.
-    assert!(
-        outcome.contains("if (report.ceased > 0 || !report.unknown_message) {"),
-        "{outcome}"
-    );
     let cease = js_fn(MAIN_JS, "cease");
-    assert!(cease.contains("say(ceaseOutcome(report));"), "{cease}");
+    assert!(cease.contains("say(report.text);"), "{cease}");
     assert!(
         cease.contains("await refresh(el(\"outcome\").textContent, report.behind_the_record);"),
         "{cease}"
