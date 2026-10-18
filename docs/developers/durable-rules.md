@@ -38,8 +38,12 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   re-read's `lead` argument alone.
 - **#814: every `.commit()` in the tree is inventoried** by `db_errors_stay_legible.rs`: in `MARKED_COMMIT_SITES`
   (each through `db_diagnosis::commit_failure`, counted per file: judge, each sign-off line, both `seal_sign_submit`
-  arms, the attested reconciliation, the CLI's attestation, a registration since #815) or in `UNMARKED_COMMITS` with
-  its reason (#817 identity writes). An unattested submit's autocommit statement IS its commit, so it is marked too.
+  arms, the attested reconciliation, the CLI's attestation, a registration since #815, and since #817 every identity
+  write: identify, a John-Doe chart, evidence, a proposal's link, an auto-applied link, and the autocommit submits of a
+  sensitivity grade/withdrawal, a shred and a text evidence) or in `UNMARKED_COMMITS` with its reason (only a
+  restore's `finalize_identity`, whose landed commit fences the door, so a re-run cannot double it). A marked file's
+  commit that writes NO event (auto-apply's two send-to-review commits) is counted in `EVENTLESS_COMMITS` with its
+  reason. An unattested submit's autocommit statement IS its commit, so it is marked too.
   Only an ordinary ERROR answer proves a rollback; no answer, or a FATAL/PANIC (which can follow a landed commit), is
   marked. `data_error_from` classifies a marked error as `DataError::OutcomeUnknown` (#815), so `node_failure`
   re-reads it. **Tempting wrong fix:** a bare `tx.commit().await?` "because

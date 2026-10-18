@@ -227,8 +227,9 @@ pub async fn register_john_doe(
     // from the payload (see this module's doc for why that must be absence, not an empty
     // object): there is nothing to search an unconscious patient with, and the db/045 floor
     // refuses a non-standard registration that carries a `search` key at all.
+    let registration_event_id = Uuid::now_v7();
     let registration_body = build_registration_body(
-        Uuid::now_v7(),
+        registration_event_id,
         patient_id,
         RegistrationClass::Unidentified,
         Some(basis),
@@ -254,7 +255,12 @@ pub async fn register_john_doe(
         .await?;
     tx.execute("SELECT submit_event($1)", &[&pending_signed.signed_bytes])
         .await?;
-    tx.commit().await?;
+    // A lost commit may have created the chart, and a re-run mints a SECOND one (the #815
+    // hazard), so it is marked and names the chart the operator should look for (#817).
+    tx.commit().await.map_err(|e| {
+        crate::db_diagnosis::commit_failure(registration_event_id, e.into())
+            .context(format!("registering John Doe chart {patient_id}"))
+    })?;
 
     // Read the node-local friendly ordinal for this registration (finisher 1). Queried
     // post-commit against the same client: the callsign row is durably present, and

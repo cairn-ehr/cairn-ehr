@@ -484,10 +484,14 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   the line it stopped at (NOT known, or NOT signed) and the lines never tried, in one Rust sentence
   (`sign_off_outcome`); the CLI prints the same and exits 1. Re-sending the same signed batch (safe at the floor:
   `submit_event` is idempotent on `event_id`) stays possible later, after #807, with #649. Review follow-ons: **#820**.
+- **2026-10-18 (#817, PR #821):** every identity-side commit is marked too: identify, a John-Doe chart (whose re-run
+  would mint a second chart), observed and photo evidence, a proposal's link, an auto-applied link, and the autocommit
+  submits of a sensitivity grade/withdrawal, a shred and a text evidence. The one commit left unmarked is a
+  restore's `finalize_identity`: if it landed, the door is fenced and a re-run is refused.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #819 (#815 + #818); then #817 (the identity-side commits) and #820 (#819's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #821 (#817); then #820 (#819's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

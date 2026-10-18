@@ -169,9 +169,11 @@ pub async fn shred_event(
             // (no contributor claims `responsibility`), so the plain 1-arg door suffices.
             let body = build_shred_body(event_id, patient, target, basis, node_kid, None, hlc);
             let signed = sign(&body, node_sk)?;
+            // The statement IS the commit; a lost answer may have landed (#817).
             client
                 .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-                .await?;
+                .await
+                .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
         }
         Some(params) => {
             // Attested: the HUMAN authors and signs the tombstone itself (they are the
@@ -195,7 +197,8 @@ pub async fn shred_event(
                     "SELECT submit_event($1,$2,$3)",
                     &[&signed.signed_bytes, &token, &attester_vk],
                 )
-                .await?;
+                .await
+                .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
         }
     }
     Ok(event_id)

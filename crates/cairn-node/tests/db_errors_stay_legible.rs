@@ -709,6 +709,9 @@ fn every_postgres_call_in_the_component_read_names_what_it_was_doing() {
 /// a medication event's attested COMMIT plus its unattested `submit_event` statement; a
 /// reconciliation's attested commit; the CLI's thread attestation; a registration's one
 /// transaction (#815: a lost commit may have created the chart, so a retry could mint a second).
+/// Since #817 the identity writes too: a re-run after a lost commit authors a SECOND event (a
+/// second John-Doe chart, a second identify, a duplicate evidence or link event), and the
+/// autocommit submits of a sensitivity grade or withdrawal, a shred, and a text evidence.
 const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
     ("crates/cairn-node/src/chart_link/judge.rs", 0),
     ("crates/cairn-node/src/patient/register.rs", 0),
@@ -716,19 +719,38 @@ const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
     ("crates/cairn-node/src/medication/sealed_submit.rs", 1),
     ("crates/cairn-node/src/medication/reconciliation.rs", 0),
     ("crates/cairn-node/src/medication/attestation.rs", 0),
+    ("crates/cairn-node/src/identify.rs", 0),
+    ("crates/cairn-node/src/john_doe.rs", 0),
+    ("crates/cairn-node/src/evidence.rs", 0),
+    ("crates/cairn-node/src/photo_evidence.rs", 0),
+    ("crates/cairn-node/src/apply_proposal.rs", 0),
+    ("crates/cairn-node/src/auto_apply.rs", 0),
+    ("crates/cairn-node/src/sensitivity/mod.rs", 2),
+    ("crates/cairn-node/src/shred.rs", 2),
+    ("crates/cairn-node/src/identity_evidence.rs", 1),
 ];
+
+/// Commits inside a MARKED file that write no event, so there is nothing to double: how many,
+/// and why. Each is subtracted from that file's count of commits that need `commit_failure(`.
+/// Kept apart from [`UNMARKED_COMMITS`] because the same file also commits an event, which IS
+/// marked; a new commit in it is still red unless it is marked or listed here on purpose.
+const EVENTLESS_COMMITS: &[(&str, usize, &str)] = &[(
+    "crates/cairn-node/src/auto_apply.rs",
+    2,
+    "sending a disputed or vetoed pair to human review only sets `match_proposal.status`; \
+     a re-run after a lost commit finds the row `review` (skips it) or `pending` (sends it \
+     again), both harmless",
+)];
 
 /// Every other file that commits a database transaction, with why it is not (yet) marked. A
 /// file that is in neither list is red, so a new write is classified on purpose, never by
-/// default; moving a file from here to [`MARKED_COMMIT_SITES`] is how #817 is fixed.
+/// default.
 const UNMARKED_COMMITS: &[(&str, &str)] = &[
-    ("crates/cairn-node/src/identify.rs", "#817"),
-    ("crates/cairn-node/src/john_doe.rs", "#817"),
-    ("crates/cairn-node/src/evidence.rs", "#817"),
-    ("crates/cairn-node/src/photo_evidence.rs", "#817"),
-    ("crates/cairn-node/src/apply_proposal.rs", "#817"),
-    ("crates/cairn-node/src/restore.rs", "#817"),
-    ("crates/cairn-node/src/auto_apply.rs", "#817"),
+    (
+        "crates/cairn-node/src/restore.rs",
+        "`finalize_identity`'s commit fences the restore door: if it landed, `local_node` is \
+         enrolled and a re-run is refused, so it cannot be written twice (#817)",
+    ),
     (
         "cairn-gui/cairn-gui-tauri/src/link/record_links.rs",
         "a read-only snapshot: it writes nothing",
@@ -788,11 +810,23 @@ fn every_commit_is_marked_outcome_unknown_or_listed_with_its_reason() {
         let text = read(path);
         let commits = db_commits_in(&text);
         let marked = text.matches("commit_failure(").count();
+        let eventless = EVENTLESS_COMMITS
+            .iter()
+            .find(|(p, _, _)| p == path)
+            .map_or(0, |(_, n, _)| *n);
         assert_eq!(
             marked,
-            commits + autocommits,
-            "{path}: {commits} commit(s) + {autocommits} autocommit statement(s), but {marked} \
-             `commit_failure(` call(s) — every commit must be marked"
+            commits + autocommits - eventless,
+            "{path}: {commits} commit(s) + {autocommits} autocommit statement(s) - {eventless} \
+             eventless commit(s), but {marked} `commit_failure(` call(s) — every commit that \
+             writes an event must be marked"
+        );
+    }
+    // An eventless entry must name a marked file, or it is a hole in the inventory.
+    for (path, _, _) in EVENTLESS_COMMITS {
+        assert!(
+            MARKED_COMMIT_SITES.iter().any(|(p, _)| p == path),
+            "{path} is in EVENTLESS_COMMITS but not in MARKED_COMMIT_SITES"
         );
     }
     // A listed file that no longer commits is a stale entry: the list must stay the inventory.

@@ -125,7 +125,10 @@ pub async fn assert_photo_evidence(
     // Author the event (its floor learns the reference — ON CONFLICT no-op against the row above).
     tx.execute("SELECT submit_event($1)", &[&signed.signed_bytes])
         .await?;
-    tx.commit().await?;
+    // A lost commit may have landed: marked, so a re-run is not offered blind (#817).
+    tx.commit()
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
 
     Ok(event_id)
 }

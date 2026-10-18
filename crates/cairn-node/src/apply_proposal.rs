@@ -163,7 +163,10 @@ pub async fn apply_accepted_proposal(
     // `asserted.agrees` is deliberately not required: a human's acceptance is recorded as
     // how this proposal was answered even if a later human judgement about the pair now
     // outranks it — `patient_link` holds what stands, the proposal row how it was answered.
-    tx.commit().await?;
+    // A lost commit may have landed: marked, so the operator checks before re-running (#817).
+    tx.commit()
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(asserted.event_id, e.into()))?;
     Ok(asserted.event_id)
 }
 

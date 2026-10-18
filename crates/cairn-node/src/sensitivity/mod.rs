@@ -156,9 +156,11 @@ pub async fn assert_sensitivity(
     // Sensitivity bodies are plaintext by necessity (cairn-event::sensitivity's own module
     // doc: a node must READ the grade to coarsen, so sealing it under the key it governs
     // would be circular) — the plain 1-arg door, no DEK, no attestation token.
+    // The statement IS the commit; a lost answer may have landed (#817).
     client
         .execute("SELECT submit_event($1)", &[&signed.signed_bytes])
-        .await?;
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
     Ok(event_id)
 }
 
@@ -220,12 +222,14 @@ pub async fn withdraw_sensitivity(
     let ca = event_address(&signed.signed_bytes);
     let token = sign_attestation(&ca, kid, "attested", sk)?;
     let vk = sk.verifying_key().to_bytes().to_vec();
+    // The statement IS the commit; a lost answer may have landed (#817).
     client
         .execute(
             "SELECT submit_event($1,$2,$3)",
             &[&signed.signed_bytes, &token, &vk],
         )
-        .await?;
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
     Ok(event_id)
 }
 

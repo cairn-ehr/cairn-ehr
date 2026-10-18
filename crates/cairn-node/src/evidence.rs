@@ -141,35 +141,42 @@ pub async fn assert_observed_evidence(
         anyhow::bail!("assert_observed_evidence: supply at least one of age or sex");
     }
     // Build + sign each event OUTSIDE the txn (HLC ticks self-commit and may gap safely).
+    // Each event's id is kept beside it: a lost commit names one of them (#817).
     let mut signed = Vec::new();
     if let Some(a) = &ev.age {
         let (lo, hi) = birth_year_range_from_age(a.age_years, a.tolerance_years, observed_year);
         let h = crate::db::next_hlc(client, node_origin).await?;
-        signed.push(sign(
-            &build_estimated_dob_event(Uuid::now_v7(), patient_id, lo, hi, &a.basis, kid, h),
-            sk,
-        )?);
+        let id = Uuid::now_v7();
+        signed.push((
+            id,
+            sign(
+                &build_estimated_dob_event(id, patient_id, lo, hi, &a.basis, kid, h),
+                sk,
+            )?,
+        ));
     }
     if let Some(s) = &ev.sex {
         let h = crate::db::next_hlc(client, node_origin).await?;
-        signed.push(sign(
-            &build_observed_sex_event(
-                Uuid::now_v7(),
-                patient_id,
-                &s.value,
-                s.basis.as_deref(),
-                kid,
-                h,
-            ),
-            sk,
-        )?);
+        let id = Uuid::now_v7();
+        signed.push((
+            id,
+            sign(
+                &build_observed_sex_event(id, patient_id, &s.value, s.basis.as_deref(), kid, h),
+                sk,
+            )?,
+        ));
     }
     let tx = client.transaction().await?;
-    for s in &signed {
+    for (_, s) in &signed {
         tx.execute("SELECT submit_event($1)", &[&s.signed_bytes])
             .await?;
     }
-    tx.commit().await?;
+    // A lost commit may have landed: marked, so a re-run is not offered blind (#817). The
+    // events commit together, so the first one's id answers for all of them; `signed` is
+    // non-empty because the guard at the top refused a call with neither age nor sex.
+    tx.commit()
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(signed[0].0, e.into()))?;
     Ok(())
 }
 
