@@ -21,7 +21,7 @@ const ORIGIN: &str = "gui-live-origin";
 
 const DROP_KILL_SWITCH: &str = "
     DROP TRIGGER IF EXISTS cairn_test_kill_at_commit ON patient_registration;
-    DROP FUNCTION IF EXISTS cairn_test_kill_at_commit();";
+    DROP FUNCTION IF EXISTS cairn_test_kill_at_commit() CASCADE;";
 
 const CREATE_KILL_SWITCH: &str = "
     CREATE FUNCTION cairn_test_kill_at_commit() RETURNS trigger

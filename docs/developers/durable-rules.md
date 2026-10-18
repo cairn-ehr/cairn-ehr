@@ -79,8 +79,9 @@ wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the sou
   inside the line (its own reason survives the dead ROLLBACK; mutation-checked), or answers the COMMIT with an ERROR
   (that line alone fails; the rest are signed). **Tempting wrong fix:** a `?` on `client.transaction()` or `tx.rollback()` in the loop — it
   compiles, and discards every line already signed and every reason.
-  **And (#820):** `SignOffOutcome`'s two production readers (the CLI's `sign-off` arm, `sign_off_impl`) destructure
-  it naming every field, no `..`, so a new field breaks the build at each reader. **Tempting wrong fix:** a `..`
+  **And (#820):** `SignOffOutcome`'s three production readers (the CLI's `sign-off` arm and its
+  `nothing_attested_sentence`, `sign_off_impl`) destructure it naming every field, no `..`, so a new field breaks the
+  build at each reader. **Tempting wrong fix:** a `..`
   "to shorten it" — Rust never warns on an unread `pub` field, which is how `failed` was once dropped.
 - **No script spells the string `"after_reread"`**, not even in a comment: the retry is an object, and
   `failure.retry === "after_reread"` is always false (no re-read, a live button). Guarded over every `src-ui/*.js`.

@@ -5407,7 +5407,8 @@ async fn run() -> anyhow::Result<()> {
             let cairn_node::medication::signoff::SignOffOutcome {
                 attested,
                 event_ids,
-                // Read by `nothing_attested_sentence`, which is handed the whole outcome.
+                // Read by `nothing_attested_sentence`, handed the whole outcome; it names every
+                // field too.
                 total_rows: _,
                 active_rows: _,
                 withheld,
@@ -5711,12 +5712,27 @@ fn nothing_attested_sentence(
     out: &cairn_node::medication::signoff::SignOffOutcome,
     patient: Uuid,
 ) -> String {
-    if out.total_rows == 0 && out.groups_missing_from_chart.is_empty() {
+    // Every field named, none behind `..` (#820): this is the branch that once ignored `failed`,
+    // so a field added to the outcome must break the build here too.
+    let cairn_node::medication::signoff::SignOffOutcome {
+        attested: _,
+        event_ids: _,
+        total_rows,
+        active_rows,
+        withheld,
+        separation_targets: _,
+        groups_missing_from_chart,
+        failed,
+        interrupted,
+        // Only how many lines needed a signature decides this sentence, not which charts.
+        charts: _,
+    } = out;
+    if *total_rows == 0 && groups_missing_from_chart.is_empty() {
         format!(
             "no medications are recorded for {patient}; nothing was signed. Recording \
              \"nil medications, reviewed\" as an act has no home yet (issue #331)."
         )
-    } else if out.total_rows == 0 {
+    } else if *total_rows == 0 {
         // Guarded on the missing set: "no medications are recorded" is a straightforward LIE
         // when the node holds content for this patient it simply cannot display. The detail
         // follows in the block the caller prints below.
@@ -5724,22 +5740,22 @@ fn nothing_attested_sentence(
             "nothing could be signed for {patient}: this chart displays no medications, but \
              that is NOT the same as having none — see below."
         )
-    } else if out.active_rows == 0 {
+    } else if *active_rows == 0 {
         // A chart of nothing but struck lines. Those lines may well carry NO signature at all —
         // a ceased drug is never re-signed — so "everything already signed" would be false.
         format!(
             "no CURRENT medications for {patient} ({} ceased line(s) on the chart); nothing \
              needed a signature. A struck line is never re-signed, signed or not.",
-            out.total_rows
+            total_rows
         )
-    } else if out.withheld.is_empty() && out.failed.is_empty() && out.interrupted.is_none() {
+    } else if withheld.is_empty() && failed.is_empty() && interrupted.is_none() {
         // Also guarded on `failed`/`interrupted` (#818): a gesture whose lines failed or were
         // cut off has lines that still need a signature.
         format!(
             "nothing to sign off for {patient}: every current drug already carries a current \
              signature"
         )
-    } else if out.interrupted.as_ref().is_some_and(|stopped| {
+    } else if interrupted.as_ref().is_some_and(|stopped| {
         matches!(
             stopped.line,
             cairn_node::medication::signoff::StoppedLine::MayBeSigned { .. }

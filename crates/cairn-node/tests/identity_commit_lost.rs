@@ -50,7 +50,7 @@ const KILLED: &str = "cairn-test-killed-event:";
 fn drop_kill_switch(table: &str) -> String {
     format!(
         "DROP TRIGGER IF EXISTS cairn_test_kill_at_commit ON {table};
-         DROP FUNCTION IF EXISTS cairn_test_kill_at_commit();"
+         DROP FUNCTION IF EXISTS cairn_test_kill_at_commit() CASCADE;"
     )
 }
 
