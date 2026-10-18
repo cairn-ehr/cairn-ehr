@@ -114,9 +114,8 @@ pub(crate) struct CeaseUnknown {
 /// What one cease did, as the outcome line says it (ADR-0060: partial completion is reported,
 /// never implied): the threads stopped, those NOT stopped (`failed`, each already named), and
 /// those whose commit got no ordinary answer (#814), which may or may not be stopped, so they
-/// are neither. "Stopped 0" is left out when one is unknown: that thread
-/// may be stopped, so the count would be false. Rust, not the webview, so every combination is
-/// tested.
+/// are neither. "Stopped 0" is left out when one is unknown: that thread may be stopped, so the
+/// count would be false. Rust, not the webview, so every combination is tested.
 pub(crate) fn cease_outcome(ceased: usize, failed: &[String], unknown: &[CeaseUnknown]) -> String {
     let mut parts = Vec::new();
     if ceased > 0 || unknown.is_empty() {

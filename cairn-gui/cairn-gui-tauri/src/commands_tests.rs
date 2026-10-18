@@ -300,6 +300,27 @@ fn the_webview_reads_both_partial_completion_reports() {
     }
 }
 
+/// #820: `sign_off_impl` names every `SignOffOutcome` field, none behind `..`, so a field added
+/// to the outcome breaks this build rather than dropping out of the report. `..` is the one-token
+/// fix for that compile error, which is why the source is read. The CLI's twin is the root tree's
+/// `crates/cairn-node/tests/signoff_readers_name_every_field.rs`.
+#[test]
+fn sign_off_impl_names_every_outcome_field() {
+    let sign_off = crate::source_guard::rust_fn(include_str!("commands.rs"), "sign_off_impl");
+    let start = sign_off
+        .find("SignOffOutcome {")
+        .expect("sign_off_impl destructures the outcome");
+    let pattern = &sign_off[start..start + sign_off[start..].find("} = outcome").unwrap()];
+    let hides_a_field = pattern
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .any(|l| l.contains(".."));
+    assert!(
+        !hides_a_field,
+        "name the field and bind it to `_` with a comment saying why it is not shown: {pattern}"
+    );
+}
+
 /// Every command the webview calls is one `main.rs` registers. A command missing from
 /// `generate_handler!` compiles, passes every `*_impl` test, and fails only in the running window
 /// — where the call rejects and its surface says it "could not reach its backend". (Found adding

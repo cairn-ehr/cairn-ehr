@@ -3,13 +3,14 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824)** (#820, branch `fix/820-signoff-registration-follow-ons`, #819's review
-> follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824)** (#820,
+> branch `fix/820-signoff-registration-follow-ons`, #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
 > `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
 > standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
-> mutation-checked); `SignOffOutcome`'s two readers destructure with no `..`; cease's `CeaseUnknown`; a judgement's
-> unknown outcome says "no ordinary answer came back". Skipped (optional): one shared renderer for the CLI's and the
-> window's interruption sentence. **Merged 2026-10-18:** PR [#821](https://github.com/cairn-ehr/cairn-ehr/pull/821)
+> mutation-checked); `SignOffOutcome`'s three readers destructure with no `..` (source-guarded in both trees); cease's
+> `CeaseUnknown`; a judgement's unknown outcome says "no ordinary answer came back". Skipped (optional): one shared
+> renderer for the CLI's and the window's interruption sentence. Review filed **#825** (the window drops an unknown
+> outcome's error chain — needs a decision on where operator diagnostics live). **Merged 2026-10-18:** PR [#821](https://github.com/cairn-ehr/cairn-ehr/pull/821)
 > (#817: every identity-side commit through `commit_failure`; review filed **#822**, the CLI has no command to do the
 > check the marker asks for, and **#823**, auto-apply's run ends as a plain outage), PR #819 (#815 registration marked,
 > search spent; #818 an interrupted sign-off reports what it did), PR #816 (#814), PR #813 (#811), PR #805 (#797,

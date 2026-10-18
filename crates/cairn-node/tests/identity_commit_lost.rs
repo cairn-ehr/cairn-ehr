@@ -1,8 +1,9 @@
 //! #820: a lost COMMIT on the identity side, driven end to end through a real FATAL answer.
 //!
-//! #815/#817 mark every identity-side commit with `db_diagnosis::commit_failure`, and a guard
-//! (`db_errors_stay_legible.rs`) pins that each `.commit()` goes through it. What no test pinned
-//! is what the marker SAYS once a commit really is lost:
+//! #815/#817 mark the identity-side commits that write an event with
+//! `db_diagnosis::commit_failure`, and a guard (`db_errors_stay_legible.rs`) counts one
+//! `commit_failure(` per `.commit()` in each marked file — it counts, it does not check which id
+//! is passed. What no test pinned is what the marker SAYS once a commit really is lost:
 //!
 //! - `register_john_doe`: a re-run after a lost commit mints a SECOND chart, so the marker must
 //!   name the registration event, and the headline must carry the chart id the operator is told
@@ -86,9 +87,18 @@ async fn connect_hearing_warnings(base: &str) -> (Client, mpsc::UnboundedReceive
     let (client, mut connection) = tokio_postgres::connect(base, NoTls).await.unwrap();
     let (tx, rx) = mpsc::unbounded_channel();
     tokio::spawn(async move {
-        while let Some(Ok(message)) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
-            if let AsyncMessage::Notice(notice) = message {
-                let _ = tx.send(notice.message().to_string());
+        while let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+            // The error that ends the connection is forwarded too, so a failure reads as what
+            // happened rather than as "the switch never fired". The receiver may be gone.
+            match message {
+                Ok(AsyncMessage::Notice(notice)) => {
+                    let _ = tx.send(notice.message().to_string());
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = tx.send(format!("(the connection ended: {e})"));
+                    break;
+                }
             }
         }
     });
@@ -101,6 +111,7 @@ async fn connect_hearing_warnings(base: &str) -> (Client, mpsc::UnboundedReceive
 
 /// The event the switch killed and its chart, read off the warnings received.
 fn killed_event(warnings: &mut mpsc::UnboundedReceiver<String>) -> (Uuid, Uuid) {
+    let mut seen = Vec::new();
     while let Ok(message) = warnings.try_recv() {
         if let Some(ids) = message.strip_prefix(KILLED) {
             let (event, chart) = ids.split_once(' ').expect("the switch names two ids");
@@ -109,8 +120,9 @@ fn killed_event(warnings: &mut mpsc::UnboundedReceiver<String>) -> (Uuid, Uuid) 
                 Uuid::parse_str(chart).expect("a chart uuid"),
             );
         }
+        seen.push(message);
     }
-    panic!("the kill switch never fired: no '{KILLED}' warning arrived");
+    panic!("no '{KILLED}' warning arrived; the connection reported: {seen:?}");
 }
 
 /// Load the schema, clear the fixtures and arm the switch on `table`. Returns the signer and a

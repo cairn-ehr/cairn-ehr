@@ -494,10 +494,11 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   John-Doe drive-through added to **#820**. **Merged** (PR #821).
 - **2026-10-18 (#820, PR #824):** #819's review follow-ons. A real lost COMMIT is now driven end to end: a registration's
   through `LiveData::register` → `OutcomeUnknown` → `settle` (search spent), and in the root tree a John Doe, a standard
-  registration and observed evidence, each pinning WHICH event the marker names. `SignOffOutcome`'s two readers
-  destructure it with no `..`; cease's unknown tuple is the named `CeaseUnknown`; a judgement's unknown outcome says
-  "no ordinary answer came back", not "the connection was lost". Not done (optional): one renderer for the CLI's and
-  the window's interruption sentence — their remedies differ by surface.
+  registration and observed evidence, each pinning WHICH event the marker names. `SignOffOutcome`'s three readers
+  destructure it with no `..`, pinned by a source guard in each tree; cease's unknown tuple is the named
+  `CeaseUnknown`; a judgement's unknown outcome says "no ordinary answer came back", not "the connection was lost".
+  Not done (optional): one renderer for the CLI's and the window's interruption sentence — their remedies differ by
+  surface. Review filed **#825** (the window drops an unknown outcome's error chain; needs an operator-log decision).
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).

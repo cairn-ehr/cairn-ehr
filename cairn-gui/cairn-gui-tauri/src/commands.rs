@@ -516,7 +516,9 @@ async fn record_timing(state: &AppState, kind: &str, items: usize, elapsed_ms: i
     let Some(db) = state.db.as_ref() else { return };
     let db = db.lock().await;
     if let Err(e) = cairn_node::ui_timing::record_gesture(&*db, kind, items, elapsed_ms).await {
-        eprintln!("gesture timing not recorded (the clinical act itself succeeded): {e}");
+        // Not "the act succeeded": a gesture whose every line failed is timed too, and its
+        // connection may be the very thing that failed it. The act reports its own outcome.
+        eprintln!("gesture timing not recorded (the act reports its own outcome): {e:#}");
     }
 }
 

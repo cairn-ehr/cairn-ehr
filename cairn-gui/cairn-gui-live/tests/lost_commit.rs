@@ -69,7 +69,12 @@ async fn a_lost_registration_commit_spends_the_search() {
     reader.batch_execute(DROP_KILL_SWITCH).await.unwrap();
 
     match store.settle(outcome) {
-        Err((DataError::OutcomeUnknown(_), Restored::Consumed)) => {}
+        // The clerk is told WHICH chart to search for: `register_patient`'s context survives the
+        // chain (the id itself is pinned by the root tree's `identity_commit_lost.rs`).
+        Err((DataError::OutcomeUnknown(text), Restored::Consumed)) => assert!(
+            text.contains("registering chart "),
+            "the outcome names the chart that may exist: {text}"
+        ),
         Err((error, restored)) => panic!(
             "a commit with no ordinary answer MAY have created the chart, so it must arrive as \
              OutcomeUnknown and spend the search; it arrived as {error:?}, {restored:?}"
