@@ -89,9 +89,143 @@ fn a_locked_key_may_retry_and_a_node_that_cannot_write_needs_its_operator() {
     // after the window's snapshot: its `Stale` refusal must reach the webview classified, never
     // as a plain string (#797 review — a revert to `refused(format!(…))` reads naturally here).
     assert!(
-        rust_fn(src, "sign_off_impl").contains(".map_err(|e| node_failure(&e))?"),
+        rust_fn(src, "sign_off_impl").contains(".map_err(|e| sign_off_failure(&e))?"),
         "sign_off_impl"
     );
+}
+
+/// A failure marked outcome-unknown by the node (#713, #814).
+fn interrupted(event: uuid::Uuid) -> anyhow::Error {
+    cairn_node::db_diagnosis::commit_outcome_unknown(event, anyhow::anyhow!("connection closed"))
+        .context("signing off the medication list")
+}
+
+/// #816 review: the shared classifier itself never offers `Retry::Now` for a write that may have
+/// landed, so a surface that forgets to word the marker first still re-reads instead of inviting
+/// a second, duplicate write (the #713 hazard). Its text is the node's, untouched.
+#[test]
+fn node_failure_never_offers_a_retry_for_a_commit_that_may_have_landed() {
+    let e = interrupted(uuid::Uuid::from_u128(816));
+    let view = node_failure(&e);
+    assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
+    assert_eq!(view.text, format!("{e:#}"));
+}
+
+/// #814: a sign-off whose line commit was lost mid-flight is NOT said to have failed: whether it
+/// was recorded is not known, so the window re-reads (`Unknown`). The sentence names the event
+/// and the cause, says the lines after it were never tried, and claims no lost CONNECTION (the
+/// marker also covers a FATAL answer). Every other failure is `node_failure`'s, unchanged.
+#[test]
+fn an_interrupted_sign_off_commit_is_not_known_never_failed() {
+    let event = uuid::Uuid::from_u128(814);
+    let view = sign_off_failure(&interrupted(event));
+    assert_eq!(view.retry, Retry::AfterReread(Recorded::Unknown));
+    let text = &view.text;
+    assert!(
+        text.starts_with("Whether the sign-off was recorded is NOT known"),
+        "{text}"
+    );
+    assert!(text.contains(&event.to_string()), "names the event: {text}");
+    assert!(
+        text.contains("(connection closed)"),
+        "names the cause: {text}"
+    );
+    assert!(text.contains("lines after it were not signed"), "{text}");
+    assert!(!text.contains("failed"), "never \"failed\": {text}");
+    assert!(!text.contains("connection was lost"), "{text}");
+
+    let outage = anyhow::anyhow!("connection refused");
+    assert_eq!(sign_off_failure(&outage), node_failure(&outage));
+}
+
+/// #814: what one cease did, every combination. Stopped, NOT stopped, and not known are three
+/// separate counts; "Stopped 0" is left out only when a thread's outcome is unknown (that thread
+/// may be stopped, so the count would be false), and kept when nothing at all was stopped.
+#[test]
+fn a_cease_outcome_keeps_stopped_not_stopped_and_not_known_apart() {
+    let unknown = [(
+        uuid::Uuid::from_u128(1),
+        uuid::Uuid::from_u128(2),
+        "connection closed".to_string(),
+    )];
+    let failed = [
+        "thread x: refused".to_string(),
+        "thread y: held back".to_string(),
+    ];
+
+    assert_eq!(
+        cease_outcome(1, &[], &[]),
+        "Stopped 1 thread(s) of this drug."
+    );
+    assert_eq!(
+        cease_outcome(0, &[], &[]),
+        "Stopped 0 thread(s) of this drug."
+    );
+    assert_eq!(
+        cease_outcome(1, &failed, &[]),
+        "Stopped 1 thread(s) of this drug. 2 thread(s) were NOT stopped and are still active: \
+         thread x: refused; thread y: held back"
+    );
+
+    let only_unknown = cease_outcome(0, &[], &unknown);
+    assert!(
+        only_unknown.starts_with("Whether 1 thread(s) of this drug were stopped is NOT known"),
+        "no false \"Stopped 0\": {only_unknown}"
+    );
+    assert!(
+        only_unknown.contains(&format!(
+            "thread {} (event {}: connection closed)",
+            unknown[0].0, unknown[0].1
+        )),
+        "{only_unknown}"
+    );
+
+    let all = cease_outcome(2, &failed, &unknown);
+    assert!(
+        all.starts_with("Stopped 2 thread(s) of this drug. 2 thread(s) were NOT stopped"),
+        "{all}"
+    );
+    assert!(
+        all.contains("Whether 1 thread(s) of this drug were stopped is NOT known"),
+        "{all}"
+    );
+
+    let two = [
+        unknown[0].clone(),
+        (
+            uuid::Uuid::from_u128(3),
+            uuid::Uuid::from_u128(4),
+            "x".into(),
+        ),
+    ];
+    let both = cease_outcome(0, &failed, &two);
+    assert!(both.starts_with("2 thread(s) were NOT stopped"), "{both}");
+    assert!(
+        both.contains("Whether 2 thread(s) of this drug were stopped is NOT known"),
+        "{both}"
+    );
+    assert!(
+        both.contains("connection closed); thread "),
+        "joined with \"; \": {both}"
+    );
+}
+
+/// #814: `cease_impl` sorts each thread's failure by the node's marker — an interrupted commit to
+/// the unknown list (and the report marks the list behind the record), anything else to `failed`.
+/// The marker's classification is `commit_outcome_unknown_event`'s, unit-tested in cairn-node;
+/// what is pinned here is only that `cease_impl` is wired to it.
+#[test]
+fn cease_sorts_an_interrupted_commit_from_a_failure() {
+    let body = crate::source_guard::rust_fn(include_str!("commands.rs"), "cease_impl");
+    let flat: String = body.split_whitespace().collect();
+    for shape in [
+        "Err(e)=>matchcairn_node::db_diagnosis::commit_outcome_unknown_event(&e){",
+        "Some(event)=>unknown.push((medication_id,event,e.root_cause().to_string()))",
+        "lettext=cease_outcome(ceased,&failed,&unknown);",
+        "(!unknown.is_empty()).then_some(Recorded::Unknown)",
+    ] {
+        assert!(flat.contains(shape), "{shape}\n{body}");
+    }
 }
 
 /// A chart read that failed before anything was written is an OUTAGE: nothing was decided, so

@@ -117,6 +117,8 @@ fn the_webview_reads_no_field_the_backend_does_not_send() {
     let cease = serde_json::to_value(CeaseReport {
         ceased: 0,
         failed: vec![],
+        text: String::new(),
+        behind_the_record: None,
     })
     .unwrap();
     let lock = serde_json::to_value(LockState {

@@ -220,6 +220,10 @@ pub async fn attest_medication_thread(
     let hlc = crate::db::next_hlc(client, node_origin).await?;
     let tx = client.transaction().await?;
     let id = attest_thread_in_tx(&tx, params, patient, medication_id, hlc).await?;
-    tx.commit().await?;
+    // A commit lost mid-flight may have landed (#814): marked, so the operator checks before
+    // re-running rather than minting a second attestation.
+    tx.commit()
+        .await
+        .map_err(|e| crate::db_diagnosis::commit_failure(id, e.into()))?;
     Ok(id)
 }

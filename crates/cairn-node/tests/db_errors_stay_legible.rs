@@ -702,3 +702,103 @@ fn every_postgres_call_in_the_component_read_names_what_it_was_doing() {
          the SQLSTATE of a failed search but not that the doubt check is what failed."
     );
 }
+
+/// The files whose every COMMIT goes through `db_diagnosis::commit_failure` (#713, #814), with
+/// how many AUTOCOMMIT statements each also routes through it (an autocommit statement IS its
+/// commit, and has no `.commit()` to count): a judgement's commit; each sign-off line's commit;
+/// a medication event's attested COMMIT plus its unattested `submit_event` statement; a
+/// reconciliation's attested commit; the CLI's thread attestation.
+const MARKED_COMMIT_SITES: &[(&str, usize)] = &[
+    ("crates/cairn-node/src/chart_link/judge.rs", 0),
+    ("crates/cairn-node/src/medication/signoff.rs", 0),
+    ("crates/cairn-node/src/medication/sealed_submit.rs", 1),
+    ("crates/cairn-node/src/medication/reconciliation.rs", 0),
+    ("crates/cairn-node/src/medication/attestation.rs", 0),
+];
+
+/// Every other file that commits a database transaction, with why it is not (yet) marked. A
+/// file that is in neither list is red, so a new write is classified on purpose, never by
+/// default; moving a file from here to [`MARKED_COMMIT_SITES`] is how #815/#817 are fixed.
+const UNMARKED_COMMITS: &[(&str, &str)] = &[
+    ("crates/cairn-node/src/patient/register.rs", "#815"),
+    ("crates/cairn-node/src/identify.rs", "#817"),
+    ("crates/cairn-node/src/john_doe.rs", "#817"),
+    ("crates/cairn-node/src/evidence.rs", "#817"),
+    ("crates/cairn-node/src/photo_evidence.rs", "#817"),
+    ("crates/cairn-node/src/apply_proposal.rs", "#817"),
+    ("crates/cairn-node/src/restore.rs", "#817"),
+    ("crates/cairn-node/src/auto_apply.rs", "#817"),
+    (
+        "cairn-gui/cairn-gui-tauri/src/link/record_links.rs",
+        "a read-only snapshot: it writes nothing",
+    ),
+    (
+        "crates/cairn-sync/src/main.rs",
+        "the sync harness's `write`/`gen` load generator and its content-addressed blob store",
+    ),
+];
+
+/// A database commit in flattened code: tokio_postgres's `.commit().await` or the sync
+/// `postgres` crate's `.commit()?`. A non-database `commit()` (the funnel's token store) is
+/// neither, so it is not counted.
+fn db_commits_in(code: &str) -> usize {
+    // Spaces dropped: rustfmt may or may not break the line before `.await`.
+    let code = code.replace(' ', "");
+    code.matches(".commit().await").count() + code.matches(".commit()?").count()
+}
+
+/// A clinical write whose commit is lost mid-flight MAY have landed, and the window must say so,
+/// never "failed" (#814). So every file that commits is listed: marked, or not yet with its
+/// reason. In a marked file each commit (plus each declared autocommit) is one `commit_failure(`
+/// call, so a second commit added as `.commit().await.context("…")?` — which compiles and reads
+/// as an outage, the #713 hazard — is red even though the file already has one marked site.
+#[test]
+fn every_commit_is_marked_outcome_unknown_or_listed_with_its_reason() {
+    let root = sources::repo_root();
+    let listed = |rel: &str| {
+        MARKED_COMMIT_SITES.iter().any(|(p, _)| *p == rel)
+            || UNMARKED_COMMITS.iter().any(|(p, _)| *p == rel)
+    };
+    let mut unlisted = Vec::new();
+    for path in sources::production_rust_files(&root) {
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        if db_commits_in(&flattened_code(&sources::read_source(&path))) > 0 && !listed(&rel) {
+            unlisted.push(rel);
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "these files commit a transaction but are in neither MARKED_COMMIT_SITES nor \
+         UNMARKED_COMMITS — route the commit through `db_diagnosis::commit_failure`, or list \
+         the file with its reason: {unlisted:?}"
+    );
+
+    let read = |rel: &str| {
+        flattened_code(
+            &std::fs::read_to_string(root.join(rel))
+                .unwrap_or_else(|e| panic!("{rel} is in the tree: {e}")),
+        )
+    };
+    for (path, autocommits) in MARKED_COMMIT_SITES {
+        let text = read(path);
+        let commits = db_commits_in(&text);
+        let marked = text.matches("commit_failure(").count();
+        assert_eq!(
+            marked,
+            commits + autocommits,
+            "{path}: {commits} commit(s) + {autocommits} autocommit statement(s), but {marked} \
+             `commit_failure(` call(s) — every commit must be marked"
+        );
+    }
+    // A listed file that no longer commits is a stale entry: the list must stay the inventory.
+    for (path, _) in UNMARKED_COMMITS {
+        assert!(
+            db_commits_in(&read(path)) > 0,
+            "{path} no longer commits: drop its entry"
+        );
+    }
+}

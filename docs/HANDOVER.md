@@ -3,24 +3,25 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#813](https://github.com/cairn-ehr/cairn-ehr/pull/813)** (#811) (branch `feat/811-after-reread-unknown`). Option (b), the
-> maintainer's choice: `Retry::AfterReread(Recorded::{No, Unknown})`, so after an interrupted commit (#713) the window
-> no longer says "the record changed" about what may be the clinician's own act. That sentence is Rust's, for Link
-> and Unlink only (M4). Any re-read that names a change says "review it" (M5). Both review rounds are fixed on the
-> branch; the second filed **#814** and added items 7–10 to #812. Plan `docs/superpowers/plans/2026-10-18-811-after-reread-recorded.md`; durable rules
-> in the #811 block. Merged before it (2026-10-18): PR #802 (#799 · #800 · #801) and PR #805 (#797, #806 — the
-> self-re-reading chart, "Read this chart again"; RUNBOOK §14 is its owed human timing). The repair path (#679 · #680
-> · #681) is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`;
-> R4's runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest
-> ADR-0080).
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#816](https://github.com/cairn-ehr/cairn-ehr/pull/816)** (#814) (branch `fix/814-medication-commit-unknown`). The medication
+> writes and the judgement commit go through one rule, `db_diagnosis::commit_failure`: a commit with no ordinary
+> ERROR answer (none at all, or a FATAL/PANIC) is outcome-unknown. So an interrupted sign-off says "whether the
+> sign-off was recorded is NOT known", never "failed", and a cease names each unknown thread and never says
+> "Stopped 0" over one. A guard inventories every `.commit()` in the tree as marked or not-yet-with-a-reason. Filed
+> **#815** (registration still unmarked; its retry mints a SECOND chart), **#817** (the identity-side commits),
+> **#818** (an interrupted sign-off discards its partial report). Merged 2026-10-18: PR #813 (#811, `Retry::AfterReread(Recorded::{No, Unknown})`; durable rules
+> in the #811 block), PR #805 (#797, "Read this chart again"; RUNBOOK §14 is its owed human timing), PR #802. The
+> repair path (#679 · #680 · #681) is built through R7. Design
+> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's runbook
+> `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest ADR-0080).
 > DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate a pair an
 > older test asserts absent — fix the fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #813** (#811), then **#814** (an interrupted sign-off or cease commit is still reported as
->    "failed": #811's gap on the medication writes). **#728** (the Pi re-measure) can run beside. #699 stays open
->    until the maintainer closes it.
+> 1. **Review and merge PR #816** (#814), then **#815** (registration's interrupted commit; a decision: mark it, or make
+>    the retry re-send the same minted ids), **#818** (sign-off's partial report), **#817** (identity commits). **#728** (the Pi re-measure) can run beside. #699 stays open until the
+>    maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
 >    state between active and ceased, with a reason; a new event type, needs an ADR; settle the clash with the window's
 >    existing "withheld" = hidden-lines wording) → **#804** (on link, show only where the two charts' medication
@@ -148,7 +149,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -180,6 +181,27 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-18 (third) — #814: the medication writes' interrupted commits
+
+HANDOVER was stale on arrival again (#813 had merged). TDD: a source guard (every clinical commit through
+`commit_failure`, no bare `.commit().await?`) went red first, then the window's tests failed to compile (6 errors);
+each new pin was mutation-checked, one mutation per run.
+- **⇒ A rule stated in one site is a rule one site keeps.** #713 put "unanswered ⇒ unknown" inline in `judge.rs`;
+  the medication writes never got it. It is now one function, and a guard lists every site.
+- **⇒ An autocommit statement IS a commit.** `seal_sign_submit`'s unattested arm has no `tx.commit()`, yet a lost
+  answer to its `execute` leaves the same doubt.
+- **⇒ "Stopped 0" is a claim too.** Next to "whether 1 thread was stopped is NOT known" it says that thread was
+  not stopped. Walk the count sentences through the new state, not just the new sentence.
+- **⇒ A real unanswered `tokio_postgres` error is testable:** `pg_terminate_backend` from a second connection, then
+  wait for `is_closed()` before the next call, or the server's FATAL (a `DbError`) answers it instead.
+- **⇒ The review (4 agents) found "a `DbError` ⇒ rolled back" false for PANIC/FATAL**: a PANIC while flushing the
+  commit's WAL is sent to the client, yet crash recovery replays the commit. Only an ERROR-severity answer now proves a
+  rollback. A self-`pg_terminate_backend` gives a real FATAL answer to test with. Also fixed: the CLI's
+  `attest_medication_thread` was unmarked; the guard read only its four files (now a tree inventory, which also
+  counts commits per file, so a second `.commit().await.context(…)?` in a marked file is red); the cease sentence moved
+  to Rust (`cease_outcome`, truth-table tested); `node_failure` itself re-reads a marked error. The new sentences
+  say "once the window can reach the node again" because the window never reconnects (#807).
 
 ### 2026-10-18 (second) — #811: the re-read after an interrupted commit (option (b))
 
@@ -233,58 +255,26 @@ or, commonly, the two charts never meet; so the refused press is not an `M > N` 
 - **⇒ An operator procedure is a claim too:** RUNBOOK §14 first told testers to stop Postgres and recover with the
   button — the window never reconnects (#807); a REVOKE cannot fail a superuser; the fault is a renamed function now.
 
-### 2026-10-17 (second) — #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
+### 2026-10-16 → 10-17 — #745 · #752 · #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)), its second review, #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
 
-HANDOVER was stale on arrival again (PR #798 had merged). Three decision-free issues in one file pair, TDD by source
-guards (7 RED → green, 9 mutations → 9 reds), then a headless walk run against BOTH this branch and `main`.
-- **⇒ Walk the old code with the same script.** A walk that only passes on the fix proves the rig, not the fix; on
-  `main` the same script showed every defect (reason wiped, `OLD` over `NEW`, a one-row partial list under a live
-  "Sign off 1"), which is what makes the green on the branch evidence.
-- **⇒ A fix can falsify OTHER files' rationale.** After #799, six comments (and a durable rule) still said a
-  whole-chart `refresh()` "wipes a half-typed stop reason"; grep the issue number and the claim, not just the diff.
-- **⇒ A per-step lock is not a per-read lock.** `med_list_impl` and `banner_alone_impl` take `state.db` per step,
-  so "a later read is served after an earlier one" is false; say what the interleaving actually guarantees.
-- **⇒ An existing payload guard caught a rename:** `fields_read_by_the_webview("view")` scans for `view.charts`;
-  `pane.list.charts` hid it. Keep the `view` binding the guard reads.
-- **Review (two agents: correctness + comment fact-check), all fixed on the PR.** ⇒ **"Newest STARTED" is the wrong
-  rule for drawing**: the older of two overlapping reads usually lands first, and dropping it left a list older than
-  both if the newer failed. Draw unless something newer is DRAWN; say a failure only if newest STARTED — two
-  predicates. ⇒ **A guard that looks for both halves of `a && b` passes `a || b`**: pin the exact expression.
-  ⇒ **Keeping a pointer set "because the data was read" re-opened a door a rule had closed** (Review over an
-  undrawable list); the reviewer was right to hold the established rule. ⇒ A rule change can turn a "belt and
-  braces" line LOAD-BEARING (`clearChart`'s floor) — re-ask which lines are essential after changing a predicate.
-  `stop_reasons.js` split out to keep `main.js` under 500.
-
-### 2026-10-17 — PR #798's second review round (fixed in place; filed #801, widened #797)
-
-- **⇒ The webview's JS CAN be pinned without a JS runner:** `source_guard::js_fn` / `js_const` read a function or a
-  sentence out of the script, and `duplicates/webview_tests.rs` pins the ORDER or CHOICE each fix is. Mutation-check
-  every guard (break the fix, see red, restore with `cp`) — a guard written after its code proves nothing until then.
-- **⇒ A sentence the window words itself must be true of EVERY state that reaches it.** `renderedPatient === null`
-  is both "the first read failed" and "it is still in flight"; "could not be read" was false for the second.
-- **⇒ Emptying a list is not cancelling its read.** A clear that does not bump the revision lets an older answer,
-  still in flight, draw the cleared entries straight back.
-- **⇒ Re-reading the narrowest stale thing is right only when THAT is the stale thing.** On a set-changed refusal the
-  list is stale, not the banner, and a fresh banner over it makes a stale screen look current (#797's comment).
-
-### 2026-10-16 (fourth) — #745 · #752 · the rest of #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798))
-
-#795 merged mid-session (the maintainer said to presume it); this branch was cut on it and rebased onto main after.
-- **⇒ An issue's points can already be absorbed by a later fix — read the code before planning them.** #740's
-  points 2 and 3 ("may be recorded twice", no reload on an all-failed press) were both done by #713's
-  `judgement_error_view` + `combined_retry`; only the stutter was left.
-- **⇒ A fix that SHOWS something in a new state reaches code that state never reached.** The banner drawn alone
-  after a failed FIRST read offered Review, which sends `renderedPatient` — null, since no list ever rendered (the
-  review's I1). Walk every button the newly-visible thing carries.
-- **⇒ A re-read is not free: `refresh()` rebuilds the rows and wipes a half-typed stop reason.** Re-read the
-  narrowest thing that is stale (the banner), never the chart, on a refusal that changed nothing (review I2; the
-  general case is #799).
-- **⇒ A headless walk's stub must pick its answer at CALL time, before any delay,** or an ordering test passes or
-  fails for the stub's reasons. Mutate the guard in the copy to prove the walk sees the defect. Dump the stub's
-  payloads from Rust (a throwaway `#[test]` serializing the fixture-mode `*_impl` answers), never hand-write them.
-- **⇒ A test assert must never echo identity-built text** (`"{}", view.heading`): CodeQL's rust/cleartext-logging
-  failed PR #795's check on one, after it merged. **zsh does not word-split `$step`** (again): run multi-step gates
-  under `bash -c`.
+HANDOVER was stale on arrival twice (#795, then #798, had merged). TDD by source guards, mutation-checked, then a
+headless walk against BOTH the branch and `main`.
+- **⇒ Walk the old code with the same script.** A walk that passes only on the fix proves the rig; on `main` the same
+  script showed every defect, which is what makes the branch's green evidence.
+- **⇒ The webview's JS CAN be pinned without a JS runner:** `source_guard::js_fn` / `js_const`; pin the ORDER or
+  CHOICE each fix is. **A guard that looks for both halves of `a && b` passes `a || b`**: pin the exact expression.
+- **⇒ "Newest STARTED" is the wrong rule for drawing**: draw unless something newer is DRAWN; say a failure only if
+  newest STARTED — two predicates. **A per-step lock is not a per-read lock** (`med_list_impl` locks per step).
+- **⇒ A sentence the window words itself must be true of EVERY state that reaches it** (`renderedPatient === null` is
+  "failed" AND "in flight"). **Emptying a list is not cancelling its read** (bump the revision).
+- **⇒ An issue's points can already be absorbed by a later fix** (#740's by #713's `judgement_error_view`) — read the
+  code first. **A fix that SHOWS something in a new state reaches code that state never reached**: walk every button
+  it carries. **A fix can falsify OTHER files' rationale** (after #799, six comments) — grep the claim, not the diff.
+- **⇒ Re-read the narrowest stale thing, and only when THAT is the stale thing** (a set-changed refusal: the list,
+  not the banner). **A rule change can make a "belt and braces" line load-bearing** (`clearChart`'s floor).
+- Mechanics: a walk's stub picks its answer at CALL time; dump stub payloads from Rust, never hand-write them; a
+  test assert must never echo identity-built text (CodeQL failed #795 after merge); keep the `view` binding the
+  payload guard reads; zsh does not word-split `$step` (use `bash -c`); `stop_reasons.js` split out of `main.js`.
 
 ### 2026-10-15 → 10-16 — R7 (PR #788), R6's residuals (PR #792), file splits (PRs #794, #795)
 

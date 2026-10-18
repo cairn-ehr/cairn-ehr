@@ -335,7 +335,12 @@ pub async fn sign_off_medication_list(
         let tx = client.transaction().await?;
         match crate::medication::attest_thread_in_tx(&tx, params, chart, *thread, hlc).await {
             Ok(event_id) => {
-                tx.commit().await?;
+                // A commit lost mid-flight may have landed (#814): it is marked outcome-unknown
+                // and ends the gesture, so the window says "NOT known", never "failed", and
+                // re-reads. Lines committed before it are signed; the re-read shows them.
+                tx.commit()
+                    .await
+                    .map_err(|e| crate::db_diagnosis::commit_failure(event_id, e.into()))?;
                 attested.push(*thread);
                 event_ids.push(event_id);
             }

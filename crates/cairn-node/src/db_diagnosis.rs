@@ -561,7 +561,8 @@ pub fn carries_refusal_marker(e: &anyhow::Error) -> bool {
 /// A write whose COMMIT was interrupted, so whether it landed is unknown (#713).
 ///
 /// A connection lost DURING `COMMIT` is the one failure after which the database may or may not
-/// hold the event. It is neither a verdict (nothing was decided about the call) nor an ordinary
+/// hold the event ([`commit_failure`] decides which failures count: also an autocommit statement's,
+/// and a FATAL or PANIC answer). It is neither a verdict (nothing was decided about the call) nor an ordinary
 /// outage (an outage wrote nothing, so the same act may simply be tried again). Treating it as an
 /// outage is the #713 hazard: a judgement that DID commit — say as `Outranked`, so the record
 /// still reads as before — invites a second press, and that second event, stamped above a
@@ -585,7 +586,7 @@ impl std::fmt::Display for CommitOutcomeUnknown {
         write!(
             f,
             "commit outcome unknown for event {} — check whether it was recorded before \
-             retrying, or the judgement may be recorded twice",
+             retrying, or it may be recorded twice",
             self.event_id
         )
     }
@@ -605,6 +606,41 @@ impl std::error::Error for CommitOutcomeUnknown {
 /// more cautious (re-read before acting), never hide a remedy behind a false verdict.
 pub fn commit_outcome_unknown(event_id: uuid::Uuid, cause: anyhow::Error) -> anyhow::Error {
     anyhow::Error::new(CommitOutcomeUnknown { event_id, cause })
+}
+
+/// The failure of a write's COMMIT (`fault`, which carries the commit's `tokio_postgres::Error`),
+/// marked [`commit_outcome_unknown`] unless the server answered it with an ordinary ERROR
+/// (#713, #814).
+///
+/// A server that answered with an ERROR-severity `DbError` (somewhere on the chain, so a
+/// SQLSTATE) rolled the transaction back: nothing was written, and `fault` is returned untouched,
+/// an ordinary failure. Anything else may have landed, so it is marked, and a surface re-reads
+/// before offering the act again instead of calling it "failed": a commit with no answer (the
+/// connection lost mid-flight), and a FATAL or PANIC answer, which can follow a commit that
+/// landed (a PANIC while flushing the commit's WAL is replayed by crash recovery).
+///
+/// The rule the medication writes and the judgement commit go through (each sign-off line, both
+/// `seal_sign_submit` arms, the attested reconciliation, the CLI's thread attestation), so the
+/// question is asked the same way everywhere; `tests/db_errors_stay_legible.rs` lists every
+/// `.commit()` in this crate as marked or, with its reason, not yet (registration #815, the
+/// identity writes #817). An autocommit statement counts: it is its own commit.
+///
+/// Errs towards "unknown": a call that failed before it was ever sent (a dead connection), or a
+/// FATAL that arrived before the commit began, is marked too. That claims LESS than the truth,
+/// never more.
+pub fn commit_failure(event_id: uuid::Uuid, fault: anyhow::Error) -> anyhow::Error {
+    use tokio_postgres::error::Severity;
+    let answered = fault.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio_postgres::Error>()
+            .and_then(|pg| pg.as_db_error())
+            .is_some_and(|db| db.parsed_severity() == Some(Severity::Error))
+    });
+    if answered {
+        fault
+    } else {
+        commit_outcome_unknown(event_id, fault)
+    }
 }
 
 /// The event whose commit outcome is unknown, if this chain carries the [`CommitOutcomeUnknown`]
@@ -1056,6 +1092,20 @@ mod refusal_scope_tests {
             commit_outcome_unknown_event(&deliberate_refusal("no")),
             None
         );
+    }
+
+    /// #814: a commit failure with no server answer anywhere on its chain (no `DbError`) is
+    /// marked outcome-unknown, naming the event, and keeps the failure as its cause. The
+    /// answered half needs a real `DbError`, so it is pinned in `tests/db_diagnosis.rs`.
+    #[test]
+    fn an_unanswered_commit_failure_is_marked_with_its_event() {
+        let id = uuid::Uuid::from_u128(78);
+        let e = commit_failure(
+            id,
+            anyhow::anyhow!("connection closed").context("committing a line's sign-off"),
+        );
+        assert_eq!(commit_outcome_unknown_event(&e), Some(id));
+        assert!(format!("{e:#}").contains("connection closed"));
     }
 
     /// A refusal over a changed record is marked `Stale`, and its text is untouched.

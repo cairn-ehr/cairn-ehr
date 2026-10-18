@@ -252,9 +252,34 @@ fn a_list_that_fails_to_draw_leaves_nothing_partial_and_no_live_sign_off() {
 #[test]
 fn a_failed_sign_off_or_cease_is_worded_from_its_error_view() {
     let sign_off = js_fn(MAIN_JS, "signOff");
-    assert!(sign_off.contains("\"Sign-off failed: \" + failureText(failure)"));
+    assert!(sign_off.contains("\"Sign-off failed: \") + failureText(failure)"));
     let cease = js_fn(MAIN_JS, "cease");
     assert!(cease.contains("\"Could not stop this drug: \" + failureText(failure)"));
     assert!(!sign_off.contains("failed: \" + e)"));
     assert!(!cease.contains("this drug: \" + e)"));
+}
+
+/// #814: an interrupted commit is not a failure. Sign-off's catch drops its "failed" prefix for
+/// it (Rust's sentence says whether it was recorded is NOT known); in that one handler the act is
+/// known, so keying the prefix on `"unknown"` cannot excuse another act (the #811 rule). A cease
+/// that ran says Rust's whole outcome line (`write_failure::cease_outcome`, where every
+/// combination is tested) and re-reads with the report's mark, so a failed re-read marks the list
+/// "may be out of date".
+#[test]
+fn an_interrupted_sign_off_or_cease_is_never_said_to_have_failed() {
+    let sign_off = js_fn(MAIN_JS, "signOff");
+    assert!(
+        sign_off.contains("const unknown = behindTheRecord(failure) === \"unknown\";"),
+        "{sign_off}"
+    );
+    assert!(
+        sign_off.contains("say((unknown ? \"\" : \"Sign-off failed: \") + failureText(failure));"),
+        "{sign_off}"
+    );
+    let cease = js_fn(MAIN_JS, "cease");
+    assert!(cease.contains("say(report.text);"), "{cease}");
+    assert!(
+        cease.contains("await refresh(el(\"outcome\").textContent, report.behind_the_record);"),
+        "{cease}"
+    );
 }
