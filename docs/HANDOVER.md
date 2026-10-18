@@ -3,32 +3,25 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#821](https://github.com/cairn-ehr/cairn-ehr/pull/821)** (#817, branch
-> `fix/817-identity-commits-unknown`): every identity-side commit goes through `commit_failure` (identify, John Doe,
-> evidence, photo, a proposal's link, an auto-applied link; the autocommit submits of sensitivity, shred, text
-> evidence). Unmarked on purpose: `restore::finalize_identity` (its landed commit fences the door) and auto-apply's
-> two send-to-review commits (no event; `EVENTLESS_COMMITS`). **Merged 2026-10-18: PR
-> [#819](https://github.com/cairn-ehr/cairn-ehr/pull/819)** (#815 + #818).
-> **#815** (maintainer's choice: mark + search again): registration's commit goes through `commit_failure`;
-> `data_error_from` makes the marker `DataError::OutcomeUnknown`; the front door says "NOT known" with
-> `Retry::AfterReread(Unknown)`, and `TokenStore::settle` itself SPENDS every search like a success
-> (`RegistrationFailure::may_have_written` → `Restored::Consumed`), so the next press searches first.
-> **#818**: an interrupted sign-off returns `Ok` with `SignOffOutcome::interrupted` (a `StoppedLine`: `MayBeSigned` or
-> `NotSigned`), worded whole in Rust (`sign_off_outcome`); the CLI prints it and exits 1. The review round is in the PR
-> too; its three deferred items are **#820**. Merged 2026-10-18: PR #816 (#814: one `commit_failure` rule
-> for the judgement and the medication writes; a guard inventories every `.commit()`), PR #813 (#811,
-> `Retry::AfterReread(Recorded::{No, Unknown})`), PR #805 (#797, "Read this chart again"; RUNBOOK §14 is its owed
-> human timing), PR #802. #817 (the identity-side commits) is PR #821; its review filed **#822** (the CLI has no
-> command to do the check the marker asks for) and **#823** (auto-apply's run ends as a plain outage). The
-> repair path (#679 · #680 · #681) is built through R7. Design
-> `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's runbook
-> `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest ADR-0080).
-> DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate a pair an
-> older test asserts absent — fix the fixture date, never the assertion.
+> **⇒ ONE PR AWAITS THE MAINTAINER: the #820 PR** (branch `fix/820-signoff-registration-follow-ons`, #819's review
+> follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
+> `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
+> standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
+> mutation-checked); `SignOffOutcome`'s two readers destructure with no `..`; cease's `CeaseUnknown`; a judgement's
+> unknown outcome says "no ordinary answer came back". Skipped (optional): one shared renderer for the CLI's and the
+> window's interruption sentence. **Merged 2026-10-18:** PR [#821](https://github.com/cairn-ehr/cairn-ehr/pull/821)
+> (#817: every identity-side commit through `commit_failure`; review filed **#822**, the CLI has no command to do the
+> check the marker asks for, and **#823**, auto-apply's run ends as a plain outage), PR #819 (#815 registration marked,
+> search spent; #818 an interrupted sign-off reports what it did), PR #816 (#814), PR #813 (#811), PR #805 (#797,
+> "Read this chart again"; RUNBOOK §14 is its owed human timing), PR #802. The repair path (#679 · #680 · #681) is
+> built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's
+> runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest
+> ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate
+> a pair an older test asserts absent — fix the fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #821** (#817), then **#820** (#819's review follow-ons). An idempotent re-send of a registration
+> 1. **Review and merge the #820 PR**, then **#822** and **#823** (#821's review follow-ons). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
@@ -191,6 +184,17 @@ tested but **not wired**.
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
 
+### 2026-10-18 (sixth) — #820: #819's review follow-ons
+
+HANDOVER was stale on arrival (#821 had merged). All three items plus the John-Doe drive-through #821's review added.
+- **⇒ To learn an id a rolled-back transaction minted, have the kill switch SAY it.** The orchestrators mint their
+  event ids inside and the lost COMMIT rolls everything back, so nothing is left to read. The test trigger raises a
+  WARNING naming the event behind its row (and its chart) before it terminates the backend; the test's own
+  `tokio_postgres` connection polls `poll_message` for notices (`db::connect` drops them, #585). A notice is sent at
+  once, ahead of the FATAL. Rig: `tests/identity_commit_lost.rs`; mutation-checked (a nil marker id goes red).
+- **Not done (optional in #820):** one renderer for the CLI's and the window's interruption sentence. Their remedies
+  differ by surface ("check the chart before signing it again" vs "once the window can reach the node again").
+
 ### 2026-10-18 (fifth) — #817: the identity-side commits
 
 HANDOVER was stale on arrival again (#819 had merged). TDD: the commit inventory went red first (`identify.rs`, 0 of 1
@@ -231,8 +235,8 @@ went red first, then three GUI tests failed to compile, then #818's DB test (a d
   - The CLI's registration error did not name the chart.
   - DB pins added for an ERROR-answered commit and for a backend killed inside a line. The second is
     mutation-checked: a `?` on its ROLLBACK goes red.
-  - Deferred to #820: exhaustive readers of `SignOffOutcome`, the judgement sentence's "connection was lost", and an
-    end-to-end lost-registration test.
+  - Deferred to #820 (done in the #820 PR): exhaustive readers of `SignOffOutcome`, the judgement sentence's
+    "connection was lost", and an end-to-end lost-registration test.
 
 ### 2026-10-18 (third) — #814: the medication writes' interrupted commits
 

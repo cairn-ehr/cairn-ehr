@@ -115,8 +115,8 @@ fn commit_unknown() -> ErrorView {
 /// The commit-unknown sentence for "Different people", as `judgement_error_view` words it.
 fn commit_unknown_text() -> String {
     format!(
-        "Whether the \"different people\" judgement was recorded is NOT known — the connection \
-         was lost while event {} was being saved. If it was recorded but a later judgement \
+        "Whether the \"different people\" judgement was recorded is NOT known — no ordinary \
+         answer came back while event {} was being saved. If it was recorded but a later judgement \
          outranks it, the chart will look unchanged after it is read again.",
         id(77)
     )

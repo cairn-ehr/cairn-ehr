@@ -291,10 +291,10 @@ fn the_webview_reads_both_partial_completion_reports() {
     assert!(reported.contains("behind_the_record"), "got: {reported:?}");
     let sign_off = crate::source_guard::rust_fn(include_str!("commands.rs"), "sign_off_impl");
     for fed in [
-        "withheld_report(&outcome.withheld,",
+        "withheld_report(&withheld,",
         "missing_report(",
-        "&outcome.groups_missing_from_chart,",
-        "&notes,",
+        "&groups_missing_from_chart,",
+        "&notes)",
     ] {
         assert!(sign_off.contains(fed), "{fed} not in sign_off_impl");
     }
