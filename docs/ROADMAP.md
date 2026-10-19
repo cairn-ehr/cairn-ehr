@@ -499,10 +499,17 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   `CeaseUnknown`; a judgement's unknown outcome says "no ordinary answer came back", not "the connection was lost".
   Not done (optional): one renderer for the CLI's and the window's interruption sentence — their remedies differ by
   surface. Review filed **#825** (the window drops an unknown outcome's error chain; needs an operator-log decision).
+  **Merged** (PR #824).
+- **2026-10-19 (#822 + #823, PR #827):** #821's review follow-ons. `cairn-node event <id>` (read-only, clear envelope
+  columns) says whether this node holds an event, and the CLI's remedy line after an unknown-outcome commit names it.
+  Auto-apply stops at a pair whose commit outcome is unknown and returns its summary (`outcome_unknown`,
+  `not_attempted`), its last line saying a re-run is safe — no longer a plain "connection closed"; a connection lost
+  anywhere in a pair stops it the same way (review), as does any failed HLC tick, and "not recorded" says "as of now"
+  with the check to make before a re-run (second review). Skipped: event ids on the success lines (#826).
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #824 (#820); then #822 / #823 (#821's review follow-ons); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #827 (#822 + #823); #825 (a decision); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

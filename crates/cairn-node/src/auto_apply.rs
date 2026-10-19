@@ -345,6 +345,7 @@ pub async fn apply_auto_candidate(
 }
 
 /// Batch outcome counts for the operator's summary line.
+#[derive(Default)]
 pub struct AutoSummary {
     pub applied: usize,
     pub vetoed_to_review: usize,
@@ -366,6 +367,72 @@ pub struct AutoSummary {
     /// never masquerade as a healthy quiet run — the CLI turns any `errored` into a
     /// non-zero exit.
     pub errored: usize,
+    /// The pair whose link COMMIT got no ordinary answer, if one did (#823). Not counted in
+    /// `errored`: it may have landed. The run stops there — the session is dead or cannot be
+    /// trusted with the next pair — so at most one pair is ever here.
+    pub outcome_unknown: Option<UnknownOutcome>,
+    /// The run stopped because the connection failed somewhere OTHER than a link commit
+    /// (#823 review): found closed before a pair, or the pair's HLC tick failed (the tick raises
+    /// nothing of its own, db/007, so a failed tick is the session failing). The cause is on
+    /// stderr. Usually the pair before died on that connection and is counted in `errored`, but
+    /// `errored` can be 0: a connection can close idle between two good pairs. A lost LINK commit
+    /// is never this (it is `outcome_unknown`), but a lost review-status commit (veto/dispute →
+    /// review) may have landed, which a re-run handles: that proposal is no longer `pending`.
+    pub connection_lost: bool,
+    /// Pairs left untouched because the run stopped (`outcome_unknown` or `connection_lost`).
+    /// `pending` when this run read its worklist, so the next run takes them unless something
+    /// else has acted on them since.
+    pub not_attempted: usize,
+}
+
+/// The pair whose auto-applied link may or may not have been recorded (#823).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownOutcome {
+    pub low: Uuid,
+    pub high: Uuid,
+    /// The link event the lost commit carried.
+    pub event_id: Uuid,
+}
+
+/// The run's last line when it must not end quietly, or `None` for a clean run. **Pure.**
+///
+/// The CLI turns `Some` into its error (a non-zero exit, so a cron job notices). An unknown
+/// outcome leads (#823): before #823, the next pair's first call failed on the dead connection
+/// and the run's last line was a plain "connection closed", which reads as an outage. "Running
+/// it again is safe" is true because a link and its proposal's `auto_applied` status commit in
+/// ONE transaction ([`apply_auto_candidate`] step 7): a landed link has left the `pending`
+/// worklist, and a rolled-back one is still on it.
+pub fn run_verdict(s: &AutoSummary) -> Option<String> {
+    if let Some(u) = &s.outcome_unknown {
+        let mut line = format!(
+            "auto-apply stopped after pair ({},{}): whether its link (event {}) was recorded is \
+             NOT known — no ordinary answer came back, so the connection could not be trusted \
+             with the next pair. {} pair(s) were not attempted. Running auto-apply again is \
+             safe: a link that landed has left the pending list and is skipped.",
+            u.low, u.high, u.event_id, s.not_attempted
+        );
+        if s.errored > 0 {
+            line.push_str(&format!(
+                " {} other pair(s) errored (see stderr above).",
+                s.errored
+            ));
+        }
+        return Some(line);
+    }
+    if s.connection_lost {
+        return Some(format!(
+            "auto-apply stopped: the connection to the database failed (the cause is on stderr \
+             above). {} pair(s) were not attempted and {} pair(s) errored. Running auto-apply \
+             again is safe: a pair that did not commit is still pending.",
+            s.not_attempted, s.errored
+        ));
+    }
+    (s.errored > 0).then(|| {
+        format!(
+            "{} pair(s) errored during auto-apply (see stderr above)",
+            s.errored
+        )
+    })
 }
 
 /// Session advisory-lock key for the auto-apply ceremony. Two-int form (namespace
@@ -376,8 +443,11 @@ const AUTO_APPLY_LOCK_SLOT: i32 = 2;
 
 /// Auto-apply EVERY pending auto_candidate proposal. Resolves the matcher actor once per
 /// distinct epoch (cached), then applies each pair in its own transaction so one bad pair
-/// never rolls back the batch (skip-and-report, mirroring pipeline/sweep.py). Owner-run:
-/// `resolve_matcher_actor` enrolls actors, which the runtime role may not.
+/// never rolls back the batch (skip-and-report, mirroring pipeline/sweep.py). The exception is
+/// a failed connection or a link commit with no ordinary answer: the run stops there and
+/// returns its summary, the rest counted as not attempted ([`AutoSummary::connection_lost`],
+/// [`AutoSummary::outcome_unknown`], #823). Owner-run: `resolve_matcher_actor` enrolls actors,
+/// which the runtime role may not.
 pub async fn apply_auto_candidates(
     client: &mut Client,
     keystore_dir: &Path,
@@ -399,7 +469,8 @@ pub async fn apply_auto_candidates(
         .get(0);
     if !got_lock {
         anyhow::bail!(
-            "another apply-auto-candidates run holds the auto-apply lock — retry once it finishes"
+            "another apply-auto-candidates run holds the auto-apply lock — retry once it \
+             finishes (or, after an interrupted run, once the server has closed that run's session)"
         );
     }
 
@@ -483,17 +554,19 @@ async fn ceremony_locked(
     // for every remaining pair of a broken/revoked epoch, but STILL count each affected
     // pair as errored (the operator sees the true blast radius, not one line).
     let mut failed_versions: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut summary = AutoSummary {
-        applied: 0,
-        vetoed_to_review: 0,
-        disputed_to_review: 0,
-        human_judged: 0,
-        awaiting_recheck: 0,
-        skipped: 0,
-        errored: 0,
-    };
+    let mut summary = AutoSummary::default();
 
-    for r in rows {
+    let total = rows.len();
+    for (at, r) in rows.into_iter().enumerate() {
+        // A dead connection refuses every pair left (#823 review): stop with the summary, rather
+        // than count each as errored or let a call below end the run as a plain outage.
+        if client.is_closed() {
+            // Said here, as the pair before may have succeeded and printed nothing.
+            eprintln!("auto-apply: the connection to the database closed after {at} pair(s)");
+            summary.connection_lost = true;
+            summary.not_attempted = total - at;
+            break;
+        }
         let low: Uuid = r.get::<_, String>(0).parse()?;
         let high: Uuid = r.get::<_, String>(1).parse()?;
         let version: String = r.get(2);
@@ -530,7 +603,19 @@ async fn ceremony_locked(
             (sk.clone(), kid.clone())
         };
 
-        let hlc = crate::db::next_hlc(client, node_origin).await?;
+        // Every tick failure stops the run, whether or not the client has noticed its connection
+        // close yet (#827 review): the check above can lose that race, and a FATAL answering this
+        // very call arrives before the close. `node_hlc_tick` raises nothing of its own (db/007),
+        // so a failure here is the session, and it would fail for every pair left.
+        let hlc = match crate::db::next_hlc(client, node_origin).await {
+            Ok(hlc) => hlc,
+            Err(e) => {
+                eprintln!("auto-apply: {}", crate::db_diagnosis::operator_chain(&e));
+                summary.connection_lost = true;
+                summary.not_attempted = total - at;
+                break;
+            }
+        };
         match apply_auto_candidate(client, low, high, &sk, &kid, hlc).await {
             Ok(AutoOutcome::Applied(_)) => summary.applied += 1,
             Ok(AutoOutcome::VetoedToReview) => summary.vetoed_to_review += 1,
@@ -539,6 +624,26 @@ async fn ceremony_locked(
             Ok(AutoOutcome::AwaitingRecheck) => summary.awaiting_recheck += 1,
             Ok(AutoOutcome::Skipped(_)) => summary.skipped += 1,
             Err(e) => {
+                // No ordinary answer to the commit (#823): this pair MAY be linked, and the
+                // session is dead (or cannot be trusted). Stop here with the summary, rather
+                // than let the next pair's first call end the run as a plain outage. The line
+                // leaves out the marker's "it may be recorded twice": a re-run cannot double
+                // this link, and `run_verdict` says so.
+                if let Some(event_id) = crate::db_diagnosis::commit_outcome_unknown_event(&e) {
+                    let cause =
+                        crate::db_diagnosis::commit_outcome_unknown_cause(&e).unwrap_or_default();
+                    eprintln!(
+                        "auto-apply ({low},{high}): no ordinary answer to the link's commit: \
+                         {cause}"
+                    );
+                    summary.outcome_unknown = Some(UnknownOutcome {
+                        low,
+                        high,
+                        event_id,
+                    });
+                    summary.not_attempted = total - at - 1;
+                    break;
+                }
                 eprintln!("{}", apply_failure_line(low, high, &e));
                 summary.errored += 1;
             }
@@ -608,6 +713,87 @@ mod tests {
             1,
             "said exactly once: {line}"
         );
+    }
+
+    /// #823: a clean run ends quietly; an errored one keeps its old last line.
+    #[test]
+    fn a_run_without_an_unknown_outcome_keeps_its_verdict() {
+        assert_eq!(run_verdict(&AutoSummary::default()), None);
+        let errored = AutoSummary {
+            errored: 2,
+            ..AutoSummary::default()
+        };
+        assert_eq!(
+            run_verdict(&errored).as_deref(),
+            Some("2 pair(s) errored during auto-apply (see stderr above)")
+        );
+    }
+
+    /// #823: after a pair whose outcome is unknown the run's last line names that pair as NOT
+    /// known (never "errored", never a plain outage), counts what was not attempted, and says a
+    /// re-run is safe — a landed link left the pending list in the same transaction.
+    #[test]
+    fn a_run_stopped_by_an_unknown_outcome_names_the_pair_and_says_a_rerun_is_safe() {
+        let (event_id, low, high) = ids();
+        let stopped = AutoSummary {
+            applied: 1,
+            not_attempted: 3,
+            outcome_unknown: Some(UnknownOutcome {
+                low,
+                high,
+                event_id,
+            }),
+            ..AutoSummary::default()
+        };
+        let line = run_verdict(&stopped).expect("a stopped run is not a quiet one");
+        assert!(
+            line.contains(&format!("({low},{high})")),
+            "the pair: {line}"
+        );
+        assert!(line.contains(&event_id.to_string()), "its event: {line}");
+        assert!(line.contains("NOT known"), "{line}");
+        assert!(line.contains("3 pair(s) were not attempted"), "{line}");
+        assert!(line.contains("again is safe"), "{line}");
+        assert!(!line.contains("errored"), "nothing errored: {line}");
+
+        // Errors before the stop are still counted, beside it.
+        let both = AutoSummary {
+            errored: 1,
+            ..stopped
+        };
+        let line = run_verdict(&both).unwrap();
+        assert!(line.contains("NOT known"), "{line}");
+        assert!(line.contains("1 other pair(s) errored"), "{line}");
+    }
+
+    /// #823 review: a connection that died anywhere else (a statement, an unmarked commit, a
+    /// transaction that would not open) stops the run too, with its summary and the same "safe to
+    /// run again" — a pair that did not commit is still pending.
+    #[test]
+    fn a_run_stopped_by_a_lost_connection_says_so_and_counts_what_was_left() {
+        let lost = AutoSummary {
+            errored: 1,
+            not_attempted: 4,
+            connection_lost: true,
+            ..AutoSummary::default()
+        };
+        let line = run_verdict(&lost).expect("a stopped run is not a quiet one");
+        assert!(line.contains("connection to the database failed"), "{line}");
+        assert!(line.contains("4 pair(s) were not attempted"), "{line}");
+        assert!(line.contains("1 pair(s) errored"), "{line}");
+        assert!(line.contains("again is safe"), "{line}");
+
+        // A connection that closed idle between two good pairs errored nothing: still a stop,
+        // still loud — the cause is the line the loop printed when it found the connection gone.
+        let idle = AutoSummary {
+            applied: 1,
+            not_attempted: 2,
+            connection_lost: true,
+            ..AutoSummary::default()
+        };
+        let line = run_verdict(&idle).expect("a stopped run is not a quiet one");
+        assert!(line.contains("0 pair(s) errored"), "{line}");
+        assert!(line.contains("2 pair(s) were not attempted"), "{line}");
     }
 
     fn ids() -> (Uuid, Uuid, Uuid) {

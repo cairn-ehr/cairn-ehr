@@ -10,6 +10,31 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #822 + #823 — THE CLI AFTER AN UNKNOWN COMMIT OUTCOME — do not undo** (pins: `db_diagnosis.rs`'s
+`only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy`, `tests/event_lookup.rs`, `auto_apply.rs`'s
+`run_verdict` tests, and `tests/identity_commit_lost.rs`'s `a_lost_auto_apply_commit_stops_the_run_with_its_summary`,
+mutation-checked; `a_failed_hlc_tick_stops_the_run_with_its_summary` and `event_lookup.rs`'s unit tests since the
+second review):
+- **The marker's "check whether it was recorded" has a command: `cairn-node event <id>`**, named by `cli_remedy`'s
+  line, `--conn` BEFORE the subcommand (it is not a global flag; the binary test runs that form). It reads clear
+  envelope columns only (never the body, never `safety`) and says "IS / is NOT recorded on this node". The remedy
+  claims only "if it does, do not run the command again", never "if not, run it again": a command could have committed
+  earlier steps, which its own sentence reports. **"NOT recorded" says "as of now" and names the check before a
+  re-run** (the interrupted session has ended, `pg_stat_activity`): when only the client's side of the connection was
+  cut, the server can still be finishing that commit, and a bare "not recorded" invites the re-run that doubles it. A
+  lookup that cannot read `event_log` is an ERROR, never "absent" (`a_lookup_that_cannot_read_is_an_error_not_absent`).
+- **Auto-apply STOPS at the first pair whose outcome is unknown** and returns its summary (`outcome_unknown`,
+  `not_attempted`; never counted `errored`). **Tempting wrong fix:** `errored += 1` and carry on, as for any pair. The
+  session is dead, so the next pair's first call ends the run as a plain "connection closed" with no summary.
+  "Running auto-apply again is safe" holds only because the link and the proposal's `auto_applied` status commit in
+  ONE transaction: split them and that sentence becomes false. That pair's stderr line renders the cause through
+  `commit_outcome_unknown_cause`, WITHOUT the marker's "it may be recorded twice", which would contradict it.
+- **A connection that dies anywhere else stops the run too** (`connection_lost`: a `client.is_closed()` check at the
+  top of each pair, and ANY `next_hlc` failure — not only one on an already-closed client, because a FATAL answering
+  the tick arrives before the close; `node_hlc_tick` raises nothing of its own, so a failed tick is the session. Both
+  print their cause, so the verdict's "the cause is on stderr above" holds even with `errored == 0`; pins
+  `a_connection_lost_mid_pair_stops_the_run_with_its_summary`, `a_failed_hlc_tick_stops_the_run_with_its_summary`).
+
 **⇒ #811 — A RE-READ AFTER AN INTERRUPTED COMMIT SAYS ONLY WHAT IT KNOWS — do not undo** (pins: `funnel/view_tests.rs`'s
 wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the source guards in
 `reread_webview_tests.rs` / `read_again_webview_tests.rs`):

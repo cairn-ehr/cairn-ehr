@@ -9,6 +9,7 @@ pub mod db_diagnosis;
 pub mod duplicate_check;
 pub mod duplicate_review;
 pub mod enroll;
+pub mod event_lookup;
 pub mod evidence;
 pub mod identify;
 pub mod identity;
