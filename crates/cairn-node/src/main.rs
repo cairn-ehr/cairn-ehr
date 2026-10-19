@@ -2375,10 +2375,10 @@ enum Cmd {
         patient: Option<Uuid>,
     },
 
-    /// Say whether this node holds an event, and if so its type, chart and recorded time (#822).
-    /// The check a write whose commit got no ordinary answer asks for ("commit outcome unknown
-    /// for event <id> — check whether it was recorded before retrying"): if the event is here,
-    /// the write took effect and running the command again could record it twice. Only reads.
+    /// Say whether this node holds an event, and if so its type, chart and when it arrived here
+    /// (#822). The check a write whose commit got no ordinary answer asks for: if the event is
+    /// here, the write took effect and running the command again would record it twice. "Not
+    /// here" holds only as of the check. Only reads.
     Event {
         /// The event id the failure named.
         id: Uuid,
@@ -4162,9 +4162,10 @@ async fn run() -> anyhow::Result<()> {
                     ""
                 }
             );
-            // Non-zero exit when anything errored or an outcome is unknown, so neither can pass
-            // as a healthy quiet run in a cron/pipeline (the summary line is still printed
-            // above). An unknown outcome's line says a re-run is safe (#823).
+            // Non-zero exit when anything errored, an outcome is unknown, or the connection failed
+            // and the run stopped, so none can pass as a healthy quiet run in a cron/pipeline (the
+            // summary line is still printed above). The two stops' lines say a re-run is safe
+            // (#823).
             if let Some(verdict) = cairn_node::auto_apply::run_verdict(&s) {
                 anyhow::bail!("{verdict}");
             }
@@ -5518,8 +5519,8 @@ async fn run() -> anyhow::Result<()> {
                 match stopped.line {
                     StoppedLine::MayBeSigned { event } => eprintln!(
                         "! whether {} was signed is NOT known: no ordinary answer came back while \
-                         event {event} was being saved ({}). Check the chart before signing it \
-                         again.",
+                         event {event} was being saved ({}). Check the chart, or run \
+                         `cairn-node --conn <the same> event {event}`, before signing it again.",
                         stopped.medication_id, stopped.cause
                     ),
                     StoppedLine::NotSigned => eprintln!(

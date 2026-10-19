@@ -525,16 +525,19 @@ pub const CLI_STALE_REMEDY: &str =
 ///
 /// The unknown-outcome line exists because the marker asks the operator to "check whether it was
 /// recorded", and before #822 the CLI had no command to check with: only raw psql. It names
-/// `cairn-node event`, which says whether this node holds that event. It claims nothing about
-/// the command's OTHER writes: a command that committed earlier steps (a sign-off of several
-/// lines) says what those did in its own sentence.
+/// `cairn-node event`, which says whether this node holds that event. `--conn` is written
+/// before the subcommand because it is a top-level flag, not a global one. The line only says what
+/// a found event means: what "not found" means (only "not yet", while a cut-off session may still
+/// be committing) is `cairn-node event`'s own answer to give, at the moment it is true. It claims
+/// nothing about the command's OTHER writes: a command that committed earlier steps says what
+/// those did in its own sentence.
 pub fn cli_remedy(e: &anyhow::Error) -> Option<String> {
     if refusal_scope(e) == Some(RefusalScope::Stale) {
         return Some(CLI_STALE_REMEDY.to_string());
     }
     commit_outcome_unknown_event(e).map(|id| {
         format!(
-            "To check, run `cairn-node event {id}` with the same --conn: it says whether this \
+            "To check, run `cairn-node --conn <the same> event {id}`: it says whether this \
              node holds that event. If it does, the write took effect: do not run the command \
              again."
         )
@@ -673,7 +676,8 @@ pub fn commit_outcome_unknown_event(e: &anyhow::Error) -> Option<uuid::Uuid> {
 
 /// The failure behind a [`CommitOutcomeUnknown`] marker, rendered as [`operator_chain`] renders
 /// it but WITHOUT the marker's own sentence ("check whether it was recorded … or it may be
-/// recorded twice"). For a caller that words the outcome itself: auto-apply knows a re-run cannot
+/// recorded twice") and without any `.context(…)` layer added ABOVE the marker — only what the
+/// marker wraps. For a caller that words the outcome itself: auto-apply knows a re-run cannot
 /// double its link (#823 review), so printing the marker's warning beside its "running it again
 /// is safe" would contradict it. `None` when the chain carries no marker.
 pub fn commit_outcome_unknown_cause(e: &anyhow::Error) -> Option<String> {
@@ -1162,8 +1166,9 @@ mod refusal_scope_tests {
     }
 
     /// The CLI prints a node sentence as it is, and a stale one names no remedy (the window's
-    /// remedy is its own re-read, #797) — so the CLI adds its own line, for `Stale` alone, wherever
-    /// on the chain the marker sits. Every other scope's sentence already says what to do.
+    /// remedy is its own re-read, #797) — so the CLI adds its own line for `Stale`, wherever on
+    /// the chain the marker sits. And, since #822, for a `CommitOutcomeUnknown`: its marker asks
+    /// for a check the CLI now names. Every other scope's sentence already says what to do.
     #[test]
     fn only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy() {
         let stale = stale_picture_refusal("x").context("signing");
@@ -1175,8 +1180,8 @@ mod refusal_scope_tests {
         let unknown = commit_failure(id, anyhow::anyhow!("connection closed")).context("shred");
         let remedy = cli_remedy(&unknown).expect("an unknown outcome gets a remedy line");
         assert!(
-            remedy.contains(&format!("cairn-node event {id}")),
-            "names the check, with the event: {remedy}"
+            remedy.contains(&format!("cairn-node --conn <the same> event {id}")),
+            "names the check, with the event, `--conn` before the subcommand: {remedy}"
         );
         for e in [
             crate::actor_enrolment::ambiguous_actor_refusal("9f3c"),

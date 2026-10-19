@@ -9,7 +9,11 @@
 > summary — that pair named, the rest "not attempted", "running it again is safe" — instead of a plain "connection
 > closed" (#823, driven end to end through a real lost commit, mutation-checked). The review added: a connection lost
 > ANYWHERE in a pair stops the run the same way (`connection_lost`), and the pair's stderr line drops the marker's
-> "may be recorded twice", which contradicted "safe to run again". Skipped from #822: event ids on the success lines (#826). **Merged 2026-10-18:** PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824) (#820,
+> "may be recorded twice", which contradicted "safe to run again". The second review added: ANY failed HLC tick stops the
+> run with its summary (a FATAL can answer the tick before the client sees the close) and every stop prints its cause;
+> "NOT recorded" says "as of now" and names the check before a re-run (a client-side cut can leave the server still
+> committing); the lookup shows local arrival (`event_log.recorded_at`), not another node's HLC; a failed lookup is an
+> error, the command is run as a real binary. Skipped from #822: event ids on the success lines (#826). **Merged 2026-10-18:** PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824) (#820,
 > #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
 > `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
 > standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
@@ -29,7 +33,7 @@
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
 > 1. **Review and merge PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)** (#822 + #823); **#825** needs a decision (where the window's operator diagnostics
->    live). An idempotent re-send of a registration
+>    live); **#826** (event ids on the success lines) is small. An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
