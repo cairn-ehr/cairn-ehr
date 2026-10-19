@@ -3,8 +3,8 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824)** (#820,
-> branch `fix/820-signoff-registration-follow-ons`, #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
+> **⇒ IN PROGRESS (2026-10-19): #822 + #823** on branch `fix/822-823-cli-after-unknown-commit`. **Merged 2026-10-18:**
+> PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824) (#820, #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
 > `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
 > standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
 > mutation-checked); `SignOffOutcome`'s three readers destructure with no `..` (source-guarded in both trees); cease's
@@ -22,7 +22,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR #824** (#820), then **#822** and **#823** (#821's review follow-ons). An idempotent re-send of a registration
+> 1. **#822** and **#823** (#821's review follow-ons) — in progress. An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
