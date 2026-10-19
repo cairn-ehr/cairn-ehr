@@ -4676,7 +4676,7 @@ async fn run() -> anyhow::Result<()> {
                 sex: sex_obs,
             };
 
-            cairn_node::evidence::assert_observed_evidence(
+            let event_ids = cairn_node::evidence::assert_observed_evidence(
                 &mut db,
                 &sk,
                 &kid,
@@ -4686,7 +4686,12 @@ async fn run() -> anyhow::Result<()> {
                 observed_year,
             )
             .await?;
-            println!("recorded clinician-observed evidence on {patient}");
+            // #826: name the events, as every other evidence verb does — a lost commit names one.
+            let event_ids: Vec<String> = event_ids.iter().map(Uuid::to_string).collect();
+            println!(
+                "recorded clinician-observed evidence on {patient}; event {}",
+                event_ids.join(", event ")
+            );
         }
         Cmd::AssertIdentityEvidence {
             patient,

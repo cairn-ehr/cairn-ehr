@@ -171,6 +171,48 @@ async fn a_document_verified_dob_displaces_the_estimate() {
     assert_eq!(value, "1985-03-12");
 }
 
+/// #826: the call returns the id of every event it recorded, so the CLI can print them. A lost
+/// commit names `signed[0]`'s id (#817); without this the operator had never seen that id on a
+/// run that worked. Pinned against `event_log`, not against the call's own bookkeeping.
+#[tokio::test]
+async fn returns_the_ids_of_the_events_it_recorded() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut db = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&db).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&db, &sk, &kid, patient, 0).await;
+
+    let ev = ObservedEvidence {
+        age: Some(AgeObservation {
+            age_years: 40,
+            tolerance_years: 5,
+            basis: "dentition".into(),
+        }),
+        sex: Some(SexObservation {
+            value: "male".into(),
+            basis: None,
+        }),
+    };
+    let ids =
+        evidence::assert_observed_evidence(&mut db, &sk, &kid, "test-node", patient, &ev, 2026)
+            .await
+            .unwrap();
+
+    let recorded: Vec<Uuid> = db
+        .query(
+            "SELECT event_id::text FROM event_log WHERE patient_id = $1::text::uuid \
+             AND event_type = 'demographic.field.asserted' ORDER BY seq",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| Uuid::parse_str(r.get::<_, &str>(0)).unwrap())
+        .collect();
+    assert_eq!(ids, recorded, "age first, then sex, as submitted");
+}
+
 #[tokio::test]
 async fn observed_sex_lands_on_administrative_sex() {
     let Some(base) = cs() else { return };

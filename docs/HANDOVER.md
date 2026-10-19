@@ -3,36 +3,23 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **#826 IN PROGRESS** (branch `fix/826-cli-success-event-ids`). **Merged 2026-10-19:** PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822 + #823): a new
-> read-only `cairn-node event <id>` says whether this node holds an event, and the CLI's remedy line after an
-> unknown-outcome commit names it (#822); auto-apply STOPS at a pair whose commit outcome is unknown and ends with its
-> summary — that pair named, the rest "not attempted", "running it again is safe" — instead of a plain "connection
-> closed" (#823, driven end to end through a real lost commit, mutation-checked). The review added: a connection lost
-> ANYWHERE in a pair stops the run the same way (`connection_lost`), and the pair's stderr line drops the marker's
-> "may be recorded twice", which contradicted "safe to run again". The second review added: ANY failed HLC tick stops the
-> run with its summary (a FATAL can answer the tick before the client sees the close) and every stop prints its cause;
-> "NOT recorded" says "as of now" and names the check before a re-run (a client-side cut can leave the server still
-> committing); the lookup shows local arrival (`event_log.recorded_at`), not another node's HLC; a failed lookup is an
-> error, the command is run as a real binary. Skipped from #822: event ids on the success lines (#826). **Merged 2026-10-18:** PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824) (#820,
-> #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
-> `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
-> standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
-> mutation-checked); `SignOffOutcome`'s three readers destructure with no `..` (source-guarded in both trees); cease's
-> `CeaseUnknown`; a judgement's unknown outcome says "no ordinary answer came back". Skipped (optional): one shared
-> renderer for the CLI's and the window's interruption sentence. Review filed **#825** (the window drops an unknown
-> outcome's error chain — needs a decision on where operator diagnostics live). **Merged 2026-10-18:** PR [#821](https://github.com/cairn-ehr/cairn-ehr/pull/821)
-> (#817: every identity-side commit through `commit_failure`; review filed **#822**, the CLI has no command to do the
-> check the marker asks for, and **#823**, auto-apply's run ends as a plain outage), PR #819 (#815 registration marked,
-> search spent; #818 an interrupted sign-off reports what it did), PR #816 (#814), PR #813 (#811), PR #805 (#797,
-> "Read this chart again"; RUNBOOK §14 is its owed human timing), PR #802. The repair path (#679 · #680 · #681) is
-> built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)** (#826, branch
+> `fix/826-cli-success-event-ids`): `assert-observed-evidence` prints its event ids — the only one of the issue's seven
+> verbs that printed none (the other six already did; the issue's survey was wrong). Filed **#828** (three unlisted verbs
+> print a chart/thread id, never the event id a lost commit names).
+> **Merged 2026-10-18/19 (ROADMAP has each):** PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
+> `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
+> COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
+> where operator diagnostics live) · PR #821 (#817) · PR #819 (#815 + #818) · PR #816 (#814) · PR #813 (#811) · PR #805
+> (#797, "Read this chart again"; RUNBOOK §14 is its owed human timing) · PR #802. The repair path (#679 · #680 · #681)
+> is built through R7. Design `docs/superpowers/specs/2026-09-27-duplicate-repair-path-679-680-681-design.md`; R4's
 > runbook `docs/developers/running-the-duplicate-check.md`; human passes RUNBOOK §11–§14. spec **v0.82** (newest
 > ADR-0080). DOB-near-miss follow-ups: #759 · #760 · #762 · #764 · #765 · #766. Trap: a new blocking key can generate
 > a pair an older test asserts absent — fix the fixture date, never the assertion.
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#826** (in progress); **#825** needs a decision (where the window's operator diagnostics
+> 1. **Review and merge PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)** (#826); **#828** is small; **#825** needs a decision (where the window's operator diagnostics
 >    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
@@ -163,7 +150,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -195,6 +182,12 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-20 — #826: event ids on the CLI's success lines
+
+HANDOVER was stale on arrival (#827 had merged). **⇒ An issue's survey is a claim:** six of its seven verbs already
+printed their event ids; reading each arm first turned a seven-verb change into one, and found three unlisted verbs with
+the real gap (#828).
 
 ### 2026-10-19 — #822 + #823: the CLI after an unknown commit outcome
 

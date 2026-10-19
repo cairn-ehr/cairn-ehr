@@ -127,7 +127,8 @@ pub fn build_observed_sex_event(
 /// Author the supplied clinician-observed evidence on `patient_id` in ONE transaction.
 /// `observed_year` is the year the estimate was made (the caller owns the clock). Ticks
 /// the HLC once per event (age before sex when both present). Errors if `ev` carries
-/// neither kind.
+/// neither kind. Returns the recorded events' ids in that same order, for the CLI to print
+/// (#826): a lost commit names the first of them, so an operator should have seen it before.
 pub async fn assert_observed_evidence(
     client: &mut Client,
     sk: &SigningKey,
@@ -136,7 +137,7 @@ pub async fn assert_observed_evidence(
     patient_id: Uuid,
     ev: &ObservedEvidence,
     observed_year: i32,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<Uuid>> {
     if ev.age.is_none() && ev.sex.is_none() {
         anyhow::bail!("assert_observed_evidence: supply at least one of age or sex");
     }
@@ -177,7 +178,7 @@ pub async fn assert_observed_evidence(
     tx.commit()
         .await
         .map_err(|e| crate::db_diagnosis::commit_failure(signed[0].0, e.into()))?;
-    Ok(())
+    Ok(signed.into_iter().map(|(id, _)| id).collect())
 }
 
 #[cfg(test)]
