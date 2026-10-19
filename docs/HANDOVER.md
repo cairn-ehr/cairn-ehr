@@ -3,7 +3,7 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)** (#822 + #823, branch `fix/822-823-cli-after-unknown-commit`): a new
+> **#826 IN PROGRESS** (branch `fix/826-cli-success-event-ids`). **Merged 2026-10-19:** PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822 + #823): a new
 > read-only `cairn-node event <id>` says whether this node holds an event, and the CLI's remedy line after an
 > unknown-outcome commit names it (#822); auto-apply STOPS at a pair whose commit outcome is unknown and ends with its
 > summary — that pair named, the rest "not attempted", "running it again is safe" — instead of a plain "connection
@@ -32,8 +32,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)** (#822 + #823); **#825** needs a decision (where the window's operator diagnostics
->    live); **#826** (event ids on the success lines) is small. An idempotent re-send of a registration
+> 1. **#826** (in progress); **#825** needs a decision (where the window's operator diagnostics
+>    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
