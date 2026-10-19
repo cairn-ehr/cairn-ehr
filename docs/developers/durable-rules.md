@@ -10,6 +10,24 @@ here, newest first, and leave a one-line pointer in HANDOVER.
 
 ## Per-slice rules (the repair path, the funnel)
 
+**⇒ #822 + #823 — THE CLI AFTER AN UNKNOWN COMMIT OUTCOME — do not undo** (pins: `db_diagnosis.rs`'s
+`only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy`, `tests/event_lookup.rs`, `auto_apply.rs`'s
+`run_verdict` tests, and `tests/identity_commit_lost.rs`'s `a_lost_auto_apply_commit_stops_the_run_with_its_summary`,
+mutation-checked):
+- **The marker's "check whether it was recorded" has a command: `cairn-node event <id>`**, named by `cli_remedy`'s
+  line. It reads clear envelope columns only (never the body, never `safety`) and says "IS / is NOT recorded on this
+  node". The remedy claims only "if it does, do not run the command again", never "if not, run it again": a command
+  could have committed earlier steps, which its own sentence reports.
+- **Auto-apply STOPS at the first pair whose outcome is unknown** and returns its summary (`outcome_unknown`,
+  `not_attempted`; never counted `errored`). **Tempting wrong fix:** `errored += 1` and carry on, as for any pair. The
+  session is dead, so the next pair's first call ends the run as a plain "connection closed" with no summary.
+  "Running auto-apply again is safe" holds only because the link and the proposal's `auto_applied` status commit in
+  ONE transaction: split them and that sentence becomes false. That pair's stderr line renders the cause through
+  `commit_outcome_unknown_cause`, WITHOUT the marker's "it may be recorded twice", which would contradict it.
+- **A connection that dies anywhere else stops the run too** (`connection_lost`: a `client.is_closed()` check at the
+  top of each pair, and again when `next_hlc` fails, because the first can lose a race with a closing connection;
+  pin `a_connection_lost_mid_pair_stops_the_run_with_its_summary`, mutation-checked).
+
 **⇒ #811 — A RE-READ AFTER AN INTERRUPTED COMMIT SAYS ONLY WHAT IT KNOWS — do not undo** (pins: `funnel/view_tests.rs`'s
 wire test, `judgement_view_tests.rs`, `duplicates/verdict_tests.rs`, and the source guards in
 `reread_webview_tests.rs` / `read_again_webview_tests.rs`):

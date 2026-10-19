@@ -519,10 +519,26 @@ pub const CLI_STALE_REMEDY: &str =
      if it still applies.";
 
 /// The CLI's own remedy line for this failure, if it needs one: [`CLI_STALE_REMEDY`] for a
-/// [`RefusalScope::Stale`] refusal, `None` for everything else (whose sentences already say what
-/// to do, or are accidents with nothing to add). Pure, so `main.rs`'s printer stays one line.
-pub fn cli_remedy(e: &anyhow::Error) -> Option<&'static str> {
-    (refusal_scope(e) == Some(RefusalScope::Stale)).then_some(CLI_STALE_REMEDY)
+/// [`RefusalScope::Stale`] refusal, the check to run for a [`CommitOutcomeUnknown`] (#822),
+/// `None` for everything else (whose sentences already say what to do, or are accidents with
+/// nothing to add). Pure, so `main.rs`'s printer stays one line.
+///
+/// The unknown-outcome line exists because the marker asks the operator to "check whether it was
+/// recorded", and before #822 the CLI had no command to check with: only raw psql. It names
+/// `cairn-node event`, which says whether this node holds that event. It claims nothing about
+/// the command's OTHER writes: a command that committed earlier steps (a sign-off of several
+/// lines) says what those did in its own sentence.
+pub fn cli_remedy(e: &anyhow::Error) -> Option<String> {
+    if refusal_scope(e) == Some(RefusalScope::Stale) {
+        return Some(CLI_STALE_REMEDY.to_string());
+    }
+    commit_outcome_unknown_event(e).map(|id| {
+        format!(
+            "To check, run `cairn-node event {id}` with the same --conn: it says whether this \
+             node holds that event. If it does, the write took effect: do not run the command \
+             again."
+        )
+    })
 }
 
 /// Did this node deliberately refuse, above the database?
@@ -653,6 +669,17 @@ pub fn commit_outcome_unknown_event(e: &anyhow::Error) -> Option<uuid::Uuid> {
     e.chain()
         .find_map(|cause| cause.downcast_ref::<CommitOutcomeUnknown>())
         .map(|marker| marker.event_id)
+}
+
+/// The failure behind a [`CommitOutcomeUnknown`] marker, rendered as [`operator_chain`] renders
+/// it but WITHOUT the marker's own sentence ("check whether it was recorded … or it may be
+/// recorded twice"). For a caller that words the outcome itself: auto-apply knows a re-run cannot
+/// double its link (#823 review), so printing the marker's warning beside its "running it again
+/// is safe" would contradict it. `None` when the chain carries no marker.
+pub fn commit_outcome_unknown_cause(e: &anyhow::Error) -> Option<String> {
+    e.chain()
+        .find_map(|cause| cause.downcast_ref::<CommitOutcomeUnknown>())
+        .map(|marker| operator_chain(&marker.cause))
 }
 
 #[cfg(test)]
@@ -1111,6 +1138,20 @@ mod refusal_scope_tests {
         assert!(format!("{e:#}").contains("connection closed"));
     }
 
+    /// #823 review: a caller that says the outcome itself (auto-apply's "a re-run is safe") needs
+    /// the failure WITHOUT the marker's "it may be recorded twice", which would contradict it.
+    #[test]
+    fn the_unknown_outcomes_cause_is_rendered_without_the_markers_sentence() {
+        let e = commit_failure(
+            uuid::Uuid::from_u128(80),
+            anyhow::anyhow!("connection closed").context("committing the auto-applied link"),
+        )
+        .context("auto-applying");
+        let cause = commit_outcome_unknown_cause(&e).expect("marked");
+        assert_eq!(cause, "committing the auto-applied link: connection closed");
+        assert_eq!(commit_outcome_unknown_cause(&anyhow::anyhow!("x")), None);
+    }
+
     /// A refusal over a changed record is marked `Stale`, and its text is untouched.
     #[test]
     fn a_stale_picture_refusal_is_marked_stale() {
@@ -1124,9 +1165,19 @@ mod refusal_scope_tests {
     /// remedy is its own re-read, #797) — so the CLI adds its own line, for `Stale` alone, wherever
     /// on the chain the marker sits. Every other scope's sentence already says what to do.
     #[test]
-    fn only_a_stale_refusal_gets_the_cli_remedy() {
+    fn only_a_stale_refusal_or_an_unknown_outcome_gets_the_cli_remedy() {
         let stale = stale_picture_refusal("x").context("signing");
-        assert_eq!(cli_remedy(&stale), Some(CLI_STALE_REMEDY));
+        assert_eq!(cli_remedy(&stale).as_deref(), Some(CLI_STALE_REMEDY));
+        assert_eq!(cli_remedy(&anyhow::anyhow!("timeout")), None);
+        // #822: the marker tells the operator to check whether the event was recorded; the
+        // remedy names the command that checks, with that event's id, through any context.
+        let id = uuid::Uuid::from_u128(79);
+        let unknown = commit_failure(id, anyhow::anyhow!("connection closed")).context("shred");
+        let remedy = cli_remedy(&unknown).expect("an unknown outcome gets a remedy line");
+        assert!(
+            remedy.contains(&format!("cairn-node event {id}")),
+            "names the check, with the event: {remedy}"
+        );
         for e in [
             crate::actor_enrolment::ambiguous_actor_refusal("9f3c"),
             crate::patient::register::dob_precision("not a date").unwrap_err(),

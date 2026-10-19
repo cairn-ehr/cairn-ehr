@@ -3,8 +3,14 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ IN PROGRESS (2026-10-19): #822 + #823** on branch `fix/822-823-cli-after-unknown-commit`. **Merged 2026-10-18:**
-> PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824) (#820, #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR #TBD** (#822 + #823, branch `fix/822-823-cli-after-unknown-commit`): a new
+> read-only `cairn-node event <id>` says whether this node holds an event, and the CLI's remedy line after an
+> unknown-outcome commit names it (#822); auto-apply STOPS at a pair whose commit outcome is unknown and ends with its
+> summary — that pair named, the rest "not attempted", "running it again is safe" — instead of a plain "connection
+> closed" (#823, driven end to end through a real lost commit, mutation-checked). The review added: a connection lost
+> ANYWHERE in a pair stops the run the same way (`connection_lost`), and the pair's stderr line drops the marker's
+> "may be recorded twice", which contradicted "safe to run again". Skipped from #822: event ids on the success lines. **Merged 2026-10-18:** PR [#824](https://github.com/cairn-ehr/cairn-ehr/pull/824) (#820,
+> #819's review follow-ons): a real lost COMMIT driven end to end — `cairn-gui-live/tests/lost_commit.rs` (registration →
 > `OutcomeUnknown` → `settle` spends the search) and `crates/cairn-node/tests/identity_commit_lost.rs` (John Doe,
 > standard registration, observed evidence: the marker names the right event, learnt from the kill switch's WARNING;
 > mutation-checked); `SignOffOutcome`'s three readers destructure with no `..` (source-guarded in both trees); cease's
@@ -22,7 +28,8 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **#822** and **#823** (#821's review follow-ons) — in progress. An idempotent re-send of a registration
+> 1. **Review and merge PR #TBD** (#822 + #823); **#825** needs a decision (where the window's operator diagnostics
+>    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
 > 2. **Decided in the #797 brainstorm (2026-10-17), in this order:** **#803** (medication **withhold "W"** — a held
@@ -152,7 +159,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-19 (#822 + #823, PR #TBD) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -184,6 +191,19 @@ tested but **not wired**.
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
 slice's own rules are its block in `developers/durable-rules.md`).
+
+### 2026-10-19 — #822 + #823: the CLI after an unknown commit outcome
+
+HANDOVER was stale on arrival (#824 had merged). TDD: the remedy test and the `run_verdict` tests red first, then the
+end-to-end auto-apply test (the #820 kill switch on `patient_link`); disabling the stop reproduced the bug exactly
+(the run's `Result` an `Err`).
+- **⇒ A sentence telling an operator to CHECK something needs a command to check with** — run it (`cairn-node event`
+  was run against a real database both ways before the remedy named it).
+- **⇒ A loop that catches per-item errors must ask whether the error killed the session**; if it did, stop and
+  report, or the next item's first call throws away the summary. The review found my first fix asked only via the
+  marker — one of several ways a session dies; ask the connection (`is_closed`) instead.
+- **⇒ Two true sentences can contradict each other on one screen**: the marker's generic "may be recorded twice" sat
+  above auto-apply's specific "safe to run again". Read the whole output a run prints, not each line alone.
 
 ### 2026-10-18 (sixth) — #820: #819's review follow-ons
 
@@ -226,18 +246,9 @@ went red first, then three GUI tests failed to compile, then #818's DB test (a d
 - **⇒ A test-only trigger goes on a projection table, session-gated** (`cairn.test_kill_thread`): `event_log` has
   an "only the dispatcher" trigger pin, and a leaked trigger must be inert for every other connection. Name the line
   it fires on, never count lines: a raised ERROR rolls back a session counter set in the same transaction.
-- **Review round (five reviewers), all fixed in the PR:**
-  - The CLI printed "nothing was signed off" beside a line that may be signed. It is now the pure, tested
-    `nothing_attested_sentence`.
-  - The clinician's sentence carried the marker's own text. `cause` is now the root cause.
-  - A future `settle` caller could restore an unknown outcome's search. `settle` now routes it itself.
-  - funnel.js kept a newer token Rust had spent. It now reads `AfterReread(Unknown)` as "every search is spent".
-  - A timing sample was recorded for an interrupted gesture.
-  - The CLI's registration error did not name the chart.
-  - DB pins added for an ERROR-answered commit and for a backend killed inside a line. The second is
-    mutation-checked: a `?` on its ROLLBACK goes red.
-  - Deferred to #820 (done in PR #824): exhaustive readers of `SignOffOutcome`, the judgement sentence's
-    "connection was lost", and an end-to-end lost-registration test.
+- **Review round (five reviewers), all fixed in the PR** (the CLI's "nothing was signed off" beside a maybe-signed
+  line, the marker's text in the clinician's sentence, `settle` routing, funnel.js's spent token, a timing sample for
+  an interrupted gesture, the CLI's registration error naming the chart, two DB pins); the rest went to #820 (PR #824).
 
 ### 2026-10-18 (third) — #814: the medication writes' interrupted commits
 

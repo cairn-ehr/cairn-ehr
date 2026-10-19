@@ -2375,6 +2375,15 @@ enum Cmd {
         patient: Option<Uuid>,
     },
 
+    /// Say whether this node holds an event, and if so its type, chart and recorded time (#822).
+    /// The check a write whose commit got no ordinary answer asks for ("commit outcome unknown
+    /// for event <id> — check whether it was recorded before retrying"): if the event is here,
+    /// the write took effect and running the command again could record it twice. Only reads.
+    Event {
+        /// The event id the failure named.
+        id: Uuid,
+    },
+
     /// List events this node admitted UNINTERPRETED (ADR-0056 decision 1 / #265):
     /// stored verbatim and re-propagated, but holding NO power because this node
     /// has no code classifying their type. A row carrying a reason has since been
@@ -2385,8 +2394,9 @@ enum Cmd {
 }
 
 /// The CLI's entry point: [`run`], with its failure printed exactly as a `Result`-returning
-/// `main` would (`Error: {e:?}`, exit status 1) — plus, for a stale refusal, the one remedy line
-/// the node's sentence leaves to its caller (`db_diagnosis::cli_remedy`, #797 review).
+/// `main` would (`Error: {e:?}`, exit status 1) — plus, for a stale refusal or an unknown commit
+/// outcome, the one remedy line the node's sentence leaves to its caller
+/// (`db_diagnosis::cli_remedy`, #797 review, #822).
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     match run().await {
@@ -4136,22 +4146,27 @@ async fn run() -> anyhow::Result<()> {
             println!(
                 "auto-apply: applied {}  vetoed->review {}  disputed->review {}  \
                  human-judged (left pending) {}  awaiting re-check (left pending) {}  \
-                 skipped {}  errored {}",
+                 skipped {}  errored {}  outcome unknown {}  not attempted {}{}",
                 s.applied,
                 s.vetoed_to_review,
                 s.disputed_to_review,
                 s.human_judged,
                 s.awaiting_recheck,
                 s.skipped,
-                s.errored
+                s.errored,
+                usize::from(s.outcome_unknown.is_some()),
+                s.not_attempted,
+                if s.connection_lost {
+                    "  (connection lost)"
+                } else {
+                    ""
+                }
             );
-            // Non-zero exit when anything errored, so a systematic failure can't pass as a
-            // healthy quiet run in a cron/pipeline (the summary line is still printed above).
-            if s.errored > 0 {
-                anyhow::bail!(
-                    "{} pair(s) errored during auto-apply (see stderr above)",
-                    s.errored
-                );
+            // Non-zero exit when anything errored or an outcome is unknown, so neither can pass
+            // as a healthy quiet run in a cron/pipeline (the summary line is still printed
+            // above). An unknown outcome's line says a re-run is safe (#823).
+            if let Some(verdict) = cairn_node::auto_apply::run_verdict(&s) {
+                anyhow::bail!("{verdict}");
             }
         }
         Cmd::RegisterJohnDoe { class, site, basis } => {
@@ -5585,6 +5600,12 @@ async fn run() -> anyhow::Result<()> {
             if let Some(p) = patient {
                 println!("{}", dc::chart_line(dc::chart_check_pending(&db, p).await?));
             }
+        }
+        Cmd::Event { id } => {
+            // A plain connect: this only reads, and a schema replay takes locks (#726).
+            let db = cairn_node::db::connect(&cli.conn).await?;
+            let found = cairn_node::event_lookup::recorded_event(&db, id).await?;
+            println!("{}", cairn_node::event_lookup::describe(id, found.as_ref()));
         }
         Cmd::Reproject { prefix, rebuild } => {
             let db = cairn_node::db::connect_and_load_schema(&cli.conn).await?;
