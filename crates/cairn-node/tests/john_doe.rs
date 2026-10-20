@@ -464,3 +464,39 @@ async fn the_unidentified_registration_carries_no_search_attestation() {
         "search_incomplete must be NULL — no search ran, so there is no completeness to state"
     );
 }
+
+/// #828: the call also returns the registration event's id, the one a lost commit names, so
+/// the CLI's success line can print it. Pinned against `event_log`; the callsign-name and
+/// pending-marker events the same call writes must not be the id returned.
+#[tokio::test]
+async fn returns_the_registration_event_id_a_lost_commit_names() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = common::setup(&c, &OVERLAY_TABLES).await;
+
+    let got = john_doe::register_john_doe_returning_event(
+        &mut c,
+        &sk,
+        &kid,
+        "n",
+        "ED",
+        "site1",
+        "2026-10-20",
+        "unconscious ED arrival, no ID",
+    )
+    .await
+    .expect("registration accepted by the floor");
+
+    let (pid, _call, _ord) = &got.value;
+    let recorded: String = c
+        .query_one(
+            "SELECT event_id::text FROM event_log WHERE patient_id::text = $1 \
+             AND event_type = 'identity.registration.asserted'",
+            &[&pid.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(got.event_id.to_string(), recorded);
+}

@@ -80,6 +80,7 @@
 //! never actually saw — the load-bearing round-trip test in `tests/patient_register.rs` is
 //! what keeps this the only place it happens.
 
+use crate::db_diagnosis::Committed;
 use cairn_event::demographics::{
     dob_assertion_body, identifier_assertion_body, name_assertion_body, render_dob_twin,
     render_identifier_twin, render_name_twin, IdentifierAssertion,
@@ -439,6 +440,22 @@ pub async fn register_patient(
     query: &SearchQuery,
     displayed: &CandidateList,
 ) -> anyhow::Result<Uuid> {
+    register_patient_returning_event(client, sk, kid, node_origin, name, query, displayed)
+        .await
+        .map(|r| r.value)
+}
+
+/// [`register_patient`], also returning the registration event's id (#828): the id a lost
+/// commit of this call names, so the CLI can print it on a run that worked.
+pub async fn register_patient_returning_event(
+    client: &mut Client,
+    sk: &SigningKey,
+    kid: &str,
+    node_origin: &str,
+    name: Option<&str>,
+    query: &SearchQuery,
+    displayed: &CandidateList,
+) -> anyhow::Result<Committed<Uuid>> {
     let patient_id = Uuid::now_v7();
     let attestation = SearchAttestation::from_displayed(query, displayed);
 
@@ -566,13 +583,38 @@ pub async fn register_patient(
             .context(format!("registering chart {patient_id}"))
     })?;
 
-    Ok(patient_id)
+    Ok(Committed {
+        value: patient_id,
+        event_id: registration_event_id,
+    })
+}
+
+/// What `cairn-node patient-register` prints on success: the chart on the first line, exactly as
+/// before #828, and the registration event (the id a lost commit names) on its own line below.
+/// The first line is a parse contract: the RUNBOOK extracts the chart with
+/// `sed -n 's/^registered patient //p'`, so the event must never share that line.
+pub fn registered_patient_lines(patient_id: Uuid, event_id: Uuid) -> String {
+    format!("registered patient {patient_id}\nregistration event {event_id}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use cairn_patient_search::{Candidate, PersonRow, TrustState};
+
+    /// #828: the RUNBOOK's `sed -n 's/^registered patient //p'` must still yield exactly the
+    /// chart id, and the event id must still be printed.
+    #[test]
+    fn the_runbook_sed_still_reads_the_chart_id_alone() {
+        let (pid, eid) = (Uuid::now_v7(), Uuid::now_v7());
+        let out = registered_patient_lines(pid, eid);
+        let extracted: Vec<&str> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix("registered patient "))
+            .collect();
+        assert_eq!(extracted, [pid.to_string()]);
+        assert!(out.contains(&format!("registration event {eid}")));
+    }
 
     fn hlc(wall: i64) -> Hlc {
         Hlc {

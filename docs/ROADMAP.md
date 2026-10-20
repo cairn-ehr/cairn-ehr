@@ -511,11 +511,15 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   returns them, pinned against `event_log`, mutation-checked). The issue's other six verbs already printed theirs.
   Filed **#828**: `patient-register`, `register-john-doe` and `medication-assert` print a chart/thread id, never the event id
   a lost commit names. **Merged** (PR #829).
-- **2026-10-20 (#828):** in progress on `fix/828-cli-event-ids`.
+- **2026-10-20 (#828):** `patient-register` and `register-john-doe` print `registration event <id>` on its own line (the
+  first line is the RUNBOOK's parse contract, pinned by `the_runbook_sed_still_reads_the_chart_id_alone`);
+  `medication-assert` appends `; event <id>` like its sibling verbs. Each orchestrator gained a `*_returning_event`
+  sibling returning `db_diagnosis::Committed<T>`; each id pinned against `event_log`, mutation-checked. Every CLI write
+  verb now prints its event ids. PR open.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** #828 (in progress); #825 (a decision); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge #828's PR; #825 (a decision); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

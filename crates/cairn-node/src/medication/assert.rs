@@ -147,6 +147,33 @@ pub async fn assert_medication(
     author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
+    assert_medication_returning_event(
+        client,
+        node_sk,
+        node_kid,
+        node_origin,
+        patient,
+        input,
+        author,
+        attest,
+    )
+    .await
+    .map(|r| r.value)
+}
+
+/// [`assert_medication`], also returning the assert event's id (#828): the id a lost commit of
+/// this call names (`seal_sign_submit`), so the CLI can print it beside the thread.
+#[allow(clippy::too_many_arguments)] // as `assert_medication`
+pub async fn assert_medication_returning_event(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    input: &AssertMedicationInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
+) -> anyhow::Result<crate::db_diagnosis::Committed<Uuid>> {
     validate_term(input.term)?;
     // Mint HLCs up front (self-committing; a rolled-back submit just leaves a gap —
     // the HLC is monotonic and gaps are allowed, exactly like identify_patient).
@@ -192,11 +219,15 @@ pub async fn assert_medication(
     // ONE strict door by seal_sign_submit — which also runs the atomic author-time
     // attestation when `attest` is Some (it vouches for the thread named in the body's
     // payload.medication_id), and rewrites the body to human-signed authorship when
-    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). We return the
-    // THREAD id, not the content event id.
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-        .await?;
-    Ok(medication_id)
+    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). It returns the
+    // content event's id, the one its lost commit names; the thread id rides beside it.
+    let recorded =
+        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+            .await?;
+    Ok(crate::db_diagnosis::Committed {
+        value: medication_id,
+        event_id: recorded,
+    })
 }
 
 #[cfg(test)]

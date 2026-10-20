@@ -23,7 +23,7 @@
 mod common;
 
 use cairn_node::db;
-use cairn_node::patient::register::register_patient;
+use cairn_node::patient::register::{register_patient, register_patient_returning_event};
 use cairn_patient_search::{Candidate, CandidateList, PersonRow, SearchQuery, TrustState};
 use common::{cs, setup};
 use tokio_postgres::Client;
@@ -305,4 +305,41 @@ async fn registering_with_no_human_author_succeeds() {
     assert_eq!(class, "standard");
     assert_eq!(displayed_count, 0);
     assert_eq!(incomplete, Some(false));
+}
+
+/// #828: the call also returns the REGISTRATION event's id, the one a lost commit names
+/// (`commit_failure(registration_event_id, …)`), so the CLI's success line can print it. Pinned
+/// against `event_log`, not the call's own bookkeeping: the name and dob events the same call
+/// writes must not be the id returned.
+#[tokio::test]
+async fn returns_the_registration_event_id_a_lost_commit_names() {
+    let Some(base) = cs() else {
+        eprintln!("skipped: set CAIRN_TEST_PG");
+        return;
+    };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup(&c, &EXTRA_TABLES).await;
+    let list = CandidateList {
+        people: vec![],
+        incomplete: false,
+        incomplete_reason: None,
+    };
+    let query = SearchQuery::new("smith", Some("1980-01-01"), &[]);
+
+    let got =
+        register_patient_returning_event(&mut c, &sk, &kid, "n", Some("smith"), &query, &list)
+            .await
+            .expect("registration accepted");
+
+    let recorded: String = c
+        .query_one(
+            "SELECT event_id::text FROM event_log WHERE patient_id::text = $1 \
+             AND event_type = 'identity.registration.asserted'",
+            &[&got.value.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(got.event_id.to_string(), recorded);
 }

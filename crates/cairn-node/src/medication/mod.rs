@@ -26,8 +26,8 @@ pub mod sealed_submit;
 pub mod signoff;
 
 pub use assert::{
-    assert_medication, build_assert_body, coding_from_parts, validate_term, AssertMedicationInput,
-    SubstanceCoding,
+    assert_medication, assert_medication_returning_event, build_assert_body, coding_from_parts,
+    validate_term, AssertMedicationInput, SubstanceCoding,
 };
 pub use attestation::{
     attest_medication_thread, attest_thread_in_tx, build_attestation_body, thread_commitment,

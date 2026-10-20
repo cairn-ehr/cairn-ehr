@@ -38,6 +38,7 @@
 //! orchestrator (one transaction, so the registration, the callsign name, and the pending
 //! marker land atomically — a chart is never half-registered).
 
+use crate::db_diagnosis::Committed;
 use crate::patient::register::build_registration_body;
 use cairn_event::demographics::{name_assertion_body, render_name_twin};
 use cairn_event::identity::{pending_assertion_body, render_pending_twin, PendingAssertion};
@@ -200,6 +201,24 @@ pub async fn register_john_doe(
     date: &str,
     basis: &str,
 ) -> anyhow::Result<(Uuid, String, anyhow::Result<i64>)> {
+    register_john_doe_returning_event(client, sk, kid, node_origin, class, site, date, basis)
+        .await
+        .map(|r| r.value)
+}
+
+/// [`register_john_doe`], also returning the registration event's id (#828): the id a lost
+/// commit of this call names, so the CLI can print it on a run that worked.
+#[allow(clippy::too_many_arguments)] // as `register_john_doe`
+pub async fn register_john_doe_returning_event(
+    client: &mut Client,
+    sk: &SigningKey,
+    kid: &str,
+    node_origin: &str,
+    class: &str,
+    site: &str,
+    date: &str,
+    basis: &str,
+) -> anyhow::Result<Committed<(Uuid, String, anyhow::Result<i64>)>> {
     // Refuse a blank basis with ZERO side effects — before a UUID is minted, before any
     // HLC is ticked. The db/045 floor is still the enforcement point (principle 12: this is
     // a client-side courtesy, not the guarantee); this only stops the wasted mint. Same
@@ -299,7 +318,10 @@ pub async fn register_john_doe(
         .map(|row| row.get::<_, i64>("ordinal"))
         .map_err(|e| anyhow::Error::new(e).context("reading the John Doe's local ordinal"));
 
-    Ok((patient_id, call, ordinal))
+    Ok(Committed {
+        value: (patient_id, call, ordinal),
+        event_id: registration_event_id,
+    })
 }
 
 #[cfg(test)]
