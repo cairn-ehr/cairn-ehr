@@ -110,9 +110,10 @@ extensions:
 
       # Returns String: "registered patient <chart id>\nregistration event <event id>" — two random
       # v7 record identifiers that `patient-register` prints ON PURPOSE (#828): the chart for the
-      # RUNBOOK's `sed`, the event for matching a later "commit outcome unknown". Its inputs are
-      # the two Uuids alone; no name, date of birth or identifier can reach it. Flagged because its
-      # parameter is named `patient_id`. (the `patient-register` success line)
+      # RUNBOOK's `sed`, the event as the same kind of id a "commit outcome unknown" names. Its
+      # inputs are the two Uuids alone; no name, date of birth or identifier can reach it. Flagged
+      # for its parameter's name: the alert read "This operation writes patient_id to a log file."
+      # (the `patient-register` success line)
       - ["cairn_node::patient::register::registered_patient_lines", "ReturnValue", "log-injection", "manual"]
 
       # ---- cairn-wire -------------------------------------------------------------------------

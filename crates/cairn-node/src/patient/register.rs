@@ -424,7 +424,8 @@ pub fn build_identifier_body(
 /// while asserting the name "Jones", and this function would sign both without complaint
 /// (the twelfth founding principle again: the type system permits the illegal state; only a
 /// disciplined caller prevents it). Two callers today, each satisfying it by construction:
-/// `main.rs`'s `PatientRegister` handler builds `name` and `query` from the SAME `name: String`
+/// `main.rs`'s `PatientRegister` handler (through [`register_patient_returning_event`], which
+/// holds this body) builds `name` and `query` from the SAME `name: String`
 /// CLI argument, one line apart; and the reference window (`cairn-gui-live`'s registration
 /// port) is handed both by `cairn_gui_funnel::FunnelSession`, which stores the raw name WITH
 /// the search it ran on. A future caller must preserve that.
@@ -446,7 +447,9 @@ pub async fn register_patient(
 }
 
 /// [`register_patient`], also returning the registration event's id (#828): the id a lost
-/// commit of this call names, so the CLI can print it on a run that worked.
+/// commit of this call names, so the CLI can print it on a run that worked. Every
+/// precondition of [`register_patient`] applies here unchanged, above all its rule that `name`
+/// is the very string `query` was built from.
 pub async fn register_patient_returning_event(
     client: &mut Client,
     sk: &SigningKey,
@@ -591,8 +594,8 @@ pub async fn register_patient_returning_event(
 
 /// What `cairn-node patient-register` prints on success: the chart on the first line, exactly as
 /// before #828, and the registration event (the id a lost commit names) on its own line below.
-/// The first line is a parse contract: the RUNBOOK extracts the chart with
-/// `sed -n 's/^registered patient //p'`, so the event must never share that line.
+/// The first line is a parse contract: `cairn-gui/cairn-gui-tauri/results/RUNBOOK.md` extracts
+/// the chart with `sed -n 's/^registered patient //p'`, so the event must never share that line.
 pub fn registered_patient_lines(patient_id: Uuid, event_id: Uuid) -> String {
     format!("registered patient {patient_id}\nregistration event {event_id}")
 }

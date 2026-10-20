@@ -65,7 +65,9 @@ Since [#345](https://github.com/cairn-ehr/cairn-ehr/issues/345) a chart must be 
 before anything can be recorded about it — the §5.3/§5.8 precedence rule, enforced in the
 database. A hand-minted `uuidgen` id is refused by `medication-assert`, which is the point: you
 cannot write on a chart nobody made, exactly as on paper. `patient-register` runs the
-search-before-create funnel and prints the new id on its last line.
+search-before-create funnel and prints the new chart id on the line that starts
+`registered patient ` (the registration event's id follows on the next line, so read the chart
+by that prefix, never by `tail -1`).
 
 ```bash
 NODE="cairn-node --conn $CONN --key $NODE_KEY"

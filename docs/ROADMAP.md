@@ -515,7 +515,9 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   first line is the RUNBOOK's parse contract, pinned by `the_runbook_sed_still_reads_the_chart_id_alone`);
   `medication-assert` appends `; event <id>` like its sibling verbs. Each orchestrator gained a `*_returning_event`
   sibling returning `db_diagnosis::Committed<T>`; each id pinned against `event_log`, mutation-checked. Every CLI write
-  verb now prints its event ids. PR #830.
+  verb now prints its event ids. PR #830. Its review moved all three lines into pure builders
+  (`registered_patient_lines`, `registered_john_doe_lines`, `recorded_medication_line`), each unit-tested, pinned the
+  attested assert's event id too, and corrected the RUNBOOK's "last line" sentence.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).

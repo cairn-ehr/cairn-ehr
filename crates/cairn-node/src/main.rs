@@ -4172,8 +4172,8 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::RegisterJohnDoe { class, site, basis } => {
             // Fail cheap, before any key I/O or DB round trip — the same discipline
-            // `patient-register` applies to `--birth-date`, and the SAME function
-            // `register_john_doe` calls internally, so the CLI edge and the library call
+            // `patient-register` applies to `--birth-date`, and the SAME function the
+            // orchestrator below calls internally, so the CLI edge and the library call
             // cannot drift into different opinions of "stated". Without it, `--basis ""`
             // unsealed a key, opened a connection, minted a patient UUID and burned three
             // HLC ticks before the db/045 floor refused the first submit.
@@ -4202,10 +4202,9 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             let (pid, call, ordinal) = recorded.value;
-            // The event on its own line, like `patient-register`'s: the first line stays as it was.
             println!(
-                "registered John Doe {pid}\nregistration event {}\ncallsign {call}",
-                recorded.event_id
+                "{}",
+                cairn_node::john_doe::registered_john_doe_lines(pid, recorded.event_id, &call)
             );
             // NOT `?`: the chart is committed; a failed display read must not read as a
             // failed registration, or the retry mints a second chart (#817 review).
@@ -4313,7 +4312,7 @@ async fn run() -> anyhow::Result<()> {
             // The raw typed name — NOT `query.name_tokens` (`SearchQuery` retains only
             // normalised search tokens, never the raw string; see
             // `patient::register`'s module doc, "signature problem", for why). Passed through
-            // unconditionally: `register_patient` itself treats a blank/empty string the same
+            // unconditionally: the orchestrator itself treats a blank/empty string the same
             // as `None` (principle 4 — an empty `--name` default must never assert an
             // empty-string name), so no pre-filtering is needed here.
             let recorded = cairn_node::patient::register::register_patient_returning_event(
@@ -4923,8 +4922,12 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             println!(
-                "recorded medication for {patient}; thread {}; event {}",
-                recorded.value, recorded.event_id
+                "{}",
+                cairn_node::medication::recorded_medication_line(
+                    patient,
+                    recorded.value,
+                    recorded.event_id
+                )
             );
         }
         Cmd::MedicationCease {

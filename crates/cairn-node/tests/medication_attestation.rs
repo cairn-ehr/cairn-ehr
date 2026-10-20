@@ -19,9 +19,10 @@ use cairn_event::{
 };
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, attest_medication_thread, build_dose_change_body, change_dose, correct_dose,
-    reconcile_medications, resolve_correction_target, separate_medications, AssertMedicationInput,
-    AttestParams, ChangeDoseInput, CorrectDoseInput, ReconcileInput,
+    assert_medication, assert_medication_returning_event, attest_medication_thread,
+    build_dose_change_body, change_dose, correct_dose, reconcile_medications,
+    resolve_correction_target, separate_medications, AssertMedicationInput, AttestParams,
+    ChangeDoseInput, CorrectDoseInput, ReconcileInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -1736,7 +1737,7 @@ async fn author_time_assert_is_attested_current_in_one_txn() {
         basis: Some("chart review"),
         note: Some("confirmed with patient at time of entry"),
     };
-    let medication_id = assert_medication(
+    let recorded = assert_medication_returning_event(
         &mut c,
         &sk_d,
         &kid_d,
@@ -1748,6 +1749,20 @@ async fn author_time_assert_is_attested_current_in_one_txn() {
     )
     .await
     .expect("author-time assert+attest must succeed atomically in one txn");
+    let medication_id = recorded.value;
+
+    // #828 review: on the attested path the same call also writes an attestation event; the
+    // id returned must still be the ASSERT's, the one this path's lost `tx.commit` names.
+    let assert_event: String = c
+        .query_one(
+            "SELECT event_id::text FROM event_log WHERE patient_id::text = $1 \
+             AND event_type = 'clinical.medication.asserted'",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(recorded.event_id.to_string(), assert_event);
 
     let (attester_kid, stale): (String, bool) = {
         let row = c

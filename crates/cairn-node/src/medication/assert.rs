@@ -230,9 +230,28 @@ pub async fn assert_medication_returning_event(
     })
 }
 
+/// What `cairn-node medication-assert` prints on success: the chart, the thread (what later
+/// verbs take as `--medication-id`), and the assert event (the id a lost commit names, #828),
+/// in the `; event <id>` shape its sibling verbs use. A pure function so a unit test can pin
+/// each label to its id: all three are `Uuid`s.
+pub fn recorded_medication_line(chart: Uuid, thread: Uuid, event: Uuid) -> String {
+    format!("recorded medication for {chart}; thread {thread}; event {event}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #828 review: three bare `Uuid`s on one line, so a swap would type-check and every DB
+    /// test would still pass. Each label must sit beside its own id.
+    #[test]
+    fn the_assert_success_line_labels_each_id() {
+        let (chart, thread, event) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        assert_eq!(
+            recorded_medication_line(chart, thread, event),
+            format!("recorded medication for {chart}; thread {thread}; event {event}")
+        );
+    }
 
     #[test]
     fn coding_from_parts_accepts_all_three_or_none() {

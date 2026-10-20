@@ -324,6 +324,13 @@ pub async fn register_john_doe_returning_event(
     })
 }
 
+/// What `cairn-node register-john-doe` prints on success: the chart on the first line, exactly
+/// as before #828, then the registration event (the id a lost commit names) and the callsign.
+/// A pure function so a unit test can pin each label to its id: the two ids are both `Uuid`s.
+pub fn registered_john_doe_lines(chart: Uuid, event: Uuid, callsign: &str) -> String {
+    format!("registered John Doe {chart}\nregistration event {event}\ncallsign {callsign}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +339,23 @@ mod tests {
         let eid = Uuid::parse_str("22222222-0000-0000-0000-000000000000").unwrap();
         let pid = Uuid::parse_str("00000000-0000-0000-0000-0000000000ab").unwrap();
         (eid, pid)
+    }
+
+    /// #828 review: both ids are bare `Uuid`s, so a swap would type-check. Each label must sit
+    /// beside its own id, and the chart must stay on the first line (as before #828).
+    #[test]
+    fn the_john_doe_success_lines_label_each_id() {
+        let (eid, pid) = ids();
+        let out = registered_john_doe_lines(pid, eid, "JD-ED-1");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                format!("registered John Doe {pid}"),
+                format!("registration event {eid}"),
+                "callsign JD-ED-1".to_string(),
+            ]
+        );
     }
 
     // --- final review (minor): `--basis` is validated at the edge, like `--birth-date` ---

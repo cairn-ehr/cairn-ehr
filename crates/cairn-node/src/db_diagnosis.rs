@@ -666,9 +666,9 @@ pub fn commit_failure(event_id: uuid::Uuid, fault: anyhow::Error) -> anyhow::Err
 }
 
 /// What a write returned (`value`), plus the id of the event a lost commit of that same write
-/// would have named through [`commit_failure`] (#828). A success line that prints `event_id`
-/// shows the operator, on a run that worked, the id a later "commit outcome unknown" names, so
-/// the two can be matched by eye (`cairn-node event <id>` checks either way).
+/// would have named instead through [`commit_failure`] (#828). A success line that prints
+/// `event_id` therefore names the same KIND of id a "commit outcome unknown" names, so the
+/// operator meets one vocabulary either way and `cairn-node event <id>` checks both.
 #[derive(Debug)]
 pub struct Committed<T> {
     pub value: T,

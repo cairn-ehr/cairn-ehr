@@ -185,12 +185,15 @@ arrival** (a merged PR still "awaiting") — house rule 8's check is not optiona
 
 ### 2026-10-20 — #826 (PR #829) and #828 (PR #830): event ids on the CLI's success lines
 
-
 - **⇒ An issue's survey is a claim** (#826): six of its seven verbs already printed their event ids; reading each arm
   first turned a seven-verb change into one, and found the three unlisted verbs with the real gap (#828).
 - **⇒ A printed line can be a parse contract** (#828): the RUNBOOK reads the chart id with
   `sed -n 's/^registered patient //p'`, so `; event …` on that line would have broken four runbook blocks. Grep docs and
-  scripts for a line's text before changing it; the event now gets its own line, pinned by a unit test.
+  scripts for a line's text before changing it; the event now gets its own line, pinned by a unit test. The review
+  then found the same contract stated in PROSE ("prints the new id on its last line", RUNBOOK) and false: grep for
+  what the docs *say* about a line, not only for the code that parses it.
+- **⇒ Two bare `Uuid`s on one line get a pure builder and a test** (#828 review, as #829's
+  `observed_evidence_line`): a swap type-checks and every DB test still passes.
 - **⇒ Widen a return without touching its callers:** a `*_returning_event` sibling returning
   `db_diagnosis::Committed<T>`, the old name a one-line wrapper (~215 call sites untouched).
 
