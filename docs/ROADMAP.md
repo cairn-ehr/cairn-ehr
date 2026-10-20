@@ -505,11 +505,16 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   Auto-apply stops at a pair whose commit outcome is unknown and returns its summary (`outcome_unknown`,
   `not_attempted`), its last line saying a re-run is safe — no longer a plain "connection closed"; a connection lost
   anywhere in a pair stops it the same way (review), as does any failed HLC tick, and "not recorded" says "as of now"
-  with the check to make before a re-run (second review). Skipped: event ids on the success lines (#826).
+  with the check to make before a re-run (second review). Skipped: event ids on the success lines (#826). **Merged**
+  (PR #827).
+- **2026-10-20 (#826, PR #829):** `assert-observed-evidence` prints the id of every event it recorded (its orchestrator
+  returns them, pinned against `event_log`, mutation-checked). The issue's other six verbs already printed theirs.
+  Filed **#828**: `patient-register`, `register-john-doe` and `medication-assert` print a chart/thread id, never the event id
+  a lost commit names.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #827 (#822 + #823); #825 (a decision); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** review and merge PR #829 (#826); #825 (a decision); #828 (small); then #803 (brainstorm + ADR first); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)

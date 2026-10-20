@@ -4676,7 +4676,7 @@ async fn run() -> anyhow::Result<()> {
                 sex: sex_obs,
             };
 
-            cairn_node::evidence::assert_observed_evidence(
+            let event_ids = cairn_node::evidence::assert_observed_evidence(
                 &mut db,
                 &sk,
                 &kid,
@@ -4686,7 +4686,11 @@ async fn run() -> anyhow::Result<()> {
                 observed_year,
             )
             .await?;
-            println!("recorded clinician-observed evidence on {patient}");
+            // #826: name the events, as every other evidence verb does — a lost commit names one.
+            println!(
+                "{}",
+                cairn_node::evidence::observed_evidence_line(patient, &ev, &event_ids)
+            );
         }
         Cmd::AssertIdentityEvidence {
             patient,
