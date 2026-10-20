@@ -515,13 +515,13 @@ designed + as built, with its plan under `docs/superpowers/plans/` and its §1.2
   first line is the RUNBOOK's parse contract, pinned by `the_runbook_sed_still_reads_the_chart_id_alone`);
   `medication-assert` appends `; event <id>` like its sibling verbs. Each orchestrator gained a `*_returning_event`
   sibling returning `db_diagnosis::Committed<T>`; each id pinned against `event_log`, mutation-checked. Every CLI write
-  verb now prints its event ids. PR #830. Its review moved all three lines into pure builders
+  verb now prints its event ids. **Merged** (PR #830). Its review moved all three lines into pure builders
   (`registered_patient_lines`, `registered_john_doe_lines`, `recorded_medication_line`), each unit-tested, pinned the
   attested assert's event id too, and corrected the RUNBOOK's "last line" sentence.
 - **Decided, unbuilt (2026-10-17):** #803 (medication withhold "W": a held state with a reason — new event type, ADR
   first) → #804 (on link, show only where the two charts' lists differ; continue / discontinue / withhold per line;
   needs #803 and #690).
-- **Next:** review and merge PR #830 (#828); #825 (a decision); then #803 (brainstorm + ADR first); then the open issues above
+- **Next:** #825 (a decision); #803 (brainstorm + ADR first, started 2026-10-21 on `feat/803-medication-withhold`); then the open issues above
   (HANDOVER's ⇒ NEXT orders them). #699 stays open until the maintainer closes it.
 
 ## Above the foundation line (NOT in this roadmap)
