@@ -181,6 +181,38 @@ pub async fn assert_observed_evidence(
     Ok(signed.into_iter().map(|(id, _)| id).collect())
 }
 
+/// The CLI's success line for [`assert_observed_evidence`] (#826): every recorded event id,
+/// each labelled with its kind, so an operator can tell the age event from the sex event and
+/// later match the id a lost commit names. `event_ids` is that call's return value; the labels
+/// follow the same age-then-sex order. Should the two ever disagree in length, the ids are
+/// printed unlabelled — a wrong label misleads, and a dropped id is the gap #826 closes.
+pub fn observed_evidence_line(
+    patient_id: Uuid,
+    ev: &ObservedEvidence,
+    event_ids: &[Uuid],
+) -> String {
+    let kinds: Vec<&str> = [
+        ev.age.as_ref().map(|_| "age"),
+        ev.sex.as_ref().map(|_| "sex"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let events: Vec<String> = if kinds.len() == event_ids.len() {
+        event_ids
+            .iter()
+            .zip(kinds)
+            .map(|(id, kind)| format!("event {id} ({kind})"))
+            .collect()
+    } else {
+        event_ids.iter().map(|id| format!("event {id}")).collect()
+    };
+    format!(
+        "recorded clinician-observed evidence on {patient_id}; {}",
+        events.join(", ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +229,68 @@ mod tests {
             counter: 0,
             node_origin: "n".into(),
         }
+    }
+
+    fn age() -> Option<AgeObservation> {
+        Some(AgeObservation {
+            age_years: 40,
+            tolerance_years: 5,
+            basis: "dentition".into(),
+        })
+    }
+    fn sex() -> Option<SexObservation> {
+        Some(SexObservation {
+            value: "male".into(),
+            basis: None,
+        })
+    }
+
+    #[test]
+    fn success_line_labels_each_event_with_its_kind_in_submit_order() {
+        let both = ObservedEvidence {
+            age: age(),
+            sex: sex(),
+        };
+        assert_eq!(
+            observed_evidence_line(pid(), &both, &[eid(), pid()]),
+            format!(
+                "recorded clinician-observed evidence on {}; event {} (age), event {} (sex)",
+                pid(),
+                eid(),
+                pid()
+            )
+        );
+        let sex_only = ObservedEvidence {
+            age: None,
+            sex: sex(),
+        };
+        assert_eq!(
+            observed_evidence_line(pid(), &sex_only, &[eid()]),
+            format!(
+                "recorded clinician-observed evidence on {}; event {} (sex)",
+                pid(),
+                eid()
+            )
+        );
+    }
+
+    #[test]
+    fn success_line_never_drops_an_id_when_the_kinds_do_not_line_up() {
+        // Not reachable through `assert_observed_evidence`; if it were, a wrong label would
+        // mislead, so every id is printed unlabelled rather than one silently lost.
+        let age_only = ObservedEvidence {
+            age: age(),
+            sex: None,
+        };
+        assert_eq!(
+            observed_evidence_line(pid(), &age_only, &[eid(), pid()]),
+            format!(
+                "recorded clinician-observed evidence on {}; event {}, event {}",
+                pid(),
+                eid(),
+                pid()
+            )
+        );
     }
 
     #[test]

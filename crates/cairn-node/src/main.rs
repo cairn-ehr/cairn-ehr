@@ -4687,10 +4687,9 @@ async fn run() -> anyhow::Result<()> {
             )
             .await?;
             // #826: name the events, as every other evidence verb does — a lost commit names one.
-            let event_ids: Vec<String> = event_ids.iter().map(Uuid::to_string).collect();
             println!(
-                "recorded clinician-observed evidence on {patient}; event {}",
-                event_ids.join(", event ")
+                "{}",
+                cairn_node::evidence::observed_evidence_line(patient, &ev, &event_ids)
             );
         }
         Cmd::AssertIdentityEvidence {
