@@ -3,11 +3,10 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)** (#826, branch
-> `fix/826-cli-success-event-ids`): `assert-observed-evidence` prints its event ids — the only one of the issue's seven
-> verbs that printed none (the other six already did; the issue's survey was wrong). Filed **#828** (three unlisted verbs
-> print a chart/thread id, never the event id a lost commit names).
-> **Merged 2026-10-18/19 (ROADMAP has each):** PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
+> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)** (#828, branch `fix/828-cli-event-ids`): `patient-register`,
+> `register-john-doe` and `medication-assert` print the event id a lost commit of theirs names. With it, every
+> CLI write verb prints its event ids on success.
+> **Merged 2026-10-18/20 (ROADMAP has each):** PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
 > `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
 > COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
 > where operator diagnostics live) · PR #821 (#817) · PR #819 (#815 + #818) · PR #816 (#814) · PR #813 (#811) · PR #805
@@ -19,7 +18,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)** (#826); **#828** is small; **#825** needs a decision (where the window's operator diagnostics
+> 1. **Review and merge PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)** (#828); **#825** needs a decision (where the window's operator diagnostics
 >    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
@@ -150,7 +149,7 @@ through one — include it next.
 
 ---
 
-**Session date:** 2026-10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
+**Session date:** 2026-10-20 (#828, PR [#830](https://github.com/cairn-ehr/cairn-ehr/pull/830)) · 10-20 (#826, PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)) · 2026-10-19 (#822 + #823, PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827)) · 2026-10-18 (#817, PR #821) · 10-18 (#815 + #818, PR #819) · 10-18 (#814, PR #816) · 10-18 (#811, PR #813) · 10-18 (PR #805's second review, fixed) · 2026-10-17 (#797, PR [#805](https://github.com/cairn-ehr/cairn-ehr/pull/805)) · 10-17 (#799 · #800 · #801, PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802)) · 10-17 (PR #798's second review round) · 2026-10-16 (#745 · #752 · #740, PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)) · 10-16 (#793 · #737, PR #795) · 10-16 (#781 · #789 · #732, PR #794) · 10-16 (R6 residuals, PR #792) · 10-15 (R7, #742 + #743 part 2, PR #788) · 10-14/15 (R6, #716 + #723, PR #777) · 10-12/13 three cloud tech-debt passes (PRs #770–#776, ADR-0080) · 10-11 DOB near miss (PR #758, ADR-0079) · 10-08/09 R5b (PR #749, ADR-0078) · 10-06/07 R5a (PR #735) · 10-05 #725 (PR #733) · 10-04/05 R4 (ADR-0076 decision 7, PR #724) ·
 10-03 R3 (PR #721) and R1b (PR #717) · 09-30 R2b-2 (ADR-0077, PR #711) · 09-29 R2b-1 (PR #707) · 09-27 R2a (PR #698,
 `db/055`) and R1 (ADR-0076, `db/054`, PR #688) · 09-26 #671 (ADR-0075, PR #678) · 09-23 funnel 2c (PR #674) · earlier:
 ROADMAP. · **Spec:** **v0.82** (newest ADR-0080;
@@ -181,17 +180,26 @@ tested but **not wired**.
 ## Recent sessions — what to carry forward
 
 ROADMAP carries the per-slice narrative and every open issue number; this keeps only lessons that generalise (each
-slice's own rules are its block in `developers/durable-rules.md`).
+slice's own rules are its block in `developers/durable-rules.md`). **Every session since 10-16 found HANDOVER stale on
+arrival** (a merged PR still "awaiting") — house rule 8's check is not optional.
 
-### 2026-10-20 — #826: event ids on the CLI's success lines
+### 2026-10-20 — #826 (PR #829) and #828 (PR #830): event ids on the CLI's success lines
 
-HANDOVER was stale on arrival (#827 had merged). **⇒ An issue's survey is a claim:** six of its seven verbs already
-printed their event ids; reading each arm first turned a seven-verb change into one, and found three unlisted verbs with
-the real gap (#828).
+- **⇒ An issue's survey is a claim** (#826): six of its seven verbs already printed their event ids; reading each arm
+  first turned a seven-verb change into one, and found the three unlisted verbs with the real gap (#828).
+- **⇒ A printed line can be a parse contract** (#828): the RUNBOOK reads the chart id with
+  `sed -n 's/^registered patient //p'`, so `; event …` on that line would have broken four runbook blocks. Grep docs and
+  scripts for a line's text before changing it; the event now gets its own line, pinned by a unit test. The review
+  then found the same contract stated in PROSE ("prints the new id on its last line", RUNBOOK) and false: grep for
+  what the docs *say* about a line, not only for the code that parses it.
+- **⇒ Two bare `Uuid`s on one line get a pure builder and a test** (#828 review, as #829's
+  `observed_evidence_line`): a swap type-checks and every DB test still passes.
+- **⇒ Widen a return without touching its callers:** a `*_returning_event` sibling returning
+  `db_diagnosis::Committed<T>`, the old name a one-line wrapper (~215 call sites untouched).
 
 ### 2026-10-19 — #822 + #823: the CLI after an unknown commit outcome
 
-HANDOVER was stale on arrival (#824 had merged). TDD: the remedy test and the `run_verdict` tests red first, then the
+TDD: the remedy test and the `run_verdict` tests red first, then the
 end-to-end auto-apply test (the #820 kill switch on `patient_link`); disabling the stop reproduced the bug exactly
 (the run's `Result` an `Err`).
 - **⇒ A sentence telling an operator to CHECK something needs a command to check with** — run it (`cairn-node event`
@@ -204,7 +212,7 @@ end-to-end auto-apply test (the #820 kill switch on `patient_link`); disabling t
 
 ### 2026-10-18 (sixth) — #820: #819's review follow-ons
 
-HANDOVER was stale on arrival (#821 had merged). All three items plus the John-Doe drive-through #821's review added.
+All three items plus the John-Doe drive-through #821's review added.
 - **⇒ To learn an id a rolled-back transaction minted, have the kill switch SAY it.** The orchestrators mint their
   event ids inside and the lost COMMIT rolls everything back, so nothing is left to read. The test trigger raises a
   WARNING naming the event behind its row (and its chart) before it terminates the backend; the test's own
@@ -215,7 +223,7 @@ HANDOVER was stale on arrival (#821 had merged). All three items plus the John-D
 
 ### 2026-10-18 (fifth) — #817: the identity-side commits
 
-HANDOVER was stale on arrival again (#819 had merged). TDD: the commit inventory went red first (`identify.rs`, 0 of 1
+TDD: the commit inventory went red first (`identify.rs`, 0 of 1
 marked); every site then routed through `commit_failure`. Checked each site for a doubled write: the restore's commit
 is fenced, and so are both link paths (a proposal's status), which are marked anyway because the marker only claims
 less. The review found the inventory blind to files that only AUTOCOMMIT (three sat unmarked and unlisted on a green
@@ -230,7 +238,7 @@ chart.
 
 ### 2026-10-18 (fourth) — #815 + #818: registration and sign-off after an interrupted commit
 
-HANDOVER was stale on arrival again (#816 had merged). The maintainer chose #815 option (a). TDD: the commit inventory
+The maintainer chose #815 option (a). TDD: the commit inventory
 went red first, then three GUI tests failed to compile, then #818's DB test (a deferred trigger on
 `medication_attestation` makes the backend terminate itself at line 2's COMMIT, a real FATAL); each pin mutation-checked.
 - **⇒ An outcome that MAY have written settles like a success, not like a failure.** Dropping the attested search was
@@ -249,7 +257,7 @@ went red first, then three GUI tests failed to compile, then #818's DB test (a d
 
 ### 2026-10-18 (third) — #814: the medication writes' interrupted commits
 
-HANDOVER was stale on arrival again (#813 had merged). TDD: a source guard (every clinical commit through
+TDD: a source guard (every clinical commit through
 `commit_failure`, no bare `.commit().await?`) went red first, then the window's tests failed to compile (6 errors);
 each new pin was mutation-checked, one mutation per run.
 - **⇒ A rule stated in one site is a rule one site keeps.** #713 put "unanswered ⇒ unknown" inline in `judge.rs`;
@@ -303,7 +311,7 @@ or, commonly, the two charts never meet; so the refused press is not an `M > N` 
 
 ### 2026-10-16 → 10-17 — #745 · #752 · #740 (PR [#798](https://github.com/cairn-ehr/cairn-ehr/pull/798)), its second review, #799 · #800 · #801 (PR [#802](https://github.com/cairn-ehr/cairn-ehr/pull/802))
 
-HANDOVER was stale on arrival twice (#795, then #798, had merged). TDD by source guards, mutation-checked, then a
+TDD by source guards, mutation-checked, then a
 headless walk against BOTH the branch and `main`.
 - **⇒ Walk the old code with the same script.** A walk that passes only on the fix proves the rig; on `main` the same
   script showed every defect, which is what makes the branch's green evidence.
@@ -325,7 +333,7 @@ headless walk against BOTH the branch and `main`.
 ### 2026-10-15 → 10-16 — R7 (PR #788), R6's residuals (PR #792), file splits (PRs #794, #795)
 
 R7 = #742 + #743 part 2; residuals #787 · #786 · #783 · #782; splits #781 · #789 · #732 · #793 + #712 item 3 · #737 ·
-#796. Filed #789 · #790 · #791; commented #718. HANDOVER was stale on arrival three times (a merged PR still "awaiting").
+#796. Filed #789 · #790 · #791; commented #718. 
 - **⇒ A remedy that names a command is a claim: run it, and name the LIGHTEST that works** (#787: a plain
   `reproject --prefix identity.` heal first, `--rebuild` only as fallback; `--prefix identity. --rebuild` is refused).
 - **⇒ Keep one in-memory truth and project it at the boundary** (#786: serde `try_from`/`into` via a private wire struct).

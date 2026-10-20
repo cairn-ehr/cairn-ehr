@@ -5,8 +5,8 @@
 use cairn_event::{generate_key, sign, EventBody, SigningKey};
 use cairn_node::db;
 use cairn_node::medication::{
-    assert_medication, build_assert_body, cease_medication, AssertMedicationInput,
-    CeaseMedicationInput,
+    assert_medication, assert_medication_returning_event, build_assert_body, cease_medication,
+    AssertMedicationInput, CeaseMedicationInput,
 };
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -568,4 +568,42 @@ async fn distinct_terms_are_not_flagged() {
         flag_rows(&c, patient).await.is_empty(),
         "unrelated drugs never collide"
     );
+}
+
+/// #828: the call also returns the ASSERT event's id (the one a lost commit names, via
+/// `seal_sign_submit`) beside the thread id it always returned, so the CLI's success line can
+/// print both. Pinned against `event_log`.
+#[tokio::test]
+async fn returns_the_assert_event_id_a_lost_commit_names() {
+    let Some(base) = cs() else { return };
+    let _guard = db::test_serial_guard(&base).await.unwrap();
+    let mut c = db::connect_and_load_schema(&base).await.unwrap();
+    let (sk, kid) = setup_node(&c).await;
+    let patient = Uuid::now_v7();
+    common::submit_registration(&c, &sk, &kid, patient, 0).await;
+
+    let got = assert_medication_returning_event(
+        &mut c,
+        &sk,
+        &kid,
+        "test-node",
+        patient,
+        &sample_input(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let recorded: String = c
+        .query_one(
+            "SELECT event_id::text FROM event_log WHERE patient_id::text = $1 \
+             AND event_type = 'clinical.medication.asserted'",
+            &[&patient.to_string()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(got.event_id.to_string(), recorded);
+    assert_ne!(got.event_id, got.value, "the event is not the thread");
 }

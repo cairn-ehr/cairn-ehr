@@ -38,6 +38,7 @@
 //! orchestrator (one transaction, so the registration, the callsign name, and the pending
 //! marker land atomically — a chart is never half-registered).
 
+use crate::db_diagnosis::Committed;
 use crate::patient::register::build_registration_body;
 use cairn_event::demographics::{name_assertion_body, render_name_twin};
 use cairn_event::identity::{pending_assertion_body, render_pending_twin, PendingAssertion};
@@ -200,6 +201,24 @@ pub async fn register_john_doe(
     date: &str,
     basis: &str,
 ) -> anyhow::Result<(Uuid, String, anyhow::Result<i64>)> {
+    register_john_doe_returning_event(client, sk, kid, node_origin, class, site, date, basis)
+        .await
+        .map(|r| r.value)
+}
+
+/// [`register_john_doe`], also returning the registration event's id (#828): the id a lost
+/// commit of this call names, so the CLI can print it on a run that worked.
+#[allow(clippy::too_many_arguments)] // as `register_john_doe`
+pub async fn register_john_doe_returning_event(
+    client: &mut Client,
+    sk: &SigningKey,
+    kid: &str,
+    node_origin: &str,
+    class: &str,
+    site: &str,
+    date: &str,
+    basis: &str,
+) -> anyhow::Result<Committed<(Uuid, String, anyhow::Result<i64>)>> {
     // Refuse a blank basis with ZERO side effects — before a UUID is minted, before any
     // HLC is ticked. The db/045 floor is still the enforcement point (principle 12: this is
     // a client-side courtesy, not the guarantee); this only stops the wasted mint. Same
@@ -299,7 +318,17 @@ pub async fn register_john_doe(
         .map(|row| row.get::<_, i64>("ordinal"))
         .map_err(|e| anyhow::Error::new(e).context("reading the John Doe's local ordinal"));
 
-    Ok((patient_id, call, ordinal))
+    Ok(Committed {
+        value: (patient_id, call, ordinal),
+        event_id: registration_event_id,
+    })
+}
+
+/// What `cairn-node register-john-doe` prints on success: the chart on the first line, exactly
+/// as before #828, then the registration event (the id a lost commit names) and the callsign.
+/// A pure function so a unit test can pin each label to its id: the two ids are both `Uuid`s.
+pub fn registered_john_doe_lines(chart: Uuid, event: Uuid, callsign: &str) -> String {
+    format!("registered John Doe {chart}\nregistration event {event}\ncallsign {callsign}")
 }
 
 #[cfg(test)]
@@ -310,6 +339,23 @@ mod tests {
         let eid = Uuid::parse_str("22222222-0000-0000-0000-000000000000").unwrap();
         let pid = Uuid::parse_str("00000000-0000-0000-0000-0000000000ab").unwrap();
         (eid, pid)
+    }
+
+    /// #828 review: both ids are bare `Uuid`s, so a swap would type-check. Each label must sit
+    /// beside its own id, and the chart must stay on the first line (as before #828).
+    #[test]
+    fn the_john_doe_success_lines_label_each_id() {
+        let (eid, pid) = ids();
+        let out = registered_john_doe_lines(pid, eid, "JD-ED-1");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                format!("registered John Doe {pid}"),
+                format!("registration event {eid}"),
+                "callsign JD-ED-1".to_string(),
+            ]
+        );
     }
 
     // --- final review (minor): `--basis` is validated at the edge, like `--birth-date` ---

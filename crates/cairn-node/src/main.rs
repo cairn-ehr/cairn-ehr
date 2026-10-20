@@ -4172,8 +4172,8 @@ async fn run() -> anyhow::Result<()> {
         }
         Cmd::RegisterJohnDoe { class, site, basis } => {
             // Fail cheap, before any key I/O or DB round trip — the same discipline
-            // `patient-register` applies to `--birth-date`, and the SAME function
-            // `register_john_doe` calls internally, so the CLI edge and the library call
+            // `patient-register` applies to `--birth-date`, and the SAME function the
+            // orchestrator below calls internally, so the CLI edge and the library call
             // cannot drift into different opinions of "stated". Without it, `--basis ""`
             // unsealed a key, opened a connection, minted a patient UUID and burned three
             // HLC ticks before the db/045 floor refused the first submit.
@@ -4190,7 +4190,7 @@ async fn run() -> anyhow::Result<()> {
             // This does not enrol it — nothing on a write path does, since #654. `init`
             // provisions; `cairn-node enroll-device-actor` is the remedy the refusal names.
             cairn_node::actor_enrolment::require_device_actor(&db, &kid).await?;
-            let (pid, call, ordinal) = cairn_node::john_doe::register_john_doe(
+            let recorded = cairn_node::john_doe::register_john_doe_returning_event(
                 &mut db,
                 &sk,
                 &kid,
@@ -4201,7 +4201,11 @@ async fn run() -> anyhow::Result<()> {
                 &basis,
             )
             .await?;
-            println!("registered John Doe {pid}\ncallsign {call}");
+            let (pid, call, ordinal) = recorded.value;
+            println!(
+                "{}",
+                cairn_node::john_doe::registered_john_doe_lines(pid, recorded.event_id, &call)
+            );
             // NOT `?`: the chart is committed; a failed display read must not read as a
             // failed registration, or the retry mints a second chart (#817 review).
             match ordinal {
@@ -4308,10 +4312,10 @@ async fn run() -> anyhow::Result<()> {
             // The raw typed name — NOT `query.name_tokens` (`SearchQuery` retains only
             // normalised search tokens, never the raw string; see
             // `patient::register`'s module doc, "signature problem", for why). Passed through
-            // unconditionally: `register_patient` itself treats a blank/empty string the same
+            // unconditionally: the orchestrator itself treats a blank/empty string the same
             // as `None` (principle 4 — an empty `--name` default must never assert an
             // empty-string name), so no pre-filtering is needed here.
-            let patient_id = cairn_node::patient::register::register_patient(
+            let recorded = cairn_node::patient::register::register_patient_returning_event(
                 &mut db,
                 &sk,
                 &kid,
@@ -4321,7 +4325,13 @@ async fn run() -> anyhow::Result<()> {
                 &list,
             )
             .await?;
-            println!("registered patient {patient_id}");
+            println!(
+                "{}",
+                cairn_node::patient::register::registered_patient_lines(
+                    recorded.value,
+                    recorded.event_id
+                )
+            );
         }
         Cmd::SensitivityAssert {
             patient,
@@ -4900,7 +4910,7 @@ async fn run() -> anyhow::Result<()> {
             let params = attest_params(&resolved, &attest);
             let resolved_author = resolve_author(&db, &author).await?;
             let a_params = author_params(&resolved_author);
-            let med_id = cairn_node::medication::assert_medication(
+            let recorded = cairn_node::medication::assert_medication_returning_event(
                 &mut db,
                 &node_sk,
                 &node_kid,
@@ -4911,7 +4921,14 @@ async fn run() -> anyhow::Result<()> {
                 params.as_ref(),
             )
             .await?;
-            println!("recorded medication for {patient}; thread {med_id}");
+            println!(
+                "{}",
+                cairn_node::medication::recorded_medication_line(
+                    patient,
+                    recorded.value,
+                    recorded.event_id
+                )
+            );
         }
         Cmd::MedicationCease {
             patient,

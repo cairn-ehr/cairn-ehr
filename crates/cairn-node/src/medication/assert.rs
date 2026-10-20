@@ -147,6 +147,33 @@ pub async fn assert_medication(
     author: Option<&crate::medication::AuthorParams<'_>>,
     attest: Option<&crate::medication::AttestParams<'_>>,
 ) -> anyhow::Result<Uuid> {
+    assert_medication_returning_event(
+        client,
+        node_sk,
+        node_kid,
+        node_origin,
+        patient,
+        input,
+        author,
+        attest,
+    )
+    .await
+    .map(|r| r.value)
+}
+
+/// [`assert_medication`], also returning the assert event's id (#828): the id a lost commit of
+/// this call names (`seal_sign_submit`), so the CLI can print it beside the thread.
+#[allow(clippy::too_many_arguments)] // as `assert_medication`
+pub async fn assert_medication_returning_event(
+    client: &mut tokio_postgres::Client,
+    node_sk: &SigningKey,
+    node_kid: &str,
+    node_origin: &str,
+    patient: Uuid,
+    input: &AssertMedicationInput<'_>,
+    author: Option<&crate::medication::AuthorParams<'_>>,
+    attest: Option<&crate::medication::AttestParams<'_>>,
+) -> anyhow::Result<crate::db_diagnosis::Committed<Uuid>> {
     validate_term(input.term)?;
     // Mint HLCs up front (self-committing; a rolled-back submit just leaves a gap —
     // the HLC is monotonic and gaps are allowed, exactly like identify_patient).
@@ -192,16 +219,39 @@ pub async fn assert_medication(
     // ONE strict door by seal_sign_submit — which also runs the atomic author-time
     // attestation when `attest` is Some (it vouches for the thread named in the body's
     // payload.medication_id), and rewrites the body to human-signed authorship when
-    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). We return the
-    // THREAD id, not the content event id.
-    crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
-        .await?;
-    Ok(medication_id)
+    // `author` is Some (#204 / ADR-0053; the node still keeps DEK custody). It returns the
+    // content event's id, the one its lost commit names; the thread id rides beside it.
+    let recorded =
+        crate::medication::sealed_submit::seal_sign_submit(client, node_sk, body, author, attest)
+            .await?;
+    Ok(crate::db_diagnosis::Committed {
+        value: medication_id,
+        event_id: recorded,
+    })
+}
+
+/// What `cairn-node medication-assert` prints on success: the chart, the thread (what later
+/// verbs take as `--medication-id`), and the assert event (the id a lost commit names, #828),
+/// in the `; event <id>` shape its sibling verbs use. A pure function so a unit test can pin
+/// each label to its id: all three are `Uuid`s.
+pub fn recorded_medication_line(chart: Uuid, thread: Uuid, event: Uuid) -> String {
+    format!("recorded medication for {chart}; thread {thread}; event {event}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #828 review: three bare `Uuid`s on one line, so a swap would type-check and every DB
+    /// test would still pass. Each label must sit beside its own id.
+    #[test]
+    fn the_assert_success_line_labels_each_id() {
+        let (chart, thread, event) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        assert_eq!(
+            recorded_medication_line(chart, thread, event),
+            format!("recorded medication for {chart}; thread {thread}; event {event}")
+        );
+    }
 
     #[test]
     fn coding_from_parts_accepts_all_three_or_none() {
