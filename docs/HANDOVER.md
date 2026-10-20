@@ -3,11 +3,9 @@
 ## ⇒ NEXT
 
 > [!NOTE]
-> **⇒ ONE PR AWAITS THE MAINTAINER: PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)** (#826, branch
-> `fix/826-cli-success-event-ids`): `assert-observed-evidence` prints its event ids — the only one of the issue's seven
-> verbs that printed none (the other six already did; the issue's survey was wrong). Filed **#828** (three unlisted verbs
-> print a chart/thread id, never the event id a lost commit names).
-> **Merged 2026-10-18/19 (ROADMAP has each):** PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
+> **⇒ IN PROGRESS: #828** (branch `fix/828-cli-event-ids`): `patient-register`, `register-john-doe` and
+> `medication-assert` print the event id a lost commit of theirs names.
+> **Merged 2026-10-18/20 (ROADMAP has each):** PR #829 (#826: `assert-observed-evidence` prints its event ids) · PR [#827](https://github.com/cairn-ehr/cairn-ehr/pull/827) (#822
 > `cairn-node event <id>`; #823 auto-apply stops at an unknown commit with its summary) · PR #824 (#820: a real lost
 > COMMIT driven end to end; review filed **#825**, the window drops an unknown outcome's error chain — a decision on
 > where operator diagnostics live) · PR #821 (#817) · PR #819 (#815 + #818) · PR #816 (#814) · PR #813 (#811) · PR #805
@@ -19,7 +17,7 @@
 >
 > **⇒ NEXT, in order:**
 > 0. Check `gh pr list` before trusting this list (house rule 8).
-> 1. **Review and merge PR [#829](https://github.com/cairn-ehr/cairn-ehr/pull/829)** (#826); **#828** is small; **#825** needs a decision (where the window's operator diagnostics
+> 1. **#828** (in progress); **#825** needs a decision (where the window's operator diagnostics
 >    live). An idempotent re-send of a registration
 >    (the same signed batch; `submit_event` is a no-op on a repeated `event_id`) is possible later, after #807, with
 >    #649. **#728** (the Pi re-measure) can run beside. #699 stays open until the maintainer closes it.
